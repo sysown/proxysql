@@ -3,6 +3,7 @@
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_Variables.h"
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
@@ -17,19 +18,13 @@
 #define SQLITE_HOSTGROUP -4
 
 
-#define MYSQL_DEFAULT_SQL_MODE	""
-#define MYSQL_DEFAULT_TIME_ZONE	"SYSTEM"
-#define MYSQL_DEFAULT_ISOLATION_LEVEL	"READ COMMITTED"
-#define MYSQL_DEFAULT_TRANSACTION_READ	"WRITE"
 #define MYSQL_DEFAULT_TX_ISOLATION	"READ-COMMITTED"
-#define MYSQL_DEFAULT_CHARACTER_SET_RESULTS	"NULL"
-#define MYSQL_DEFAULT_SESSION_TRACK_GTIDS	"OFF"
-#define MYSQL_DEFAULT_SQL_AUTO_IS_NULL	"OFF"
-#define MYSQL_DEFAULT_SQL_SELECT_LIMIT	"DEFAULT"
-#define MYSQL_DEFAULT_SQL_SAFE_UPDATES	"OFF"
+#define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
 #define MYSQL_DEFAULT_MAX_JOIN_SIZE	"18446744073709551615"
+
+extern class MySQL_Variables mysql_variables;
 
 #ifdef IDLE_THREADS
 typedef struct __attribute__((aligned(64))) _conn_exchange_t {
@@ -366,19 +361,9 @@ class MySQL_Threads_Handler
 		char *init_connect;
 		char *ldap_user_variable;
 		char *add_ldap_user_comment;
-		char *default_sql_mode;
-		char *default_time_zone;
-		char *default_isolation_level;
-		char *default_transaction_read;
 		char *default_tx_isolation;
-		char *default_character_set_results;
 		char *default_session_track_gtids;
-		char *default_sql_auto_is_null;
-		char *default_sql_select_limit;
-		char *default_sql_safe_updates;
-		char *default_collation_connection;
-		char *default_net_write_timeout;
-		char *default_max_join_size;
+		char *default_variables[SQL_NAME_LAST];
 		char *firewall_whitelist_errormsg;
 #ifdef DEBUG
 		bool session_debug;
@@ -420,7 +405,7 @@ class MySQL_Threads_Handler
  	void wrunlock();
 	void commit();
 	char *get_variable(char *name);
-	bool set_variable(char *name, char *value);
+	bool set_variable(char *name, const char *value);
 	char **get_variables_list();
 	bool has_variable(const char * name);
 

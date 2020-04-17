@@ -146,6 +146,29 @@ enum MySQL_DS_type {
 };
 
 
+enum variable_name {
+	SQL_CHARACTER_SET,
+	SQL_CHARACTER_ACTION,
+	SQL_SET_NAMES,
+	SQL_SAFE_UPDATES,
+	SQL_SELECT_LIMIT,
+	SQL_SQL_MODE,
+	SQL_TIME_ZONE,
+	SQL_CHARACTER_SET_RESULTS,
+	SQL_CHARACTER_SET_CONNECTION,
+	SQL_CHARACTER_SET_CLIENT,
+	SQL_CHARACTER_SET_DATABASE,
+	SQL_ISOLATION_LEVEL,
+	SQL_TRANSACTION_READ,
+	SQL_SQL_AUTO_IS_NULL,
+	SQL_COLLATION_CONNECTION,
+	SQL_NET_WRITE_TIMEOUT,
+	SQL_MAX_JOIN_SIZE,
+	SQL_LOG_BIN,
+	SQL_WSREP_SYNC_WAIT,
+	SQL_NAME_LAST
+};
+
 enum session_status {
 	CONNECTING_CLIENT,
 	CONNECTING_SERVER,
@@ -163,26 +186,33 @@ enum session_status {
 	RESETTING_CONNECTION,
 	SETTING_INIT_CONNECT,
 	SETTING_LDAP_USER_VARIABLE,
-	SETTING_SQL_LOG_BIN,
-	SETTING_SQL_MODE,
-	SETTING_TIME_ZONE,
 	SETTING_ISOLATION_LEVEL,
 	SETTING_TRANSACTION_READ,
-	SETTING_TX_ISOLATION,
-	SETTING_CHARACTER_SET_RESULTS,
 	SETTING_SESSION_TRACK_GTIDS,
-	SETTING_SQL_AUTO_IS_NULL,
-	SETTING_SQL_SELECT_LIMIT,
-	SETTING_SQL_SAFE_UPDATES,
-	SETTING_COLLATION_CONNECTION,
-	SETTING_NET_WRITE_TIMEOUT,
-	SETTING_MAX_JOIN_SIZE,
 	SETTING_MULTI_STMT,
 	FAST_FORWARD,
 	PROCESSING_STMT_PREPARE,
 	PROCESSING_STMT_EXECUTE,
+	SETTING_VARIABLE,
+	SETTING_MULTIPLE_VARIABLES,
+	SETTING_SET_NAMES,
 	NONE
 };
+
+#ifdef __cplusplus
+typedef struct {
+	enum variable_name idx;     // index number
+	enum session_status status; // what status should be changed after setting this variables
+	bool quote;                 // if the variable needs to be quoted
+	bool set_transaction;       // if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
+	bool special_handling;      // if true, some special handling is required
+	bool is_number;				// if true, the variable is a number. Special cases should be checked
+	bool is_bool;				// if true, the variable is a boolean. Special cases should be checked
+	char * set_variable_name;   // what variable name (or string) will be used when setting it to backend
+	char * internal_variable_name; // variable name as displayed in admin , WITHOUT "default_"
+	char * default_value;       // default value
+} mysql_variable_st;
+#endif
 
 enum mysql_data_stream_status {
 	STATE_NOT_INITIALIZED,
@@ -652,19 +682,8 @@ __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___keep_multiplexing_variables;
 __thread char *mysql_thread___init_connect;
 __thread char *mysql_thread___ldap_user_variable;
-__thread char *mysql_thread___default_sql_mode;
-__thread char *mysql_thread___default_time_zone;
-__thread char *mysql_thread___default_isolation_level;
-__thread char *mysql_thread___default_transaction_read;
 __thread char *mysql_thread___default_tx_isolation;
-__thread char *mysql_thread___default_character_set_results;
 __thread char *mysql_thread___default_session_track_gtids;
-__thread char *mysql_thread___default_sql_auto_is_null;
-__thread char *mysql_thread___default_sql_select_limit;
-__thread char *mysql_thread___default_sql_safe_updates;
-__thread char *mysql_thread___default_collation_connection;
-__thread char *mysql_thread___default_net_write_timeout;
-__thread char *mysql_thread___default_max_join_size;
 __thread char *mysql_thread___firewall_whitelist_errormsg;
 __thread int mysql_thread___max_allowed_packet;
 __thread bool mysql_thread___automatic_detect_sqli;
@@ -706,7 +725,6 @@ __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
-__thread unsigned int mysql_thread___default_charset;
 __thread unsigned int mysql_thread___handle_unknown_charset;
 __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
@@ -739,6 +757,7 @@ __thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
+__thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -808,19 +827,8 @@ extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___keep_multiplexing_variables;
 extern __thread char *mysql_thread___init_connect;
 extern __thread char *mysql_thread___ldap_user_variable;
-extern __thread char *mysql_thread___default_sql_mode;
-extern __thread char *mysql_thread___default_time_zone;
-extern __thread char *mysql_thread___default_isolation_level;
-extern __thread char *mysql_thread___default_transaction_read;
 extern __thread char *mysql_thread___default_tx_isolation;
-extern __thread char *mysql_thread___default_character_set_results;
 extern __thread char *mysql_thread___default_session_track_gtids;
-extern __thread char *mysql_thread___default_sql_auto_is_null;
-extern __thread char *mysql_thread___default_sql_select_limit;
-extern __thread char *mysql_thread___default_sql_safe_updates;
-extern __thread char *mysql_thread___default_collation_connection;
-extern __thread char *mysql_thread___default_net_write_timeout;
-extern __thread char *mysql_thread___default_max_join_size;
 extern __thread char *mysql_thread___firewall_whitelist_errormsg;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread bool mysql_thread___automatic_detect_sqli;
@@ -862,7 +870,6 @@ extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
-extern __thread unsigned int  mysql_thread___default_charset;
 extern __thread unsigned int mysql_thread___handle_unknown_charset;
 extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;
@@ -895,6 +902,7 @@ extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
+extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
@@ -954,3 +962,56 @@ extern __thread bool mysql_thread___session_debug;
 #endif /* DEBUG */
 extern __thread unsigned int g_seed;
 #endif /* PROXYSQL_EXTERN */
+
+#ifndef MYSQL_TRACKED_VARIABLES
+#define MYSQL_TRACKED_VARIABLES
+#ifdef PROXYSQL_EXTERN
+// field_1: index number
+// field_2: what status should be changed after setting this variables
+// field_3: if the variable needs to be quoted
+// field_4: if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
+// field_5: if true, some special handling is required
+// field_6: if true, the variable is a number. Special cases should be checked
+// field_7: if true, the variable is a boolean. Special cases should be checked
+// field_8: what variable name (or string) will be used when setting it to backend
+// field_9: variable name as displayed in admin , WITHOUT "default_"
+// field_10: default value
+/*
+typedef struct {
+	enum variable_name idx;     // index number
+	enum session_status status; // what status should be changed after setting this variables
+	bool quote;                 // if the variable needs to be quoted
+	bool set_transaction;       // if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
+	bool special_handling;      // if true, some special handling is required
+	bool is_number;				// if true, the variable is a number. Special cases should be checked
+	bool is_bool;				// if true, the variable is a boolean. Special cases should be checked
+	char * set_variable_name;   // what variable name (or string) will be used when setting it to backend
+	char * internal_variable_name; // variable name as displayed in admin , WITHOUT "default_"
+	char * default_value;       // default value
+} mysql_variable_st;
+*/
+mysql_variable_st mysql_tracked_variables[] {
+    { SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true, false,  false, false, (char *)"CHARSET", (char *)"CHARSET", (char *)"UTF8" } , // should be before SQL_CHARACTER_SET_RESULTS
+    { SQL_CHARACTER_ACTION,      NONE,		         false, false, false, false, false, (char *)"action", (char *)"action", (char *)"1" } ,
+    { SQL_SET_NAMES,             SETTING_SET_NAMES,  false, false, false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" } ,
+	{ SQL_SAFE_UPDATES,          SETTING_VARIABLE,   true,  false, true,  false, true,  (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" } ,
+    { SQL_SELECT_LIMIT,          SETTING_VARIABLE,   false, false, true,  true, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
+	{ SQL_SQL_MODE,              SETTING_VARIABLE,   true,  false, true,  false, false, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" } ,
+    { SQL_TIME_ZONE,             SETTING_VARIABLE,   true,  false, true,  false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" } ,
+	{ SQL_CHARACTER_SET_RESULTS, SETTING_VARIABLE,   false, false, true,  false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"UTF8" } ,
+	{ SQL_CHARACTER_SET_CONNECTION, SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_connection", (char *)"character_set_connection", (char *)"UTF8" } ,
+	{ SQL_CHARACTER_SET_CLIENT,     SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_client", (char *)"character_set_client", (char *)"UTF8" } ,
+	{ SQL_CHARACTER_SET_DATABASE,   SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_database", (char *)"character_set_database", (char *)"UTF8" } ,
+	{ SQL_ISOLATION_LEVEL,  SETTING_ISOLATION_LEVEL,  false, true,  true, false, false, (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" } ,
+	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ, false, true,  true, false, false, (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" } ,
+    { SQL_SQL_AUTO_IS_NULL,     SETTING_VARIABLE,     true,  false, true, false, true,  (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" } ,
+    { SQL_COLLATION_CONNECTION, SETTING_VARIABLE,     true,  false, true, false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"utf8_general_ci" } ,
+    { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" } ,
+    { SQL_MAX_JOIN_SIZE,        SETTING_VARIABLE,     false, false, true, true,  false, (char *)"max_join_size", (char *)"max_join_size", (char *)"18446744073709551615" } ,
+    { SQL_LOG_BIN,              SETTING_VARIABLE,     false, false, true, false, false, (char *)"sql_log_bin", (char *)"sql_log_bin", (char *)"1" } ,
+    { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" } ,
+};
+#else
+extern mysql_variable_st mysql_tracked_variables[];
+#endif // PROXYSQL_EXTERN
+#endif // MYSQL_TRACKED_VARIABLES

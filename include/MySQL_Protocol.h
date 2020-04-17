@@ -3,8 +3,11 @@
 
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_Variables.h"
 
 #define RESULTSET_BUFLEN 16300
+
+extern MySQL_Variables mysql_variables;
 
 class MySQL_ResultSet {
 	private:

@@ -2,9 +2,12 @@
 #define __CLASS_MYSQL_SESSION_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "MySQL_Variables.h"
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
+
+extern class MySQL_Variables mysql_variables;
 
 enum proxysql_session_type {
 	PROXYSQL_SESSION_MYSQL,
@@ -70,7 +73,6 @@ class MySQL_Session
 {
 	private:
 	int handler_ret;
-	std::stack<enum session_status> previous_status;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
@@ -106,57 +108,32 @@ class MySQL_Session
 	int handler_again___status_RESETTING_CONNECTION();
 	void handler_again___new_thread_to_kill_connection();
 
-	bool handler_again___verify_backend_charset();
 	bool handler_again___verify_init_connect();
 	bool handler_again___verify_ldap_user_variable();
 	bool handler_again___verify_backend_autocommit();
-	bool handler_again___verify_backend_user_schema();
-	bool handler_again___verify_backend_sql_log_bin();
-	bool handler_again___verify_backend_sql_mode();
-	bool handler_again___verify_backend_time_zone();
-	bool handler_again___verify_backend_isolation_level();
-	bool handler_again___verify_backend_transaction_read();
-	bool handler_again___verify_backend_tx_isolation();
-	bool handler_again___verify_backend_character_set_results();
 	bool handler_again___verify_backend_session_track_gtids();
-	bool handler_again___verify_backend_sql_auto_is_null();
-	bool handler_again___verify_backend_sql_select_limit();
-	bool handler_again___verify_backend_sql_safe_updates();
-	bool handler_again___verify_backend_collation_connection();
-	bool handler_again___verify_backend_net_write_timeout();
-	bool handler_again___verify_backend_max_join_size();
 	bool handler_again___verify_backend_multi_statement();
 	bool handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
+	bool handler_again___verify_backend_user_schema();
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
-	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
-	bool handler_again___status_SETTING_TIME_ZONE(int *);
-	bool handler_again___status_SETTING_ISOLATION_LEVEL(int *);
-	bool handler_again___status_SETTING_TRANSACTION_READ(int *);
-	bool handler_again___status_SETTING_TX_ISOLATION(int *);
-	bool handler_again___status_SETTING_CHARACTER_SET_RESULTS(int *);
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
-	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
-	bool handler_again___status_SETTING_CHARSET(int *_rc);
-	bool handler_again___status_SETTING_SQL_AUTO_IS_NULL(int *);
-	bool handler_again___status_SETTING_SQL_SELECT_LIMIT(int *);
-	bool handler_again___status_SETTING_SQL_SAFE_UPDATES(int *);
-	bool handler_again___status_SETTING_COLLATION_CONNECTION(int *);
-	bool handler_again___status_SETTING_NET_WRITE_TIMEOUT(int *);
-	bool handler_again___status_SETTING_MAX_JOIN_SIZE(int *);
-	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, char *var_name, char *var_value, bool no_quote=false, bool set_transaction=false);
+	bool handler_again___status_CHANGING_CHARSET(int *_rc);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
-	bool handler_again___status_CHANGING_CHARSET(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
+	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
 
 
 	public:
+	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
+	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
+	std::stack<enum session_status> previous_status;
 	void * operator new(size_t);
 	void operator delete(void *);
 
@@ -231,6 +208,9 @@ class MySQL_Session
 	Session_Regex **match_regexes;
 
 	void *ldap_ctx;
+
+	// this variable is relevant only if status == SETTING_VARIABLE
+	enum variable_name changing_variable_idx;
 
 	MySQL_Session();
 	~MySQL_Session();

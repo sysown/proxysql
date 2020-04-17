@@ -12,6 +12,7 @@ PROXYSQL_PATH=../../..
 PROXYSQL_IDIR=$(PROXYSQL_PATH)/include
 
 SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
+JSON_IDIR=$(DEPS_PATH)/json
 
 RE2_PATH=$(DEPS_PATH)/re2/re2
 RE2_IDIR=$(RE2_PATH)
@@ -23,7 +24,7 @@ LIBHTTPSERVER_IDIR=$(LIBHTTPSERVER_DIR)/src
 LIBHTTPSERVER_LDIR=$(LIBHTTPSERVER_DIR)/build/src/.libs/
 
 LIBCONFIG_PATH=$(DEPS_PATH)/libconfig/libconfig
-LIBCONFIG_IDIR=-I$(LIBCONFIG_PATH)/lib
+LIBCONFIG_IDIR=$(LIBCONFIG_PATH)/lib
 LIBCONFIG_LDIR=-L$(LIBCONFIG_PATH)/lib/.libs
 
 CURL_DIR=$(DEPS_PATH)/curl/curl
@@ -63,7 +64,7 @@ EXECUTABLE=proxysql
 
 OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o
 
-INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR)
+INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR)
 LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR)
 
 MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK)
@@ -74,18 +75,18 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t test_ps_large_result-t test_firewall-t || true
+	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t test_ps_large_result-t set_testing-t test_firewall-t || true
 
 OPT=-O2
 
-SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp test_firewall-t.cpp
+SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp set_testing-t.cpp test_firewall-t.cpp
 
-tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t test_ps_large_result-t test_firewall-t
+tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t test_ps_large_result-t set_testing-t test_firewall-t
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
 sqlite3-t: $(TAP_LIBDIR)/libtap.a sqlite3-t.cpp
-	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) ../../../lib/libproxysql.a $(MYLIBS) -lpthread -ldl -std=c++11 -ltap -o sqlite3-t
+	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap -o sqlite3-t
 
 basic-t: $(TAP_LIBDIR)/libtap.a
 	g++ basic-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -o basic-t
@@ -117,3 +118,5 @@ galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
 aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
 
+set_testing-t: set_testing-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ set_testing-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -O0 -ggdb -ldl -lssl -lcrypto -o set_testing-t
