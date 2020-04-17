@@ -954,6 +954,304 @@ MyHGC::~MyHGC() {
 	delete mysrvs;
 }
 
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+using hg_counter_tuple =
+	std::tuple<
+		p_hg_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using hg_gauge_tuple =
+	std::tuple<
+		p_hg_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using hg_dyn_counter_tuple =
+	std::tuple<
+		p_hg_dyn_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using hg_dyn_gauge_tuple =
+	std::tuple<
+		p_hg_dyn_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using hg_counter_vector = std::vector<hg_counter_tuple>;
+using hg_gauge_vector = std::vector<hg_gauge_tuple>;
+using hg_dyn_counter_vector = std::vector<hg_dyn_counter_tuple>;
+using hg_dyn_gauge_vector = std::vector<hg_dyn_gauge_tuple>;
+
+const std::tuple<
+	hg_counter_vector,
+	hg_gauge_vector,
+	hg_dyn_counter_vector,
+	hg_dyn_gauge_vector
+>
+hg_metrics_map = std::make_tuple(
+	hg_counter_vector {
+		std::make_tuple (
+			// TODO: Check this help
+			p_hg_counter::servers_table_version,
+			"proxysql_servers_table_version",
+			"Number of times the \"servers_table\" have been modified.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::server_connections_created,
+			"proxysql_server_connections",
+			"Total number of server connections created.",
+			metric_tags {
+				{ "status", "created" }
+			}
+		),
+		std::make_tuple (
+			p_hg_counter::server_connections_delayed,
+			"proxysql_server_connections",
+			"Total number of server connections delayed.",
+			metric_tags {
+				{ "status", "delayed" }
+			}
+		),
+		std::make_tuple (
+			p_hg_counter::server_connections_aborted,
+			"proxysql_server_connections",
+			"Total number of backend failed connections (or closed improperly).",
+			metric_tags {
+				{ "status", "aborted" }
+			}
+		),
+		std::make_tuple (
+			p_hg_counter::client_connections_created,
+			"proxysql_client_connections_created",
+			"Total number of client connections created.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::client_connections_aborted,
+			"proxysql_client_connections_aborted",
+			"Total number of client failed connections (or closed improperly).",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_autocommit,
+			"proxysql_com_autocommit",
+			"Total queries autocommited.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_autocommit_filtered,
+			"proxysql_com_autocommit_filtered",
+			"Total queries filtered autocommit.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_rollback,
+			"proxysql_com_rollback",
+			"Total queries rollbacked.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_rollback_filtered,
+			"proxysql_com_rollback_filtered",
+			"Total queries filtered rollbacked.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_backend_change_user,
+			"proxysql_com_backend_change_user",
+			"Total CHANGE_USER queries backend.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_backend_init_db,
+			"proxysql_com_backend_init_db",
+			"Total queries backend INIT DB.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_frontend_init_db,
+			"proxysql_com_frontend_init_db",
+			"Total INIT DB queries frontend.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_frontend_set_names,
+			"proxysql_com_frontend_set_names",
+			"Total SET NAMES frontend queries.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_frontend_use_db,
+			"proxysql_com_frontend_use_db",
+			"Total USE DB queries frontend.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_commit_cnt,
+			"proxysql_com_commit_cnt",
+			"Total queries commit.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_commit_cnt_filtered,
+			"proxysql_com_commit_cnt_filtered",
+			"Total queries commit filtered.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::selects_for_update__autocommit0,
+			"proxysql_selects_for_update__autocommit0",
+			"Total queries that are SELECT for update or equivalent.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::access_denied_wrong_password,
+			"proxysql_access_denied_wrong_password",
+			"Total access denied \"wrong password\".",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::access_denied_max_connections,
+			"proxysql_access_denied_max_connections",
+			"Total access denied \"max connections\".",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::access_denied_max_user_connections,
+			"proxysql_access_denied_max_user_connections",
+			"Total access denied \"max user connections\".",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_get,
+			"proxysql_myhgm_myconnpool_get",
+			"The number of requests made to the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_get_ok,
+			"proxysql_myhgm_myconnpool_get_ok",
+			"The number of successful requests to the connection pool (i.e. where a connection was available).",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_push,
+			"proxysql_myhgm_myconnpool_push",
+			"The number of connections returned to the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_reset,
+			"proxysql_myhgm_myconnpool_reset",
+			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_destroy,
+			"proxysql_myhgm_myconnpool_destroy",
+			"The number of connections considered unhealthy and therefore closed.",
+			metric_tags {}
+		)
+	},
+	// prometheus gauges
+	hg_gauge_vector {
+		std::make_tuple (
+			p_hg_gauge::server_connections_connected,
+			"proxysql_server_connections_connected",
+			"Backend connections that are currently connected.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_gauge::client_connections_connected,
+			"proxysql_client_connections_connected",
+			"Client connections that are currently connected.",
+			metric_tags {}
+		)
+	},
+	// prometheus dynamic counters
+	hg_dyn_counter_vector {
+		// connection_pool
+		std::make_tuple (
+			p_hg_dyn_counter::conn_pool_bytes_data_recv,
+			"proxysql_connection_pool_bytes_data_recv",
+			"The amount of data received from the backend, excluding metadata.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::conn_pool_bytes_data_sent,
+			"proxysql_connection_pool_bytes_data_sent",
+			"The amount of data sent to the backend, excluding metadata.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::connection_pool_conn_err,
+			"proxysql_connection_pool_conn_err",
+			"How many connections weren't established successfully.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::connection_pool_conn_ok,
+			"proxysql_connection_pool_conn_ok",
+			"How many connections were established successfully.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::connection_pool_queries,
+			"proxysql_connection_pool_conn_queries",
+			"The number of queries routed towards this particular backend server.",
+			metric_tags {}
+		),
+		// gtid
+		std::make_tuple (
+			p_hg_dyn_counter::gtid_executed,
+			"proxysql_gtid_executed",
+			"Tracks the number of executed gtid per host and port.",
+			metric_tags {}
+		),
+	},
+	// prometheus dynamic counters
+	hg_dyn_gauge_vector {
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_conn_free,
+			"proxysql_connection_pool_conn_free",
+			"How many connections are currently free.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_conn_used,
+			"proxysql_connection_pool_conn_used",
+			"How many connections are currently used by ProxySQL for sending queries to the backend server.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_latency_us,
+			"proxysql_connection_pool_conn_latency_us",
+			"The currently ping time in microseconds, as reported from Monitor.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_status,
+			"proxysql_connection_pool_conn_status",
+			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).",
+			metric_tags {}
+		)
+	}
+);
+
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_mutex_init(&ev_loop_mutex, NULL);
 	status.client_connections=0;
