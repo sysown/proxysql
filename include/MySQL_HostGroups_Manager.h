@@ -278,7 +278,7 @@ struct p_hg_counter {
 		com_rollback_filtered,
 		com_backend_change_user,
 		com_backend_init_db,
-		// TODO: https://sysown-team.monday.com/boards/484798975/pulses/529413331
+		// TODO: https://github.com/sysown/proxysql/issues/2690
 		com_backend_set_names,
 		com_frontend_init_db,
 		com_frontend_set_names,
