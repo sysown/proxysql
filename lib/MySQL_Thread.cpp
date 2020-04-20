@@ -620,37 +620,37 @@ th_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_prepare,
 			"proxysql_com_backend_stmt_prepare",
-			"Represents the number of “PREPARE” executed by ProxySQL against the backends.",
+			"Represents the number of \"PREPARE\" executed by ProxySQL against the backends.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_execute,
 			"proxysql_com_backend_stmt_execute",
-			"Represents the number of “EXECUTE” executed by ProxySQL against the backends.",
+			"Represents the number of \"EXECUTE\" executed by ProxySQL against the backends.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_close,
 			"proxysql_com_backend_stmt_close",
-			"Represents the number of “CLOSE” executed by ProxySQL against the backends.",
+			"Represents the number of \"CLOSE\" executed by ProxySQL against the backends.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_prepare,
 			"proxysql_com_frontend_stmt_prepare",
-			"Represents the number of “PREPARE” executed by clients.",
+			"Represents the number of \"PREPARE\" executed by clients.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_execute,
 			"proxysql_com_frontend_stmt_execute",
-			"Represents the number of “EXECUTE” executed by clients.",
+			"Represents the number of \"EXECUTE\" executed by clients.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_close,
 			"proxysql_com_frontend_stmt_close",
-			"Represents the number of “CLOSE” executed by clients.",
+			"Represents the number of \"CLOSE\" executed by clients.",
 			metric_tags {}
 		),
 		std::make_tuple (
