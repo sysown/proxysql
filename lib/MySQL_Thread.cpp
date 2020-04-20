@@ -875,6 +875,90 @@ th_metrics_map = std::make_tuple(
 			"proxysql_mysql_thread_workers",
 			"Number of MySQL Thread workers i.e. “mysql-threads”",
 			metric_tags {}
+		),
+		// global_variables
+		// TODO: Change unit
+		std::make_tuple (
+			p_th_gauge::mysql_wait_timeout,
+			"proxysql_mysql_wait_timeout",
+			"If a proxy session has been idle for more than this threshold, the proxy will kill the session.",
+			metric_tags {}
+		),
+		// TODO: Change unit
+		std::make_tuple (
+			p_th_gauge::mysql_max_connections,
+			"proxysql_mysql_max_connections",
+			"The maximum number of client connections that the proxy can handle.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_enabled,
+			"mysql_monitor_enabled",
+			"Enables or disables MySQL Monitor.",
+			metric_tags {}
+		),
+		// TODO: Change unit
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_ping_interval,
+			"proxysql_mysql_monitor_ping_interval",
+			"How frequently a ping check is performed, in milliseconds.",
+			metric_tags {}
+		),
+		// TODO: Change unit
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_ping_timeout,
+			"proxysql_mysql_monitor_ping_timeout",
+			"Ping timeout in milliseconds.",
+			metric_tags {}
+		),
+		// TODO: Check help
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_ping_max_failures,
+			"proxysql_mysql_monitor_ping_max_failures",
+			"If a host misses mysql-monitor_ping_max_failures pings in a row, the node is considered unreachable and that should immediately kill all connections.",
+			metric_tags {}
+		),
+		// TODO: Check unit
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_read_only_interval,
+			"proxysql_mysql_monitor_read_only_interval",
+			"How frequently a read only check is performed, in milliseconds.",
+			metric_tags {}
+		),
+		// TODO: Check unit
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_read_only_interval,
+			"proxysql_mysql_monitor_read_only_interval",
+			"How frequently a read only check is performed, in milliseconds.",
+			metric_tags {}
+		),
+		// TODO: Check help
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_writer_is_also_reader,
+			"proxysql_mysql_monitor_writer_is_also_reader",
+			"When a node change its read_only value from 1 to 0, this variable determines if the node should be present in both hostgroups or not.",
+			metric_tags {}
+		),
+		// TODO: Check unit
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_replication_lag_interval,
+			"mysql_monitor_replication_lag_interval",
+			"How frequently a replication lag check is performed, in milliseconds.",
+			metric_tags {}
+		),
+		// TODO: Check unit
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_replication_lag_timeout,
+			"mysql_monitor_replication_lag_timeout",
+			"Replication lag check timeout in milliseconds.",
+			metric_tags {}
+		),
+		// TODO: Current help looks too complicated to be exposed as a metric help.
+		std::make_tuple (
+			p_th_gauge::mysql_monitor_history,
+			"mysql_monitor_history",
+			".",
+			metric_tags {}
 		)
 	}
 );
@@ -6176,6 +6260,17 @@ void MySQL_Threads_Handler::p_update_metrics() {
 			get_status_variable(MySQL_Thread_status_variables_array[i].v_idx, MySQL_Thread_status_variables_array[i].m_idx);
 		}
 	}
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_wait_timeout]->Set(this->variables.wait_timeout);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_interval]->Set(this->variables.monitor_ping_interval);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_max_connections]->Set(this->variables.max_connections);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_enabled]->Set(this->variables.monitor_enabled);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_timeout]->Set(this->variables.monitor_ping_timeout);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_max_failures]->Set(this->variables.monitor_ping_max_failures);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_interval]->Set(this->variables.monitor_read_only_interval);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_writer_is_also_reader]->Set(this->variables.monitor_writer_is_also_reader);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_interval]->Set(this->variables.monitor_replication_lag_interval);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_timeout]->Set(this->variables.monitor_replication_lag_timeout);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_history]->Set(this->variables.monitor_history);
 }
 
 void MySQL_Thread::Get_Memory_Stats() {

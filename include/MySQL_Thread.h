@@ -305,6 +305,19 @@ struct p_th_gauge {
 		mirror_concurrency,
 		mirror_queue_lengths,
 		mysql_thread_workers,
+		// global_variables
+		mysql_wait_timeout,
+		mysql_max_connections,
+		mysql_monitor_enabled,
+		mysql_monitor_ping_interval,
+		mysql_monitor_ping_timeout,
+		mysql_monitor_ping_max_failures,
+		mysql_monitor_read_only_interval,
+		mysql_monitor_read_only_timeout,
+		mysql_monitor_writer_is_also_reader,
+		mysql_monitor_replication_lag_interval,
+		mysql_monitor_replication_lag_timeout,
+		mysql_monitor_history,
 		__size
 	};
 };
