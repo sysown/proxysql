@@ -3526,7 +3526,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			std::string endpoint_addr = mysrvc->address;
 			std::string endpoint_port = std::to_string(mysrvc->port);
 			std::string hostgroup_id = std::to_string(myhgc->hid);
-			std::string endpoint_id = endpoint_addr + ":" + endpoint_port + ":" + hostgroup_id;
+			std::string endpoint_id = hostgroup_id + ":" + endpoint_addr + ":" + endpoint_port;
 
 			// proxysql_connection_pool_bytes_data_recv metric
 			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
