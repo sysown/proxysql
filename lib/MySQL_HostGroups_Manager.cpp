@@ -2267,7 +2267,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
-MySrvC *MyHGC::get_random_MySrvC(char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
+MySrvC *MyHGC::get_random_MySrvC(char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, uint32_t server_hash) {
 	MySrvC *mysrvc = NULL;
 	unsigned int j;
 	unsigned int sum = 0;
@@ -2519,23 +2519,66 @@ MySrvC *MyHGC::get_random_MySrvC(char *gtid_uuid, uint64_t gtid_trxid, int max_l
 		}
 
 		unsigned int k;
-		if (New_sum > 32768) {
-			k=rand()%New_sum;
-		} else {
-			k = fastrand() % New_sum;
-		}
-		k++;
-		New_sum = 0;
 
-		for (j = 0; j < num_candidates; j++) {
-			mysrvc = mysrvcCandidates[j];
-			New_sum += mysrvc->weight;
-			if (k <= New_sum) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-				if (l > 32) {
-					free(mysrvcCandidates);
+		// If we have a server hash, we initially consider all servers, including unavailable ones.
+		// This is in order to avoid cases where a server goes offline and shifts the hash indexing, 
+		// potentially affecting requests that otherwise could have maintained server continuity.
+		// For random indexing this is not an issue, so we just use the set of currently available servers.
+		if (server_hash) {
+			unsigned int all_weights_static[32];
+			unsigned int *all_weights = all_weights_static;
+			unsigned int sum_of_all_weights = 0;
+
+			if (l > sizeof(all_weights_static)/sizeof(unsigned int)) {
+				all_weights = (unsigned int *)malloc(sizeof(unsigned int) * l);
+			}
+			for (j = 0; j < l; j++) {
+				sum_of_all_weights += all_weights[j] = mysrvs->idx(j)->weight;
+			}
+			while (sum_of_all_weights > 0) {
+				for (k = server_hash % sum_of_all_weights + 1, New_sum = 0, j = 0; j < l; j++) {
+					New_sum += all_weights[j];
+					if (k <= New_sum) {
+						mysrvc = mysrvs->idx(j);
+						// We've used the hash to pick from all servers; now see if that one is available
+						for (unsigned int c = 0; c < num_candidates; c++) {
+							if (mysrvc == mysrvcCandidates[c]) {
+								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+								if (l > 32) {
+									free(mysrvcCandidates);
+								}
+								if (all_weights != all_weights_static) {
+									free(all_weights);
+								}
+								return mysrvc;
+							}
+						}
+						// The one we picked is unavailable, so unweight it and start again.
+						sum_of_all_weights -= all_weights[j];
+						all_weights[j] = 0;
+						break;
+					}
 				}
-				return mysrvc;
+			}
+		} else {
+			if (New_sum > 32768) {
+				k=rand()%New_sum;
+			} else {
+				k = fastrand() % New_sum;
+			}
+			k++;
+			New_sum = 0;
+
+			for (j = 0; j < num_candidates; j++) {
+				mysrvc = mysrvcCandidates[j];
+				New_sum += mysrvc->weight;
+				if (k <= New_sum) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+					if (l > 32) {
+						free(mysrvcCandidates);
+					}
+					return mysrvc;
+				}
 			}
 		}
 	}
@@ -2658,7 +2701,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	return NULL; // never reach here
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, uint32_t server_hash) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
@@ -2667,7 +2710,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 #ifdef TEST_AURORA
 	for (int i=0; i<10; i++)
 #endif // TEST_AURORA
-	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
+	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess, server_hash);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
 		if (conn) {

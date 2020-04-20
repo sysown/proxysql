@@ -190,7 +190,7 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
-	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
+	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, uint32_t server_hash = 0);
 };
 
 class Group_Replication_Info {
@@ -377,7 +377,7 @@ class MySQL_HostGroups_Manager {
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
 
-	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
+	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, uint32_t server_hash);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);

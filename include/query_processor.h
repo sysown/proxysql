@@ -125,6 +125,7 @@ class Query_Processor_Output {
 	int timeout;
 	int retries;
 	int delay;
+	uint32_t server_hash;
 	char *error_msg;
 	char *OK_msg;
 	int sticky_conn;
@@ -162,6 +163,7 @@ class Query_Processor_Output {
 		timeout=-1;
 		retries=-1;
 		delay=-1;
+		server_hash=(uint32_t)0;
 		sticky_conn=-1;
 		multiplex=-1;
 		gtid_from_hostgroup=-1;
@@ -300,7 +302,7 @@ class Query_Processor {
 
 	void query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags);
 	enum MYSQL_COM_QUERY_command query_parser_command_type(SQP_par_t *qp);
-	bool query_parser_first_comment(Query_Processor_Output *qpo, char *fc);
+	void query_parser_first_comment(Query_Processor_Output *qpo, char *fc);
 	void query_parser_free(SQP_par_t *qp);
 	char * get_digest_text(SQP_par_t *qp);
 	uint64_t get_digest(SQP_par_t *qp);

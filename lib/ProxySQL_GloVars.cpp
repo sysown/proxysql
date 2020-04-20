@@ -42,6 +42,18 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(ldap_auth_plugin);
 		ldap_auth_plugin = NULL;
 	}
+	if (query_parser_token_delimiters) {
+		free(query_parser_token_delimiters);
+		query_parser_token_delimiters = NULL;
+	}
+	if (query_parser_key_value_delimiters) {
+		free(query_parser_key_value_delimiters);
+		query_parser_key_value_delimiters = NULL;
+	}
+	if (unit_of_work_identifiers) {
+		free(unit_of_work_identifiers);
+		unit_of_work_identifiers = NULL;
+	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
@@ -80,6 +92,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
 	checksums_values.global_checksum = 0;
 	execute_on_exit_failure = NULL;
 	ldap_auth_plugin = NULL;
+	query_parser_token_delimiters = strdup(";");
+	query_parser_key_value_delimiters = strdup("=");
+	unit_of_work_identifiers = NULL;
 #ifdef DEBUG
 	global.gdb=0;
 #endif
