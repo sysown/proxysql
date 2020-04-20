@@ -94,7 +94,7 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
 
-	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
+	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection(uint32_t server_hash);	
 
 	void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
@@ -121,7 +121,7 @@ class MySQL_Session
 	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
 	bool handler_again___status_CHANGING_CHARSET(int *_rc);
 	bool handler_again___status_CHANGING_SCHEMA(int *);
-	bool handler_again___status_CONNECTING_SERVER(int *);
+	bool handler_again___status_CONNECTING_SERVER(int *, uint32_t server_hash);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);

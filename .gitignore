@@ -170,3 +170,9 @@ heaptrack.*
 
 #tap tests
 *-t
+config/secrets.yml
+*~
+proxysql.db
+proxysql_stats.db
+proxysql.db.bak
+*.pem
