@@ -5599,17 +5599,17 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 		//commit(); NOT IMPLEMENTED
 		wrunlock();
 		{
+			std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
+				[this](const httpserver::http_request& request) {
+					auto headers = request_headers(request);
+					auto serial_response = this->serial_exposer(headers);
+					auto http_response = make_response(serial_response);
+
+					return http_response;
+				}
+			};
 			if (variables.restapi_enabled != variables.restapi_enabled_old) {
 				if (variables.restapi_enabled) {
-					std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
-						[this](const httpserver::http_request& request) {
-							auto headers = request_headers(request);
-							auto serial_response = this->serial_exposer(headers);
-							auto http_response = make_response(serial_response);
-
-							return http_response;
-						}
-					};
 					AdminRestApiServer = new ProxySQL_RESTAPI_Server(
 						variables.restapi_port, {{"/metrics", prometheus_callback}}
 					);
@@ -5626,7 +5626,9 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 						AdminRestApiServer = NULL;
 					}
 					if (variables.restapi_enabled) {
-						AdminRestApiServer = new ProxySQL_RESTAPI_Server(variables.restapi_port);
+						AdminRestApiServer = new ProxySQL_RESTAPI_Server(
+							variables.restapi_port, {{"/metrics", prometheus_callback}}
+						);
 					}
 					variables.restapi_port_old = variables.restapi_port;
 				}
