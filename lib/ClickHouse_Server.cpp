@@ -1141,7 +1141,7 @@ __run_query:
 						if (clickhouse_sess->transfer_started) {
 	    					myprot->generate_pkt_EOF(true,NULL,NULL,clickhouse_sess->sid,0, 2); clickhouse_sess->sid++;
 						} else {
-							myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"");
+							myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"",false);
 						}
 	  					myds->DSS=STATE_SLEEP;
 						clickhouse_sess->transfer_started=false;
@@ -1152,7 +1152,7 @@ __run_query:
 	  					myprot=&sess->client_myds->myprot; assert(myprot);
   						MySQL_Data_Stream *myds=myprot->get_myds();
 						myds->DSS=STATE_QUERY_SENT_DS;
-						myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"");
+						myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"",false);
   						myds->DSS=STATE_SLEEP;
 						clickhouse_sess->transfer_started=false;
 					}
@@ -1622,7 +1622,7 @@ void ClickHouse_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int row
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
-	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,2,0,msg);
+	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,2,0,msg,false);
 	myds->DSS=STATE_SLEEP;
 }
 
