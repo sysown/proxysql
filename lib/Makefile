@@ -45,7 +45,7 @@ SSL_IDIR=$(SSL_DIR)/include
 EV_DIR=$(DEPS_PATH)/libev/libev/
 EV_IDIR=$(EV_DIR)
 
-PROMETHEUS_PATH=$(DEPS_PATH)/prometheus-cpp
+PROMETHEUS_PATH=$(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR=$(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR=$(PROMETHEUS_PATH)/lib
 
