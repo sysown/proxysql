@@ -698,7 +698,7 @@ void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows, 
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
-	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,status,0,msg);
+	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,status,0,msg,false);
 	myds->DSS=STATE_SLEEP;
 }
 
