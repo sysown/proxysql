@@ -535,6 +535,7 @@ static char * admin_variables_names[]= {
 	(char *)"restapi_port",
 	(char *)"web_enabled",
 	(char *)"web_port",
+	(char *)"prometheus_memory_metrics_interval",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
@@ -5028,10 +5029,12 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.web_enabled_old = false;
 	variables.web_port = 6080;
 	variables.web_port_old = variables.web_port;
-
+	variables.p_memory_metrics_interval = 61;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
+
+	last_p_memory_metrics_ts = 0;
 	// create the scheduler
 	scheduler=new ProxySQL_External_Scheduler();
 
@@ -6607,6 +6610,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.web_port);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"prometheus_memory_metrics_interval")) {
+		sprintf(intbuf, "%d", variables.p_memory_metrics_interval);
+		return strdup(intbuf);
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -7202,6 +7209,15 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"prometheus_memory_metrics_interval")) {
+		const auto fval = atoi(value);
+		if (fval > 0 && fval < 7*24*3600) {
+			variables.p_memory_metrics_interval = fval;
+			return true;
+		} else {
+			return false;
+		}
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -7235,6 +7251,14 @@ void ProxySQL_Admin::p_update_metrics() {
 
 void ProxySQL_Admin::p_stats___memory_metrics() {
 	if (!GloMTH) return;
+
+	// Check that last execution is older than the specified interval
+	unsigned long long new_ts = monotonic_time() / 1000 / 1000;
+	if (new_ts < last_p_memory_metrics_ts + variables.p_memory_metrics_interval) {
+		return;
+	}
+	// Update the 'memory_metrics' last exec timestamp
+	last_p_memory_metrics_ts = new_ts;
 
 	// proxysql_connpool_memory_bytes metric
 	const auto connpool_mem = MyHGM->Get_Memory_Stats();

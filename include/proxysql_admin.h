@@ -165,10 +165,13 @@ class ProxySQL_Admin {
 		bool web_enabled_old;
 		int web_port;
 		int web_port_old;
+		int p_memory_metrics_interval;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
 	} variables;
+
+	unsigned long long last_p_memory_metrics_ts;
 
 	struct {
 		std::array<prometheus::Counter*, p_admin_counter::__size> p_counter_array {};
