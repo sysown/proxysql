@@ -927,9 +927,9 @@ th_metrics_map = std::make_tuple(
 		),
 		// TODO: Check unit
 		std::make_tuple (
-			p_th_gauge::mysql_monitor_read_only_interval,
-			"proxysql_mysql_monitor_read_only_interval",
-			"How frequently a read only check is performed, in milliseconds.",
+			p_th_gauge::mysql_monitor_read_only_timeout,
+			"proxysql_mysql_monitor_read_only_timeout",
+			"Read only check timeout in milliseconds.",
 			metric_tags {}
 		),
 		// TODO: Check help
