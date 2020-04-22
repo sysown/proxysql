@@ -291,6 +291,7 @@ struct p_hg_counter {
 		access_denied_max_user_connections,
 		myhgm_myconnpool_get,
 		myhgm_myconnpool_get_ok,
+		myhgm_myconnpool_get_ping,
 		myhgm_myconnpool_push,
 		myhgm_myconnpool_reset,
 		myhgm_myconnpool_destroy,

@@ -1084,6 +1084,12 @@ hg_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
+			p_hg_counter::com_backend_set_names,
+			"proxysql_com_backend_set_names",
+			"Total queries backend SET NAMES.",
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_hg_counter::com_frontend_init_db,
 			"proxysql_com_frontend_init_db",
 			"Total INIT DB queries frontend.",
@@ -1147,6 +1153,12 @@ hg_metrics_map = std::make_tuple(
 			p_hg_counter::myhgm_myconnpool_get_ok,
 			"proxysql_myhgm_myconnpool_get_ok",
 			"The number of successful requests to the connection pool (i.e. where a connection was available).",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_get_ping,
+			"proxysql_myhgm_myconnpool_get_ping",
+			"The number of connections that were taken from the pool to run a ping to keep them alive.",
 			metric_tags {}
 		),
 		std::make_tuple (
