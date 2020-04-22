@@ -420,27 +420,13 @@ Query_Cache::Query_Cache() {
 
 void Query_Cache::p_update_metrics() {
 	this->metrics.p_gauge_array[p_qc_gauge::query_cache_memory_bytes]->Set(get_data_size_total());
-
-	const auto& cur_count_get = this->metrics.p_counter_array[p_qc_counter::query_cache_count_get]->Value();
-	this->metrics.p_counter_array[p_qc_counter::query_cache_count_get]->Increment(Glo_cntGet - cur_count_get);
-
-	const auto& cur_count_get_ok = this->metrics.p_counter_array[p_qc_counter::query_cache_count_get_ok]->Value();
-	this->metrics.p_counter_array[p_qc_counter::query_cache_count_get_ok]->Increment(Glo_cntGetOK - cur_count_get_ok);
-
-	const auto& cur_count_set = this->metrics.p_counter_array[p_qc_counter::query_cache_count_set]->Value();
-	this->metrics.p_counter_array[p_qc_counter::query_cache_count_set]->Increment(Glo_cntSet - cur_count_set);
-
-	const auto& cur_bytes_in = this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_in]->Value();
-	this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_in]->Increment(Glo_dataIN - cur_bytes_in);
-
-	const auto& cur_bytes_out = this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_out]->Value();
-	 this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_out]->Increment(Glo_dataOUT - cur_bytes_out);
-
-	const auto& cur_purged = this->metrics.p_counter_array[p_qc_counter::query_cache_purged]->Value();
-	this->metrics.p_counter_array[p_qc_counter::query_cache_purged]->Increment(Glo_cntPurge - cur_purged);
-
-	const auto& cur_entries = this->metrics.p_counter_array[p_qc_counter::query_cache_entries]->Value();
-	this->metrics.p_counter_array[p_qc_counter::query_cache_entries]->Increment(Glo_dataIN - cur_entries);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get], Glo_cntGet);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get_ok], Glo_cntGetOK);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_set], Glo_cntSet);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_in], Glo_dataIN);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_out], Glo_dataOUT);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_purged], Glo_cntPurge);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_entries], Glo_num_entries);
 }
 
 void Query_Cache::print_version() {

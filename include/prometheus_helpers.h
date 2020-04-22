@@ -210,4 +210,15 @@ void init_prometheus_dyn_gauge_array(
 	}
 }
 
+/**
+ * @brief Inline helper function to avoid code duplication while updating prometheus counters.
+ *
+ * @param counter The counter to be updated.
+ * @param new_val The new value to be set in the counter.
+ */
+inline void p_update_counter(prometheus::Counter* const counter, const double new_val) {
+	const auto& actual_val = counter->Value();
+	counter->Increment(new_val - actual_val);
+}
+
 #endif /* __PROXYSQL_PROMETHEUS_HELPERS_H */

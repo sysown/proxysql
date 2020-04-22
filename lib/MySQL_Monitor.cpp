@@ -755,28 +755,15 @@ void MySQL_Monitor::p_update_metrics() {
 		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Set(GloMyMon->num_threads);
 		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers_aux]->Set(GloMyMon->aux_threads);
 
-		const auto& cur_started_threads = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Increment(GloMyMon->started_threads - cur_started_threads);
-
-		const auto& cur_connect_ok = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok]->Increment(GloMyMon->connect_check_OK- cur_connect_ok);
-		const auto& cur_connect_err = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err]->Increment(GloMyMon->connect_check_ERR - cur_connect_err);
-
-		const auto& cur_ping_check_ok = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok]->Increment(GloMyMon->ping_check_OK - cur_ping_check_ok);
-		const auto& cur_ping_check_err = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err]->Increment(GloMyMon->ping_check_ERR - cur_ping_check_err);
-
-		const auto& cur_read_only_check_ok = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok]->Increment(GloMyMon->read_only_check_OK - cur_read_only_check_ok);
-		const auto& cur_read_only_check_err = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err]->Increment(GloMyMon->read_only_check_ERR - cur_read_only_check_err);
-
-		const auto& cur_replication_lag_check_ok = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok]->Increment(GloMyMon->replication_lag_check_OK - cur_replication_lag_check_ok);
-		const auto& cur_replication_lag_check_err = this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err]->Value();
-		this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err]->Increment(GloMyMon->replication_lag_check_ERR - cur_replication_lag_check_err);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started], GloMyMon->started_threads);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok], GloMyMon->connect_check_OK);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err], GloMyMon->connect_check_ERR);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok], GloMyMon->ping_check_OK);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err], GloMyMon->ping_check_ERR );
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok], GloMyMon->read_only_check_OK);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err], GloMyMon->read_only_check_ERR);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok], GloMyMon->replication_lag_check_OK);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err], GloMyMon->replication_lag_check_ERR);
 	}
 }
 

@@ -389,6 +389,14 @@ class MySQL_HostGroups_Manager {
 	pthread_mutex_t mysql_errors_mutex;
 	umap_mysql_errors mysql_errors_umap;
 
+	/**
+	 * @brief Update the prometheus "connection_pool" counters.
+	 */
+	void p_update_connection_pool();
+	/**
+	 * @brief Update the "stats_mysql_gtid_executed" counters.
+	 */
+	void p_update_mysql_gtid_executed();
 
 	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
 	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
@@ -462,18 +470,11 @@ class MySQL_HostGroups_Manager {
 
 		//////////////////////////////////////////////////////
 	} status;
+
 	/**
-	 * @brief Update the prometheus connection_pool counters.
+	 * @brief Update the module prometheus metrics.
 	 */
-	void p_update_connection_pool();
-	/**
-	 * @brief Update 'myconnpoll' prometheus counters.
-	 */
-	void p_update_myconnpoll();
-	/**
-	 * @brief Update the stats_mysql_gtid_executed counters.
-	 */
-	void p_update_mysql_gtid_executed();
+	void p_update_metrics();
 
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();

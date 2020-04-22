@@ -4091,26 +4091,52 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 	wrunlock();
 }
 
-void MySQL_HostGroups_Manager::p_update_myconnpoll() {
-	const auto& cur_myconnpoll_get =
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get]->Value();
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get]->Increment(status.myconnpoll_get - cur_myconnpoll_get);
+void MySQL_HostGroups_Manager::p_update_metrics() {
+	p_update_counter(status.p_counter_array[p_hg_counter::servers_table_version], status.servers_table_version);
+	// Update *server_connections* related metrics
+	status.p_gauge_array[p_hg_gauge::server_connections_connected]->Set(status.server_connections_connected);
+	p_update_counter(status.p_counter_array[p_hg_counter::server_connections_aborted], status.server_connections_aborted);
+	p_update_counter(status.p_counter_array[p_hg_counter::server_connections_created], status.server_connections_created);
+	p_update_counter(status.p_counter_array[p_hg_counter::server_connections_delayed], status.server_connections_delayed);
 
-	const auto& cur_myconnpoll_get_ok =
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok]->Value();
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok]->Increment(status.myconnpoll_get_ok - cur_myconnpoll_get_ok);
+	// Update *client_connections* related metrics
+	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_created], status.client_connections_created);
+	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_aborted], status.client_connections_aborted);
+	status.p_gauge_array[p_hg_gauge::client_connections_connected]->Set(status.client_connections);
 
-	const auto& cur_myconnpoll_push =
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_push]->Value();
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_push]->Increment(status.myconnpoll_push - cur_myconnpoll_push);
+	// Update *acess_denied* related metrics
+	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_wrong_password], status.access_denied_wrong_password);
+	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_max_connections], status.access_denied_max_connections);
+	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_max_user_connections], status.access_denied_max_user_connections);
 
-	const auto& cur_myconnpoll_reset =
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset]->Value();
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset]->Increment(status.myconnpoll_reset - cur_myconnpoll_reset);
+	p_update_counter(status.p_counter_array[p_hg_counter::selects_for_update__autocommit0], status.select_for_update_or_equivalent);
 
-	const auto& cur_myconnpoll_destroy =
-		this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy]->Value();
-	this->status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy]->Increment(status.myconnpoll_destroy - cur_myconnpoll_destroy);
+	// Update *com_* related metrics
+	p_update_counter(status.p_counter_array[p_hg_counter::com_autocommit], status.autocommit_cnt);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_autocommit_filtered], status.autocommit_cnt_filtered);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_commit_cnt], status.commit_cnt);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_commit_cnt_filtered], status.commit_cnt_filtered);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_rollback], status.rollback_cnt);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_rollback_filtered], status.rollback_cnt_filtered);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_init_db], status.backend_init_db);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_change_user], status.backend_change_user);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_set_names], status.backend_set_names);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_init_db], status.frontend_init_db);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_set_names], status.frontend_set_names);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_use_db], status.frontend_use_db);
+
+	// Update *myconnpoll* related metrics
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_get], status.myconnpoll_get);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok], status.myconnpoll_get_ok);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ping], status.myconnpoll_get_ping);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_push], status.myconnpoll_push);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset], status.myconnpoll_reset);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy], status.myconnpoll_destroy);
+
+	// Update the *connection_pool* metrics
+	this->p_update_connection_pool();
+	// Update the *gtid_executed* metrics
+	this->p_update_mysql_gtid_executed();
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
