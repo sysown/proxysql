@@ -5077,10 +5077,6 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
 		}
-		// Update metrics
-		MyHGM->status.p_counter_array[p_hg_counter::client_connections_created]->Increment();
-		MyHGM->status.p_gauge_array[p_hg_gauge::client_connections_connected]->Increment();
-
 		sess->client_myds->client_addrlen=addrlen;
 		sess->client_myds->client_addr=addr;
 

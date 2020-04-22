@@ -866,7 +866,6 @@ void MySrvC::connect_error(int err_num) {
 	// as a single connection failure won't make a significant difference
 	__sync_fetch_and_add(&connect_ERR,1);
 	__sync_fetch_and_add(&MyHGM->status.server_connections_aborted,1);
-	MyHGM->status.p_counter_array[p_hg_counter::server_connections_aborted]->Increment();
 	if (err_num >= 1048 && err_num <= 1052)
 		return;
 	if (err_num >= 1054 && err_num <= 1075)
@@ -3072,7 +3071,6 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					conn = new MySQL_Connection();
 					conn->parent=mysrvc;
 					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-					MyHGM->status.p_counter_array[p_hg_counter::server_connections_created]->Increment();
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 				} else {
 					// we may consider creating a new connection
@@ -3082,7 +3080,6 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 						conn = new MySQL_Connection();
 						conn->parent=mysrvc;
 						__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-						MyHGM->status.p_counter_array[p_hg_counter::server_connections_created]->Increment();
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					} else {
 						conn=(MySQL_Connection *)conns->remove_index_fast(i);
@@ -3105,13 +3102,11 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		_myhgc->new_connections_now++;
 		if (_myhgc->new_connections_now > (unsigned int) mysql_thread___throttle_connections_per_sec_to_hostgroup) {
 			__sync_fetch_and_add(&MyHGM->status.server_connections_delayed, 1);
-			MyHGM->status.p_counter_array[p_hg_counter::server_connections_delayed]->Increment();
 			return NULL;
 		} else {
 			conn = new MySQL_Connection();
 			conn->parent=mysrvc;
 			__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-			MyHGM->status.p_counter_array[p_hg_counter::server_connections_created]->Increment();
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 			return  conn;
 		}
