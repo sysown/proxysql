@@ -197,6 +197,8 @@ Query_Info::Query_Info() {
 	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
+	end_time=0;
+	start_time=0;
 }
 
 Query_Info::~Query_Info() {
@@ -3922,6 +3924,9 @@ handler_again:
 											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
 											GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
+											// issue #841
+											myconn->local_stmts->remove_stmt(myconn->query.stmt);
+											myconn->query_close_stmt();
 										} else {
 											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
 											GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);

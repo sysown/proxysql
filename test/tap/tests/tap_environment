@@ -1,0 +1,4 @@
+export TAP_HOST=127.0.0.1
+export TAP_PORT=6033
+export TAP_USERNAME=root
+export TAP_PASSWORD=root

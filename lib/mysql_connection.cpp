@@ -2250,6 +2250,15 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	return 1;
 }
 
+void MySQL_Connection::query_close_stmt() {
+	if (query.stmt) {
+		/* clear memory */
+
+		mysql_stmt_close_no_command(query.stmt);
+		query.stmt = NULL;
+	}
+}
+
 void MySQL_Connection::reset() {
 	status_flags=0;
 	reusable=true;
