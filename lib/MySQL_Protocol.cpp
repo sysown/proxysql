@@ -2639,11 +2639,15 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 		if (_myds && _myds->killed_at) { // see case #750
 			if (_myds->kill_type == 0) {
 				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,1907,sqlstate,(char *)"Query execution was interrupted, query_timeout exceeded");
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myds->myconn->parent->myhgc->hid, myds->myconn->parent->address, myds->myconn->parent->port, 1907);
 			} else {
 				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,1317,sqlstate,(char *)"Query execution was interrupted");
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myds->myconn->parent->myhgc->hid, myds->myconn->parent->address, myds->myconn->parent->port, 1317);
 			}
 		} else {
 			myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,mysql_errno(_mysql),sqlstate,mysql_error(_mysql));
+			// TODO: Check this is a mysql error
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myds->myconn->parent->myhgc->hid, myds->myconn->parent->address, myds->myconn->parent->port, mysql_errno(_mysql));
 		}
 		PSarrayOUT.add(pkt.ptr,pkt.size);
 		sid++;

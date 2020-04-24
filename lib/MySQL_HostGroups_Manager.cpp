@@ -7,6 +7,7 @@
 #include "MySQL_Data_Stream.h"
 
 #include <memory>
+#include <pthread.h>
 #include <string>
 
 #include <prometheus/counter.h>
@@ -1234,6 +1235,13 @@ hg_metrics_map = std::make_tuple(
 			"Tracks the number of executed gtid per host and port.",
 			metric_tags {}
 		),
+		// mysql_error
+		std::make_tuple (
+			p_hg_dyn_counter::mysql_error,
+			"proxysql_mysql_error",
+			"Tracks the mysql errors encountered, identifying them by: hostgroup + hostname + port + error_code.",
+			metric_tags {}
+		)
 	},
 	// prometheus dynamic counters
 	hg_dyn_gauge_vector {
@@ -1347,6 +1355,8 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	init_prometheus_gauge_array<hg_metrics_map_idx, p_hg_gauge>(hg_metrics_map, this->status.p_gauge_array);
 	init_prometheus_dyn_counter_array<hg_metrics_map_idx, p_hg_dyn_counter>(hg_metrics_map, this->status.p_dyn_counter_array);
 	init_prometheus_dyn_gauge_array<hg_metrics_map_idx, p_hg_dyn_gauge>(hg_metrics_map, this->status.p_dyn_gauge_array);
+
+	pthread_mutex_init(&mysql_errors_mutex, NULL);
 }
 
 void MySQL_HostGroups_Manager::init() {
@@ -1399,6 +1409,37 @@ void MySQL_HostGroups_Manager::wrlock() {
 #else
 	spin_wrlock(&rwlock);
 #endif
+}
+
+void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
+	p_hg_dyn_counter::metric metric = p_hg_dyn_counter::mysql_error;
+	if (err_type == p_mysql_error_type::proxysql) {
+		metric = p_hg_dyn_counter::proxysql_mysql_error;
+	}
+
+	std::string s_hostgroup = std::to_string(hid);
+	std::string s_address = std::string(address);
+	std::string s_port = std::to_string(port);
+	// TODO: Create switch here to classify error codes
+	std::string s_code = std::to_string(code);
+	std::string metric_id = s_hostgroup + ":" + address + ":" + s_port;
+	std::map<string, string> metric_labels {
+		{ "hostgroup", s_hostgroup },
+		{ "address", address },
+		{ "port", s_port },
+		{ "code", s_code }
+	};
+
+	pthread_mutex_lock(&mysql_errors_mutex);
+
+	p_inc_map_counter(
+		status.p_mysql_errors_map,
+		status.p_dyn_counter_array[metric],
+		metric_id,
+		metric_labels
+	);
+
+	pthread_mutex_unlock(&mysql_errors_mutex);
 }
 
 void MySQL_HostGroups_Manager::wrunlock() {
@@ -3167,7 +3208,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 								auth_password=ui->password;
 							}
 						}
-						KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->mysql->thread_id, KILL_CONNECTION, NULL);
+						KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->parent->myhgc->hid, c->mysql->thread_id, KILL_CONNECTION, NULL);
 						pthread_attr_t attr;
 						pthread_attr_init(&attr);
 						pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

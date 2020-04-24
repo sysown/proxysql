@@ -315,8 +315,15 @@ struct p_hg_dyn_counter {
 		connection_pool_conn_ok,
 		connection_pool_queries,
 		gtid_executed,
+		proxysql_mysql_error,
+		mysql_error,
 		__size
 	};
+};
+
+enum class p_mysql_error_type {
+	mysql,
+	proxysql
 };
 
 struct p_hg_dyn_gauge {
@@ -397,6 +404,10 @@ class MySQL_HostGroups_Manager {
 	 * @brief Update the "stats_mysql_gtid_executed" counters.
 	 */
 	void p_update_mysql_gtid_executed();
+	/**
+	 * @brief Mutex to be taken before accessing the p_mysql_errors_map.
+	 */
+	pthread_mutex_t p_err_map_access;
 
 	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
 	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
@@ -468,13 +479,25 @@ class MySQL_HostGroups_Manager {
 		/// Prometheus gtid_executed metrics
 		std::map<std::string, prometheus::Counter*> p_gtid_executed_map {};
 
+		/// Prometheus mysql_error metrics
+		std::map<std::string, prometheus::Counter*> p_mysql_errors_map {};
+
 		//////////////////////////////////////////////////////
 	} status;
-
 	/**
 	 * @brief Update the module prometheus metrics.
 	 */
 	void p_update_metrics();
+	/**
+	 * @brief Updates the 'mysql_error' counter identified by the 'm_id' parameter,
+	 * or creates a new one in case of not existing.
+	 *
+	 * @param hid The hostgroup identifier.
+	 * @param address The connection address that triggered the error.
+	 * @param port The port of the connection that triggered the error.
+	 * @param errno The error code itself.
+	 */
+	void p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code);
 
 	wqueue<MySQL_Connection *> queue;
 	MySQL_HostGroups_Manager();

@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <prometheus/counter.h>
+#include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
 #include "proxysql.h"
 #include "cpp.h"
@@ -912,6 +913,7 @@ void * monitor_ping_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		//proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 	} else {
 		if (crc==false) {
@@ -1058,6 +1060,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		if (myrc==NULL) {
 			mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, hostgroup_id, hostname, port, myerrno);
 			if (myerrno < 2000) {
 				mysql_close(mysql);
 			} else {
@@ -1140,6 +1143,7 @@ void * monitor_read_only_thread(void *arg) {
 		if (mmsd->interr) {
 			// error during query
 			mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1152,6 +1156,7 @@ void * monitor_read_only_thread(void *arg) {
 	if (mmsd->interr) {
 		// error during query
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		goto __exit_monitor_read_only_thread;
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
@@ -1173,6 +1178,7 @@ void * monitor_read_only_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 	}
 
 __exit_monitor_read_only_thread:
@@ -1374,6 +1380,7 @@ void * monitor_group_replication_thread(void *arg) {
 		if (mmsd->interr) {
 			// error during query
 			mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			goto __exit_monitor_group_replication_thread;
 		}
 
@@ -1387,6 +1394,7 @@ void * monitor_group_replication_thread(void *arg) {
 	if (mmsd->interr) {
 		// error during query
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		goto __exit_monitor_group_replication_thread;
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
@@ -1407,6 +1415,7 @@ void * monitor_group_replication_thread(void *arg) {
 	}
 	if (mmsd->interr) { // group replication check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 		GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 		if (mmsd->mysql) {
@@ -1755,6 +1764,7 @@ void * monitor_galera_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
@@ -2130,6 +2140,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		unsigned long long now=monotonic_time();
 #ifdef DEBUG
 		proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (now-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
@@ -4272,6 +4283,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	}
 	if (mmsd->interr) { // check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 	}
 
 __exit_monitor_aws_aurora_HG_thread:
@@ -4695,6 +4707,7 @@ void * monitor_AWS_Aurora_thread(void *arg) {
 	}
 	if (mmsd->interr) { // check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 	}
 
 __exit_monitor_aws_aurora_thread:
