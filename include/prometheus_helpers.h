@@ -4,6 +4,7 @@
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 #include <prometheus/family.h>
+#include <string>
 
 #include "proxysql.h"
 
@@ -219,6 +220,67 @@ void init_prometheus_dyn_gauge_array(
 inline void p_update_counter(prometheus::Counter* const counter, const double new_val) {
 	const auto& actual_val = counter->Value();
 	counter->Increment(new_val - actual_val);
+}
+
+/**
+ * @brief Updates the supplied counter map counter which correspond with the supplied identifier.
+ *  In case the identifier doesn't exist in the map, a new counter is created used the supplied
+ *  metric labels and 'counter family'.
+ *
+ * @param counter_map The counter map to be updated.
+ * @param counter_family The 'counter family' required to create a new counter if not present.
+ * @param m_id The target counter identifier.
+ * @param m_labels The labels for creating a new counter if not present.
+ * @param new_val The new value to be set in the counter.
+ */
+inline void p_update_map_counter(
+	std::map<std::string, prometheus::Counter*> counter_map,
+	prometheus::Family<prometheus::Counter>* const counter_family,
+	const std::string m_id,
+	const std::map<std::string, std::string> m_labels,
+	const double new_val
+) {
+	const auto& id_val = counter_map.find(m_id);
+	if (id_val != counter_map.end()) {
+		p_update_counter(id_val->second, new_val);
+	} else {
+		prometheus::Counter* new_counter =
+			std::addressof(
+				counter_family->Add(m_labels)
+			);
+		counter_map.insert({m_id, new_counter});
+
+		p_update_counter(new_counter, new_val);
+	}
+}
+
+/**
+ * @brief Updates the supplied counter map counter incrementing the counter that correspond
+ *  with the supplied identifier. In case of non existing, it creates a new one and increment it.
+ *
+ * @param counter_map The counter map to be updated.
+ * @param counter_family The 'counter family' required to create a new counter if not present.
+ * @param m_id The target counter identifier.
+ * @param m_labels The labels for creating a new counter if not present.
+ */
+inline void p_inc_map_counter(
+	std::map<std::string, prometheus::Counter*> counter_map,
+	prometheus::Family<prometheus::Counter>* const counter_family,
+	const std::string m_id,
+	const std::map<std::string, std::string> m_labels
+) {
+	const auto& id_val = counter_map.find(m_id);
+	if (id_val != counter_map.end()) {
+		id_val->second->Increment();
+	} else {
+		prometheus::Counter* new_counter =
+			std::addressof(
+				counter_family->Add(m_labels)
+			);
+		counter_map.insert({m_id, new_counter});
+
+		new_counter->Increment();
+	}
 }
 
 #endif /* __PROXYSQL_PROMETHEUS_HELPERS_H */
