@@ -723,6 +723,12 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 				break;
 			case STATE_OK:
 				break;
+			case STATE_ROW:
+				if (eof_identifier)
+					(*myds)->DSS=STATE_EOF2;
+				else
+					assert(0);
+				break;
 			default:
 				assert(0);
 		}
