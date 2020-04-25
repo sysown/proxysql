@@ -180,7 +180,7 @@ static char is_digit_string(char *f, char *t)
 	return 1;
 }
 
-inline char is_arithmetic_op(char op) {
+static inline char is_arithmetic_op(char op) {
 	if (op == '+') {
 		return 1;
 	} else if (op == '-') {
