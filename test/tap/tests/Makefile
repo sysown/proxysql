@@ -82,6 +82,7 @@ debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed
 debug: tests
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -105,3 +106,9 @@ aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 
 create_connection_annotation: test_connection_annotation-t.cpp
 	g++ -DTEST_AURORA -DDEBUG test_connection_annotation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_connection_annotation-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+set_testing-t: set_testing-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ set_testing-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -O0 -ggdb -ldl -lssl -lcrypto -o set_testing-t
+
+test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_tokenizer-t
