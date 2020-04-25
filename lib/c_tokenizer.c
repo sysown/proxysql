@@ -180,6 +180,21 @@ static char is_digit_string(char *f, char *t)
 	return 1;
 }
 
+inline char is_arithmetic_op(char op) {
+	if (op == '+') {
+		return 1;
+	} else if (op == '-') {
+		return 1;
+	} else if (op == '*') {
+		return 1;
+	} else if (op == '/') {
+		return 1;
+	} else if (op == '%') {
+		return 1;
+	} else {
+		return 0;
+	}
+}
 
 char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comment, char *buf){
 	int i = 0;
@@ -247,11 +262,11 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				flag = 3;
 			}
 
-			else if (*s == '-') {
-				if (prev_char != '-' && i!=(len-1) && ((*(s+1)=='-'))) {
+			else if (*s == '-' && ((*(s+1)=='-'))) {
+				if (prev_char != '-' && i!=(len-1)) {
 					flag = 3;
 				}
-				else if (i==0 && ((*(s+1)=='-'))) {
+				else if (i==0) {
 					flag = 3;
 				}
 			}
@@ -304,6 +319,29 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							s++;
 							i++;
 						}
+					}
+				}
+				{
+					char* p = p_r - 2;
+					// supress spaces before aritmetic operators
+					if (p >= r && is_space_char(prev_char) && is_arithmetic_op(*s)) {
+						if (*p == '?') {
+							prev_char = *s;
+							--p_r;
+							*p_r++ = *s;
+							s++;
+							i++;
+							continue;
+						}
+					}
+					// supress spaces before and after commas
+					if (p >= r && is_space_char(prev_char) && ((*s == ',') || (*p == ','))) {
+						prev_char = ',';
+						--p_r;
+						*p_r++ = *s;
+						s++;
+						i++;
+						continue;
 					}
 				}
 				if (replace_null) {
@@ -515,8 +553,21 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r--;
 						}
 					}
+					if ( _p >= r && is_space_char(*(_p + 2))) {
+						if ( _p >= r && ( *(_p+1) == '-' || *(_p+1) == '+' || *(_p+1) == '*' || *(_p+1) == '/' || *(_p+1) == '%' || *(_p+1) == ',')) {
+							p_r--;
+						}
+					}
 					*p_r++ = '?';
 					i++;
+					continue;
+				}
+
+				// is float
+				if (*s == '.' || *s == 'e' || ((*s == '+' || *s == '-') && prev_char == 'e')) {
+					prev_char = *s;
+					i++;
+					s++;
 					continue;
 				}
 
@@ -528,11 +579,18 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						char *_p = p_r_t;
 						_p-=3;
 						p_r = p_r_t;
+						// remove symbol and keep parenthesis or comma
 						if ( _p >= r && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 							if  (
 								( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
 								( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
 							) {
+								p_r--;
+							}
+						}
+						// Remove spaces before number
+						if ( _p >= r && is_space_char(*(_p + 2))) {
+							if ( _p >= r && ( *(_p+1) == '-' || *(_p+1) == '+' || *(_p+1) == '*' || *(_p+1) == '/' || *(_p+1) == '%' || *(_p+1) == ',')) {
 								p_r--;
 							}
 						}
@@ -544,8 +602,6 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							i++;
 							continue;
 						}
-
-
 					}
 					flag = 0;
 				}
