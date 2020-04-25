@@ -93,6 +93,28 @@ class MySQL_Thread
 
 	Session_Regex **match_regexes;
 
+#ifdef IDLE_THREADS
+	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
+	void worker_thread_gets_sessions_from_idle_thread();
+	void idle_thread_gets_sessions_from_worker_thread();
+	void idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr);
+	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr);
+	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
+	void idle_thread_to_kill_idle_sessions();
+#endif // IDLE_THREADS
+
+	unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
+	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
+	bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
+	void handle_mirror_queue_mysql_sessions();
+	void handle_kill_queues();
+	void check_timing_out_session(unsigned int n);
+	void check_for_invalid_fd(unsigned int n);
+	void read_one_byte_from_pipe(unsigned int n);
+	void tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds);
+	void tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds);
+	void configure_pollout(MySQL_Data_Stream *myds, unsigned int n);
+
 	protected:
 	int nfds;
 
