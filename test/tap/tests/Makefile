@@ -127,3 +127,4 @@ set_testing-t: set_testing-t.cpp $(TAP_LIBDIR)/libtap.a
 
 test_default_value_transaction_isolation-t: test_default_value_transaction_isolation-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_default_value_transaction_isolation-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -ldl $(STATIC_LIBS) -o test_default_value_transaction_isolation-t
+
