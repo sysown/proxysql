@@ -126,12 +126,19 @@ int main(int argc, char** argv) {
 #endif
 
 	MYSQL_QUERY(mysql, "load mysql variables from disk");
+	MYSQL_QUERY(mysql, "load mysql variables to runtime");
 	MYSQL_QUERY(mysql, "load admin variables from disk");
+	MYSQL_QUERY(mysql, "load admin variables to runtime");
 	MYSQL_QUERY(mysql, "load mysql users from disk");
+	MYSQL_QUERY(mysql, "load mysql users to runtime");
 	MYSQL_QUERY(mysql, "load mysql servers from disk");
+	MYSQL_QUERY(mysql, "load mysql servers to runtime");
 	MYSQL_QUERY(mysql, "load scheduler from disk");
+	MYSQL_QUERY(mysql, "load scheduler to runtime");
 	MYSQL_QUERY(mysql, "load restapi from disk");
+	MYSQL_QUERY(mysql, "load restapi to runtime");
 	MYSQL_QUERY(mysql, "load proxysql servers from disk");
+	MYSQL_QUERY(mysql, "load proxysql servers to runtime");
 
 	mysql_close(mysql);
 
