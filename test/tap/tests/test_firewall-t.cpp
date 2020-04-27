@@ -138,6 +138,11 @@ int main(int argc, char** argv) {
 		ok(false, "Query should be allowed by firewall, but it is blocked after active=1 update");
 	}
 
+	// Cleanup firewall rules
+	MYSQL_QUERY(mysqladmin, "delete from mysql_firewall_whitelist_users");
+	MYSQL_QUERY(mysqladmin, "delete from mysql_firewall_whitelist_rules");
+	MYSQL_QUERY(mysqladmin, "load mysql firewall to runtime");
+
 	mysql_close(mysql);
 	mysql_close(mysqladmin);
 
