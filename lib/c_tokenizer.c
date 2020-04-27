@@ -246,7 +246,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			{
 				ccl=0;
 				flag = 1;
-				if (*(s+1)=='!')
+				if (i != (len-1) && *(s+1)=='!')
 					cmd=1;
 			}
 
@@ -257,13 +257,13 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			}
 
 			// comment type 3 - start with '--'
-			else if(prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
+			else if(i != (len-1) && prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
 			{
 				flag = 3;
 			}
 
-			else if (*s == '-' && ((*(s+1)=='-'))) {
-				if (prev_char != '-' && i!=(len-1)) {
+			else if (i != (len-1) && *s == '-' && (*(s+1)=='-')) {
+				if (prev_char != '-') {
 					flag = 3;
 				}
 				else if (i==0) {
