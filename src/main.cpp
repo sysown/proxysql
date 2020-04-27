@@ -1754,6 +1754,7 @@ gotofork:
 
 	} else {
 		GloAdmin->flush_error_log();
+		GloVars.install_signal_handler();
 	}
 
 __start_label:
