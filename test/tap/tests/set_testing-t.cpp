@@ -397,7 +397,7 @@ void * my_conn_thread(void *arg) {
 
 	while(__sync_fetch_and_add(&connect_phase_completed,0) != num_threads) {
 	}
-	MYSQL *mysql;
+	MYSQL *mysql=NULL;
 	json vars;
 	for (j=0; j<queries; j++) {
 		int fr = fastrand();
