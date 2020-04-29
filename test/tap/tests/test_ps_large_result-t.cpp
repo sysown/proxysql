@@ -91,7 +91,8 @@ int main(int argc, char** argv) {
 		q << "(" << k << ",'" << c.str() << "','" << pad.str() << "')";
 	}
 	MYSQL_QUERY(mysql, q.str().c_str());
-	ok(true, "%d row inserted", NUM_ROWS);
+	ok(true, "%d row inserted. Waiting for possible replication on test server 30(s)", NUM_ROWS);
+	sleep(30);
 
 	MYSQL_STMT *stmt1 = mysql_stmt_init(mysql);
 	if (!stmt1)
