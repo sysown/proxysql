@@ -510,11 +510,11 @@ void * my_conn_thread(void *arg) {
 
 int main(int argc, char *argv[]) {
 	CommandLine cl;
-	std::string fileName("./tests/set_testing-t.csv");
 
 	if(cl.getEnv())
 		return exit_status();
 
+	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
 	MYSQL* mysqladmin = mysql_init(NULL);
 	if (!mysqladmin)
 		return exit_status();
