@@ -13,7 +13,7 @@
 using nlohmann::json;
 
 CommandLine::CommandLine() :
-	host(NULL), username(NULL), password(NULL), admin_username(NULL), admin_password(NULL) {}
+	host(NULL), username(NULL), password(NULL), admin_username(NULL), admin_password(NULL), workdir() {}
 
 CommandLine::~CommandLine() {
 	if (host)
@@ -26,11 +26,13 @@ CommandLine::~CommandLine() {
 		free(admin_username);
 	if (admin_password)
 		free(admin_password);
+	if (workdir)
+		free(workdir);
 }
 
 int CommandLine::parse(int argc, char** argv) {
 	int opt;
-	while ((opt = getopt(argc, argv, "ncsu:p:h:P:")) != -1) {
+	while ((opt = getopt(argc, argv, "ncsu:p:h:P:W:")) != -1) {
 		switch (opt) {
 			case 'c':
 				checksum = true;
@@ -59,11 +61,14 @@ int CommandLine::parse(int argc, char** argv) {
 			case 'U':
 				admin_username = strdup(optarg);
 				break;
+			case 'W':
+				workdir = strdup(optarg);
+				break;
 			case 'S':
 				admin_password = strdup(optarg);
 				break;
 			default: /* '?' */
-				fprintf(stderr, "Usage: %s -u username -p password -h host [ -P port ] [ -A port ] [ -U admin_username ] [ -S admin_password ] [ -c ] [ -s ] [ -n ]\n", argv[0]);
+				fprintf(stderr, "Usage: %s -u username -p password -h host [ -P port ] [ -A port ] [ -U admin_username ] [ -S admin_password ] [ -W workdir] [ -c ] [ -s ] [ -n ]\n", argv[0]);
 				return 0;
 		}
 	}
@@ -101,6 +106,7 @@ int CommandLine::read(const std::string& file) {
 	admin_port = 6032;
 	username = strdup("root");
 	password = strdup("a");
+	workdir = strdup("./tests/");
 	return 0;
 }
 
@@ -151,6 +157,10 @@ int CommandLine::getEnv() {
 		env_port=6032;
 	if(env_port>0 && env_port<65536)
 		admin_port=env_port;
+
+	value=getenv("TAP_WORKDIR");
+	if(!value) return -1;
+	workdir = strdup(value);
 
 	return 0;
 }
