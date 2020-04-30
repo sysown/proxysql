@@ -13,6 +13,7 @@ Depends: libgnutls28 | libgnutls30
 Files: proxysql /usr/bin/
  etc/proxysql.cnf /etc/
  etc/logrotate.d/proxysql /etc/logrotate.d/
+ systemd/system/proxysql-initial.service /lib/systemd/system/
  systemd/system/proxysql.service /lib/systemd/system/
  tools/proxysql_galera_checker.sh /usr/share/proxysql/tools/
  tools/proxysql_galera_writer.pl /usr/share/proxysql/tools/
