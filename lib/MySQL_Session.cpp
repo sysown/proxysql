@@ -1217,13 +1217,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
 		char *csname=trim_spaces_and_quotes_in_place(unstripped);
-		bool collation_specified = false;
 		//unsigned int charsetnr = 0;
 		const MARIADB_CHARSET_INFO * c;
 		char * collation_name_unstripped = NULL;
 		char * collation_name = NULL;
 		if (strcasestr(csname," COLLATE ")) {
-			collation_specified = true;
 			collation_name_unstripped = strcasestr(csname," COLLATE ") + strlen(" COLLATE ");
 			collation_name = trim_spaces_and_quotes_in_place(collation_name_unstripped);
 			char *_s1=index(csname,' ');
@@ -2198,6 +2196,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		query=NULL;
 	}
 	if (rc==0) {
+		track_session_variables(myconn->mysql);
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
@@ -3618,6 +3617,7 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
+					track_session_variables(myconn->mysql);
 
 					if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
 						if (mysql_thread___client_session_track_gtid) {
@@ -6469,6 +6469,113 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 		}
 	} else {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Unable to parse SET query but NOT setting lock_hostgroup %s\n", nqn.c_str());
+	}
+}
+
+void MySQL_Session::track_session_variables(MYSQL* mysql) {
+	const char *data;
+	size_t length;
+
+	if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0)
+	{
+		int idx = SQL_NAME_LAST;
+		for (int i=0; i<SQL_NAME_LAST; i++) {
+			if (!strncasecmp(data, mysql_tracked_variables[i].set_variable_name, length)) {
+				idx = i;
+				break;
+			}
+		}
+		char name[1024];
+		memcpy(name, data, length);
+		name[length] = 0;
+
+		bool is_value = true;
+		while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0)
+		{
+			if (is_value) {
+				char val[1024];
+				memcpy(val, data, length);
+				val[length]=0;
+
+				if (length>0) {
+					if (idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE ||
+							idx == SQL_CHARACTER_SET_RESULTS) {
+						char id[16];
+						char name[32];
+						memcpy(name, data, length);
+						name[length] = '\0';
+						collation_id_from_charset_name_r(name, id, sizeof(id));
+						mysql_variables.client_set_value(this, idx, id);
+						mysql_variables.server_set_value(this, idx, id);
+					}
+					else if (idx == SQL_CHARACTER_SET_CONNECTION) {
+						// The SQL_CHARACTER_SET_CONNECTION should be tracked for SET CHARSET command
+						// which set CHARACTER_SET_CONNECTION to CHARACTER_SET_DATABASE
+						char id[16];
+						char name[32];
+						memcpy(name, data, length);
+						name[length] = '\0';
+						collation_id_from_charset_name_r(name, id, sizeof(id));
+
+						const MARIADB_CHARSET_INFO *ci = NULL;
+						ci = proxysql_find_charset_collate(mysql_variables.server_get_value(this, SQL_COLLATION_CONNECTION));
+						if (ci) {
+							if (strcasecmp(ci->csname, name)!=0 || mysql_variables.client_get_value(this, idx) == NULL) {
+								mysql_variables.client_set_value(this, idx, id);
+								mysql_variables.server_set_value(this, idx, id);
+							}
+						}
+					}
+					else if (idx == SQL_COLLATION_CONNECTION) {
+						char id[16];
+						char collation[32];
+						memcpy(collation, data, length);
+						collation[length] = '\0';
+						collation_id_from_collate_r(collation, id, sizeof(id));
+						mysql_variables.client_set_value(this, idx, id);
+						mysql_variables.server_set_value(this, idx, id);
+						mysql_variables.client_set_value(this, SQL_CHARACTER_SET_CONNECTION, id);
+						mysql_variables.server_set_value(this, SQL_CHARACTER_SET_CONNECTION, id);
+					}
+					else if (idx == SQL_LOG_BIN) {
+						char value[1024];
+						memcpy(value, data, length);
+						value[length] = '\0';
+						if (value[1] == 'N') {
+							mysql_variables.client_set_value(this, idx, "1");
+							mysql_variables.server_set_value(this, idx, "1");
+						} else {
+							mysql_variables.client_set_value(this, idx, "0");
+							mysql_variables.server_set_value(this, idx, "0");
+						}
+					} else {
+						if (idx >= SQL_NAME_LAST) {
+							char value[1024];
+							memcpy(value, data, length);
+							value[length] = '\0';
+							is_value = !is_value;
+							continue;
+						}
+						char value[1024];
+						memcpy(value, data, length);
+						value[length] = '\0';
+						mysql_variables.client_set_value(this, idx, value);
+						mysql_variables.server_set_value(this, idx, value);
+					}
+				}
+			} else {
+				for (int i=0; i<SQL_NAME_LAST; i++) {
+					if (!strncasecmp(data, mysql_tracked_variables[i].set_variable_name, length)) {
+						idx = i;
+						break;
+					}
+				}
+				char name[1024];
+				memcpy(name, data, length);
+				name[length] = 0;
+			}
+			is_value = !is_value;
+		}
 	}
 }
 
