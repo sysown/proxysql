@@ -15,6 +15,7 @@ __thread int mysql_thread___query_digests_max_query_length = 65000;
 __thread bool mysql_thread___query_digests_lowercase = false;
 __thread bool mysql_thread___query_digests_replace_null = false;
 __thread bool mysql_thread___query_digests_no_digits = false;
+__thread int mysql_thread___query_digests_grouping_limit = 3;
 
 const std::vector<std::string> queries {
 	// floats
@@ -43,7 +44,12 @@ const std::vector<std::string> queries {
 	"select * from t where t = \"foo\"",
 	"select \"1+ 1, 1 -1, 1 * 1 , 1/1 , 100 % 3\"",
 	// not modified
-	"select * fromt t"
+	"select * fromt t",
+	// test query_digest reduction
+	"SELECT * FROM tablename WHERE id IN (1,2,3,4,5,6,7,8,9,10)",
+	"SELECT * FROM tablename WHERE id IN (1,2,3,4)",
+	// invalid request grouping
+	"SELECT * tablename where id IN (1,2,3,4,5,6,7,8,  AND j in (1,2,3,4,5,6  and k=1"
 };
 
 const std::vector<std::string> exp_results {
@@ -73,7 +79,34 @@ const std::vector<std::string> exp_results {
 	"select * from t where t = ?",
 	"select ?",
 	// not modified
-	"select * fromt t"
+	"select * fromt t",
+	// test query_digest reduction
+	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
+	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
+	// invalid request grouping
+	"SELECT * tablename where id IN (?,?,?,... AND j in (?,?,?,... and k=?"
+};
+
+const std::vector<std::string> queries_grouping {
+	// test query_digest reduction
+	"SELECT * FROM tablename WHERE id IN (1,2,3,4,5,6,7,8,9,10)",
+	"SELECT * FROM tablename WHERE id IN (1,2,3,4)",
+	// invalid request grouping
+	"SELECT * tablename where id IN (1,2,3,4,5,6,7,8,  AND j in (1,2,3,4,5,6  and k=1",
+	"SELECT (1.1, 1, 2) FROM db.table",
+	"SELECT (1.1, 1.12934, 21.32 ) FROM db.table2",
+	"SELECT (1.1, 1.12934, 21.32, 39123 ) FROM db.table2",
+};
+
+const std::vector<std::string> exp_queries_grouping {
+	// test query_digest reduction
+	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
+	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
+	// invalid request grouping
+	"SELECT * tablename where id IN (?,?,?,... AND j in (?,?,?,... and k=?",
+	"SELECT (?,?,?) FROM db.table",
+	"SELECT (?,?,?) FROM db.table2",
+	"SELECT (?,?,?,...) FROM db.table2",
 };
 
 int main(int argc, char** argv) {
@@ -91,7 +124,17 @@ int main(int argc, char** argv) {
 		char* c_res = mysql_query_digest_and_first_comment(const_cast<char*>(query.c_str()), query.length(), NULL, buf);
 		std::string result(c_res);
 
-		ok(result == exp_res, "result isn't equal to exp result: '%s' != '%s'", result.c_str(), exp_res.c_str());
+		ok(result == exp_res, "Digest should be equal to exp result: '%s' == '%s'", result.c_str(), exp_res.c_str());
+	}
+
+	for (size_t i = 0; i < queries_grouping.size(); i++) {
+		const auto& query = queries_grouping[i];
+		const auto& exp_res = exp_queries_grouping[i];
+
+		char* c_res = mysql_query_digest_and_first_comment(const_cast<char*>(query.c_str()), query.length(), NULL, buf);
+		std::string result(c_res);
+
+		ok(result == exp_res, "Grouping digest should be equal to exp result: '%s' == '%s'", result.c_str(), exp_res.c_str());
 	}
 
 	return exit_status();
