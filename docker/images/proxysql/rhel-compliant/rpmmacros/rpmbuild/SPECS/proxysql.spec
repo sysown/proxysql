@@ -13,7 +13,7 @@ License: GPL+
 Group: Development/Tools
 SOURCE0 : %{name}-%{version}.tar.gz
 URL: http://www.proxysql.com/
-
+Requires: gnutls
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 
 %description
