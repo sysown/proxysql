@@ -1163,8 +1163,7 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 	return true;
 }
 
-//bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id) {
+bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id, bool deprecate_eof_active) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
@@ -1247,7 +1246,12 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-  memcpy(_ptr+l,"\x8f\x81\x15",3); l+=3;
+	if (deprecate_eof_active) {
+		memcpy(_ptr+l,"\x8f\x81\x15",3); l+=3;
+	}
+	else {
+		memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
+	}
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
 //#ifdef MARIADB_BASE_VERSION
