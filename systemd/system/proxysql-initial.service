@@ -1,0 +1,13 @@
+[Unit]
+Description=High Performance Advanced Proxy for MySQL, this service will reset the database and start ProxySQL
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/systemctl set-environment PROXYSQL_OPTS="--initial"
+ExecStart=/bin/systemctl start proxysql
+ExecStartPost=/bin/systemctl unset-environment PROXYSQL_OPTS
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
