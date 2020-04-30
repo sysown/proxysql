@@ -79,9 +79,9 @@ clean:
 
 OPT=-O2 -Wl,--no-as-needed
 
-SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp set_testing-t.cpp test_firewall-t.cpp
+SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp set_testing-t.cpp test_firewall-t.cpp test_ps_hg_routing-t.cpp
 
-tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t test_ps_large_result-t set_testing-t test_firewall-t
+tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t test_ps_large_result-t set_testing-t test_firewall-t test_ps_hg_routing-t
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -123,3 +123,7 @@ set_testing-t: set_testing-t.cpp $(TAP_LIBDIR)/libtap.a
 
 test_default_value_transaction_isolation-t: test_default_value_transaction_isolation-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_default_value_transaction_isolation-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -ldl $(STATIC_LIBS) -o test_default_value_transaction_isolation-t
+
+test_ps_hg_routing-t: test_ps_hg_routing-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_ps_hg_routing-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap $(STATIC_LIBS) -ldl -lpthread -o test_ps_hg_routing-t
+
