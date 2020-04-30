@@ -14,6 +14,7 @@ extern __thread int mysql_thread___query_digests_max_query_length;
 extern __thread bool mysql_thread___query_digests_lowercase;
 extern __thread bool mysql_thread___query_digests_replace_null;
 extern __thread bool mysql_thread___query_digests_no_digits;
+extern __thread bool mysql_thread___query_digests_grouping_limit;
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
@@ -227,6 +228,12 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 	bool lowercase=0;
 	bool replace_null=0;
 	bool replace_number=0;
+
+	char grouping_digest=0;
+	char grouping_limit_exceeded=0;
+	int grouping_count=0;
+	int grouping_lim = mysql_thread___query_digests_grouping_limit;
+
 	lowercase=mysql_thread___query_digests_lowercase;
 	replace_null = mysql_thread___query_digests_replace_null;
 	replace_number = mysql_thread___query_digests_no_digits;
@@ -337,6 +344,15 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					// supress spaces before and after commas
 					if (p >= r && is_space_char(prev_char) && ((*s == ',') || (*p == ','))) {
 						prev_char = ',';
+						--p_r;
+						*p_r++ = *s;
+						s++;
+						i++;
+						continue;
+					}
+					// supress spaces before closing brakets
+					if (p >= r && (*s == ')')) {
+						prev_char = *s;
 						--p_r;
 						*p_r++ = *s;
 						s++;
@@ -588,13 +604,31 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 								p_r--;
 							}
 						}
+						// check if we are in a grouping candidate query_digest
+						if (*(_p + 2) == '(' || *_p == '(') {
+							grouping_digest = 1;
+						}
 						// Remove spaces before number
 						if ( _p >= r && is_space_char(*(_p + 2))) {
-							if ( _p >= r && ( *(_p+1) == '-' || *(_p+1) == '+' || *(_p+1) == '*' || *(_p+1) == '/' || *(_p+1) == '%' || *(_p+1) == ',')) {
+							// A point can be found prior to a number in case of query grouping
+							if ( _p >= r && ( *(_p+1) == '-' || *(_p+1) == '+' || *(_p+1) == '*' || *(_p+1) == '/' || *(_p+1) == '%' || *(_p+1) == ',' || *(_p+1) == '.')) {
 								p_r--;
 							}
 						}
-						*p_r++ = '?';
+						if (grouping_count < grouping_lim) {
+							*p_r++ = '?';
+							if (grouping_digest) {
+								grouping_count++;
+							}
+						} else {
+							if (!grouping_limit_exceeded) {
+								*p_r++ = '.';
+								*p_r++ = '.';
+								*p_r++ = '.';
+
+								grouping_limit_exceeded=1;
+							}
+						}
 						if(len == i+1)
 						{
 							if(is_token_char(*s))
@@ -612,10 +646,20 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 		// COPY CHAR
 		// =================================================
 		// convert every space char to ' '
+		if (*s != ',' && !is_digit_char(*s) && !is_space_char(*s)) {
+			grouping_digest = 0;
+			grouping_count = 0;
+			grouping_limit_exceeded = 0;
+		}
+
 		if (lowercase==0) {
-			*p_r++ = !is_space_char(*s) ? *s : ' ';
+			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
+				*p_r++ = !is_space_char(*s) ? *s : ' ';
+			}
 		} else {
-			*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
+				*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+			}
 		}
 		prev_char = *s++;
 

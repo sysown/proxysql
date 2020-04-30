@@ -426,6 +426,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"threshold_resultset_size",
 	(char *)"query_digests_max_digest_length",
 	(char *)"query_digests_max_query_length",
+	(char *)"query_digests_grouping_limit",
 	(char *)"wait_timeout",
 	(char *)"throttle_max_bytes_per_second_to_client",
 	(char *)"throttle_ratio_server_to_client",
@@ -649,6 +650,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
+	variables.query_digests_grouping_limit = 3;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -987,6 +989,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 				if (!strcmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
 				if (!strcmp(name,"query_digests_replace_null")) return (int)variables.query_digests_replace_null;
 				if (!strcmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
+				if (!strcmp(name,"query_digests_grouping_limit")) return (int)variables.query_digests_grouping_limit;
 			}
 			if (name[6]=='p') {
 				if (!strcmp(name,"query_processor_iterations")) return (int)variables.query_processor_iterations;
@@ -1377,6 +1380,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"query_digests_max_query_length")) {
 		sprintf(intbuf,"%d",variables.query_digests_max_query_length);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"query_digests_grouping_limit")) {
+		sprintf(intbuf,"%d",variables.query_digests_grouping_limit);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"wait_timeout")) {
@@ -1959,6 +1966,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		int intv=atoi(value);
 		if (intv >= 16 && intv <= 16*1024*1024) {
 			variables.query_digests_max_query_length=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"query_digests_grouping_limit")) {
+		int intv=atoi(value);
+		if (intv >= 1 && intv <= 2089) {
+			variables.query_digests_grouping_limit=intv;
 			return true;
 		} else {
 			return false;
@@ -4478,6 +4494,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_no_digits=(bool)GloMTH->get_variable_int((char *)"query_digests_no_digits");
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
+	mysql_thread___query_digests_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_grouping_limit");
 	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas=GloMTH->get_variable_int((char *)"aurora_max_lag_ms_only_read_from_replicas");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
