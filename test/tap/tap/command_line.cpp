@@ -13,7 +13,7 @@
 using nlohmann::json;
 
 CommandLine::CommandLine() :
-	host(NULL), username(NULL), password(NULL), admin_username(NULL), admin_password(NULL), workdir() {}
+	host(NULL), username(NULL), password(NULL), admin_username(NULL), admin_password(NULL), workdir(NULL) {}
 
 CommandLine::~CommandLine() {
 	if (host)
