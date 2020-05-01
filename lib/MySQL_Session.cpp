@@ -412,7 +412,7 @@ void MySQL_Session::operator delete(void *ptr) {
 
 
 void MySQL_Session::set_status(enum session_status e) {
-	if (e==NONE) {
+	if (e==session_status___NONE) {
 		if (mybe) {
 			if (mybe->server_myds) {
 				assert(mybe->server_myds->myconn==0);
@@ -455,7 +455,7 @@ MySQL_Session::MySQL_Session() {
 	mirror=false;
 	mirrorPkt.ptr=NULL;
 	mirrorPkt.size=0;
-	set_status(NONE);
+	set_status(session_status___NONE);
 
 	CurrentQuery.sess=this;
 
@@ -1440,7 +1440,7 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 		}
 		delete mybe->server_myds;
 		mybe->server_myds=NULL;
-		set_status(NONE);
+		set_status(session_status___NONE);
 			return -1;
 	} else {
 		if (rc==-1 || rc==-2) {
@@ -1494,7 +1494,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 //		}
 		delete mybe->server_myds;
 		mybe->server_myds=NULL;
-		set_status(NONE);
+		set_status(session_status___NONE);
 		return -1;
 	} else {
 		if (rc==-1 || rc==-2) {
@@ -3346,7 +3346,7 @@ __get_pkts_from_client:
 			case FAST_FORWARD:
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
-			case NONE:
+			case session_status___NONE:
 			default:
 				{
 					char buf[INET6_ADDRSTRLEN];
@@ -4134,7 +4134,7 @@ handler_again:
 					goto __exit_DSS__STATE_NOT_INITIALIZED;
 			}
 			break;
-		case NONE:
+		case session_status___NONE:
 			fprintf(stderr,"NONE\n");
 		default:
 			break;

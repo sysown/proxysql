@@ -4047,13 +4047,13 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					mypolls.last_recv[n]=curtime;
 					myds->revents=mypolls.fds[n].revents;
 					myds->sess->to_process=1;
-					assert(myds->sess->status!=NONE);
+					assert(myds->sess->status!=session_status___NONE);
 				} else {
 					// no events
 					if (myds->wait_until && curtime > myds->wait_until) {
 						// timeout
 						myds->sess->to_process=1;
-						assert(myds->sess->status!=NONE);
+						assert(myds->sess->status!=session_status___NONE);
 					} else {
 						if (myds->sess->pause_until && curtime > myds->sess->pause_until) {
 							// timeout
@@ -5453,7 +5453,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					case FAST_FORWARD:
                                                 pta[11]=strdup("Fast forward");
                                                 break;
-					case NONE:
+					case session_status___NONE:
                                                 pta[11]=strdup("None");
                                                 break;
 					default:
