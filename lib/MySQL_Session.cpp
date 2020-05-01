@@ -4165,6 +4165,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	handler_ret = 0;
 	return handler_ret;
 }
+// end ::handler()
 
 
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *pkt) {
