@@ -7,7 +7,7 @@ Package: proxysql
 Version: PKG_VERSION_CURVER
 Maintainer: ProxySQL LLC <info@proxysql.com>
 Architecture: amd64
-Depends: libgnutls28
+Depends: libgnutls28 | libgnutls30 | libgnutls-deb0-28
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/
