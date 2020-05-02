@@ -387,6 +387,7 @@ MySQL_Connection::~MySQL_Connection() {
 		if (variables[i].value) {
 			free(variables[i].value);
 			variables[i].value = NULL;
+			var_hash[i] = 0;
 		}
 	}
 
@@ -2264,6 +2265,7 @@ void MySQL_Connection::reset() {
 		if (variables[i].value) {
 			free(variables[i].value);
 			variables[i].value = NULL;
+			var_hash[i] = 0;
 		}
 	}
 
