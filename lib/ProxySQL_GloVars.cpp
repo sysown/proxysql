@@ -3,7 +3,9 @@
 #include "cpp.h"
 #include <string>
 #include <sys/utsname.h>
+#include <prometheus/registry.h>
 #include "SpookyV2.h"
+#include <cxxabi.h>
 
 static void term_handler(int sig) {
   proxy_warning("Received TERM signal: shutdown in progress...\n");
@@ -17,6 +19,8 @@ void crash_handler(int sig) {
 //	malloc_stats_print(NULL, NULL, "");
 #endif
 #ifdef __GLIBC__
+#define DEBUG_MSG_MAXSIZE	1024
+	char debugbuff[DEBUG_MSG_MAXSIZE];
 	void *arr[20];
 	size_t s;
 
@@ -24,6 +28,26 @@ void crash_handler(int sig) {
 
 	fprintf(stderr, "Error: signal %d:\n", sig);
 	backtrace_symbols_fd(arr, s, STDERR_FILENO);
+
+	char **strings;
+	strings=backtrace_symbols(arr,s);
+	if (strings == NULL) {
+		perror("backtrace_symbols failed!");
+	} else {
+		for (unsigned int i=0; i<s; i++) {
+			debugbuff[0]=0;
+			sscanf(strings[i], "%*[^(](%100[^+]", debugbuff);
+			int status;
+			char *realname=NULL;
+			realname=abi::__cxa_demangle(debugbuff, 0, 0, &status);
+			if (realname) {
+				fprintf(stderr," ---- %s : %s\n", strings[i], realname);
+			}
+		}
+		//free(strings); // we don't free, we are crashing anyway
+	}
+
+
 #endif /* __GLIBC__ */
 	// try to generate a core dump signaling again the thread
 	signal(sig, SIG_DFL);
@@ -44,7 +68,9 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	}
 };
 
-ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
+ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
+	prometheus_registry(std::make_shared<prometheus::Registry>())
+{
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;
 	__cmd_proxysql_datadir=NULL;

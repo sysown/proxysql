@@ -664,7 +664,7 @@ int MySQL_Data_Stream::write_to_net() {
 		if (myds_type == MYDS_FRONTEND) {
 			if (sess) {
 				if (sess->thread) {
-					sess->thread->status_variables.queries_frontends_bytes_sent += bytes_io;
+					sess->thread->status_variables.stvar[st_var_queries_frontends_bytes_sent] += bytes_io;
 				}
 			}
 		}

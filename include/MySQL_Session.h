@@ -243,6 +243,7 @@ class MySQL_Session
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
+	bool has_any_backend();
 };
 
 #define KILL_QUERY       1
@@ -257,7 +258,8 @@ class KillArgs {
 	unsigned int port;
 	unsigned long id;
 	int kill_type;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt);
+	unsigned int hid;
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread *_mt);
 	~KillArgs();
 };
 

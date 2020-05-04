@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(3);
+	plan(7);
 	diag("Testing firewall whitelist functionality");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
 	mysql_free_result(result);
 
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value=1 where variable_name='mysql-firewall_whitelist_enabled'");
-	MYSQL_QUERY(mysqladmin, "load mysql users to runtime");
+	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 	
 	// Test that firewall initialized and blocks all queries
 	if (mysql_query(mysql, "select @@version")) {
@@ -137,6 +137,15 @@ int main(int argc, char** argv) {
 	else {
 		ok(false, "Query should be allowed by firewall, but it is blocked after active=1 update");
 	}
+
+	// Cleanup firewall rules
+	MYSQL_QUERY(mysqladmin, "load mysql firewall from disk");
+	MYSQL_QUERY(mysqladmin, "load mysql firewall to runtime");
+
+	// Clean up variables
+	MYSQL_QUERY(mysqladmin, "load mysql variables from disk");
+	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
+
 
 	mysql_close(mysql);
 	mysql_close(mysqladmin);

@@ -51,7 +51,6 @@
 
 #if !defined(__FreeBSD__) && !defined(__APPLE__)
 #define HAVE_BOOL
-#include "ma_global.h"
 //#include "my_pthread.h"
 #endif
 #include "mysql.h"
