@@ -417,7 +417,7 @@ void MySQL_Session::operator delete(void *ptr) {
 
 
 void MySQL_Session::set_status(enum session_status e) {
-	if (e==NONE) {
+	if (e==session_status___NONE) {
 		if (mybe) {
 			if (mybe->server_myds) {
 				assert(mybe->server_myds->myconn==0);
@@ -460,7 +460,7 @@ MySQL_Session::MySQL_Session() {
 	mirror=false;
 	mirrorPkt.ptr=NULL;
 	mirrorPkt.size=0;
-	set_status(NONE);
+	set_status(session_status___NONE);
 
 	CurrentQuery.sess=this;
 
@@ -1448,7 +1448,7 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 		}
 		delete mybe->server_myds;
 		mybe->server_myds=NULL;
-		set_status(NONE);
+		set_status(session_status___NONE);
 			return -1;
 	} else {
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
@@ -1503,7 +1503,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 //		}
 		delete mybe->server_myds;
 		mybe->server_myds=NULL;
-		set_status(NONE);
+		set_status(session_status___NONE);
 		return -1;
 	} else {
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
@@ -3394,7 +3394,7 @@ __get_pkts_from_client:
 			case FAST_FORWARD:
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
-			case NONE:
+			case session_status___NONE:
 			default:
 				{
 					char buf[INET6_ADDRSTRLEN];
@@ -4062,66 +4062,6 @@ handler_again:
 			}
 			break;
 
-		case CHANGING_USER_SERVER:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_USER_SERVER(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case CHANGING_AUTOCOMMIT:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_AUTOCOMMIT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_MULTI_STMT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_MULTI_STMT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_SESSION_TRACK_GTIDS:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_SESSION_TRACK_GTIDS(&rc))
-					goto handler_again;     // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_SET_NAMES:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_CHARSET(&rc))
-					goto handler_again;     // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_ISOLATION_LEVEL:
 		case SETTING_TRANSACTION_READ:
 		case SETTING_CHARSET:
@@ -4138,42 +4078,6 @@ handler_again:
 			}
 			break;
 
-		case SETTING_INIT_CONNECT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_INIT_CONNECT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_LDAP_USER_VARIABLE:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_LDAP_USER_VARIABLE(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case CHANGING_SCHEMA:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_SCHEMA(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case CONNECTING_SERVER:
 			{
 				int rc=0;
@@ -4183,9 +4087,18 @@ handler_again:
 					goto __exit_DSS__STATE_NOT_INITIALIZED;
 			}
 			break;
-		case NONE:
+		case session_status___NONE:
 			fprintf(stderr,"NONE\n");
 		default:
+			{
+				int rc = 0;
+				if (handler_again___multiple_statuses(&rc)) // a sort of catch all
+					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
 			break;
 	}
 
@@ -4214,7 +4127,41 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	handler_ret = 0;
 	return handler_ret;
 }
+// end ::handler()
 
+
+bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
+	bool ret = false;
+	switch(status) {
+		case CHANGING_USER_SERVER:
+			ret = handler_again___status_CHANGING_USER_SERVER(rc);
+			break;
+		case CHANGING_AUTOCOMMIT:
+			ret = handler_again___status_CHANGING_AUTOCOMMIT(rc);
+			break;
+		case CHANGING_SCHEMA:
+			ret = handler_again___status_CHANGING_SCHEMA(rc);
+			break;
+		case SETTING_LDAP_USER_VARIABLE:
+			ret = handler_again___status_SETTING_LDAP_USER_VARIABLE(rc);
+			break;
+		case SETTING_INIT_CONNECT:
+			ret = handler_again___status_SETTING_INIT_CONNECT(rc);
+			break;
+		case SETTING_MULTI_STMT:
+			ret = handler_again___status_SETTING_MULTI_STMT(rc);
+			break;
+		case SETTING_SESSION_TRACK_GTIDS:
+			ret = handler_again___status_SETTING_SESSION_TRACK_GTIDS(rc);
+			break;
+		case SETTING_SET_NAMES:
+			ret = handler_again___status_CHANGING_CHARSET(rc);
+			break;
+		default:
+			break;
+	}
+	return ret;
+}
 
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *pkt) {
 	unsigned char c;

@@ -196,7 +196,7 @@ enum session_status {
 	SETTING_VARIABLE,
 	SETTING_MULTIPLE_VARIABLES,
 	SETTING_SET_NAMES,
-	NONE
+	session_status___NONE // special marker
 };
 
 #ifdef __cplusplus
@@ -992,7 +992,7 @@ typedef struct {
 */
 mysql_variable_st mysql_tracked_variables[] {
     { SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true, false,  false, false, (char *)"CHARSET", (char *)"CHARSET", (char *)"UTF8" } , // should be before SQL_CHARACTER_SET_RESULTS
-    { SQL_CHARACTER_ACTION,      NONE,		         false, false, false, false, false, (char *)"action", (char *)"action", (char *)"1" } ,
+    { SQL_CHARACTER_ACTION,    session_status___NONE,false, false, false, false, false, (char *)"action", (char *)"action", (char *)"1" } ,
     { SQL_SET_NAMES,             SETTING_SET_NAMES,  false, false, false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" } ,
 	{ SQL_SAFE_UPDATES,          SETTING_VARIABLE,   true,  false, true,  false, true,  (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" } ,
     { SQL_SELECT_LIMIT,          SETTING_VARIABLE,   false, false, true,  true, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" } ,
