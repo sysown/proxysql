@@ -3075,52 +3075,13 @@ __get_pkts_from_client:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
 							case _MYSQL_COM_STMT_RESET:
-								{
-									uint32_t stmt_global_id=0;
-									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-									SLDH->reset(stmt_global_id);
-									l_free(pkt.size,pkt.ptr);
-									client_myds->setDSS_STATE_QUERY_SENT_NET();
-									unsigned int nTrx=NumActiveTransactions();
-									uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-									if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-									client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-									client_myds->DSS=STATE_SLEEP;
-									status=WAITING_CLIENT_DATA;
-								}
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(pkt);
 								break;
 							case _MYSQL_COM_STMT_CLOSE:
-								{
-									uint32_t client_global_id=0;
-									memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-									// FIXME: no input validation
-									uint64_t stmt_global_id=0;
-									stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_global_id);
-									SLDH->reset(client_global_id);
-									if (stmt_global_id) {
-										sess_STMTs_meta->erase(stmt_global_id);
-									}
-									client_myds->myconn->local_stmts->client_close(client_global_id);
-								}
-								l_free(pkt.size,pkt.ptr);
-								// FIXME: this is not complete. Counters should be decreased
-								thread->status_variables.stvar[st_var_frontend_stmt_close]++;
-								thread->status_variables.stvar[st_var_queries]++;
-								client_myds->DSS=STATE_SLEEP;
-								status=WAITING_CLIENT_DATA;
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(pkt);
 								break;
 							case _MYSQL_COM_STMT_SEND_LONG_DATA:
-								{
-									// FIXME: no input validation
-									uint32_t stmt_global_id=0;
-									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-									uint32_t stmt_param_id=0;
-									memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
-									SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
-								}
-								client_myds->DSS=STATE_SLEEP;
-								status=WAITING_CLIENT_DATA;
-								l_free(pkt.size,pkt.ptr);
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
 								if (session_type != PROXYSQL_SESSION_MYSQL) { // only MySQL module supports prepared statement!!
@@ -6488,4 +6449,50 @@ bool MySQL_Session::has_any_backend() {
 		}
 	}
 	return false;
+}
+
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
+	uint32_t stmt_global_id=0;
+	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+	SLDH->reset(stmt_global_id);
+	l_free(pkt.size,pkt.ptr);
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+	unsigned int nTrx=NumActiveTransactions();
+	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+	client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+	client_myds->DSS=STATE_SLEEP;
+	status=WAITING_CLIENT_DATA;
+}
+
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
+	uint32_t client_global_id=0;
+	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+	// FIXME: no input validation
+	uint64_t stmt_global_id=0;
+	stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_global_id);
+	SLDH->reset(client_global_id);
+	if (stmt_global_id) {
+		sess_STMTs_meta->erase(stmt_global_id);
+	}
+	client_myds->myconn->local_stmts->client_close(client_global_id);
+	l_free(pkt.size,pkt.ptr);
+	// FIXME: this is not complete. Counters should be decreased
+	thread->status_variables.stvar[st_var_frontend_stmt_close]++;
+	thread->status_variables.stvar[st_var_queries]++;
+	client_myds->DSS=STATE_SLEEP;
+	status=WAITING_CLIENT_DATA;
+}
+
+
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) {
+	// FIXME: no input validation
+	uint32_t stmt_global_id=0;
+	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+	uint32_t stmt_param_id=0;
+	memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
+	SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
+	client_myds->DSS=STATE_SLEEP;
+	status=WAITING_CLIENT_DATA;
+	l_free(pkt.size,pkt.ptr);
 }
