@@ -2323,8 +2323,36 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
 		if (rc==-1) {
-			proxy_error("Error setting multistatement on server %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql), mysql_error(myconn->mysql));
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
+			// the command failed
+			int myerr=mysql_errno(myconn->mysql);
+			if (myerr >= 2000) {
+				bool retry_conn=false;
+				// client error, serious
+				proxy_error("Detected a broken connection during setting MYSQL_OPTION_MULTI_STATEMENTS on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
+				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					retry_conn=true;
+				}
+				myds->destroy_MySQL_Connection_From_Pool(false);
+				myds->fd=0;
+				if (retry_conn) {
+					myds->DSS=STATE_NOT_INITIALIZED;
+					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+				}
+				*_rc=-1; // an error happened, we should destroy the Session
+				return ret;
+			} else {
+				proxy_warning("Error during MYSQL_OPTION_MULTI_STATEMENTS : %d, %s\n", myerr, mysql_error(myconn->mysql));
+				// we won't go back to PROCESSING_QUERY
+				st=previous_status.top();
+				previous_status.pop();
+				char sqlstate[10];
+				sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+				myds->destroy_MySQL_Connection_From_Pool(true);
+				myds->fd=0;
+				RequestEnd(myds);
+			}
 		} else {
 			// rc==1 , nothing to do for now
 		}
@@ -6495,3 +6523,13 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	}
 }
 
+bool MySQL_Session::has_any_backend() {
+	for (unsigned int j=0;j < mybes->len;j++) {
+		MySQL_Backend *tmp_mybe=(MySQL_Backend *)mybes->index(j);
+		MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
+		if (__myds->myconn) {
+			return true;
+		}
+	}
+	return false;
+}

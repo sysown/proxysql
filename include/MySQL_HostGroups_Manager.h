@@ -6,6 +6,7 @@
 
 #include <thread>
 #include <iostream>
+#include <mutex>
 
 // Headers for declaring Prometheus counters
 #include <prometheus/counter.h>
@@ -413,6 +414,7 @@ class MySQL_HostGroups_Manager {
 	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
 
 	public:
+	std::mutex galera_set_writer_mutex;
 	pthread_rwlock_t gtid_rwlock;
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;
 	struct ev_async * gtid_ev_async;

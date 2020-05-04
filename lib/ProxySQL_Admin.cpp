@@ -10367,6 +10367,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	}
 	// commit all the changes
 	MyHGM->commit();
+	GloAdmin->save_mysql_servers_runtime_to_database(true);
 
 	// clean up
 	if (resultset) delete resultset;

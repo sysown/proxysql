@@ -10,6 +10,8 @@ If you are submitting a reproducible bug report, please provide:
 [ ] The FULL error log (not just the last few lines)
 [ ] If it is a crashing bug, please check here: https://github.com/sysown/proxysql/wiki/How-to-report-a-crash-bug
 
+If the above is not provided, the issue is likely to be closed.
+
 Please use markdown to format code or SQL: https://guides.github.com/features/mastering-markdown/
 
 Thank you!
