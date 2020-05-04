@@ -258,7 +258,8 @@ class KillArgs {
 	unsigned int port;
 	unsigned long id;
 	int kill_type;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt);
+	unsigned int hid;
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread *_mt);
 	~KillArgs();
 };
 

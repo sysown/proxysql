@@ -3,6 +3,7 @@
 #include "cpp.h"
 #include <string>
 #include <sys/utsname.h>
+#include <prometheus/registry.h>
 #include "SpookyV2.h"
 #include <cxxabi.h>
 
@@ -67,7 +68,9 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	}
 };
 
-ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() {
+ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
+	prometheus_registry(std::make_shared<prometheus::Registry>())
+{
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;
 	__cmd_proxysql_datadir=NULL;

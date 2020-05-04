@@ -672,7 +672,7 @@ EXTERN global_variables glovars;
 #ifdef PROXYSQL_EXTERN
 #ifndef GLOBAL_DEFINED_OPTS_ENTRIES
 #define GLOBAL_DEFINED_OPTS_ENTRIES
-ProxySQL_GlobalVariables GloVars;
+ProxySQL_GlobalVariables GloVars {};
 #endif // GLOBAL_DEFINED_OPTS_ENTRIES 
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP

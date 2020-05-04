@@ -27,6 +27,10 @@ LIBCONFIG_PATH=$(DEPS_PATH)/libconfig/libconfig
 LIBCONFIG_IDIR=-I$(LIBCONFIG_PATH)/lib
 LIBCONFIG_LDIR=-L$(LIBCONFIG_PATH)/lib/.libs
 
+PROMETHEUS_PATH=$(DEPS_PATH)/prometheus-cpp/prometheus-cpp
+PROMETHEUS_IDIR=$(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
+PROMETHEUS_LDIR=$(PROMETHEUS_PATH)/lib
+
 RE2_PATH=$(DEPS_PATH)/re2/re2
 RE2_IDIR=$(RE2_PATH)
 
@@ -69,8 +73,8 @@ EV_LDIR=$(EV_DIR)/.libs
 
 IDIR=../include
 LDIR=../lib
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR) -I$(RE2_IDIR)
-LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR) -I$(RE2_IDIR) -I$(PROMETHEUS_IDIR)
+LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
 UNAME_S := $(shell uname -s)
 
@@ -91,9 +95,9 @@ MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_V
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lhttpserver -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lhttpserver -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core $(EXTRALINK)
 else
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core $(EXTRALINK)
 endif
 
 ifeq ($(UNAME_S),Darwin)

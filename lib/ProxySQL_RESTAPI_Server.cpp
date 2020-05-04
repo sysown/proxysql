@@ -2,6 +2,7 @@
 #include "cpp.h"
 #include "httpserver.hpp"
 
+#include <functional>
 #include <sstream>
 
 
@@ -231,13 +232,34 @@ public:
 
 };
 
+class gen_get_endpoint : public http_resource {
+private:
+	std::function<std::shared_ptr<http_response>(const http_request&)> _get_fn {};
+public:
+	gen_get_endpoint(std::function<std::shared_ptr<http_response>(const http_request&)> get_fn) :
+		_get_fn(get_fn)
+	{}
+
+	const std::shared_ptr<http_response> render_GET(const http_request& req) override {
+		return this->_get_fn(req);
+	}
+};
+
 void * restapi_server_thread(void *arg) {
 	httpserver::webserver * ws = (httpserver::webserver *)arg;
     ws->start(true);
 	return NULL;
 }
 
-ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(int p) {
+using std::vector;
+using std::pair;
+using std::function;
+using std::shared_ptr;
+
+ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
+	int p,
+	vector<pair<std::string, function<shared_ptr<http_response>(const http_request&)>>> endpoints
+) {
 	ws = std::unique_ptr<httpserver::webserver>(new webserver(create_webserver(p)));
 	auto sr = new sync_resource();
 
@@ -247,6 +269,16 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(int p) {
 	if (pthread_create(&thread_id, NULL, restapi_server_thread, ws.get()) !=0 ) {
 		perror("Thread creation");
 		exit(EXIT_FAILURE);
+	}
+
+	for (const auto& id_endpoint : endpoints) {
+		const std::string& endpoint_route = id_endpoint.first;
+		auto endpoint_fn = id_endpoint.second;
+		std::unique_ptr<httpserver::http_resource> endpoint_res =
+			std::unique_ptr<httpserver::http_resource>(new gen_get_endpoint(endpoint_fn));
+
+		ws->register_resource(endpoint_route, endpoint_res.get(), true);
+		_endpoints.push_back({endpoint_route, std::move(endpoint_res)});
 	}
 }
 
