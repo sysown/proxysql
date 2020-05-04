@@ -17,6 +17,7 @@ class CommandLine {
 	char* admin_password;
 	int	 port;
 	int admin_port;
+	char* workdir;
 
 	int read(const std::string& file);
 	int getEnv();
