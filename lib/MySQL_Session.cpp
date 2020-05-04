@@ -4013,66 +4013,6 @@ handler_again:
 			}
 			break;
 
-		case CHANGING_USER_SERVER:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_USER_SERVER(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case CHANGING_AUTOCOMMIT:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_AUTOCOMMIT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_MULTI_STMT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_MULTI_STMT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_SESSION_TRACK_GTIDS:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_SESSION_TRACK_GTIDS(&rc))
-					goto handler_again;     // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_SET_NAMES:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_CHARSET(&rc))
-					goto handler_again;     // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_ISOLATION_LEVEL:
 		case SETTING_TRANSACTION_READ:
 		case SETTING_CHARSET:
@@ -4083,42 +4023,6 @@ handler_again:
 					goto handler_again;
 				}
 				if (rc == -1) {
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_INIT_CONNECT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_INIT_CONNECT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_LDAP_USER_VARIABLE:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_LDAP_USER_VARIABLE(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case CHANGING_SCHEMA:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_SCHEMA(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
 					handler_ret = -1;
 					return handler_ret;
 				}
@@ -4137,6 +4041,15 @@ handler_again:
 		case session_status___NONE:
 			fprintf(stderr,"NONE\n");
 		default:
+			{
+				int rc = 0;
+				if (handler_again___multiple_statuses(&rc)) // a sort of catch all
+					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
 			break;
 	}
 
@@ -4167,6 +4080,39 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 }
 // end ::handler()
 
+
+bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
+	bool ret = false;
+	switch(status) {
+		case CHANGING_USER_SERVER:
+			ret = handler_again___status_CHANGING_USER_SERVER(rc);
+			break;
+		case CHANGING_AUTOCOMMIT:
+			ret = handler_again___status_CHANGING_AUTOCOMMIT(rc);
+			break;
+		case CHANGING_SCHEMA:
+			ret = handler_again___status_CHANGING_SCHEMA(rc);
+			break;
+		case SETTING_LDAP_USER_VARIABLE:
+			ret = handler_again___status_SETTING_LDAP_USER_VARIABLE(rc);
+			break;
+		case SETTING_INIT_CONNECT:
+			ret = handler_again___status_SETTING_INIT_CONNECT(rc);
+			break;
+		case SETTING_MULTI_STMT:
+			ret = handler_again___status_SETTING_MULTI_STMT(rc);
+			break;
+		case SETTING_SESSION_TRACK_GTIDS:
+			ret = handler_again___status_SETTING_SESSION_TRACK_GTIDS(rc);
+			break;
+		case SETTING_SET_NAMES:
+			ret = handler_again___status_CHANGING_CHARSET(rc);
+			break;
+		default:
+			break;
+	}
+	return ret;
+}
 
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *pkt) {
 	unsigned char c;

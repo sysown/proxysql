@@ -125,6 +125,7 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
+	bool handler_again___multiple_statuses(int *rc);
 	void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
