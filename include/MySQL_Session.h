@@ -72,7 +72,7 @@ class Query_Info {
 class MySQL_Session
 {
 	private:
-	int handler_ret;
+	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
@@ -130,6 +130,7 @@ class MySQL_Session
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
 
+	int get_pkts_from_client(bool&, PtrSize_t&);
 
 	public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);

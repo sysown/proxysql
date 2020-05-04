@@ -433,7 +433,7 @@ void MySQL_Session::set_status(enum session_status e) {
 
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
-	handler_ret = 0;
+	//handler_ret = 0;
 	pause_until=0;
 	qpo=new Query_Processor_Output();
 	start_time=0;
@@ -2743,44 +2743,10 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	return false;
 }
 
-int MySQL_Session::handler() {
-	handler_ret = 0;
-	bool prepared_stmt_with_no_params = false;
-	bool wrong_pass=false;
-	if (to_process==0) return 0; // this should be redundant if the called does the same check
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
-	PtrSize_t pkt;
-	pktH=&pkt;
-	unsigned int j;
-	unsigned char c;
 
-	if (active_transactions <= 0) {
-		active_transactions=NumActiveTransactions();
-	}
-//	FIXME: Sessions without frontend are an ugly hack
-	if (session_fast_forward==false) {
-	if (client_myds==NULL) {
-		// if we are here, probably we are trying to ping backends
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
-		assert(mybe);
-		assert(mybe->server_myds);
-		goto handler_again;
-	} else {
-		if (mirror==true) {
-			if (mirrorPkt.ptr) { // this is the first time we call handler()
-				pkt.ptr=mirrorPkt.ptr;
-				pkt.size=mirrorPkt.size;
-				mirrorPkt.ptr=NULL; // this will prevent the copy to happen again
-			} else {
-				if (status==WAITING_CLIENT_DATA) {
-					// we are being called a second time with WAITING_CLIENT_DATA
-					handler_ret = 0;
-					return handler_ret;
-				}
-			}
-		}
-	}
-	}
+int MySQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
+	int handler_ret = 0;
+	unsigned char c;
 
 __get_pkts_from_client:
 
@@ -2789,7 +2755,7 @@ __get_pkts_from_client:
 	// if client_myds , this is a regular client
 	// if client_myds == NULL , it is a mirror
 	//     process mirror only status==WAITING_CLIENT_DATA
-	for (j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
+	for (unsigned int j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
 		if (mirror==false) {
 			client_myds->PSarrayIN->remove_index(0,&pkt);
 		}
@@ -2875,7 +2841,14 @@ __get_pkts_from_client:
 							mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
 							mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 							previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
-							NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
+							{
+								//NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
+								// we can't use NEXT_IMMEDIATE() inside get_pkts_from_client()
+								// instead we set status to CONNECTING_SERVER and return 0
+								// when we exit from get_pkts_from_client() we expect the label "handler_again"
+								set_status(CONNECTING_SERVER);
+								return 0;
+							}
 						}
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
@@ -3428,8 +3401,53 @@ __get_pkts_from_client:
 				break;
 		}
 	}
+	return handler_ret;
+}
 
 
+int MySQL_Session::handler() {
+	int handler_ret = 0;
+	bool prepared_stmt_with_no_params = false;
+	bool wrong_pass=false;
+	if (to_process==0) return 0; // this should be redundant if the called does the same check
+	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
+	PtrSize_t pkt;
+	pktH=&pkt;
+	//unsigned int j;
+	//unsigned char c;
+
+	if (active_transactions <= 0) {
+		active_transactions=NumActiveTransactions();
+	}
+//	FIXME: Sessions without frontend are an ugly hack
+	if (session_fast_forward==false) {
+	if (client_myds==NULL) {
+		// if we are here, probably we are trying to ping backends
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
+		assert(mybe);
+		assert(mybe->server_myds);
+		goto handler_again;
+	} else {
+		if (mirror==true) {
+			if (mirrorPkt.ptr) { // this is the first time we call handler()
+				pkt.ptr=mirrorPkt.ptr;
+				pkt.size=mirrorPkt.size;
+				mirrorPkt.ptr=NULL; // this will prevent the copy to happen again
+			} else {
+				if (status==WAITING_CLIENT_DATA) {
+					// we are being called a second time with WAITING_CLIENT_DATA
+					handler_ret = 0;
+					return handler_ret;
+				}
+			}
+		}
+	}
+	}
+
+	handler_ret = get_pkts_from_client(wrong_pass, pkt);
+	if (handler_ret != 0) {
+		return handler_ret;
+	}
 
 handler_again:
 
