@@ -3178,7 +3178,7 @@ __get_pkts_from_client:
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
-										thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
+										thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
 											(endt.tv_sec*1000000000+endt.tv_nsec) -
 											(begint.tv_sec*1000000000+begint.tv_nsec);
 									}
@@ -3300,11 +3300,11 @@ __get_pkts_from_client:
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
 									if (qpo->max_lag_ms >= 0) {
-										thread->status_variables.queries_with_max_lag_ms++;
+										thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 									}
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
-										thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
+										thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
 											(endt.tv_sec*1000000000+endt.tv_nsec) -
 											(begint.tv_sec*1000000000+begint.tv_nsec);
 									}
@@ -3361,7 +3361,7 @@ __get_pkts_from_client:
 												char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
 												sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
 												client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
-												thread->status_variables.hostgroup_locked_queries++;
+												thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 												RequestEnd(NULL);
 												free(buf);
 												l_free(pkt.size,pkt.ptr);
