@@ -3319,15 +3319,6 @@ __get_pkts_from_client:
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								}
 								break;
-//							case _MYSQL_COM_STMT_PREPARE:
-//								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(&pkt);
-//								break;
-//							case _MYSQL_COM_STMT_EXECUTE:
-//								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(&pkt);
-//								break;
-//							case _MYSQL_COM_STMT_CLOSE:
-//								mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-//								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 								GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL);
