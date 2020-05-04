@@ -103,7 +103,7 @@ int main(int argc, char** argv) {
 
 	{
 		std::ifstream inFile;
-		inFile.open("./tests/proxysql_reference_select_config_file.cnf"); //open the input file
+		inFile.open(std::string(cl.workdir) + "/proxysql_reference_select_config_file.cnf"); //open the input file
 
 		std::stringstream strStream;
 		strStream << inFile.rdbuf(); //read the file
