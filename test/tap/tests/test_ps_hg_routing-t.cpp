@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(2);
+	plan(10);
 	diag("Testing PS host groups routing");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
@@ -75,6 +75,7 @@ int main(int argc, char** argv) {
 		mysql_library_end();
 		return exit_status();
 	}
+	ok(true, "Statement prepared");
 
 	if (mysql_stmt_execute(stmt))
 	{
@@ -82,6 +83,7 @@ int main(int argc, char** argv) {
 		ok(false, " %s\n", mysql_stmt_error(stmt));
 		return exit_status();
 	}
+	ok(true, "Statement executed");
 
 	MYSQL_BIND bind[2];
 	char char_data0[STRING_SIZE];
@@ -118,12 +120,16 @@ int main(int argc, char** argv) {
 		ok(false, " %s\n", mysql_stmt_error(stmt));
 		return exit_status();
 	}
+	ok(true, "Result stored");
 
 	while (!mysql_stmt_fetch(stmt))	{
-		ok(strcmp((char*)bind[0].buffer, "abcdef") == 0 &&  strcmp((char*)bind[1].buffer, "abcdef") == 0, "Variables initialized");
+		ok(strcmp((char*)bind[0].buffer, "abcdef") == 0 &&  strcmp((char*)bind[1].buffer, "abcdef") == 0, "Data received");
 	}
+	ok(true, "Result fetched");
 
 	MYSQL_QUERY(mysql, "update test.test1 set c1='aaaaaa'");
+
+	ok(true, "Record is updated");
 
 	if (mysql_stmt_execute(stmt))
 	{
@@ -131,6 +137,8 @@ int main(int argc, char** argv) {
 		ok(false, " %s\n", mysql_stmt_error(stmt));
 		return exit_status();
 	}
+
+	ok(true, "Statement executed second time");
 
 	bind[0].buffer_type= MYSQL_TYPE_STRING;
 	bind[0].buffer= (char *)&char_data0;
@@ -159,10 +167,12 @@ int main(int argc, char** argv) {
 		ok(false, " %s\n", mysql_stmt_error(stmt));
 		return exit_status();
 	}
+	ok(true, "Result stored");
 
 	while (!mysql_stmt_fetch(stmt))	{
 		ok(strcmp((char*)bind[0].buffer, "aaaaaa") == 0, "Read value that was updated. Expected [aaaaaa]. Actual [%s]", bind[0].buffer);
 	}
+	ok(true, "Result fetched");
 
 	if (mysql_stmt_close(stmt))
 	{
