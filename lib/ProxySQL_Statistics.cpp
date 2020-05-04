@@ -632,15 +632,15 @@ void ProxySQL_Statistics::system_memory_sets() {
 }
 #endif
 
-void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset1, SQLite3_result *resultset2) {
-	MyHGM_Handler_sets_v1(resultset1);
+void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset1, SQLite3_result *resultset2, time_t ts) {
+	MyHGM_Handler_sets_v1(resultset1, ts);
 	if (GloVars.web_interface_plugin && resultset2) {
-		MySQL_Threads_Handler_sets_v2(resultset1);
-		MyHGM_Handler_sets_connection_pool(resultset2);
+		MySQL_Threads_Handler_sets_v2(resultset1, ts);
+		MyHGM_Handler_sets_connection_pool(resultset2, ts);
 	}
 }
 
-void ProxySQL_Statistics::MyHGM_Handler_sets_connection_pool(SQLite3_result *resultset) {
+void ProxySQL_Statistics::MyHGM_Handler_sets_connection_pool(SQLite3_result *resultset, time_t ts) {
 	int rc;
 	if (resultset == NULL)
 		return;
@@ -650,7 +650,7 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_connection_pool(SQLite3_result *res
 	if (resultset->rows_count == 0) {
 		return;
 	}
-	time_t ts = time(NULL);
+	//time_t ts = time(NULL);
 	query = "INSERT INTO history_stats_mysql_connection_pool VALUES (?1";
 	for (int i=0; i < resultset->columns; i++) {
 		query += ",?" + to_string(i+2);
@@ -674,7 +674,7 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_connection_pool(SQLite3_result *res
 	sqlite3_finalize(statement);
 }
 
-void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
+void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset, time_t ts) {
 	int rc;
 	if (resultset == NULL)
 		return;
@@ -696,7 +696,7 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 	//rc=sqlite3_prepare_v2(mydb3, query3, -1, &statement3, 0);
 	//ASSERT_SQLITE_OK(rc, statsdb_disk);
 
-	time_t ts = time(NULL);
+	//time_t ts = time(NULL);
 
 	uint64_t myhgm_connections_values[6];
 	for (int i=0; i<6; i++) {
@@ -777,51 +777,109 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 	}
 }
 
-void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) {
-	MySQL_Threads_Handler_sets_v1(resultset);
+void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset, time_t ts) {
+	MySQL_Threads_Handler_sets_v1(resultset, ts);
 	if (GloVars.web_interface_plugin) {
-		MySQL_Threads_Handler_sets_v2(resultset);
+		MySQL_Threads_Handler_sets_v2(resultset, ts);
 	}
 }
 
-void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultset) {
+void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultset, time_t ts) {
 	int rc;
 	if (resultset == NULL)
 		return;
-	sqlite3 *mydb3=statsdb_disk->get_db();
+	//sqlite3 *mydb3=statsdb_disk->get_db();
 	sqlite3_stmt *statement=NULL;
-	string query;
-	if (resultset->rows_count == 0) {
+	char * error = NULL;
+	int cols, affected_rows;
+	string s = "SELECT * FROM history_mysql_status_variables WHERE timestamp = ";
+	s += to_string(ts);
+	SQLite3_result * md = new SQLite3_result();
+	statsdb_disk->execute_statement(s.c_str(), &error, &cols, &affected_rows, &md);
+	if (error) {
+		delete md;
 		return;
 	}
-	time_t ts = time(NULL);
-	query = "INSERT INTO history_mysql_status_variables VALUES ";
-	int idx = 0;
-	for (int i=0; i < resultset->rows_count; i++) {
-		query += "(?" + to_string(idx+1) + ",?" + to_string(idx+2) + ",?" + to_string(idx+3) + "),";
-		idx+=3;
+	if (md->rows_count == 0) { // row not found, we run an INSERT
+		unordered_map<string,int> varmap;
+		vector<bool> present;
+		string query = "INSERT INTO history_mysql_status_variables VALUES (";
+		for (int i=0; i<md->columns; i++) {
+			varmap.insert(make_pair(md->column_definition[i]->name,i));
+			present.push_back(false);
+			query += "?";
+			query += to_string(i+1);
+			query += ",";
+		}
+		query.pop_back();
+		query += ")";
+		//cout << query << endl;
+		rc = statsdb_disk->prepare_v2(query.c_str(), &statement);
+		ASSERT_SQLITE_OK(rc, statsdb_disk);
+		for (auto it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			auto it2 = varmap.find(r->fields[0]);
+			if (it2 != varmap.end()) {
+				int id = it2->second;
+				rc=sqlite3_bind_text(statement, id+1, r->fields[1] , -1, SQLITE_TRANSIENT);
+				ASSERT_SQLITE_OK(rc, statsdb_disk);
+				present[id] = true;
+			}
+        }
+		for (int i=1; i<md->columns; i++) { // find unassigned variables . we start from 1
+			if (present[i] == false) {
+				// insert empty string
+				rc=sqlite3_bind_text(statement, i+1, (char *)"" , -1, SQLITE_TRANSIENT);
+				ASSERT_SQLITE_OK(rc, statsdb_disk);
+			}
+		}
+		rc=sqlite3_bind_int64(statement, 1, ts);
+		ASSERT_SQLITE_OK(rc, statsdb_disk);
+		SAFE_SQLITE3_STEP2(statement);
+		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=sqlite3_reset(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+		sqlite3_finalize(statement);
+	} else { // row found, we run an update
+		set<string> varset;
+		for (int i=0; i<md->columns; i++) {
+			varset.insert(md->column_definition[i]->name);
+		}
+		string query = "UPDATE history_mysql_status_variables SET timestamp=timestamp ";
+		int idx=1;
+		for (auto it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			auto it2 = varset.find(r->fields[0]);
+			if (it2 != varset.end()) {
+				query += ", ";
+				query += r->fields[0];
+				query += "=?" + to_string(idx);
+				idx++;
+			}
+		}
+		query += " WHERE timestamp=?" + to_string(idx);
+		//cout << query << endl;
+		rc = statsdb_disk->prepare_v2(query.c_str(), &statement);
+		ASSERT_SQLITE_OK(rc, statsdb_disk);
+		idx = 1;
+		for (auto it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			auto it2 = varset.find(r->fields[0]);
+			if (it2 != varset.end()) {
+				rc=sqlite3_bind_text(statement, idx, r->fields[1] , -1, SQLITE_TRANSIENT);
+				idx++;
+			}
+		}
+		rc=sqlite3_bind_int64(statement, idx, ts);
+		ASSERT_SQLITE_OK(rc, statsdb_disk);
+		SAFE_SQLITE3_STEP2(statement);
+		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=sqlite3_reset(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+		sqlite3_finalize(statement);
 	}
-	query.pop_back();
-	rc=sqlite3_prepare_v2(mydb3, query.c_str(), -1, &statement, 0);
-	if (rc!=SQLITE_OK) {
-		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
-		exit(EXIT_SUCCESS);
-	}
-	idx=0;
-	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-		SQLite3_row *r=*it;
-		rc=sqlite3_bind_int64(statement, idx+1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc=sqlite3_bind_text(statement, idx+2, r->fields[0] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // name
-		rc=sqlite3_bind_text(statement, idx+3, r->fields[1] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // value
-		idx+=3;
-	}
-	SAFE_SQLITE3_STEP2(statement);
-	rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
-	rc=sqlite3_reset(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
-	sqlite3_finalize(statement);
+	delete md;
 }
 
-void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultset) {
+void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultset, time_t ts) {
 	int rc;
 	if (resultset == NULL)
 		return;
@@ -844,7 +902,7 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultse
 	//rc=sqlite3_prepare_v2(mydb3, query3, -1, &statement3, 0);
 	//ASSERT_SQLITE_OK(rc, statsdb_disk);
 
-	time_t ts = time(NULL);
+	//time_t ts = time(NULL);
 
 	uint64_t mysql_connections_values[13];
 	for (int i=0; i<13; i++) {
@@ -954,7 +1012,14 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultse
 	}
 }
 
-void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
+void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset, time_t ts) {
+	MySQL_Query_Cache_sets_v1(resultset, ts);
+	if (GloVars.web_interface_plugin) {
+		MySQL_Threads_Handler_sets_v2(resultset, ts);
+	}
+}
+
+void ProxySQL_Statistics::MySQL_Query_Cache_sets_v1(SQLite3_result *resultset, time_t ts) {
 	int rc;
 	if (resultset == NULL)
 		return;
@@ -1023,7 +1088,7 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 	int cols;
 	int affected_rows;
 	char *error = NULL;
-	time_t ts = time(NULL);
+	//time_t ts = time(NULL);
 	char *query = (char *)"SELECT MAX(timestamp) FROM mysql_query_cache_hour";
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset2);
 	if (error) {

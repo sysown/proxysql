@@ -28,14 +28,16 @@ const char * const variable_names[] = { "Access_Denied_Max_Connections", "Access
 void create_table(SQLite3DB& statsdb) {
 	statsdb.execute((char *)"DROP TABLE IF EXISTS history_mysql_status_variables_v2");
 	int num_vars = sizeof(variable_names)/sizeof(const char *);
-	string query = "CREATE TABLE history_mysql_status_variables_v2 (timestamp INT NOT NULL PRIMARY KEY, ";
+	string query = "CREATE TABLE history_mysql_status_variables_v2 (timestamp INT NOT NULL PRIMARY KEY ,";
 	for (int i=0; i<num_vars; i++) {
+		query += " ";
 		query += variable_names[i];
-		query += " VARCHAR NOT NULL DEFAULT '',";
+		query += " VARCHAR NOT NULL DEFAULT '' ,";
 	}
 	query.pop_back();
 	query += ")";
 	statsdb.execute(query.c_str());
+	cout << query << endl;
 }
 
 void insert_row(SQLite3DB& statsdb, unordered_map<string,int>& varmap, SQLite3_result *res, uint64_t ts) {
@@ -89,7 +91,7 @@ int main() {
 	}
 	//for (auto it=varset.begin(); it!=varset.end(); ++it) {
 	for (auto it=varmap.begin(); it!=varmap.end(); ++it) {
-		cout << it->first << " " << it->second << endl;
+		//cout << it->first << " " << it->second << endl;
 	}
 	SQLite3_result * timestamps = new SQLite3_result();
 	char * error;
