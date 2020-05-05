@@ -417,7 +417,7 @@ void MySQL_Session::operator delete(void *ptr) {
 
 
 void MySQL_Session::set_status(enum session_status e) {
-	if (e==NONE) {
+	if (e==session_status___NONE) {
 		if (mybe) {
 			if (mybe->server_myds) {
 				assert(mybe->server_myds->myconn==0);
@@ -433,7 +433,7 @@ void MySQL_Session::set_status(enum session_status e) {
 
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
-	handler_ret = 0;
+	//handler_ret = 0;
 	pause_until=0;
 	qpo=new Query_Processor_Output();
 	start_time=0;
@@ -460,7 +460,7 @@ MySQL_Session::MySQL_Session() {
 	mirror=false;
 	mirrorPkt.ptr=NULL;
 	mirrorPkt.size=0;
-	set_status(NONE);
+	set_status(session_status___NONE);
 
 	CurrentQuery.sess=this;
 
@@ -1448,7 +1448,7 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 		}
 		delete mybe->server_myds;
 		mybe->server_myds=NULL;
-		set_status(NONE);
+		set_status(session_status___NONE);
 			return -1;
 	} else {
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
@@ -1503,7 +1503,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 //		}
 		delete mybe->server_myds;
 		mybe->server_myds=NULL;
-		set_status(NONE);
+		set_status(session_status___NONE);
 		return -1;
 	} else {
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
@@ -2743,44 +2743,10 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	return false;
 }
 
-int MySQL_Session::handler() {
-	handler_ret = 0;
-	bool prepared_stmt_with_no_params = false;
-	bool wrong_pass=false;
-	if (to_process==0) return 0; // this should be redundant if the called does the same check
-	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
-	PtrSize_t pkt;
-	pktH=&pkt;
-	unsigned int j;
-	unsigned char c;
 
-	if (active_transactions <= 0) {
-		active_transactions=NumActiveTransactions();
-	}
-//	FIXME: Sessions without frontend are an ugly hack
-	if (session_fast_forward==false) {
-	if (client_myds==NULL) {
-		// if we are here, probably we are trying to ping backends
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
-		assert(mybe);
-		assert(mybe->server_myds);
-		goto handler_again;
-	} else {
-		if (mirror==true) {
-			if (mirrorPkt.ptr) { // this is the first time we call handler()
-				pkt.ptr=mirrorPkt.ptr;
-				pkt.size=mirrorPkt.size;
-				mirrorPkt.ptr=NULL; // this will prevent the copy to happen again
-			} else {
-				if (status==WAITING_CLIENT_DATA) {
-					// we are being called a second time with WAITING_CLIENT_DATA
-					handler_ret = 0;
-					return handler_ret;
-				}
-			}
-		}
-	}
-	}
+int MySQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
+	int handler_ret = 0;
+	unsigned char c;
 
 __get_pkts_from_client:
 
@@ -2789,7 +2755,7 @@ __get_pkts_from_client:
 	// if client_myds , this is a regular client
 	// if client_myds == NULL , it is a mirror
 	//     process mirror only status==WAITING_CLIENT_DATA
-	for (j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
+	for (unsigned int j=0; j< ( client_myds->PSarrayIN ? client_myds->PSarrayIN->len : 0)  || (mirror==true && status==WAITING_CLIENT_DATA) ;) {
 		if (mirror==false) {
 			client_myds->PSarrayIN->remove_index(0,&pkt);
 		}
@@ -2875,7 +2841,14 @@ __get_pkts_from_client:
 							mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
 							mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 							previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
-							NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
+							{
+								//NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
+								// we can't use NEXT_IMMEDIATE() inside get_pkts_from_client()
+								// instead we set status to CONNECTING_SERVER and return 0
+								// when we exit from get_pkts_from_client() we expect the label "handler_again"
+								set_status(CONNECTING_SERVER);
+								return 0;
+							}
 						}
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
@@ -3102,52 +3075,13 @@ __get_pkts_from_client:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
 								break;
 							case _MYSQL_COM_STMT_RESET:
-								{
-									uint32_t stmt_global_id=0;
-									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-									SLDH->reset(stmt_global_id);
-									l_free(pkt.size,pkt.ptr);
-									client_myds->setDSS_STATE_QUERY_SENT_NET();
-									unsigned int nTrx=NumActiveTransactions();
-									uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-									if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-									client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-									client_myds->DSS=STATE_SLEEP;
-									status=WAITING_CLIENT_DATA;
-								}
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(pkt);
 								break;
 							case _MYSQL_COM_STMT_CLOSE:
-								{
-									uint32_t client_global_id=0;
-									memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-									// FIXME: no input validation
-									uint64_t stmt_global_id=0;
-									stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_global_id);
-									SLDH->reset(client_global_id);
-									if (stmt_global_id) {
-										sess_STMTs_meta->erase(stmt_global_id);
-									}
-									client_myds->myconn->local_stmts->client_close(client_global_id);
-								}
-								l_free(pkt.size,pkt.ptr);
-								// FIXME: this is not complete. Counters should be decreased
-								thread->status_variables.stvar[st_var_frontend_stmt_close]++;
-								thread->status_variables.stvar[st_var_queries]++;
-								client_myds->DSS=STATE_SLEEP;
-								status=WAITING_CLIENT_DATA;
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(pkt);
 								break;
 							case _MYSQL_COM_STMT_SEND_LONG_DATA:
-								{
-									// FIXME: no input validation
-									uint32_t stmt_global_id=0;
-									memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
-									uint32_t stmt_param_id=0;
-									memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
-									SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
-								}
-								client_myds->DSS=STATE_SLEEP;
-								status=WAITING_CLIENT_DATA;
-								l_free(pkt.size,pkt.ptr);
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
 								if (session_type != PROXYSQL_SESSION_MYSQL) { // only MySQL module supports prepared statement!!
@@ -3319,15 +3253,6 @@ __get_pkts_from_client:
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								}
 								break;
-//							case _MYSQL_COM_STMT_PREPARE:
-//								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(&pkt);
-//								break;
-//							case _MYSQL_COM_STMT_EXECUTE:
-//								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(&pkt);
-//								break;
-//							case _MYSQL_COM_STMT_CLOSE:
-//								mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-//								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 								GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL);
@@ -3394,7 +3319,7 @@ __get_pkts_from_client:
 			case FAST_FORWARD:
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
-			case NONE:
+			case session_status___NONE:
 			default:
 				{
 					char buf[INET6_ADDRSTRLEN];
@@ -3437,8 +3362,53 @@ __get_pkts_from_client:
 				break;
 		}
 	}
+	return handler_ret;
+}
 
 
+int MySQL_Session::handler() {
+	int handler_ret = 0;
+	bool prepared_stmt_with_no_params = false;
+	bool wrong_pass=false;
+	if (to_process==0) return 0; // this should be redundant if the called does the same check
+	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
+	PtrSize_t pkt;
+	pktH=&pkt;
+	//unsigned int j;
+	//unsigned char c;
+
+	if (active_transactions <= 0) {
+		active_transactions=NumActiveTransactions();
+	}
+//	FIXME: Sessions without frontend are an ugly hack
+	if (session_fast_forward==false) {
+	if (client_myds==NULL) {
+		// if we are here, probably we are trying to ping backends
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
+		assert(mybe);
+		assert(mybe->server_myds);
+		goto handler_again;
+	} else {
+		if (mirror==true) {
+			if (mirrorPkt.ptr) { // this is the first time we call handler()
+				pkt.ptr=mirrorPkt.ptr;
+				pkt.size=mirrorPkt.size;
+				mirrorPkt.ptr=NULL; // this will prevent the copy to happen again
+			} else {
+				if (status==WAITING_CLIENT_DATA) {
+					// we are being called a second time with WAITING_CLIENT_DATA
+					handler_ret = 0;
+					return handler_ret;
+				}
+			}
+		}
+	}
+	}
+
+	handler_ret = get_pkts_from_client(wrong_pass, pkt);
+	if (handler_ret != 0) {
+		return handler_ret;
+	}
 
 handler_again:
 
@@ -4062,66 +4032,6 @@ handler_again:
 			}
 			break;
 
-		case CHANGING_USER_SERVER:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_USER_SERVER(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case CHANGING_AUTOCOMMIT:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_AUTOCOMMIT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_MULTI_STMT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_MULTI_STMT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_SESSION_TRACK_GTIDS:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_SESSION_TRACK_GTIDS(&rc))
-					goto handler_again;     // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_SET_NAMES:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_CHARSET(&rc))
-					goto handler_again;     // we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case SETTING_ISOLATION_LEVEL:
 		case SETTING_TRANSACTION_READ:
 		case SETTING_CHARSET:
@@ -4138,42 +4048,6 @@ handler_again:
 			}
 			break;
 
-		case SETTING_INIT_CONNECT:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_INIT_CONNECT(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case SETTING_LDAP_USER_VARIABLE:
-			{
-				int rc=0;
-				if (handler_again___status_SETTING_LDAP_USER_VARIABLE(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
-		case CHANGING_SCHEMA:
-			{
-				int rc=0;
-				if (handler_again___status_CHANGING_SCHEMA(&rc))
-					goto handler_again;	// we changed status
-				if (rc==-1) { // we have an error we can't handle
-					handler_ret = -1;
-					return handler_ret;
-				}
-			}
-			break;
-
 		case CONNECTING_SERVER:
 			{
 				int rc=0;
@@ -4183,9 +4057,18 @@ handler_again:
 					goto __exit_DSS__STATE_NOT_INITIALIZED;
 			}
 			break;
-		case NONE:
+		case session_status___NONE:
 			fprintf(stderr,"NONE\n");
 		default:
+			{
+				int rc = 0;
+				if (handler_again___multiple_statuses(&rc)) // a sort of catch all
+					goto handler_again;	// we changed status
+				if (rc==-1) { // we have an error we can't handle
+					handler_ret = -1;
+					return handler_ret;
+				}
+			}
 			break;
 	}
 
@@ -4214,7 +4097,41 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	handler_ret = 0;
 	return handler_ret;
 }
+// end ::handler()
 
+
+bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
+	bool ret = false;
+	switch(status) {
+		case CHANGING_USER_SERVER:
+			ret = handler_again___status_CHANGING_USER_SERVER(rc);
+			break;
+		case CHANGING_AUTOCOMMIT:
+			ret = handler_again___status_CHANGING_AUTOCOMMIT(rc);
+			break;
+		case CHANGING_SCHEMA:
+			ret = handler_again___status_CHANGING_SCHEMA(rc);
+			break;
+		case SETTING_LDAP_USER_VARIABLE:
+			ret = handler_again___status_SETTING_LDAP_USER_VARIABLE(rc);
+			break;
+		case SETTING_INIT_CONNECT:
+			ret = handler_again___status_SETTING_INIT_CONNECT(rc);
+			break;
+		case SETTING_MULTI_STMT:
+			ret = handler_again___status_SETTING_MULTI_STMT(rc);
+			break;
+		case SETTING_SESSION_TRACK_GTIDS:
+			ret = handler_again___status_SETTING_SESSION_TRACK_GTIDS(rc);
+			break;
+		case SETTING_SET_NAMES:
+			ret = handler_again___status_CHANGING_CHARSET(rc);
+			break;
+		default:
+			break;
+	}
+	return ret;
+}
 
 void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *pkt) {
 	unsigned char c;
@@ -6532,4 +6449,50 @@ bool MySQL_Session::has_any_backend() {
 		}
 	}
 	return false;
+}
+
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
+	uint32_t stmt_global_id=0;
+	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+	SLDH->reset(stmt_global_id);
+	l_free(pkt.size,pkt.ptr);
+	client_myds->setDSS_STATE_QUERY_SENT_NET();
+	unsigned int nTrx=NumActiveTransactions();
+	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+	client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+	client_myds->DSS=STATE_SLEEP;
+	status=WAITING_CLIENT_DATA;
+}
+
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
+	uint32_t client_global_id=0;
+	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+	// FIXME: no input validation
+	uint64_t stmt_global_id=0;
+	stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_global_id);
+	SLDH->reset(client_global_id);
+	if (stmt_global_id) {
+		sess_STMTs_meta->erase(stmt_global_id);
+	}
+	client_myds->myconn->local_stmts->client_close(client_global_id);
+	l_free(pkt.size,pkt.ptr);
+	// FIXME: this is not complete. Counters should be decreased
+	thread->status_variables.stvar[st_var_frontend_stmt_close]++;
+	thread->status_variables.stvar[st_var_queries]++;
+	client_myds->DSS=STATE_SLEEP;
+	status=WAITING_CLIENT_DATA;
+}
+
+
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) {
+	// FIXME: no input validation
+	uint32_t stmt_global_id=0;
+	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+	uint32_t stmt_param_id=0;
+	memcpy(&stmt_param_id,(char *)pkt.ptr+9,sizeof(uint16_t));
+	SLDH->add(stmt_global_id,stmt_param_id,(char *)pkt.ptr+11,pkt.size-11);
+	client_myds->DSS=STATE_SLEEP;
+	status=WAITING_CLIENT_DATA;
+	l_free(pkt.size,pkt.ptr);
 }
