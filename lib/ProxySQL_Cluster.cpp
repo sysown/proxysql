@@ -112,7 +112,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					bool same_version = false;
 					while ((row = mysql_fetch_row(result))) {
 						if (row[0]) {
-							if (strcmp(row[0], PROXYSQL_VERSION)!=0) {
+							if (strcmp(row[0], PROXYSQL_VERSION)==0) {
 								proxy_info("Cluster: clustering with peer %s:%d . Remote version: %s . Self version: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION);
 								same_version = true;
 							} else {
