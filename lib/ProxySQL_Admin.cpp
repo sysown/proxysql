@@ -5313,7 +5313,8 @@ bool ProxySQL_Admin::init() {
 
 	__insert_or_replace_maintable_select_disktable();
 
-	flush_admin_variables___database_to_runtime(admindb,true);
+	// removing this line of code. It seems redundant
+	//flush_admin_variables___database_to_runtime(admindb,true);
 
 	// workaround for issue #708
 	statsdb->execute("INSERT OR IGNORE INTO global_variables VALUES('mysql-max_allowed_packet',4194304)");
