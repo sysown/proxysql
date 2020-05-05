@@ -5044,7 +5044,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							}
 						}
-					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") || (var == "wsrep_sync_wait") ) {
+					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") || (var == "wsrep_sync_wait") || (var == "group_concat_max_len") ) {
 						int idx = SQL_NAME_LAST;
 						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
 							if (mysql_tracked_variables[i].is_number) {
