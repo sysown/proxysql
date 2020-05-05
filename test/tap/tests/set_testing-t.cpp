@@ -88,9 +88,12 @@ int queries_per_connections=1;
 unsigned int num_threads=1;
 int count=0;
 char *username=NULL;
+char *admin_username=NULL;
+char *admin_password=NULL;
 char *password=NULL;
 char *host=(char *)"localhost";
 int port=3306;
+int admin_port=6032;
 int multiport=1;
 char *schema=(char *)"information_schema";
 int silent = 0;
@@ -113,6 +116,7 @@ unsigned int g_failed=0;
 unsigned int status_connections = 0;
 unsigned int connect_phase_completed = 0;
 unsigned int query_phase_completed = 0;
+unsigned int admin_exit = 0;
 
 __thread int g_seed;
 std::mutex mtx_;
@@ -361,6 +365,33 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 	}
 }
 
+void * admin_conn_thread(void *arg) {
+	MYSQL *mysqladmin = mysql_init(NULL);
+	MYSQL *rc=mysql_real_connect(mysqladmin, host, admin_username, admin_password, schema, admin_port, NULL, 0);
+	if (rc == NULL)
+		return NULL;
+
+	__sync_fetch_and_add(&admin_exit,0);
+	while(admin_exit==0) {
+		int sleepDelay = fastrand()%100;
+		usleep(sleepDelay * 1000);
+
+		if (mysql_query(mysqladmin, "select * from stats_mysql_processlist")) {
+			if (silent==0) {
+				fprintf(stderr,"%s\n", mysql_error(mysqladmin));
+			}
+		} else {
+			MYSQL_RES *result = mysql_store_result(mysqladmin);
+			mysql_free_result(result);
+		}
+
+		__sync_fetch_and_add(&admin_exit,0);
+	};
+
+	mysql_close(mysqladmin);
+	return NULL;
+}
+
 void * my_conn_thread(void *arg) {
 	g_seed = time(NULL) ^ getpid() ^ pthread_self();
 	unsigned int select_OK=0;
@@ -544,6 +575,13 @@ int main(int argc, char *argv[]) {
 				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
+	//
+	// create stored procedure for test case
+	MYSQL_QUERY(mysql, "drop database if exists t1");
+	MYSQL_QUERY(mysql, "create database t1");
+	MYSQL_QUERY(mysql, "use t1");
+	MYSQL_QUERY(mysql, "CREATE PROCEDURE test() BEGIN set names latin7; SET @@SESSION.max_join_size=2000000000; END");
+
 	MYSQL_QUERY(mysql, "select @@version");
 	MYSQL_RES *result = mysql_store_result(mysql);
 	MYSQL_ROW row;
@@ -576,6 +614,10 @@ int main(int argc, char *argv[]) {
 	host = cl.host;
 	port = cl.port;
 
+	admin_username = cl.admin_username;
+	admin_password = cl.admin_password;
+	admin_port = cl.admin_port;
+
 	plan(queries * num_threads);
 	if (!readTestCases(fileName)) {
 		fprintf(stderr, "Cannot read %s\n", fileName.c_str());
@@ -596,12 +638,20 @@ int main(int argc, char *argv[]) {
 	if (thi==NULL)
 		return exit_status();
 
+	pthread_t admin_thread;
+	if (pthread_create(&admin_thread, NULL, admin_conn_thread, NULL) != 0)
+		perror("Thread creating");
+
 	for (unsigned int i=0; i<num_threads; i++) {
 		if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
 			perror("Thread creation");
 	}
+
 	for (unsigned int i=0; i<num_threads; i++) {
 		pthread_join(thi[i], NULL);
 	}
+
+	__sync_fetch_and_add(&admin_exit,1);
+
 	return exit_status();
 }
