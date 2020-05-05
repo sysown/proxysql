@@ -48,6 +48,7 @@ admin_variables =
 	cluster_username="admin"
 	hash_passwords="admin"
 	mysql_ifaces="admin"
+	prometheus_memory_metrics_interval="admin"
 	read_only="admin"
 	refresh_interval="admin"
 	restapi_enabled="admin"
