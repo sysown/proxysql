@@ -3104,7 +3104,18 @@ __get_pkts_from_client:
 									// because the offset will be identical
 									CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,true);
 
+									timespec begint;
+									timespec endt;
+									if (thread->variables.stats_time_query_processor) {
+										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
+									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									if (thread->variables.stats_time_query_processor) {
+										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+										thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
+											(endt.tv_sec*1000000000+endt.tv_nsec) -
+											(begint.tv_sec*1000000000+begint.tv_nsec);
+									}
 									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (rc_break==true) {
@@ -3143,7 +3154,7 @@ __get_pkts_from_client:
 									if (client_myds->myconn->local_stmts==NULL) {
 										client_myds->myconn->local_stmts=new MySQL_STMTs_local_v14(true);
 									}
-									uint64_t hash=client_myds->myconn->local_stmts->compute_hash(current_hostgroup,(char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+									uint64_t hash=client_myds->myconn->local_stmts->compute_hash((char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 									MySQL_STMT_Global_info *stmt_info=NULL;
 									// we first lock GloStmt
 									GloMyStmt->wrlock();
@@ -3187,9 +3198,10 @@ __get_pkts_from_client:
 									break;
 								} else {
 									// if we reach here, we are on MySQL module
+									bool rc_break=false;
+									bool lock_hostgroup = false;
 									thread->status_variables.stvar[st_var_frontend_stmt_execute]++;
 									thread->status_variables.stvar[st_var_queries]++;
-									//bool rc_break=false;
 
 									uint32_t client_stmt_id=0;
 									uint64_t stmt_global_id=0;
@@ -3215,6 +3227,22 @@ __get_pkts_from_client:
 									CurrentQuery.stmt_info=stmt_info;
 									CurrentQuery.start_time=thread->curtime;
 
+									timespec begint;
+									timespec endt;
+									if (thread->variables.stats_time_query_processor) {
+										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
+									}
+									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									if (qpo->max_lag_ms >= 0) {
+										thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
+									}
+									if (thread->variables.stats_time_query_processor) {
+										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+										thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
+											(endt.tv_sec*1000000000+endt.tv_nsec) -
+											(begint.tv_sec*1000000000+begint.tv_nsec);
+									}
+									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									// we now take the metadata associated with STMT_EXECUTE from MySQL_STMTs_meta
 									bool stmt_meta_found=true; // let's be optimistic and we assume we will found it
 									stmt_execute_metadata_t *stmt_meta=sess_STMTs_meta->find(stmt_global_id);
@@ -3240,10 +3268,41 @@ __get_pkts_from_client:
 									// else
 
 									CurrentQuery.stmt_meta=stmt_meta;
-//									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
-									// NOTE: we do not call YET the follow function for STMT_EXECUTE
-									//rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt);
-									current_hostgroup=stmt_info->hostgroup_id;
+									//current_hostgroup=qpo->destination_hostgroup;
+									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, true);
+									if (rc_break==true) {
+										break;
+									}
+									if (mysql_thread___set_query_lock_on_hostgroup == 1) { // algorithm introduced in 2.0.6
+										if (locked_on_hostgroup < 0) {
+											if (lock_hostgroup) {
+												// we are locking on hostgroup now
+												locked_on_hostgroup = current_hostgroup;
+											}
+										}
+										if (locked_on_hostgroup >= 0) {
+											if (current_hostgroup != locked_on_hostgroup) {
+												client_myds->DSS=STATE_QUERY_SENT_NET;
+												//int l = CurrentQuery.QueryLength;
+												int l = CurrentQuery.stmt_info->query_length;
+												char *end = (char *)"";
+												if (l>256) {
+													l=253;
+													end = (char *)"...";
+												}
+												string nqn = string((char *)CurrentQuery.stmt_info->query,l);
+												char *err_msg = (char *)"Session trying to reach HG %d while locked on HG %d . Rejecting query: %s";
+												char *buf = (char *)malloc(strlen(err_msg)+strlen(nqn.c_str())+strlen(end)+64);
+												sprintf(buf, err_msg, current_hostgroup, locked_on_hostgroup, nqn.c_str(), end);
+												client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9005,(char *)"HY000",buf, true);
+												thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
+												RequestEnd(NULL);
+												free(buf);
+												l_free(pkt.size,pkt.ptr);
+												break;
+											}
+										}
+									}
 									mybe=find_or_create_backend(current_hostgroup);
 									status=PROCESSING_STMT_EXECUTE;
 									mybe->server_myds->connect_retries_on_failure=mysql_thread___connect_retries_on_failure;
@@ -3676,15 +3735,12 @@ handler_again:
 								uint64_t global_stmtid;
 								//bool is_new;
 								MySQL_STMT_Global_info *stmt_info=NULL;
-									stmt_info=GloMyStmt->add_prepared_statement(current_hostgroup,
+									stmt_info=GloMyStmt->add_prepared_statement(
 										(char *)client_myds->myconn->userinfo->username,
 										(char *)client_myds->myconn->userinfo->schemaname,
 										(char *)CurrentQuery.QueryPointer,
 										CurrentQuery.QueryLength,
 										CurrentQuery.mysql_stmt,
-										qpo->cache_ttl,
-										qpo->timeout,
-										qpo->delay,
 										false);
 									if (CurrentQuery.QueryParserArgs.digest_text) {
 										if (stmt_info->digest_text==NULL) {
