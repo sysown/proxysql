@@ -98,6 +98,7 @@ mysql_variables =
 	default_character_set_results="mysql"
 	default_charset="mysql"
 	default_collation_connection="mysql"
+	default_group_concat_max_len="mysql"
 	default_isolation_level="mysql"
 	default_max_join_size="mysql"
 	default_max_latency_ms="mysql"
