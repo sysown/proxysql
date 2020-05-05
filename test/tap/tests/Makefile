@@ -120,3 +120,6 @@ aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 
 set_testing-t: set_testing-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ set_testing-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -O0 -ggdb -ldl -lssl -lcrypto -o set_testing-t
+
+test_admin_configs-t: test_admin_configs-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_admin_configs-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -lssl -lcrypto -Wl,--no-as-needed -ldl -lpthread -o test_admin_configs-t
