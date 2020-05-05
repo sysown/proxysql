@@ -146,10 +146,14 @@ class ProxySQL_Admin {
 		int cluster_mysql_servers_diffs_before_sync;
 		int cluster_mysql_users_diffs_before_sync;
 		int cluster_proxysql_servers_diffs_before_sync;
+		int cluster_mysql_variables_diffs_before_sync;
+		int cluster_admin_variables_diffs_before_sync;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
 		bool cluster_mysql_users_save_to_disk;
 		bool cluster_proxysql_servers_save_to_disk;
+		bool cluster_mysql_variables_save_to_disk;
+		bool cluster_admin_variables_save_to_disk;
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
@@ -202,7 +206,7 @@ class ProxySQL_Admin {
 	void __refresh_users();
 	void __add_active_users_ldap();
 
-	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 	char **get_variables_list();
@@ -248,6 +252,8 @@ class ProxySQL_Admin {
 		bool checksum_mysql_query_rules;
 		bool checksum_mysql_servers;
 		bool checksum_mysql_users;
+		bool checksum_mysql_variables;
+		bool checksum_admin_variables;
 	} checksum_variables;
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
 		__add_active_users(usertype, user);
