@@ -342,15 +342,14 @@ int test_group_replication_hostgroups(MYSQL* l_proxysql_admin) {
 int test_free_connections_stats(MYSQL* l_proxysql_admin) {
 	const char* check_mysql_info_consistency =
 		"SELECT COUNT(*) FROM stats_mysql_free_connections WHERE "
-		"srv_host = JSON_EXTRACT(mysql_info,'$.host') AND "
-		"srv_port = JSON_EXTRACT(mysql_info,'$.port') AND "
-		"JSON_EXTRACT(statistics,'$.questions') > 0";
+		"srv_host != JSON_EXTRACT(mysql_info,'$.host') OR "
+		"srv_port != JSON_EXTRACT(mysql_info,'$.port')";
 
 	MYSQL_QUERY(l_proxysql_admin, check_mysql_info_consistency);
 	MYSQL_RES* info_res = mysql_store_result(l_proxysql_admin);
 	int info_count = fetch_count(info_res);
 
-	ok(info_count == 1, "%s",
+	ok(info_count == 0, "%s",
 		err_msg("'stats_mysql_free_connections' fields should be consistent with 'mysql_info'.",
 		__FILE__,
 		__LINE__).c_str()
@@ -359,14 +358,263 @@ int test_free_connections_stats(MYSQL* l_proxysql_admin) {
 	return 0;
 }
 
+int test_stats_mysql_query_digest(MYSQL* l_proxysql_admin) {
+	int res = 0;
+	const char* track_hostname_query =
+		"select * from global_variables where variable_name='mysql-query_digests_track_hostname'";
+
+	MYSQL_QUERY(l_proxysql_admin, track_hostname_query);
+	MYSQL_RES* hostname_res = mysql_store_result(l_proxysql_admin);
+	auto hostname_map = fetch_assoc(hostname_res);
+	auto track_hostname_row = get_matching_row(hostname_map, "variable_name", "mysql-query_digests_track_hostname");
+
+	// All fields should be populated but the 'client_address' which depends on 'mysql-query_digests_track_hostname'
+	const char* t_stats_mysql_query =
+		"SELECT COUNT(*) FROM stats_mysql_query_digest WHERE "
+		"hostgroup=='' OR schemaname=='' OR username=='' OR %s OR "
+		"digest=='' OR digest_text=='' OR count_star=='' OR first_seen=='' OR "
+		"last_seen=='' OR sum_time=='' OR min_time=='' OR max_time=='' OR "
+		"sum_rows_affected=='' OR sum_rows_sent==''";
+
+	if (track_hostname_row.size() == 2) {
+		const std::string value = track_hostname_row[1];
+		std::string stats_mysql_query {};
+
+		if (value == "false") {
+			string_format(t_stats_mysql_query, stats_mysql_query, "client_address!=''");
+		} else {
+			string_format(t_stats_mysql_query, stats_mysql_query, "client_address==''");
+		}
+
+		MYSQL_QUERY(l_proxysql_admin, stats_mysql_query.c_str());
+		MYSQL_RES* stats_res = mysql_store_result(l_proxysql_admin);
+		int stats_count = fetch_count(stats_res);
+
+		ok(stats_count == 0, "%s",
+			err_msg("'stats_mysql_query_digest' fields should be all properly populated.",
+			__FILE__,
+			__LINE__).c_str()
+		);
+	} else {
+		ok(false, "%s",
+			err_msg("Should be able to return 'mysql-query_digests_track_hostname' from 'global_variables'",
+				__FILE__,
+				__LINE__).c_str()
+		);
+	}
+
+	return res;
+}
+
+int test_stats_mysql_errors(MYSQL* l_proxysql_admin) {
+	// Do an invalid query to populate 'stats_mysql_errors'
+	const char* invalid_query =
+		"SELECT 1 FROM invalid_db.invalid_table";
+	mysql_query(l_proxysql_admin, invalid_query);
+
+	// Check 'stats_mysql_errors' table
+	const char* check_mysql_errors =
+		"SELECT COUNT(*) FROM stats_mysql_errors WHERE "
+		"hostgroup=='' OR hostname='' OR port='' OR username='' OR "
+		"client_address='' OR schemaname='' OR errno='' OR count_star='' OR "
+		"first_seen='' OR last_seen='' OR last_error=''";
+
+	MYSQL_QUERY(l_proxysql_admin, check_mysql_errors);
+	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
+	int count = fetch_count(mysql_res);
+
+	ok(count == 0, "%s",
+		err_msg("'stats_mysql_errors' fields should have non empty fields.",
+		__FILE__,
+		__LINE__).c_str()
+	);
+
+	return 0;
+}
+
+int test_save_query_rules_fast_routing(MYSQL* l_proxysql_admin) {
+	// Queries
+	const char* update_replication_hostgroups_query =
+		"INSERT INTO mysql_query_rules_fast_routing "
+		"( username, schemaname, flagIN, destination_hostgroup, comment )"
+		"VALUES ('test_user', 'test_db.test_schema', 0, 1, 'test_save_query_rules_fast_routing')";
+	const char* load_mysql_servers_runtime =
+		"LOAD MYSQL QUERY RULES TO RUNTIME";
+	const char* delete_replication_hostgroups_query =
+		"DELETE FROM mysql_query_rules_fast_routing WHERE "
+		"comment='test_save_query_rules_fast_routing'";
+	const char* length_query_rules_fast_routing =
+		"SELECT COUNT(*) FROM mysql_query_rules_fast_routing";
+	const char* check_query_rules_fast_routing =
+		"SELECT COUNT(*) FROM mysql_query_rules_fast_routing t1 "
+		"NATURAL JOIN runtime_mysql_query_rules_fast_routing t2";
+
+	// Setup config
+	MYSQL_QUERY(l_proxysql_admin, delete_replication_hostgroups_query);
+	MYSQL_QUERY(l_proxysql_admin, update_replication_hostgroups_query);
+	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+
+	MYSQL_QUERY(l_proxysql_admin, length_query_rules_fast_routing);
+	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
+	int count = fetch_count(mysql_res);
+
+	MYSQL_QUERY(l_proxysql_admin, check_query_rules_fast_routing);
+	MYSQL_RES* natural_res = mysql_store_result(l_proxysql_admin);
+	int natural_count = fetch_count(natural_res);
+
+
+	ok(count == natural_count, "%s",
+		err_msg("'query_rules_fast_routing' and 'runtime_mysql_query_rules_fast_routing' should be identical.",
+		__FILE__,
+		__LINE__).c_str()
+	);
+
+	// Teardown config
+	MYSQL_QUERY(l_proxysql_admin, delete_replication_hostgroups_query);
+	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+
+	return 0;
+}
+
+int test_save_mysql_firewall_whitelist_users_from_runtime(MYSQL* l_proxysql_admin) {
+	// Queries
+	const char* update_mysql_firewall_whitelist =
+		"INSERT INTO mysql_firewall_whitelist_users"
+		"( active, username, client_address, mode, comment )"
+		"VALUES ( 1, 'test_user', '127.0.0.1', 'DETECTING', 'test_save_mysql_firewall_whitelist_users_from_runtime')";
+	const char* load_mysql_servers_runtime =
+		"LOAD MYSQL QUERY RULES TO RUNTIME";
+	const char *check_mysql_firewall_whitelist =
+		"SELECT COUNT(*) FROM mysql_firewall_whitelist_users t1 "
+		"NATURAL JOIN mysql_firewall_whitelist_users t2";
+	const char* delete_mysql_firewall_whitelist =
+		"DELETE FROM mysql_firewall_whitelist_users WHERE "
+		"comment='test_save_mysql_firewall_whitelist_users_from_runtime'";
+
+	// Setup config
+	MYSQL_QUERY(l_proxysql_admin, delete_mysql_firewall_whitelist);
+	MYSQL_QUERY(l_proxysql_admin, update_mysql_firewall_whitelist);
+	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+	MYSQL_QUERY(l_proxysql_admin, check_mysql_firewall_whitelist);
+
+	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
+	int count = fetch_count(mysql_res);
+
+	ok(count == 1, "%s",
+		err_msg(
+			"'mysql_firewall_whitelist_users' and 'test_save_mysql_firewall_whitelist_users_from_runtime' should be identical.",
+			__FILE__,
+			__LINE__
+		).c_str()
+	);
+
+	// Teardown config
+	MYSQL_QUERY(l_proxysql_admin, delete_mysql_firewall_whitelist);
+	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+
+	return 0;
+}
+
+int test_save_mysql_firewall_whitelist_rules_from_runtime(MYSQL* l_proxysql_admin) {
+	// Queries
+	const char* update_mysql_firewall_whitelist =
+		"INSERT INTO mysql_firewall_whitelist_rules"
+		"( active, username, client_address, schemaname, flagIN, digest, comment )"
+		"VALUES ( 1, 'test_user', '127.0.0.1', 'test_db.test_schema', 0, 'select * from example_digest', 'test_save_mysql_firewall_whitelist_rules_from_runtime' )";
+	const char* delete_mysql_firewall_whitelist =
+		"DELETE FROM mysql_firewall_whitelist_rules WHERE "
+		"comment='test_save_mysql_firewall_whitelist_rules_from_runtime'";
+	const char* load_mysql_firewall_runtime =
+		"LOAD MYSQL FIREWALL TO RUNTIME";
+	const char* save_mysql_firewall_runtime =
+		"LOAD MYSQL FIREWALL TO RUNTIME";
+	const char *check_mysql_firewall_whitelist =
+		"SELECT COUNT(*) FROM mysql_firewall_whitelist_rules t1 "
+		"NATURAL JOIN mysql_firewall_whitelist_rules t2";
+
+	// Setup config
+	MYSQL_QUERY(l_proxysql_admin, delete_mysql_firewall_whitelist);
+	MYSQL_QUERY(l_proxysql_admin, update_mysql_firewall_whitelist);
+	MYSQL_QUERY(l_proxysql_admin, load_mysql_firewall_runtime);
+	MYSQL_QUERY(l_proxysql_admin, save_mysql_firewall_runtime);
+	MYSQL_QUERY(l_proxysql_admin, check_mysql_firewall_whitelist);
+
+	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
+	int count = fetch_count(mysql_res);
+
+	ok(count == 1, "%s",
+		err_msg(
+			"'mysql_firewall_whitelist_rules' and 'test_save_mysql_firewall_whitelist_rules_from_runtime' should be identical.",
+			__FILE__,
+			__LINE__
+		).c_str()
+	);
+
+	// Teardown config
+	MYSQL_QUERY(l_proxysql_admin, delete_mysql_firewall_whitelist);
+	MYSQL_QUERY(l_proxysql_admin, load_mysql_firewall_runtime);
+
+	return 0;
+}
+
+// TODO: Check how to properly test 'ldap_mapping'
+int test_save_mysql_ldap_mapping_runtime_to_database(MYSQL* l_proxysql_admin) {
+	return 0;
+}
+
+int test_save_mysql_servers_runtime_to_database(MYSQL* l_proxysql_admin) {
+// Queries
+	const char* load_mysql_servers_runtime =
+		"LOAD MYSQL SERVERS TO RUNTIME";
+	const char* save_mysql_servers_runtime =
+		"LOAD MYSQL SERVERS TO RUNTIME";
+	const char* lenght_mysql_servers =
+		"SELECT COUNT(*) FROM mysql_servers";
+	const char *check_mysql_servers =
+		"SELECT COUNT(*) FROM mysql_servers t1 "
+		"NATURAL JOIN runtime_mysql_servers t2";
+
+	// Setup config
+	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+	MYSQL_QUERY(l_proxysql_admin, save_mysql_servers_runtime);
+
+	MYSQL_QUERY(l_proxysql_admin, lenght_mysql_servers);
+	MYSQL_RES* lenght_res = mysql_store_result(l_proxysql_admin);
+	int count = fetch_count(lenght_res);
+
+	MYSQL_QUERY(l_proxysql_admin, check_mysql_servers);
+	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
+	int natural_count = fetch_count(mysql_res);
+
+	ok(count == natural_count, "%s",
+		err_msg(
+			"'mysql_servers' and 'runtime_mysql_servers' should be identical.",
+			__FILE__,
+			__LINE__
+		).c_str()
+	);
+
+	// Teardown config
+	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+
+	return 0;
+}
+
 using test_data = std::pair<std::string, std::function<int(MYSQL*)>>;
 
 const std::vector<test_data> table_tests {
-	test_data ( "admin_config_tests: Check the servers tables.", test_servers_tables ),
-	test_data ( "admin_config_tests: Check the 'stats_mysql_prepared_statements_info' table.", test_stats_prepared_statements),
-	test_data ( "admin_config_tests: Check the 'mysql_replication_hostgroups' table.", test_replication_hostgroups ),
-	test_data ( "admin_config_tests: Check the 'mysql_group_replication_hostgroups' table.", test_group_replication_hostgroups ),
-	test_data ( "admin_config_tests: Check the 'free_connections_stats' table.", test_free_connections_stats )
+//  TODO: Temporarly disabled because requires extra infra.
+//  test_data ( "admin_config_tests: Check 'proxysql_servers' tables.", test_servers_tables ),
+	test_data ( "admin_config_tests: Check 'stats_mysql_prepared_statements_info' table.", test_stats_prepared_statements),
+	test_data ( "admin_config_tests: Check 'mysql_replication_hostgroups' table.", test_replication_hostgroups ),
+	test_data ( "admin_config_tests: Check 'mysql_group_replication_hostgroups' table.", test_group_replication_hostgroups ),
+	test_data ( "admin_config_tests: Check 'free_connections_stats' table.", test_free_connections_stats ),
+	test_data ( "admin_config_tests: Check 'stats_mysql_query_digest' table.", test_stats_mysql_query_digest),
+	test_data ( "admin_config_tests: Check 'stats_mysql_errors' table.", test_stats_mysql_errors),
+	test_data ( "admin_config_tests: Check 'query_rules_fast_routing' table.", test_save_query_rules_fast_routing),
+	test_data ( "admin_config_tests: Check 'mysql_firewall_whitelist_users' table.", test_save_mysql_firewall_whitelist_users_from_runtime),
+	test_data ( "admin_config_tests: Check 'mysql_firewall_whitelist_rules' table.", test_save_mysql_firewall_whitelist_rules_from_runtime),
+	test_data ( "admin_config_tests: Check 'mysql_servers' table.", test_save_mysql_servers_runtime_to_database),
 };
 
 int main(int argc, char** argv) {
