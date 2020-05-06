@@ -181,7 +181,7 @@ void queryVariables(MYSQL *mysql, json& j) {
 	//fprintf(stderr, "TRACE : QUERY 3 : variables %s\n", query.str().c_str());
 	if (mysql_query(mysql, query.str().c_str())) {
 		if (silent==0) {
-			fprintf(stderr,"%s\n", mysql_error(mysql));
+			fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", query.str().c_str(), mysql_errno(mysql), mysql_error(mysql));
 		}
 	} else {
 		MYSQL_RES *result = mysql_store_result(mysql);
@@ -198,7 +198,7 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 	//fprintf(stderr, "TRACE : QUERY 4 : variables %s\n", query);
 	if (mysql_query(mysql, query)) {
 		if (silent==0) {
-			fprintf(stderr,"%s\n", mysql_error(mysql));
+			fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", query, mysql_errno(mysql), mysql_error(mysql));
 		}
 	} else {
 		MYSQL_RES *result = mysql_store_result(mysql);
@@ -408,12 +408,19 @@ void * my_conn_thread(void *arg) {
 			mysql=mysqlconns[r1];
 			vars = varsperconn[r1];
 		}
-
+		if (strcmp(username,(char *)"root")) {
+			if (strstr(testCases[r2].command.c_str(),"database")) {
+				continue;
+			}
+			if (strstr(testCases[r2].command.c_str(),"sql_log_bin")) {
+				continue;
+			}
+		}
 		std::vector<std::string> commands = split(testCases[r2].command.c_str(), ';');
 		for (auto c : commands) {
 			if (mysql_query(mysql, c.c_str())) {
 				if (silent==0) {
-					fprintf(stderr,"%s\n", mysql_error(mysql));
+					fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", c.c_str(), mysql_errno(mysql), mysql_error(mysql));
 				}
 			} else {
 				MYSQL_RES *result = mysql_store_result(mysql);
@@ -476,6 +483,7 @@ void * my_conn_thread(void *arg) {
 		queryInternalStatus(mysql, proxysql_vars);
 
 		bool testPassed = true;
+		int variables_tested = 0;
 		for (auto& el : vars.items()) {
 			auto k = mysql_vars.find(el.key());
 			auto s = proxysql_vars["conn"].find(el.key());
@@ -495,11 +503,13 @@ void * my_conn_thread(void *arg) {
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
 				exit(0);
+			} else {
+				variables_tested++;
 			}
 		}
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
-			ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+			ok(testPassed, "mysql connection [%p], thread_id [%lu], variables_tested [%d], command [%s]", mysql, mysql->thread_id, variables_tested, testCases[r2].command.c_str());
 		}
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);
