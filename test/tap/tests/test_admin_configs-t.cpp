@@ -265,18 +265,18 @@ cleanup:
 	return res;
 }
 
-int test_replication_hostgroups(MYSQL* l_proxysql_admin) {
-	const char* delete_replication_hostgroups =
-		"DELETE FROM mysql_replication_hostgroups";
-	const char* update_replication_hostgroups_query =
-		"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, comment) "
-		"VALUES (0, 1, \"reader_writer_test_hostgroup\")";
-	const char* load_mysql_servers =
-		"LOAD MYSQL SERVERS TO RUNTIME";
 
-	MYSQL_QUERY(l_proxysql_admin, delete_replication_hostgroups);
-	MYSQL_QUERY(l_proxysql_admin, update_replication_hostgroups_query);
-	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers);
+
+int test_replication_hostgroups_inner(MYSQL* l_proxysql_admin, int rows, std::vector<int>& hgs, std::vector<std::string>& check_types) {
+
+	MYSQL_QUERY(l_proxysql_admin, (char *)"DELETE FROM mysql_replication_hostgroups");
+	for (int i=0; i<rows; i++) {
+		std::string s = "INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type, comment) VALUES (";
+		s += std::to_string(hgs[i*2]) + "," + std::to_string(hgs[i*2+1]) + ",'" + check_types[rand()%check_types.size()] + "','hostgroups ";
+		s += std::to_string(hgs[i*2]) + " and " + std::to_string(hgs[i*2+1]) + "')";
+		MYSQL_QUERY(l_proxysql_admin, s.c_str());
+	}
+	MYSQL_QUERY(l_proxysql_admin, (char *)"LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Compare with runtime table
 	const char* compare_runtime_and_config =
@@ -287,24 +287,37 @@ int test_replication_hostgroups(MYSQL* l_proxysql_admin) {
 	MYSQL_RES* cmp_res = mysql_store_result(l_proxysql_admin);
 	int cmp_count = fetch_count(cmp_res);
 
-	ok(cmp_count == 1, "'mysql_replication_hostgroups' and 'runtime_mysql_replication_hostgroups' should be identical.");
+	string msg = "'mysql_replication_hostgroups' and 'runtime_mysql_replication_hostgroups' should be identical with " + std::to_string(rows);
+	ok(cmp_count == rows, msg.c_str());
+	mysql_free_result(cmp_res);
 
-	// Check the table format
-	const char* check_replication_hostgroups =
-		"SELECT COUNT(*) FROM runtime_mysql_replication_hostgroups WHERE "
-		"writer_hostgroup=0 AND reader_hostgroup=1 AND comment='reader_writer_test_hostgroup'";
+	if (cmp_count!=rows)
+		return -1;
 
-	MYSQL_QUERY(l_proxysql_admin, check_replication_hostgroups);
-	MYSQL_RES* check_rep_result = mysql_store_result(l_proxysql_admin);
-	int rep_count = fetch_count(check_rep_result);
-
-	ok(rep_count == 1, "'mysql_replication_hostgroups' should have the exp values.");
-
-	MYSQL_QUERY(l_proxysql_admin, delete_replication_hostgroups);
-	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers);
+	MYSQL_QUERY(l_proxysql_admin, (char *)"DELETE FROM mysql_replication_hostgroups");
+	MYSQL_QUERY(l_proxysql_admin, (char *)"LOAD MYSQL SERVERS TO RUNTIME");
 
 	return 0;
 }
+
+int test_replication_hostgroups(MYSQL* l_proxysql_admin) {
+	std::vector<int> hgs;
+	std::vector<int> nrows;
+	std::vector<std::string> check_types = { "read_only", "innodb_read_only", "super_read_only" };
+	int max_rows = 100;
+	for (int i=1; i<=max_rows*2; i++) hgs.push_back(i); // we insert double the number or rows
+	std::random_shuffle ( hgs.begin(), hgs.end() );
+	for (int i=1; i<=max_rows; i++) nrows.push_back(i);
+	std::random_shuffle ( nrows.begin(), nrows.end() );
+
+	for (std::vector<int>::iterator it=nrows.begin(); it!=nrows.end(); ++it) {
+		int rows = *it;
+		int ret = test_replication_hostgroups_inner(l_proxysql_admin, rows, hgs, check_types);
+		if (ret) return ret;
+	}
+	return 0;
+}
+
 
 int test_group_replication_hostgroups(MYSQL* l_proxysql_admin) {
 	const char* delete_replication_hostgroups =
@@ -615,6 +628,7 @@ const std::vector<test_data> table_tests {
 	test_data ( "admin_config_tests: Check 'mysql_firewall_whitelist_users' table.", test_save_mysql_firewall_whitelist_users_from_runtime),
 	test_data ( "admin_config_tests: Check 'mysql_firewall_whitelist_rules' table.", test_save_mysql_firewall_whitelist_rules_from_runtime),
 	test_data ( "admin_config_tests: Check 'mysql_servers' table.", test_save_mysql_servers_runtime_to_database),
+
 };
 
 int main(int argc, char** argv) {
