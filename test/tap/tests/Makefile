@@ -54,6 +54,10 @@ EV_DIR=$(DEPS_PATH)/libev/libev/
 EV_IDIR=$(EV_DIR)
 EV_LDIR=$(EV_DIR)/.libs
 
+PROMETHEUS_PATH=$(DEPS_PATH)/prometheus-cpp/prometheus-cpp
+PROMETHEUS_IDIR=$(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
+PROMETHEUS_LDIR=$(PROMETHEUS_PATH)/lib
+
 IDIR=../../../include
 LDIR=../../../lib
 TAP_LIBDIR=../tap
@@ -64,10 +68,10 @@ EXECUTABLE=proxysql
 
 OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o
 
-INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR)
-LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR)
+INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR)
+LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK) -lprometheus-cpp-core
 STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 
 .PHONY: all
@@ -75,39 +79,16 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t test_ps_large_result-t set_testing-t test_firewall-t || true
+	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora || true
 
 OPT=-O2 -Wl,--no-as-needed
 
-SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp set_testing-t.cpp test_firewall-t.cpp test_ps_hg_routing-t.cpp
-
-tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t test_ps_large_result-t set_testing-t test_firewall-t test_ps_hg_routing-t
+tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
-sqlite3-t: $(TAP_LIBDIR)/libtap.a sqlite3-t.cpp
-	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o sqlite3-t
-
-basic-t: $(TAP_LIBDIR)/libtap.a
-	g++ basic-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap $(STATIC_LIBS) -o basic-t
-
-set_character_set-t: set_character_set-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ set_character_set-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) $(STATIC_LIBS) -o set_character_set-t
-
-charset_unsigned_int-t: charset_unsigned_int-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ charset_unsigned_int-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) $(STATIC_LIBS) -o charset_unsigned_int-t
-
-select_config_file-t: select_config_file-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ select_config_file-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) $(STATIC_LIBS) -o select_config_file-t
-
-test_set_character_results-t: test_set_character_results-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_set_character_results-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -ldl -lpthread $(STATIC_LIBS) -o test_set_character_results-t
-
-test_ps_large_result-t: test_ps_large_result-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_ps_large_result-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -ldl -lpthread $(STATIC_LIBS) -o test_ps_large_result-t
-
-test_firewall-t: test_firewall-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_firewall-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -ldl -lpthread $(STATIC_LIBS) -o test_firewall-t
+%-t:%-t.cpp $(TAP_LIBDIR)/libtap.a
+	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_GALERA -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
@@ -117,13 +98,4 @@ galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
 
 aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
-
-set_testing-t: set_testing-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ set_testing-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -ldl $(STATIC_LIBS) -o set_testing-t
-
-test_default_value_transaction_isolation-t: test_default_value_transaction_isolation-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_default_value_transaction_isolation-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -ldl $(STATIC_LIBS) -o test_default_value_transaction_isolation-t
-
-test_ps_hg_routing-t: test_ps_hg_routing-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_ps_hg_routing-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap $(STATIC_LIBS) -ldl -lpthread -o test_ps_hg_routing-t
-
+  

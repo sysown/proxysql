@@ -1,9 +1,21 @@
+#include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "SpookyV2.h"
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
+
+#include <memory>
+#include <pthread.h>
+#include <string>
+
+#include <prometheus/counter.h>
+#include <prometheus/detail/builder.h>
+#include <prometheus/family.h>
+#include <prometheus/gauge.h>
+
+#include "prometheus_helpers.h"
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
@@ -943,6 +955,323 @@ MyHGC::~MyHGC() {
 	delete mysrvs;
 }
 
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+using hg_counter_tuple =
+	std::tuple<
+		p_hg_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using hg_gauge_tuple =
+	std::tuple<
+		p_hg_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using hg_dyn_counter_tuple =
+	std::tuple<
+		p_hg_dyn_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using hg_dyn_gauge_tuple =
+	std::tuple<
+		p_hg_dyn_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using hg_counter_vector = std::vector<hg_counter_tuple>;
+using hg_gauge_vector = std::vector<hg_gauge_tuple>;
+using hg_dyn_counter_vector = std::vector<hg_dyn_counter_tuple>;
+using hg_dyn_gauge_vector = std::vector<hg_dyn_gauge_tuple>;
+
+const std::tuple<
+	hg_counter_vector,
+	hg_gauge_vector,
+	hg_dyn_counter_vector,
+	hg_dyn_gauge_vector
+>
+hg_metrics_map = std::make_tuple(
+	hg_counter_vector {
+		std::make_tuple (
+			// TODO: Check this help
+			p_hg_counter::servers_table_version,
+			"proxysql_servers_table_version",
+			"Number of times the \"servers_table\" have been modified.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::server_connections_created,
+			"proxysql_server_connections",
+			"Total number of server connections created.",
+			metric_tags {
+				{ "status", "created" }
+			}
+		),
+		std::make_tuple (
+			p_hg_counter::server_connections_delayed,
+			"proxysql_server_connections",
+			"Total number of server connections delayed.",
+			metric_tags {
+				{ "status", "delayed" }
+			}
+		),
+		std::make_tuple (
+			p_hg_counter::server_connections_aborted,
+			"proxysql_server_connections",
+			"Total number of backend failed connections (or closed improperly).",
+			metric_tags {
+				{ "status", "aborted" }
+			}
+		),
+		std::make_tuple (
+			p_hg_counter::client_connections_created,
+			"proxysql_client_connections_created",
+			"Total number of client connections created.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::client_connections_aborted,
+			"proxysql_client_connections_aborted",
+			"Total number of client failed connections (or closed improperly).",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_autocommit,
+			"proxysql_com_autocommit",
+			"Total queries autocommited.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_autocommit_filtered,
+			"proxysql_com_autocommit_filtered",
+			"Total queries filtered autocommit.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_rollback,
+			"proxysql_com_rollback",
+			"Total queries rollbacked.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_rollback_filtered,
+			"proxysql_com_rollback_filtered",
+			"Total queries filtered rollbacked.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_backend_change_user,
+			"proxysql_com_backend_change_user",
+			"Total CHANGE_USER queries backend.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_backend_init_db,
+			"proxysql_com_backend_init_db",
+			"Total queries backend INIT DB.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_backend_set_names,
+			"proxysql_com_backend_set_names",
+			"Total queries backend SET NAMES.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_frontend_init_db,
+			"proxysql_com_frontend_init_db",
+			"Total INIT DB queries frontend.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_frontend_set_names,
+			"proxysql_com_frontend_set_names",
+			"Total SET NAMES frontend queries.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_frontend_use_db,
+			"proxysql_com_frontend_use_db",
+			"Total USE DB queries frontend.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_commit_cnt,
+			"proxysql_com_commit_cnt",
+			"Total queries commit.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_commit_cnt_filtered,
+			"proxysql_com_commit_cnt_filtered",
+			"Total queries commit filtered.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::selects_for_update__autocommit0,
+			"proxysql_selects_for_update__autocommit0",
+			"Total queries that are SELECT for update or equivalent.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::access_denied_wrong_password,
+			"proxysql_access_denied_wrong_password",
+			"Total access denied \"wrong password\".",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::access_denied_max_connections,
+			"proxysql_access_denied_max_connections",
+			"Total access denied \"max connections\".",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::access_denied_max_user_connections,
+			"proxysql_access_denied_max_user_connections",
+			"Total access denied \"max user connections\".",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_get,
+			"proxysql_myhgm_myconnpool_get",
+			"The number of requests made to the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_get_ok,
+			"proxysql_myhgm_myconnpool_get_ok",
+			"The number of successful requests to the connection pool (i.e. where a connection was available).",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_get_ping,
+			"proxysql_myhgm_myconnpool_get_ping",
+			"The number of connections that were taken from the pool to run a ping to keep them alive.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_push,
+			"proxysql_myhgm_myconnpool_push",
+			"The number of connections returned to the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_reset,
+			"proxysql_myhgm_myconnpool_reset",
+			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::myhgm_myconnpool_destroy,
+			"proxysql_myhgm_myconnpool_destroy",
+			"The number of connections considered unhealthy and therefore closed.",
+			metric_tags {}
+		)
+	},
+	// prometheus gauges
+	hg_gauge_vector {
+		std::make_tuple (
+			p_hg_gauge::server_connections_connected,
+			"proxysql_server_connections_connected",
+			"Backend connections that are currently connected.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_gauge::client_connections_connected,
+			"proxysql_client_connections_connected",
+			"Client connections that are currently connected.",
+			metric_tags {}
+		)
+	},
+	// prometheus dynamic counters
+	hg_dyn_counter_vector {
+		// connection_pool
+		std::make_tuple (
+			p_hg_dyn_counter::conn_pool_bytes_data_recv,
+			"proxysql_connection_pool_bytes_data_recv",
+			"The amount of data received from the backend, excluding metadata.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::conn_pool_bytes_data_sent,
+			"proxysql_connection_pool_bytes_data_sent",
+			"The amount of data sent to the backend, excluding metadata.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::connection_pool_conn_err,
+			"proxysql_connection_pool_conn_err",
+			"How many connections weren't established successfully.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::connection_pool_conn_ok,
+			"proxysql_connection_pool_conn_ok",
+			"How many connections were established successfully.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::connection_pool_queries,
+			"proxysql_connection_pool_conn_queries",
+			"The number of queries routed towards this particular backend server.",
+			metric_tags {}
+		),
+		// gtid
+		std::make_tuple (
+			p_hg_dyn_counter::gtid_executed,
+			"proxysql_gtid_executed",
+			"Tracks the number of executed gtid per host and port.",
+			metric_tags {}
+		),
+		// mysql_error
+		std::make_tuple (
+			p_hg_dyn_counter::mysql_error,
+			"proxysql_mysql_error",
+			"Tracks the mysql errors encountered, identifying them by: hostgroup + hostname + port + error_code.",
+			metric_tags {}
+		)
+	},
+	// prometheus dynamic counters
+	hg_dyn_gauge_vector {
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_conn_free,
+			"proxysql_connection_pool_conn_free",
+			"How many connections are currently free.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_conn_used,
+			"proxysql_connection_pool_conn_used",
+			"How many connections are currently used by ProxySQL for sending queries to the backend server.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_latency_us,
+			"proxysql_connection_pool_conn_latency_us",
+			"The currently ping time in microseconds, as reported from Monitor.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_status,
+			"proxysql_connection_pool_conn_status",
+			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).",
+			metric_tags {}
+		)
+	}
+);
+
 MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	pthread_mutex_init(&ev_loop_mutex, NULL);
 	status.client_connections=0;
@@ -1020,6 +1349,14 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 		rand_del[7] = 0;
 	}
 	pthread_mutex_init(&mysql_errors_mutex, NULL);
+
+	// Initialize prometheus metrics
+	init_prometheus_counter_array<hg_metrics_map_idx, p_hg_counter>(hg_metrics_map, this->status.p_counter_array);
+	init_prometheus_gauge_array<hg_metrics_map_idx, p_hg_gauge>(hg_metrics_map, this->status.p_gauge_array);
+	init_prometheus_dyn_counter_array<hg_metrics_map_idx, p_hg_dyn_counter>(hg_metrics_map, this->status.p_dyn_counter_array);
+	init_prometheus_dyn_gauge_array<hg_metrics_map_idx, p_hg_dyn_gauge>(hg_metrics_map, this->status.p_dyn_gauge_array);
+
+	pthread_mutex_init(&mysql_errors_mutex, NULL);
 }
 
 void MySQL_HostGroups_Manager::init() {
@@ -1072,6 +1409,37 @@ void MySQL_HostGroups_Manager::wrlock() {
 #else
 	spin_wrlock(&rwlock);
 #endif
+}
+
+void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
+	p_hg_dyn_counter::metric metric = p_hg_dyn_counter::mysql_error;
+	if (err_type == p_mysql_error_type::proxysql) {
+		metric = p_hg_dyn_counter::proxysql_mysql_error;
+	}
+
+	std::string s_hostgroup = std::to_string(hid);
+	std::string s_address = std::string(address);
+	std::string s_port = std::to_string(port);
+	// TODO: Create switch here to classify error codes
+	std::string s_code = std::to_string(code);
+	std::string metric_id = s_hostgroup + ":" + address + ":" + s_port;
+	std::map<string, string> metric_labels {
+		{ "hostgroup", s_hostgroup },
+		{ "address", address },
+		{ "port", s_port },
+		{ "code", s_code }
+	};
+
+	pthread_mutex_lock(&mysql_errors_mutex);
+
+	p_inc_map_counter(
+		status.p_mysql_errors_map,
+		status.p_dyn_counter_array[metric],
+		metric_id,
+		metric_labels
+	);
+
+	pthread_mutex_unlock(&mysql_errors_mutex);
 }
 
 void MySQL_HostGroups_Manager::wrunlock() {
@@ -1620,6 +1988,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 
 	__sync_fetch_and_add(&status.servers_table_version,1);
+	this->status.p_counter_array[p_hg_counter::servers_table_version]->Increment();
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
 	wrunlock();
@@ -2322,7 +2691,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 									num_candidates++;
 #endif // USE_MYSRVC_ARRAY
 								} else {
-									sess->thread->status_variables.aws_aurora_replicas_skipped_during_query++;
+									sess->thread->status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
 								}
 							} else {
 								sum+=mysrvc->weight;
@@ -2580,7 +2949,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 					// all servers have some latency.
 					// That is good. If any server have no latency, something is wrong
 					// and we will skip this algorithm
-					sess->thread->status_variables.ConnPool_get_conn_latency_awareness++;
+					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
 					unsigned int avg_latency_us = 0;
 					avg_latency_us = total_latency_us/num_candidates;
 					for (j=0; j<num_candidates; j++) {
@@ -2839,7 +3208,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 								auth_password=ui->password;
 							}
 						}
-						KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->mysql->thread_id, KILL_CONNECTION, NULL);
+						KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->parent->myhgc->hid, c->mysql->thread_id, KILL_CONNECTION, NULL);
 						pthread_attr_t attr;
 						pthread_attr_init(&attr);
 						pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -3157,6 +3526,96 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 	}
 	wrunlock();
 	return result;
+}
+
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
+	const auto& counter_id = m_map.find(endpoint_id);
+	if (counter_id != m_map.end()) {
+		const auto& cur_val = counter_id->second->Value();
+		counter_id->second->Increment(value - cur_val);
+	} else {
+		auto& new_counter = status.p_dyn_counter_array[idx];
+		m_map.insert(
+			{
+				endpoint_id,
+				std::addressof(new_counter->Add({
+					{"endpoint", endpoint_addr + ":" + endpoint_port},
+					{"hostgroup", hostgroup_id }
+				}))
+			}
+		);
+	}
+}
+
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
+	const auto& counter_id = m_map.find(endpoint_id);
+	if (counter_id != m_map.end()) {
+		counter_id->second->Set(value);
+	} else {
+		auto& new_counter = status.p_dyn_gauge_array[idx];
+		m_map.insert(
+			{
+				endpoint_id,
+				std::addressof(new_counter->Add({
+					{"endpoint", endpoint_addr + ":" + endpoint_port},
+					{"hostgroup", hostgroup_id }
+				}))
+			}
+		);
+	}
+}
+
+void MySQL_HostGroups_Manager::p_update_connection_pool() {
+	wrlock();
+	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
+		MyHGC *myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+		for (int j = 0; j < static_cast<int>(myhgc->mysrvs->cnt()); j++) {
+			MySrvC *mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
+			std::string endpoint_addr = mysrvc->address;
+			std::string endpoint_port = std::to_string(mysrvc->port);
+			std::string hostgroup_id = std::to_string(myhgc->hid);
+			std::string endpoint_id = hostgroup_id + ":" + endpoint_addr + ":" + endpoint_port;
+
+			// proxysql_connection_pool_bytes_data_recv metric
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_conn_pool_bytes_data_recv_map, mysrvc->bytes_recv, p_hg_dyn_counter::conn_pool_bytes_data_recv);
+
+			// proxysql_connection_pool_bytes_data_sent metric
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_conn_pool_bytes_data_sent_map, mysrvc->bytes_sent, p_hg_dyn_counter::conn_pool_bytes_data_sent);
+
+			// proxysql_connection_pool_conn_err metric
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_conn_err_map, mysrvc->connect_ERR, p_hg_dyn_counter::connection_pool_conn_err);
+
+			// proxysql_connection_pool_conn_free metric
+			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_conn_free_map, mysrvc->ConnectionsFree->conns_length(), p_hg_dyn_gauge::connection_pool_conn_free);
+
+
+			// proxysql_connection_pool_conn_ok metric
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_conn_ok_map, mysrvc->connect_OK, p_hg_dyn_counter::connection_pool_conn_ok);
+
+			// proxysql_connection_pool_conn_used metric
+			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_conn_used_map, mysrvc->ConnectionsUsed->conns_length(), p_hg_dyn_gauge::connection_pool_conn_used);
+
+			// proxysql_connection_pool_latency_us metric
+			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_latency_us_map, mysrvc->current_latency_us, p_hg_dyn_gauge::connection_pool_latency_us);
+
+
+			// proxysql_connection_pool_queries metric
+			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_queries_map, mysrvc->queries_sent, p_hg_dyn_counter::connection_pool_queries);
+
+			// proxysql_connection_pool_status metric
+			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+				status.p_connection_pool_status_map, mysrvc->status + 1, p_hg_dyn_gauge::connection_pool_status);
+		}
+	}
+	wrunlock();
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
@@ -3668,6 +4127,53 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 	wrunlock();
 }
 
+void MySQL_HostGroups_Manager::p_update_metrics() {
+	p_update_counter(status.p_counter_array[p_hg_counter::servers_table_version], status.servers_table_version);
+	// Update *server_connections* related metrics
+	status.p_gauge_array[p_hg_gauge::server_connections_connected]->Set(status.server_connections_connected);
+	p_update_counter(status.p_counter_array[p_hg_counter::server_connections_aborted], status.server_connections_aborted);
+	p_update_counter(status.p_counter_array[p_hg_counter::server_connections_created], status.server_connections_created);
+	p_update_counter(status.p_counter_array[p_hg_counter::server_connections_delayed], status.server_connections_delayed);
+
+	// Update *client_connections* related metrics
+	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_created], status.client_connections_created);
+	p_update_counter(status.p_counter_array[p_hg_counter::client_connections_aborted], status.client_connections_aborted);
+	status.p_gauge_array[p_hg_gauge::client_connections_connected]->Set(status.client_connections);
+
+	// Update *acess_denied* related metrics
+	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_wrong_password], status.access_denied_wrong_password);
+	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_max_connections], status.access_denied_max_connections);
+	p_update_counter(status.p_counter_array[p_hg_counter::access_denied_max_user_connections], status.access_denied_max_user_connections);
+
+	p_update_counter(status.p_counter_array[p_hg_counter::selects_for_update__autocommit0], status.select_for_update_or_equivalent);
+
+	// Update *com_* related metrics
+	p_update_counter(status.p_counter_array[p_hg_counter::com_autocommit], status.autocommit_cnt);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_autocommit_filtered], status.autocommit_cnt_filtered);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_commit_cnt], status.commit_cnt);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_commit_cnt_filtered], status.commit_cnt_filtered);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_rollback], status.rollback_cnt);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_rollback_filtered], status.rollback_cnt_filtered);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_init_db], status.backend_init_db);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_change_user], status.backend_change_user);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_set_names], status.backend_set_names);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_init_db], status.frontend_init_db);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_set_names], status.frontend_set_names);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_use_db], status.frontend_use_db);
+
+	// Update *myconnpoll* related metrics
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_get], status.myconnpoll_get);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ok], status.myconnpoll_get_ok);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_get_ping], status.myconnpoll_get_ping);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_push], status.myconnpoll_push);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset], status.myconnpoll_reset);
+	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy], status.myconnpoll_destroy);
+
+	// Update the *connection_pool* metrics
+	this->p_update_connection_pool();
+	// Update the *gtid_executed* metrics
+	this->p_update_mysql_gtid_executed();
+}
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
 	const int colnum=2;
@@ -4951,6 +5457,60 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 		// we couldn't find the cluster, exits
 	}
 	pthread_mutex_unlock(&Galera_Info_mutex);
+}
+
+void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
+	pthread_rwlock_wrlock(&gtid_rwlock);
+
+	std::unordered_map<string, GTID_Server_Data*>::iterator it = gtid_map.begin();
+	while(it != gtid_map.end()) {
+		GTID_Server_Data* gtid_si = it->second;
+		std::string address {};
+		std::string port {};
+		std::string endpoint_id {};
+
+		if (gtid_si) {
+			address = std::string(gtid_si->address);
+			port = std::to_string(gtid_si->mysql_port);
+		} else {
+			std::string s = it->first;
+			std::size_t found = s.find_last_of(":");
+			address = s.substr(0, found);
+			port = s.substr(found + 1);
+		}
+		endpoint_id = address + ":" + port;
+
+		const auto& gitd_id_counter = this->status.p_gtid_executed_map.find(endpoint_id);
+		prometheus::Counter* gtid_counter = nullptr;
+
+		if (gitd_id_counter == this->status.p_gtid_executed_map.end()) {
+			auto& gitd_counter =
+				this->status.p_dyn_counter_array[p_hg_dyn_counter::gtid_executed];
+
+			gtid_counter = std::addressof(gitd_counter->Add({
+				{ "hostname", address },
+				{ "port", port },
+			}));
+
+			this->status.p_gtid_executed_map.insert(
+				{
+					endpoint_id,
+					gtid_counter
+				}
+			);
+		} else {
+			gtid_counter = gitd_id_counter->second;
+		}
+
+		if (gtid_si) {
+			const auto& cur_executed_gtid = gtid_counter->Value();
+			gtid_counter->Increment(gtid_si->events_read - cur_executed_gtid);
+		}
+
+		it++;
+	}
+
+	pthread_rwlock_unlock(&gtid_rwlock);
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {

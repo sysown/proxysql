@@ -1,9 +1,14 @@
 #ifndef __CLASS_PROXYSQL_ADMIN_H
 #define __CLASS_PROXYSQL_ADMIN_H
 
+#include <prometheus/exposer.h>
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
+
 #include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include <tuple>
 #include <vector>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
@@ -44,6 +49,52 @@ class ProxySQL_External_Scheduler {
 	void update_table(SQLite3_result *result);
 };
 
+struct p_admin_counter {
+	enum metric {
+		uptime = 0,
+		jemalloc_allocated,
+		__size
+	};
+};
+
+struct p_admin_gauge {
+	enum metric {
+		// memory metrics
+		connpool_memory_bytes = 0,
+		sqlite3_memory_bytes,
+		jemalloc_resident,
+		jemalloc_active,
+		jemalloc_mapped,
+		jemalloc_metadata,
+		jemalloc_retained,
+		query_digest_memory_bytes,
+		auth_memory_bytes,
+		mysql_query_rules_memory_bytes,
+		mysql_firewall_users_table,
+		mysql_firewall_users_config,
+		mysql_firewall_rules_table,
+		mysql_firewall_rules_config,
+		stack_memory_mysql_threads,
+		stack_memory_admin_threads,
+		stack_memory_cluster_threads,
+		// stmt metrics
+		stmt_client_active_total,
+		stmt_client_active_unique,
+		stmt_server_active_total,
+		stmt_server_active_unique,
+		stmt_max_stmt_id,
+		stmt_cached,
+		__size
+	};
+};
+
+struct admin_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges
+	};
+};
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
@@ -71,8 +122,7 @@ class ProxySQL_Admin {
 	rwlock_t mysql_servers_rwlock;
 #endif
 
-	
-
+	prometheus::SerialExposer serial_exposer;
 
 	void wrlock();
 	void wrunlock();
@@ -96,10 +146,14 @@ class ProxySQL_Admin {
 		int cluster_mysql_servers_diffs_before_sync;
 		int cluster_mysql_users_diffs_before_sync;
 		int cluster_proxysql_servers_diffs_before_sync;
+		int cluster_mysql_variables_diffs_before_sync;
+		int cluster_admin_variables_diffs_before_sync;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
 		bool cluster_mysql_users_save_to_disk;
 		bool cluster_proxysql_servers_save_to_disk;
+		bool cluster_mysql_variables_save_to_disk;
+		bool cluster_admin_variables_save_to_disk;
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
@@ -115,11 +169,18 @@ class ProxySQL_Admin {
 		bool web_enabled_old;
 		int web_port;
 		int web_port_old;
+		int p_memory_metrics_interval;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
 	} variables;
 
+	unsigned long long last_p_memory_metrics_ts;
+
+	struct {
+		std::array<prometheus::Counter*, p_admin_counter::__size> p_counter_array {};
+		std::array<prometheus::Gauge*, p_admin_gauge::__size> p_gauge_array {};
+	} metrics;
 
 	ProxySQL_External_Scheduler *scheduler;
 
@@ -145,7 +206,7 @@ class ProxySQL_Admin {
 	void __refresh_users();
 	void __add_active_users_ldap();
 
-	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
+	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 	char **get_variables_list();
@@ -191,6 +252,8 @@ class ProxySQL_Admin {
 		bool checksum_mysql_query_rules;
 		bool checksum_mysql_servers;
 		bool checksum_mysql_users;
+		bool checksum_mysql_variables;
+		bool checksum_admin_variables;
 	} checksum_variables;
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
 		__add_active_users(usertype, user);
@@ -254,6 +317,7 @@ class ProxySQL_Admin {
 	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
 
+	void p_update_metrics();
 	void stats___mysql_query_rules();
 	void stats___mysql_query_digests(bool reset, bool copy=false);
 	//void stats___mysql_query_digests_reset();
@@ -270,6 +334,10 @@ class ProxySQL_Admin {
 	void stats___proxysql_servers_metrics();
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
+
+	// Update prometheus metrics
+	void p_stats___memory_metrics();
+	void p_update_stmt_metrics();
 
 	ProxySQL_Config& proxysql_config();
 	ProxySQL_Restapi& proxysql_restapi();

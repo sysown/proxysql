@@ -1,9 +1,11 @@
+#include <prometheus/counter.h>
 #include "btree_map.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "query_cache.hpp"
 #include "proxysql_atomic.h"
 #include "SpookyV2.h"
+#include "prometheus_helpers.h"
 
 #define THR_UPDATE_CNT(__a, __b, __c, __d) \
 	do {\
@@ -293,6 +295,85 @@ void KV_BtreeArray::empty() {
 #endif
 };
 
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+using qc_counter_tuple =
+	std::tuple<
+		p_qc_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using qc_gauge_tuple =
+	std::tuple<
+		p_qc_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using qc_counter_vector = std::vector<qc_counter_tuple>;
+using qc_gauge_vector = std::vector<qc_gauge_tuple>;
+
+const std::tuple<qc_counter_vector, qc_gauge_vector>
+qc_metrics_map = std::make_tuple(
+	qc_counter_vector {
+		std::make_tuple (
+			p_qc_counter::query_cache_count_get,
+			"proxysql_query_cache_count_get",
+			"Number of read requests.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_count_get_ok,
+			"proxysql_query_cache_count_get_ok",
+			"Number of successful read requests.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_count_set,
+			"proxysql_query_cache_count_set",
+			"Number of write requests.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_bytes_in,
+			"proxysql_query_cache_bytes_in",
+			"Number of bytes sent into the Query Cache.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_bytes_out,
+			"proxysql_query_cache_bytes_out",
+			"Number of bytes read from the Query Cache.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_purged,
+			"proxysql_query_cache_purged",
+			"Number of entries purged by the Query Cache due to TTL expiration.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_qc_counter::query_cache_entries,
+			"proxysql_query_cache_entries",
+			"Number of entries currently stored in the query cache.",
+			metric_tags {}
+		)
+	},
+	qc_gauge_vector {
+		std::make_tuple (
+			p_qc_gauge::query_cache_memory_bytes,
+			"proxysql_query_cache_memory_bytes",
+			"Memory currently used by the query cache (more details later).",
+			metric_tags {}
+		)
+	}
+);
+
 uint64_t Query_Cache::get_data_size_total() {
 	int r=0;
 	int i;
@@ -331,7 +412,22 @@ Query_Cache::Query_Cache() {
 	purge_threshold_pct_min=DEFAULT_purge_threshold_pct_min;
 	purge_threshold_pct_max=DEFAULT_purge_threshold_pct_max;
 	max_memory_size=DEFAULT_SQC_size;
+
+	// Initialize prometheus metrics
+	init_prometheus_counter_array<qc_metrics_map_idx, p_qc_counter>(qc_metrics_map, this->metrics.p_counter_array);
+	init_prometheus_gauge_array<qc_metrics_map_idx, p_qc_gauge>(qc_metrics_map, this->metrics.p_gauge_array);
 };
+
+void Query_Cache::p_update_metrics() {
+	this->metrics.p_gauge_array[p_qc_gauge::query_cache_memory_bytes]->Set(get_data_size_total());
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get], Glo_cntGet);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get_ok], Glo_cntGetOK);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_set], Glo_cntSet);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_in], Glo_dataIN);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_out], Glo_dataOUT);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_purged], Glo_cntPurge);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_entries], Glo_num_entries);
+}
 
 void Query_Cache::print_version() {
 	fprintf(stderr,"In memory Standard Query Cache (SQC) rev. %s -- %s -- %s\n", QUERY_CACHE_VERSION, __FILE__, __TIMESTAMP__);

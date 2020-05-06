@@ -1,5 +1,10 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
+
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
+
+#include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "thread.h"
@@ -225,6 +230,36 @@ class WorkItem {
 	~WorkItem() {}
 };
 
+struct p_mon_counter {
+	enum metric {
+		mysql_monitor_workers_started,
+		mysql_monitor_connect_check_ok,
+		mysql_monitor_connect_check_err,
+		mysql_monitor_ping_check_ok,
+		mysql_monitor_ping_check_err,
+		mysql_monitor_read_only_check_ok,
+		mysql_monitor_read_only_check_err,
+		mysql_monitor_replication_lag_check_ok,
+		mysql_monitor_replication_lag_check_err,
+		__size
+	};
+};
+
+struct p_mon_gauge {
+	enum metric {
+		mysql_monitor_workers,
+		mysql_monitor_workers_aux,
+		__size
+	};
+};
+
+struct mon_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges
+	};
+};
+
 class MySQL_Monitor {
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
@@ -254,6 +289,12 @@ class MySQL_Monitor {
 	unsigned long long read_only_check_ERR;
 	unsigned long long replication_lag_check_OK;
 	unsigned long long replication_lag_check_ERR;
+	struct {
+		/// Prometheus metrics arrays
+		std::array<prometheus::Counter*, p_mon_counter::__size> p_counter_array {};
+		std::array<prometheus::Gauge*, p_mon_gauge::__size> p_gauge_array {};
+	} metrics;
+	void p_update_metrics();
 	std::unique_ptr<wqueue<WorkItem*>> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
 	bool shutdown;

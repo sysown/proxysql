@@ -10,6 +10,9 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <prometheus/counter.h>
+#include "MySQL_HostGroups_Manager.h"
+#include "MySQL_Monitor.hpp"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -534,6 +537,113 @@ void * monitor_replication_lag_pthread(void *arg) {
 	return NULL;
 }
 
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+using mon_counter_tuple =
+	std::tuple<
+		p_mon_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using mon_gauge_tuple =
+	std::tuple<
+		p_mon_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using mon_counter_vector = std::vector<mon_counter_tuple>;
+using mon_gauge_vector = std::vector<mon_gauge_tuple>;
+
+const std::tuple<mon_counter_vector, mon_gauge_vector>
+mon_metrics_map = std::make_tuple(
+	mon_counter_vector {
+		std::make_tuple (
+			p_mon_counter::mysql_monitor_workers_started,
+			"proxysql_mysql_monitor_workers_started",
+			"Number of MySQL Monitor workers started.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_connect_check_ok,
+			"proxysql_mysql_monitor_connect_check_ok",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_connect_check_err,
+			"proxysql_mysql_monitor_connect_check_err",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_ping_check_ok,
+			"proxysql_mysql_monitor_ping_check_ok",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_ping_check_err,
+			"proxysql_mysql_monitor_ping_check_err",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_read_only_check_ok,
+			"proxysql_mysql_monitor_read_only_check_ok",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_read_only_check_err,
+			"proxysql_mysql_monitor_read_only_check_err",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_replication_lag_check_ok,
+			"proxysql_mysql_monitor_replication_lag_check_ok",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_counter::mysql_monitor_replication_lag_check_err,
+			"proxysql_mysql_monitor_replication_lag_check_err",
+			"",
+			metric_tags {}
+		)
+	},
+	mon_gauge_vector {
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_gauge::mysql_monitor_workers,
+			"proxysql_mysql_monitor_workers",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_mon_gauge::mysql_monitor_workers_aux,
+			"proxysql_mysql_monitor_workers_aux",
+			"",
+			metric_tags {}
+		)
+	}
+);
+
 MySQL_Monitor::MySQL_Monitor() {
 
 	GloMyMon = this;
@@ -608,6 +718,10 @@ MySQL_Monitor::MySQL_Monitor() {
 		num_threads=16;	// limit to 16
 	}
 */
+
+	// Initialize prometheus metrics
+	init_prometheus_counter_array<mon_metrics_map_idx, p_mon_counter>(mon_metrics_map, this->metrics.p_counter_array);
+	init_prometheus_gauge_array<mon_metrics_map_idx, p_mon_gauge>(mon_metrics_map, this->metrics.p_gauge_array);
 };
 
 MySQL_Monitor::~MySQL_Monitor() {
@@ -637,6 +751,22 @@ MySQL_Monitor::~MySQL_Monitor() {
 	AWS_Aurora_Hosts_Map.clear();
 };
 
+void MySQL_Monitor::p_update_metrics() {
+	if (GloMyMon) {
+		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Set(GloMyMon->num_threads);
+		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers_aux]->Set(GloMyMon->aux_threads);
+
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started], GloMyMon->started_threads);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_ok], GloMyMon->connect_check_OK);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_connect_check_err], GloMyMon->connect_check_ERR);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_ok], GloMyMon->ping_check_OK);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_ping_check_err], GloMyMon->ping_check_ERR );
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_ok], GloMyMon->read_only_check_OK);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_read_only_check_err], GloMyMon->read_only_check_ERR);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_ok], GloMyMon->replication_lag_check_OK);
+		p_update_counter(this->metrics.p_counter_array[p_mon_counter::mysql_monitor_replication_lag_check_err], GloMyMon->replication_lag_check_ERR);
+	}
+}
 
 void MySQL_Monitor::print_version() {
 	fprintf(stderr,"Standard MySQL Monitor (StdMyMon) rev. %s -- %s -- %s\n", MYSQL_MONITOR_VERSION, __FILE__, __TIMESTAMP__);
@@ -783,6 +913,7 @@ void * monitor_ping_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		//proxy_warning("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 	} else {
 		if (crc==false) {
@@ -929,6 +1060,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		if (myrc==NULL) {
 			mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, hostgroup_id, hostname, port, myerrno);
 			if (myerrno < 2000) {
 				mysql_close(mysql);
 			} else {
@@ -1011,6 +1143,7 @@ void * monitor_read_only_thread(void *arg) {
 		if (mmsd->interr) {
 			// error during query
 			mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			goto __exit_monitor_read_only_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1023,6 +1156,7 @@ void * monitor_read_only_thread(void *arg) {
 	if (mmsd->interr) {
 		// error during query
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		goto __exit_monitor_read_only_thread;
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
@@ -1044,6 +1178,7 @@ void * monitor_read_only_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 	}
 
 __exit_monitor_read_only_thread:
@@ -1245,6 +1380,7 @@ void * monitor_group_replication_thread(void *arg) {
 		if (mmsd->interr) {
 			// error during query
 			mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			goto __exit_monitor_group_replication_thread;
 		}
 
@@ -1258,6 +1394,7 @@ void * monitor_group_replication_thread(void *arg) {
 	if (mmsd->interr) {
 		// error during query
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		goto __exit_monitor_group_replication_thread;
 	}
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
@@ -1278,6 +1415,7 @@ void * monitor_group_replication_thread(void *arg) {
 	}
 	if (mmsd->interr) { // group replication check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 		GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 		if (mmsd->mysql) {
@@ -1626,6 +1764,7 @@ void * monitor_galera_thread(void *arg) {
 	}
 	if (mmsd->interr) { // ping failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
@@ -2001,6 +2140,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		unsigned long long now=monotonic_time();
 #ifdef DEBUG
 		proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (now-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
@@ -3055,6 +3195,7 @@ __monitor_run:
 		threads[i]->start(2048,false);
 	}
 	started_threads += num_threads;
+	this->metrics.p_counter_array[p_mon_counter::mysql_monitor_workers_started]->Increment(num_threads);
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setstacksize (&attr, 2048*1024);
@@ -3104,6 +3245,7 @@ __monitor_run:
 				unsigned int threads_min = (unsigned int)mysql_thread___monitor_threads_min;
 				if (old_num_threads < threads_min) {
 					num_threads = threads_min;
+					this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Set(threads_min);
 					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
 					started_threads += (num_threads - old_num_threads);
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
@@ -3132,6 +3274,7 @@ __monitor_run:
 				if (new_threads) {
 					unsigned int old_num_threads = num_threads;
 					num_threads += new_threads;
+					this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Increment(new_threads);
 					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
 					started_threads += new_threads;
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
@@ -4140,6 +4283,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	}
 	if (mmsd->interr) { // check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 	}
 
 __exit_monitor_aws_aurora_HG_thread:
@@ -4563,6 +4707,7 @@ void * monitor_AWS_Aurora_thread(void *arg) {
 	}
 	if (mmsd->interr) { // check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 	}
 
 __exit_monitor_aws_aurora_thread:
