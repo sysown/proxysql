@@ -194,6 +194,7 @@ class MySQL_Data_Stream
 		myconn=mc;
 		myconn->statuses.myconnpoll_get++;
 		mc->myds=this;
+		sess->mysql_tid=myconn->get_mysql_thread_id();
 	}
 
 	// safe way to detach a MySQL Connection

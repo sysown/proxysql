@@ -3790,7 +3790,7 @@ handler_again:
 						if (myerr >= 2000 && myerr < 3000) {
 							bool retry_conn=false;
 							// client error, serious
-							proxy_error("Detected a broken connection during query on (%d,%s,%d,%lu) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myds->fd, myds->myconn->fd,  myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
+							proxy_error("Detected a broken connection during query on (%d,%s,%d,%lu) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_tid, myds->fd, myds->myconn->fd,  myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
 							if (myds->query_retries_on_failure > 0) {
 								myds->query_retries_on_failure--;
 								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -3835,9 +3835,9 @@ handler_again:
 							return handler_ret;
 						} else {
 							if (mysql_thread___verbose_query_error) {
-								proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %d, %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)), CurrentQuery.QueryParserArgs.digest_text );
+								proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %d, %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_tid, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)), CurrentQuery.QueryParserArgs.digest_text );
 							} else {
-								proxy_warning("Error during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
+								proxy_warning("Error during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_tid, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
 							}
 							MyHGM->add_mysql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, (char *)( errmsg ? errmsg : mysql_error(myconn->mysql)));
 							bool retry_conn=false;
@@ -3901,7 +3901,7 @@ handler_again:
 									//return handler_ret;
 									break;
 								case 1153: // ER_NET_PACKET_TOO_LARGE
-									proxy_warning("Error ER_NET_PACKET_TOO_LARGE during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myerr, mysql_error(myconn->mysql));
+									proxy_warning("Error ER_NET_PACKET_TOO_LARGE during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_tid, myerr, mysql_error(myconn->mysql));
 									break;
 								default:
 									break; // continue normally
