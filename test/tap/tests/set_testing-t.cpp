@@ -410,9 +410,11 @@ void * my_conn_thread(void *arg) {
 		}
 		if (strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
+				ok(true, "mysql connection [%p], thread_id [%lu], skipped test for command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
 				continue;
 			}
 			if (strstr(testCases[r2].command.c_str(),"sql_log_bin")) {
+				ok(true, "mysql connection [%p], thread_id [%lu], skipped test for command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
 				continue;
 			}
 		}
