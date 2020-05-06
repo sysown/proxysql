@@ -413,12 +413,12 @@ void * my_conn_thread(void *arg) {
 		if (strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
 				std::lock_guard<std::mutex> lock(mtx_);
-				ok(true, "mysql connection [%p], thread_id [%lu], skipped test for command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
 				continue;
 			}
 			if (strstr(testCases[r2].command.c_str(),"sql_log_bin")) {
 				std::lock_guard<std::mutex> lock(mtx_);
-				ok(true, "mysql connection [%p], thread_id [%lu], skipped test for command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
 				continue;
 			}
 		}
