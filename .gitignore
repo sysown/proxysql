@@ -155,6 +155,10 @@ deps/libssl/openssl-1.1.1d/
 #google coredumper
 deps/google-coredumper/google-coredumper/
 
+#prometheus-cpp
+deps/prometheus-cpp/*
+!deps/prometheus-cpp/patches
+
 test/.vagrant
 .DS_Store
 proxysql-tests.ini

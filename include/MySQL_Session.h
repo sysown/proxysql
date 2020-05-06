@@ -72,7 +72,7 @@ class Query_Info {
 class MySQL_Session
 {
 	private:
-	int handler_ret;
+	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
@@ -125,10 +125,15 @@ class MySQL_Session
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
+	bool handler_again___multiple_statuses(int *rc);
 	void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
 
+	int get_pkts_from_client(bool&, PtrSize_t&);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
 
 	public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
@@ -243,6 +248,7 @@ class MySQL_Session
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
+	bool has_any_backend();
 };
 
 #define KILL_QUERY       1
@@ -257,7 +263,8 @@ class KillArgs {
 	unsigned int port;
 	unsigned long id;
 	int kill_type;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned long i, int kt, MySQL_Thread *_mt);
+	unsigned int hid;
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread *_mt);
 	~KillArgs();
 };
 

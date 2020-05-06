@@ -1,7 +1,12 @@
 #include <iostream>     // std::cout
 #include <fstream>
 #include <algorithm>    // std::sort
+#include <memory>
 #include <vector>       // std::vector
+#include <prometheus/exposer.h>
+#include <prometheus/counter.h>
+#include "MySQL_HostGroups_Manager.h"
+#include "proxysql_admin.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -493,7 +498,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #endif /* PROXYSQLCLICKHOUSE */
 
 
-#define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL, hostgroup INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , query VARCHAR NOT NULL)"
+#define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , query VARCHAR NOT NULL)"
 
 static char * admin_variables_names[]= {
 	(char *)"admin_credentials",
@@ -531,11 +536,204 @@ static char * admin_variables_names[]= {
 	(char *)"restapi_port",
 	(char *)"web_enabled",
 	(char *)"web_port",
+	(char *)"prometheus_memory_metrics_interval",
 #ifdef DEBUG
   (char *)"debug",
 #endif /* DEBUG */
   NULL
 };
+
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+using admin_counter_tuple =
+	std::tuple<
+		p_admin_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using admin_gauge_tuple =
+	std::tuple<
+		p_admin_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using admin_counter_vector = std::vector<admin_counter_tuple>;
+using admin_gauge_vector = std::vector<admin_gauge_tuple>;
+
+const std::tuple<admin_counter_vector, admin_gauge_vector>
+admin_metrics_map = std::make_tuple(
+	admin_counter_vector {
+		std::make_tuple (
+			p_admin_counter::uptime,
+			"proxysql_uptime_seconds",
+			"The total uptime of ProxySQL.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_counter::jemalloc_allocated,
+			"proxysql_jemalloc_allocated",
+			"Bytes allocated by the application.",
+			metric_tags {}
+		)
+	},
+	admin_gauge_vector {
+		// memory metrics
+		std::make_tuple (
+			p_admin_gauge::connpool_memory_bytes,
+			"proxysql_connpool_memory_bytes",
+			"Memory used by the connection pool to store connections metadata.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::sqlite3_memory_bytes,
+			"proxysql_sqlite3_memory_bytes",
+			"Memory used by SQLite.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::jemalloc_resident,
+			"proxysql_jemalloc_resident",
+			"Bytes in physically resident data pages mapped by the allocator.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::jemalloc_active,
+			"proxysql_jemalloc_active",
+			"Bytes in pages allocated by the application.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::jemalloc_mapped,
+			"proxysql_jemalloc_mapped",
+			"Bytes in extents mapped by the allocator.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::jemalloc_metadata,
+			"proxysql_jemalloc_metadata",
+			"Bytes dedicated to metadata.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::jemalloc_retained,
+			"proxysql_jemalloc_retained",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::query_digest_memory_bytes,
+			"proxysql_query_digest_memory_bytes",
+			"Memory used to store data related to stats_mysql_query_digest.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::auth_memory_bytes,
+			"proxysql_auth_memory_bytes",
+			"Memory used by the authentication module to store user credentials and attributes.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::mysql_query_rules_memory_bytes,
+			"proxysql_mysql_query_rules_memory_bytes",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::mysql_firewall_users_table,
+			"proxysql_mysql_firewall_users_table",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::mysql_firewall_users_config,
+			"proxysql_mysql_firewall_users_config",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::mysql_firewall_rules_table,
+			"proxysql_mysql_firewall_rules_table",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::mysql_firewall_rules_config,
+			"proxysql_mysql_firewall_rules_config",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::stack_memory_mysql_threads,
+			"proxysql_stack_memory_mysql_threads",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::stack_memory_admin_threads,
+			"proxysql_stack_memory_admin_threads",
+			"",
+			metric_tags {}
+		),
+		std::make_tuple (
+			// TODO: Add meaningful help
+			p_admin_gauge::stack_memory_cluster_threads,
+			"proxysql_stack_memory_cluster_threads",
+			"",
+			metric_tags {}
+		),
+		// stmt metrics
+		std::make_tuple (
+			p_admin_gauge::stmt_client_active_total,
+			"proxysql_stmt_client_active_total",
+			"The total number of prepared statements that are in use by clients.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::stmt_client_active_unique,
+			"proxysql_stmt_client_active_unique",
+			"This variable tracks the number of unique prepared statements currently in use by clients.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::stmt_server_active_total,
+			"proxysql_stmt_server_active_total",
+			"The total number of prepared statements currently available across all backend connections.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::stmt_server_active_unique,
+			"proxysql_stmt_server_active_unique",
+			"The number of unique prepared statements currently available across all backend connections.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::stmt_max_stmt_id,
+			"proxysql_stmt_max_stmt_id",
+			"When a new global prepared statement is created, a new \"stmt_id\" is used. Stmt_Max_Stmt_id represents the maximum \"stmt_id\" ever used.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::stmt_cached,
+			"proxysql_stmt_cached",
+			"This is the number of global prepared statements for which proxysql has metadata.",
+			metric_tags {}
+		)
+	}
+);
 
 static ProxySQL_Admin *SPA=NULL;
 
@@ -4728,7 +4926,33 @@ __end_while_pool:
 #endif /* DEBUG */
 #define PROXYSQL_ADMIN_VERSION "2.0.6.0805" DEB
 
-ProxySQL_Admin::ProxySQL_Admin() {
+/**
+ * @brief Routine to be called before each scrape from prometheus.
+ */
+void update_modules_metrics() {
+	// Update mysql_threads_handler metrics
+	if (GloMTH) {
+		GloMTH->p_update_metrics();
+	}
+	// Update mysql_hostgroups_manager metrics
+	if (MyHGM) {
+		MyHGM->p_update_metrics();
+	}
+	// Update monitor metrics
+	if (GloMyMon) {
+		GloMyMon->p_update_metrics();
+	}
+	// Update query_cache metrics
+	if (GloQC) {
+		GloQC->p_update_metrics();
+	}
+	// Update admin metrics
+	GloAdmin->p_update_metrics();
+}
+
+ProxySQL_Admin::ProxySQL_Admin() :
+	serial_exposer(std::function<void()> { update_modules_metrics })
+{
 #ifdef DEBUG
 		if (glovars.has_debug==false) {
 #else
@@ -4809,10 +5033,12 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	variables.web_enabled_old = false;
 	variables.web_port = 6080;
 	variables.web_port_old = variables.web_port;
-
+	variables.p_memory_metrics_interval = 61;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
+
+	last_p_memory_metrics_ts = 0;
 	// create the scheduler
 	scheduler=new ProxySQL_External_Scheduler();
 
@@ -4831,6 +5057,10 @@ ProxySQL_Admin::ProxySQL_Admin() {
 	}
 	rand_del[4] = '-';
 	rand_del[5] = 0;
+
+	// Initialize prometheus metrics
+	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
+	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
 };
 
 void ProxySQL_Admin::wrlock() {
@@ -5149,8 +5379,6 @@ bool ProxySQL_Admin::init() {
 return true;
 };
 
-
-
 #ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::init_clickhouse_variables() {
 	flush_clickhouse_variables___runtime_to_database(configdb, false, false, false);
@@ -5306,6 +5534,29 @@ void ProxySQL_Admin::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
 	}
 };
 
+std::map<string,string> request_headers(const httpserver::http_request& request) {
+	auto req_headers = request.get_headers();
+	std::map<string,string> result {};
+
+	for (const auto& header : req_headers) {
+		result.insert({header.first, header.second});
+	}
+
+	return result;
+}
+
+std::shared_ptr<httpserver::http_response> make_response(
+	const std::pair<std::map<std::string,std::string>, std::string>& res_data
+) {
+	std::shared_ptr<httpserver::string_response> response =
+		std::make_shared<httpserver::string_response>(httpserver::string_response(res_data.second));
+
+	for (const auto& h_key_val : res_data.first) {
+		response->with_header(h_key_val.first, h_key_val.second);
+	}
+
+	return response;
+}
 
 void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
@@ -5353,9 +5604,21 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 		//commit(); NOT IMPLEMENTED
 		wrunlock();
 		{
+			std::function<std::shared_ptr<httpserver::http_response>(const httpserver::http_request&)> prometheus_callback {
+				[this](const httpserver::http_request& request) {
+					auto headers = request_headers(request);
+					auto serial_response = this->serial_exposer(headers);
+					auto http_response = make_response(serial_response);
+
+					return http_response;
+				}
+			};
 			if (variables.restapi_enabled != variables.restapi_enabled_old) {
 				if (variables.restapi_enabled) {
-					AdminRestApiServer = new ProxySQL_RESTAPI_Server(variables.restapi_port);
+					AdminRestApiServer = new ProxySQL_RESTAPI_Server(
+						variables.restapi_port, {{"/metrics", prometheus_callback}}
+					);
+					this->serial_exposer.RegisterCollectable(GloVars.prometheus_registry);
 				} else {
 					delete AdminRestApiServer;
 					AdminRestApiServer = NULL;
@@ -5368,7 +5631,9 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 						AdminRestApiServer = NULL;
 					}
 					if (variables.restapi_enabled) {
-						AdminRestApiServer = new ProxySQL_RESTAPI_Server(variables.restapi_port);
+						AdminRestApiServer = new ProxySQL_RESTAPI_Server(
+							variables.restapi_port, {{"/metrics", prometheus_callback}}
+						);
 					}
 					variables.restapi_port_old = variables.restapi_port;
 				}
@@ -6349,6 +6614,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.web_port);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"prometheus_memory_metrics_interval")) {
+		sprintf(intbuf, "%d", variables.p_memory_metrics_interval);
+		return strdup(intbuf);
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -6944,6 +7213,15 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"prometheus_memory_metrics_interval")) {
+		const auto fval = atoi(value);
+		if (fval > 0 && fval < 7*24*3600) {
+			variables.p_memory_metrics_interval = fval;
+			return true;
+		} else {
+			return false;
+		}
+	}
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -6960,6 +7238,112 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 	}
 #endif /* DEBUG */
 	return false;
+}
+
+void ProxySQL_Admin::p_update_metrics() {
+	// Update proxysql_uptime
+	auto t1 = monotonic_time();
+	auto new_uptime = (t1 - GloVars.global.start_time)/1000/1000;
+	auto cur_uptime = this->metrics.p_counter_array[p_admin_counter::uptime]->Value();
+	this->metrics.p_counter_array[p_admin_counter::uptime]->Increment(new_uptime - cur_uptime);
+
+	// Update memory metrics
+	this->p_stats___memory_metrics();
+	// Update stmt metrics
+	this->p_update_stmt_metrics();
+}
+
+void ProxySQL_Admin::p_stats___memory_metrics() {
+	if (!GloMTH) return;
+
+	// Check that last execution is older than the specified interval
+	unsigned long long new_ts = monotonic_time() / 1000 / 1000;
+	if (new_ts < last_p_memory_metrics_ts + variables.p_memory_metrics_interval) {
+		return;
+	}
+	// Update the 'memory_metrics' last exec timestamp
+	last_p_memory_metrics_ts = new_ts;
+
+	// proxysql_connpool_memory_bytes metric
+	const auto connpool_mem = MyHGM->Get_Memory_Stats();
+	this->metrics.p_gauge_array[p_admin_gauge::connpool_memory_bytes]->Set(connpool_mem);
+
+	// proxysql_sqlite3_memory_bytes metric
+	int highwater = 0;
+	int current = 0;
+	sqlite3_status(SQLITE_STATUS_MEMORY_USED, &current, &highwater, 0);
+	this->metrics.p_gauge_array[p_admin_gauge::sqlite3_memory_bytes]->Set(current);
+
+	// proxysql_jemalloc_* memory metrics
+	// ===============================================================
+	size_t
+		allocated = 0,
+		resident  = 0,
+		active    = 0,
+		mapped    = 0,
+		metadata  = 0,
+		retained  = 0,
+		sz        = sizeof(size_t);
+
+	mallctl("stats.resident", &resident, &sz, NULL, 0);
+	mallctl("stats.active", &active, &sz, NULL, 0);
+	mallctl("stats.allocated", &allocated, &sz, NULL, 0);
+	mallctl("stats.mapped", &mapped, &sz, NULL, 0);
+	mallctl("stats.metadata", &metadata, &sz, NULL, 0);
+	mallctl("stats.retained", &retained, &sz, NULL, 0);
+
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_resident]->Set(resident);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_active]->Set(active);
+	const auto cur_allocated = this->metrics.p_counter_array[p_admin_counter::jemalloc_allocated]->Value();
+	this->metrics.p_counter_array[p_admin_counter::jemalloc_allocated]->Increment(allocated - cur_allocated);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_mapped]->Set(mapped);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_metadata]->Set(metadata);
+	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_retained]->Set(retained);
+
+	// ===============================================================
+
+	// proxysql_auth_memory metric
+	unsigned long mu = GloMyAuth->memory_usage();
+	this->metrics.p_gauge_array[p_admin_gauge::auth_memory_bytes]->Set(mu);
+
+	// proxysql_query_digest_memory metric
+	const auto& query_digest_t_size = GloQPro->get_query_digests_total_size();
+	this->metrics.p_gauge_array[p_admin_gauge::query_digest_memory_bytes]->Set(query_digest_t_size);
+
+	// mysql_query_rules_memory metric
+	const auto& rules_mem_used = GloQPro->get_rules_mem_used();
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_query_rules_memory_bytes]->Set(rules_mem_used);
+
+	// mysql_firewall_users_table metric
+	const auto& firewall_users_table = GloQPro->get_mysql_firewall_memory_users_table();
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_table]->Set(firewall_users_table);
+
+	// mysql_firewall_users_config metric
+	const auto& firewall_users_config = GloQPro->get_mysql_firewall_memory_users_config();
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_users_config]->Set(firewall_users_config);
+
+	// mysql_firewall_rules_table metric
+	const auto& firewall_rules_table = GloQPro->get_mysql_firewall_memory_rules_table();
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_table]->Set(firewall_rules_table);
+
+	// mysql_firewall_rules_table metric
+	const auto& firewall_rules_config = GloQPro->get_mysql_firewall_memory_rules_config();
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_firewall_rules_config]->Set(firewall_rules_config);
+
+	// proxysql_stack_memory_mysql_threads
+	const auto& stack_memory_mysql_threads =
+		__sync_fetch_and_add(&GloVars.statuses.stack_memory_mysql_threads, 0);
+	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_mysql_threads]->Set(stack_memory_mysql_threads);
+
+	// proxysql_stack_memory_admin_threads
+	const auto& stack_memory_admin_threads =
+		__sync_fetch_and_add(&GloVars.statuses.stack_memory_admin_threads, 0);
+	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_admin_threads]->Set(stack_memory_admin_threads);
+
+	// proxysql_stack_memory_cluster_threads
+	const auto& stack_memory_cluster_threads =
+		__sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads, 0);
+	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_cluster_threads]->Set(stack_memory_cluster_threads);
 }
 
 void ProxySQL_Admin::stats___memory_metrics() {
@@ -7129,6 +7513,34 @@ void ProxySQL_Admin::stats___memory_metrics() {
 		free(query);
 	}
 	statsdb->execute("COMMIT");
+}
+
+void ProxySQL_Admin::p_update_stmt_metrics() {
+	if (GloMyStmt) {
+		uint64_t stmt_client_active_unique { 0 };
+		uint64_t stmt_client_active_total { 0 };
+		uint64_t stmt_max_stmt_id { 0 };
+		uint64_t stmt_cached { 0 };
+		uint64_t stmt_server_active_unique { 0 };
+		uint64_t stmt_server_active_total { 0 };
+		GloMyStmt->get_metrics(
+			&stmt_client_active_unique,
+			&stmt_client_active_total,
+			&stmt_max_stmt_id,
+			&stmt_cached,
+			&stmt_server_active_unique,
+			&stmt_server_active_total
+		);
+
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_client_active_total]->Set(stmt_client_active_total);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_client_active_unique]->Set(stmt_client_active_unique);
+
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_server_active_total]->Set(stmt_server_active_total);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_server_active_unique]->Set(stmt_server_active_unique);
+
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_max_stmt_id]->Set(stmt_max_stmt_id);
+		this->metrics.p_gauge_array[p_admin_gauge::stmt_cached]->Set(stmt_cached);
+	}
 }
 
 void ProxySQL_Admin::stats___mysql_global() {
@@ -9707,6 +10119,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	}
 	// commit all the changes
 	MyHGM->commit();
+	GloAdmin->save_mysql_servers_runtime_to_database(true);
 
 	// clean up
 	if (resultset) delete resultset;
@@ -10771,8 +11184,8 @@ void ProxySQL_Admin::stats___mysql_prepared_statements_info() {
 	char *query1=NULL;
 	char *query32=NULL;
 	statsdb->execute("DELETE FROM stats_mysql_prepared_statements_info");
-	query1=(char *)"INSERT INTO stats_mysql_prepared_statements_info VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
-	query32=(char *)"INSERT INTO stats_mysql_prepared_statements_info VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8), (?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16), (?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32), (?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40), (?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48), (?49, ?50, ?51, ?52, ?53, ?54, ?55, ?56), (?57, ?58, ?59, ?60, ?61, ?62, ?63, ?64), (?65, ?66, ?67, ?68, ?69, ?70, ?71, ?72), (?73, ?74, ?75, ?76, ?77, ?78, ?79, ?80), (?81, ?82, ?83, ?84, ?85, ?86, ?87, ?88), (?89, ?90, ?91, ?92, ?93, ?94, ?95, ?96), (?97, ?98, ?99, ?100, ?101, ?102, ?103, ?104), (?105, ?106, ?107, ?108, ?109, ?110, ?111, ?112), (?113, ?114, ?115, ?116, ?117, ?118, ?119, ?120), (?121, ?122, ?123, ?124, ?125, ?126, ?127, ?128), (?129, ?130, ?131, ?132, ?133, ?134, ?135, ?136), (?137, ?138, ?139, ?140, ?141, ?142, ?143, ?144), (?145, ?146, ?147, ?148, ?149, ?150, ?151, ?152), (?153, ?154, ?155, ?156, ?157, ?158, ?159, ?160), (?161, ?162, ?163, ?164, ?165, ?166, ?167, ?168), (?169, ?170, ?171, ?172, ?173, ?174, ?175, ?176), (?177, ?178, ?179, ?180, ?181, ?182, ?183, ?184), (?185, ?186, ?187, ?188, ?189, ?190, ?191, ?192), (?193, ?194, ?195, ?196, ?197, ?198, ?199, ?200), (?201, ?202, ?203, ?204, ?205, ?206, ?207, ?208), (?209, ?210, ?211, ?212, ?213, ?214, ?215, ?216), (?217, ?218, ?219, ?220, ?221, ?222, ?223, ?224), (?225, ?226, ?227, ?228, ?229, ?230, ?231, ?232), (?233, ?234, ?235, ?236, ?237, ?238, ?239, ?240), (?241, ?242, ?243, ?244, ?245, ?246, ?247, ?248), (?249, ?250, ?251, ?252, ?253, ?254, ?255, ?256)";
+	query1=(char *)"INSERT INTO stats_mysql_prepared_statements_info VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+	query32=(char *)"INSERT INTO stats_mysql_prepared_statements_info VALUES (?1,?2,?3,?4,?5,?6,?7),(?8,?9,?10,?11,?12,?13,?14),(?15,?16,?17,?18,?19,?20,?21),(?22,?23,?24,?25,?26,?27,?28),(?29,?30,?31,?32,?33,?34,?35),(?36,?37,?38,?39,?40,?41,?42),(?43,?44,?45,?46,?47,?48,?49),(?50,?51,?52,?53,?54,?55,?56),(?57,?58,?59,?60,?61,?62,?63),(?64,?65,?66,?67,?68,?69,?70),(?71,?72,?73,?74,?75,?76,?77),(?78,?79,?80,?81,?82,?83,?84),(?85,?86,?87,?88,?89,?90,?91),(?92,?93,?94,?95,?96,?97,?98),(?99,?100,?101,?102,?103,?104,?105),(?106,?107,?108,?109,?110,?111,?112),(?113,?114,?115,?116,?117,?118,?119),(?120,?121,?122,?123,?124,?125,?126),(?127,?128,?129,?130,?131,?132,?133),(?134,?135,?136,?137,?138,?139,?140),(?141,?142,?143,?144,?145,?146,?147),(?148,?149,?150,?151,?152,?153,?154),(?155,?156,?157,?158,?159,?160,?161),(?162,?163,?164,?165,?166,?167,?168),(?169,?170,?171,?172,?173,?174,?175),(?176,?177,?178,?179,?180,?181,?182),(?183,?184,?185,?186,?187,?188,?189),(?190,?191,?192,?193,?194,?195,?196),(?197,?198,?199,?200,?201,?202,?203),(?204,?205,?206,?207,?208,?209,?210),(?211,?212,?213,?214,?215,?216,?217),(?218,?219,?220,?221,?222,?223,?224)";
 	//rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
 	rc = statsdb->prepare_v2(query1, &statement1);
 	ASSERT_SQLITE_OK(rc, statsdb);
@@ -10782,13 +11195,13 @@ void ProxySQL_Admin::stats___mysql_prepared_statements_info() {
 	int row_idx=0;
 	int max_bulk_row_idx=resultset->rows_count/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
-	vector<bool> is_nums { true, true, false, false, false, true, true, false };
-	vector<int> cols { 0, 1, 2, 3, 4, 6, 7, 5 };
+	vector<bool> is_nums { true, false, false, false, true, true, false };
+	vector<int> cols { 0, 1, 2, 3, 5, 6, 7, 4 };
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r1=*it;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement32, r1, idx*8 + 1, is_nums, cols);
+			proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement32, r1, idx*7 + 1, is_nums, cols);
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
 				rc=sqlite3_clear_bindings(statement32); ASSERT_SQLITE_OK(rc, statsdb);

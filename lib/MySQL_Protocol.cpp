@@ -10,6 +10,8 @@
 
 #include <sstream>
 
+#include <ma_global.h>
+
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern MySQL_Threads_Handler *GloMTH;
@@ -469,7 +471,7 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
 
 	char buf1[1000];
 	unsigned long long t1=monotonic_time();
-	sprintf(buf1,"Uptime: %llu Threads: %d  Questions: %llu  Slow queries: %llu", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections , GloMTH->get_total_queries() , GloMTH->get_slow_queries() );
+	sprintf(buf1,"Uptime: %llu Threads: %d  Questions: %llu  Slow queries: %llu", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections , GloMTH->get_status_variable(st_var_queries,p_th_counter::questions) , GloMTH->get_status_variable(st_var_queries,p_th_counter::slow_queries) );
 	unsigned char statslen=strlen(buf1);
 	mysql_hdr myhdr;
 	myhdr.pkt_id=1;
@@ -600,7 +602,7 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 		if (*myds)
 			if ((*myds)->sess)
 				if ((*myds)->sess->thread)
-					(*myds)->sess->thread->status_variables.generated_pkt_err++;
+					(*myds)->sess->thread->status_variables.stvar[st_var_generated_pkt_err]++;
 	if (*myds) {
 		(*myds)->pkt_sid=sequence_id;
 	}
@@ -2637,11 +2639,15 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 		if (_myds && _myds->killed_at) { // see case #750
 			if (_myds->kill_type == 0) {
 				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,1907,sqlstate,(char *)"Query execution was interrupted, query_timeout exceeded");
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myds->myconn->parent->myhgc->hid, myds->myconn->parent->address, myds->myconn->parent->port, 1907);
 			} else {
 				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,1317,sqlstate,(char *)"Query execution was interrupted");
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myds->myconn->parent->myhgc->hid, myds->myconn->parent->address, myds->myconn->parent->port, 1317);
 			}
 		} else {
 			myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,mysql_errno(_mysql),sqlstate,mysql_error(_mysql));
+			// TODO: Check this is a mysql error
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myds->myconn->parent->myhgc->hid, myds->myconn->parent->address, myds->myconn->parent->port, mysql_errno(_mysql));
 		}
 		PSarrayOUT.add(pkt.ptr,pkt.size);
 		sid++;
