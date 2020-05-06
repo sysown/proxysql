@@ -3202,7 +3202,6 @@ __get_pkts_from_client:
 									bool lock_hostgroup = false;
 									thread->status_variables.stvar[st_var_frontend_stmt_execute]++;
 									thread->status_variables.stvar[st_var_queries]++;
-
 									uint32_t client_stmt_id=0;
 									uint64_t stmt_global_id=0;
 									memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
