@@ -445,47 +445,54 @@ int test_stats_mysql_errors(MYSQL* l_proxysql_admin) {
 	return 0;
 }
 
-int test_save_query_rules_fast_routing(MYSQL* l_proxysql_admin) {
+int test_save_query_rules_fast_routing_inner(MYSQL* l_proxysql_admin, int rows) {
 	// Queries
-	const char* update_replication_hostgroups_query =
-		"INSERT INTO mysql_query_rules_fast_routing "
-		"( username, schemaname, flagIN, destination_hostgroup, comment )"
-		"VALUES ('test_user', 'test_db.test_schema', 0, 1, 'test_save_query_rules_fast_routing')";
-	const char* load_mysql_servers_runtime =
-		"LOAD MYSQL QUERY RULES TO RUNTIME";
-	const char* delete_replication_hostgroups_query =
-		"DELETE FROM mysql_query_rules_fast_routing WHERE "
-		"comment='test_save_query_rules_fast_routing'";
-	const char* length_query_rules_fast_routing =
-		"SELECT COUNT(*) FROM mysql_query_rules_fast_routing";
 	const char* check_query_rules_fast_routing =
 		"SELECT COUNT(*) FROM mysql_query_rules_fast_routing t1 "
 		"NATURAL JOIN runtime_mysql_query_rules_fast_routing t2";
 
-	// Setup config
-	MYSQL_QUERY(l_proxysql_admin, delete_replication_hostgroups_query);
-	MYSQL_QUERY(l_proxysql_admin, update_replication_hostgroups_query);
-	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+	std::vector<int> user_num;
+	for (int i=0; i<rows*10; i++) user_num.push_back(i);
+	std::random_shuffle ( user_num.begin(), user_num.end() );
 
-	MYSQL_QUERY(l_proxysql_admin, length_query_rules_fast_routing);
-	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
-	int count = fetch_count(mysql_res);
+	// Setup config
+	MYSQL_QUERY(l_proxysql_admin, (char *)"DELETE FROM mysql_query_rules_fast_routing");
+	for (int i=0; i<rows; i++) {
+		std::string s = "INSERT INTO mysql_query_rules_fast_routing ( username, schemaname, flagIN, destination_hostgroup, comment ) VALUES (";
+		s += "'user" + std::to_string(user_num[i]) + "','schema" + std::to_string(user_num[i+1]) + "',";
+		s += std::to_string(rand()%rows) + "," + std::to_string(rand()%(rows*7)) + ",";
+		s += "'comment " + std::to_string(user_num[i]) + "')";
+		MYSQL_QUERY(l_proxysql_admin, s.c_str());
+	}
+	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	MYSQL_QUERY(l_proxysql_admin, check_query_rules_fast_routing);
 	MYSQL_RES* natural_res = mysql_store_result(l_proxysql_admin);
 	int natural_count = fetch_count(natural_res);
+	mysql_free_result(natural_res);
 
-
-	ok(count == natural_count, "%s",
-		err_msg("'query_rules_fast_routing' and 'runtime_mysql_query_rules_fast_routing' should be identical.",
-		__FILE__,
-		__LINE__).c_str()
-	);
+	ok(rows==natural_count, "Testing query_rules_fast_routing. Expected %d rows , count returns %d", rows, natural_count);
 
 	// Teardown config
-	MYSQL_QUERY(l_proxysql_admin, delete_replication_hostgroups_query);
-	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+	MYSQL_QUERY(l_proxysql_admin, (char *)"DELETE FROM mysql_query_rules_fast_routing");
+	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
+	if (rows != natural_count) {
+		return -1;
+	}
+	return 0;
+}
+
+int test_save_query_rules_fast_routing(MYSQL* l_proxysql_admin) {
+	std::vector<int> nrows;
+	for (int i=1; i<=100; i++) nrows.push_back(i);
+	std::random_shuffle ( nrows.begin(), nrows.end() );
+
+	for (std::vector<int>::iterator it=nrows.begin(); it!=nrows.end(); ++it) {
+		int rows = *it;
+		int ret = test_save_query_rules_fast_routing_inner(l_proxysql_admin, rows);
+		if (ret) return ret;
+	}
 	return 0;
 }
 
@@ -628,12 +635,11 @@ const std::vector<test_data> table_tests {
 	test_data ( "admin_config_tests: Check 'mysql_firewall_whitelist_users' table.", test_save_mysql_firewall_whitelist_users_from_runtime),
 	test_data ( "admin_config_tests: Check 'mysql_firewall_whitelist_rules' table.", test_save_mysql_firewall_whitelist_rules_from_runtime),
 	test_data ( "admin_config_tests: Check 'mysql_servers' table.", test_save_mysql_servers_runtime_to_database),
-
 };
 
 int main(int argc, char** argv) {
 	CommandLine cl;
-	
+
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return -1;
