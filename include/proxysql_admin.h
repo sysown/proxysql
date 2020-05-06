@@ -241,7 +241,7 @@ class ProxySQL_Admin {
 
 	void generate_sqlite3_prepare_insert_values_query(std::string& query, int columns, int rows);
 	void proxysql_sqlite3_bind(SQLite3DB *db, sqlite3_stmt *stmt, int idx, bool is_num, bool passed_as_char, long long num, char *ptr);
-	void proxysql_sqlite3_bind_from_SQLite3_row(SQLite3DB *db, sqlite3_stmt *stmt, SQLite3_row *row, int base_idx, vector<bool>& is_nums, vector<int>& cols);
+	void proxysql_sqlite3_bind_from_SQLite3_row(SQLite3DB *db, sqlite3_stmt *stmt, SQLite3_row *row, int base_idx, std::vector<bool>& is_nums, std::vector<int>& cols);
 
 	public:
 	pthread_mutex_t sql_query_global_mutex;
