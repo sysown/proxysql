@@ -159,21 +159,21 @@ void queryVariables(MYSQL *mysql, json& j) {
 	std::stringstream query;
 	if (is_mariadb) {
 		query << "SELECT /* mysql " << mysql << " */ lower(variable_name), variable_value FROM information_schema.session_variables WHERE variable_name IN "
-			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'tx_isolation', 'tx_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database');";
 	}
 	if (is_cluster) {
 		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
-			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'wsrep_sync_wait');";
 	}
 	if (!is_mariadb && !is_cluster) {
 		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
-			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database');";
@@ -224,7 +224,7 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				j["conn"]["sql_log_bin"] = "OFF";
 			}
 
-			// autocommit {true|false}
+			// sql_auto_is_null {true|false}
 			if (!el.value()["sql_auto_is_null"].dump().compare("ON") ||
 					!el.value()["sql_auto_is_null"].dump().compare("1") ||
 					!el.value()["sql_auto_is_null"].dump().compare("on") ||
@@ -240,6 +240,8 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				j["conn"]["sql_auto_is_null"] = "OFF";
 			}
 
+			// completely remove autocommit test
+/*
 			// autocommit {true|false}
 			if (!el.value()["autocommit"].dump().compare("ON") ||
 					!el.value()["autocommit"].dump().compare("1") ||
@@ -255,7 +257,7 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				el.value().erase("autocommit");
 				j["conn"]["autocommit"] = "OFF";
 			}
-
+*/
 			// sql_safe_updates
 			if (!el.value()["sql_safe_updates"].dump().compare("\"ON\"") ||
 					!el.value()["sql_safe_updates"].dump().compare("\"1\"") ||
@@ -410,10 +412,12 @@ void * my_conn_thread(void *arg) {
 		}
 		if (strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
+				std::lock_guard<std::mutex> lock(mtx_);
 				ok(true, "mysql connection [%p], thread_id [%lu], skipped test for command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
 				continue;
 			}
 			if (strstr(testCases[r2].command.c_str(),"sql_log_bin")) {
+				std::lock_guard<std::mutex> lock(mtx_);
 				ok(true, "mysql connection [%p], thread_id [%lu], skipped test for command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
 				continue;
 			}
@@ -527,6 +531,8 @@ int main(int argc, char *argv[]) {
 		return exit_status();
 
 	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
+/*
+	// do not connect to admin at all
 	MYSQL* mysqladmin = mysql_init(NULL);
 	if (!mysqladmin)
 		return exit_status();
@@ -547,7 +553,7 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
 	mysql_close(mysqladmin);
-
+*/
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
 		return exit_status();
