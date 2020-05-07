@@ -1,6 +1,9 @@
 #ifndef __CLASS_MYSQL_THREAD_H
 #define __CLASS_MYSQL_THREAD_H
 #define ____CLASS_STANDARD_MYSQL_THREAD_H
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
+
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
@@ -8,6 +11,8 @@
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
 #include <atomic>
+
+#include "prometheus_helpers.h"
 
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
@@ -71,6 +76,50 @@ class ProxySQL_Poll {
 	int find_index(int fd);
 };
 
+enum MySQL_Thread_status_variable {
+	st_var_backend_stmt_prepare,
+	st_var_backend_stmt_execute,
+	st_var_backend_stmt_close,
+	st_var_frontend_stmt_prepare,
+	st_var_frontend_stmt_execute,
+	st_var_frontend_stmt_close,
+	st_var_queries,
+	st_var_queries_slow,
+	st_var_queries_gtid,
+	st_var_queries_with_max_lag_ms,
+	st_var_queries_with_max_lag_ms__delayed,
+	st_var_queries_with_max_lag_ms__total_wait_time_us,
+	st_var_queries_backends_bytes_sent,
+	st_var_queries_backends_bytes_recv,
+	st_var_queries_frontends_bytes_sent,
+	st_var_queries_frontends_bytes_recv,
+	st_var_query_processor_time,
+	st_var_backend_query_time,
+	st_var_mysql_backend_buffers_bytes,
+	st_var_mysql_frontend_buffers_bytes,
+	st_var_mysql_session_internal_bytes,
+	st_var_ConnPool_get_conn_immediate,
+	st_var_ConnPool_get_conn_success,
+	st_var_ConnPool_get_conn_failure,
+	st_var_ConnPool_get_conn_latency_awareness,
+	st_var_gtid_binlog_collected,
+	st_var_gtid_session_collected,
+	st_var_generated_pkt_err,
+	st_var_max_connect_timeout_err,
+	st_var_backend_lagging_during_query,
+	st_var_backend_offline_during_query,
+	st_var_unexpected_com_quit,
+	st_var_unexpected_packet,
+	st_var_killed_connections,
+	st_var_killed_queries,
+	st_var_hostgroup_locked,
+	st_var_hostgroup_locked_set_cmds,
+	st_var_hostgroup_locked_queries,
+	st_var_aws_aurora_replicas_skipped_during_query,
+	st_var_automatic_detected_sqli,
+	st_var_whitelisted_sqli_fingerprint,
+	st_var_END
+};
 
 class MySQL_Thread
 {
@@ -92,6 +141,28 @@ class MySQL_Thread
 #endif // IDLE_THREADS
 
 	Session_Regex **match_regexes;
+
+#ifdef IDLE_THREADS
+	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
+	void worker_thread_gets_sessions_from_idle_thread();
+	void idle_thread_gets_sessions_from_worker_thread();
+	void idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr);
+	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr);
+	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
+	void idle_thread_to_kill_idle_sessions();
+#endif // IDLE_THREADS
+
+	unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
+	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
+	bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
+	void handle_mirror_queue_mysql_sessions();
+	void handle_kill_queues();
+	void check_timing_out_session(unsigned int n);
+	void check_for_invalid_fd(unsigned int n);
+	void read_one_byte_from_pipe(unsigned int n);
+	void tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds);
+	void tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds);
+	void configure_pollout(MySQL_Data_Stream *myds, unsigned int n);
 
 	protected:
 	int nfds;
@@ -127,47 +198,7 @@ class MySQL_Thread
 	// in this way, there is no need for atomic operation and there is no cache miss
 	// when it is needed a total, all threads are checked
 	struct {
-		unsigned long long backend_stmt_prepare;
-		unsigned long long backend_stmt_execute;
-		unsigned long long backend_stmt_close;
-		unsigned long long frontend_stmt_prepare;
-		unsigned long long frontend_stmt_execute;
-		unsigned long long frontend_stmt_close;
-		unsigned long long queries;
-		unsigned long long queries_slow;
-		unsigned long long queries_gtid;
-		unsigned long long queries_with_max_lag_ms;
-		unsigned long long queries_with_max_lag_ms__delayed;
-		unsigned long long queries_with_max_lag_ms__total_wait_time_us;
-		unsigned long long queries_backends_bytes_sent;
-		unsigned long long queries_backends_bytes_recv;
-		unsigned long long queries_frontends_bytes_sent;
-		unsigned long long queries_frontends_bytes_recv;
-		unsigned long long query_processor_time;
-		unsigned long long backend_query_time;
-		unsigned long long mysql_backend_buffers_bytes;
-		unsigned long long mysql_frontend_buffers_bytes;
-		unsigned long long mysql_session_internal_bytes;
-		unsigned long long ConnPool_get_conn_immediate;
-		unsigned long long ConnPool_get_conn_success;
-		unsigned long long ConnPool_get_conn_failure;
-		unsigned long long ConnPool_get_conn_latency_awareness;
-		unsigned long long gtid_binlog_collected;
-		unsigned long long gtid_session_collected;
-		unsigned long long generated_pkt_err;
-		unsigned long long max_connect_timeout_err;
-		unsigned long long backend_lagging_during_query;
-		unsigned long long backend_offline_during_query;
-		unsigned long long unexpected_com_quit;
-		unsigned long long unexpected_packet;
-		unsigned long long killed_connections;
-		unsigned long long killed_queries;
-		unsigned long long hostgroup_locked;
-		unsigned long long hostgroup_locked_set_cmds;
-		unsigned long long hostgroup_locked_queries;
-		unsigned long long aws_aurora_replicas_skipped_during_query;
-		unsigned long long automatic_detected_sqli;
-		unsigned long long whitelisted_sqli_fingerprint;
+		unsigned long long stvar[st_var_END];
 		unsigned int active_transactions;
 	} status_variables;
 
@@ -239,6 +270,85 @@ class MySQL_Listeners_Manager {
 	iface_info * find_iface_from_fd(int fd);
 	int get_fd(unsigned int idx);
 	void del(unsigned int idx);
+};
+
+struct p_th_counter {
+	enum metric {
+		queries_backends_bytes_sent = 0,
+		queries_backends_bytes_recv,
+		queries_frontends_bytes_sent,
+		queries_frontends_bytes_recv,
+		client_connections_created,
+		client_connections_aborted,
+		query_processor_time_nsec,
+		backend_query_time_nsec,
+		com_backend_stmt_prepare,
+		com_backend_stmt_execute,
+		com_backend_stmt_close,
+		com_frontend_stmt_prepare,
+		com_frontend_stmt_execute,
+		com_frontend_stmt_close,
+		questions,
+		slow_queries,
+		gtid_consistent_queries,
+		gtid_session_collected,
+		connpool_get_conn_latency_awareness,
+		connpool_get_conn_immediate,
+		connpool_get_conn_success,
+		connpool_get_conn_failure,
+		generated_error_packets,
+		max_connect_timeouts,
+		backend_lagging_during_query,
+		backend_offline_during_query,
+		queries_with_max_lag_ms,
+		queries_with_max_lag_ms__delayed,
+		queries_with_max_lag_ms__total_wait_time_us,
+		mysql_unexpected_frontend_com_quit,
+		client_connections_hostgroup_locked,
+		hostgroup_locked_set_cmds,
+		hostgroup_locked_queries,
+		mysql_unexpected_frontend_packets,
+		aws_aurora_replicas_skipped_during_query,
+		automatic_detected_sql_injection,
+		whitelisted_sqli_fingerprint,
+		mysql_killed_backend_connections,
+		mysql_killed_backend_queries,
+		__size
+	};
+};
+
+struct p_th_gauge {
+	enum metric {
+		active_transactions = 0,
+		client_connections_non_idle,
+		mysql_backend_buffers_bytes,
+		mysql_frontend_buffers_bytes,
+		mysql_session_internal_bytes,
+		mirror_concurrency,
+		mirror_queue_lengths,
+		mysql_thread_workers,
+		// global_variables
+		mysql_wait_timeout,
+		mysql_max_connections,
+		mysql_monitor_enabled,
+		mysql_monitor_ping_interval,
+		mysql_monitor_ping_timeout,
+		mysql_monitor_ping_max_failures,
+		mysql_monitor_read_only_interval,
+		mysql_monitor_read_only_timeout,
+		mysql_monitor_writer_is_also_reader,
+		mysql_monitor_replication_lag_interval,
+		mysql_monitor_replication_lag_timeout,
+		mysql_monitor_history,
+		__size
+	};
+};
+
+struct th_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges
+	};
 };
 
 class MySQL_Threads_Handler
@@ -395,7 +505,14 @@ class MySQL_Threads_Handler
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
+		/// Prometheus metrics arrays
+		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
+		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
 	} status_variables;
+	/**
+	 * @brief Callback to update the metrics.
+	 */
+	void p_update_metrics();
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
 #ifdef IDLE_THREADS
@@ -432,50 +549,14 @@ class MySQL_Threads_Handler
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
-	unsigned long long get_total_backend_stmt_prepare();
-	unsigned long long get_total_backend_stmt_execute();
-	unsigned long long get_total_backend_stmt_close();
-	unsigned long long get_total_frontend_stmt_prepare();
-	unsigned long long get_total_frontend_stmt_execute();
-	unsigned long long get_total_frontend_stmt_close();
-	unsigned long long get_total_queries();
-	unsigned long long get_slow_queries();
-	unsigned long long get_gtid_queries();
-	unsigned long long get_gtid_session_collected();
-	unsigned long long get_queries_backends_bytes_recv();
-	unsigned long long get_queries_backends_bytes_sent();
-	unsigned long long get_queries_frontends_bytes_recv();
-	unsigned long long get_queries_frontends_bytes_sent();
+	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx);
 	unsigned int get_active_transations();
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();
 #endif // IDLE_THREADS
-	unsigned long long get_query_processor_time();
-	unsigned long long get_backend_query_time();
 	unsigned long long get_mysql_backend_buffers_bytes();
 	unsigned long long get_mysql_frontend_buffers_bytes();
 	unsigned long long get_mysql_session_internal_bytes();
-	unsigned long long get_ConnPool_get_conn_immediate();
-	unsigned long long get_ConnPool_get_conn_success();
-	unsigned long long get_ConnPool_get_conn_failure();
-	unsigned long long get_ConnPool_get_conn_latency_awareness();
-	unsigned long long get_generated_pkt_err();
-	unsigned long long get_max_connect_timeout();
-	unsigned long long get_unexpected_com_quit();
-	unsigned long long get_unexpected_packet();
-	unsigned long long get_hostgroup_locked();
-	unsigned long long get_hostgroup_locked_set_cmds();
-	unsigned long long get_hostgroup_locked_queries();
-	unsigned long long get_aws_aurora_replicas_skipped_during_query();
-	unsigned long long get_automatic_detected_sqli();
-	unsigned long long get_whitelisted_sqli_fingerprint();
-	unsigned long long get_backend_lagging_during_query();
-	unsigned long long get_backend_offline_during_query();
-	unsigned long long get_queries_with_max_lag_ms();
-	unsigned long long get_queries_with_max_lag_ms__delayed();
-	unsigned long long get_queries_with_max_lag_ms__total_wait_time_us();
-	unsigned long long get_killed_connections();
-	unsigned long long get_killed_queries();
 	iface_info *MLM_find_iface_from_fd(int fd) {
 		return MLM->find_iface_from_fd(fd);
 	}

@@ -1,7 +1,9 @@
 #ifndef __CLASS_QUERY_CACHE_H
 #define __CLASS_QUERY_CACHE_H
+
 #include "proxysql.h"
 #include "cpp.h"
+#include <tuple>
 
 #define EXPIRE_DROPIT   0
 #define SHARED_QUERY_CACHE_HASH_TABLES  32
@@ -11,6 +13,8 @@
 #define DEFAULT_purge_threshold_pct_min 3
 #define DEFAULT_purge_threshold_pct_max 90
 
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
 
 class KV_BtreeArray;
 
@@ -29,13 +33,45 @@ struct __QC_entry_t {
 	uint32_t ref_count; // reference counter
 };
 
+struct p_qc_counter {
+	enum metric {
+		query_cache_count_get = 0,
+		query_cache_count_get_ok,
+		query_cache_count_set,
+		query_cache_bytes_in,
+		query_cache_bytes_out,
+		query_cache_purged,
+		query_cache_entries,
+		__size
+	};
+};
+
+struct p_qc_gauge {
+	enum metric {
+		query_cache_memory_bytes = 0,
+		__size
+	};
+};
+
+struct qc_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges
+	};
+};
+
 class KV_BtreeArray;
 class Query_Cache {
 	private:
 	KV_BtreeArray * KVs[SHARED_QUERY_CACHE_HASH_TABLES];
 	uint64_t get_data_size_total();
 	unsigned int current_used_memory_pct();
+	struct {
+		std::array<prometheus::Counter*, p_qc_counter::__size> p_counter_array {};
+		std::array<prometheus::Gauge*, p_qc_gauge::__size> p_gauge_array {};
+	} metrics;
 	public:
+	void p_update_metrics();
 	void * purgeHash_thread(void *);
 	int size;
 	int shutdown;

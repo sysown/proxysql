@@ -5,6 +5,8 @@
 #if defined(__FreeBSD__) || defined(__APPLE__)
 #include <fcntl.h>
 #endif
+#include <fcntl.h>
+#include <unistd.h>
 
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
@@ -31,6 +33,11 @@
 #include "curl/curl.h"
 
 #include <openssl/x509v3.h>
+
+// Minimal headers for exporting metrics using prometheus
+#include <prometheus/counter.h>
+#include <prometheus/exposer.h>
+#include <prometheus/registry.h>
 
 #include <sys/mman.h>
 
@@ -1209,8 +1216,6 @@ void ProxySQL_Main_init() {
 	}
 }
 
-
-
 static void LoadPlugins() {
 	if (GloVars.web_interface_plugin) {
 		dlerror();
@@ -1754,6 +1759,7 @@ gotofork:
 
 	} else {
 		GloAdmin->flush_error_log();
+		GloVars.install_signal_handler();
 	}
 
 __start_label:

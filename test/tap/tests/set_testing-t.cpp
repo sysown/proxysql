@@ -159,21 +159,21 @@ void queryVariables(MYSQL *mysql, json& j) {
 	std::stringstream query;
 	if (is_mariadb) {
 		query << "SELECT /* mysql " << mysql << " */ lower(variable_name), variable_value FROM information_schema.session_variables WHERE variable_name IN "
-			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'tx_isolation', 'tx_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database');";
 	}
 	if (is_cluster) {
 		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
-			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'wsrep_sync_wait');";
 	}
 	if (!is_mariadb && !is_cluster) {
 		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
-			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
+			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database');";
@@ -181,7 +181,7 @@ void queryVariables(MYSQL *mysql, json& j) {
 	//fprintf(stderr, "TRACE : QUERY 3 : variables %s\n", query.str().c_str());
 	if (mysql_query(mysql, query.str().c_str())) {
 		if (silent==0) {
-			fprintf(stderr,"%s\n", mysql_error(mysql));
+			fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", query.str().c_str(), mysql_errno(mysql), mysql_error(mysql));
 		}
 	} else {
 		MYSQL_RES *result = mysql_store_result(mysql);
@@ -198,7 +198,7 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 	//fprintf(stderr, "TRACE : QUERY 4 : variables %s\n", query);
 	if (mysql_query(mysql, query)) {
 		if (silent==0) {
-			fprintf(stderr,"%s\n", mysql_error(mysql));
+			fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", query, mysql_errno(mysql), mysql_error(mysql));
 		}
 	} else {
 		MYSQL_RES *result = mysql_store_result(mysql);
@@ -224,7 +224,7 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				j["conn"]["sql_log_bin"] = "OFF";
 			}
 
-			// autocommit {true|false}
+			// sql_auto_is_null {true|false}
 			if (!el.value()["sql_auto_is_null"].dump().compare("ON") ||
 					!el.value()["sql_auto_is_null"].dump().compare("1") ||
 					!el.value()["sql_auto_is_null"].dump().compare("on") ||
@@ -240,6 +240,8 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				j["conn"]["sql_auto_is_null"] = "OFF";
 			}
 
+			// completely remove autocommit test
+/*
 			// autocommit {true|false}
 			if (!el.value()["autocommit"].dump().compare("ON") ||
 					!el.value()["autocommit"].dump().compare("1") ||
@@ -255,7 +257,7 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				el.value().erase("autocommit");
 				j["conn"]["autocommit"] = "OFF";
 			}
-
+*/
 			// sql_safe_updates
 			if (!el.value()["sql_safe_updates"].dump().compare("\"ON\"") ||
 					!el.value()["sql_safe_updates"].dump().compare("\"1\"") ||
@@ -397,7 +399,7 @@ void * my_conn_thread(void *arg) {
 
 	while(__sync_fetch_and_add(&connect_phase_completed,0) != num_threads) {
 	}
-	MYSQL *mysql;
+	MYSQL *mysql=NULL;
 	json vars;
 	for (j=0; j<queries; j++) {
 		int fr = fastrand();
@@ -408,12 +410,23 @@ void * my_conn_thread(void *arg) {
 			mysql=mysqlconns[r1];
 			vars = varsperconn[r1];
 		}
-
+		if (strcmp(username,(char *)"root")) {
+			if (strstr(testCases[r2].command.c_str(),"database")) {
+				std::lock_guard<std::mutex> lock(mtx_);
+				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
+				continue;
+			}
+			if (strstr(testCases[r2].command.c_str(),"sql_log_bin")) {
+				std::lock_guard<std::mutex> lock(mtx_);
+				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
+				continue;
+			}
+		}
 		std::vector<std::string> commands = split(testCases[r2].command.c_str(), ';');
 		for (auto c : commands) {
 			if (mysql_query(mysql, c.c_str())) {
 				if (silent==0) {
-					fprintf(stderr,"%s\n", mysql_error(mysql));
+					fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", c.c_str(), mysql_errno(mysql), mysql_error(mysql));
 				}
 			} else {
 				MYSQL_RES *result = mysql_store_result(mysql);
@@ -476,6 +489,7 @@ void * my_conn_thread(void *arg) {
 		queryInternalStatus(mysql, proxysql_vars);
 
 		bool testPassed = true;
+		int variables_tested = 0;
 		for (auto& el : vars.items()) {
 			auto k = mysql_vars.find(el.key());
 			auto s = proxysql_vars["conn"].find(el.key());
@@ -495,11 +509,13 @@ void * my_conn_thread(void *arg) {
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
 				exit(0);
+			} else {
+				variables_tested++;
 			}
 		}
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
-			ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+			ok(testPassed, "mysql connection [%p], thread_id [%lu], variables_tested [%d], command [%s]", mysql, mysql->thread_id, variables_tested, testCases[r2].command.c_str());
 		}
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);
@@ -510,11 +526,13 @@ void * my_conn_thread(void *arg) {
 
 int main(int argc, char *argv[]) {
 	CommandLine cl;
-	std::string fileName("./tests/set_testing-t.csv");
 
 	if(cl.getEnv())
 		return exit_status();
 
+	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
+/*
+	// do not connect to admin at all
 	MYSQL* mysqladmin = mysql_init(NULL);
 	if (!mysqladmin)
 		return exit_status();
@@ -535,7 +553,7 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
 	mysql_close(mysqladmin);
-
+*/
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
 		return exit_status();

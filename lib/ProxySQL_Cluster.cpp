@@ -96,10 +96,42 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			//rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, CLIENT_COMPRESS); // FIXME: add optional support for compression
 			rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, 0);
+//			if (rc_conn) {
+//			}
 			//char *query = query1;
 			if (rc_conn) {
+				rc_query = mysql_query(conn,(char *)"SELECT @@version");
+				if (rc_query == 0) {
+					query_error = NULL;
+					query_error_counter = 0;
+					MYSQL_RES *result = mysql_store_result(conn);
+					MYSQL_ROW row;
+					bool same_version = false;
+					while ((row = mysql_fetch_row(result))) {
+						if (row[0]) {
+							if (strcmp(row[0], PROXYSQL_VERSION)==0) {
+								proxy_info("Cluster: clustering with peer %s:%d . Remote version: %s . Self version: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION);
+								same_version = true;
+							} else {
+								proxy_warning("Cluster: different ProxySQL version with peer %s:%d . Remote: %s . Self: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION);
+							}
+						}
+					}
+					mysql_free_result(result);
+					if (same_version == false) {
+						mysql_close(conn);
+						conn = mysql_init(NULL);
+						int exit_after_N_seconds = 30; // hardcoded sleep time
+						while (glovars.shutdown == 0 && exit_after_N_seconds) {
+							sleep(1);
+							exit_after_N_seconds--;
+						}
+						rc_query = 1;
+					}
+				}
 				while ( glovars.shutdown == 0 && rc_query == 0 && rc_bool == true) {
 					unsigned long long start_time=monotonic_time();
 					//unsigned long long before_query_time=monotonic_time();
@@ -615,6 +647,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
@@ -770,6 +803,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
@@ -853,6 +887,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
@@ -997,6 +1032,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {

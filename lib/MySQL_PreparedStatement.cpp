@@ -12,11 +12,10 @@
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 //#endif
 
-static uint64_t stmt_compute_hash(unsigned int hostgroup, char *user,
+static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
 	int l = 0;
-	l += sizeof(hostgroup);
 	l += strlen(user);
 	l += strlen(schema);
 // two random seperators
@@ -27,9 +26,6 @@ static uint64_t stmt_compute_hash(unsigned int hostgroup, char *user,
 	l += query_length;
 	char *buf = (char *)malloc(l);
 	l = 0;
-	// write hostgroup
-	memcpy(buf, &hostgroup, sizeof(hostgroup));
-	l += sizeof(hostgroup);
 
 	// write user
 	strcpy(buf + l, user);
@@ -57,7 +53,7 @@ static uint64_t stmt_compute_hash(unsigned int hostgroup, char *user,
 }
 
 void MySQL_STMT_Global_info::compute_hash() {
-	hash = stmt_compute_hash(hostgroup_id, username, schemaname, query,
+	hash = stmt_compute_hash(username, schemaname, query,
 	                         query_length);
 }
 
@@ -134,13 +130,12 @@ void *StmtLongDataHandler::get(uint32_t _stmt_id, uint16_t _param_id,
 	return NULL;
 }
 
-MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
+MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id,
                                                char *u, char *s, char *q,
                                                unsigned int ql,
                                                MYSQL_STMT *stmt, uint64_t _h) {
 	pthread_rwlock_init(&rwlock_, NULL);
 	statement_id = id;
-	hostgroup_id = h;
 	ref_count_client = 0;
 	ref_count_server = 0;
 	digest_text = NULL;
@@ -248,9 +243,9 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id, unsigned int h,
 __exit_MySQL_STMT_Global_info___search_select:
 
 	// set default properties:
-	properties.cache_ttl = -1;
-	properties.timeout = -1;
-	properties.delay = -1;
+//	properties.cache_ttl = -1;
+//	properties.timeout = -1;
+//	properties.delay = -1;
 
 	fields = NULL;
 	if (num_columns) {
@@ -545,11 +540,11 @@ void MySQL_STMTs_local_v14::backend_insert(uint64_t global_statement_id, MYSQL_S
 	// GloMyStmt->ref_count_client(global_statement_id, 1);
 }
 
-uint64_t MySQL_STMTs_local_v14::compute_hash(unsigned int hostgroup, char *user,
+uint64_t MySQL_STMTs_local_v14::compute_hash(char *user,
                                          char *schema, char *query,
                                          unsigned int query_length) {
 	uint64_t hash;
-	hash = stmt_compute_hash(hostgroup, user, schema, query, query_length);
+	hash = stmt_compute_hash(user, schema, query, query_length);
 	return hash;
 }
 
@@ -816,11 +811,11 @@ bool MySQL_STMTs_local_v14::client_close(uint32_t client_statement_id) {
 }
 
 MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
-    unsigned int _h, char *u, char *s, char *q, unsigned int ql,
-    MYSQL_STMT *stmt, int _cache_ttl, int _timeout, int _delay, bool lock) {
+    char *u, char *s, char *q, unsigned int ql,
+    MYSQL_STMT *stmt, bool lock) {
 	MySQL_STMT_Global_info *ret = NULL;
 	uint64_t hash = stmt_compute_hash(
-	    _h, u, s, q, ql);  // this identifies the prepared statement
+	    u, s, q, ql);  // this identifies the prepared statement
 	if (lock) {
 		pthread_rwlock_wrlock(&rwlock_);
 	}
@@ -852,10 +847,7 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 
 		//next_statement_id++;
 		MySQL_STMT_Global_info *a =
-		    new MySQL_STMT_Global_info(next_id, _h, u, s, q, ql, stmt, hash);
-		a->properties.cache_ttl = _cache_ttl;
-		a->properties.timeout = _timeout;
-		a->properties.delay = _delay;
+		    new MySQL_STMT_Global_info(next_id, u, s, q, ql, stmt, hash);
 		// insert it in both maps
 		map_stmt_id_to_info.insert(std::make_pair(a->statement_id, a));
 		map_stmt_hash_to_info.insert(std::make_pair(a->hash, a));
@@ -936,16 +928,14 @@ void MySQL_STMT_Manager_v14::get_metrics(uint64_t *c_unique, uint64_t *c_total,
 class PS_global_stats {
 	public:
 	uint64_t statement_id;
-	unsigned int hid;
 	char *username;
 	char *schemaname;
 	uint64_t digest;
 	unsigned long long ref_count_client;
 	unsigned long long ref_count_server;
 	char *query;
-	PS_global_stats(uint64_t stmt_id, unsigned int h, char *s, char *u, uint64_t d, char *q, unsigned long long ref_c, unsigned long long ref_s) {
+	PS_global_stats(uint64_t stmt_id, char *s, char *u, uint64_t d, char *q, unsigned long long ref_c, unsigned long long ref_s) {
 		statement_id = stmt_id;
-		hid=h;
 		digest=d;
 		query=strndup(q, mysql_thread___query_digests_max_digest_length);
 		username=strdup(u);
@@ -969,31 +959,29 @@ class PS_global_stats {
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*8);
+		char **pta=(char **)malloc(sizeof(char *)*7);
 		sprintf(buf,"%lu",statement_id);
 		pta[0]=strdup(buf);
-		sprintf(buf,"%u",hid);
-		pta[1]=strdup(buf);
 		assert(schemaname);
-		pta[2]=strdup(schemaname);
+		pta[1]=strdup(schemaname);
 		assert(username);
-		pta[3]=strdup(username);
+		pta[2]=strdup(username);
 
 		sprintf(buf,"0x%016llX", (long long unsigned int)digest);
-		pta[4]=strdup(buf);
+		pta[3]=strdup(buf);
 
 		assert(query);
-		pta[5]=strdup(query);
+		pta[4]=strdup(query);
 		sprintf(buf,"%llu",ref_count_client);
-		pta[6]=strdup(buf);
+		pta[5]=strdup(buf);
 		sprintf(buf,"%llu",ref_count_server);
-		pta[7]=strdup(buf);
+		pta[6]=strdup(buf);
 
 		return pta;
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<8;i++) {
+		for (i=0;i<7;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -1004,10 +992,9 @@ class PS_global_stats {
 
 SQLite3_result * MySQL_STMT_Manager_v14::get_prepared_statements_global_infos() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current prepared statements global info\n");
-	SQLite3_result *result=new SQLite3_result(8);
+	SQLite3_result *result=new SQLite3_result(7);
 	rdlock();
 	result->add_column_definition(SQLITE_TEXT,"stmt_id");
-	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
 	result->add_column_definition(SQLITE_TEXT,"username");
 	result->add_column_definition(SQLITE_TEXT,"digest");
@@ -1017,7 +1004,7 @@ SQLite3_result * MySQL_STMT_Manager_v14::get_prepared_statements_global_infos() 
 	for (std::map<uint64_t, MySQL_STMT_Global_info *>::iterator it = map_stmt_id_to_info.begin();
 			it != map_stmt_id_to_info.end(); ++it) {
 		MySQL_STMT_Global_info *a = it->second;
-		PS_global_stats * pgs = new PS_global_stats(a->statement_id, a->hostgroup_id,
+		PS_global_stats * pgs = new PS_global_stats(a->statement_id,
 			a->schemaname, a->username,
 			a->hash, a->query,
 			a->ref_count_client, a->ref_count_server);

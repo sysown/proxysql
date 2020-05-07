@@ -1,6 +1,9 @@
 #ifndef __CLASS_PROXYSQL_GLOVARS_H
 #define __CLASS_PROXYSQL_GLOVARS_H
 
+#include <memory>
+#include <prometheus/registry.h>
+
 #include "configfile.hpp"
 #include "proxy_defines.h"
 
@@ -59,6 +62,7 @@ class ProxySQL_GlobalVariables {
 	char * execute_on_exit_failure;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
+	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };
 	struct  {
 		unsigned long long start_time;
 		bool gdbg;
