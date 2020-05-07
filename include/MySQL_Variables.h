@@ -29,6 +29,9 @@ class MySQL_Variables {
 	static update_var updaters[SQL_NAME_LAST];
 
 public:
+	std::string variables_regexp;
+
+public:
 	MySQL_Variables();
 
 	virtual ~MySQL_Variables();

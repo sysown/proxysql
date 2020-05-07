@@ -3373,7 +3373,11 @@ bool MySQL_Thread::init() {
 
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
 	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)(SQL_MODE|TIME_ZONE|CHARACTER_SET_RESULTS|CHARACTER_SET_CLIENT|CHARACTER_SET_DATABASE|SESSION_TRACK_GTIDS|SQL_AUTO_IS_NULL|SQL_SELECT_LIMIT|SQL_SAFE_UPDATES|COLLATION_CONNECTION|CHARACTER_SET_CONNECTION|NET_WRITE_TIMEOUT|WSREP_SYNC_WAIT|TX_ISOLATION|GROUP_CONCAT_MAX_LEN|MAX_JOIN_SIZE( *)(:|)=( *))");
+
+	std::stringstream ss;
+	ss << "^SET (|SESSION |@@|@@session.)(" << mysql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION( *)(:|)=( *))";
+	match_regexes[1]=new Session_Regex((char *)ss.str().c_str());
+
 	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 	match_regexes[3]=new Session_Regex((char *)"^(set)(?: +)((charset)|(character +set))(?: )");
 
