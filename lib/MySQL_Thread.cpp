@@ -2995,7 +2995,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 // scan both mysql_thread_variables_names AND mysql_tracked_variables
 bool MySQL_Threads_Handler::has_variable(const char *name) {
 	if (strlen(name) > 8) {
-		if (strncmp(name, "default_", 8)) {
+		if (strncmp(name, "default_", 8) == 0) {
 			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
 				size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
 				if (strlen(name) == (var_len+8)) {
