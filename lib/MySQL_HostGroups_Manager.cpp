@@ -2082,7 +2082,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 	it = gtid_map.begin();
 	while(it != gtid_map.end()) {
 		GTID_Server_Data * gtid_si = it->second;
-		if (gtid_si->active == false) {
+		if (gtid_si && gtid_si->active == false) {
 			to_remove.push_back(it->first);
 		}
 		it++;
