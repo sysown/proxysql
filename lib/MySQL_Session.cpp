@@ -3605,7 +3605,9 @@ handler_again:
 					mybe->server_myds->wait_until=0;
 					if (qpo) {
 						if (qpo->timeout > 0) {
-							mybe->server_myds->wait_until=thread->curtime+qpo->timeout*1000;
+							unsigned long long qr_timeout=qpo->timeout;
+							mybe->server_myds->wait_until=thread->curtime;
+							mybe->server_myds->wait_until+=qr_timeout*1000;
 						}
 					}
 					if (mysql_thread___default_query_timeout) {
