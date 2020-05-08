@@ -1,6 +1,8 @@
 #include <vector>
 #include <string>
 #include <cstring>
+#include <algorithm>
+#include <iostream>
 
 #include "proxysql.h"
 
@@ -89,25 +91,57 @@ const std::vector<std::string> exp_results {
 
 const std::vector<std::string> queries_grouping {
 	// test query_digest reduction
-	"SELECT * FROM tablename WHERE id IN (1,2,3,4,5,6,7,8,9,10)",
-	"SELECT * FROM tablename WHERE id IN (1,2,3,4)",
+	"SELECT * FROM tablename WHERE id IN (1,2, 3,4 ,5 ,6,7,8,9,10)",
 	// invalid request grouping
-	"SELECT * tablename where id IN (1,2,3,4,5,6,7,8,  AND j in (1,2,3,4,5,6  and k=1",
-	"SELECT (1.1, 1, 2) FROM db.table",
-	"SELECT (1.1, 1.12934, 21.32 ) FROM db.table2",
-	"SELECT (1.1, 1.12934, 21.32, 39123 ) FROM db.table2",
+	"SELECT * tablename where id IN (1,2,3,4,5 , 6,7,8,  AND j in (1, 2,3, 4 ,5,6,7,8,9  and k=1",
+	"SELECT (1.1, 1, 2, 13, 4.81, 12) FROM db.table",
+	"SELECT (1.1, 1.12934 , 21.32 , 91, 91, 12.93 ) FROM db.table2",
+	"SELECT (1.1, 1.12934 , 21.32 , 91.2 , 91, 12 ) FROM db.table7",
+	"SELECT (1.1, 1.12934, 21.32, 391,2381,28.493,1283 ) FROM db.table2",
+	"SELECT (1.1, 1.12934, 21.32 , 91, 91, 12.1 ) FROM db.table3"
 };
 
 const std::vector<std::string> exp_queries_grouping {
 	// test query_digest reduction
-	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
-	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
+	"SELECT * FROM tablename WHERE id IN (?,...)",
 	// invalid request grouping
-	"SELECT * tablename where id IN (?,?,?,... AND j in (?,?,?,... and k=?",
-	"SELECT (?,?,?) FROM db.table",
-	"SELECT (?,?,?) FROM db.table2",
-	"SELECT (?,?,?,...) FROM db.table2",
+	"SELECT * tablename where id IN (?,... AND j in (?,... and k=?",
+	"SELECT (?,...) FROM db.table",
+	"SELECT (?,...) FROM db.table2",
+	"SELECT (?,...) FROM db.table7",
+	"SELECT (?,...) FROM db.table2",
+	"SELECT (?,...) FROM db.table3"
 };
+
+std::string replace_str(const std::string& str, const std::string& match, const std::string& repl) {
+	if(match.empty()) {
+		return str;
+	}
+
+	std::string result = str;
+	size_t start_pos = 0;
+
+	while((start_pos = result.find(match, start_pos)) != std::string::npos) {
+		result.replace(start_pos, match.length(), repl);
+		start_pos += repl.length();
+	}
+
+	return result;
+}
+
+std::string increase_mark_num(const std::string query, uint32_t num) {
+	std::string result = query;
+	std::string marks = "";
+
+	for (uint32_t i = 0; i < num - 1; i++) {
+		marks += "?,";
+	}
+	marks += "?,...";
+
+	result = replace_str(result, "?,...", marks);
+
+	return result;
+}
 
 int main(int argc, char** argv) {
 	if (queries.size() != exp_results.size()) {
@@ -128,13 +162,17 @@ int main(int argc, char** argv) {
 	}
 
 	for (size_t i = 0; i < queries_grouping.size(); i++) {
-		const auto& query = queries_grouping[i];
-		const auto& exp_res = exp_queries_grouping[i];
-
-		char* c_res = mysql_query_digest_and_first_comment(const_cast<char*>(query.c_str()), query.length(), NULL, buf);
-		std::string result(c_res);
-
-		ok(result == exp_res, "Grouping digest should be equal to exp result: '%s' == '%s'", result.c_str(), exp_res.c_str());
+		for (int j = 1; j <= 5; j++) {
+			mysql_thread___query_digests_grouping_limit = j;
+	
+			const auto& query = queries_grouping[i];
+			const auto& exp_res = increase_mark_num(exp_queries_grouping[i], j);
+	
+			char* c_res = mysql_query_digest_and_first_comment(const_cast<char*>(query.c_str()), query.length(), NULL, buf);
+			std::string result(c_res);
+	
+			ok(result == exp_res, "Grouping digest should be equal to exp result: '%s' == '%s'", result.c_str(), exp_res.c_str());
+		}
 	}
 
 	return exit_status();
