@@ -343,9 +343,12 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					}
 					// supress spaces before and after commas
 					if (p >= r && is_space_char(prev_char) && ((*s == ',') || (*p == ','))) {
-						prev_char = ',';
 						--p_r;
-						*p_r++ = *s;
+						// only copy the comma if we are not grouping a query
+						if (!grouping_limit_exceeded) {
+							*p_r++ = *s;
+						}
+						prev_char = ',';
 						s++;
 						i++;
 						continue;
