@@ -100,4 +100,4 @@ aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
 
 test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_tokenizer-t
+	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_tokenizer-t -DGITVERSION=\"$(GIT_VERSION)\"
