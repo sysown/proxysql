@@ -22,8 +22,18 @@
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
+
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
 #define PROXYSQL_VERSION_COMMENT_LEN 81
+
+// PROXYSQL_VERSION_COMMENT_WITH_OK is sent instead of PROXYSQL_VERSION_COMMENT
+// if Client supports CLIENT_DEPRECATE_EOF
+#define PROXYSQL_VERSION_COMMENT_WITH_OK "\x01\x00\x00\x01\x01" \
+"\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00" \
+"\x0b\x00\x00\x03\x0a(ProxySQL)" \
+"\x07\x00\x00\x04\xfe\x00\x00\x02\x00\x00\x00"
+#define PROXYSQL_VERSION_COMMENT_WITH_OK_LEN 74
+
 #define SELECT_CONNECTION_ID "SELECT CONNECTION_ID()"
 #define SELECT_CONNECTION_ID_LEN 22
 #define SELECT_LAST_INSERT_ID "SELECT LAST_INSERT_ID()"
@@ -756,7 +766,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 		client_myds->DSS=STATE_QUERY_SENT_NET;
 		uint16_t setStatus = 0;
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 		client_myds->DSS=STATE_SLEEP;
 		status=WAITING_CLIENT_DATA;
 		if (mirror==false) {
@@ -895,7 +905,7 @@ __ret_autocommit_OK:
 				client_myds->DSS=STATE_QUERY_SENT_NET;
 				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 				client_myds->DSS=STATE_SLEEP;
 				status=WAITING_CLIENT_DATA;
 				if (mirror==false) {
@@ -1067,7 +1077,8 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 		char *pta[1];
 		pta[0] = (char *)s.c_str();
 		resultset->add_row(pta);
-		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot);
+		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
 		return;
 	}
@@ -1083,6 +1094,7 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 }
 
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
+	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
 	if (pkt->size>(5+18) && strncasecmp((char *)"PROXYSQL INTERNAL ",(char *)pkt->ptr+5,18)==0) {
 		return_proxysql_internal(pkt);
@@ -1139,9 +1151,15 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
 		PtrSize_t pkt_2;
-		pkt_2.size=PROXYSQL_VERSION_COMMENT_LEN;
-		pkt_2.ptr=l_alloc(pkt_2.size);
-		memcpy(pkt_2.ptr,PROXYSQL_VERSION_COMMENT,pkt_2.size);
+		if (deprecate_eof_active) {
+			pkt_2.size=PROXYSQL_VERSION_COMMENT_WITH_OK_LEN;
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			memcpy(pkt_2.ptr,PROXYSQL_VERSION_COMMENT_WITH_OK,pkt_2.size);
+		} else {
+			pkt_2.size=PROXYSQL_VERSION_COMMENT_LEN;
+			pkt_2.ptr=l_alloc(pkt_2.size);
+			memcpy(pkt_2.ptr,PROXYSQL_VERSION_COMMENT,pkt_2.size);
+		}
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
 		client_myds->PSarrayOUT->add(pkt_2.ptr,pkt_2.size);
@@ -1161,7 +1179,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		int affected_rows;
 		SQLite3_result *resultset;
 		GloAdmin->admindb->execute_statement(query2, &error , &cols , &affected_rows , &resultset);
-		SQLite3_to_MySQL(resultset, error, affected_rows, &client_myds->myprot);
+		SQLite3_to_MySQL(resultset, error, affected_rows, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
 		free(query2);
 		if (mirror==false) {
@@ -1295,7 +1313,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			unsigned int nTrx=NumActiveTransactions();
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 			client_myds->DSS=STATE_SLEEP;
 			status=WAITING_CLIENT_DATA;
 			if (mirror==false) {
@@ -1311,7 +1329,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		resultset->add_column_definition(SQLITE_TEXT,"Level");
 		resultset->add_column_definition(SQLITE_TEXT,"Code");
 		resultset->add_column_definition(SQLITE_TEXT,"Message");
-		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot);
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
 		client_myds->DSS=STATE_SLEEP;
 		status=WAITING_CLIENT_DATA;
@@ -3092,7 +3110,7 @@ __get_pkts_from_client:
 									unsigned int nTrx=NumActiveTransactions();
 									uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 									if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-									client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+									client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 									client_myds->DSS=STATE_SLEEP;
 									status=WAITING_CLIENT_DATA;
 								}
@@ -4233,7 +4251,7 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 	) {
 		l_free(pkt->size,pkt->ptr);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Successful connection\n", this, client_myds);
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL,false);
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_CHANGE_USER_OK, this, NULL);
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
@@ -4507,8 +4525,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						(strcmp(client_addr,(char *)"::1")==0)
 					) {
 						// we are good!
-						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL);
+						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL,false);
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_OK, this, NULL);
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
@@ -4542,10 +4560,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 					} else {
 						// we are good!
-						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL);
+						//client_myds->myprot.generate_pkt_OK(true,NULL,NULL, (is_encrypted ? 3 : 2), 0,0,0,0,NULL,false);
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_OK, this, NULL);
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL,false);
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
 					}
@@ -4631,7 +4649,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(PtrSize_
 /*
 	if (client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) {
 		l_free(pkt->size,pkt->ptr);
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,3,0,0,0,0,NULL);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,3,0,0,0,0,NULL,false);
 		mybe->server_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		status=WAITING_CLIENT_DATA;
 		client_myds->DSS=STATE_SLEEP;
@@ -4658,11 +4676,16 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	unsigned int nTrx=NumActiveTransactions();
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-	if (v==1) { // disabled. MYSQL_OPTION_MULTI_STATEMENTS_OFF == 1
+
+	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+	if (deprecate_eof_active)
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,true);
+	else
 		client_myds->myprot.generate_pkt_EOF(true,NULL,NULL,1,0, setStatus );
+
+	if (v==1) { // disabled. MYSQL_OPTION_MULTI_STATEMENTS_OFF == 1
 		client_myds->myconn->options.client_flag &= ~CLIENT_MULTI_STATEMENTS;
 	} else { // enabled, MYSQL_OPTION_MULTI_STATEMENTS_ON == 0
-		client_myds->myprot.generate_pkt_EOF(true,NULL,NULL,1,0, setStatus );
 		client_myds->myconn->options.client_flag |= CLIENT_MULTI_STATEMENTS;
 	}
 	client_myds->DSS=STATE_SLEEP;
@@ -4677,7 +4700,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	unsigned int nTrx=NumActiveTransactions();
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 	if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-	client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+	client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 	client_myds->DSS=STATE_SLEEP;
 }
 
@@ -4743,7 +4766,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
@@ -4752,7 +4775,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
@@ -4789,7 +4812,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_INITDB, this, NULL);
 		client_myds->DSS=STATE_SLEEP;
 	} else {
@@ -4798,7 +4821,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
@@ -4860,7 +4883,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,0,0,setStatus,0,qpo->OK_msg);
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,0,0,setStatus,0,qpo->OK_msg,false);
 		RequestEnd(NULL);
 		l_free(pkt->size,pkt->ptr);
 		return true;
@@ -4933,7 +4956,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						client_myds->DSS=STATE_QUERY_SENT_NET;
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 						client_myds->DSS=STATE_SLEEP;
 						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
@@ -4953,7 +4976,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						client_myds->DSS=STATE_QUERY_SENT_NET;
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 						client_myds->DSS=STATE_SLEEP;
 						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
@@ -5383,7 +5406,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						client_myds->DSS=STATE_QUERY_SENT_NET;
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 						client_myds->DSS=STATE_SLEEP;
 						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
@@ -5428,7 +5451,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						client_myds->DSS=STATE_QUERY_SENT_NET;
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 						client_myds->DSS=STATE_SLEEP;
 						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
@@ -5469,7 +5492,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						client_myds->DSS=STATE_QUERY_SENT_NET;
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 						client_myds->DSS=STATE_SLEEP;
 						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
@@ -5507,14 +5530,24 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
 		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
 		myds->DSS=STATE_COLUMN_DEFINITION;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+
+		bool deprecate_eof_active = myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
+
 		char **p=(char **)malloc(sizeof(char*)*1);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
 		l[0]=strlen(buf);
 		p[0]=buf;
 		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+
+		if (deprecate_eof_active) {
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,0,0,setStatus,0,NULL,true); sid++;
+		} else {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
 		myds->DSS=STATE_SLEEP;
 		RequestEnd(NULL);
 		l_free(pkt->size,pkt->ptr);
@@ -5579,14 +5612,22 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
 				myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",buf2,(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
 				myds->DSS=STATE_COLUMN_DEFINITION;
-				myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+
+				bool deprecate_eof_active = myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+				if (!deprecate_eof_active) {
+					myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+				}
 				char **p=(char **)malloc(sizeof(char*)*1);
 				unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
 				l[0]=strlen(buf);
 				p[0]=buf;
 				myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 				myds->DSS=STATE_ROW;
-				myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+				if (deprecate_eof_active) {
+					myprot->generate_pkt_OK(true,NULL,NULL,sid,0,0,setStatus,0,NULL,true); sid++;
+				} else {
+					myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+				}
 				myds->DSS=STATE_SLEEP;
 				RequestEnd(NULL);
 				l_free(pkt->size,pkt->ptr);
@@ -5687,7 +5728,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		client_authenticated=false;
 		if (client_myds->myprot.process_pkt_COM_CHANGE_USER((unsigned char *)pkt->ptr, pkt->size)==true) {
 			l_free(pkt->size,pkt->ptr);
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL,false);
 			client_myds->DSS=STATE_SLEEP;
 			status=WAITING_CLIENT_DATA;
 			*wrong_pass=false;
@@ -5893,7 +5934,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
 			setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 			setStatus = setStatus & ~SERVER_STATUS_CURSOR_EXISTS; // Do not send cursor #1128
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus , mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus , mysql->warning_count,mysql->info,false);
 			client_myds->pkt_sid++;
 		} else {
 			// error
@@ -5960,7 +6001,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
 			setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 			setStatus = setStatus & ~SERVER_STATUS_CURSOR_EXISTS; // Do not send cursor #1128
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus, mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus, mysql->warning_count,mysql->info,false);
 			//client_myds->pkt_sid++;
 		} else {
 			// error
@@ -5980,7 +6021,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 	}
 }
 
-void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot, bool in_transaction) {
+void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot, bool in_transaction, bool deprecate_eof_active) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
@@ -6003,7 +6044,10 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 			setStatus = SERVER_STATUS_AUTOCOMMIT;
 			setStatus |= SERVER_STATUS_IN_TRANS;
 		}
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus ); sid++;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus ); sid++;
+		}
+
 		char **p=(char **)malloc(sizeof(char*)*result->columns);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*result->columns);
 		for (int r=0; r<result->rows_count; r++) {
@@ -6014,7 +6058,16 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		myprot->generate_pkt_row(true,NULL,NULL,sid,result->columns,l,p); sid++;
 		}
 		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus ); sid++;
+
+		if (deprecate_eof_active) {
+			myprot->generate_pkt_OK(true, NULL, NULL, sid, 0, 0, setStatus, 0, NULL, true); sid++;
+		} else {
+			// I think the 2 | setStatus here is a bug. the previous generate_pkt_EOF was changed from 2|setStatus to just
+			// setStatus a long time ago in c3e6fda7a47ecb94e97d4e191cdbd0f10fec7924
+			// also 2 represents the SERVER_STATUS_IN_TRANS which is already set in setStatus
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus ); sid++;
+		}
+
 		myds->DSS=STATE_SLEEP;
 		free(l);
 		free(p);
@@ -6040,7 +6093,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 				setStatus = SERVER_STATUS_AUTOCOMMIT;
 				setStatus |= SERVER_STATUS_IN_TRANS;
 			}
-			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,setStatus,0,NULL);
+			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,setStatus,0,NULL,false);
 		}
 		myds->DSS=STATE_SLEEP;
 	}
@@ -6318,7 +6371,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 								unsigned int nTrx=NumActiveTransactions();
 								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 								if (autocommit) setStatus = SERVER_STATUS_AUTOCOMMIT;
-								client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+								client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL,false);
 								client_myds->DSS=STATE_SLEEP;
 								status=WAITING_CLIENT_DATA;
 								RequestEnd(NULL);

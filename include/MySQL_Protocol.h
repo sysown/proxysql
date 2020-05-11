@@ -9,8 +9,16 @@
 
 extern MySQL_Variables mysql_variables;
 
+/* The default mariadb-connecter 3.1.4 does not yet implement CLIENT_DEPRECATE_EOF
+ * flag.
+ */
+#ifndef CLIENT_DEPRECATE_EOF
+#define CLIENT_DEPRECATE_EOF     (1UL << 24)
+#endif
+
 class MySQL_ResultSet {
 	private:
+	bool deprecate_eof_active;
 	public:
 	bool transfer_started;
 	bool resultset_completed;
@@ -76,7 +84,7 @@ class MySQL_Protocol {
 	// - a pointer to void pointer, used to return the packet if not NULL
 	// - a pointer to unsigned int, used to return the size of the packet if not NULL 
 	// for now,  they all return true
-	bool generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg);
+	bool generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg, bool eof_identifier);
 	bool generate_pkt_ERR(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t error_code, char *sql_state, const char *sql_message, bool track=false);
 	bool generate_pkt_EOF(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint16_t warnings, uint16_t status, MySQL_ResultSet *myrs=NULL);
 //	bool generate_COM_INIT_DB(bool send, void **ptr, unsigned int *len, char *schema);
@@ -91,8 +99,7 @@ class MySQL_Protocol {
 	bool generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue, MySQL_ResultSet *myrs=NULL);
 	bool generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt);
 	uint8_t generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt);
-//	bool generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
-	bool generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *thread_id);
+	bool generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *thread_id, bool deprecate_eof_active);
 //	bool generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
 	bool generate_statistics_response(bool send, void **ptr, unsigned int *len);
 

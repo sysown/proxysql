@@ -607,7 +607,7 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg) {
+bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, unsigned int affected_rows, uint64_t last_insert_id, uint16_t status, uint16_t warnings, char *msg, bool eof_identifier) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
@@ -655,7 +655,18 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 	unsigned char *_ptr=(unsigned char *)l_alloc(size);
 	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
 	int l=sizeof(mysql_hdr);
-	_ptr[l]=0x00; l++;
+
+	/*
+	 * Use 0xFE packet header if eof_identifier is true.
+	 * OK packet with 0xFE replaces EOF packet for clients
+	 * supporting CLIENT_DEPRECATE_EOF flag
+	 */
+	if (eof_identifier)
+		_ptr[l]=0xFE;
+	else
+		_ptr[l]=0x00;
+
+	l++;
 	l+=write_encoded_length(_ptr+l, affected_rows, affected_rows_len, affected_rows_prefix);
 	l+=write_encoded_length(_ptr+l, last_insert_id, last_insert_id_len, last_insert_id_prefix);
 	int16_t internal_status = status;
@@ -711,6 +722,12 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 				(*myds)->DSS=STATE_OK;
 				break;
 			case STATE_OK:
+				break;
+			case STATE_ROW:
+				if (eof_identifier)
+					(*myds)->DSS=STATE_EOF2;
+				else
+					assert(0);
 				break;
 			default:
 				assert(0);
@@ -931,6 +948,12 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 		setStatus = (Trx_id >= 0 ? SERVER_STATUS_IN_TRANS : 0 );
 		if ((*myds)->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 	}
+	bool deprecate_eof_active = false;
+	if (*myds && (*myds)->myconn) {
+		if ((*myds)->myconn->options.client_flag & CLIENT_DEPRECATE_EOF) {
+			deprecate_eof_active = true;
+		}
+	}
 	if (stmt_info->num_params) {
 		for (i=0; i<stmt_info->num_params; i++) {
 			generate_pkt_field(true,NULL,NULL,sid,
@@ -938,8 +961,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 				63,0,253,128,0,false,0,NULL); // NOTE: charset is 63 = binary !
 			sid++;
 		}
-		generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
-		sid++;
+		if (!deprecate_eof_active) {
+			generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
+			sid++;
+		}
 	}
 	if (stmt_info->num_columns) {
 		for (i=0; i<stmt_info->num_columns; i++) {
@@ -951,8 +976,10 @@ bool MySQL_Protocol::generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_S
 				fd->charsetnr, fd->length, fd->type, fd->flags, fd->decimals, false,0,NULL);
 			sid++;
 		}
-		generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
-		sid++;
+		if (!deprecate_eof_active) {
+			generate_pkt_EOF(true,NULL,NULL,sid,0,setStatus);
+			sid++;
+		}
 	}
 	pthread_rwlock_unlock(&stmt_info->rwlock_);
 	return true;
@@ -1142,8 +1169,7 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 	return true;
 }
 
-//bool MySQL_Protocol::generate_pkt_initial_handshake(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len) {
-bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id) {
+bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *_thread_id, bool deprecate_eof_active) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating handshake pkt\n");
   mysql_hdr myhdr;
   myhdr.pkt_id=0;
@@ -1226,7 +1252,12 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-  memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
+	if (deprecate_eof_active) {
+		memcpy(_ptr+l,"\x8f\x81\x15",3); l+=3;
+	}
+	else {
+		memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
+	}
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
 //#ifdef MARIADB_BASE_VERSION
@@ -2390,6 +2421,9 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 			}
 		}
 	}
+
+	deprecate_eof_active = c_myds->myconn && (c_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF);
+
 	// first EOF
 	unsigned int nTrx=myds->sess->NumActiveTransactions();
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -2405,7 +2439,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
 			buffer_to_PSarrayOut();
 		}
-	if (myds->com_field_list==false) {
+	if (!deprecate_eof_active && myds->com_field_list==false) {
 		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
 		sid++;
 		resultset_size += 9;
@@ -2605,7 +2639,6 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 }
 
 void MySQL_ResultSet::add_eof() {
-	//PtrSize_t pkt;
 	if (myprot) {
 		unsigned int nTrx=myds->sess->NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -2616,13 +2649,23 @@ void MySQL_ResultSet::add_eof() {
 		//PSarrayOUT->add(pkt.ptr,pkt.size);
 		//sid++;
 		//resultset_size+=pkt.size;
-		if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
+
+		if (deprecate_eof_active) {
+			PtrSize_t pkt;
 			buffer_to_PSarrayOut();
+			myprot->generate_pkt_OK(false, &pkt.ptr, &pkt.size, sid, 0, 0, setStatus, 0, NULL, true);
+			PSarrayOUT.add(pkt.ptr, pkt.size);
+			resultset_size += pkt.size;
 		}
-		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
+		else {
+			if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
+				buffer_to_PSarrayOut();
+			}
+			myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
+			resultset_size += 9;
+			buffer_to_PSarrayOut(true);
+		}
 		sid++;
-		resultset_size += 9;
-		buffer_to_PSarrayOut(true);
 	}
 	resultset_completed=true;
 }
