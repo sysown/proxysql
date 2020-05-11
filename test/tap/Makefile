@@ -1,4 +1,3 @@
-
 .PHONY: all
 all: tap tests
 
@@ -7,12 +6,12 @@ clean:
 	cd tap && ${MAKE} clean
 	cd tests && ${MAKE} clean
 
-OPT=-O2
+debug: tap tests
 
 .PHONY: tap
 tap: 
-	cd tap && OPTZ="${O0} -ggdb " CC=${CC} CXX=${CXX} ${MAKE}
+	cd tap && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 tests: tap
-	cd tests && OPTZ="${O0} -ggdb " CC=${CC} CXX=${CXX} ${MAKE}
+	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
