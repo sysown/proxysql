@@ -60,6 +60,17 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysqladmin, "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, apply) values (200, 1, 0, '^SELECT', 0, 'CASELESS', 1, 1)");
 	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
 
+	for (;;) {
+		sleep(1);
+		int rc = mysql_query(mysql, "select * from test.test1");
+		if (rc == 0) {
+			MYSQL_RES *r1 = mysql_store_result(mysql);
+			if (r1)
+				mysql_free_result(r1);
+			break;
+		}
+	}
+
 	MYSQL_QUERY(mysql, "set autocommit=0");
 	MYSQL_STMT *stmt = mysql_stmt_init(mysql);
 	if (!stmt)
