@@ -62,3 +62,5 @@
 "set max_join_size=18446744073709551615", "{'max_join_size':'18446744073709551615'}"
 "set wsrep_sync_wait=1", "{'wsrep_sync_wait':'1'}"
 "set wsrep_sync_wait=0", "{'wsrep_sync_wait':'0'}"
+"set group_concat_max_len=2048", "{'group_concat_max_len':'2048'}"
+"set group_concat_max_len=4096", "{'group_concat_max_len':'4096'}"
