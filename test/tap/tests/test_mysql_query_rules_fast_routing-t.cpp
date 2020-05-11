@@ -13,21 +13,46 @@
 #include "utils.h"
 
 int main(int argc, char** argv) {
+	/*
+	 * 1. Read and command line parameters
+	 */
+
+	// Define comman line parser
 	CommandLine cl;
 
+	// Initialize tests parameters from environment variables
+	// Test parameters are similar to the mysql command line parameters but
+	// additionally they include admin interface username/password, host and port,
+	// working directory for test files.
+	if(cl.getEnv())
+		return exit_status();
+
+	/*
+	 * Prepare TAP framework to run tests
+	 */
+
+	// Initialize TAP with planned number of checks and print the name of the test
+	plan(6);
+	diag("Testing query rules fast routing");
+
+	/*
+	 * Initialize connections to the servers and prepare data for test.
+	 * Also initialize additional libraries.
+	 */
+
+	// Initialize connection to the proxysql admin interface
+	MYSQL* mysqlAdmin = mysql_init(NULL);
+	if (!mysqlAdmin) return exit_status();
+	if (!mysql_real_connect(mysqlAdmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) return exit_status();
+
+	// Initialize extra functionality that will be used durin the test
 	std::random_device rd;  //Will be used to obtain a seed for the random number engine
 	std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
 	std::uniform_int_distribution<> dis(100000, 1000000);
 
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(6);
-	diag("Testing query rules fast routing");
-
-	MYSQL* mysqlAdmin = mysql_init(NULL);
-	if (!mysqlAdmin) return exit_status();
-	if (!mysql_real_connect(mysqlAdmin, cl.host, "admin", "admin", NULL, 6032, NULL, 0)) return exit_status();
+	/*
+	 * Execute test performing required checks during execution
+	 */
 
 	const auto NUM_REPS=3;
 	char query[1024] = {0};
@@ -61,6 +86,10 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY(mysqlAdmin, "PROXYSQLTEST 17 11");
 	}
 
+
+	/*
+	 * Teardown test set up. Reload proxysql configuration.
+	 */
 
 	if (mysql_query(mysqlAdmin, "load mysql query rules from disk")) return exit_status();
 	if (mysql_query(mysqlAdmin, "load mysql query rules to runtime")) return exit_status();
