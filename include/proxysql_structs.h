@@ -758,6 +758,7 @@ __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
 __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
+__thread int mysql_thread___query_digests_grouping_limit;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -903,6 +904,7 @@ extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
 extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
+extern __thread int mysql_thread___query_digests_grouping_limit;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
