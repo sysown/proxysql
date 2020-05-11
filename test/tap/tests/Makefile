@@ -78,6 +78,8 @@ clean:
 	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora || true
 
 OPT=-O2 -Wl,--no-as-needed
+debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed
+debug: tests
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
