@@ -1,6 +1,9 @@
-
-
+ifndef GIT_VERSION
 GIT_VERSION := $(shell git describe --long)
+ifndef GIT_VERSION
+$(error GIT_VERSION is not set)
+endif
+endif
 
 DEPS_PATH=../deps
 
