@@ -5039,7 +5039,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						exit_after_SetParse = true;
 					// the following two blocks of code will be simplified later
-					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
+					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates") || (var == "foreign_key_checks")) {
 						int idx = SQL_NAME_LAST;
 						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
 							if (mysql_tracked_variables[i].is_bool) {

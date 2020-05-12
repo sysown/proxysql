@@ -162,21 +162,24 @@ void queryVariables(MYSQL *mysql, json& j) {
 			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'tx_isolation', 'tx_read_only', "
-			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'group_concat_max_len');";
+			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'group_concat_max_len',"
+			" 'foreign_key_checks');";
 	}
 	if (is_cluster) {
 		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
 			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
-			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'wsrep_sync_wait', 'group_concat_max_len');";
+			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'wsrep_sync_wait', 'group_concat_max_len',"
+			" 'foreign_key_checks');";
 	}
 	if (!is_mariadb && !is_cluster) {
 		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
 			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'autocommit', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
-			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'group_concat_max_len');";
+			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'group_concat_max_len',"
+			" 'foreign_key_checks');";
 	}
 	//fprintf(stderr, "TRACE : QUERY 3 : variables %s\n", query.str().c_str());
 	if (mysql_query(mysql, query.str().c_str())) {
@@ -222,6 +225,16 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 			else if (el.value()["sql_log_bin"] == 0) {
 				el.value().erase("sql_log_bin");
 				j["conn"]["sql_log_bin"] = "OFF";
+			}
+
+			// foreign_key_checks {0|1}
+			if (el.value()["foreign_key_checks"] == 1) {
+				el.value().erase("foreign_key_checks");
+				j["conn"]["foreign_key_checks"] = "ON";
+			}
+			else if (el.value()["foreign_key_checks"] == 0) {
+				el.value().erase("foreign_key_checks");
+				j["conn"]["foreign_key_checks"] = "OFF";
 			}
 
 			// autocommit {true|false}
