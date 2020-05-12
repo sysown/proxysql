@@ -5477,6 +5477,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						return true;
 					}
 				}
+			} else if (match_regexes && match_regexes[4]->match(dig)) {
+				proxy_warning("The set statement for GLOBAL variable is detected [%s]. Pass on to MySQL.\n", nq.c_str());
+				goto __exit_set_destination_hostgroup;
 			} else {
 				unable_to_parse_set_statement(lock_hostgroup);
 				return false;
