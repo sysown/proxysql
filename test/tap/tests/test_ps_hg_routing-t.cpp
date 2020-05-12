@@ -62,11 +62,13 @@ int main(int argc, char** argv) {
 
 	for (;;) {
 		sleep(1);
+		ok(true, "Waiting for test.test1");
 		int rc = mysql_query(mysql, "select * from test.test1");
 		if (rc == 0) {
 			MYSQL_RES *r1 = mysql_store_result(mysql);
 			if (r1)
 				mysql_free_result(r1);
+				ok(true, "test.test1 is available");
 			break;
 		}
 	}
