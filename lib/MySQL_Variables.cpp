@@ -126,6 +126,12 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 				mysql_variables.client_set_hash_and_value(session, SQL_COLLATION_CONNECTION, "", 0);
 			}
 		}
+		break;
+	case SQL_MAX_JOIN_SIZE:
+		if (value != "18446744073709551615") {
+			mysql_variables.client_set_value(session, SQL_BIG_SELECTS, "0");
+		}
+		break;
 	}
 
 	session->client_myds->myconn->var_hash[idx] = SpookyHash::Hash32(value.c_str(),strlen(value.c_str()),10);
