@@ -1,7 +1,6 @@
 /**
- * @file test_mixed_compression-t.cpp
+ * @file reg_test_1493-mixed_compression-t.cpp
  * @brief This test is a regression test for issue #1493.
- * @version v2.1.12
  * @date 2020-05-14
  */
 
@@ -26,23 +25,18 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	plan(1);
+	plan(2);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	MYSQL* proxysql_mysql = mysql_init(NULL);
 
 	// Initialize connections
-	if (!proxysql_admin || !proxysql_mysql) {
-		if (!proxysql_admin) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		} else {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
-		}
+	if (!proxysql_admin) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
 	}
 
 	// Connnect to local proxysql
-	if (!mysql_real_connect(proxysql_admin, "127.0.0.1", "admin", "admin", NULL, 6032, NULL, 0)) {
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
 	}
@@ -65,16 +59,14 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, update_mysql_query_rules);
 	MYSQL_QUERY(proxysql_admin, load_mysql_queries_runtime);
 
-	// Connect to mysql
-	if (!mysql_real_connect(proxysql_mysql, "127.0.0.1", "root", "root", NULL, 6033, NULL, CLIENT_COMPRESS)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
-		return -1;
-	}
-
 	// Mixed compressed / uncompressed queries test #1493
 	const char* mysql_select_command = "mysql";
-	std::vector<const char*> n_auth_cargs = { "mysql", "-uroot", "-proot", "-h", "127.0.0.1", "-P6033", "-C", "-e", "select 1", "--default-auth=mysql_native_password" };
-	std::vector<const char*> n_auth_args = { "mysql", "-uroot", "-proot", "-h", "127.0.0.1", "-P6033", "-e", "select 1", "--default-auth=mysql_native_password" };
+	std::string tg_port = std::string("-P") + std::to_string(cl.port);
+	std::string name = std::string("-u") + cl.username;
+	std::string pass = std::string("-p") + cl.password;
+
+	std::vector<const char*> n_auth_cargs = { "mysql", name.c_str(), pass.c_str(), "-h", cl.host, tg_port.c_str(), "-C", "-e", "select 1", "--default-auth=mysql_native_password" };
+	std::vector<const char*> n_auth_args = { "mysql", name.c_str(), pass.c_str(), "-h", cl.host, tg_port.c_str(), "-e", "select 1", "--default-auth=mysql_native_password" };
 
 	// Query the mysql server in a compressed connection
 	std::string result = "";
