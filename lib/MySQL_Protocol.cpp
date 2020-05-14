@@ -1549,6 +1549,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		//(*myds)->switching_auth_stage=2;
 		charset=(*myds)->tmp_charset;
 		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,2,"Session=%p , DS=%p . Encrypted: %d , switching_auth: %d, auth_plugin_id: %d\n", (*myds)->sess, (*myds), (*myds)->encrypted, (*myds)->switching_auth_stage, auth_plugin_id);
+		capabilities = (*myds)->myconn->options.client_flag;
 		goto __do_auth;
 	}
 
@@ -1556,6 +1557,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	(*myds)->myconn->options.client_flag = capabilities;
 	pkt     += sizeof(uint32_t);
 	max_pkt  = CPY4(pkt);
+	(*myds)->myconn->options.max_allowed_pkt = max_pkt;
 	pkt     += sizeof(uint32_t);
 	charset  = *(uint8_t *)pkt;
 	if ( (*myds)->encrypted == false ) { // client wants to use SSL
@@ -2000,7 +2002,6 @@ __exit_do_auth:
 
 	if (ret==true) {
 
-		(*myds)->myconn->options.max_allowed_pkt=max_pkt;
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
 		if (!userinfo->username) // if set already, ignore
