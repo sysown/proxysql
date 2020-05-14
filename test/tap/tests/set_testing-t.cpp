@@ -227,6 +227,12 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 				j["conn"]["sql_log_bin"] = "OFF";
 			}
 
+			// max_join_size
+			if (el.value()["max_join_size"].dump().compare("\"18446744073709551615\"") != 0) {
+				el.value().erase("sql_big_selects");
+				j["conn"]["sql_big_selects"] = "OFF";
+			}
+
 			// foreign_key_checks {0|1}
 			if (el.value()["foreign_key_checks"] == 1) {
 				el.value().erase("foreign_key_checks");
