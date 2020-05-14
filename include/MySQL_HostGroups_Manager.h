@@ -405,7 +405,7 @@ class MySQL_HostGroups_Manager {
 
 	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
 	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
-	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup);
+	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup, bool pxc_maint_mode_disabled);
 	void converge_galera_config(int _writer_hostgroup);
 
 	// FIXME : add action functions for AWS Aurora

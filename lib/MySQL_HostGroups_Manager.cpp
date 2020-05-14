@@ -4554,7 +4554,7 @@ Galera_Info *MySQL_HostGroups_Manager::get_galera_node_info(int hostgroup) {
 	return info;
 }
 
-void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
+void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup, bool pxc_maint_mode_disabled) {
 	std::lock_guard<std::mutex> lock(galera_set_writer_mutex);
 	int cols=0;
 	int affected_rows=0;
@@ -4579,6 +4579,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	bool need_converge=false;
 	int max_writers = 0;
 	Galera_Info *info=NULL;
+	bool failback_from_shunned = false;
 
 	if (resultset) {
 		// let's get info about this cluster
@@ -4611,6 +4612,24 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 			}
 		}
 
+		// failback
+		if (need_converge == false) {
+			SQLite3_result *resultset2=NULL;
+			q = (char *)"SELECT hostname, port FROM mysql_servers WHERE hostgroup_id=%d AND hostname='%s' AND port=%d AND  status=1";
+			query=(char *)malloc(strlen(q)+32);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port);
+			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
+			if (resultset2) {
+				if (resultset2->rows_count && pxc_maint_mode_disabled == true) {
+					proxy_warning("Galera: [%s:%d:%d] is SHUNNED and pxc_maint_mode is disbaled\n", _hostname, _port, _writer_hostgroup);
+					failback_from_shunned = true;
+				}
+				delete resultset2;
+			}
+			free(query);
+		}
+		// failback
+
 		if (need_converge == false) {
 			SQLite3_result *resultset2=NULL;
 			q = (char *)"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
@@ -4633,7 +4652,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 			free(query);
 		}
 
-		if (need_converge==false) {
+		if (need_converge==false  && failback_from_shunned != true) {
 			if (found_writer) { // maybe no-op
 				if (
 					(writer_is_also_reader==0 && found_reader==false)
@@ -4673,6 +4692,34 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				sprintf(query,q,read_HG,_writer_hostgroup,_hostname,_port);
 				mydb->execute(query);
 			}
+
+			// If we are here, then we have one writer node coming up online (failback).
+			// In situation when failback_from_shunned == true we have to SHUNN current writer
+			if (failback_from_shunned == true) {
+				SQLite3_result *resultset3=NULL;
+				q = (char *)"SELECT hostname, port FROM mysql_servers WHERE hostgroup_id=%d AND  status=0";
+				query=(char *)malloc(2048);
+				sprintf(query,q,_writer_hostgroup);
+				mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset3);
+				if (resultset3) {
+					if (resultset3->rows_count) {
+						std::vector<SQLite3_row *>::iterator it = resultset3->rows.begin();
+						SQLite3_row *r=*it;
+						q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+						sprintf(query,q,_writer_hostgroup,r->fields[0],atoi(r->fields[1]));
+						mydb->execute(query);
+
+						q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
+						sprintf(query,q,r->fields[0],atoi(r->fields[1]),_writer_hostgroup);
+						mydb->execute(query);
+
+						proxy_warning("Galera: current writer [%s:%d:%d] status is switching to SHUNNED status\n", r->fields[0],atoi(r->fields[1]),_writer_hostgroup);
+					}
+					delete resultset3;
+				}
+				free(query);
+			}
+
 			converge_galera_config(_writer_hostgroup);
 			uint64_t checksum_current = 0;
 			uint64_t checksum_incoming = 0;

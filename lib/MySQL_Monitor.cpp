@@ -1660,6 +1660,7 @@ __exit_monitor_galera_thread:
 		bool wsrep_sst_donor_rejects_queries = true;
 		long long wsrep_local_recv_queue=0;
 		bool pxc_maint_mode=false;
+		bool pxc_maint_mode_disabled=false;
 		int num_timeouts = 0;
 		MYSQL_FIELD * fields=NULL;
 		if (mmsd->interr == 0 && mmsd->result) {
@@ -1741,15 +1742,22 @@ __end_process_galera_result:
 		std::map<std::string, Galera_monitor_node *>::iterator it2;
 		it2 = GloMyMon->Galera_Hosts_Map.find(s);
 		Galera_monitor_node *node=NULL;
+		Galera_status_entry_t *last_entry=NULL;
 		if (it2!=GloMyMon->Galera_Hosts_Map.end()) {
 			node=it2->second;
 			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
+			last_entry=node->last_entry();
 			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, pxc_maint_mode, mmsd->mysql_error_msg);
 		} else {
 			node = new Galera_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
 			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
 			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, pxc_maint_mode, mmsd->mysql_error_msg);
 			GloMyMon->Galera_Hosts_Map.insert(std::make_pair(s,node));
+		}
+		if (pxc_maint_mode==false && last_entry && last_entry->pxc_maint_mode==true) {
+			pxc_maint_mode_disabled=true;
+		} else {
+			pxc_maint_mode_disabled=false;
 		}
 		if (mmsd->mysql_error_msg) {
 			if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
@@ -1844,7 +1852,7 @@ __end_process_galera_result:
 							} else {
 								// the node is a writer
 								// TODO: for now we don't care about the number of writers
-								MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
+								MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, pxc_maint_mode_disabled);
 							}
 						}
 					}
