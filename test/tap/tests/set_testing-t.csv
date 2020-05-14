@@ -64,3 +64,6 @@
 "set wsrep_sync_wait=0", "{'wsrep_sync_wait':'0'}"
 "set group_concat_max_len=2048", "{'group_concat_max_len':'2048'}"
 "set group_concat_max_len=4096", "{'group_concat_max_len':'4096'}"
+"set long_query_time=20.102000", "{'long_query_time':'20.102000'}"
+"set long_query_time=30.201000", "{'long_query_time':'30.201000'}"
+"set long_query_time=100030.201000", "{'long_query_time':'100030.201000'}"
