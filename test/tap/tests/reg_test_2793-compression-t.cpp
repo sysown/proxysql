@@ -26,7 +26,6 @@ int main(int argc, char** argv) {
 
 	plan(1);
 
-	// Mixed compressed / uncompressed queries test #1493
 	const char* mysql_select_command = "mysql";
 	std::vector<const char*> cargs = { "mysql", "-uroot", "-proot", "-h", "127.0.0.1", "-P6033", "-C", "-e", "select 1" };
 
