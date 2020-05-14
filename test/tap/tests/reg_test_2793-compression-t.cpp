@@ -1,7 +1,6 @@
 /**
- * @file test_mixed_compression-t.cpp
+ * @file reg_test_2793-compression-t.cpp
  * @brief This test is a regression test for issue #2793.
- * @version v2.1.12
  * @date 2020-05-14
  */
 
@@ -26,25 +25,6 @@ int main(int argc, char** argv) {
 	}
 
 	plan(1);
-
-	MYSQL* proxysql_admin = mysql_init(NULL);
-	MYSQL* proxysql_mysql = mysql_init(NULL);
-
-	// Initialize connections
-	if (!proxysql_admin || !proxysql_mysql) {
-		if (!proxysql_admin) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		} else {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
-		}
-		return -1;
-	}
-
-	// Connnect to local proxysql
-	if (!mysql_real_connect(proxysql_admin, "127.0.0.1", "admin", "admin", NULL, 6032, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		return -1;
-	}
 
 	// Mixed compressed / uncompressed queries test #1493
 	const char* mysql_select_command = "mysql";
