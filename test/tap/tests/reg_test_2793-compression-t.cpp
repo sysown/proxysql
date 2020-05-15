@@ -26,12 +26,12 @@ int main(int argc, char** argv) {
 
 	plan(1);
 
-	const char* mysql_select_command = "mysql";
+	const char* mysql_client = "mysql";
 	std::vector<const char*> cargs = { "mysql", "-uroot", "-proot", "-h", "127.0.0.1", "-P6033", "-C", "-e", "select 1" };
 
 	// Query the mysql server in a compressed connection
 	std::string result = "";
-	int query_res = execvp(mysql_select_command, cargs, result);
+	int query_res = execvp(mysql_client, cargs, result);
 	ok(query_res == 0 && result != "", "Compressed query should be executed correctly.");
 
 	return exit_status();

@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, load_mysql_queries_runtime);
 
 	// Mixed compressed / uncompressed queries test #1493
-	const char* mysql_select_command = "mysql";
+	const char* mysql_client = "mysql";
 	std::string tg_port = std::string("-P") + std::to_string(cl.port);
 	std::string name = std::string("-u") + cl.username;
 	std::string pass = std::string("-p") + cl.password;
@@ -70,11 +70,11 @@ int main(int argc, char** argv) {
 
 	// Query the mysql server in a compressed connection
 	std::string result = "";
-	int query_res = execvp(mysql_select_command, n_auth_cargs, result);
+	int query_res = execvp(mysql_client, n_auth_cargs, result);
 	ok(query_res == 0 && result != "", "Native auth compressed query should be executed correctly.");
 
 	// Now query again using a uncompressed connection
-	query_res = execvp(mysql_select_command, n_auth_args, result);
+	query_res = execvp(mysql_client, n_auth_args, result);
 	ok(query_res == 0 && result != "", "Native auth uncompressed query should be executed correctly.");
 
 	// Teardown config
