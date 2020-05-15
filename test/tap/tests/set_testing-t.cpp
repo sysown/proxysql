@@ -228,9 +228,14 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 			}
 
 			// max_join_size
-			if (el.value()["max_join_size"].dump().compare("\"18446744073709551615\"") != 0) {
+			if (el.value()["max_join_size"].dump().compare("\"18446744073709551615\"") != 0 &&
+			    el.value()["max_join_size"].dump().compare("\"\"") != 0) {
 				el.value().erase("sql_big_selects");
 				j["conn"]["sql_big_selects"] = "OFF";
+			}
+			else if (el.value()["max_join_size"].dump().compare("\"18446744073709551615\"") == 0) {
+				el.value().erase("sql_big_selects");
+				j["conn"]["sql_big_selects"] = "ON";
 			}
 
 			// foreign_key_checks {0|1}
