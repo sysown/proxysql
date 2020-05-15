@@ -172,25 +172,25 @@ int execvp(const std::string& cmd, const std::vector<const char*>& argv, std::st
 		close(CHILD_WRITE_FD);
 		close(CHILD_WRITE_ERR);
 
-		waitpid(child_pid, &err, 0);
-
 		if (err == 0) {
 			// Read from child’s stdout
-			count = read(PARENT_READ_FD, buffer, sizeof(buffer) - 1);
+			count = read(PARENT_READ_FD, buffer, sizeof(buffer));
 			while (count > 0) {
 				buffer[count] = 0;
 				result_ += buffer;
-				count = 0;
+				count = read(PARENT_READ_FD, buffer, sizeof(buffer));
 			}
 		} else {
 			// Read from child’s stderr
-			count = read(PARENT_READ_ERR, buffer, sizeof(buffer) - 1);
+			count = read(PARENT_READ_ERR, buffer, sizeof(buffer));
 			while (count > 0) {
 				buffer[count] = 0;
 				result_ += buffer;
-				count = 0;
+				count = read(PARENT_READ_ERR, buffer, sizeof(buffer));
 			}
 		}
+
+		waitpid(child_pid, &err, 0);
 	}
 
 	result = result_;
