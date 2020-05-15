@@ -163,7 +163,7 @@ void queryVariables(MYSQL *mysql, json& j) {
 			" 'sql_safe_updates', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'tx_isolation', 'tx_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'group_concat_max_len',"
-			" 'foreign_key_checks', 'sql_big_selects', 'innodb_lock_wait_timeout');";
+			" 'foreign_key_checks', 'sql_big_selects', 'innodb_lock_wait_timeout', 'long_query_time');";
 	}
 	if (is_cluster) {
 		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
@@ -171,7 +171,7 @@ void queryVariables(MYSQL *mysql, json& j) {
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'wsrep_sync_wait', 'group_concat_max_len',"
-			" 'foreign_key_checks', 'sql_big_selects', 'innodb_lock_wait_timeout');";
+			" 'foreign_key_checks', 'sql_big_selects', 'innodb_lock_wait_timeout', 'long_query_time');";
 	}
 	if (!is_mariadb && !is_cluster) {
 		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
@@ -179,7 +179,7 @@ void queryVariables(MYSQL *mysql, json& j) {
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'group_concat_max_len',"
-			" 'foreign_key_checks', 'sql_big_selects', 'innodb_lock_wait_timeout');";
+			" 'foreign_key_checks', 'sql_big_selects', 'innodb_lock_wait_timeout', 'long_query_time');";
 	}
 	//fprintf(stderr, "TRACE : QUERY 3 : variables %s\n", query.str().c_str());
 	if (mysql_query(mysql, query.str().c_str())) {
