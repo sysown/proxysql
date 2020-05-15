@@ -515,11 +515,15 @@ bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, strin
 }
 
 bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string& value1, bool& exit_after_SetParse, bool * lock_hostgroup) {
-	int vl = strlen(value1.c_str());
+	int vl = value1.size();
+	if (vl == 0) {
+		sess->unable_to_parse_set_statement(lock_hostgroup);
+		return false;
+	}
 	const char *v = value1.c_str();
 	bool only_digit_chars = true;
 	for (int i=0; i<vl && only_digit_chars==true; i++) {
-		if (is_digit(v[i])==0) {
+		if (is_digit(v[i])==0 && v[i] != '.') {
 			only_digit_chars=false;
 		}
 	}
