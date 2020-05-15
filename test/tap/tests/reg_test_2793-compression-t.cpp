@@ -26,8 +26,11 @@ int main(int argc, char** argv) {
 
 	plan(1);
 
-	const char* mysql_client = "mysql";
-	std::vector<const char*> cargs = { "mysql", "-uroot", "-proot", "-h", "127.0.0.1", "-P6033", "-C", "-e", "select 1" };
+	const std::string mysql_client = "mysql";
+	const std::string name = std::string("-u") + cl.username;
+	const std::string pass = std::string("-p") + cl.password;
+	const std::string tg_port = std::string("-P") + std::to_string(cl.port);
+	const std::vector<const char*> cargs = { "mysql", name.c_str(), pass.c_str(), "-h", cl.host, tg_port.c_str(), "-C", "-e", "select 1" };
 
 	// Query the mysql server in a compressed connection
 	std::string result = "";
