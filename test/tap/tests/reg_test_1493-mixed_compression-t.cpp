@@ -60,13 +60,12 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, load_mysql_queries_runtime);
 
 	// Mixed compressed / uncompressed queries test #1493
-	const char* mysql_client = "mysql";
-	std::string tg_port = std::string("-P") + std::to_string(cl.port);
-	std::string name = std::string("-u") + cl.username;
-	std::string pass = std::string("-p") + cl.password;
-
-	std::vector<const char*> n_auth_cargs = { "mysql", name.c_str(), pass.c_str(), "-h", cl.host, tg_port.c_str(), "-C", "-e", "select 1", "--default-auth=mysql_native_password" };
-	std::vector<const char*> n_auth_args = { "mysql", name.c_str(), pass.c_str(), "-h", cl.host, tg_port.c_str(), "-e", "select 1", "--default-auth=mysql_native_password" };
+	const std::string mysql_client = "mysql";
+	const std::string tg_port = std::string("-P") + std::to_string(cl.port);
+	const std::string name = std::string("-u") + cl.username;
+	const std::string pass = std::string("-p") + cl.password;
+	const std::vector<const char*> n_auth_cargs = { "mysql", name.c_str(), pass.c_str(), "-h", cl.host, tg_port.c_str(), "-C", "-e", "select 1", "--default-auth=mysql_native_password" };
+	const std::vector<const char*> n_auth_args = { "mysql", name.c_str(), pass.c_str(), "-h", cl.host, tg_port.c_str(), "-e", "select 1", "--default-auth=mysql_native_password" };
 
 	// Query the mysql server in a compressed connection
 	std::string result = "";
