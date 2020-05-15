@@ -7,6 +7,7 @@
 
 #include <sstream>
 
+const char* MAX_JOIN_SIZE = "18446744073709551615";
 
 static inline char is_digit(char c) {
 	if(c >= '0' && c <= '9')
@@ -128,8 +129,11 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 		}
 		break;
 	case SQL_MAX_JOIN_SIZE:
-		if (value != "18446744073709551615") {
-			mysql_variables.client_set_value(session, SQL_BIG_SELECTS, "0");
+		if (value != MAX_JOIN_SIZE  && !value.empty()) {
+			mysql_variables.client_set_value(session, SQL_BIG_SELECTS, "OFF");
+		}
+		else if (value == MAX_JOIN_SIZE) {
+			mysql_variables.client_set_value(session, SQL_BIG_SELECTS, "ON");
 		}
 		break;
 	}
@@ -428,6 +432,19 @@ inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t cli
 					return false;
 			}
 		}
+
+		// Special case for max_join_size variable.
+		// setting max_join_size changes sql_big_selects on the mysql server side,
+		// so we do the same for variable at the server connection, to be in sync
+		if (idx == SQL_MAX_JOIN_SIZE) {
+			const char* value = mysql_variables.client_get_value(session, idx);
+			if (strcmp(value, MAX_JOIN_SIZE) != 0 && strlen(value) != 0) {
+				mysql_variables.server_set_value(session, SQL_BIG_SELECTS, "OFF");
+			}
+			else if (strcmp(value, MAX_JOIN_SIZE) == 0) {
+				mysql_variables.server_set_value(session, SQL_BIG_SELECTS, "ON");
+			}
+		}
 		// this variable is relevant only if status == SETTING_VARIABLE
 		session->changing_variable_idx = (enum variable_name)idx;
 		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
@@ -496,8 +513,6 @@ bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, strin
 	}
 	return true;
 }
-
-
 
 bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string& value1, bool& exit_after_SetParse, bool * lock_hostgroup) {
 	int vl = strlen(value1.c_str());
