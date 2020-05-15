@@ -27,7 +27,7 @@
 #            file is only used to initial the on-disk database read on the first startup.
 #
 # In order to FORCE a re-initialise of the on-disk database from the configuration file 
-# the ProxySQL service should be started with "service proxysql initial".
+# the ProxySQL service should be started with "systemctl start proxysql-initial".
 #
 ########################################################################################
 
