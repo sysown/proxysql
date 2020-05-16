@@ -5061,8 +5061,13 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							if (idx == SQL_LONG_QUERY_TIME) {
 								std::string val = std::string((const char*)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 								std::size_t pos = val.find("=");
-								std::string str = val.substr(pos+1);
-								if (mysql_variables.parse_variable_number(this,idx, str, exit_after_SetParse, lock_hostgroup)==false) {
+								std::string number = val.substr(pos+1);
+
+								pos = number.find(".");
+								if (pos != std::string::npos) {
+									number = number.substr(0, pos+7);
+								}
+								if (mysql_variables.parse_variable_number(this,idx, number, exit_after_SetParse, lock_hostgroup)==false) {
 									return false;
 								}
 							} else {
