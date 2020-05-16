@@ -60,15 +60,21 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysqladmin, "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, apply) values (200, 1, 0, '^SELECT', 0, 'CASELESS', 1, 1)");
 	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
 
+	const int MAX_NUM_REPS = 60;
+	int count = 0;
 	for (;;) {
-		sleep(1);
-		ok(true, "Waiting for test.test1");
+		diag("Waiting for test.test1 [%d] seconds", count);
 		int rc = mysql_query(mysql, "select * from test.test1");
 		if (rc == 0) {
 			MYSQL_RES *r1 = mysql_store_result(mysql);
 			if (r1)
 				mysql_free_result(r1);
-				ok(true, "test.test1 is available");
+			break;
+		}
+		sleep(1);
+		count++;
+		if (count >= MAX_NUM_REPS) {
+			ok(false, "Cannot execute query 'select * from test.test1'. Test failed.");
 			break;
 		}
 	}
