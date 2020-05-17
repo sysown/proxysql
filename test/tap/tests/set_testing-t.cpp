@@ -12,6 +12,7 @@
 #include <iostream>
 #include <fstream>
 #include <mutex>
+#include <queue>
 #include "json.hpp"
 
 #include "tap.h"
@@ -38,6 +39,9 @@ struct TestCase {
 };
 
 std::vector<TestCase> testCases;
+std::queue<std::string> last_messages;
+const uint32_t MAX_QUEUE_SIZE=20;
+uint32_t ok_counter=0;
 
 #define MAX_LINE 1024
 
@@ -491,15 +495,31 @@ void * my_conn_thread(void *arg) {
 			if (k.value() != el.value() || s.value() != el.value()) {
 				__sync_fetch_and_add(&g_failed, 1);
 				testPassed = false;
+				if (last_messages.size() == 20) { // keep report size according to the planned size
+					last_messages.pop();
+				}
+				auto queue_size = last_messages.size();
+				for (auto i=0; i<queue_size; i++) {
+					ok(true, last_messages.front().c_str());
+					last_messages.pop();
+				}
+				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+
 				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
-				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
-				exit(0);
+
+				exit(exit_status());
 			}
 		}
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
-			ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+			if (last_messages.size() >= MAX_QUEUE_SIZE) {
+				last_messages.pop();
+			}
+			char buf[1024];
+			ok_counter++;
+			snprintf(buf, sizeof(buf), "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+			last_messages.push(buf);
 		}
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);
@@ -576,7 +596,7 @@ int main(int argc, char *argv[]) {
 	host = cl.host;
 	port = cl.port;
 
-	plan(queries * num_threads);
+	plan(MAX_QUEUE_SIZE);
 	if (!readTestCases(fileName)) {
 		fprintf(stderr, "Cannot read %s\n", fileName.c_str());
 		return exit_status();
@@ -603,5 +623,11 @@ int main(int argc, char *argv[]) {
 	for (unsigned int i=0; i<num_threads; i++) {
 		pthread_join(thi[i], NULL);
 	}
+    auto queue_size = last_messages.size();
+	for (auto i=0; i<queue_size; i++) {
+		ok(true, last_messages.front().c_str());
+		last_messages.pop();
+	}
+
 	return exit_status();
 }
