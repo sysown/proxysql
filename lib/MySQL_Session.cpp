@@ -5039,7 +5039,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						exit_after_SetParse = true;
 					// the following two blocks of code will be simplified later
-					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
+					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates") || (var == "foreign_key_checks")
+							|| (var == "sql_big_selects")) {
 						int idx = SQL_NAME_LAST;
 						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
 							if (mysql_tracked_variables[i].is_bool) {
@@ -5054,7 +5055,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							}
 						}
-					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") || (var == "wsrep_sync_wait") || (var == "group_concat_max_len") ) {
+					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") 
+						|| (var == "wsrep_sync_wait") || (var == "group_concat_max_len") || (var == "innodb_lock_wait_timeout") 
+						|| (var == "long_query_time")) {
 						int idx = SQL_NAME_LAST;
 						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
 							if (mysql_tracked_variables[i].is_number) {
@@ -5065,8 +5068,22 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (idx != SQL_NAME_LAST) {
-							if (mysql_variables.parse_variable_number(this,idx, *values, exit_after_SetParse, lock_hostgroup)==false) {
-								return false;
+							if (idx == SQL_LONG_QUERY_TIME) {
+								std::string val = std::string((const char*)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+								std::size_t pos = val.find("=");
+								std::string number = val.substr(pos+1);
+
+								pos = number.find(".");
+								if (pos != std::string::npos) {
+									number = number.substr(0, pos+7);
+								}
+								if (mysql_variables.parse_variable_number(this,idx, number, exit_after_SetParse, lock_hostgroup)==false) {
+									return false;
+								}
+							} else {
+								if (mysql_variables.parse_variable_number(this,idx, *values, exit_after_SetParse, lock_hostgroup)==false) {
+									return false;
+								}
 							}
 						}
 					} else if (var == "autocommit") {
