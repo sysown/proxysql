@@ -23,7 +23,7 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(6);
+	plan(7);
 	diag("Testing query rules fast routing");
 
 	MYSQL* mysql = mysql_init(NULL);
