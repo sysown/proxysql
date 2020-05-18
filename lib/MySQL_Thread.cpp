@@ -3879,7 +3879,7 @@ bool MySQL_Thread::init() {
 
 	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 	match_regexes[3]=new Session_Regex((char *)"^(set)(?: +)((charset)|(character +set))(?: )");
-	match_regexes[4]=new Session_Regex((char *)"^SET(?: )(|GLOBAL( +)|@@GLOBAL.)(([a-zA-Z_]+)+)( *)(:|)=( *)");
+	match_regexes[4]=new Session_Regex((char *)"^SET(?: +)((GLOBAL( +))|(@@GLOBAL.))([[:alnum:]_]+)( *)(:|)=( *)");
 
 	return true;
 }
