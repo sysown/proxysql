@@ -190,3 +190,35 @@ void init_debug_struct_from_cmdline() {
 	}
 }
 #endif /* DEBUG */
+
+void proxy_info_(const char* msg, ...) {
+	va_list args;
+	va_start(args, msg);
+
+	time_t __timer;
+	char __buffer[25];
+
+	// create the time info
+	struct tm *__tm_info;
+	time(&__timer);
+	__tm_info = localtime(&__timer);
+	strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
+
+	// format the message
+#ifdef DEBUG
+	const char* debug_msg_fmt = " %s:%d:%s(): [INFO] ";
+#else
+	const char* debug_msg_fmt = " [INFO]";
+#endif /* DEBUG */
+
+	std::size_t msg_len = strlen(msg);
+	char* str_buf = (char*)malloc(25 + strlen(debug_msg_fmt) + msg_len + 1);
+	strcpy(str_buf, __buffer);
+	strcat(str_buf, debug_msg_fmt);
+	strcat(str_buf, msg);
+
+	vfprintf(stderr, str_buf, args);
+
+	free(str_buf);
+	va_end(args);
+}
