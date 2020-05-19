@@ -305,6 +305,12 @@ void todo_start(char const *message, ...)
 
 void todo_end();
 
+/**
+ * @brief Return the number of tests that have failed yet.
+ */
+
+int tests_failed();
+
 /** @} */
 
 #ifdef __cplusplus
