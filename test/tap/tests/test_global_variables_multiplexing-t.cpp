@@ -17,19 +17,22 @@
 
 using nlohmann::json;
 
+#define REGEXP "^SET(?: +)((GLOBAL( +))|(@@GLOBAL.))([[:alnum:]_]+)( *)(:|)=( *)"
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(7);
+	plan(13);
 	diag("Testing query rules fast routing");
 
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql) return exit_status();
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) return exit_status();
 
+	// Case 1: Check that setting lobal variables does not lock a hostgroup
 	MYSQL_QUERY(mysql, "set global innodb_stats_on_metadata=1");
 	int rc = mysql_query(mysql, "PROXYSQL INTERNAL SESSION");
 	ok(rc==0, "We should be able to query internal proxysql session [set global innodb_stats_on_metadata=1]");
@@ -49,6 +52,7 @@ int main(int argc, char** argv) {
 		ok(locked_on_hostgroup == -1,"Hostgroup should not be locked. Current hostgroup [%d]", locked_on_hostgroup);
 	}
 
+	// Case 2: Check that setting global variable does not lock a hostgroup
 	MYSQL_QUERY(mysql, "set @@global.innodb_stats_on_metadata=1");
 	rc = mysql_query(mysql, "PROXYSQL INTERNAL SESSION");
 	ok(rc==0, "We should be able to query internal proxysql session [set @@global.innodb_stats_on_metadata=1]");
@@ -68,10 +72,11 @@ int main(int argc, char** argv) {
 		ok(locked_on_hostgroup == -1,"Hostgroup should not be locked. Current hostgroup [%d]", locked_on_hostgroup);
 	}
 
+	// Case 3: Check that all gloabl variables (names) are parsed with regex
 	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 	opt2->set_case_sensitive(false);
 	auto opt=(void *)opt2;
-	auto re=(RE2 *)new RE2("^SET(?: +)((GLOBAL( +))|(@@GLOBAL.))([[:alnum:]_]+)( *)(:|)=( *)", *opt2);
+	auto re=(RE2 *)new RE2(REGEXP, *opt2);
 
 	MYSQL_QUERY(mysql, "select variable_name from performance_schema.global_variables");
 	{
@@ -94,6 +99,46 @@ int main(int argc, char** argv) {
 	}
 	delete re;
 	delete opt2;
+
+	// Case 5: Check that HANDLED session variable does NOT lock a hostgroup
+	MYSQL_QUERY(mysql, "set sql_safe_updates=1");
+	rc = mysql_query(mysql, "PROXYSQL INTERNAL SESSION");
+	ok(rc==0, "We should be able to query internal proxysql session [set @@global.innodb_stats_on_metadata=1]");
+
+	if (rc == 0) {
+		json internal_session;
+		MYSQL_RES* result = mysql_store_result(mysql);
+		ok(result != NULL, "We should be able to get resultset");
+
+		MYSQL_ROW row;
+		while ((row = mysql_fetch_row(result)))
+		{
+			internal_session = json::parse(row[0]);
+		}
+		mysql_free_result(result);
+		int locked_on_hostgroup = internal_session["locked_on_hostgroup"];
+		ok(locked_on_hostgroup == -1,"Hostgroup should NOT be locked. Current hostgroup [%d]", locked_on_hostgroup);
+	}
+
+	// Case 4: Check that UNHANDLED session variable locks a hostgroup
+	MYSQL_QUERY(mysql, "set @a=1");
+	rc = mysql_query(mysql, "PROXYSQL INTERNAL SESSION");
+	ok(rc==0, "We should be able to query internal proxysql session [set @@global.innodb_stats_on_metadata=1]");
+
+	if (rc == 0) {
+		json internal_session;
+		MYSQL_RES* result = mysql_store_result(mysql);
+		ok(result != NULL, "We should be able to get resultset");
+
+		MYSQL_ROW row;
+		while ((row = mysql_fetch_row(result)))
+		{
+			internal_session = json::parse(row[0]);
+		}
+		mysql_free_result(result);
+		int locked_on_hostgroup = internal_session["locked_on_hostgroup"];
+		ok(locked_on_hostgroup != -1,"Hostgroup should be locked. Current hostgroup [%d]", locked_on_hostgroup);
+	}
 
 	mysql_close(mysql);
 	return exit_status();
