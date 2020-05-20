@@ -3,6 +3,7 @@
 
 #include <mysql.h>
 #include <string>
+#include <vector>
 
 #define MYSQL_QUERY(mysql, query) \
 	do { \
@@ -27,5 +28,15 @@ int select_config_file(MYSQL* mysql, std::string& resultset);
 }
 #endif
 
+/**
+ * @brief Execute the given comand, and stores it's output.
+ *
+ * @param file File to be executed.
+ * @param argv Arguments to be given to the executable.
+ * @param result The output of the file execution. If the execution succeed it contains `stdout` output,
+ *  in case of failure `stderr` contents are returned.
+ * @return int Zero in case of success, or the errno returned by `execvp` in case of failure.
+ */
+int execvp(const std::string& file, const std::vector<const char*>& argv, std::string& result);
 
 #endif // #define UTILS_H
