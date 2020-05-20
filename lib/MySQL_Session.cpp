@@ -1574,7 +1574,24 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 		*be_var = strdup(def);
 		uint32_t tmp_int = SpookyHash::Hash32(*be_var, strlen(*be_var), 10);
 		*be_int = tmp_int;
+
+		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				previous_status.push(PROCESSING_QUERY);
+				break;
+			case PROCESSING_STMT_PREPARE:
+				previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+			case PROCESSING_STMT_EXECUTE:
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		NEXT_IMMEDIATE_NEW(next_sess_status);
 	}
+
 	if (*fe_int) {
 		if (*fe_int != *be_int) {
 			{
