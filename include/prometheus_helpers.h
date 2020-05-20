@@ -11,6 +11,8 @@
 using prometheus::Counter;
 using prometheus::Gauge;
 
+#define ILLFORMED_PMAP_MSG "Array element remains empty after initialization, map must be ill-formed."
+
 /**
  * @brief Initalizes an array of 'prometheus::Counter*' with the data supplied in a map.
  *
@@ -59,6 +61,13 @@ void init_prometheus_counter_array(
 
 		counter_array[tg_metric] =
 			std::addressof(metric_family->Add(metric_tags));
+	}
+
+	for (const auto& array_elem : counter_array) {
+		if (array_elem == nullptr) {
+			proxy_error("init_prometheus_counter_array: " ILLFORMED_PMAP_MSG);
+			assert(0);
+		}
 	}
 }
 
@@ -111,6 +120,13 @@ void init_prometheus_gauge_array(
 		gauge_array[tg_metric] =
 			std::addressof(metric_family->Add(metric_tags));
 	}
+
+	for (const auto& array_elem : gauge_array) {
+		if (array_elem == nullptr) {
+			proxy_error("init_prometheus_gauge_array: " ILLFORMED_PMAP_MSG);
+			assert(0);
+		}
+	}
 }
 
 /**
@@ -160,6 +176,13 @@ void init_prometheus_dyn_counter_array(
 
 		dyn_counter_array[tg_metric] = metric_family;
 	}
+
+	for (const auto& array_elem : dyn_counter_array) {
+		if (array_elem == nullptr) {
+			proxy_error("init_prometheus_dyn_counter_array: " ILLFORMED_PMAP_MSG);
+			assert(0);
+		}
+	}
 }
 
 /**
@@ -208,6 +231,13 @@ void init_prometheus_dyn_gauge_array(
 		}
 
 		dyn_gauge_array[tg_metric] = metric_family;
+	}
+
+	for (const auto& array_elem : dyn_gauge_array) {
+		if (array_elem == nullptr) {
+			proxy_error("init_prometheus_dyn_gauge_array: " ILLFORMED_PMAP_MSG);
+			assert(0);
+		}
 	}
 }
 
