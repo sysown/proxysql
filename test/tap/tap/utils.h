@@ -54,4 +54,9 @@ struct to_opts {
  */
 int wexecvp(const std::string& file, const std::vector<const char*>& argv, const to_opts* opts, std::string& s_stdout, std::string& s_stderr);
 
+/*
+ * @return int Zero in case of success, or the errno returned by `execvp` in case of failure.
+ */
+int execvp(const std::string& file, const std::vector<const char*>& argv, std::string& result);
+
 #endif // #define UTILS_H

@@ -880,6 +880,7 @@ int MySQL_Data_Stream::buffer2array() {
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new compressed packet\n", sess);
  			memcpy(&queueIN.hdr,queue_r_ptr(queueIN), sizeof(mysql_hdr));
 			queue_r(queueIN,sizeof(mysql_hdr));
+			pkt_sid=queueIN.hdr.pkt_id;
 			queueIN.pkt.size=queueIN.hdr.pkt_length+sizeof(mysql_hdr)+3;
 			queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
 			memcpy(queueIN.pkt.ptr, &queueIN.hdr, sizeof(mysql_hdr)); // immediately copy the header into the packet
