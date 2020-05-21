@@ -277,7 +277,7 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 		bool stdout_eof = false;
 		bool stderr_eof = false;
 
-		while (!stdout_eof && !stderr_eof) {
+		while (!stdout_eof || !stderr_eof) {
 			FD_ZERO(&read_fds);
 			FD_SET(PARENT_READ_FD, &read_fds);
 			FD_SET(PARENT_READ_ERR, &read_fds);
@@ -286,12 +286,11 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 			timeval select_to = { 0, to_opts.select_to_us };
 			select(maxfd + 1, &read_fds, NULL, NULL, &select_to);
 
-			if (FD_ISSET(PARENT_READ_FD, &read_fds)) {
+			if (FD_ISSET(PARENT_READ_FD, &read_fds) && stdout_eof == false) {
 				int read_res = read_pipe(PARENT_READ_FD, stdout_);
 
 				if (read_res == 0) {
 					stdout_eof = true;
-					close(PARENT_READ_FD);
 				}
 				// Unexpected error while reading pipe
 				if (read_res < 0) {
@@ -307,12 +306,11 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 				}
 			}
 
-			if(FD_ISSET(PARENT_READ_ERR, &read_fds)) {
+			if(FD_ISSET(PARENT_READ_ERR, &read_fds) && stderr_eof == false) {
 				int read_res = read_pipe(PARENT_READ_ERR, stderr_);
 
 				if (read_res == 0) {
 					stderr_eof = true;
-					close(PARENT_READ_ERR);
 				}
 				// Unexpected error while reading pipe
 				if (read_res < 0) {
