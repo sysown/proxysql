@@ -109,24 +109,6 @@ int get_server_version(MYSQL *mysql, std::string& version) {
 	return 0;
 }
 
-// Pipes definition
-constexpr uint8_t NUM_PIPES = 3;
-constexpr uint8_t PARENT_WRITE_PIPE = 0;
-constexpr uint8_t PARENT_READ_PIPE  = 1;
-constexpr uint8_t PARENT_ERR_PIPE   = 2;
-int pipes[NUM_PIPES][2];
-// Pipe selection
-constexpr uint8_t READ_FD  = 0;
-constexpr uint8_t WRITE_FD = 1;
-// Parent pipes
-const auto& PARENT_READ_FD  = pipes[PARENT_READ_PIPE][READ_FD];
-const auto& PARENT_READ_ERR = pipes[PARENT_ERR_PIPE][READ_FD];
-const auto& PARENT_WRITE_FD = pipes[PARENT_WRITE_PIPE][WRITE_FD];
-// Child pipes
-const auto& CHILD_READ_FD   = pipes[PARENT_WRITE_PIPE][READ_FD];
-const auto& CHILD_WRITE_FD  = pipes[PARENT_READ_PIPE][WRITE_FD];
-const auto& CHILD_WRITE_ERR = pipes[PARENT_ERR_PIPE][WRITE_FD];
-
 int kill_child_proc(pid_t child_pid, const uint timeout_us, const uint it_sleep_us) {
 	uint err = 0;
 	uint waited = 0;
@@ -134,7 +116,7 @@ int kill_child_proc(pid_t child_pid, const uint timeout_us, const uint it_sleep_
 
 	err = kill(child_pid, SIGTERM);
 
-	while (waitpid(child_pid, &child_status, WNOHANG) > 0) {
+	while (waitpid(child_pid, &child_status, WNOHANG) == 0) {
 		if (waited >= timeout_us) {
 			kill(child_pid, SIGKILL);
 			waited = 0;
@@ -174,22 +156,26 @@ int read_pipe(int pipe_fd, std::string& sbuffer) {
 }
 
 int wexecvp(const std::string& file, const std::vector<const char*>& argv, const to_opts* opts, std::string& s_stdout, std::string& s_stderr) {
+	// Pipes definition
+	constexpr uint8_t NUM_PIPES = 3;
+	constexpr uint8_t PARENT_WRITE_PIPE = 0;
+	constexpr uint8_t PARENT_READ_PIPE  = 1;
+	constexpr uint8_t PARENT_ERR_PIPE   = 2;
+	int pipes[NUM_PIPES][2];
+	// Pipe selection
+	constexpr uint8_t READ_FD  = 0;
+	constexpr uint8_t WRITE_FD = 1;
+	// Parent pipes
+	const auto& PARENT_READ_FD  = pipes[PARENT_READ_PIPE][READ_FD];
+	const auto& PARENT_READ_ERR = pipes[PARENT_ERR_PIPE][READ_FD];
+	const auto& PARENT_WRITE_FD = pipes[PARENT_WRITE_PIPE][WRITE_FD];
+	// Child pipes
+	const auto& CHILD_READ_FD   = pipes[PARENT_WRITE_PIPE][READ_FD];
+	const auto& CHILD_WRITE_FD  = pipes[PARENT_READ_PIPE][WRITE_FD];
+	const auto& CHILD_WRITE_ERR = pipes[PARENT_ERR_PIPE][WRITE_FD];
+
 	int err = 0;
-	int pipe_err = 0;
-	std::string stdout_ = "";
-	std::string stderr_ = "";
-	std::vector<const char*> _argv = argv;
-	to_opts to_opts { 1000*1000, 1000*100 };
-
-	// Append null to end of _argv for extra safety
-	_argv.push_back(nullptr);
-	// Duplicate file argument to avoid manual duplication
-	_argv.insert(_argv.begin(), file.c_str());
-
-	if (opts) {
-		to_opts.timeout_us = opts->timeout_us;
-		to_opts.it_delay_us = opts->it_delay_us;
-	}
+	to_opts to_opts { 1000*1000, 100*1000, 500*1000 };
 
 	int outfd[2];
 	int infd[2];
@@ -201,6 +187,18 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 
 	pid_t child_pid = fork();
 	if(child_pid == 0) {
+		std::vector<const char*> _argv = argv;
+
+		// Append null to end of _argv for extra safety
+		_argv.push_back(nullptr);
+		// Duplicate file argument to avoid manual duplication
+		_argv.insert(_argv.begin(), file.c_str());
+
+		if (opts) {
+			to_opts.timeout_us = opts->timeout_us;
+			to_opts.it_delay_us = opts->it_delay_us;
+		}
+
 		// Copy the pipe descriptors
 		dup2(CHILD_READ_FD, STDIN_FILENO);
 		dup2(CHILD_WRITE_FD, STDOUT_FILENO);
@@ -225,10 +223,10 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 		}
 	} else {
 		int errno_cpy = 0;
-		char stdout_buffer[128];
-		char stderr_buffer[128];
-		ssize_t stdout_count = 0;
-		ssize_t stderr_count = 0;
+		int pipe_err = 0;
+
+		std::string stdout_ = "";
+		std::string stderr_ = "";
 
 		// Close no longer needed pipes
 		close(CHILD_READ_FD);
@@ -252,13 +250,15 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 			FD_SET(PARENT_READ_ERR, &read_fds);
 
 			// Wait for the pipes to be ready
-			select(maxfd + 1, &read_fds, NULL, NULL, NULL);
+			timeval select_to = { 0, to_opts.select_to_us };
+			select(maxfd + 1, &read_fds, NULL, NULL, &select_to);
 
 			if (FD_ISSET(PARENT_READ_FD, &read_fds)) {
 				int read_res = read_pipe(PARENT_READ_FD, stdout_);
 
 				if (read_res == 0) {
 					stdout_eof = true;
+					close(PARENT_READ_FD);
 				}
 				// Unexpected error while reading pipe
 				if (read_res < 0) {
@@ -269,6 +269,8 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 					kill_child_proc(child_pid, to_opts.timeout_us, to_opts.it_delay_us);
 					// Recover errno before return
 					errno = errno_cpy;
+					// Exit the loop
+					break;
 				}
 			}
 
@@ -277,6 +279,7 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 
 				if (read_res == 0) {
 					stderr_eof = true;
+					close(PARENT_READ_ERR);
 				}
 				// Unexpected error while reading pipe
 				if (read_res < 0) {
@@ -287,6 +290,8 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 					kill_child_proc(child_pid, to_opts.timeout_us, to_opts.it_delay_us);
 					// Recover errno before return
 					errno = errno_cpy;
+					// Exit the loop
+					break;
 				}
 			}
 		}
@@ -294,13 +299,13 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 		if (pipe_err == 0) {
 			waitpid(child_pid, &err, 0);
 		}
-	}
 
-	if (pipe_err == 0) {
-		s_stdout = stdout_;
-		s_stderr = stderr_;
-	} else {
-		err = pipe_err;
+		if (pipe_err == 0) {
+			s_stdout = stdout_;
+			s_stderr = stderr_;
+		} else {
+			err = pipe_err;
+		}
 	}
 
 	return err;

@@ -34,6 +34,7 @@ int select_config_file(MYSQL* mysql, std::string& resultset);
 struct to_opts {
 	uint timeout_us;
 	uint it_delay_us;
+	uint select_to_us;
 };
 
 /**
