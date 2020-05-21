@@ -35,7 +35,7 @@ const char* t_fmt_config_file = "./test/tap/tests/test_cluster_sync_config/test_
 const char* fmt_config_file = "./test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf";
 const char* cluster_sync_node_stderr = "./test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt";
 const uint32_t SYNC_TIMEOUT = 20;
-const uint32_t CONNECT_TIMEOUT = 30;
+const uint32_t CONNECT_TIMEOUT = 5;
 
 int setup_config_file(const CommandLine& cl) {
 	// Prepare the configuration file
@@ -152,27 +152,27 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 	// Launch proxysql with cluster config
-	std::thread proxy_replica_th([&save_proxy_stderr] () {
-		std::string proxy_stdout = "";
-		std::string proxy_stderr = "";
-		int exec_res = wexecvp("./src/proxysql", { "-f", "-M", "-c", fmt_config_file }, NULL, proxy_stdout, proxy_stderr);
-
-		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely.");
-
-		// In case of error, log 'proxysql' stderr to a file
-		if (exec_res || save_proxy_stderr.load()) {
-			if (exec_res) {
-				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_node_stderr.txt'");
-			} else {
-				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_node_stderr.txt'");
-			}
-
-			std::ofstream error_log_file {};
-			error_log_file.open(cluster_sync_node_stderr);
-			error_log_file << proxy_stderr;
-			error_log_file.close();
-		}
-	});
+//	std::thread proxy_replica_th([&save_proxy_stderr] () {
+//		std::string proxy_stdout = "";
+//		std::string proxy_stderr = "";
+//		int exec_res = wexecvp("./src/proxysql", { "-f", "-M", "-c", fmt_config_file }, NULL, proxy_stdout, proxy_stderr);
+//
+//		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely.");
+//
+//		// In case of error, log 'proxysql' stderr to a file
+//		if (exec_res || save_proxy_stderr.load()) {
+//			if (exec_res) {
+//				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_node_stderr.txt'");
+//			} else {
+//				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_node_stderr.txt'");
+//			}
+//
+//			std::ofstream error_log_file {};
+//			error_log_file.open(cluster_sync_node_stderr);
+//			error_log_file << proxy_stderr;
+//			error_log_file.close();
+//		}
+//	});
 
 	// Waiting for proxysql to be ready
 	uint con_waited = 0;
@@ -519,11 +519,11 @@ cleanup:
 		save_proxy_stderr.store(true);
 	}
 	int mysql_timeout = 2;
-	mysql_options(proxysql_replica, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
-	mysql_options(proxysql_replica, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
-	mysql_options(proxysql_replica, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
-	mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
-	proxy_replica_th.join();
+	// mysql_options(proxysql_replica, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
+	// mysql_options(proxysql_replica, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
+	// mysql_options(proxysql_replica, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
+	// mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
+	// proxy_replica_th.join();
 
 	remove(fmt_config_file);
 
