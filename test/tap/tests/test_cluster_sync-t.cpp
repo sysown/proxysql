@@ -11,15 +11,16 @@
 #include <iostream>
 #include <fstream>
 
+#include <libconfig.h>
+
+#include <proxysql_utils.h>
+
 #include <mysql.h>
 #include <mysql/mysqld_error.h>
-#include <proxysql_utils.h>
 
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
-
-#include <libconfig.h>
 
 #define MYSQL_QUERY__(mysql, query) \
 	do { \
@@ -34,7 +35,7 @@
 const char* t_fmt_config_file = "./test/tap/tests/test_cluster_sync_config/test_cluster_sync-t.cnf";
 const char* fmt_config_file = "./test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf";
 const char* cluster_sync_node_stderr = "./test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt";
-const uint32_t SYNC_TIMEOUT = 5;
+const uint32_t SYNC_TIMEOUT = 20;
 const uint32_t CONNECT_TIMEOUT = 30;
 
 int setup_config_file(const CommandLine& cl) {
@@ -155,7 +156,7 @@ int main(int argc, char** argv) {
 	std::thread proxy_replica_th([&save_proxy_stderr] () {
 		std::string proxy_stdout = "";
 		std::string proxy_stderr = "";
-		int exec_res = wexecvp("./src/proxysql", { "-f", "-c", fmt_config_file }, NULL, proxy_stdout, proxy_stderr);
+		int exec_res = wexecvp("./src/proxysql", { "-f", "-M", "-c", fmt_config_file }, NULL, proxy_stdout, proxy_stderr);
 
 		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely.");
 
@@ -203,10 +204,10 @@ int main(int argc, char** argv) {
 			"active, max_writers, writer_is_also_reader, max_transactions_behind, comment) "
 			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d, %s)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int, const char*>> insert_galera_values {
-			std::make_tuple(0, 1, 5, 10, 1, 10, 0, 200, "'reader_writer_test_galera_hostgroup'"),
-			std::make_tuple(1, 2, 6, 11, 1, 20, 0, 250, "'reader_writer_test_galera_hostgroup'"),
-			std::make_tuple(2, 3, 7, 12, 1, 20, 0, 150, "'reader_writer_test_galera_hostgroup'"),
-			std::make_tuple(3, 4, 8, 13, 1, 20, 0, 350, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350, "'reader_writer_test_galera_hostgroup'"),
 		};
 		std::vector<std::string> insert_mysql_galera_hostgroup_queries {};
 
@@ -256,52 +257,37 @@ int main(int argc, char** argv) {
 		const char* delete_galera_hostgroups =
 			"DELETE FROM mysql_galera_hostgroups WHERE comment='reader_writer_test_galera_hostgroup'";
 		MYSQL_QUERY__(proxysql_admin, delete_galera_hostgroups);
-		
+
 		// Insert the new galera hostgroups values
 		for (const auto& query : insert_mysql_galera_hostgroup_queries) {
 			MYSQL_QUERY__(proxysql_admin, query.c_str());
 		}
-		// TODO: Initial sleep for sync - This shouldn't be necessary
-		usleep(1.5*1000*1000);
-		
-		// Four loads are required because of 'admin-cluster_mysql_servers_diffs_before_sync' default value
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-
-		usleep(1.5*1000*1000);
-
-		MYSQL_QUERY__(proxysql_replica, select_mysql_galera_hostgroup_queries[0].c_str());
-		MYSQL_RES* galera_res = mysql_store_result(proxysql_replica);
-		MYSQL_ROW row = mysql_fetch_row(galera_res);
-		int row_value = atoi(row[0]);
-		mysql_free_result(galera_res);
 
 		// Sleep until timeout waiting for synchronization
 		uint waited = 0;
-		while (waited < SYNC_TIMEOUT && row_value == 0) {
-			MYSQL_QUERY__(proxysql_replica, select_mysql_galera_hostgroup_queries[0].c_str());
-			galera_res = mysql_store_result(proxysql_replica);
-			row = mysql_fetch_row(galera_res);
-			row_value = atoi(row[0]);
-			mysql_free_result(galera_res);
-
-			waited += 1;
-			sleep(1);
-		}
-
 		bool not_synced_query = false;
-		// Check that all the entries have been synced
-		for (const auto& query : select_mysql_galera_hostgroup_queries) {
-			MYSQL_QUERY__(proxysql_replica, query.c_str());
-			galera_res = mysql_store_result(proxysql_replica);
-			row = mysql_fetch_row(galera_res);
-			row_value = atoi(row[0]);
-			mysql_free_result(galera_res);
+		while (waited < SYNC_TIMEOUT) {
+			not_synced_query = false;
+			// Check that all the entries have been synced
+			for (const auto& query : select_mysql_galera_hostgroup_queries) {
+				MYSQL_QUERY__(proxysql_replica, query.c_str());
+				MYSQL_RES* galera_res = mysql_store_result(proxysql_replica);
+				MYSQL_ROW row = mysql_fetch_row(galera_res);
+				int row_value = atoi(row[0]);
+				mysql_free_result(galera_res);
 
-			if (row_value == 0) {
-				not_synced_query = true;
+				proxy_info_(":: row_value: %d\n", row_value);
+				if (row_value == 0) {
+					not_synced_query = true;
+					break;
+				}
+			}
+
+			if (not_synced_query) {
+				waited += 1;
+				sleep(1);
+			} else {
 				break;
 			}
 		}
@@ -318,13 +304,13 @@ int main(int argc, char** argv) {
 		const char* t_insert_mysql_group_replication_hostgroups =
 			"INSERT INTO mysql_group_replication_hostgroups ( "
 			"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, "
-			"active, max_writers, writer_is_also_reader, max_transactions_behind, comment) "
-			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d, %s)";
+			"active, max_writers, writer_is_also_reader, max_transactions_behind) " // , comment) "
+			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d)"; // , %s)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int, const char*>> insert_group_replication_values {
-			std::make_tuple(0, 1, 5, 10, 1, 10, 0, 200, "'reader_writer_test_group_replication_hostgroup'"),
-			std::make_tuple(1, 2, 6, 11, 1, 20, 0, 250, "'reader_writer_test_group_replication_hostgroup'"),
-			std::make_tuple(2, 3, 7, 12, 1, 20, 0, 150, "'reader_writer_test_group_replication_hostgroup'"),
-			std::make_tuple(3, 4, 8, 13, 1, 20, 0, 350, "'reader_writer_test_group_replication_hostgroup'"),
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_group_replication_hostgroup'"),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_group_replication_hostgroup'"),
+			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150, "'reader_writer_test_group_replication_hostgroup'"),
+			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350, "'reader_writer_test_group_replication_hostgroup'"),
 		};
 		std::vector<std::string> insert_mysql_group_replication_hostgroup_queries {};
 
@@ -340,8 +326,8 @@ int main(int argc, char** argv) {
 				std::get<4>(values),
 				std::get<5>(values),
 				std::get<6>(values),
-				std::get<7>(values),
-				std::get<8>(values)
+				std::get<7>(values)
+				// std::get<8>(values)
 			);
 			insert_mysql_group_replication_hostgroup_queries.push_back(insert_group_replication_hostgroup_query);
 		}
@@ -350,7 +336,7 @@ int main(int argc, char** argv) {
 			"SELECT COUNT(*) FROM mysql_group_replication_hostgroups WHERE "
 			"writer_hostgroup=%d AND backup_writer_hostgroup=%d AND reader_hostgroup=%d AND "
 			"offline_hostgroup=%d AND active=%d AND max_writers=%d AND writer_is_also_reader=%d AND "
-			"max_transactions_behind=%d AND comment=%s";
+			"max_transactions_behind=%d"; // AND comment=%s";
 		std::vector<std::string> select_mysql_group_replication_hostgroup_queries {};
 
 		for (auto const& values : insert_group_replication_values) {
@@ -365,62 +351,45 @@ int main(int argc, char** argv) {
 				std::get<4>(values),
 				std::get<5>(values),
 				std::get<6>(values),
-				std::get<7>(values),
-				std::get<8>(values)
+				std::get<7>(values)
+				// std::get<8>(values)
 			);
 			select_mysql_group_replication_hostgroup_queries.push_back(select_group_replication_hostgroup_query);
 		}
 
 		const char* delete_group_replication_hostgroups =
-			"DELETE FROM mysql_group_replication_hostgroups WHERE comment='reader_writer_test_group_replication_hostgroup'";
+			"DELETE FROM mysql_group_replication_hostgroups";//  WHERE comment='reader_writer_test_group_replication_hostgroup'";
 		MYSQL_QUERY__(proxysql_admin, delete_group_replication_hostgroups);
 		
 		// Insert the new group_replication hostgroups values
 		for (const auto& query : insert_mysql_group_replication_hostgroup_queries) {
 			MYSQL_QUERY__(proxysql_admin, query.c_str());
 		}
-
-		// TODO: Initial sleep for sync - This shouldn't be necessary
-		usleep(1.5*1000*1000);
-
-		// Four loads are required because of 'admin-cluster_mysql_servers_diffs_before_sync' default value
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-		usleep(1.5*1000*1000);
-
-		MYSQL_QUERY__(proxysql_replica, select_mysql_group_replication_hostgroup_queries[0].c_str());
-		MYSQL_RES* group_replication_res = mysql_store_result(proxysql_replica);
-		MYSQL_ROW row = mysql_fetch_row(group_replication_res);
-		int row_value = atoi(row[0]);
-		mysql_free_result(group_replication_res);
-
-		// Sleep until timeout waiting for synchronization
 		uint waited = 0;
-		while (waited < SYNC_TIMEOUT && row_value == 0) {
-			MYSQL_QUERY__(proxysql_replica, select_mysql_group_replication_hostgroup_queries[0].c_str());
-			group_replication_res = mysql_store_result(proxysql_replica);
-			row = mysql_fetch_row(group_replication_res);
-			row_value = atoi(row[0]);
-			mysql_free_result(group_replication_res);
-
-			waited += 1;
-			sleep(1);
-		}
-
 		bool not_synced_query = false;
-		// Check that all the entries have been synced
-		for (const auto& query : select_mysql_group_replication_hostgroup_queries) {
-			MYSQL_QUERY__(proxysql_replica, query.c_str());
-			group_replication_res = mysql_store_result(proxysql_replica);
-			row = mysql_fetch_row(group_replication_res);
-			row_value = atoi(row[0]);
-			mysql_free_result(group_replication_res);
+		while (waited < SYNC_TIMEOUT) {
+			not_synced_query = false;
+			// Check that all the entries have been synced
+			for (const auto& query : select_mysql_group_replication_hostgroup_queries) {
+				MYSQL_QUERY__(proxysql_replica, query.c_str());
+				MYSQL_RES* group_replication_res = mysql_store_result(proxysql_replica);
+				MYSQL_ROW row = mysql_fetch_row(group_replication_res);
+				int row_value = atoi(row[0]);
+				mysql_free_result(group_replication_res);
 
-			if (row_value == 0) {
-				not_synced_query = true;
+				proxy_info_(":: row_value: %d\n", row_value);
+				if (row_value == 0) {
+					not_synced_query = true;
+					break;
+				}
+			}
+
+			if (not_synced_query) {
+				waited += 1;
+				sleep(1);
+			} else {
 				break;
 			}
 		}
@@ -503,56 +472,36 @@ int main(int argc, char** argv) {
 		const char* delete_aws_aurora_hostgroups =
 			"DELETE FROM mysql_aws_aurora_hostgroups WHERE comment='reader_writer_test_aws_aurora_hostgroup'";
 		MYSQL_QUERY__(proxysql_admin, delete_aws_aurora_hostgroups);
-		
+
 		// Insert the new aws_aurora hostgroups values
 		for (const auto& query : insert_mysql_aws_aurora_hostgroup_queries) {
 			MYSQL_QUERY__(proxysql_admin, query.c_str());
 		}
-
-		// TODO: Initial sleep for sync - This shouldn't be necessary
-		usleep(1.5*1000*1000);
-
-		// Four loads are required because of 'admin-cluster_mysql_servers_diffs_before_sync' default value
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-		usleep(1.5*1000*1000);
-
-		MYSQL_QUERY__(proxysql_replica, select_mysql_aws_aurora_hostgroup_queries[0].c_str());
-		MYSQL_RES* aws_aurora_res = mysql_store_result(proxysql_replica);
-		MYSQL_ROW row = mysql_fetch_row(aws_aurora_res);
-		int row_value = atoi(row[0]);
-		mysql_free_result(aws_aurora_res);
-
-		// Sleep until timeout waiting for synchronization
 		uint waited = 0;
-		while (waited < SYNC_TIMEOUT && row_value == 0) {
-			// TODO: Discover why loading MYSQL SERVERS again is required for forcing sync
-			MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-			//
-			MYSQL_QUERY__(proxysql_replica, select_mysql_aws_aurora_hostgroup_queries[0].c_str());
-			aws_aurora_res = mysql_store_result(proxysql_replica);
-			row = mysql_fetch_row(aws_aurora_res);
-			row_value = atoi(row[0]);
-			mysql_free_result(aws_aurora_res);
-
-			waited += 1;
-			sleep(1);
-		}
-
 		bool not_synced_query = false;
-		// Check that all the entries have been synced
-		for (const auto& query : select_mysql_aws_aurora_hostgroup_queries) {
-			MYSQL_QUERY__(proxysql_replica, query.c_str());
-			aws_aurora_res = mysql_store_result(proxysql_replica);
-			row = mysql_fetch_row(aws_aurora_res);
-			row_value = atoi(row[0]);
-			mysql_free_result(aws_aurora_res);
+		while (waited < SYNC_TIMEOUT) {
+			not_synced_query = false;
+			// Check that all the entries have been synced
+			for (const auto& query : select_mysql_aws_aurora_hostgroup_queries) {
+				MYSQL_QUERY__(proxysql_replica, query.c_str());
+				MYSQL_RES* aws_aurora_res = mysql_store_result(proxysql_replica);
+				MYSQL_ROW row = mysql_fetch_row(aws_aurora_res);
+				int row_value = atoi(row[0]);
+				mysql_free_result(aws_aurora_res);
 
-			if (row_value == 0) {
-				not_synced_query = true;
+				proxy_info_(":: row_value: %d\n", row_value);
+				if (row_value == 0) {
+					not_synced_query = true;
+					break;
+				}
+			}
+
+			if (not_synced_query) {
+				waited += 1;
+				sleep(1);
+			} else {
 				break;
 			}
 		}
@@ -570,6 +519,10 @@ cleanup:
 	if (tests_failed() != 0) {
 		save_proxy_stderr.store(true);
 	}
+	int mysql_timeout = 2;
+	mysql_options(proxysql_replica, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
+	mysql_options(proxysql_replica, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
+	mysql_options(proxysql_replica, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
 	mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
 	proxy_replica_th.join();
 
