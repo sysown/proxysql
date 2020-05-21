@@ -1073,19 +1073,30 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
 							"max_writers, writer_is_also_reader, max_transactions_behind, comment) "
 							"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
+						char *error = NULL;
+						int cols = 0;
+						int affected_rows = 0;
+						SQLite3_result *resultset = NULL;
 						while ((row = mysql_fetch_row(results[2]))) {
 							int i;
 							int l = 0;
 							for (i = 0; i < 8; i++) {
 								l += strlen(row[i]);
 							}
-							char *o = escape_string_single_quotes(row[8], false);
-							char *query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
-							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
-							// free in case of 'o' being a copy
-							if (o != row[8]) {
-								free(o);
+							char* o = nullptr;
+							char* query = nullptr;
+							if (row[8] != nullptr) {
+								o = escape_string_single_quotes(row[8], false);
+								query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
+								// free in case of 'o' being a copy
+								if (o != row[8]) {
+									free(o);
+								}
+							} else {
+								o = const_cast<char*>("NULL");
+								query = (char *)malloc(strlen(q) + strlen("NULL") + i + 64);
 							}
+							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
@@ -1103,13 +1114,20 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							for (i = 0; i < 8; i++) {
 								l += strlen(row[i]);
 							}
-							char *o = escape_string_single_quotes(row[8], false);
-							char *query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
-							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
-							// free in case of 'o' being a copy
-							if (o != row[8]) {
-								free(o);
+							char* o = nullptr;
+							char* query = nullptr;
+							if (row[8] != nullptr) {
+								o = escape_string_single_quotes(row[8], false);
+								query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
+								// free in case of 'o' being a copy
+								if (o != row[8]) {
+									free(o);
+								}
+							} else {
+								o = const_cast<char*>("NULL");
+								query = (char *)malloc(strlen(q) + i + strlen("NULL") + 64);
 							}
+							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
@@ -1127,13 +1145,20 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							for (i = 0; i < 13; i++) {
 								l += strlen(row[i]);
 							}
-							char *o = escape_string_single_quotes(row[13], false);
-							char *query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
-							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
-							// free in case of 'o' being a copy
-							if (o != row[13]) {
-								free(o);
+							char* o = nullptr;
+							char* query = nullptr;
+							if (row[13] != nullptr) {
+								o = escape_string_single_quotes(row[13], false);
+								query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
+								// free in case of 'o' being a copy
+								if (o != row[13]) {
+									free(o);
+								}
+							} else {
+								o = const_cast<char*>("NULL");
+								query = (char *)malloc(strlen(q) + strlen("NULL") + i + 64);
 							}
+							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
