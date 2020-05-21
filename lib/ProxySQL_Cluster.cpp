@@ -943,6 +943,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
+				GloAdmin->mysql_servers_wrlock();
 				std::vector<MYSQL_RES*> results {};
 
 				// Server query messages
