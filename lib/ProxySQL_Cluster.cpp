@@ -955,7 +955,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 				// group_replication_hostgroups query and messages
 				const char* CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS =
 					"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
-					"max_writers, writer_is_also_reader, max_transactions_behind, comment FROM mysql_group_replication_hostgroups";
+					"max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_group_replication_hostgroups";
 				std::string fetch_group_replication_hostgroups = "";
 				string_format("Cluster: Fetching 'MySQL Group Replication Hostgroups' from peer %s:%d\n", fetch_group_replication_hostgroups, hostname, port);
 				std::string fetch_group_replication_hostgroups_err = "";
@@ -964,7 +964,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 				// AWS Aurora query and messages
 				const char* CLUSTER_QUERY_MYSQL_AWS_AURORA =
 					"SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
-					"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment FROM mysql_aws_aurora_hostgroups";
+					"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment FROM runtime_mysql_aws_aurora_hostgroups";
 				std::string fetch_aws_aurora_start = "";
 				string_format("Cluster: Fetching 'MySQL Aurora Hostgroups' from peer %s:%d\n", fetch_aws_aurora_start, hostname, port);
 				std::string fetch_aws_aurora_err = "";
@@ -973,7 +973,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 				// Galera query and messages
 				const char* CLUSTER_QUERY_MYSQL_GALERA =
 					"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
-					"max_writers, writer_is_also_reader, max_transactions_behind, comment FROM mysql_galera_hostgroups";
+					"max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_galera_hostgroups";
 				std::string fetch_galera_start = "";
 				string_format("Cluster: Fetching 'MySQL Galera Hostgroups' from peer %s:%d\n", fetch_galera_start, hostname, port);
 				std::string fetch_galera_err = "";
