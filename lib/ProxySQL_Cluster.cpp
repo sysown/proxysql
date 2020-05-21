@@ -1100,6 +1100,10 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
+						proxy_info("Dumping fetched 'mysql_group_replication_hostgroups'\n");
+						GloAdmin->admindb->execute_statement((char *)"SELECT * FROM mysql_group_replication_hostgroups", &error , &cols , &affected_rows , &resultset);
+						resultset->dump_to_stderr();
+						delete resultset;
 
 						// sync mysql_galera_hostgroups
 						proxy_info("Cluster: Writing mysql_galera_hostgroups table\n");
@@ -1131,6 +1135,10 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
+						proxy_info("Dumping fetched 'mysql_galera_hostgroups'\n");
+						GloAdmin->admindb->execute_statement((char *)"SELECT * FROM mysql_galera_hostgroups", &error , &cols , &affected_rows , &resultset);
+						resultset->dump_to_stderr();
+						delete resultset;
 
 						// sync mysql_aws_aurora_hostgroups
 						proxy_info("Cluster: Writing mysql_aws_aurora_hostgroups table\n");
@@ -1162,6 +1170,10 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
+						proxy_info("Dumping fetched 'mysql_aws_aurora_hostgroups'\n");
+						GloAdmin->admindb->execute_statement((char *)"SELECT * FROM mysql_aws_aurora_hostgroups", &error , &cols , &affected_rows , &resultset);
+						resultset->dump_to_stderr();
+						delete resultset;
 
 						proxy_info("Cluster: Loading to runtime MySQL Servers from peer %s:%d\n", hostname, port);
 						GloAdmin->load_mysql_servers_to_runtime();
