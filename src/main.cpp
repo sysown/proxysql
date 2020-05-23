@@ -1,3 +1,4 @@
+#define MAIN_PROXY_SQLITE3
 #include <iostream>
 #include <thread>
 #include "btree_map.h"
@@ -21,7 +22,6 @@
 #include "MySQL_LDAP_Authentication.hpp"
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
-
 
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>
@@ -49,53 +49,6 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 
 
 
-#define MAIN_PROXY_SQLITE3
-int (*proxy_sqlite3_bind_double)(sqlite3_stmt*, int, double);
-int (*proxy_sqlite3_bind_int)(sqlite3_stmt*, int, int);
-int (*proxy_sqlite3_bind_int64)(sqlite3_stmt*, int, sqlite3_int64);
-int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int);
-int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*));
-const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int N);
-const unsigned char *(*proxy_sqlite3_column_text)(sqlite3_stmt*, int iCol);
-int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int iCol);
-int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int iCol);
-int (*proxy_sqlite3_column_count)(sqlite3_stmt *pStmt);
-int (*proxy_sqlite3_column_int)(sqlite3_stmt*, int iCol);
-const char *(*proxy_sqlite3_errmsg)(sqlite3*);
-int (*proxy_sqlite3_finalize)(sqlite3_stmt *pStmt);
-int (*proxy_sqlite3_reset)(sqlite3_stmt *pStmt);
-int (*proxy_sqlite3_clear_bindings)(sqlite3_stmt*);
-int (*proxy_sqlite3_close_v2)(sqlite3*);
-int (*proxy_sqlite3_get_autocommit)(sqlite3*);
-void (*proxy_sqlite3_free)(void*);
-int (*proxy_sqlite3_status)(int op, int *pCurrent, int *pHighwater, int resetFlag);
-int (*proxy_sqlite3_changes)(sqlite3*);
-int (*proxy_sqlite3_step)(sqlite3_stmt*);
-int (*proxy_sqlite3_config)(int, ...);
-int (*proxy_sqlite3_shutdown)(void);
-
-int (*proxy_sqlite3_prepare_v2)(
-  sqlite3 *db,            /* Database handle */
-  const char *zSql,       /* SQL statement, UTF-8 encoded */
-  int nByte,              /* Maximum length of zSql in bytes. */
-  sqlite3_stmt **ppStmt,  /* OUT: Statement handle */
-  const char **pzTail     /* OUT: Pointer to unused portion of zSql */
-);
-
-int (*proxy_sqlite3_open_v2)(
-  const char *filename,   /* Database filename (UTF-8) */
-  sqlite3 **ppDb,         /* OUT: SQLite db handle */
-  int flags,              /* Flags */
-  const char *zVfs        /* Name of VFS module to use */
-);
-
-int (*proxy_sqlite3_exec)(
-  sqlite3*,                                  /* An open database */
-  const char *sql,                           /* SQL to be evaluated */
-  int (*callback)(void*,int,char**,char**),  /* Callback function */
-  void *,                                    /* 1st argument to callback */
-  char **errmsg                              /* Error msg written here */
-);
 
 
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
