@@ -47,6 +47,57 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 }
 */
 
+
+
+#define MAIN_PROXY_SQLITE3
+int (*proxy_sqlite3_bind_double)(sqlite3_stmt*, int, double);
+int (*proxy_sqlite3_bind_int)(sqlite3_stmt*, int, int);
+int (*proxy_sqlite3_bind_int64)(sqlite3_stmt*, int, sqlite3_int64);
+int (*proxy_sqlite3_bind_null)(sqlite3_stmt*, int);
+int (*proxy_sqlite3_bind_text)(sqlite3_stmt*,int,const char*,int,void(*)(void*));
+const char *(*proxy_sqlite3_column_name)(sqlite3_stmt*, int N);
+const unsigned char *(*proxy_sqlite3_column_text)(sqlite3_stmt*, int iCol);
+int (*proxy_sqlite3_column_bytes)(sqlite3_stmt*, int iCol);
+int (*proxy_sqlite3_column_type)(sqlite3_stmt*, int iCol);
+int (*proxy_sqlite3_column_count)(sqlite3_stmt *pStmt);
+int (*proxy_sqlite3_column_int)(sqlite3_stmt*, int iCol);
+const char *(*proxy_sqlite3_errmsg)(sqlite3*);
+int (*proxy_sqlite3_finalize)(sqlite3_stmt *pStmt);
+int (*proxy_sqlite3_reset)(sqlite3_stmt *pStmt);
+int (*proxy_sqlite3_clear_bindings)(sqlite3_stmt*);
+int (*proxy_sqlite3_close_v2)(sqlite3*);
+int (*proxy_sqlite3_get_autocommit)(sqlite3*);
+void (*proxy_sqlite3_free)(void*);
+int (*proxy_sqlite3_status)(int op, int *pCurrent, int *pHighwater, int resetFlag);
+int (*proxy_sqlite3_changes)(sqlite3*);
+int (*proxy_sqlite3_step)(sqlite3_stmt*);
+int (*proxy_sqlite3_config)(int, ...);
+int (*proxy_sqlite3_shutdown)(void);
+
+int (*proxy_sqlite3_prepare_v2)(
+  sqlite3 *db,            /* Database handle */
+  const char *zSql,       /* SQL statement, UTF-8 encoded */
+  int nByte,              /* Maximum length of zSql in bytes. */
+  sqlite3_stmt **ppStmt,  /* OUT: Statement handle */
+  const char **pzTail     /* OUT: Pointer to unused portion of zSql */
+);
+
+int (*proxy_sqlite3_open_v2)(
+  const char *filename,   /* Database filename (UTF-8) */
+  sqlite3 **ppDb,         /* OUT: SQLite db handle */
+  int flags,              /* Flags */
+  const char *zVfs        /* Name of VFS module to use */
+);
+
+int (*proxy_sqlite3_exec)(
+  sqlite3*,                                  /* An open database */
+  const char *sql,                           /* SQL to be evaluated */
+  int (*callback)(void*,int,char**,char**),  /* Callback function */
+  void *,                                    /* 1st argument to callback */
+  char **errmsg                              /* Error msg written here */
+);
+
+
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
 void * __mysql_ldap_auth;
 
@@ -843,6 +894,14 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.errorlog = strdup(errorlog_path.c_str());
 			}
 		}
+		if (root.exists("sqlite3_plugin")==true) {
+			string sqlite3_plugin;
+			bool rc;
+			rc=root.lookupValue("sqlite3_plugin", sqlite3_plugin);
+			if (rc==true) {
+				GloVars.sqlite3_plugin=strdup(sqlite3_plugin.c_str());
+			}
+		}
 		if (root.exists("web_interface_plugin")==true) {
 			string web_interface_plugin;
 			bool rc;
@@ -1205,11 +1264,145 @@ void ProxySQL_Main_init() {
 #endif /* DEBUG */
 //	__thr_sfp=l_mem_init();
 
+}
+static void LoadPlugin_sqlite3_plugin() {
+	proxy_sqlite3_config = NULL;
+	proxy_sqlite3_bind_double = NULL;
+	proxy_sqlite3_bind_int = NULL;
+	proxy_sqlite3_bind_int64 = NULL;
+	proxy_sqlite3_bind_null = NULL;
+	proxy_sqlite3_bind_text = NULL;
+	proxy_sqlite3_column_name = NULL;
+	proxy_sqlite3_column_text = NULL;
+	proxy_sqlite3_column_bytes = NULL;
+	proxy_sqlite3_column_type = NULL;
+	proxy_sqlite3_column_count = NULL;
+	proxy_sqlite3_column_int = NULL;
+	proxy_sqlite3_errmsg = NULL;
+	proxy_sqlite3_finalize = NULL;
+	proxy_sqlite3_reset = NULL;
+	proxy_sqlite3_clear_bindings = NULL;
+	proxy_sqlite3_close_v2 = NULL;
+	proxy_sqlite3_get_autocommit = NULL;
+	proxy_sqlite3_free = NULL;
+	proxy_sqlite3_status = NULL;
+	proxy_sqlite3_changes = NULL;
+	proxy_sqlite3_step = NULL;
+	proxy_sqlite3_shutdown = NULL;
+	proxy_sqlite3_prepare_v2 = NULL;
+	proxy_sqlite3_open_v2 = NULL;
+	proxy_sqlite3_exec = NULL;
+	if (GloVars.sqlite3_plugin) {
+		int fd = -1;
+		fd = open(GloVars.sqlite3_plugin, O_RDONLY);
+		char binary_sha1_sqlite3[SHA_DIGEST_LENGTH*2+1];
+		if(fd >= 0) {
+			struct stat statbuf;
+			if(fstat(fd, &statbuf) == 0) {
+				unsigned char *fb = (unsigned char *)mmap(0, statbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
+				if (fb != MAP_FAILED) {
+					unsigned char temp[SHA_DIGEST_LENGTH];
+					SHA1(fb, statbuf.st_size, temp);
+					memset(binary_sha1_sqlite3, 0, SHA_DIGEST_LENGTH*2+1);
+					char buf[SHA_DIGEST_LENGTH*2];
+					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
+						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
+					}
+					memcpy(binary_sha1_sqlite3, buf, SHA_DIGEST_LENGTH*2);
+					munmap(fb,statbuf.st_size);
+				} else {
+					proxy_error("Unable to mmap %s: %s\n", GloVars.sqlite3_plugin, strerror(errno));
+				}
+			} else {
+				proxy_error("Unable to fstat %s: %s\n", GloVars.sqlite3_plugin, strerror(errno));
+			}
+		} else {
+			proxy_error("Unable to open %s: %s\n", GloVars.sqlite3_plugin, strerror(errno));
+		}
+
+		close(fd);
+		proxy_info("SQLite3 Plugin SHA1 checksum: %s\n", binary_sha1_sqlite3);
+
+		dlerror();
+		char * dlsym_error = NULL;
+		dlerror();
+		dlsym_error=NULL;
+		void * handle_sqlite3_plugin = dlopen(GloVars.sqlite3_plugin, RTLD_NOW);
+		if (!handle_sqlite3_plugin) {
+			cerr << "Cannot load SQLite3 plugin from library: " << dlerror() << '\n';
+			exit(EXIT_FAILURE);
+		} else {
+			dlerror();
+			int (*proxy_load_sqlite3)();
+			proxy_load_sqlite3 = (int (*)()) dlsym(handle_sqlite3_plugin, "proxy_load_sqlite3"); dlsym_error = dlerror();
+			if (dlsym_error!=NULL) { cerr << "Cannot load symbol proxy_load_sqlite3: " << dlsym_error << '\n'; exit(EXIT_FAILURE); }
+			(*proxy_load_sqlite3)();
+		}
+		if (handle_sqlite3_plugin==NULL || dlsym_error) {
+			proxy_error("Unable to load SQLite3 plugin from %s\n", GloVars.sqlite3_plugin);
+			exit(EXIT_FAILURE);
+		}
+		proxy_info("Loaded SQLite3 from plugin\n");
+	} else {
+		proxy_sqlite3_config = sqlite3_config;
+		proxy_sqlite3_bind_double = sqlite3_bind_double;
+		proxy_sqlite3_bind_int = sqlite3_bind_int;
+		proxy_sqlite3_bind_int64 = sqlite3_bind_int64;
+		proxy_sqlite3_bind_null = sqlite3_bind_null;
+		proxy_sqlite3_bind_text = sqlite3_bind_text;
+		proxy_sqlite3_column_name = sqlite3_column_name;
+		proxy_sqlite3_column_text = sqlite3_column_text;
+		proxy_sqlite3_column_bytes = sqlite3_column_bytes;
+		proxy_sqlite3_column_type = sqlite3_column_type;
+		proxy_sqlite3_column_count = sqlite3_column_count;
+		proxy_sqlite3_column_int = sqlite3_column_int;
+		proxy_sqlite3_errmsg = sqlite3_errmsg;
+		proxy_sqlite3_finalize = sqlite3_finalize;
+		proxy_sqlite3_reset = sqlite3_reset;
+		proxy_sqlite3_clear_bindings = sqlite3_clear_bindings;
+		proxy_sqlite3_close_v2 = sqlite3_close_v2;
+		proxy_sqlite3_get_autocommit = sqlite3_get_autocommit;
+		proxy_sqlite3_free = sqlite3_free;
+		proxy_sqlite3_status = sqlite3_status;
+		proxy_sqlite3_changes = sqlite3_changes;
+		proxy_sqlite3_step = sqlite3_step;
+		proxy_sqlite3_shutdown = sqlite3_shutdown;
+		proxy_sqlite3_prepare_v2 = sqlite3_prepare_v2;
+		proxy_sqlite3_open_v2 = sqlite3_open_v2;
+		proxy_sqlite3_exec = sqlite3_exec;
+		proxy_info("Loaded built-in SQLite3\n");
+	}
+	assert(proxy_sqlite3_config);
+	assert(proxy_sqlite3_bind_double);
+	assert(proxy_sqlite3_bind_int);
+	assert(proxy_sqlite3_bind_int64);
+	assert(proxy_sqlite3_bind_null);
+	assert(proxy_sqlite3_bind_text);
+	assert(proxy_sqlite3_column_name);
+	assert(proxy_sqlite3_column_text);
+	assert(proxy_sqlite3_column_bytes);
+	assert(proxy_sqlite3_column_type);
+	assert(proxy_sqlite3_column_count);
+	assert(proxy_sqlite3_column_int);
+	assert(proxy_sqlite3_errmsg);
+	assert(proxy_sqlite3_finalize);
+	assert(proxy_sqlite3_reset);
+	assert(proxy_sqlite3_clear_bindings);
+	assert(proxy_sqlite3_close_v2);
+	assert(proxy_sqlite3_get_autocommit);
+	assert(proxy_sqlite3_free);
+	assert(proxy_sqlite3_status);
+	assert(proxy_sqlite3_changes);
+	assert(proxy_sqlite3_step);
+	assert(proxy_sqlite3_shutdown);
+	assert(proxy_sqlite3_prepare_v2);
+	assert(proxy_sqlite3_open_v2);
+	assert(proxy_sqlite3_exec);
 	{
 		/* moved here, so if needed by multiple modules it applies to all of them */
-		int i=sqlite3_config(SQLITE_CONFIG_URI, 1);
+		int i=(*proxy_sqlite3_config)(SQLITE_CONFIG_URI, 1);
 		if (i!=SQLITE_OK) {
-			fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
+			fprintf(stderr,"SQLITE: Error on (*proxy_sqlite3_config)(SQLITE_CONFIG_URI,1)\n");
 			assert(i==SQLITE_OK);
 			exit(EXIT_FAILURE);
 		}
@@ -1217,6 +1410,7 @@ void ProxySQL_Main_init() {
 }
 
 static void LoadPlugins() {
+	LoadPlugin_sqlite3_plugin();
 	if (GloVars.web_interface_plugin) {
 		dlerror();
 		char * dlsym_error = NULL;

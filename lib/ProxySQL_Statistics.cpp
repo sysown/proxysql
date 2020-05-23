@@ -26,7 +26,7 @@ extern MySQL_Threads_Handler *GloMTH;
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
 	do {\
-		rc=sqlite3_step(_stmt);\
+		rc=(*proxy_sqlite3_step)(_stmt);\
 		if (rc!=SQLITE_DONE) {\
 			assert(rc==SQLITE_LOCKED)\
 			usleep(100);\
@@ -36,7 +36,7 @@ extern MySQL_Threads_Handler *GloMTH;
 
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
 	do {\
-		rc=sqlite3_step(_stmt);\
+		rc=(*proxy_sqlite3_step)(_stmt);\
 		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
 			usleep(100);\
 		}\
@@ -497,19 +497,19 @@ void ProxySQL_Statistics::system_cpu_sets() {
 		sqlite3_stmt *statement1=NULL;
 		char *query1=NULL;
 		query1=(char *)"INSERT INTO system_cpu VALUES (?1, ?2, ?3)";
-		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 		ASSERT_SQLITE_OK(rc, statsdb_disk);
 		time_t ts = time(NULL);
 
-		rc = sqlite3_bind_int64(statement1, 1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc = sqlite3_bind_int64(statement1, 2, buf.tms_utime); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc = sqlite3_bind_int64(statement1, 3, buf.tms_stime); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 2, buf.tms_utime); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 3, buf.tms_stime); ASSERT_SQLITE_OK(rc, statsdb_disk);
 
 		ASSERT_SQLITE_OK(rc, statsdb_disk);
 		SAFE_SQLITE3_STEP2(statement1);
-		rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc=sqlite3_reset(statement1);
-		sqlite3_finalize(statement1);
+		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_reset)(statement1);
+		(*proxy_sqlite3_finalize)(statement1);
 		
 		SQLite3_result *resultset = NULL;
 		int cols;
@@ -560,9 +560,9 @@ void ProxySQL_Statistics::system_memory_sets() {
 		sqlite3_stmt *statement1=NULL;
 		char *query1=NULL;
 		query1=(char *)"INSERT INTO system_memory VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
-		rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+		rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 		if (rc!=SQLITE_OK) {
-			proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+			proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", (*proxy_sqlite3_errmsg)(mydb3));
 			exit(EXIT_SUCCESS);
 		}
 
@@ -577,19 +577,19 @@ void ProxySQL_Statistics::system_memory_sets() {
 		mallctl("stats.retained", &retained, &sz, NULL, 0);
 
 
-		rc = sqlite3_bind_int64(statement1, 1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc = sqlite3_bind_int64(statement1, 2, allocated); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc = sqlite3_bind_int64(statement1, 3, resident); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc = sqlite3_bind_int64(statement1, 4, active); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc = sqlite3_bind_int64(statement1, 5, mapped); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc = sqlite3_bind_int64(statement1, 6, metadata); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc = sqlite3_bind_int64(statement1, 7, retained); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 2, allocated); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 3, resident); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 4, active); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 5, mapped); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 6, metadata); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc = (*proxy_sqlite3_bind_int64)(statement1, 7, retained); ASSERT_SQLITE_OK(rc, statsdb_disk);
 
 		ASSERT_SQLITE_OK(rc, statsdb_disk);
 		SAFE_SQLITE3_STEP2(statement1);
-		rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc=sqlite3_reset(statement1);
-		sqlite3_finalize(statement1);
+		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_reset)(statement1);
+		(*proxy_sqlite3_finalize)(statement1);
 
 		SQLite3_result *resultset = NULL;
 		int cols;
@@ -656,22 +656,22 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_connection_pool(SQLite3_result *res
 		query += ",?" + to_string(i+2);
 	}
 	query += ")";
-	rc=sqlite3_prepare_v2(mydb3, query.c_str(), -1, &statement, 0);
+	rc=(*proxy_sqlite3_prepare_v2)(mydb3, query.c_str(), -1, &statement, 0);
 	if (rc!=SQLITE_OK) {
-		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", (*proxy_sqlite3_errmsg)(mydb3));
 		exit(EXIT_SUCCESS);
 	}
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		rc=sqlite3_bind_int64(statement, 1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
 		for (int i=0 ; i < resultset->columns ; i++) {
-			rc=sqlite3_bind_text(statement, i+2, r->fields[i] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
+			rc=(*proxy_sqlite3_bind_text)(statement, i+2, r->fields[i] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk);
 		}
 		SAFE_SQLITE3_STEP2(statement);
-		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc=sqlite3_reset(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_reset)(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
 	}
-	sqlite3_finalize(statement);
+	(*proxy_sqlite3_finalize)(statement);
 }
 
 void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
@@ -686,14 +686,14 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 	//char *query2=NULL;
 	//char *query3=NULL;
 	query1=(char *)"INSERT INTO myhgm_connections VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
-	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 	if (rc!=SQLITE_OK) {
-		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", (*proxy_sqlite3_errmsg)(mydb3));
 		exit(EXIT_SUCCESS);
 	}
-	//rc=sqlite3_prepare_v2(mydb3, query2, -1, &statement2, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query2, -1, &statement2, 0);
 	//ASSERT_SQLITE_OK(rc, statsdb_disk);
-	//rc=sqlite3_prepare_v2(mydb3, query3, -1, &statement3, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query3, -1, &statement3, 0);
 	//ASSERT_SQLITE_OK(rc, statsdb_disk);
 
 	time_t ts = time(NULL);
@@ -729,13 +729,13 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 	}
 
 	for (int i=0; i<6; i++) {
-		rc=sqlite3_bind_int64(statement1, i+1, myhgm_connections_values[i]); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, i+1, myhgm_connections_values[i]); ASSERT_SQLITE_OK(rc, statsdb_disk);
 	}
 
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
-	rc=sqlite3_reset(statement1); //ASSERT_SQLITE_OK(rc, statsdb_disk);
-	sqlite3_finalize(statement1);
+	rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
+	rc=(*proxy_sqlite3_reset)(statement1); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+	(*proxy_sqlite3_finalize)(statement1);
 
 	SQLite3_result *resultset2 = NULL;
 	int cols;
@@ -802,23 +802,23 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultse
 		idx+=3;
 	}
 	query.pop_back();
-	rc=sqlite3_prepare_v2(mydb3, query.c_str(), -1, &statement, 0);
+	rc=(*proxy_sqlite3_prepare_v2)(mydb3, query.c_str(), -1, &statement, 0);
 	if (rc!=SQLITE_OK) {
-		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", (*proxy_sqlite3_errmsg)(mydb3));
 		exit(EXIT_SUCCESS);
 	}
 	idx=0;
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		rc=sqlite3_bind_int64(statement, idx+1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc=sqlite3_bind_text(statement, idx+2, r->fields[0] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // name
-		rc=sqlite3_bind_text(statement, idx+3, r->fields[1] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // value
+		rc=(*proxy_sqlite3_bind_int64)(statement, idx+1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_bind_text)(statement, idx+2, r->fields[0] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // name
+		rc=(*proxy_sqlite3_bind_text)(statement, idx+3, r->fields[1] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // value
 		idx+=3;
 	}
 	SAFE_SQLITE3_STEP2(statement);
-	rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
-	rc=sqlite3_reset(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
-	sqlite3_finalize(statement);
+	rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb_disk);
+	rc=(*proxy_sqlite3_reset)(statement); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+	(*proxy_sqlite3_finalize)(statement);
 }
 
 void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultset) {
@@ -834,14 +834,14 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultse
 	//char *query3=NULL;
 	query1=(char *)"INSERT INTO mysql_connections VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 	//query2=(char *)"INSERT INTO myhgm_connections VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
-	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 	if (rc!=SQLITE_OK) {
-		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", (*proxy_sqlite3_errmsg)(mydb3));
 		exit(EXIT_SUCCESS);
 	}
-	//rc=sqlite3_prepare_v2(mydb3, query2, -1, &statement2, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query2, -1, &statement2, 0);
 	//ASSERT_SQLITE_OK(rc, statsdb_disk);
-	//rc=sqlite3_prepare_v2(mydb3, query3, -1, &statement3, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query3, -1, &statement3, 0);
 	//ASSERT_SQLITE_OK(rc, statsdb_disk);
 
 	time_t ts = time(NULL);
@@ -906,13 +906,13 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultse
 	}
 
 	for (int i=0; i<13; i++) {
-		rc=sqlite3_bind_int64(statement1, i+1, mysql_connections_values[i]); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, i+1, mysql_connections_values[i]); ASSERT_SQLITE_OK(rc, statsdb_disk);
 	}
 
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
-	rc=sqlite3_reset(statement1); //ASSERT_SQLITE_OK(rc, statsdb_disk);
-	sqlite3_finalize(statement1);
+	rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
+	rc=(*proxy_sqlite3_reset)(statement1); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+	(*proxy_sqlite3_finalize)(statement1);
 
 	SQLite3_result *resultset2 = NULL;
 	int cols;
@@ -962,9 +962,9 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 	sqlite3_stmt *statement1=NULL;
 	char *query1=NULL;
 	query1=(char *)"INSERT INTO mysql_query_cache VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)";
-	rc=sqlite3_prepare_v2(mydb3, query1, -1, &statement1, 0);
+	rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 	if (rc!=SQLITE_OK) {
-		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", sqlite3_errmsg(mydb3));
+		proxy_error("SQLITE CRITICAL error: %s . Shutting down.\n", (*proxy_sqlite3_errmsg)(mydb3));
 		exit(EXIT_SUCCESS);
 	}
 
@@ -1011,13 +1011,13 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 	}
 
 	for (int i=0; i<9; i++) {
-		rc=sqlite3_bind_int64(statement1, i+1, qc_values[i]); ASSERT_SQLITE_OK(rc, statsdb_disk);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, i+1, qc_values[i]); ASSERT_SQLITE_OK(rc, statsdb_disk);
 	}
 
 	SAFE_SQLITE3_STEP2(statement1);
-	rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
-	rc=sqlite3_reset(statement1); //ASSERT_SQLITE_OK(rc, statsdb_disk);
-	sqlite3_finalize(statement1);
+	rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb_disk);
+	rc=(*proxy_sqlite3_reset)(statement1); //ASSERT_SQLITE_OK(rc, statsdb_disk);
+	(*proxy_sqlite3_finalize)(statement1);
 
 	SQLite3_result *resultset2 = NULL;
 	int cols;

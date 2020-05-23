@@ -535,7 +535,7 @@ void MySQL_Session::reset() {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
 		if (sqlite_sess->sessdb) {
 			sqlite3 *db = sqlite_sess->sessdb->get_db();
-			if (sqlite3_get_autocommit(db)==0) {
+			if ((*proxy_sqlite3_get_autocommit)(db)==0) {
 				sqlite_sess->sessdb->execute((char *)"COMMIT");
 			}
 		}

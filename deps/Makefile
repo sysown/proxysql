@@ -149,7 +149,8 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-3190200
 	cd sqlite3 && tar -zxf sqlite-amalgamation-3190200.tar.gz
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../from_unixtime.patch
-	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1
+	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
+	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
