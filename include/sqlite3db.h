@@ -178,6 +178,7 @@ class SQLite3DB {
 	bool build_table(char *table_name, char *table_def, bool dropit);
 	bool check_and_build_table(char *table_name, char *table_def);
 	int prepare_v2(const char *, sqlite3_stmt **);
+	static void LoadPlugin(const char *);
 };
 
 #endif /* __CLASS_SQLITE3DB_H */
