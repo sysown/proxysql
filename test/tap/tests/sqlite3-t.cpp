@@ -1,10 +1,13 @@
 #define PROXYSQL_EXTERN
-
+#define MAIN_PROXY_SQLITE3
 #include <stdlib.h>
 #include "tap.h"
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <openssl/ssl.h>
+#include "proxysql_structs.h"
+#include "proxysql_glovars.hpp"
 #include "sqlite3db.h"
 
 int main() {
