@@ -330,7 +330,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
 		sqlite3 *db = sqlite_sess->sessdb->get_db();
 		uint16_t status=2; // autocommit
-		if (sqlite3_get_autocommit(db)==0) {
+		if ((*proxy_sqlite3_get_autocommit)(db)==0) {
 			status = 3; // autocommit + transaction
 		}
 		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
@@ -624,7 +624,7 @@ __run_query:
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 		sqlite3 *db = sqlite_sess->sessdb->get_db();
 		bool in_trans = false;
-		if (sqlite3_get_autocommit(db)==0) {
+		if ((*proxy_sqlite3_get_autocommit)(db)==0) {
 			in_trans = true;
 		}
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, in_trans);
@@ -645,7 +645,7 @@ SQLite3_Session::SQLite3_Session() {
 
 SQLite3_Session::~SQLite3_Session() {
 	sqlite3 *db = sessdb->get_db();
-	if (sqlite3_get_autocommit(db)==0) {
+	if ((*proxy_sqlite3_get_autocommit)(db)==0) {
 		sessdb->execute((char *)"COMMIT");
 	}
 	delete sessdb;
