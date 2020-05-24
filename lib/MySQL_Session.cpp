@@ -1584,7 +1584,24 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 		*be_var = strdup(def);
 		uint32_t tmp_int = SpookyHash::Hash32(*be_var, strlen(*be_var), 10);
 		*be_int = tmp_int;
+
+		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				previous_status.push(PROCESSING_QUERY);
+				break;
+			case PROCESSING_STMT_PREPARE:
+				previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+			case PROCESSING_STMT_EXECUTE:
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		NEXT_IMMEDIATE_NEW(next_sess_status);
 	}
+
 	if (*fe_int) {
 		if (*fe_int != *be_int) {
 			{
@@ -2606,7 +2623,8 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->myconn->reset();
-		st=previous_status.top();
+		myds->DSS = STATE_MARIADB_GENERIC;
+		st = previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
