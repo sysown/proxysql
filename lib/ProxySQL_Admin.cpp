@@ -9952,7 +9952,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			vector<int> cols { 0, 1, 2, 3, -1, 4, 6, 7, 8, 9, 10, 11 };
 			if (row_idx<max_bulk_row_idx) { // bulk
 				proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement32, r1, idx*12 + 1, is_nums, cols);
-				rc=sqlite3_bind_text(statement32, (idx*12)+5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				if (idx==31) {
 					SAFE_SQLITE3_STEP2(statement32);
 					rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, admindb);
@@ -9960,7 +9960,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 				}
 			} else { // single row
 				proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement1, r1, 1, is_nums, cols);
-				rc=sqlite3_bind_text(statement1, 5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				SAFE_SQLITE3_STEP(statement1);
 				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
@@ -11548,25 +11548,25 @@ is_num: because this function works with both number and not, this flag defines 
 passed_as_char: this is relevant only if is_num==true , otherwise ignored.
                 If is_num==true && passed_as_char==true , the number is converted from ptr
 num: numeric value if is_num==true && passed_as_char==false
-ptr: char pointer for text or numbers that need conversion. If NULL, sqlite3_bind_null() is called
+ptr: char pointer for text or numbers that need conversion. If NULL, (*proxy_sqlite3_bind_null)() is called
 */
 void ProxySQL_Admin::proxysql_sqlite3_bind(SQLite3DB *db, sqlite3_stmt *stmt, int idx, bool is_num, bool passed_as_char, long long num, char *ptr) {
 	int rc;
 	if (is_num) { // we are binding a number
 		if (passed_as_char) { // we must convert
 			if (ptr) {
-				rc=sqlite3_bind_int64(stmt, idx, atoll(ptr)); ASSERT_SQLITE_OK(rc, db);
+				rc=(*proxy_sqlite3_bind_int64)(stmt, idx, atoll(ptr)); ASSERT_SQLITE_OK(rc, db);
 			} else { // we are binding a null
-				rc = sqlite3_bind_null(stmt, idx); ASSERT_SQLITE_OK(rc, db);
+				rc = (*proxy_sqlite3_bind_null)(stmt, idx); ASSERT_SQLITE_OK(rc, db);
 			}
 		} else { // pure number
-			rc=sqlite3_bind_int64(stmt, idx, num); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_int64)(stmt, idx, num); ASSERT_SQLITE_OK(rc, db);
 		}
 	} else { // we are binding a text
 		if (ptr) {
-			rc=sqlite3_bind_text(stmt, idx, ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_text)(stmt, idx, ptr, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 		} else { // we are binding a null
-			rc = sqlite3_bind_null(stmt, idx); ASSERT_SQLITE_OK(rc, db);
+			rc = (*proxy_sqlite3_bind_null)(stmt, idx); ASSERT_SQLITE_OK(rc, db);
 		}
 	}
 }
