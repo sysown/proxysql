@@ -2606,7 +2606,8 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->myconn->reset();
-		st=previous_status.top();
+		myds->DSS = STATE_MARIADB_GENERIC;
+		st = previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
