@@ -2472,19 +2472,19 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		// we will now scan again to ignore overloaded servers
 		for (j=0; j<num_candidates; j++) {
 			mysrvc = mysrvcCandidates[j];
-				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
-						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+			unsigned int len=mysrvc->ConnectionsUsed->conns_length();
+			if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
 
-							New_sum+=mysrvc->weight;
-							New_TotalUsedConn+=len;
-						} else {
-							// remove the candidate
-							if (j+1 < num_candidates) {
-								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-							}
-							j--;
-							num_candidates--;
-						}
+				New_sum+=mysrvc->weight;
+				New_TotalUsedConn+=len;
+			} else {
+				// remove the candidate
+				if (j+1 < num_candidates) {
+					mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+				}
+				j--;
+				num_candidates--;
+			}
 		}
 
 
@@ -2552,17 +2552,17 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 		for (j=0; j<num_candidates; j++) {
 			mysrvc = mysrvcCandidates[j];
-							New_sum+=mysrvc->weight;
-							if (k<=New_sum) {
-								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-								if (l>32) {
-									free(mysrvcCandidates);
-								}
+			New_sum+=mysrvc->weight;
+			if (k<=New_sum) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+				if (l>32) {
+					free(mysrvcCandidates);
+				}
 #ifdef TEST_AURORA
-								array_mysrvc_cands += num_candidates;
+				array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
-								return mysrvc;
-							}
+				return mysrvc;
+			}
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
