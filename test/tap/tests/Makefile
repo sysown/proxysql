@@ -79,39 +79,18 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t galera_1_timeout_count galera_2_timeout_no_count aurora test_set_character_results-t test_ps_large_result-t set_testing-t test_firewall-t test_default_value_transaction_isolation-t || true
+	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora || true
 
 OPT=-O2 -Wl,--no-as-needed
+debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed
+debug: tests
 
-SRC=basic-t.cpp set_character_set-t.cpp charset_unsigned_int-t.cpp select_config_file-t.cpp sqlite3-t.cpp  galera_1_timeout_count.cpp galera_2_timeout_no_count.cpp aurora.cpp test_set_character_results-t.cpp test_ps_large_result-t.cpp set_testing-t.cpp test_firewall-t.cpp test_default_value_transaction_isolation-t.cpp
-
-tests: basic-t set_character_set-t charset_unsigned_int-t select_config_file-t sqlite3-t test_set_character_results-t test_ps_large_result-t set_testing-t test_firewall-t test_default_value_transaction_isolation-t test_admin_configs-t
+tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
-sqlite3-t: $(TAP_LIBDIR)/libtap.a sqlite3-t.cpp
-	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o sqlite3-t
-
-basic-t: $(TAP_LIBDIR)/libtap.a
-	g++ basic-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap $(STATIC_LIBS) -o basic-t
-
-set_character_set-t: set_character_set-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ set_character_set-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) $(STATIC_LIBS) -o set_character_set-t
-
-charset_unsigned_int-t: charset_unsigned_int-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ charset_unsigned_int-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) $(STATIC_LIBS) -o charset_unsigned_int-t
-
-select_config_file-t: select_config_file-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ select_config_file-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -ltap -ldl $(MYLIBS) $(STATIC_LIBS) -o select_config_file-t
-
-test_set_character_results-t: test_set_character_results-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_set_character_results-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -ldl -lpthread $(STATIC_LIBS) -o test_set_character_results-t
-
-test_ps_large_result-t: test_ps_large_result-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_ps_large_result-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -ldl -lpthread $(STATIC_LIBS) -o test_ps_large_result-t
-
-test_firewall-t: test_firewall-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_firewall-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -ldl -lpthread $(STATIC_LIBS) -o test_firewall-t
+%-t:%-t.cpp $(TAP_LIBDIR)/libtap.a
+	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_GALERA -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
@@ -122,11 +101,13 @@ galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
 aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
 
-set_testing-t: set_testing-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ set_testing-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -ldl $(STATIC_LIBS) -o set_testing-t
+test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_tokenizer-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-test_default_value_transaction_isolation-t: test_default_value_transaction_isolation-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_default_value_transaction_isolation-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -ldl $(STATIC_LIBS) -o test_default_value_transaction_isolation-t
+1493_mixed_compression: reg_test_1493-mixed_compression-t.cpp
+	g++ -DDEBUG test_mixed_compression-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o reg_test_1493-mixed_compression-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 test_admin_configs-t: test_admin_configs-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_admin_configs-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -lssl -lcrypto -Wl,--no-as-needed -ldl -lpthread -o test_admin_configs-t
+2793_compression: reg_test_2793-compression-t.cpp
+	g++ -DDEBUG reg_test_2793-compression-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o reg_test_2793-compression-t -DGITVERSION=\"$(GIT_VERSION)\"

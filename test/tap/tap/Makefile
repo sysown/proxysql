@@ -14,6 +14,9 @@ clean:
 
 OPT=-O2
 
+debug: OPT = -O0 -DDEBUG -ggdb
+debug: libtap.a
+
 libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h
 	g++ -c tap.cpp command_line.cpp utils.cpp -std=c++11 -I$(JSON_IDIR) -I$(MARIADB_IDIR) $(OPT)
 	ar rcs libtap.a tap.o command_line.o utils.o

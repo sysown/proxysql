@@ -36,7 +36,7 @@ static MySQL_Monitor *GloMyMon;
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
 	do {\
-		rc=sqlite3_step(_stmt);\
+		rc=(*proxy_sqlite3_step)(_stmt);\
 		if (rc!=SQLITE_DONE) {\
 			assert(rc==SQLITE_LOCKED);\
 			usleep(100);\
@@ -46,7 +46,7 @@ static MySQL_Monitor *GloMyMon;
 
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
         do {\
-                rc=sqlite3_step(_stmt);\
+                rc=(*proxy_sqlite3_step)(_stmt);\
                 if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
                         usleep(100);\
                 }\
@@ -825,20 +825,20 @@ void * monitor_connect_thread(void *arg) {
 	int rc;
 	char *query=NULL;
 	query=(char *)"INSERT OR REPLACE INTO mysql_server_connect_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
-	//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 	rc = mmsd->mondb->prepare_v2(query, &statement);
 	ASSERT_SQLITE_OK(rc, mmsd->mondb);
-	rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-	rc=sqlite3_bind_int(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+	rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+	rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 	unsigned long long time_now=realtime_time();
 	time_now=time_now-(mmsd->t2 - start_time);
-	rc=sqlite3_bind_int64(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-	rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-	rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+	rc=(*proxy_sqlite3_bind_int64)(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+	rc=(*proxy_sqlite3_bind_int64)(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+	rc=(*proxy_sqlite3_bind_text)(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 	SAFE_SQLITE3_STEP2(statement);
-	rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-	rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-	sqlite3_finalize(statement);
+	rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+	rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+	(*proxy_sqlite3_finalize)(statement);
 	if (mmsd->mysql_error_msg) {
 		if (
 			(strncmp(mmsd->mysql_error_msg,"Access denied for user",strlen("Access denied for user"))==0)
@@ -934,20 +934,20 @@ __exit_monitor_ping_thread:
 #endif // TEST_AURORA
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
-		//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+		//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 		rc = mmsd->mondb->prepare_v2(query, &statement);
 		ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_bind_int(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		unsigned long long time_now=realtime_time();
 		time_now=time_now-(mmsd->t2 - start_time);
-		rc=sqlite3_bind_int64(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_bind_text(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		SAFE_SQLITE3_STEP2(statement);
-		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		sqlite3_finalize(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		(*proxy_sqlite3_finalize)(statement);
 		if (mmsd->mysql_error_msg == NULL) {
 			ping_success = true;
 		}
@@ -1189,16 +1189,16 @@ __exit_monitor_read_only_thread:
 		int rc;
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_read_only_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-		//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+		//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 		rc = mmsd->mondb->prepare_v2(query, &statement);
 		ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		int read_only=1; // as a safety mechanism , read_only=1 is the default
-		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_bind_int(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		unsigned long long time_now=realtime_time();
 		time_now=time_now-(mmsd->t2 - start_time);
-		rc=sqlite3_bind_int64(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
 			int k=0;
@@ -1224,29 +1224,29 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 					}
 				}
 //					if (repl_lag>=0) {
-				rc=sqlite3_bind_int64(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_bind_int64)(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 //					} else {
-//						rc=sqlite3_bind_null(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+//						rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 //					}
 			} else {
 				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
-				rc=sqlite3_bind_null(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 			}
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		} else {
-			rc=sqlite3_bind_null(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+			rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		}
 		if (mmsd->result) {
 			// make sure it is clear
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
-		rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		SAFE_SQLITE3_STEP2(statement);
-		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		sqlite3_finalize(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		(*proxy_sqlite3_finalize)(statement);
 
 		if (mmsd->mysql_error_msg == NULL) {
 			read_only_success = true;
@@ -1564,15 +1564,15 @@ __end_process_group_replication_result:
 		int rc;
 		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_read_only_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-		rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+		rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 		ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		int read_only=1; // as a safety mechanism , read_only=1 is the default
-		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_bind_int(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		unsigned long long time_now=realtime_time();
 		time_now=time_now-(mmsd->t2 - start_time);
-		rc=sqlite3_bind_int64(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		if (mmsd->result) {
 			int num_fields=0;
 			int k=0;
@@ -1596,23 +1596,23 @@ __end_process_group_replication_result:
 				}
 			}
 //					if (repl_lag>=0) {
-			rc=sqlite3_bind_int64(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 5, read_only); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 //					} else {
-//						rc=sqlite3_bind_null(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+//						rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 //					}
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		} else {
-			rc=sqlite3_bind_null(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+			rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		}
-		rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		SAFE_SQLITE3_STEP2(statement);
-		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 
 		MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only);
 
-		sqlite3_finalize(statement);
+		(*proxy_sqlite3_finalize)(statement);
 */
 
 	}
@@ -2167,16 +2167,16 @@ __exit_monitor_replication_lag_thread:
 		char *query=NULL;
 
 			query=(char *)"INSERT OR REPLACE INTO mysql_server_replication_lag_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
-			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 			rc = mmsd->mondb->prepare_v2(query, &statement);
 			ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				int repl_lag=-2;
-				rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-				rc=sqlite3_bind_int(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				unsigned long long time_now=realtime_time();
 				time_now=time_now-(mmsd->t2 - start_time);
-				rc=sqlite3_bind_int64(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_bind_int64)(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_bind_int64)(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				if (mmsd->interr == 0 && mmsd->result) {
 					int num_fields=0;
 					int k=0;
@@ -2209,25 +2209,25 @@ __exit_monitor_replication_lag_thread:
 							}
 						}
 						if (repl_lag>=0) {
-							rc=sqlite3_bind_int64(statement, 5, repl_lag); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+							rc=(*proxy_sqlite3_bind_int64)(statement, 5, repl_lag); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 						} else {
-							rc=sqlite3_bind_null(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+							rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 						}
 					} else {
 							proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
-							rc=sqlite3_bind_null(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+							rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 					}
 					mysql_free_result(mmsd->result);
 					mmsd->result=NULL;
 				} else {
-					rc=sqlite3_bind_null(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+					rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				}
-				rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_bind_text)(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				SAFE_SQLITE3_STEP2(statement);
-				rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-				rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
-			sqlite3_finalize(statement);
+			(*proxy_sqlite3_finalize)(statement);
 			if (mmsd->mysql_error_msg == NULL) {
 				replication_lag_success = true;
 			}
@@ -2385,7 +2385,7 @@ __end_monitor_connect_loop:
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_connect_log WHERE time_start_us < ?1";
-			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 			rc = monitordb->prepare_v2(query, &statement);
 			ASSERT_SQLITE_OK(rc, monitordb);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -2393,11 +2393,11 @@ __end_monitor_connect_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			sqlite3_finalize(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			(*proxy_sqlite3_finalize)(statement);
 		}
 		if (resultset)
 			delete resultset;
@@ -2503,7 +2503,7 @@ __end_monitor_ping_loop:
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_ping_log WHERE time_start_us < ?1";
-			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 			rc = monitordb->prepare_v2(query, &statement);
 			ASSERT_SQLITE_OK(rc, monitordb);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -2511,11 +2511,11 @@ __end_monitor_ping_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			sqlite3_finalize(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			(*proxy_sqlite3_finalize)(statement);
 		}
 
 		if (resultset) {
@@ -2790,7 +2790,7 @@ __end_monitor_read_only_loop:
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
-			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 			rc = monitordb->prepare_v2(query, &statement);
 			ASSERT_SQLITE_OK(rc, monitordb);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_read_only_interval * (mysql_thread___monitor_read_only_max_timeout_count + 1 )) { // issue #626
@@ -2798,11 +2798,11 @@ __end_monitor_read_only_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_read_only_interval * (mysql_thread___monitor_read_only_max_timeout_count + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			sqlite3_finalize(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			(*proxy_sqlite3_finalize)(statement);
 		}
 
 		if (resultset)
@@ -2918,18 +2918,18 @@ __end_monitor_group_replication_loop:
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
-			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 			ASSERT_SQLITE_OK(rc, monitordb);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
 				if (mysql_thread___monitor_ping_interval < 3600000)
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			sqlite3_finalize(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			(*proxy_sqlite3_finalize)(statement);
 */
 		}
 
@@ -3125,7 +3125,7 @@ __end_monitor_replication_lag_loop:
 			int rc;
 			char *query=NULL;
 			query=(char *)"DELETE FROM mysql_server_replication_lag_log WHERE time_start_us < ?1";
-			//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
+			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 			rc = monitordb->prepare_v2(query, &statement);
 			ASSERT_SQLITE_OK(rc, monitordb);
 			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
@@ -3133,11 +3133,11 @@ __end_monitor_replication_lag_loop:
 					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
 			}
 			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_bind_int64)(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
 			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			sqlite3_finalize(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, monitordb);
+			(*proxy_sqlite3_finalize)(statement);
 		}
 
 		if (resultset)
@@ -3616,7 +3616,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
 	query1=(char *)"INSERT INTO mysql_server_group_replication_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
 	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->group_replication_mutex);
-	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
 	rc = monitordb->prepare_v2(query1, &statement1);
 	ASSERT_SQLITE_OK(rc, monitordb);
 	monitordb->execute((char *)"DELETE FROM mysql_server_group_replication_log");
@@ -3631,21 +3631,21 @@ void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
 		int i;
 		for (i=0; i<MyGR_Nentries; i++) {
 			if (node->last_entries[i].start_time) {
-				rc=sqlite3_bind_text(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 3, node->last_entries[i].start_time ); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 4, node->last_entries[i].check_time ); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 5, ( node->last_entries[i].primary_partition ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 6, ( node->last_entries[i].read_only ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 7, node->last_entries[i].transactions_behind ); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 8, node->last_entries[i].error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 3, node->last_entries[i].start_time ); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 4, node->last_entries[i].check_time ); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 5, ( node->last_entries[i].primary_partition ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 6, ( node->last_entries[i].read_only ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 7, node->last_entries[i].transactions_behind ); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 8, node->last_entries[i].error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 				SAFE_SQLITE3_STEP2(statement1);
-				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
 			}
 		}
 	}
-	sqlite3_finalize(statement1);
+	(*proxy_sqlite3_finalize)(statement1);
 	pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 }
 
@@ -3657,7 +3657,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
-	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
 	rc = monitordb->prepare_v2(query1, &statement1);
 	ASSERT_SQLITE_OK(rc, monitordb);
 	monitordb->execute((char *)"DELETE FROM mysql_server_galera_log");
@@ -3672,26 +3672,26 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 		int i;
 		for (i=0; i<Galera_Nentries; i++) {
 			if (node->last_entries[i].start_time) {
-				rc=sqlite3_bind_text(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 3, node->last_entries[i].start_time ); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 4, node->last_entries[i].check_time ); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 5, ( node->last_entries[i].primary_partition ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 6, ( node->last_entries[i].read_only ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 7, node->last_entries[i].wsrep_local_recv_queue ); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_int64(statement1, 8, node->last_entries[i].wsrep_local_state ); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 9, ( node->last_entries[i].wsrep_desync ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 10, ( node->last_entries[i].wsrep_reject_queries ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 11, ( node->last_entries[i].wsrep_sst_donor_rejects_queries ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 12, ( node->last_entries[i].pxc_maint_mode ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 13, node->last_entries[i].error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 3, node->last_entries[i].start_time ); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 4, node->last_entries[i].check_time ); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 5, ( node->last_entries[i].primary_partition ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 6, ( node->last_entries[i].read_only ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 7, node->last_entries[i].wsrep_local_recv_queue ); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 8, node->last_entries[i].wsrep_local_state ); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 9, ( node->last_entries[i].wsrep_desync ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 10, ( node->last_entries[i].wsrep_reject_queries ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 11, ( node->last_entries[i].wsrep_sst_donor_rejects_queries ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 12, ( node->last_entries[i].pxc_maint_mode ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 13, node->last_entries[i].error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 				SAFE_SQLITE3_STEP2(statement1);
-				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
 			}
 		}
 	}
-	sqlite3_finalize(statement1);
+	(*proxy_sqlite3_finalize)(statement1);
 	pthread_mutex_unlock(&GloMyMon->galera_mutex);
 }
 
@@ -3707,7 +3707,7 @@ char * MySQL_Monitor::galera_find_last_node(int writer_hostgroup) {
 	char *str = NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
 /*
-	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
 	ASSERT_SQLITE_OK(rc, monitordb);
 	monitordb->execute((char *)"DELETE FROM mysql_server_galera_log");
 */
@@ -3796,10 +3796,10 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 	char *query2=NULL;
 	query2=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_log (hostname, port, time_start_us, success_time_us, error) VALUES (?1, ?2, ?3, ?4, ?5)";
 	sqlite3_stmt *statement2=NULL;
-	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
 	rc = monitordb->prepare_v2(query1, &statement1);
 	ASSERT_SQLITE_OK(rc, monitordb);
-	//rc=sqlite3_prepare_v2(mondb, query2, -1, &statement2, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query2, -1, &statement2, 0);
 	rc = monitordb->prepare_v2(query2, &statement2);
 	ASSERT_SQLITE_OK(rc, monitordb);
 	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
@@ -3820,37 +3820,37 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 					for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3!=aase->host_statuses->end(); ++it3) {
 						AWS_Aurora_replica_host_status_entry *hse = *it3;
 						if (hse) {
-							rc=sqlite3_bind_text(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_int64(statement1, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_int64(statement1, 3, aase->start_time ); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_int64(statement1, 4, aase->check_time ); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_text(statement1, 5, aase->error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_text(statement1, 6, hse->server_id , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_text(statement1, 7, hse->session_id , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_text(statement1, 8, hse->last_update_timestamp , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_double(statement1, 9, hse->replica_lag_ms ); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_int64(statement1, 10, hse->estimated_lag_ms ); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_double(statement1, 11, hse->cpu ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_text)(statement1, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 3, aase->start_time ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 4, aase->check_time ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_text)(statement1, 5, aase->error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_text)(statement1, 6, hse->server_id , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_text)(statement1, 7, hse->session_id , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_text)(statement1, 8, hse->last_update_timestamp , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_double)(statement1, 9, hse->replica_lag_ms ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 10, hse->estimated_lag_ms ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_double)(statement1, 11, hse->cpu ); ASSERT_SQLITE_OK(rc, monitordb);
 							SAFE_SQLITE3_STEP2(statement1);
-							rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
 						}
 					}
 				} else {
-					rc=sqlite3_bind_text(statement2, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_bind_int64(statement2, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_bind_int64(statement2, 3, aase->start_time ); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_bind_int64(statement2, 4, aase->check_time ); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_bind_text(statement2, 5, aase->error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_text)(statement2, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 3, aase->start_time ); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 4, aase->check_time ); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_text)(statement2, 5, aase->error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 					SAFE_SQLITE3_STEP2(statement2);
-					rc=sqlite3_clear_bindings(statement2); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_reset(statement2); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, monitordb);
 				}
 			}
 		}
 	}
-	sqlite3_finalize(statement1);
-	sqlite3_finalize(statement2);
+	(*proxy_sqlite3_finalize)(statement1);
+	(*proxy_sqlite3_finalize)(statement2);
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 }
 
@@ -3861,7 +3861,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_check_status() {
 	char *query1=NULL;
 	query1=(char *)"INSERT OR IGNORE INTO mysql_server_aws_aurora_check_status VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
 	sqlite3_stmt *statement1=NULL;
-	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
+	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
 	rc = monitordb->prepare_v2(query1, &statement1);
 	ASSERT_SQLITE_OK(rc, monitordb);
 	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
@@ -3896,34 +3896,34 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_check_status() {
 						AWS_Aurora_replica_host_status_entry *hse = *it3;
 						if (hse) {
 */
-							rc=sqlite3_bind_int64(statement1, 1, node->writer_hostgroup); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_text(statement1, 2, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_int64(statement1, 3, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_text(statement1, 4, lut, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_int64(statement1, 5, node->num_checks_tot ); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_int64(statement1, 6, node->num_checks_ok ); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_bind_text(statement1, 7, error_msg , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 1, node->writer_hostgroup); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_text)(statement1, 2, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_text)(statement1, 4, lut, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 5, node->num_checks_tot ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 6, node->num_checks_ok ); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_bind_text)(statement1, 7, error_msg , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 							SAFE_SQLITE3_STEP2(statement1);
-							rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, monitordb);
-							rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+							rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
 /*
 						}
 					}
 				} else {
-					rc=sqlite3_bind_text(statement2, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_bind_int64(statement2, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_bind_int64(statement2, 3, aase->start_time ); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_bind_int64(statement2, 4, aase->check_time ); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_bind_text(statement2, 5, aase->error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_text)(statement2, 1, host.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 2, atoi(port.c_str())); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 3, aase->start_time ); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_int64)(statement2, 4, aase->check_time ); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_bind_text)(statement2, 5, aase->error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 					SAFE_SQLITE3_STEP2(statement2);
-					rc=sqlite3_clear_bindings(statement2); ASSERT_SQLITE_OK(rc, monitordb);
-					rc=sqlite3_reset(statement2); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, monitordb);
 				}
 			}
 		}
 */
 	}
-	sqlite3_finalize(statement1);
+	(*proxy_sqlite3_finalize)(statement1);
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 }
 

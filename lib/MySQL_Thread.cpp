@@ -476,6 +476,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"threshold_resultset_size",
 	(char *)"query_digests_max_digest_length",
 	(char *)"query_digests_max_query_length",
+	(char *)"query_digests_grouping_limit",
 	(char *)"wait_timeout",
 	(char *)"throttle_max_bytes_per_second_to_client",
 	(char *)"throttle_ratio_server_to_client",
@@ -1121,6 +1122,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
+	variables.query_digests_grouping_limit = 3;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -1463,6 +1465,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 				if (!strcmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
 				if (!strcmp(name,"query_digests_replace_null")) return (int)variables.query_digests_replace_null;
 				if (!strcmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
+				if (!strcmp(name,"query_digests_grouping_limit")) return (int)variables.query_digests_grouping_limit;
 			}
 			if (name[6]=='p') {
 				if (!strcmp(name,"query_processor_iterations")) return (int)variables.query_processor_iterations;
@@ -1853,6 +1856,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"query_digests_max_query_length")) {
 		sprintf(intbuf,"%d",variables.query_digests_max_query_length);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"query_digests_grouping_limit")) {
+		sprintf(intbuf,"%d",variables.query_digests_grouping_limit);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"wait_timeout")) {
@@ -2435,6 +2442,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		int intv=atoi(value);
 		if (intv >= 16 && intv <= 16*1024*1024) {
 			variables.query_digests_max_query_length=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"query_digests_grouping_limit")) {
+		int intv=atoi(value);
+		if (intv >= 1 && intv <= 2089) {
+			variables.query_digests_grouping_limit=intv;
 			return true;
 		} else {
 			return false;
@@ -3472,7 +3488,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 // scan both mysql_thread_variables_names AND mysql_tracked_variables
 bool MySQL_Threads_Handler::has_variable(const char *name) {
 	if (strlen(name) > 8) {
-		if (strncmp(name, "default_", 8)) {
+		if (strncmp(name, "default_", 8) == 0) {
 			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
 				size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
 				if (strlen(name) == (var_len+8)) {
@@ -3854,7 +3870,11 @@ bool MySQL_Thread::init() {
 
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
 	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)(SQL_MODE|TIME_ZONE|CHARACTER_SET_RESULTS|CHARACTER_SET_CLIENT|CHARACTER_SET_DATABASE|SESSION_TRACK_GTIDS|SQL_AUTO_IS_NULL|SQL_SELECT_LIMIT|SQL_SAFE_UPDATES|COLLATION_CONNECTION|CHARACTER_SET_CONNECTION|NET_WRITE_TIMEOUT|WSREP_SYNC_WAIT|TX_ISOLATION|MAX_JOIN_SIZE( *)(:|)=( *))");
+
+	std::stringstream ss;
+	ss << "^SET (|SESSION |@@|@@session.)(" << mysql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION( *)(:|)=( *))";
+	match_regexes[1]=new Session_Regex((char *)ss.str().c_str());
+
 	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 	match_regexes[3]=new Session_Regex((char *)"^(set)(?: +)((charset)|(character +set))(?: )");
 
@@ -4833,6 +4853,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_no_digits=(bool)GloMTH->get_variable_int((char *)"query_digests_no_digits");
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
+	mysql_thread___query_digests_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_grouping_limit");
 	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas=GloMTH->get_variable_int((char *)"aurora_max_lag_ms_only_read_from_replicas");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");

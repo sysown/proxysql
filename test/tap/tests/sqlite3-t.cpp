@@ -1,15 +1,18 @@
 #define PROXYSQL_EXTERN
-
+#define MAIN_PROXY_SQLITE3
 #include <stdlib.h>
 #include "tap.h"
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <openssl/ssl.h>
+#include "proxysql_structs.h"
+#include "proxysql_glovars.hpp"
 #include "sqlite3db.h"
 
 int main() {
 	plan(8);
-
+	SQLite3DB::LoadPlugin(NULL);
 	SQLite3DB *db;	// in memory
 	db = new SQLite3DB();
 	db->open((char *)"file:mem_db?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);

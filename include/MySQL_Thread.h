@@ -426,6 +426,7 @@ class MySQL_Threads_Handler
 		bool query_digests_no_digits;
 		bool query_digests_normalize_digest_text;
 		bool query_digests_track_hostname;
+		int query_digests_grouping_limit;
 		bool default_reconnect;
 		bool have_compress;
 		bool have_ssl;
