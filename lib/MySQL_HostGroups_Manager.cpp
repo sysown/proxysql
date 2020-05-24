@@ -2290,14 +2290,14 @@ MySrvC *MyHGC::get_random_MySrvC(char *gtid_uuid, uint64_t gtid_trxid, int max_l
 	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
 	unsigned int num_candidates = 0;
 	if (l > 32) {
-		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *) * l);
+		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
 	}
 	if (l) {
 		for (j = 0; j < l; j++) {
 			mysrvc = mysrvs->idx(j);
-			if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {                                                                                          // consider this server only if ONLINE
-				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) {                                                                 // consider this server only if didn't reach max_connections
-					if (mysrvc->current_latency_us < (mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms * 1000)) { // consider the host only if not too far
+			if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
+				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
+					if (mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms * 1000)) { // consider the host only if not too far
 						if (gtid_trxid) {
 							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 								sum += mysrvc->weight;
@@ -2351,7 +2351,7 @@ MySrvC *MyHGC::get_random_MySrvC(char *gtid_uuid, uint64_t gtid_trxid, int max_l
 								mysrvc->connect_ERR_at_time_last_detected_error = 0;
 								mysrvc->time_last_detected_error = 0;
 								// if a server is taken back online, consider it immediately
-								if (mysrvc->current_latency_us < (mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms * 1000)) { // consider the host only if not too far
+								if (mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms * 1000)) { // consider the host only if not too far
 									if (gtid_trxid) {
 										if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 											sum += mysrvc->weight;
@@ -2413,7 +2413,7 @@ MySrvC *MyHGC::get_random_MySrvC(char *gtid_uuid, uint64_t gtid_trxid, int max_l
 			// most of the follow code is copied from few lines above
 			time_t t;
 			t = time(NULL);
-			int max_wait_sec = (mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max / 10000 - 1 : mysql_thread___shun_recovery_time_sec / 10);
+			int max_wait_sec = (mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max / 10000 - 1 : mysql_thread___shun_recovery_time_sec/10);
 			if (max_wait_sec < 1) { // min wait time should be at least 1 second
 				max_wait_sec = 1;
 			}
@@ -2551,17 +2551,17 @@ MySrvC *MyHGC::get_random_MySrvC(char *gtid_uuid, uint64_t gtid_trxid, int max_l
 
 		for (j = 0; j < num_candidates; j++) {
 			mysrvc = mysrvcCandidates[j];
-			New_sum += mysrvc->weight;
-			if (k <= New_sum) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-				if (l > 32) {
-					free(mysrvcCandidates);
-				}
+							New_sum += mysrvc->weight;
+							if (k <= New_sum) {
+								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+								if (l > 32) {
+									free(mysrvcCandidates);
+								}
 #ifdef TEST_AURORA
-				array_mysrvc_cands += num_candidates;
+								array_mysrvc_cands += num_candidates;
 #endif // TEST_AURORA
-				return mysrvc;
-			}
+								return mysrvc;
+							}
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
