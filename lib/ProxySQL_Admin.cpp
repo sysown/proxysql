@@ -11353,7 +11353,7 @@ void ProxySQL_Admin::stats___mysql_prepared_statements_info() {
 	int max_bulk_row_idx=resultset->rows_count/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
 	vector<bool> is_nums { true, false, false, false, true, true, false };
-	vector<int> cols { 0, 1, 2, 3, 5, 6, 7, 4 };
+	vector<int> cols { 0, 1, 2, 3, 5, 6, 4 };
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r1=*it;
 		int idx=row_idx%32;
