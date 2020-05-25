@@ -60,6 +60,7 @@ class ProxySQL_GlobalVariables {
 	char *pid;
 	int restart_on_missing_heartbeats;
 	char * execute_on_exit_failure;
+	char * sqlite3_plugin;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
 	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };

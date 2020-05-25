@@ -82,6 +82,8 @@ clean:
 	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora || true
 
 OPT=-O2 -Wl,--no-as-needed
+debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed
+debug: tests
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
@@ -99,8 +101,14 @@ galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
 aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
 
-test_default_value_transaction_isolation-t: test_default_value_transaction_isolation-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_default_value_transaction_isolation-t.cpp -Wall $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -pthread -ldl $(STATIC_LIBS) -o test_default_value_transaction_isolation-t
+test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_tokenizer-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+1493_mixed_compression: reg_test_1493-mixed_compression-t.cpp
+	g++ -DDEBUG test_mixed_compression-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o reg_test_1493-mixed_compression-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+2793_compression: reg_test_2793-compression-t.cpp
+	g++ -DDEBUG reg_test_2793-compression-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o reg_test_2793-compression-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 test_admin_configs-t: test_admin_configs-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_admin_configs-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -lssl -lcrypto -Wl,--no-as-needed -ldl -lpthread -o test_admin_configs-t

@@ -20,32 +20,22 @@ update_var MySQL_Variables::updaters[SQL_NAME_LAST];
 
 
 MySQL_Variables::MySQL_Variables() {
+	variables_regexp = "";
 	for (auto i = 0; i < SQL_NAME_LAST; i++) {
-		switch(i) {
-			case SQL_SAFE_UPDATES:
-			case SQL_SELECT_LIMIT:
-			case SQL_SQL_MODE:
-			case SQL_TIME_ZONE:
-			case SQL_CHARACTER_SET_RESULTS:
-			case SQL_CHARACTER_SET_CONNECTION:
-			case SQL_CHARACTER_SET_CLIENT:
-			case SQL_CHARACTER_SET_DATABASE:
-			case SQL_ISOLATION_LEVEL:
-			case SQL_TRANSACTION_READ:
-			case SQL_SQL_AUTO_IS_NULL:
-			case SQL_COLLATION_CONNECTION:
-			case SQL_NET_WRITE_TIMEOUT:
-			case SQL_MAX_JOIN_SIZE:
-			case SQL_WSREP_SYNC_WAIT:
-				MySQL_Variables::verifiers[i] = verify_server_variable;
-				MySQL_Variables::updaters[i] = update_server_variable;
-				break;
-			case SQL_LOG_BIN:
-				MySQL_Variables::verifiers[i] = verify_server_variable;
-				MySQL_Variables::updaters[i] = logbin_update_server_variable;
-				break;
-			default:
-				MySQL_Variables::updaters[i] = NULL;
+		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_ACTION || i == SQL_SET_NAMES) {
+			MySQL_Variables::updaters[i] = NULL;
+			MySQL_Variables::verifiers[i] = NULL;
+		}
+		else if (i == SQL_LOG_BIN) {
+			MySQL_Variables::verifiers[i] = verify_server_variable;
+			MySQL_Variables::updaters[i] = logbin_update_server_variable;
+		} else {
+			MySQL_Variables::verifiers[i] = verify_server_variable;
+			MySQL_Variables::updaters[i] = update_server_variable;
+		}
+		if (mysql_tracked_variables[i].status == SETTING_VARIABLE) {
+			variables_regexp += mysql_tracked_variables[i].set_variable_name;
+			variables_regexp += "|";
 		}
 	}
 }
@@ -534,3 +524,4 @@ bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string
 	}
 	return true;
 }
+

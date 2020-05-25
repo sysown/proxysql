@@ -47,7 +47,7 @@
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
-    rc=sqlite3_step(_stmt);\
+    rc=(*proxy_sqlite3_step)(_stmt);\
     if (rc!=SQLITE_DONE) {\
       assert(rc==SQLITE_LOCKED);\
       usleep(100);\
@@ -57,7 +57,7 @@
 
 #define SAFE_SQLITE3_STEP2(_stmt) do {\
 	do {\
-	rc=sqlite3_step(_stmt);\
+	rc=(*proxy_sqlite3_step)(_stmt);\
 		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
 			usleep(100);\
 		}\

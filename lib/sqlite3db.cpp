@@ -1,6 +1,10 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "SpookyV2.h"
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #define USLEEP_SQLITE_LOCKED 100
 
@@ -50,11 +54,11 @@ void SQLite3_row::add_fields(sqlite3_stmt *stmt) {
 	int data_ptr=0;
 	// compute the length
 	for (i=0;i<cnt;i++) {
-		t=sqlite3_column_type(stmt,i);
+		t=(*proxy_sqlite3_column_type)(stmt,i);
 		if (t==SQLITE_NULL) {
 			sizes[i]=0;
 		} else {
-			sizes[i]=sqlite3_column_bytes(stmt,i);
+			sizes[i]=(*proxy_sqlite3_column_bytes)(stmt,i);
 			data_size+=sizes[i];
 			data_size++; // leading 0
 		}
@@ -63,8 +67,8 @@ void SQLite3_row::add_fields(sqlite3_stmt *stmt) {
 		data=(char *)malloc(data_size);
 	}
 	for (i=0;i<cnt;i++) {
-		t=sqlite3_column_type(stmt,i);
-		const char *c=(char *)sqlite3_column_text(stmt,i);
+		t=(*proxy_sqlite3_column_type)(stmt,i);
+		const char *c=(char *)(*proxy_sqlite3_column_text)(stmt,i);
 		if (t==SQLITE_NULL) {
 			//sizes[i]=0;
 			fields[i]=NULL;
@@ -121,9 +125,9 @@ SQLite3DB::~SQLite3DB() {
 	if (db) {
 		// close db
 		int rc;
-		rc=sqlite3_close_v2(db);
+		rc=(*proxy_sqlite3_close_v2)(db);
 		if (rc!=SQLITE_OK) {
-	    proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on sqlite3_close_v2(): %s\n", sqlite3_errmsg(db));	
+	    proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on (*proxy_sqlite3_close_v2)(): %s\n", (*proxy_sqlite3_errmsg)(db));	
 			if (assert_on_error) {
 				assert(rc==0);
 			}
@@ -138,9 +142,9 @@ int SQLite3DB::open(char *__url, int flags) {
 	assert(db==NULL);
 	url=strdup(__url);
 	int rc;
-	rc=sqlite3_open_v2(url, &db, flags , NULL);
+	rc=(*proxy_sqlite3_open_v2)(url, &db, flags , NULL);
 	if (rc) {
-    proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on sqlite3_open_v2(): %s\n", sqlite3_errmsg(db));
+    proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on (*proxy_sqlite3_open_v2)(): %s\n", (*proxy_sqlite3_errmsg)(db));
 		if (assert_on_error) {
 			assert(rc==0);
 		}
@@ -156,7 +160,7 @@ bool SQLite3DB::execute(const char *str) {
 	char *err=NULL;
 	int rc=0;
 	do {
-	rc=sqlite3_exec(db, str, NULL, 0, &err);
+	rc=(*proxy_sqlite3_exec)(db, str, NULL, 0, &err);
 //	fprintf(stderr,"%d : %s\n", rc, str);
 		if(err!=NULL) {
 			if (rc!=SQLITE_LOCKED && rc!=SQLITE_BUSY) {
@@ -165,10 +169,10 @@ bool SQLite3DB::execute(const char *str) {
 					assert(err==0);
 				}
 			}
-			sqlite3_free(err);
+			(*proxy_sqlite3_free)(err);
 			err=NULL;
 		}
-		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of sqlite3_exec() failed because locked
+		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of (*proxy_sqlite3_exec)() failed because locked
 			usleep(USLEEP_SQLITE_LOCKED);
 		}
 	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
@@ -181,7 +185,7 @@ bool SQLite3DB::execute(const char *str) {
 int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
 	int rc;
 	do {
-		rc = sqlite3_prepare_v2(db, str, -1, statement, 0);
+		rc = (*proxy_sqlite3_prepare_v2)(db, str, -1, statement, 0);
 		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
 			usleep(USLEEP_SQLITE_LOCKED);
 		}
@@ -214,10 +218,10 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 	bool ret=false;
 	VALGRIND_DISABLE_ERROR_REPORTING;
 	do {
-		rc = sqlite3_prepare_v2(db, str, -1, &statement, 0);
+		rc = (*proxy_sqlite3_prepare_v2)(db, str, -1, &statement, 0);
 		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
-			if (sqlite3_get_autocommit(db)==0) {
-				*error=strdup(sqlite3_errmsg(db));
+			if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+				*error=strdup((*proxy_sqlite3_errmsg)(db));
 				goto __exit_execute_statement;
 			}
 			usleep(USLEEP_SQLITE_LOCKED);
@@ -225,28 +229,28 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
 	if (rc == SQLITE_OK) {
 	} else {
-		*error=strdup(sqlite3_errmsg(db));
+		*error=strdup((*proxy_sqlite3_errmsg)(db));
 		goto __exit_execute_statement;
 	}
 	VALGRIND_ENABLE_ERROR_REPORTING;
-	*cols = sqlite3_column_count(statement);
+	*cols = (*proxy_sqlite3_column_count)(statement);
 	if (*cols==0) { // not a SELECT
 		*resultset=NULL;
 		do {
-			rc=sqlite3_step(statement);
+			rc=(*proxy_sqlite3_step)(statement);
 			if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
-				if (sqlite3_get_autocommit(db)==0) {
-					*error=strdup(sqlite3_errmsg(db));
+				if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+					*error=strdup((*proxy_sqlite3_errmsg)(db));
 					goto __exit_execute_statement;
 				}
 				usleep(USLEEP_SQLITE_LOCKED);
 			}
 		} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
 		if (rc==SQLITE_DONE) {
-			*affected_rows=sqlite3_changes(db);
+			*affected_rows=(*proxy_sqlite3_changes)(db);
 			ret=true;
 		} else {
-			*error=strdup(sqlite3_errmsg(db));
+			*error=strdup((*proxy_sqlite3_errmsg)(db));
 			goto __exit_execute_statement;
 		}
 	} else {
@@ -255,8 +259,8 @@ bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int 
 		ret=true;
 	}
 __exit_execute_statement:
-	sqlite3_reset(statement);
-	sqlite3_finalize(statement);
+	(*proxy_sqlite3_reset)(statement);
+	(*proxy_sqlite3_finalize)(statement);
 	return ret;
 }
 
@@ -266,25 +270,25 @@ bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, 
 	*error=NULL;
 	bool ret=false;
 	VALGRIND_DISABLE_ERROR_REPORTING;
-	if(sqlite3_prepare_v2(db, str, -1, statement, 0) != SQLITE_OK) {
-		*error=strdup(sqlite3_errmsg(db));
+	if((*proxy_sqlite3_prepare_v2)(db, str, -1, statement, 0) != SQLITE_OK) {
+		*error=strdup((*proxy_sqlite3_errmsg)(db));
 		goto __exit_execute_statement;
 	}
 	VALGRIND_ENABLE_ERROR_REPORTING;
-	*cols = sqlite3_column_count(*statement);
+	*cols = (*proxy_sqlite3_column_count)(*statement);
 	if (*cols==0) { // not a SELECT
 		//*resultset=NULL;
 		do {
-			rc=sqlite3_step(*statement);
+			rc=(*proxy_sqlite3_step)(*statement);
 			if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) { // the execution of the prepared statement failed because locked
 				usleep(USLEEP_SQLITE_LOCKED);
 			}
 		} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
 		if (rc==SQLITE_DONE) {
-			*affected_rows=sqlite3_changes(db);
+			*affected_rows=(*proxy_sqlite3_changes)(db);
 			ret=true;
 		} else {
-			*error=strdup(sqlite3_errmsg(db));
+			*error=strdup((*proxy_sqlite3_errmsg)(db));
 			goto __exit_execute_statement;
 		}
 	} else {
@@ -293,8 +297,8 @@ bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, 
 		ret=true;
 	}
 __exit_execute_statement:
-	// NOTE: the caller MUST call sqlite3_finalize()
-	//sqlite3_finalize(statement);
+	// NOTE: the caller MUST call (*proxy_sqlite3_finalize)()
+	//(*proxy_sqlite3_finalize)(statement);
 	return ret;
 }
 
@@ -326,17 +330,17 @@ int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
 	sqlite3_stmt *statement;
 	char *buff=(char *)calloc(1,l);
 	sprintf(buff, q1, table_name , table_def);
-	if(sqlite3_prepare_v2(db, buff, -1, &statement, 0) != SQLITE_OK) {
-	  proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on sqlite3_prepare_v2() running query \"%s\" : %s\n", buff, sqlite3_errmsg(db));
-	  sqlite3_finalize(statement);
+	if((*proxy_sqlite3_prepare_v2)(db, buff, -1, &statement, 0) != SQLITE_OK) {
+	  proxy_debug(PROXY_DEBUG_SQLITE, 1, "SQLITE: Error on (*proxy_sqlite3_prepare_v2)() running query \"%s\" : %s\n", buff, (*proxy_sqlite3_errmsg)(db));
+	  (*proxy_sqlite3_finalize)(statement);
 	  free(buff);
 	  assert(0);
 	}
 	int result=0;
-	while ((result=sqlite3_step(statement))==SQLITE_ROW) {
-	  count+=sqlite3_column_int(statement,0);
+	while ((result=(*proxy_sqlite3_step)(statement))==SQLITE_ROW) {
+	  count+=(*proxy_sqlite3_column_int)(statement,0);
 	}
-	sqlite3_finalize(statement);
+	(*proxy_sqlite3_finalize)(statement);
 	free(buff);
 	return count;
 }
@@ -555,7 +559,7 @@ void SQLite3_result::add_column_definition(int a, const char *b) {
 }
 
 int SQLite3_result::add_row(sqlite3_stmt *stmt, bool skip) {
-	int rc=sqlite3_step(stmt);
+	int rc=(*proxy_sqlite3_step)(stmt);
 	if (rc!=SQLITE_ROW) return rc;
 	if (skip==false) {
 		SQLite3_row *row=new SQLite3_row(columns);
@@ -590,9 +594,9 @@ int SQLite3_result::add_row(SQLite3_row *old_row) {
 
 SQLite3_result::SQLite3_result(sqlite3_stmt *stmt) {
 	rows_count=0;
-	columns=sqlite3_column_count(stmt);
+	columns=(*proxy_sqlite3_column_count)(stmt);
 	for (int i=0; i<columns; i++) {
-		add_column_definition(sqlite3_column_type(stmt,i), sqlite3_column_name(stmt,i));
+		add_column_definition((*proxy_sqlite3_column_type)(stmt,i), (*proxy_sqlite3_column_name)(stmt,i));
 	}
 	while (add_row(stmt)==SQLITE_ROW) {};
 }
@@ -600,9 +604,9 @@ SQLite3_result::SQLite3_result(sqlite3_stmt *stmt) {
 SQLite3_result::SQLite3_result(sqlite3_stmt *stmt, int * found_rows, unsigned int offset, unsigned int limit) {
 	rows_count=0;
 	int fr = 0;
-	columns=sqlite3_column_count(stmt);
+	columns=(*proxy_sqlite3_column_count)(stmt);
 	for (int i=0; i<columns; i++) {
-		add_column_definition(sqlite3_column_type(stmt,i), sqlite3_column_name(stmt,i));
+		add_column_definition((*proxy_sqlite3_column_type)(stmt,i), (*proxy_sqlite3_column_name)(stmt,i));
 	}
 	int rc = SQLITE_ROW;
 	if (offset > 0 || limit > 0) {
@@ -654,3 +658,148 @@ SQLite3_result::~SQLite3_result() {
 SQLite3_result::SQLite3_result() {
 	columns=0;
 }
+
+void SQLite3DB::LoadPlugin(const char *plugin_name) {
+	proxy_sqlite3_config = NULL;
+	proxy_sqlite3_bind_double = NULL;
+	proxy_sqlite3_bind_int = NULL;
+	proxy_sqlite3_bind_int64 = NULL;
+	proxy_sqlite3_bind_null = NULL;
+	proxy_sqlite3_bind_text = NULL;
+	proxy_sqlite3_column_name = NULL;
+	proxy_sqlite3_column_text = NULL;
+	proxy_sqlite3_column_bytes = NULL;
+	proxy_sqlite3_column_type = NULL;
+	proxy_sqlite3_column_count = NULL;
+	proxy_sqlite3_column_int = NULL;
+	proxy_sqlite3_errmsg = NULL;
+	proxy_sqlite3_finalize = NULL;
+	proxy_sqlite3_reset = NULL;
+	proxy_sqlite3_clear_bindings = NULL;
+	proxy_sqlite3_close_v2 = NULL;
+	proxy_sqlite3_get_autocommit = NULL;
+	proxy_sqlite3_free = NULL;
+	proxy_sqlite3_status = NULL;
+	proxy_sqlite3_changes = NULL;
+	proxy_sqlite3_step = NULL;
+	proxy_sqlite3_shutdown = NULL;
+	proxy_sqlite3_prepare_v2 = NULL;
+	proxy_sqlite3_open_v2 = NULL;
+	proxy_sqlite3_exec = NULL;
+	if (plugin_name) {
+		int fd = -1;
+		fd = ::open(plugin_name, O_RDONLY);
+		char binary_sha1_sqlite3[SHA_DIGEST_LENGTH*2+1];
+		if(fd >= 0) {
+			struct stat statbuf;
+			if(fstat(fd, &statbuf) == 0) {
+				unsigned char *fb = (unsigned char *)mmap(0, statbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
+				if (fb != MAP_FAILED) {
+					unsigned char temp[SHA_DIGEST_LENGTH];
+					SHA1(fb, statbuf.st_size, temp);
+					memset(binary_sha1_sqlite3, 0, SHA_DIGEST_LENGTH*2+1);
+					char buf[SHA_DIGEST_LENGTH*2];
+					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
+						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
+					}
+					memcpy(binary_sha1_sqlite3, buf, SHA_DIGEST_LENGTH*2);
+					munmap(fb,statbuf.st_size);
+				} else {
+					proxy_error("Unable to mmap %s: %s\n", plugin_name, strerror(errno));
+				}
+			} else {
+				proxy_error("Unable to fstat %s: %s\n", plugin_name, strerror(errno));
+			}
+		} else {
+			proxy_error("Unable to open %s: %s\n", plugin_name, strerror(errno));
+		}
+
+		close(fd);
+		proxy_info("SQLite3 Plugin SHA1 checksum: %s\n", binary_sha1_sqlite3);
+
+		dlerror();
+		char * dlsym_error = NULL;
+		dlerror();
+		dlsym_error=NULL;
+		void * handle_sqlite3_plugin = dlopen(plugin_name, RTLD_NOW);
+		if (!handle_sqlite3_plugin) {
+			cerr << "Cannot load SQLite3 plugin from library: " << dlerror() << '\n';
+			exit(EXIT_FAILURE);
+		} else {
+			dlerror();
+			int (*proxy_load_sqlite3)();
+			proxy_load_sqlite3 = (int (*)()) dlsym(handle_sqlite3_plugin, "proxy_load_sqlite3"); dlsym_error = dlerror();
+			if (dlsym_error!=NULL) { cerr << "Cannot load symbol proxy_load_sqlite3: " << dlsym_error << '\n'; exit(EXIT_FAILURE); }
+			(*proxy_load_sqlite3)();
+		}
+		if (handle_sqlite3_plugin==NULL || dlsym_error) {
+			proxy_error("Unable to load SQLite3 plugin from %s\n", plugin_name);
+			exit(EXIT_FAILURE);
+		}
+		proxy_info("Loaded SQLite3 from plugin\n");
+	} else {
+		proxy_sqlite3_config = sqlite3_config;
+		proxy_sqlite3_bind_double = sqlite3_bind_double;
+		proxy_sqlite3_bind_int = sqlite3_bind_int;
+		proxy_sqlite3_bind_int64 = sqlite3_bind_int64;
+		proxy_sqlite3_bind_null = sqlite3_bind_null;
+		proxy_sqlite3_bind_text = sqlite3_bind_text;
+		proxy_sqlite3_column_name = sqlite3_column_name;
+		proxy_sqlite3_column_text = sqlite3_column_text;
+		proxy_sqlite3_column_bytes = sqlite3_column_bytes;
+		proxy_sqlite3_column_type = sqlite3_column_type;
+		proxy_sqlite3_column_count = sqlite3_column_count;
+		proxy_sqlite3_column_int = sqlite3_column_int;
+		proxy_sqlite3_errmsg = sqlite3_errmsg;
+		proxy_sqlite3_finalize = sqlite3_finalize;
+		proxy_sqlite3_reset = sqlite3_reset;
+		proxy_sqlite3_clear_bindings = sqlite3_clear_bindings;
+		proxy_sqlite3_close_v2 = sqlite3_close_v2;
+		proxy_sqlite3_get_autocommit = sqlite3_get_autocommit;
+		proxy_sqlite3_free = sqlite3_free;
+		proxy_sqlite3_status = sqlite3_status;
+		proxy_sqlite3_changes = sqlite3_changes;
+		proxy_sqlite3_step = sqlite3_step;
+		proxy_sqlite3_shutdown = sqlite3_shutdown;
+		proxy_sqlite3_prepare_v2 = sqlite3_prepare_v2;
+		proxy_sqlite3_open_v2 = sqlite3_open_v2;
+		proxy_sqlite3_exec = sqlite3_exec;
+		proxy_info("Loaded built-in SQLite3\n");
+	}
+	assert(proxy_sqlite3_config);
+	assert(proxy_sqlite3_bind_double);
+	assert(proxy_sqlite3_bind_int);
+	assert(proxy_sqlite3_bind_int64);
+	assert(proxy_sqlite3_bind_null);
+	assert(proxy_sqlite3_bind_text);
+	assert(proxy_sqlite3_column_name);
+	assert(proxy_sqlite3_column_text);
+	assert(proxy_sqlite3_column_bytes);
+	assert(proxy_sqlite3_column_type);
+	assert(proxy_sqlite3_column_count);
+	assert(proxy_sqlite3_column_int);
+	assert(proxy_sqlite3_errmsg);
+	assert(proxy_sqlite3_finalize);
+	assert(proxy_sqlite3_reset);
+	assert(proxy_sqlite3_clear_bindings);
+	assert(proxy_sqlite3_close_v2);
+	assert(proxy_sqlite3_get_autocommit);
+	assert(proxy_sqlite3_free);
+	assert(proxy_sqlite3_status);
+	assert(proxy_sqlite3_changes);
+	assert(proxy_sqlite3_step);
+	assert(proxy_sqlite3_shutdown);
+	assert(proxy_sqlite3_prepare_v2);
+	assert(proxy_sqlite3_open_v2);
+	assert(proxy_sqlite3_exec);
+	{
+		/* moved here, so if needed by multiple modules it applies to all of them */
+		int i=(*proxy_sqlite3_config)(SQLITE_CONFIG_URI, 1);
+		if (i!=SQLITE_OK) {
+			fprintf(stderr,"SQLITE: Error on (*proxy_sqlite3_config)(SQLITE_CONFIG_URI,1)\n");
+			assert(i==SQLITE_OK);
+			exit(EXIT_FAILURE);
+		}
+	}
+}
+

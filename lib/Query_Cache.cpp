@@ -375,7 +375,7 @@ qc_metrics_map = std::make_tuple(
 );
 
 uint64_t Query_Cache::get_data_size_total() {
-	int r=0;
+	uint64_t r=0;
 	int i;
 	for (i=0; i<SHARED_QUERY_CACHE_HASH_TABLES; i++) {
 		r+=KVs[i]->get_data_size();

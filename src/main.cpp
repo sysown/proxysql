@@ -1,3 +1,4 @@
+#define MAIN_PROXY_SQLITE3
 #include <iostream>
 #include <thread>
 #include "btree_map.h"
@@ -22,7 +23,6 @@
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
 
-
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>
 #include <libdaemon/dlog.h>
@@ -46,6 +46,10 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 	return NULL;
 }
 */
+
+
+
+
 
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
 void * __mysql_ldap_auth;
@@ -843,6 +847,14 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.errorlog = strdup(errorlog_path.c_str());
 			}
 		}
+		if (root.exists("sqlite3_plugin")==true) {
+			string sqlite3_plugin;
+			bool rc;
+			rc=root.lookupValue("sqlite3_plugin", sqlite3_plugin);
+			if (rc==true) {
+				GloVars.sqlite3_plugin=strdup(sqlite3_plugin.c_str());
+			}
+		}
 		if (root.exists("web_interface_plugin")==true) {
 			string web_interface_plugin;
 			bool rc;
@@ -1205,18 +1217,15 @@ void ProxySQL_Main_init() {
 #endif /* DEBUG */
 //	__thr_sfp=l_mem_init();
 
-	{
-		/* moved here, so if needed by multiple modules it applies to all of them */
-		int i=sqlite3_config(SQLITE_CONFIG_URI, 1);
-		if (i!=SQLITE_OK) {
-			fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
-			assert(i==SQLITE_OK);
-			exit(EXIT_FAILURE);
-		}
-	}
 }
 
+
+
+
+
 static void LoadPlugins() {
+	//LoadPlugin_sqlite3_plugin();
+	SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
 	if (GloVars.web_interface_plugin) {
 		dlerror();
 		char * dlsym_error = NULL;

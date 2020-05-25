@@ -535,7 +535,7 @@ void MySQL_Session::reset() {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
 		if (sqlite_sess->sessdb) {
 			sqlite3 *db = sqlite_sess->sessdb->get_db();
-			if (sqlite3_get_autocommit(db)==0) {
+			if ((*proxy_sqlite3_get_autocommit)(db)==0) {
 				sqlite_sess->sessdb->execute((char *)"COMMIT");
 			}
 		}
@@ -1584,7 +1584,24 @@ bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *b
 		*be_var = strdup(def);
 		uint32_t tmp_int = SpookyHash::Hash32(*be_var, strlen(*be_var), 10);
 		*be_int = tmp_int;
+
+		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				previous_status.push(PROCESSING_QUERY);
+				break;
+			case PROCESSING_STMT_PREPARE:
+				previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+			case PROCESSING_STMT_EXECUTE:
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		NEXT_IMMEDIATE_NEW(next_sess_status);
 	}
+
 	if (*fe_int) {
 		if (*fe_int != *be_int) {
 			{
@@ -2606,7 +2623,8 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
 		myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->myconn->reset();
-		st=previous_status.top();
+		myds->DSS = STATE_MARIADB_GENERIC;
+		st = previous_status.top();
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
@@ -3202,7 +3220,6 @@ __get_pkts_from_client:
 									bool lock_hostgroup = false;
 									thread->status_variables.stvar[st_var_frontend_stmt_execute]++;
 									thread->status_variables.stvar[st_var_queries]++;
-
 									uint32_t client_stmt_id=0;
 									uint64_t stmt_global_id=0;
 									memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
@@ -5045,7 +5062,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							}
 						}
-					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") || (var == "wsrep_sync_wait") ) {
+					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") || (var == "wsrep_sync_wait") || (var == "group_concat_max_len") ) {
 						int idx = SQL_NAME_LAST;
 						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
 							if (mysql_tracked_variables[i].is_number) {

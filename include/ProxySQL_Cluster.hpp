@@ -133,10 +133,14 @@ class ProxySQL_Cluster {
 	int cluster_mysql_servers_diffs_before_sync;
 	int cluster_mysql_users_diffs_before_sync;
 	int cluster_proxysql_servers_diffs_before_sync;
+	int cluster_mysql_variables_diffs_before_sync;
+	int cluster_admin_variables_diffs_before_sync;
 	bool cluster_mysql_query_rules_save_to_disk;
 	bool cluster_mysql_servers_save_to_disk;
 	bool cluster_mysql_users_save_to_disk;
 	bool cluster_proxysql_servers_save_to_disk;
+	bool cluster_mysql_variables_save_to_disk;
+	bool cluster_admin_variables_save_to_disk;
 	ProxySQL_Cluster();
 	~ProxySQL_Cluster();
 	void init() {};

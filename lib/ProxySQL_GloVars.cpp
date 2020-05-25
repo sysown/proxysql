@@ -106,6 +106,8 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	checksums_values.global_checksum = 0;
 	execute_on_exit_failure = NULL;
 	ldap_auth_plugin = NULL;
+	web_interface_plugin = NULL;
+	sqlite3_plugin = NULL;
 #ifdef DEBUG
 	global.gdb=0;
 #endif

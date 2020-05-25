@@ -1,3 +1,10 @@
+ifndef GIT_VERSION
+GIT_VERSION := $(shell git describe --long)
+ifndef GIT_VERSION
+$(error GIT_VERSION is not set)
+endif
+endif
+
 O0=-O0
 O2=-O2
 O1=-O1
