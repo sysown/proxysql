@@ -167,12 +167,11 @@ int kill_child_proc(pid_t child_pid, const uint timeout_us, const uint it_sleep_
 
 int read_pipe(int pipe_fd, std::string& sbuffer) {
 	char buffer[128];
-	char stderr_buffer[128];
 	ssize_t count = 0;
 	int res = 1;
 
 	for (;;) {
-		count = read(pipe_fd, buffer, sizeof(buffer));
+		count = read(pipe_fd, (void*)buffer, sizeof(buffer) - 1);
 		if (count > 0) {
 			buffer[count] = 0;
 			sbuffer += buffer;
