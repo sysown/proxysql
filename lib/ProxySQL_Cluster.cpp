@@ -533,6 +533,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	// we now do a series of checks, and we take action
 	// note that this is done outside the critical section
 	// as mutex on GloVars.checksum_mutex is already released
+	unsigned long long curtime = monotonic_time() / 1000 / 1000;
 	unsigned int diff_mqr = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync,0);
 	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0);
 	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_users_diffs_before_sync,0);
@@ -541,6 +542,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	if (diff_mqr) {
 		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.mysql_query_rules.version,0);
 		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.mysql_query_rules.epoch,0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.mysql_query_rules.checksum,0);
 		v = &checksums_values.mysql_query_rules;
 		if (v->version > 1) {
 			if (
@@ -553,6 +555,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					GloProxyCluster->pull_mysql_query_rules_from_peer();
 				}
 			}
+			// TODO: Change repetition technique
+			if ((v->epoch == own_epoch) && ((v->diff_check % (diff_mqr*10)) == 0)) {
+				proxy_error("Cluster: detected a peer %s:%d with mysql_query_rules version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mqr*10));
+			}
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_mqr*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with mysql_query_rules version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL QUERY RULES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mqr*10));
@@ -563,6 +569,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		v = &checksums_values.mysql_servers;
 		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.mysql_servers.version,0);
 		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.mysql_servers.epoch,0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.mysql_servers.checksum,0);
 		if (v->version > 1) {
 			if (
 				(own_version == 1) // we just booted
@@ -574,6 +581,11 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					GloProxyCluster->pull_mysql_servers_from_peer();
 				}
 			}
+			// TODO: Proposed timeout based solution
+			if ((v->epoch == own_epoch) && ((curtime - last_mysql_servers_sync_err_report) > sync_report_timeout)) { // ((v->diff_check % (diff_ms*10)) == 0)) {
+				proxy_error("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms*10));
+				last_mysql_servers_sync_err_report = curtime;
+			}
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_ms*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms*10));
@@ -584,6 +596,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		v = &checksums_values.mysql_users;
 		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.mysql_users.version,0);
 		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.mysql_users.epoch,0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.mysql_users.checksum,0);
 		if (v->version > 1) {
 			if (
 				(own_version == 1) // we just booted
@@ -595,6 +608,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					GloProxyCluster->pull_mysql_users_from_peer();
 				}
 			}
+			// TODO: Change repetition technique
+			if ((v->epoch == own_epoch) && ((v->diff_check % (diff_mu*10)) == 0)) {
+				proxy_error("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mu*10));
+			}
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_mu*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL USERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mu*10));
@@ -605,6 +622,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		v = &checksums_values.proxysql_servers;
 		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.version,0);
 		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.epoch,0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.checksum,0);
 		if (v->version > 1) {
 			if (
 				(own_version == 1) // we just booted
@@ -616,6 +634,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					GloProxyCluster->pull_proxysql_servers_from_peer();
 				}
 			}
+			// TODO: Change repetition technique
+			// if ((v->epoch == own_epoch) && ((v->diff_check % (diff_ps*10)) == 0)) {
+			// 	proxy_error("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ps*10));
+			// }
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_ps*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps*10));
@@ -752,6 +774,8 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						if (GloProxyCluster->cluster_mysql_query_rules_save_to_disk == true) {
 							proxy_info("Cluster: Saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_mysql_query_rules__from_memory_to_disk();
+						} else {
+							proxy_info("Cluster: NOT saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 						}
 					} else {
 						proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
@@ -843,8 +867,10 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 					proxy_info("Cluster: Loading to runtime MySQL Users from peer %s:%d\n", hostname, port);
 					GloAdmin->init_users();
 					if (GloProxyCluster->cluster_mysql_query_rules_save_to_disk == true) {
-						proxy_info("Cluster: Saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
+						proxy_info("Cluster: Saving to disk MySQL Users from peer %s:%d\n", hostname, port);
 						GloAdmin->flush_mysql_users__from_memory_to_disk();
+					} else {
+						proxy_info("Cluster: Saving to disk MySQL Users Rules from peer %s:%d\n", hostname, port);
 					}
 				} else {
 					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
@@ -1181,8 +1207,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							proxy_info("Cluster: Saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_mysql_servers__from_memory_to_disk();
 						} else {
-							// TODO: Change this message
-							proxy_info("Cluster: Fetching checksum for MySQL Servers from peer %s:%d failed. Checksum: %s\n", hostname, port, checks);
+							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d failed.\n", hostname, port);
 						}
 					}
 
@@ -1263,6 +1288,8 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 					if (GloProxyCluster->cluster_proxysql_servers_save_to_disk == true) {
 						proxy_info("Cluster: Saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
 						GloAdmin->flush_proxysql_servers__from_memory_to_disk();
+					} else {
+						proxy_info("Cluster: NOT saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
 					}
 				} else {
 					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
