@@ -2,6 +2,7 @@
 #include "proxysql_utils.h"
 #include "cpp.h"
 #include "SpookyV2.h"
+#include "prometheus_helpers.h"
 
 #include "ProxySQL_Cluster.hpp"
 
@@ -48,7 +49,6 @@ typedef struct _proxy_node_address_t {
 
 
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
-
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
 	if (!pthread_attr_init(&thread_attr)) {
@@ -777,11 +777,14 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						} else {
 							proxy_info("Cluster: NOT saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 						}
+						metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_success]->Increment();
 					} else {
 						proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+						metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
 					}
 				} else {
 					proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
 				}
 				if (result1) {
 					mysql_free_result(result1);
@@ -791,6 +794,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 				}
 			} else {
 				proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
 			}
 		}
 __exit_pull_mysql_query_rules_from_peer:
@@ -872,11 +876,14 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 					} else {
 						proxy_info("Cluster: Saving to disk MySQL Users Rules from peer %s:%d\n", hostname, port);
 					}
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_success]->Increment();
 				} else {
 					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
 				}
 			} else {
 				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
 			}
 		}
 __exit_pull_mysql_users_from_peer:
@@ -891,15 +898,6 @@ __exit_pull_mysql_users_from_peer:
 }
 
 /**
- * @brief Simple struct for holding a query, and three messages to report
- *  the progress of the query execution.
- */
-struct fetch_query {
-	const char* query;
-	std::string msgs[3];
-};
-
-/**
  * @brief Makes a query with the supplied connection and stores the result in the
  *  'MYSQL_RES' passed as a parameter.
  *
@@ -912,7 +910,7 @@ struct fetch_query {
  * @return int The errno in case fo the query execution not being successful,
  *  zero otherwise.
  */
-int fetch_and_store(MYSQL* conn, const fetch_query& f_query, MYSQL_RES** result) {
+int ProxySQL_Cluster::fetch_and_store(MYSQL* conn, const fetch_query& f_query, MYSQL_RES** result) {
 	const auto& msgs = f_query.msgs;
 	const auto& query = f_query.query;
 
@@ -932,11 +930,18 @@ int fetch_and_store(MYSQL* conn, const fetch_query& f_query, MYSQL_RES** result)
 			std::string f_err = msgs[2] + mysql_error(conn);
 			proxy_info__(f_err.c_str());
 		}
+		if (f_query.failure_counter != p_cluster_counter::metric(-1)) {
+			metrics.p_counter_array[f_query.failure_counter]->Increment();
+		}
 	}
 
 	// report finish msg
-	if (!msgs[1].empty()) {
+	if (query_res == 0 && !msgs[1].empty()) {
 		proxy_info__(msgs[1].c_str());
+	}
+
+	if (f_query.success_counter != p_cluster_counter::metric(-1)) {
+		metrics.p_counter_array[f_query.success_counter]->Increment();
 	}
 
 	return query_res;
@@ -1014,12 +1019,41 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 
 				// Create fetching queries
 				fetch_query queries[] = {
-					{ CLUSTER_QUERY_MYSQL_SERVERS, { "", "", fetch_servers_err } },
-					{ CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, { "", "", fetch_servers_err } },
-					{ CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, { fetch_group_replication_hostgroups, "", fetch_group_replication_hostgroups_err } },
-					{ CLUSTER_QUERY_MYSQL_GALERA , { fetch_galera_start, "", fetch_galera_err } },
-					{ CLUSTER_QUERY_MYSQL_AWS_AURORA , { fetch_aws_aurora_start, "", fetch_aws_aurora_err } },
-					{ CLUSTER_QUERY_RUNTIME_CHECKS, { fetch_checksums_start, "", fetch_checksums_err } }
+					{
+						CLUSTER_QUERY_MYSQL_SERVERS,
+						p_cluster_counter::pulled_mysql_servers_success,
+						p_cluster_counter::pulled_mysql_servers_failure,
+						{ "", fetch_servers_done, fetch_servers_err }
+					},
+					{
+						CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS,
+						p_cluster_counter::pulled_mysql_servers_replication_hostgroups_success,
+						p_cluster_counter::pulled_mysql_servers_replication_hostgroups_failure,
+						{ "", "", fetch_servers_err }
+					},
+					{
+						CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS,
+						p_cluster_counter::pulled_mysql_servers_group_replication_hostgroups_success,
+						p_cluster_counter::pulled_mysql_servers_group_replication_hostgroups_failure,
+						{ fetch_group_replication_hostgroups, "", fetch_group_replication_hostgroups_err }
+					},
+					{
+						CLUSTER_QUERY_MYSQL_GALERA,
+						p_cluster_counter::pulled_mysql_servers_galera_hostgroups_success,
+						p_cluster_counter::pulled_mysql_servers_galera_hostgroups_failure,
+						{ fetch_galera_start, "", fetch_galera_err } },
+					{
+						CLUSTER_QUERY_MYSQL_AWS_AURORA,
+						p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_success,
+						p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_failure,
+						{ fetch_aws_aurora_start, "", fetch_aws_aurora_err }
+					},
+					{
+						CLUSTER_QUERY_RUNTIME_CHECKS,
+						p_cluster_counter::pulled_mysql_servers_runtime_checks_success,
+						p_cluster_counter::pulled_mysql_servers_runtime_checks_failure,
+						{ fetch_checksums_start, "", fetch_checksums_err }
+					}
 				};
 
 				bool fetching_error = false;
@@ -1215,10 +1249,13 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 					for (MYSQL_RES* result : results) {
 						mysql_free_result(result);
 					}
+
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_success]->Increment();
 				}
 				GloAdmin->mysql_servers_wrunlock();
 			} else {
 				proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment();
 			}
 		}
 __exit_pull_mysql_servers_from_peer:
@@ -1291,11 +1328,14 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 					} else {
 						proxy_info("Cluster: NOT saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
 					}
+					metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_success]->Increment();
 				} else {
 					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+					metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
 				}
 			} else {
 				proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
 			}
 		}
 __exit_pull_proxysql_servers_from_peer:
@@ -1849,6 +1889,151 @@ SQLite3_result * ProxySQL_Cluster_Nodes::dump_table_proxysql_servers() {
 	return result;
 }
 
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+using cluster_counter_tuple =
+	std::tuple<
+		p_cluster_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using cluster_gauge_tuple =
+	std::tuple<
+		p_cluster_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using cluster_counter_vector = std::vector<cluster_counter_tuple>;
+using cluster_gauge_vector = std::vector<cluster_gauge_tuple>;
+
+const std::tuple<cluster_counter_vector, cluster_gauge_vector>
+cluster_metrics_map = std::make_tuple(
+	cluster_counter_vector {
+		// mysql_query_rules
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_query_rules_success,
+			"pulled_mysql_query_rules",
+			"Number of times 'mysql_query_rules' have been pulled from a peer.",
+			metric_tags { { "status", "success" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_query_rules_failure,
+			"pulled_mysql_query_rules",
+			"Number of times 'mysql_query_rules' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+
+		// mysql_servers_*
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_success,
+			"pulled_mysql_servers",
+			"Number of times 'mysql_servers' have been pulled from a peer.",
+			metric_tags { { "status", "success" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_failure,
+			"pulled_mysql_servers",
+			"Number of times 'mysql_servers' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_replication_hostgroups_success,
+			"pulled_mysql_servers_replication_hostgroups",
+			"Number of times 'mysql_servers_replication_hostgroups' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_replication_hostgroups_failure,
+			"pulled_mysql_servers_replication_hostgroups",
+			"Number of times 'mysql_servers_replication_hostgroups' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_group_replication_hostgroups_success,
+			"pulled_mysql_servers_group_replication_hostgroups",
+			"Number of times 'mysql_servers_group_replication_hostgroups' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_group_replication_hostgroups_failure,
+			"pulled_mysql_servers_group_replication_hostgroups",
+			"Number of times 'mysql_servers_group_replication_hostgroups' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_galera_hostgroups_success,
+			"pulled_mysql_servers_galera_hostgroups",
+			"Number of times 'mysql_servers_galera_hostgroups' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_galera_hostgroups_failure,
+			"pulled_mysql_servers_galera_hostgroups",
+			"Number of times 'mysql_servers_galera_hostgroups' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_success,
+			"pulled_mysql_servers_aws_aurora_hostgroups",
+			"Number of times 'mysql_servers_aws_aurora_hostgroups' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_failure,
+			"pulled_mysql_servers_aws_aurora_hostgroups",
+			"Number of times 'mysql_servers_aws_aurora_hostgroups' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_runtime_checks_success,
+			"pulled_mysql_servers_runtime_checks",
+			"Number of times '' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_runtime_checks_failure,
+			"pulled_mysql_servers_runtime_checks",
+			"Number of times 'mysql_servers_runtime_checks' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+
+		// mysql_users_*
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_users_success,
+			"pulled_mysql_users",
+			"Number of times 'mysql_users' have been pulled from a peer.",
+			metric_tags { { "status", "success" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_users_failure,
+			"pulled_mysql_users",
+			"Number of times 'mysql_users' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+
+		// proxysql_servers_*
+		std::make_tuple (
+			p_cluster_counter::pulled_proxysql_servers_success,
+			"pulled_proxysql_servers",
+			"Number of times 'mysql_proxysql_servers' have been pulled from a peer.",
+			metric_tags { { "status", "success" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_proxysql_servers_failure,
+			"pulled_proxysql_servers",
+			"Number of times 'mysql_proxysql_servers' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		)
+	},
+	cluster_gauge_vector {}
+);
+
 ProxySQL_Cluster::ProxySQL_Cluster() {
 	pthread_mutex_init(&mutex,NULL);
 	pthread_mutex_init(&update_mysql_query_rules_mutex,NULL);
@@ -1867,6 +2052,8 @@ ProxySQL_Cluster::ProxySQL_Cluster() {
 	cluster_mysql_servers_save_to_disk = true;
 	cluster_mysql_users_save_to_disk = true;
 	cluster_proxysql_servers_save_to_disk = true;
+	init_prometheus_counter_array<cluster_metrics_map_idx, p_cluster_counter>(cluster_metrics_map, this->metrics.p_counter_array);
+	init_prometheus_gauge_array<cluster_metrics_map_idx, p_cluster_gauge>(cluster_metrics_map, this->metrics.p_gauge_array);
 }
 
 ProxySQL_Cluster::~ProxySQL_Cluster() {
