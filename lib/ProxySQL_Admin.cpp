@@ -11542,15 +11542,18 @@ void ProxySQL_Admin::generate_sqlite3_prepare_insert_values_query(std::string& q
 	}
 }
 
-/*
-This function is a wrapper around the various sqlite3_bind_* functions
-idx: the index used by the sqlite3_bind_ function
-is_num: because this function works with both number and not, this flag defines if the value is a number
-passed_as_char: this is relevant only if is_num==true , otherwise ignored.
-                If is_num==true && passed_as_char==true , the number is converted from ptr
-num: numeric value if is_num==true && passed_as_char==false
-ptr: char pointer for text or numbers that need conversion. If NULL, (*proxy_sqlite3_bind_null)() is called
-*/
+/**
+ * @brief This function is a wrapper around the various sqlite3_bind_* functions.
+ *
+ * @param db SQLITE3DB to be used in ASSERT_* macros.
+ * @param stmt The statement to be binded.
+ * @param idx The index used by the sqlite3_bind_ function.
+ * @param is_num is_num: because this function works with both number and not, this flag defines if the value is a number
+ * @param passed_as_char This is relevant only if is_num==true, otherwise ignored. If is_num==true && passed_as_char==true,
+ *  the number is converted from ptr.
+ * @param num Numeric value if is_num==true && passed_as_char==false.
+ * @param ptr char pointer for text or numbers that need conversion. If NULL, (*proxy_sqlite3_bind_null)() is called.
+ */
 void ProxySQL_Admin::proxysql_sqlite3_bind(SQLite3DB *db, sqlite3_stmt *stmt, int idx, bool is_num, bool passed_as_char, long long num, char *ptr) {
 	int rc;
 	if (is_num) { // we are binding a number
@@ -11572,32 +11575,35 @@ void ProxySQL_Admin::proxysql_sqlite3_bind(SQLite3DB *db, sqlite3_stmt *stmt, in
 	}
 }
 
-
-/*
-This function faciliate to bind variables from a SQLite3_row
-Because the binding may include more parameters than provided by SQLite3_row , cols is provided to identify if a bind argument should be taken from a column in SQLite3_row .
-If cols[i] == -1 , the binding is skipped.
-If cols[i] >= 0 , it represents the column in SQLite3_row .
-Note that cols could be out of order.
-For example:
-cols = { 0 , -1,  2 , 1 }
-
-The binding will be:
-sqlite3_bind_fn(1, row->fields[0]);
-// sqlite3_bind_fn(2, ...) is skipped, because cols[1] is -1
-sqlite3_bind_fn(3, row->fields[2]);
-sqlite3_bind_fn(4, row->fields[1]);
-
-While this function solves the problems of our of order columns/parameters,
-missing parameters need to be bind by the calling function.
-
-REMEBER: sqlite3_bind_ functions starts with offset 1 , not 0.
-The calling function needs to provide the right offset in base_idx, starting from 1.
-
-is_nums : defines if given parameter is a number of no.
-If refer to the binding offset, and not to the SQLite3_row offset
-*/
-
+/**
+ * @brief This function faciliate to bind variables from a SQLite3_row.
+ * @details Because the binding may include more parameters than provided by SQLite3_row, cols is provided to identify if a bind argument should be taken from a column in SQLite3_row .
+ *  If cols[i] == -1, the binding is skipped.
+ *  If cols[i] >= 0, it represents the column in SQLite3_row.
+ *  Note that cols could be out of order.
+ *
+ *  For example:
+ *   cols = { 0, -1, 2, 1 }
+ *  The binding will be:
+ *   sqlite3_bind_fn(1, row->fields[0]);
+ *   // sqlite3_bind_fn(2, ...) is skipped, because cols[1] is -1
+ *   sqlite3_bind_fn(3, row->fields[2]);
+ *   sqlite3_bind_fn(4, row->fields[1]);
+ *
+ * While this function solves the problems of our of order columns/parameters,
+ * missing parameters need to be bind by the calling function.
+ *
+ * REMEBER: sqlite3_bind_ functions starts with offset 1, not 0.
+ * The calling function needs to provide the right offset in base_idx, starting from 1.
+ *
+ * @param db SQLITE3DB to be used in ASSERT_* macros in case of error.
+ * @param stmt And already initialized prepared statement to be filled.
+ * @param row The row to be binded into the statement.
+ * @param base_idx The base index in which to start the binding. Remember biding offsets for 'sqlite_bind' functions starts
+ *  with offset 1.
+ * @param is_nums Vector definiing if a given parameter is a number of no.
+ * @param cols Vector specifing the order of the columns to be binded.
+ */
 void ProxySQL_Admin::proxysql_sqlite3_bind_from_SQLite3_row(SQLite3DB *db, sqlite3_stmt *stmt, SQLite3_row *row, int base_idx, vector<bool>& is_nums, vector<int>& cols) {
 	for (size_t i=0; i<cols.size(); i++) {
 		if (cols[i]>=0) { // if cols[i] == -1 , the binding shouldn't be done with this resultset
