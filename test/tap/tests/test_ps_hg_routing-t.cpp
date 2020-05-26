@@ -59,8 +59,10 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY(mysqladmin, "delete from mysql_query_rules");
 	MYSQL_QUERY(mysqladmin, "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, apply) values (100, 1, 0, '^SELECT.*FOR UPDATE$', 0, 'CASELESS', 0, 1)");
-	MYSQL_QUERY(mysqladmin, "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, apply) values (200, 1, 0, '^SELECT', 0, 'CASELESS', 1, 1)");
+	MYSQL_QUERY(mysqladmin, "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, apply) values (200, 1, 0, '^SELECT', 0, 'CASELESS', 2, 1)");
 	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
+	MYSQL_QUERY(mysqladmin, "INSERT INTO mysql_servers SELECT 2, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=0");
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	std::string q0 = (const std::string)"mysql -h " + cl.host + (const std::string)" -u " + cl.admin_username + " -p" + cl.admin_password + " -P " + std::to_string(cl.admin_port) + " -t -e ";
 	std::string q1 = q0 + "\"SELECT * FROM mysql_servers\"";
@@ -79,7 +81,7 @@ int main(int argc, char** argv) {
 
 	std::string query = "SELECT * FROM test.ps_hg_routing";
 	if (mysql_stmt_prepare(stmt, query.c_str(), query.size())) {
-		ok(false, "Query error %s\n", mysql_error(mysql));
+		ok(false, "mysql_stmt_prepare at line %d failed: %s\n", __LINE__ , mysql_error(mysql));
 		mysql_close(mysql);
 		mysql_library_end();
 		return exit_status();
@@ -142,6 +144,9 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY(mysqladmin, "load mysql query rules from disk");
 	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
+
+	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_servers WHERE hostgroup_id=2");
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	mysql_close(mysql);
 	mysql_close(mysqladmin);
