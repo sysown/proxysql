@@ -290,12 +290,12 @@ int test_replication_hostgroups_inner(MYSQL* l_proxysql_admin, int rows, std::ve
 
 	mysql_free_result(cmp_res);
 
-	if (cmp_count!=rows)
-		return -1;
-
 	MYSQL_QUERY(l_proxysql_admin, (char *)"DELETE FROM mysql_replication_hostgroups");
 	MYSQL_QUERY(l_proxysql_admin, (char *)"LOAD MYSQL SERVERS TO RUNTIME");
 
+	if (cmp_count!=rows) {
+		return -1;
+	}
 	return 0;
 }
 
@@ -521,31 +521,33 @@ int test_save_query_rules_fast_routing(MYSQL* l_proxysql_admin, const CommandLin
 
 int test_save_mysql_firewall_whitelist_users_from_runtime(MYSQL* l_proxysql_admin, const CommandLine&) {
 	// Queries
-	const char* update_mysql_firewall_whitelist =
+	std::string t_update_mysql_firewall_whitelist =
 		"INSERT INTO mysql_firewall_whitelist_users"
 		"( active, username, client_address, mode, comment )"
-		"VALUES ( 1, 'test_user', '127.0.0.1', 'DETECTING', 'test_save_mysql_firewall_whitelist_users_from_runtime')";
-	const char* load_mysql_servers_runtime =
-		"LOAD MYSQL QUERY RULES TO RUNTIME";
+		"VALUES ( 1, 'test_user', '127.0.0.%d', 'DETECTING', 'test_save_mysql_firewall_whitelist_users_from_runtime')";
 	const char *check_mysql_firewall_whitelist =
 		"SELECT COUNT(*) FROM mysql_firewall_whitelist_users t1 "
-		"NATURAL JOIN mysql_firewall_whitelist_users t2";
+		"NATURAL JOIN runtime_mysql_firewall_whitelist_users t2";
 	const char* delete_mysql_firewall_whitelist =
 		"DELETE FROM mysql_firewall_whitelist_users WHERE "
 		"comment='test_save_mysql_firewall_whitelist_users_from_runtime'";
 
 	// Setup config
+	int rows = 100;
 	MYSQL_QUERY(l_proxysql_admin, delete_mysql_firewall_whitelist);
-	MYSQL_QUERY(l_proxysql_admin, update_mysql_firewall_whitelist);
-	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+	for (int i = 0; i < rows; i++) {
+		std::string update_mysql_firewall_whitelist = "";
+		string_format(t_update_mysql_firewall_whitelist, update_mysql_firewall_whitelist, i);
+		MYSQL_QUERY(l_proxysql_admin, update_mysql_firewall_whitelist.c_str());
+	}
+	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL FIREWALL TO RUNTIME");
 	MYSQL_QUERY(l_proxysql_admin, check_mysql_firewall_whitelist);
-
 	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
-	int count = fetch_count(mysql_res);
+	int natural_count = fetch_count(mysql_res);
 
-	ok(count == 1, "%s",
+	ok(rows == natural_count, "%s",
 		err_msg(
-			"'mysql_firewall_whitelist_users' and 'test_save_mysql_firewall_whitelist_users_from_runtime' should be identical.",
+			"'mysql_firewall_whitelist_users' and 'runtime_mysql_firewall_whitelist_users' should be identical.",
 			__FILE__,
 			__LINE__
 		).c_str()
@@ -553,44 +555,44 @@ int test_save_mysql_firewall_whitelist_users_from_runtime(MYSQL* l_proxysql_admi
 
 	// Teardown config
 	MYSQL_QUERY(l_proxysql_admin, delete_mysql_firewall_whitelist);
-	MYSQL_QUERY(l_proxysql_admin, load_mysql_servers_runtime);
+	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL FIREWALL TO RUNTIME");
 
+	if (rows != natural_count) {
+		return -1;
+	}
 	return 0;
 }
 
 int test_save_mysql_firewall_whitelist_rules_from_runtime(MYSQL* l_proxysql_admin, const CommandLine&) {
 	// Queries
-	int res = 0;
-	const char* update_mysql_firewall_whitelist =
+	const char* t_update_mysql_firewall_whitelist =
 		"INSERT INTO mysql_firewall_whitelist_rules "
 		"( active, username, client_address, schemaname, flagIN, digest, comment ) "
-		"VALUES ( 1, 'test_user', '127.0.0.1', 'test_db.test_schema', 0, 'select * from example_digest', 'test_save_mysql_firewall_whitelist_rules_from_runtime' )";
+		"VALUES ( 1, 'test_user', '127.0.0.%d', 'test_db.test_schema', 0, 'select * from example_digest', 'test_save_mysql_firewall_whitelist_rules_from_runtime' )";
 	const char* delete_mysql_firewall_whitelist =
 		"DELETE FROM mysql_firewall_whitelist_rules WHERE "
 		"comment='test_save_mysql_firewall_whitelist_rules_from_runtime'";
-	const char* load_mysql_firewall_runtime =
-		"LOAD MYSQL FIREWALL TO RUNTIME";
-	const char* save_mysql_firewall_runtime =
-		"LOAD MYSQL FIREWALL TO RUNTIME";
 	const char *check_mysql_firewall_whitelist =
 		"SELECT COUNT(*) FROM mysql_firewall_whitelist_rules t1 "
 		"NATURAL JOIN mysql_firewall_whitelist_rules t2";
 
 	// Setup config
+	int rows = 100;
 	MYSQL_QUERY(l_proxysql_admin, delete_mysql_firewall_whitelist);
-	MYSQL_QUERY(l_proxysql_admin, update_mysql_firewall_whitelist);
-	MYSQL_QUERY(l_proxysql_admin, load_mysql_firewall_runtime);
-	MYSQL_QUERY(l_proxysql_admin, save_mysql_firewall_runtime);
+	for (int i = 0; i < rows; i++) {
+		std::string update_mysql_firewall_whitelist = "";
+		string_format(t_update_mysql_firewall_whitelist, update_mysql_firewall_whitelist, i);
+		MYSQL_QUERY(l_proxysql_admin, update_mysql_firewall_whitelist.c_str());
+	}
+	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL FIREWALL TO RUNTIME");
 	MYSQL_QUERY(l_proxysql_admin, check_mysql_firewall_whitelist);
-
 	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
-	int count = fetch_count(mysql_res);
+	int natural_count = fetch_count(mysql_res);
 	mysql_free_result(mysql_res);
 
-	res = count != 1;
-	ok(!res, "%s",
+	ok(rows == natural_count, "%s",
 		err_msg(
-			"'mysql_firewall_whitelist_rules' and 'test_save_mysql_firewall_whitelist_rules_from_runtime' should be identical.",
+			"'mysql_firewall_whitelist_rules' and 'runtime_mysql_firewall_whitelist_rules' should be identical.",
 			__FILE__,
 			__LINE__
 		).c_str()
@@ -598,13 +600,15 @@ int test_save_mysql_firewall_whitelist_rules_from_runtime(MYSQL* l_proxysql_admi
 
 	// Teardown config
 	MYSQL_QUERY(l_proxysql_admin, delete_mysql_firewall_whitelist);
-	MYSQL_QUERY(l_proxysql_admin, load_mysql_firewall_runtime);
+	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL FIREWALL TO RUNTIME");
 
-	return res;
+	if (rows != natural_count) {
+		return -1;
+	}
+	return 0;
 }
 
 int test_save_mysql_servers_runtime_to_database(MYSQL* l_proxysql_admin, const CommandLine&) {
-	int res = 0;
 	// Queries
 	const char* t_insert_mysql_servers =
 		"INSERT INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, status, "
@@ -612,8 +616,6 @@ int test_save_mysql_servers_runtime_to_database(MYSQL* l_proxysql_admin, const C
 		"VALUES (1, '127.0.0.1', %d, 0, 'ONLINE', 1, 0, 1000, 180, 0, 0, 'test_save_mysql_servers_runtime_to_database')";
 	const char* delete_mysql_servers =
 		"DELETE FROM mysql_servers WHERE comment='test_save_mysql_servers_runtime_to_database'";
-	const char* lenght_mysql_servers =
-		"SELECT COUNT(*) FROM mysql_servers";
 	const char *check_mysql_servers =
 		"SELECT COUNT(*) FROM mysql_servers t1 "
 		"NATURAL JOIN runtime_mysql_servers t2";
@@ -626,7 +628,7 @@ int test_save_mysql_servers_runtime_to_database(MYSQL* l_proxysql_admin, const C
 	}
 	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	MYSQL_QUERY(l_proxysql_admin, lenght_mysql_servers);
+	MYSQL_QUERY(l_proxysql_admin, "SELECT COUNT(*) FROM mysql_servers");
 	MYSQL_RES* lenght_res = mysql_store_result(l_proxysql_admin);
 	int count = fetch_count(lenght_res);
 
@@ -634,9 +636,8 @@ int test_save_mysql_servers_runtime_to_database(MYSQL* l_proxysql_admin, const C
 	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
 	int natural_count = fetch_count(mysql_res);
 
-	res = count != natural_count;
 	// count should be equal to natural_count
-	ok(!res, "%s",
+	ok(count == natural_count, "%s",
 		err_msg(
 			"'mysql_servers' and 'runtime_mysql_servers' should be identical.",
 			__FILE__,
@@ -648,11 +649,13 @@ int test_save_mysql_servers_runtime_to_database(MYSQL* l_proxysql_admin, const C
 	MYSQL_QUERY(l_proxysql_admin, delete_mysql_servers);
 	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	return res;
+	if (count != natural_count) {
+		return -1;
+	}
+	return 0;
 }
 
 int test_save_mysql_galera_hostgroups_runtime_to_database(MYSQL* l_proxysql_admin, const CommandLine&) {
-	int res = 0;
 	// Queries
 	const char* insert_mysql_galera_hostgroups =
 		"INSERT INTO mysql_galera_hostgroups ( "
@@ -661,8 +664,6 @@ int test_save_mysql_galera_hostgroups_runtime_to_database(MYSQL* l_proxysql_admi
 		"VALUES (0, 4, 8, 12, 1, 10, 0, 200, 'test_save_mysql_galera_hostgroups_runtime_to_database')";
 	const char* delete_mysql_galera_hostgroups =
 		"DELETE FROM mysql_galera_hostgroups WHERE comment='test_save_mysql_galera_hostgroups_runtime_to_database'";
-	const char* lenght_mysql_galera_hostgroups =
-		"SELECT COUNT(*) FROM mysql_galera_hostgroups";
 	const char *check_mysql_galera_hostgroups =
 		"SELECT COUNT(*) FROM mysql_galera_hostgroups t1 "
 		"NATURAL JOIN runtime_mysql_galera_hostgroups t2";
@@ -671,7 +672,7 @@ int test_save_mysql_galera_hostgroups_runtime_to_database(MYSQL* l_proxysql_admi
 	MYSQL_QUERY(l_proxysql_admin, insert_mysql_galera_hostgroups);
 	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	MYSQL_QUERY(l_proxysql_admin, lenght_mysql_galera_hostgroups);
+	MYSQL_QUERY(l_proxysql_admin, "SELECT COUNT(*) FROM mysql_galera_hostgroups");
 	MYSQL_RES* lenght_res = mysql_store_result(l_proxysql_admin);
 	int count = fetch_count(lenght_res);
 
@@ -679,9 +680,8 @@ int test_save_mysql_galera_hostgroups_runtime_to_database(MYSQL* l_proxysql_admi
 	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
 	int natural_count = fetch_count(mysql_res);
 
-	res = count != natural_count;
 	// count should be equal to natural_count
-	ok(!res, "%s",
+	ok(count == natural_count, "%s",
 		err_msg(
 			"'mysql_galera_hostgroups' and 'runtime_mysql_galera_hostgroups' should be identical.",
 			__FILE__,
@@ -693,11 +693,13 @@ int test_save_mysql_galera_hostgroups_runtime_to_database(MYSQL* l_proxysql_admi
 	MYSQL_QUERY(l_proxysql_admin, delete_mysql_galera_hostgroups);
 	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	return res;
+	if (count != natural_count) {
+		return -1;
+	}
+	return 0;
 }
 
 int test_save_mysql_aws_aurora_hostgroups_runtime_to_database(MYSQL* l_proxysql_admin, const CommandLine&) {
-	int res = 0;
 	// Queries
 	const char* insert_mysql_aws_aurora_hostgroups =
 		"INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
@@ -723,9 +725,8 @@ int test_save_mysql_aws_aurora_hostgroups_runtime_to_database(MYSQL* l_proxysql_
 	MYSQL_RES* mysql_res = mysql_store_result(l_proxysql_admin);
 	int natural_count = fetch_count(mysql_res);
 
-	res = count != natural_count;
 	// count should be equal to natural_count
-	ok(!res, "%s",
+	ok(count == natural_count, "%s",
 		err_msg(
 			"'mysql_aws_aurora_hostgroups' and 'runtime_mysql_aws_aurora_hostgroups' should be identical.",
 			__FILE__,
@@ -737,7 +738,10 @@ int test_save_mysql_aws_aurora_hostgroups_runtime_to_database(MYSQL* l_proxysql_
 	MYSQL_QUERY(l_proxysql_admin, delete_mysql_aws_aurora_hostgroups);
 	MYSQL_QUERY(l_proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	return res;
+	if (count != natural_count) {
+		return -1;
+	}
+	return 0;
 }
 
 using test_data = std::pair<std::string, std::function<int(MYSQL*, const CommandLine&)>>;
