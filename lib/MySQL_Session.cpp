@@ -1019,6 +1019,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["no_backslash_escapes"] = _myconn->options.no_backslash_escapes;
 				j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status_get_lock();
 				j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status_lock_tables();
+				j["backends"][i]["conn"]["status"]["has_savepoint"] = _myconn->get_status_has_savepoint();
 				j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status_temporary_table();
 				j["backends"][i]["conn"]["status"]["user_variable"] = _myconn->get_status_user_variable();
 				j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status_found_rows();
