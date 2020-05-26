@@ -9593,37 +9593,37 @@ void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) 
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement1=NULL;
-		sqlite3_stmt *statement8=NULL;
+		sqlite3_stmt *statement32=NULL;
 		//sqlite3 *mydb3=admindb->get_db();
 		char *query1=NULL;
-		char *query8=NULL;
+		char *query32=NULL;
 		if (_runtime) {
 			query1=(char *)"INSERT INTO runtime_mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4)";
-			query8=(char *)"INSERT INTO runtime_mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4), (?5, ?6, ?7, ?8), (?9, ?10, ?11, ?12), (?13, ?14, ?15, ?16), (?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32)";
+			query32=(char *)"INSERT INTO runtime_mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4), (?5, ?6, ?7, ?8), (?9, ?10, ?11, ?12), (?13, ?14, ?15, ?16), (?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32)";
 		} else {
 			query1=(char *)"INSERT INTO mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4)";
-			query8=(char *)"INSERT INTO mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4), (?5, ?6, ?7, ?8), (?9, ?10, ?11, ?12), (?13, ?14, ?15, ?16), (?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32)";
+			query32=(char *)"INSERT INTO mysql_ldap_mapping VALUES (?1, ?2, ?3, ?4), (?5, ?6, ?7, ?8), (?9, ?10, ?11, ?12), (?13, ?14, ?15, ?16), (?17, ?18, ?19, ?20), (?21, ?22, ?23, ?24), (?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32)";
 		}
 		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query1, -1, &statement1, 0);
 		rc = admindb->prepare_v2(query1, &statement1);
 		ASSERT_SQLITE_OK(rc, admindb);
 		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query8, -1, &statement8, 0);
-		rc = admindb->prepare_v2(query8, &statement8);
+		rc = admindb->prepare_v2(query32, &statement32);
 		ASSERT_SQLITE_OK(rc, admindb);
 		int row_idx=0;
-		int max_bulk_row_idx=resultset->rows_count/8;
-		max_bulk_row_idx=max_bulk_row_idx*8;
+		int max_bulk_row_idx=resultset->rows_count/32;
+		max_bulk_row_idx=max_bulk_row_idx*32;
 		vector<bool> is_nums { true, false, false, false };
 		vector<int> cols { 0, 1, 2, 3 };
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r1=*it;
-			int idx=row_idx%8;
+			int idx=row_idx%32;
 			if (row_idx<max_bulk_row_idx) { // bulk
-				proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement8, r1, idx*7 + 1, is_nums, cols);
-				if (idx==7) {
-					SAFE_SQLITE3_STEP2(statement8);
-					rc=(*proxy_sqlite3_clear_bindings)(statement8); ASSERT_SQLITE_OK(rc, admindb);
-					rc=(*proxy_sqlite3_reset)(statement8); ASSERT_SQLITE_OK(rc, admindb);
+				proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement32, r1, idx*4 + 1, is_nums, cols);
+				if (idx==31) {
+					SAFE_SQLITE3_STEP2(statement32);
+					rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, admindb);
+					rc=(*proxy_sqlite3_reset)(statement32); ASSERT_SQLITE_OK(rc, admindb);
 				}
 			} else { // single row
 				proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement1, r1, 1, is_nums, cols);
@@ -9634,7 +9634,7 @@ void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) 
 			row_idx++;
 		}
 		(*proxy_sqlite3_finalize)(statement1);
-		(*proxy_sqlite3_finalize)(statement8);
+		(*proxy_sqlite3_finalize)(statement32);
 	}
 	if(resultset) delete resultset;
 	resultset=NULL;
