@@ -8487,7 +8487,7 @@ void ProxySQL_Admin::save_mysql_firewall_whitelist_users_from_runtime(bool _runt
 			SQLite3_row *r1=*it;
 			int idx=row_idx%32;
 			vector<bool> is_nums { true, false, false, false, false };
-			vector<int> cols { 0, 1, 2, 3, 4, 5 };
+			vector<int> cols { 0, 1, 2, 3, 4 };
 			if (row_idx<max_bulk_row_idx) { // bulk
 				proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement32, r1, idx*5 + 1, is_nums, cols);
 				if (idx==31) {
