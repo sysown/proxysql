@@ -10108,8 +10108,8 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		rc = admindb->prepare_v2(query, &statement);
 		ASSERT_SQLITE_OK(rc, admindb);
 		//proxy_info("New mysql_aws_aurora_hostgroups table\n");
-		vector<bool> is_nums { true, true, true, true, false, true, true, true, true, true, true, true, true, false };
-		vector<int> cols { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14 };
+		vector<bool> is_nums { true, true, true, true, false, true, true, true, true, true, true, true, false };
+		vector<int> cols { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			proxysql_sqlite3_bind_from_SQLite3_row(admindb, statement, r, 1, is_nums, cols);
