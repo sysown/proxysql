@@ -326,6 +326,12 @@ int main(int argc, char *argv[]) {
 	              __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	}
+	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='false' where variable_name='mysql-enforce_autocommit_on_reads'");
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	MYSQL_QUERY(mysqladmin, "CREATE TABLE mysql_query_rules_948 AS SELECT * FROM mysql_query_rules");
+	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_query_rules");
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+
 	int MyHGM_myconnpoll_push = 0;
 	std::string q;
 	q = "SELECT * FROM stats_mysql_global WHERE variable_name LIKE 'MyHGM%'";
@@ -386,5 +392,8 @@ int main(int argc, char *argv[]) {
 	std::cerr << "cnt_SELECT_outside_transactions: " << cnt_SELECT_outside_transactions << std::endl;
 	std::cerr << "cnt_transactions: " << cnt_transactions << std::endl;
 	ok((MyHGM_myconnpoll_push == cnt_transactions+cnt_SELECT_outside_transactions) , "Number of transactions [%d] , Queries outside transaction [%d] , total connections returned [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_push);
+	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_query_rules");
+	MYSQL_QUERY(mysqladmin, "INSERT INTO mysql_query_rules SELECT * FROM mysql_query_rules_948");
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	return exit_status();
 }
