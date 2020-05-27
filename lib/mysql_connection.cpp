@@ -11,8 +11,6 @@
 
 #include <atomic>
 
-static std::atomic<int> savepoint_false {0};
-
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
@@ -2208,8 +2206,6 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			!strcasecmp(query_digest_text,"ROLLBACK")
 		) {
 			set_status_has_savepoint(false);
-			savepoint_false++;
-			std::cerr << "savepoint_false: " << savepoint_false << endl;
 		}
 	}
 }
