@@ -28,8 +28,6 @@ int select_config_file(MYSQL* mysql, std::string& resultset);
 }
 #endif
 
-void proxy_info_(const char* msg, ...);
-
 /**
  * @brief Simple struct that holds the 'timeout options' for 'wexecvp'.
  */
