@@ -586,7 +586,7 @@ int main(int argc, char *argv[]) {
 	mysql_close(mysql);
 
 	num_threads = 10;
-	queries = 1000;
+	queries = 300;
 	queries_per_connections = 10;
 	count = 10;
 	username = cl.username;
