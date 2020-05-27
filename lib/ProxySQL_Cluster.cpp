@@ -555,8 +555,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					GloProxyCluster->pull_mysql_query_rules_from_peer();
 				}
 			}
-			// TODO: Change repetition technique
-			if ((v->epoch == own_epoch) && ((v->diff_check % (diff_mqr*10)) == 0)) {
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mqr*10)) == 0)) {
 				proxy_error("Cluster: detected a peer %s:%d with mysql_query_rules version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mqr*10));
 			}
 		} else {
@@ -581,8 +580,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					GloProxyCluster->pull_mysql_servers_from_peer();
 				}
 			}
-			// TODO: Proposed timeout based solution
-			if ((v->epoch == own_epoch) && ((curtime - last_mysql_servers_sync_err_report) > sync_report_timeout)) { // ((v->diff_check % (diff_ms*10)) == 0)) {
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ms*10)) == 0)) {
 				proxy_error("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms*10));
 				last_mysql_servers_sync_err_report = curtime;
 			}
@@ -608,8 +606,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					GloProxyCluster->pull_mysql_users_from_peer();
 				}
 			}
-			// TODO: Change repetition technique
-			if ((v->epoch == own_epoch) && ((v->diff_check % (diff_mu*10)) == 0)) {
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mu*10)) == 0)) {
 				proxy_error("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mu*10));
 			}
 		} else {
@@ -634,10 +631,9 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					GloProxyCluster->pull_proxysql_servers_from_peer();
 				}
 			}
-			// TODO: Change repetition technique
-			// if ((v->epoch == own_epoch) && ((v->diff_check % (diff_ps*10)) == 0)) {
-			// 	proxy_error("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ps*10));
-			// }
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ps*10)) == 0)) {
+				proxy_error("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ps*10));
+			}
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_ps*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps*10));

@@ -57,8 +57,6 @@ class ProxySQL_Node_Entry {
 	int metrics_idx_prev;
 	int metrics_idx;
 	ProxySQL_Node_Metrics **metrics;
-	unsigned long long last_mysql_servers_sync_err_report = 0;
-	uint32_t sync_report_timeout = 3;
 //	void pull_mysql_query_rules_from_peer();
 //	void pull_mysql_servers_from_peer();
 //	void pull_proxysql_servers_from_peer();
