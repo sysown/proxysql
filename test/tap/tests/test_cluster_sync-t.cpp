@@ -194,7 +194,114 @@ int main(int, char**) {
 
 	sleep(2);
 
-	// Check GALERA hostgroups synchronization
+	{
+		// Configure 'mysql_galera_hostgroups' and check sync with NULL comments
+		const char* t_insert_mysql_galera_hostgroups =
+			"INSERT INTO mysql_galera_hostgroups ( "
+			"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, "
+			"active, max_writers, writer_is_also_reader, max_transactions_behind) "
+			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d)";
+		std::vector<std::tuple<int,int,int,int,int,int,int,int>> insert_galera_values {
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250),
+			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150),
+			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350)
+		};
+		std::vector<std::string> insert_mysql_galera_hostgroup_queries {};
+
+		for (auto const& values : insert_galera_values) {
+			std::string insert_galera_hostgroup_query = "";
+			string_format(
+				t_insert_mysql_galera_hostgroups,
+				insert_galera_hostgroup_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values),
+				std::get<4>(values),
+				std::get<5>(values),
+				std::get<6>(values),
+				std::get<7>(values)
+			);
+			insert_mysql_galera_hostgroup_queries.push_back(insert_galera_hostgroup_query);
+		}
+
+		const char* t_select_galera_inserted_entries =
+			"SELECT COUNT(*) FROM mysql_galera_hostgroups WHERE "
+			"writer_hostgroup=%d AND backup_writer_hostgroup=%d AND reader_hostgroup=%d AND "
+			"offline_hostgroup=%d AND active=%d AND max_writers=%d AND writer_is_also_reader=%d AND "
+			"max_transactions_behind=%d AND comment is NULL";
+		std::vector<std::string> select_mysql_galera_hostgroup_queries {};
+
+		for (auto const& values : insert_galera_values) {
+			std::string select_galera_hostgroup_query = "";
+			string_format(
+				t_select_galera_inserted_entries,
+				select_galera_hostgroup_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values),
+				std::get<4>(values),
+				std::get<5>(values),
+				std::get<6>(values),
+				std::get<7>(values)
+			);
+			select_mysql_galera_hostgroup_queries.push_back(select_galera_hostgroup_query);
+		}
+
+		// SETUP CONFIG
+
+		// Backup current table
+		MYSQL_QUERY__(proxysql_admin, "CREATE TABLE mysql_galera_hostgroups_sync_test_2687 AS SELECT * FROM mysql_galera_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_galera_hostgroups");
+
+		// Insert the new galera hostgroups values
+		for (const auto& query : insert_mysql_galera_hostgroup_queries) {
+			MYSQL_QUERY__(proxysql_admin, query.c_str());
+		}
+		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+		// SYNCH CHECK
+
+		// Sleep until timeout waiting for synchronization
+		uint waited = 0;
+		bool not_synced_query = false;
+		while (waited < SYNC_TIMEOUT) {
+			not_synced_query = false;
+			// Check that all the entries have been synced
+			for (const auto& query : select_mysql_galera_hostgroup_queries) {
+				MYSQL_QUERY__(proxysql_replica, query.c_str());
+				MYSQL_RES* galera_res = mysql_store_result(proxysql_replica);
+				MYSQL_ROW row = mysql_fetch_row(galera_res);
+				int row_value = atoi(row[0]);
+				mysql_free_result(galera_res);
+
+				if (row_value == 0) {
+					not_synced_query = true;
+					break;
+				}
+			}
+
+			if (not_synced_query) {
+				waited += 1;
+				sleep(1);
+			} else {
+				break;
+			}
+		}
+
+		ok(not_synced_query == false, "'mysql_galera_hostgroups' with NULL comments should be synced.");
+
+		// TEARDOWN CONFIG
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_galera_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_galera_hostgroups SELECT * FROM mysql_galera_hostgroups_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE mysql_galera_hostgroups_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	}
+
+	sleep(2);
+
 	{
 		// Configure 'mysql_galera_hostgroups' and check sync
 		const char* t_insert_mysql_galera_hostgroups =
@@ -298,6 +405,114 @@ int main(int, char**) {
 
 	sleep(2);
 
+	// Check 'mysql_group_replication_hostgroups' synchronization with NULL comments
+	{
+		// Configure 'mysql_group_replication_hostgroups' and check sync
+		const char* t_insert_mysql_group_replication_hostgroups =
+			"INSERT INTO mysql_group_replication_hostgroups ( "
+			"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, "
+			"active, max_writers, writer_is_also_reader, max_transactions_behind) "
+			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d)";
+		std::vector<std::tuple<int,int,int,int,int,int,int,int>> insert_group_replication_values {
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250),
+			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150),
+			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350),
+		};
+		std::vector<std::string> insert_mysql_group_replication_hostgroup_queries {};
+
+		for (auto const& values : insert_group_replication_values) {
+			std::string insert_group_replication_hostgroup_query = "";
+			string_format(
+				t_insert_mysql_group_replication_hostgroups,
+				insert_group_replication_hostgroup_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values),
+				std::get<4>(values),
+				std::get<5>(values),
+				std::get<6>(values),
+				std::get<7>(values)
+			);
+			insert_mysql_group_replication_hostgroup_queries.push_back(insert_group_replication_hostgroup_query);
+		}
+
+		const char* t_select_group_replication_inserted_entries =
+			"SELECT COUNT(*) FROM mysql_group_replication_hostgroups WHERE "
+			"writer_hostgroup=%d AND backup_writer_hostgroup=%d AND reader_hostgroup=%d AND "
+			"offline_hostgroup=%d AND active=%d AND max_writers=%d AND writer_is_also_reader=%d AND "
+			"max_transactions_behind=%d AND comment IS NULL";
+		std::vector<std::string> select_mysql_group_replication_hostgroup_queries {};
+
+		for (auto const& values : insert_group_replication_values) {
+			std::string select_group_replication_hostgroup_query = "";
+			string_format(
+				t_select_group_replication_inserted_entries,
+				select_group_replication_hostgroup_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values),
+				std::get<4>(values),
+				std::get<5>(values),
+				std::get<6>(values),
+				std::get<7>(values)
+			);
+			select_mysql_group_replication_hostgroup_queries.push_back(select_group_replication_hostgroup_query);
+		}
+
+		// SETUP CONFIG
+
+		// Backup current table
+		MYSQL_QUERY__(proxysql_admin, "CREATE TABLE mysql_group_replication_hostgroups_sync_test_2687 AS SELECT * FROM mysql_group_replication_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_group_replication_hostgroups");
+
+		// Insert the new group_replication hostgroups values
+		for (const auto& query : insert_mysql_group_replication_hostgroup_queries) {
+			MYSQL_QUERY__(proxysql_admin, query.c_str());
+		}
+		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+		// SYNCH CHECK
+
+		uint waited = 0;
+		bool not_synced_query = false;
+		while (waited < SYNC_TIMEOUT) {
+			not_synced_query = false;
+			// Check that all the entries have been synced
+			for (const auto& query : select_mysql_group_replication_hostgroup_queries) {
+				MYSQL_QUERY__(proxysql_replica, query.c_str());
+				MYSQL_RES* group_replication_res = mysql_store_result(proxysql_replica);
+				MYSQL_ROW row = mysql_fetch_row(group_replication_res);
+				int row_value = atoi(row[0]);
+				mysql_free_result(group_replication_res);
+
+				if (row_value == 0) {
+					not_synced_query = true;
+					break;
+				}
+			}
+
+			if (not_synced_query) {
+				waited += 1;
+				sleep(1);
+			} else {
+				break;
+			}
+		}
+
+		ok(not_synced_query == false, "'mysql_group_replication_hostgroups' with NULL comments should be synced.");
+
+		// TEARDOWN CONFIG
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_group_replication_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_group_replication_hostgroups SELECT * FROM mysql_group_replication_hostgroups_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE mysql_group_replication_hostgroups_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	}
+
+	sleep(2);
+
 	// Check 'mysql_group_replication_hostgroups' synchronization
 	{
 		// Configure 'mysql_group_replication_hostgroups' and check sync
@@ -360,7 +575,7 @@ int main(int, char**) {
 		const char* delete_group_replication_hostgroups =
 			"DELETE FROM mysql_group_replication_hostgroups WHERE comment='reader_writer_test_group_replication_hostgroup'";
 		MYSQL_QUERY__(proxysql_admin, delete_group_replication_hostgroups);
-		
+
 		// Insert the new group_replication hostgroups values
 		for (const auto& query : insert_mysql_group_replication_hostgroup_queries) {
 			MYSQL_QUERY__(proxysql_admin, query.c_str());
@@ -396,6 +611,124 @@ int main(int, char**) {
 		ok(not_synced_query == false, "'mysql_group_replication_hostgroups' should be synced.");
 
 		MYSQL_QUERY__(proxysql_admin, delete_group_replication_hostgroups);
+		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	}
+
+	sleep(2);
+
+	// Check 'mysql_aws_aurora_hostgroups' synchronization with NULL comments
+	{
+		// Configure 'mysql_aws_aurora_hostgroups' and check sync
+		const char* t_insert_mysql_aws_aurora_hostgroups =
+			"INSERT INTO mysql_aws_aurora_hostgroups ( "
+			"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
+			"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks) "
+			"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d)";
+		std::vector<std::tuple<int,int,int,int,const char*,int,int,int,int,int,int,int,int>> insert_aws_aurora_values {
+			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1),
+			std::make_tuple(1, 5, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1),
+			std::make_tuple(2, 6, 1, 3308, ".test_domain2", 10002, 2002, 2002, 0, 3, 50, 100, 1),
+			std::make_tuple(3, 7, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1),
+		};
+		std::vector<std::string> insert_mysql_aws_aurora_hostgroup_queries {};
+
+		for (auto const& values : insert_aws_aurora_values) {
+			std::string insert_aws_aurora_hostgroup_query = "";
+			string_format(
+				t_insert_mysql_aws_aurora_hostgroups,
+				insert_aws_aurora_hostgroup_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values),
+				std::get<4>(values),
+				std::get<5>(values),
+				std::get<6>(values),
+				std::get<7>(values),
+				std::get<8>(values),
+				std::get<9>(values),
+				std::get<10>(values),
+				std::get<11>(values),
+				std::get<12>(values)
+			);
+			insert_mysql_aws_aurora_hostgroup_queries.push_back(insert_aws_aurora_hostgroup_query);
+		}
+
+		const char* t_select_aws_aurora_inserted_entries =
+			"SELECT COUNT(*) FROM mysql_aws_aurora_hostgroups WHERE "
+			"writer_hostgroup=%d AND reader_hostgroup=%d AND active=%d AND aurora_port=%d AND domain_name='%s' "
+			"AND max_lag_ms=%d AND check_interval_ms=%d AND check_timeout_ms=%d AND writer_is_also_reader=%d "
+			"AND new_reader_weight=%d AND add_lag_ms=%d AND min_lag_ms=%d AND lag_num_checks=%d AND comment IS NULL";
+		std::vector<std::string> select_mysql_aws_aurora_hostgroup_queries {};
+
+		for (auto const& values : insert_aws_aurora_values) {
+			std::string select_aws_aurora_hostgroup_query = "";
+			string_format(
+				t_select_aws_aurora_inserted_entries,
+				select_aws_aurora_hostgroup_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values),
+				std::get<4>(values),
+				std::get<5>(values),
+				std::get<6>(values),
+				std::get<7>(values),
+				std::get<8>(values),
+				std::get<9>(values),
+				std::get<10>(values),
+				std::get<11>(values),
+				std::get<12>(values)
+			);
+			select_mysql_aws_aurora_hostgroup_queries.push_back(select_aws_aurora_hostgroup_query);
+		}
+
+		// SETUP CONFIG
+
+		// Backup current table
+		MYSQL_QUERY__(proxysql_admin, "CREATE TABLE mysql_aws_aurora_hostgroups_sync_test_2687 AS SELECT * FROM mysql_aws_aurora_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
+
+		// Insert the new aws_aurora hostgroups values
+		for (const auto& query : insert_mysql_aws_aurora_hostgroup_queries) {
+			MYSQL_QUERY__(proxysql_admin, query.c_str());
+		}
+		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+		// SYNCH CHECK
+
+		uint waited = 0;
+		bool not_synced_query = false;
+		while (waited < SYNC_TIMEOUT) {
+			not_synced_query = false;
+			// Check that all the entries have been synced
+			for (const auto& query : select_mysql_aws_aurora_hostgroup_queries) {
+				MYSQL_QUERY__(proxysql_replica, query.c_str());
+				MYSQL_RES* aws_aurora_res = mysql_store_result(proxysql_replica);
+				MYSQL_ROW row = mysql_fetch_row(aws_aurora_res);
+				int row_value = atoi(row[0]);
+				mysql_free_result(aws_aurora_res);
+
+				if (row_value == 0) {
+					not_synced_query = true;
+					break;
+				}
+			}
+
+			if (not_synced_query) {
+				waited += 1;
+				sleep(1);
+			} else {
+				break;
+			}
+		}
+
+		ok(not_synced_query == false, "'mysql_aws_aurora_hostgroups' should be synced.");
+
+		// TEARDOWN CONFIG
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_aws_aurora_hostgroups SELECT * FROM mysql_aws_aurora_hostgroups_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE mysql_aws_aurora_hostgroups_sync_test_2687");
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	}
 
@@ -511,7 +844,7 @@ int main(int, char**) {
 		MYSQL_QUERY__(proxysql_admin, delete_aws_aurora_hostgroups);
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	}
-	
+
 cleanup:
 	// Teardown config
 
@@ -530,6 +863,6 @@ cleanup:
 
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM proxysql_servers");
 	MYSQL_QUERY(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
-	
+
 	return exit_status();
 }
