@@ -723,7 +723,7 @@ int main(int, char**) {
 			}
 		}
 
-		ok(not_synced_query == false, "'mysql_aws_aurora_hostgroups' should be synced.");
+		ok(not_synced_query == false, "'mysql_aws_aurora_hostgroups' with NULL comments should be synced.");
 
 		// TEARDOWN CONFIG
 		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
