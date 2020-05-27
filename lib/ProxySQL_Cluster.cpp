@@ -533,7 +533,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	// we now do a series of checks, and we take action
 	// note that this is done outside the critical section
 	// as mutex on GloVars.checksum_mutex is already released
-	unsigned long long curtime = monotonic_time() / 1000 / 1000;
 	unsigned int diff_mqr = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync,0);
 	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0);
 	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_users_diffs_before_sync,0);
