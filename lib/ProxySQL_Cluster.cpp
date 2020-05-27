@@ -1131,10 +1131,9 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 						// sync mysql_group_replication_hostgroups
 						proxy_info("Cluster: Writing mysql_group_replication_hostgroups table\n");
 						GloAdmin->admindb->execute("DELETE FROM mysql_group_replication_hostgroups");
-						q=(char *)"INSERT INTO mysql_group_replication_hostgroups ( "
+						q=(char*)"INSERT INTO mysql_group_replication_hostgroups ( "
 							"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
-							"max_writers, writer_is_also_reader, max_transactions_behind, comment) "
-							"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
+							"max_writers, writer_is_also_reader, max_transactions_behind, comment) ";
 						char *error = NULL;
 						int cols = 0;
 						int affected_rows = 0;
@@ -1147,18 +1146,25 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							}
 							char* o = nullptr;
 							char* query = nullptr;
+							std::string fqs = q;
+
 							if (row[8] != nullptr) {
+								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
 								o = escape_string_single_quotes(row[8], false);
-								query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
+								query = (char *)malloc(strlen(fqs.c_str()) + i + strlen(o) + 64);
+								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 								// free in case of 'o' being a copy
 								if (o != row[8]) {
 									free(o);
 								}
 							} else {
+								// In case of comment being null, placeholder must not have ''
+								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
-								query = (char *)malloc(strlen(q) + strlen("NULL") + i + 64);
+								query = (char *)malloc(strlen(fqs.c_str()) + strlen("NULL") + i + 64);
+								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 							}
-							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
+
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
@@ -1172,8 +1178,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 						GloAdmin->admindb->execute("DELETE FROM mysql_galera_hostgroups");
 						q=(char *)"INSERT INTO mysql_galera_hostgroups ( "
 							"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, "
-							"max_writers, writer_is_also_reader, max_transactions_behind, comment) "
-							"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
+							"max_writers, writer_is_also_reader, max_transactions_behind, comment) ";
 						while ((row = mysql_fetch_row(results[3]))) {
 							int i;
 							int l = 0;
@@ -1182,18 +1187,25 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							}
 							char* o = nullptr;
 							char* query = nullptr;
+							std::string fqs = q;
+
 							if (row[8] != nullptr) {
+								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, '%s')";
 								o = escape_string_single_quotes(row[8], false);
-								query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
+								query = (char *)malloc(strlen(fqs.c_str()) + i + strlen(o) + 64);
+								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 								// free in case of 'o' being a copy
 								if (o != row[8]) {
 									free(o);
 								}
 							} else {
+								// In case of comment being null, placeholder must not have ''
+								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
-								query = (char *)malloc(strlen(q) + i + strlen("NULL") + 64);
+								query = (char *)malloc(strlen(fqs.c_str()) + i + strlen("NULL") + 64);
+								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
 							}
-							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], o);
+
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
@@ -1207,8 +1219,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 						GloAdmin->admindb->execute("DELETE FROM mysql_aws_aurora_hostgroups");
 						q=(char *)"INSERT INTO mysql_aws_aurora_hostgroups ( "
 							"writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, "
-							"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) "
-							"VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, '%s')";
+							"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) ";
 						while ((row = mysql_fetch_row(results[4]))) {
 							int i;
 							int l = 0;
@@ -1217,18 +1228,25 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 							}
 							char* o = nullptr;
 							char* query = nullptr;
+							std::string fqs = q;
+
 							if (row[13] != nullptr) {
+								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, '%s')";
 								o = escape_string_single_quotes(row[13], false);
-								query = (char *)malloc(strlen(q) + i + strlen(o) + 64);
+								query = (char *)malloc(strlen(fqs.c_str()) + i + strlen(o) + 64);
+								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
 								// free in case of 'o' being a copy
 								if (o != row[13]) {
 									free(o);
 								}
 							} else {
+								// In case of comment being null, placeholder must not have ''
+								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
-								query = (char *)malloc(strlen(q) + strlen("NULL") + i + 64);
+								query = (char *)malloc(strlen(fqs.c_str()) + i + strlen("NULL") + 64);
+								sprintf(query, fqs.c_str(), row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
 							}
-							sprintf(query, q, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], o);
+
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
