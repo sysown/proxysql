@@ -919,7 +919,7 @@ int ProxySQL_Cluster::fetch_and_store(MYSQL* conn, const fetch_query& f_query, M
 
 	// report operation to be performed
 	if (!msgs[0].empty()) {
-		proxy_info__(msgs[0].c_str());
+		proxy_info("%s", msgs[0].c_str());
 	}
 
 	int query_res = mysql_query(conn, query);
@@ -931,7 +931,7 @@ int ProxySQL_Cluster::fetch_and_store(MYSQL* conn, const fetch_query& f_query, M
 		// report error
 		if (!msgs[2].empty()) {
 			std::string f_err = msgs[2] + mysql_error(conn);
-			proxy_info__(f_err.c_str());
+			proxy_info("%s", f_err.c_str());
 		}
 		if (f_query.failure_counter != p_cluster_counter::metric(-1)) {
 			metrics.p_counter_array[f_query.failure_counter]->Increment();
@@ -940,7 +940,7 @@ int ProxySQL_Cluster::fetch_and_store(MYSQL* conn, const fetch_query& f_query, M
 
 	// report finish msg
 	if (query_res == 0 && !msgs[1].empty()) {
-		proxy_info__(msgs[1].c_str());
+		proxy_info("%s", msgs[1].c_str());
 	}
 
 	if (f_query.success_counter != p_cluster_counter::metric(-1)) {

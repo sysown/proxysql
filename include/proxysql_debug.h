@@ -92,9 +92,6 @@ extern int gdbg;
 		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
 		proxy_error_func("%s %s:%d:%s(): [INFO] " fmt, __buffer, __FILE__, __LINE__, __func__ , ## __VA_ARGS__); \
 	} while(0)
-
-#define proxy_info__(fmt, ...) proxy_info_(fmt, __FILE__, __LINE__, __func__ , ## __VA_ARGS__)
-
 #else
 #define proxy_info(fmt, ...) \
 	do { \
@@ -106,9 +103,6 @@ extern int gdbg;
 		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info); \
     proxy_error_func("%s [INFO] " fmt , __buffer , ## __VA_ARGS__); \
 	} while(0)
-
-#define proxy_info__(fmt, ...) proxy_info_(fmt, ## __VA_ARGS__)
-
 #endif
 
 #ifdef DEBUG
