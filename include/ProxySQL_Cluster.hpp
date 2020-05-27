@@ -141,6 +141,16 @@ struct p_cluster_counter {
 		pulled_proxysql_servers_success,
 		pulled_proxysql_servers_failure,
 
+		sync_conflict_mysql_query_rules_share_epoch,
+		sync_conflict_mysql_servers_share_epoch,
+		sync_conflict_proxysql_servers_share_epoch,
+		sync_conflict_mysql_users_share_epoch,
+
+		sync_delayed_mysql_query_rules_version_one,
+		sync_delayed_mysql_servers_version_one,
+		sync_delayed_mysql_users_version_one,
+		sync_delayed_proxysql_servers_version_one,
+
 		__size
 	};
 };
@@ -181,6 +191,7 @@ class ProxySQL_Cluster {
 		std::array<prometheus::Gauge*, p_cluster_gauge::__size> p_gauge_array {};
 	} metrics;
 	int fetch_and_store(MYSQL* conn, const fetch_query& f_query, MYSQL_RES** result);
+	friend class ProxySQL_Node_Entry;
 	public:
 	pthread_mutex_t update_mysql_query_rules_mutex;
 	pthread_mutex_t update_mysql_servers_mutex;

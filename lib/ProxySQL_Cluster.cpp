@@ -557,10 +557,12 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mqr*10)) == 0)) {
 				proxy_error("Cluster: detected a peer %s:%d with mysql_query_rules version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mqr*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_mysql_query_rules_share_epoch]->Increment();
 			}
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_mqr*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with mysql_query_rules version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL QUERY RULES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mqr*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_mysql_query_rules_version_one]->Increment();
 			}
 		}
 	}
@@ -582,11 +584,12 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ms*10)) == 0)) {
 				proxy_error("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms*10));
-				last_mysql_servers_sync_err_report = curtime;
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_mysql_servers_share_epoch]->Increment();
 			}
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_ms*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_mysql_servers_version_one]->Increment();
 			}
 		}
 	}
@@ -608,10 +611,12 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mu*10)) == 0)) {
 				proxy_error("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mu*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_mysql_users_share_epoch]->Increment();
 			}
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_mu*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL USERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mu*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_mysql_users_version_one]->Increment();
 			}
 		}
 	}
@@ -637,6 +642,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		} else {
 			if (v->diff_check && (v->diff_check % (diff_ps*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_proxysql_servers_version_one]->Increment();
 			}
 		}
 	}
@@ -898,10 +904,11 @@ __exit_pull_mysql_users_from_peer:
  *  'MYSQL_RES' passed as a parameter.
  *
  * @param conn The MYSQL connectionn in which to perform the queries.
- * @param f_query A struct holding the query and three messages:
- *  1. Message to display before performing the query.
- *  2. Message to display when the operation is complete.
- *  3. Message to display in case the query fails to be executed.
+ * @param f_query A struct holding the query, three messages and the counters to update
+ *  case of success, and in case of error:
+ *   1. Message to display before performing the query.
+ *   2. Message to display when the operation is complete.
+ *   3. Message to display in case the query fails to be executed.
  * @param result The result of the executed query.
  * @return int The errno in case fo the query execution not being successful,
  *  zero otherwise.
@@ -1942,7 +1949,7 @@ cluster_metrics_map = std::make_tuple(
 			p_cluster_counter::pulled_mysql_servers_replication_hostgroups_success,
 			"pulled_mysql_servers_replication_hostgroups",
 			"Number of times 'mysql_servers_replication_hostgroups' have been pulled from a peer.",
-			metric_tags { { "status", "failure" } }
+			metric_tags { { "status", "successs" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_replication_hostgroups_failure,
@@ -1954,7 +1961,7 @@ cluster_metrics_map = std::make_tuple(
 			p_cluster_counter::pulled_mysql_servers_group_replication_hostgroups_success,
 			"pulled_mysql_servers_group_replication_hostgroups",
 			"Number of times 'mysql_servers_group_replication_hostgroups' have been pulled from a peer.",
-			metric_tags { { "status", "failure" } }
+			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_group_replication_hostgroups_failure,
@@ -1966,7 +1973,7 @@ cluster_metrics_map = std::make_tuple(
 			p_cluster_counter::pulled_mysql_servers_galera_hostgroups_success,
 			"pulled_mysql_servers_galera_hostgroups",
 			"Number of times 'mysql_servers_galera_hostgroups' have been pulled from a peer.",
-			metric_tags { { "status", "failure" } }
+			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_galera_hostgroups_failure,
@@ -1978,7 +1985,7 @@ cluster_metrics_map = std::make_tuple(
 			p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_success,
 			"pulled_mysql_servers_aws_aurora_hostgroups",
 			"Number of times 'mysql_servers_aws_aurora_hostgroups' have been pulled from a peer.",
-			metric_tags { { "status", "failure" } }
+			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_failure,
@@ -1990,7 +1997,7 @@ cluster_metrics_map = std::make_tuple(
 			p_cluster_counter::pulled_mysql_servers_runtime_checks_success,
 			"pulled_mysql_servers_runtime_checks",
 			"Number of times '' have been pulled from a peer.",
-			metric_tags { { "status", "failure" } }
+			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_runtime_checks_failure,
@@ -2025,6 +2032,58 @@ cluster_metrics_map = std::make_tuple(
 			"pulled_proxysql_servers",
 			"Number of times 'mysql_proxysql_servers' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
+		),
+
+		// sync_conflict same epoch
+		std::make_tuple (
+			p_cluster_counter::sync_conflict_mysql_query_rules_share_epoch,
+			"sync_conflict_mysql_query_rules_share_epoch",
+			"Number of times 'mysql_query_rules' has not been synced because they share the same epoch.",
+			metric_tags { { "type", "error" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_conflict_mysql_servers_share_epoch,
+			"sync_conflict_mysql_servers_share_epoch",
+			"Number of times 'mysql_servers' has not been synced because they share the same epoch.",
+			metric_tags { { "type", "error" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_conflict_proxysql_servers_share_epoch,
+			"sync_conflict_proxysql_servers_share_epoch",
+			"Number of times 'proxysql_servers' has not been synced because they share the same epoch.",
+			metric_tags { { "type", "error" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_conflict_mysql_users_share_epoch,
+			"sync_conflict_mysql_users_share_epoch",
+			"Number of times 'mysql_users' has not been synced because they share the same epoch.",
+			metric_tags { { "type", "error" } }
+		),
+
+		// sync_delayed due to version one
+		std::make_tuple (
+			p_cluster_counter::sync_delayed_mysql_query_rules_version_one,
+			"sync_delayed_mysql_query_rules_version_one",
+			"Number of times 'mysql_query_rules' has not been synced because version one doesn't allow sync.",
+			metric_tags { { "type", "warning" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_delayed_mysql_servers_version_one,
+			"sync_delayed_mysql_servers_version_one",
+			"Number of times 'mysql_servers' has not been synced because version one doesn't allow sync.",
+			metric_tags { { "type", "warning" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_delayed_mysql_users_version_one,
+			"sync_delayed_mysql_users_version_one",
+			"Number of times 'mysql_users' has not been synced because version one doesn't allow sync.",
+			metric_tags { { "type", "warning" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_delayed_proxysql_servers_version_one,
+			"sync_delayed_proxysql_servers_version_one",
+			"Number of times 'proxysql_servers' has not been synced because version one doesn't allow sync.",
+			metric_tags { { "type", "warning" } }
 		)
 	},
 	cluster_gauge_vector {}
