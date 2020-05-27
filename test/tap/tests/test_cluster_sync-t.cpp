@@ -34,14 +34,12 @@
 const char* t_fmt_config_file = "./test/tap/tests/test_cluster_sync_config/test_cluster_sync-t.cnf";
 const char* fmt_config_file = "./test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf";
 const char* cluster_sync_node_stderr = "./test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt";
-const uint32_t SYNC_TIMEOUT = 20;
+const uint32_t SYNC_TIMEOUT = 5;
 const uint32_t CONNECT_TIMEOUT = 5;
 
 int setup_config_file(const CommandLine& cl) {
 	// Prepare the configuration file
 	config_t cfg {};
-	const config_setting_t* port = nullptr;
-	const char* hostname = nullptr;
 
 	config_init(&cfg);
 
@@ -102,7 +100,7 @@ int setup_config_file(const CommandLine& cl) {
 	return 0;
 }
 
-int main(int argc, char** argv) {
+int main(int, char**) {
 	int res = 0;
 	CommandLine cl;
 	std::atomic<bool> save_proxy_stderr(false);
@@ -152,27 +150,27 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 	// Launch proxysql with cluster config
-//	std::thread proxy_replica_th([&save_proxy_stderr] () {
-//		std::string proxy_stdout = "";
-//		std::string proxy_stderr = "";
-//		int exec_res = wexecvp("./src/proxysql", { "-f", "-M", "-c", fmt_config_file }, NULL, proxy_stdout, proxy_stderr);
-//
-//		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely.");
-//
-//		// In case of error, log 'proxysql' stderr to a file
-//		if (exec_res || save_proxy_stderr.load()) {
-//			if (exec_res) {
-//				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_node_stderr.txt'");
-//			} else {
-//				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_node_stderr.txt'");
-//			}
-//
-//			std::ofstream error_log_file {};
-//			error_log_file.open(cluster_sync_node_stderr);
-//			error_log_file << proxy_stderr;
-//			error_log_file.close();
-//		}
-//	});
+	std::thread proxy_replica_th([&save_proxy_stderr] () {
+		std::string proxy_stdout = "";
+		std::string proxy_stderr = "";
+		int exec_res = wexecvp("./src/proxysql", { "-f", "-M", "-c", fmt_config_file }, NULL, proxy_stdout, proxy_stderr);
+
+		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely.");
+
+		// In case of error, log 'proxysql' stderr to a file
+		if (exec_res || save_proxy_stderr.load()) {
+			if (exec_res) {
+				diag("LOG: Proxysql cluster node execution failed, logging stderr into 'test_cluster_sync_node_stderr.txt'");
+			} else {
+				diag("LOG: One of the tests failed to pass, logging stderr 'test_cluster_sync_node_stderr.txt'");
+			}
+
+			std::ofstream error_log_file {};
+			error_log_file.open(cluster_sync_node_stderr);
+			error_log_file << proxy_stderr;
+			error_log_file.close();
+		}
+	});
 
 	// Waiting for proxysql to be ready
 	uint con_waited = 0;
@@ -193,6 +191,8 @@ int main(int argc, char** argv) {
 		res = -1;
 		goto cleanup;
 	}
+
+	sleep(2);
 
 	// Check GALERA hostgroups synchronization
 	{
@@ -276,7 +276,6 @@ int main(int argc, char** argv) {
 				int row_value = atoi(row[0]);
 				mysql_free_result(galera_res);
 
-				proxy_info_(":: row_value: %d\n", row_value);
 				if (row_value == 0) {
 					not_synced_query = true;
 					break;
@@ -297,14 +296,16 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	}
 
+	sleep(2);
+
 	// Check 'mysql_group_replication_hostgroups' synchronization
 	{
 		// Configure 'mysql_group_replication_hostgroups' and check sync
 		const char* t_insert_mysql_group_replication_hostgroups =
 			"INSERT INTO mysql_group_replication_hostgroups ( "
 			"writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, "
-			"active, max_writers, writer_is_also_reader, max_transactions_behind) " // , comment) "
-			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d)"; // , %s)";
+			"active, max_writers, writer_is_also_reader, max_transactions_behind, comment) "
+			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d, %s)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int, const char*>> insert_group_replication_values {
 			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_group_replication_hostgroup'"),
 			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_group_replication_hostgroup'"),
@@ -325,8 +326,8 @@ int main(int argc, char** argv) {
 				std::get<4>(values),
 				std::get<5>(values),
 				std::get<6>(values),
-				std::get<7>(values)
-				// std::get<8>(values)
+				std::get<7>(values),
+				std::get<8>(values)
 			);
 			insert_mysql_group_replication_hostgroup_queries.push_back(insert_group_replication_hostgroup_query);
 		}
@@ -335,7 +336,7 @@ int main(int argc, char** argv) {
 			"SELECT COUNT(*) FROM mysql_group_replication_hostgroups WHERE "
 			"writer_hostgroup=%d AND backup_writer_hostgroup=%d AND reader_hostgroup=%d AND "
 			"offline_hostgroup=%d AND active=%d AND max_writers=%d AND writer_is_also_reader=%d AND "
-			"max_transactions_behind=%d"; // AND comment=%s";
+			"max_transactions_behind=%d AND comment=%s";
 		std::vector<std::string> select_mysql_group_replication_hostgroup_queries {};
 
 		for (auto const& values : insert_group_replication_values) {
@@ -350,14 +351,14 @@ int main(int argc, char** argv) {
 				std::get<4>(values),
 				std::get<5>(values),
 				std::get<6>(values),
-				std::get<7>(values)
-				// std::get<8>(values)
+				std::get<7>(values),
+				std::get<8>(values)
 			);
 			select_mysql_group_replication_hostgroup_queries.push_back(select_group_replication_hostgroup_query);
 		}
 
 		const char* delete_group_replication_hostgroups =
-			"DELETE FROM mysql_group_replication_hostgroups";//  WHERE comment='reader_writer_test_group_replication_hostgroup'";
+			"DELETE FROM mysql_group_replication_hostgroups WHERE comment='reader_writer_test_group_replication_hostgroup'";
 		MYSQL_QUERY__(proxysql_admin, delete_group_replication_hostgroups);
 		
 		// Insert the new group_replication hostgroups values
@@ -378,7 +379,6 @@ int main(int argc, char** argv) {
 				int row_value = atoi(row[0]);
 				mysql_free_result(group_replication_res);
 
-				proxy_info_(":: row_value: %d\n", row_value);
 				if (row_value == 0) {
 					not_synced_query = true;
 					break;
@@ -398,6 +398,8 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY__(proxysql_admin, delete_group_replication_hostgroups);
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	}
+
+	sleep(2);
 
 	// Check 'mysql_aws_aurora_hostgroups' synchronization
 	{
@@ -490,7 +492,6 @@ int main(int argc, char** argv) {
 				int row_value = atoi(row[0]);
 				mysql_free_result(aws_aurora_res);
 
-				proxy_info_(":: row_value: %d\n", row_value);
 				if (row_value == 0) {
 					not_synced_query = true;
 					break;
@@ -519,11 +520,11 @@ cleanup:
 		save_proxy_stderr.store(true);
 	}
 	int mysql_timeout = 2;
-	// mysql_options(proxysql_replica, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
-	// mysql_options(proxysql_replica, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
-	// mysql_options(proxysql_replica, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
-	// mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
-	// proxy_replica_th.join();
+	mysql_options(proxysql_replica, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
+	mysql_options(proxysql_replica, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
+	mysql_options(proxysql_replica, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
+	mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
+	proxy_replica_th.join();
 
 	remove(fmt_config_file);
 
