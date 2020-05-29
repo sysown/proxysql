@@ -534,8 +534,6 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='true' where variable_name='mysql-enforce_autocommit_on_reads'");
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
-	mysql_close(mysqladmin);
-
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
 		return exit_status();
@@ -603,5 +601,9 @@ int main(int argc, char *argv[]) {
 	for (unsigned int i=0; i<num_threads; i++) {
 		pthread_join(thi[i], NULL);
 	}
+	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='false' where variable_name='mysql-enforce_autocommit_on_reads'");
+	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
+
+	mysql_close(mysqladmin);
 	return exit_status();
 }

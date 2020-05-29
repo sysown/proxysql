@@ -480,12 +480,14 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_OPTIMIZE]=(char *)"OPTIMIZE";
   commands_counters_desc[MYSQL_COM_QUERY_PREPARE]=(char *)"PREPARE";
   commands_counters_desc[MYSQL_COM_QUERY_PURGE]=(char *)"PURGE";
+  commands_counters_desc[MYSQL_COM_QUERY_RELEASE_SAVEPOINT]=(char *)"RELEASE_SAVEPOINT";
   commands_counters_desc[MYSQL_COM_QUERY_RENAME_TABLE]=(char *)"RENAME_TABLE";
   commands_counters_desc[MYSQL_COM_QUERY_RESET_MASTER]=(char *)"RESET_MASTER";
   commands_counters_desc[MYSQL_COM_QUERY_RESET_SLAVE]=(char *)"RESET_SLAVE";
   commands_counters_desc[MYSQL_COM_QUERY_REPLACE]=(char *)"REPLACE";
   commands_counters_desc[MYSQL_COM_QUERY_REVOKE]=(char *)"REVOKE";
   commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK]=(char *)"ROLLBACK";
+  commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK_SAVEPOINT]=(char *)"ROLLBACK_SAVEPOINT";
   commands_counters_desc[MYSQL_COM_QUERY_SAVEPOINT]=(char *)"SAVEPOINT";
   commands_counters_desc[MYSQL_COM_QUERY_SELECT]=(char *)"SELECT";
   commands_counters_desc[MYSQL_COM_QUERY_SELECT_FOR_UPDATE]=(char *)"SELECT_FOR_UPDATE";
@@ -2262,6 +2264,14 @@ __remove_paranthesis:
 			break;
 		case 'r':
 		case 'R':
+			if (!strcasecmp("RELEASE",token)) { // RELEASE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("SAVEPOINT",token)) {
+					ret=MYSQL_COM_QUERY_RELEASE_SAVEPOINT;
+					break;
+				}
+			}
 			if (!strcasecmp("RENAME",token)) { // RENAME
 				token=(char *)tokenize(&tok);
 				if (token==NULL) break;
@@ -2292,7 +2302,20 @@ __remove_paranthesis:
 				break;
 			}
 			if (!strcasecmp("ROLLBACK",token)) { // ROLLBACK
-				ret=MYSQL_COM_QUERY_ROLLBACK;
+				token=(char *)tokenize(&tok);
+				if (token==NULL) {
+					ret=MYSQL_COM_QUERY_ROLLBACK;
+					break;
+				} else {
+					if (!strcasecmp("TO",token)) {
+						token=(char *)tokenize(&tok);
+						if (token==NULL) break;
+						if (!strcasecmp("SAVEPOINT",token)) {
+							ret=MYSQL_COM_QUERY_ROLLBACK_SAVEPOINT;
+							break;
+						}
+					}
+				}
 				break;
 			}
 			break;
