@@ -1,4 +1,4 @@
-datadir="tests/test_cluster_sync_config"
+datadir=""
 
 admin_variables=
 {

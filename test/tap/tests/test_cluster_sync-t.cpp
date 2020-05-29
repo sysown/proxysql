@@ -36,6 +36,7 @@ const uint32_t CONNECT_TIMEOUT = 20;
 int setup_config_file(const CommandLine& cl) {
 	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
+	const std::string datadir_path = std::string(cl.workdir) + "test_cluster_sync_config";
 
 	// Prepare the configuration file
 	config_t cfg {};
@@ -78,12 +79,20 @@ int setup_config_file(const CommandLine& cl) {
 		return -1;
 	}
 
+	// Get the datadir setting
+	config_setting_t* datadir = config_lookup(&cfg, "datadir");
+	if (datadir == nullptr) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Invalid config file - 'datadir' setting not found.");
+		return -1;
+	}
+
 	int fhost_res = config_setting_set_string(f_pserver_hostname, cl.host);
 	int fport_res = config_setting_set_int(f_pserver_port, cl.admin_port);
 	int shost_res = config_setting_set_string(s_pserver_hostname, cl.host);
 	int sport_res = config_setting_set_int(s_pserver_port, 7032);
+	int sdata_res = config_setting_set_string(datadir, datadir_path.c_str());
 
-	if (fhost_res == CONFIG_FALSE || fport_res == CONFIG_FALSE || shost_res == CONFIG_FALSE || sport_res == CONFIG_FALSE) {
+	if (fhost_res == CONFIG_FALSE || fport_res == CONFIG_FALSE || shost_res == CONFIG_FALSE || sport_res == CONFIG_FALSE || sdata_res == CONFIG_FALSE) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Invalid config file - Error while trying to set the values from env variables.");
 		return -1;
 	}
@@ -872,7 +881,7 @@ cleanup:
 	mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
 	proxy_replica_th.join();
 
-	remove(fmt_config_file.c_str());
+	// remove(fmt_config_file.c_str());
 
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM proxysql_servers");
 	MYSQL_QUERY(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
