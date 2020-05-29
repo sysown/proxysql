@@ -1,4 +1,4 @@
-datadir="./test/tap/tests/test_cluster_sync_config"
+datadir="tests/test_cluster_sync_config"
 
 admin_variables=
 {

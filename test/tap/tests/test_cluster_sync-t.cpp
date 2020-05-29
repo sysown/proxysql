@@ -30,20 +30,19 @@
 		} \
 	} while(0)
 
-// TODO: Tests paths should be taken from ENV variables not hardcoded
-const char* t_fmt_config_file = "./test/tap/tests/test_cluster_sync_config/test_cluster_sync-t.cnf";
-const char* fmt_config_file = "./test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf";
-const char* cluster_sync_node_stderr = "./test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt";
-const uint32_t SYNC_TIMEOUT = 5;
-const uint32_t CONNECT_TIMEOUT = 5;
+const uint32_t SYNC_TIMEOUT = 10;
+const uint32_t CONNECT_TIMEOUT = 20;
 
 int setup_config_file(const CommandLine& cl) {
+	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
+	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
+
 	// Prepare the configuration file
 	config_t cfg {};
 
 	config_init(&cfg);
 
-	if (!config_read_file(&cfg, t_fmt_config_file)) {
+	if (!config_read_file(&cfg, t_fmt_config_file.c_str())) {
 		fprintf(stderr, "%s:%d - %s\n", config_error_file(&cfg), config_error_line(&cfg), config_error_text(&cfg));
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Invalid config file - Error reading config file.");
 		config_destroy(&cfg);
@@ -90,7 +89,7 @@ int setup_config_file(const CommandLine& cl) {
 	}
 
 	// Write the new config file
-	if (config_write_file(&cfg, fmt_config_file) == CONFIG_FALSE) {
+	if (config_write_file(&cfg, fmt_config_file.c_str()) == CONFIG_FALSE) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Config file - Error while trying to write the new config file.");
 		return -1;
 	}
@@ -110,7 +109,7 @@ int main(int, char**) {
 		return -1;
 	}
 
-	plan(5);
+	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	MYSQL* proxysql_replica = mysql_init(NULL);
@@ -150,11 +149,16 @@ int main(int, char**) {
 	MYSQL_QUERY(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 	// Launch proxysql with cluster config
-	std::thread proxy_replica_th([&save_proxy_stderr] () {
+	std::thread proxy_replica_th([&save_proxy_stderr, &cl] () {
+		diag("Current workdir is %s", cl.workdir);
+		const std::string cluster_sync_node_stderr = std::string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt";
+		const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
+
 		std::string proxy_stdout = "";
 		std::string proxy_stderr = "";
-		int exec_res = wexecvp("./src/proxysql", { "-f", "-M", "-c", fmt_config_file }, NULL, proxy_stdout, proxy_stderr);
+		int exec_res = wexecvp("../../src/proxysql", { "-f", "-M", "-c", fmt_config_file.c_str() }, NULL, proxy_stdout, proxy_stderr);
 
+		diag("ProxySQL node instance exec result was: %d", exec_res);
 		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely.");
 
 		// In case of error, log 'proxysql' stderr to a file
@@ -170,6 +174,10 @@ int main(int, char**) {
 			error_log_file << proxy_stderr;
 			error_log_file.close();
 		}
+		std::ofstream error_log_file {};
+		error_log_file.open(cluster_sync_node_stderr);
+		error_log_file << proxy_stderr;
+		error_log_file.close();
 	});
 
 	// Waiting for proxysql to be ready
@@ -360,9 +368,9 @@ int main(int, char**) {
 			select_mysql_galera_hostgroup_queries.push_back(select_galera_hostgroup_query);
 		}
 
-		const char* delete_galera_hostgroups =
-			"DELETE FROM mysql_galera_hostgroups WHERE comment='reader_writer_test_galera_hostgroup'";
-		MYSQL_QUERY__(proxysql_admin, delete_galera_hostgroups);
+		// Backup current table
+		MYSQL_QUERY__(proxysql_admin, "CREATE TABLE mysql_galera_hostgroups_sync_test_2687 AS SELECT * FROM mysql_galera_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_galera_hostgroups");
 
 		// Insert the new galera hostgroups values
 		for (const auto& query : insert_mysql_galera_hostgroup_queries) {
@@ -399,7 +407,10 @@ int main(int, char**) {
 
 		ok(not_synced_query == false, "'mysql_galera_hostgroups' should be synced.");
 
-		MYSQL_QUERY__(proxysql_admin, delete_galera_hostgroups);
+		// TEARDOWN CONFIG
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_galera_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_galera_hostgroups SELECT * FROM mysql_galera_hostgroups_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE mysql_galera_hostgroups_sync_test_2687");
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	}
 
@@ -572,9 +583,11 @@ int main(int, char**) {
 			select_mysql_group_replication_hostgroup_queries.push_back(select_group_replication_hostgroup_query);
 		}
 
-		const char* delete_group_replication_hostgroups =
-			"DELETE FROM mysql_group_replication_hostgroups WHERE comment='reader_writer_test_group_replication_hostgroup'";
-		MYSQL_QUERY__(proxysql_admin, delete_group_replication_hostgroups);
+		// SETUP CONFIG
+
+		// Backup current table
+		MYSQL_QUERY__(proxysql_admin, "CREATE TABLE mysql_group_replication_hostgroups_sync_test_2687 AS SELECT * FROM mysql_group_replication_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_group_replication_hostgroups");
 
 		// Insert the new group_replication hostgroups values
 		for (const auto& query : insert_mysql_group_replication_hostgroup_queries) {
@@ -610,7 +623,10 @@ int main(int, char**) {
 
 		ok(not_synced_query == false, "'mysql_group_replication_hostgroups' should be synced.");
 
-		MYSQL_QUERY__(proxysql_admin, delete_group_replication_hostgroups);
+		// TEARDOWN CONFIG
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_group_replication_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_group_replication_hostgroups SELECT * FROM mysql_group_replication_hostgroups_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE mysql_group_replication_hostgroups_sync_test_2687");
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	}
 
@@ -803,9 +819,9 @@ int main(int, char**) {
 			select_mysql_aws_aurora_hostgroup_queries.push_back(select_aws_aurora_hostgroup_query);
 		}
 
-		const char* delete_aws_aurora_hostgroups =
-			"DELETE FROM mysql_aws_aurora_hostgroups WHERE comment='reader_writer_test_aws_aurora_hostgroup'";
-		MYSQL_QUERY__(proxysql_admin, delete_aws_aurora_hostgroups);
+		// Backup current table
+		MYSQL_QUERY__(proxysql_admin, "CREATE TABLE mysql_aws_aurora_hostgroups_sync_test_2687 AS SELECT * FROM mysql_aws_aurora_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
 
 		// Insert the new aws_aurora hostgroups values
 		for (const auto& query : insert_mysql_aws_aurora_hostgroup_queries) {
@@ -841,7 +857,10 @@ int main(int, char**) {
 
 		ok(not_synced_query == false, "'mysql_aws_aurora_hostgroups' should be synced.");
 
-		MYSQL_QUERY__(proxysql_admin, delete_aws_aurora_hostgroups);
+		// TEARDOWN CONFIG
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM mysql_aws_aurora_hostgroups");
+		MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_aws_aurora_hostgroups SELECT * FROM mysql_aws_aurora_hostgroups_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE mysql_aws_aurora_hostgroups_sync_test_2687");
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	}
 
@@ -859,7 +878,7 @@ cleanup:
 	mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
 	proxy_replica_th.join();
 
-	remove(fmt_config_file);
+	remove(fmt_config_file.c_str());
 
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM proxysql_servers");
 	MYSQL_QUERY(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
