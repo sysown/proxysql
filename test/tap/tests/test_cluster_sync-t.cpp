@@ -150,16 +150,14 @@ int main(int, char**) {
 
 	// Launch proxysql with cluster config
 	std::thread proxy_replica_th([&save_proxy_stderr, &cl] () {
-		diag("Current workdir is %s", cl.workdir);
 		const std::string cluster_sync_node_stderr = std::string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt";
 		const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 
 		std::string proxy_stdout = "";
 		std::string proxy_stderr = "";
-		int exec_res = wexecvp("../../src/proxysql", { "-f", "-M", "-c", fmt_config_file.c_str() }, NULL, proxy_stdout, proxy_stderr);
+		int exec_res = wexecvp(std::string(cl.workdir) + "../../../src/proxysql", { "-f", "-M", "-c", fmt_config_file.c_str() }, NULL, proxy_stdout, proxy_stderr);
 
-		diag("ProxySQL node instance exec result was: %d", exec_res);
-		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely.");
+		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. 'wexecvp' result was: %d", exec_res);
 
 		// In case of error, log 'proxysql' stderr to a file
 		if (exec_res || save_proxy_stderr.load()) {
@@ -174,10 +172,6 @@ int main(int, char**) {
 			error_log_file << proxy_stderr;
 			error_log_file.close();
 		}
-		std::ofstream error_log_file {};
-		error_log_file.open(cluster_sync_node_stderr);
-		error_log_file << proxy_stderr;
-		error_log_file.close();
 	});
 
 	// Waiting for proxysql to be ready
