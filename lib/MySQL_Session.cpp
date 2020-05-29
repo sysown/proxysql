@@ -4898,7 +4898,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nqn.c_str());
 			}
 #endif
-			if (index(dig,';')) {
+			if (index(dig,';') && (index(dig,';') != dig + strlen(dig)-1)) {
 				string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 				proxy_warning("Unable to parse multi-statements command with SET statement: setting lock hostgroup . Command: %s\n", nqn.c_str());
 				*lock_hostgroup = true;
