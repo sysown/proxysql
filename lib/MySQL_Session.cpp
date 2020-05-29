@@ -2429,7 +2429,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 }
 
 
-bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) { 
+bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc, uint32_t server_hash) { 
 	//fprintf(stderr,"CONNECTING_SERVER\n");
 	unsigned long long curtime=monotonic_time();
 	thread->atomic_curtime=curtime;
@@ -2467,7 +2467,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}
 	}
 	if (mybe->server_myds->myconn==NULL) {
-		handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
+		handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection(server_hash);
 	}
 	if (mybe->server_myds->myconn==NULL) {
 		if (mirror) {
@@ -4178,7 +4178,7 @@ handler_again:
 		case CONNECTING_SERVER:
 			{
 				int rc=0;
-				if (handler_again___status_CONNECTING_SERVER(&rc))
+				if (handler_again___status_CONNECTING_SERVER(&rc, qpo->server_hash))
 					goto handler_again;	// we changed status
 				if (rc==1) //handler_again___status_CONNECTING_SERVER returns 1
 					goto __exit_DSS__STATE_NOT_INITIALIZED;
@@ -5757,7 +5757,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
-void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
+void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection(uint32_t server_hash) {
 			// Get a MySQL Connection
 
 		MySQL_Connection *mc=NULL;
@@ -5810,16 +5810,16 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					}
 				}
 				uuid[n]='\0';
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
+				mc = (server_hash != 0) ? NULL : thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
 			} else {
-				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms);
+				mc = (server_hash != 0) ? NULL : thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms);
 			}
 		}
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid, -1);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid, -1, server_hash);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0, (int)qpo->max_lag_ms);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0, (int)qpo->max_lag_ms, server_hash);
 			}
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;

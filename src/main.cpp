@@ -852,6 +852,32 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
 			}
 		}
+		if (root.exists("query_parser_token_delimiters")==true) {
+			string query_parser_token_delimiters;
+			bool rc;
+			rc=root.lookupValue("query_parser_token_delimiters", query_parser_token_delimiters);
+			if (rc==true) {
+				if (GloVars.query_parser_token_delimiters) free (GloVars.query_parser_token_delimiters);
+				GloVars.query_parser_token_delimiters=strdup(query_parser_token_delimiters.c_str());
+			}
+		}
+		if (root.exists("query_parser_key_value_delimiters")==true) {
+			string query_parser_key_value_delimiters;
+			bool rc;
+			rc=root.lookupValue("query_parser_key_value_delimiters", query_parser_key_value_delimiters);
+			if (rc==true) {
+				if (GloVars.query_parser_key_value_delimiters) free (GloVars.query_parser_key_value_delimiters);
+				GloVars.query_parser_key_value_delimiters=strdup(query_parser_key_value_delimiters.c_str());
+			}
+		}
+		if (root.exists("unit_of_work_identifiers")==true) {
+			string unit_of_work_identifiers;
+			bool rc;
+			rc=root.lookupValue("unit_of_work_identifiers", unit_of_work_identifiers);
+			if (rc==true) {
+				GloVars.unit_of_work_identifiers=strdup(unit_of_work_identifiers.c_str());
+			}
+		}
 	} else {
 		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
 		if (GloVars.__cmd_proxysql_config_file) {

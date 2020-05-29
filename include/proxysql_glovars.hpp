@@ -59,6 +59,9 @@ class ProxySQL_GlobalVariables {
 	char * execute_on_exit_failure;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
+	char *query_parser_token_delimiters;
+	char *query_parser_key_value_delimiters;
+	char *unit_of_work_identifiers;
 	struct  {
 		unsigned long long start_time;
 		bool gdbg;

@@ -2390,15 +2390,15 @@ __exit__query_parser_command_type:
 	return ret;
 }
 
-bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, char *fc) {
-	bool ret=false;
+void Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, char *fc) {
 	tokenizer_t tok;
-	tokenizer( &tok, fc, ";", TOKENIZER_NO_EMPTIES );
 	const char* token;
+
+	tokenizer (&tok, fc, GloVars.query_parser_token_delimiters, TOKENIZER_NO_EMPTIES);
 	for ( token = tokenize( &tok ) ; token ;  token = tokenize( &tok ) ) {
 		char *key=NULL;
 		char *value=NULL;
-    c_split_2(token, "=", &key, &value);
+		c_split_2(token, GloVars.query_parser_key_value_delimiters, &key, &value);
 		remove_spaces(key);
 		remove_spaces(value);
 		if (strlen(key)) {
@@ -2409,37 +2409,37 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					qpo->cache_ttl=t;
 				}
 			}
-			if (!strcasecmp(key,"query_delay")) {
+			else if (!strcasecmp(key,"query_delay")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
 					qpo->delay=t;
 				}
 			}
-			if (!strcasecmp(key,"query_retries")) {
+			else if (!strcasecmp(key,"query_retries")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
 					qpo->retries=t;
 				}
 			}
-			if (!strcasecmp(key,"query_timeout")) {
+			else if (!strcasecmp(key,"query_timeout")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
 					qpo->timeout=t;
 				}
 			}
-			if (!strcasecmp(key,"hostgroup")) {
+			else if (!strcasecmp(key,"hostgroup")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
 					qpo->destination_hostgroup=t;
 				}
 			}
-			if (!strcasecmp(key,"mirror")) {
+			else if (!strcasecmp(key,"mirror")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
 					qpo->mirror_hostgroup=t;
 				}
 			}
-			if (!strcasecmp(key,"max_lag_ms")) {
+			else if (!strcasecmp(key,"max_lag_ms")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					int t=atoi(value);
 					if (t >= 0 && t <= 600000) {
@@ -2447,7 +2447,7 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					}
 				}
 			}
-			if (!strcasecmp(key,"min_epoch_ms")) {
+			else if (!strcasecmp(key,"min_epoch_ms")) {
 				if (c >= '0' && c <= '9') { // it is a digit
 					unsigned long long now_us = realtime_time();
 					unsigned long long now_ms = now_us/1000;
@@ -2459,7 +2459,7 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					}
 				}
 			}
-			if (!strcasecmp(key,"min_gtid")) {
+			else if (!strcasecmp(key,"min_gtid")) {
 				size_t l = strlen(value);
 				if (is_valid_gtid(value, l)) {
 					char *buf=(char*)malloc(l+1);
@@ -2469,6 +2469,20 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 				} else {
 					proxy_warning("Invalid gtid value=%s\n", value);
 				}
+			} else if (GloVars.unit_of_work_identifiers) {
+				tokenizer_t names;
+				tokenizer (&names, GloVars.unit_of_work_identifiers, ",", TOKENIZER_NO_EMPTIES);
+				const char* unit_of_work_name;
+
+				while ((unit_of_work_name = tokenize(&names))) {
+					if (!strcasecmp(key, unit_of_work_name)) {
+						qpo->server_hash = max(SpookyHash::Hash32(value, strlen(value), qpo->server_hash), (uint32_t)1);
+						// We use the current hash as the seed; if multiple IDs are passed, they will
+						// in effect chain together to yield a unique hash for that sequence.
+						// Make it at least 1 because the default value of 0 means undefined.
+						break;
+					}
+				}
 			}
 		}
 
@@ -2477,7 +2491,6 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 		free(value);
 	}
 	free_tokenizer( &tok );
-	return ret;
 }
 
 bool Query_Processor::is_valid_gtid(char *gtid, size_t gtid_len) {
