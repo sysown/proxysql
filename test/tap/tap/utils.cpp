@@ -179,9 +179,6 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 	int err = 0;
 	to_opts to_opts { 1000*1000, 100*1000, 500*1000 };
 
-	int outfd[2];
-	int infd[2];
-
 	// Pipes for parent to write and read
 	pipe(pipes[PARENT_READ_PIPE]);
 	pipe(pipes[PARENT_WRITE_PIPE]);
@@ -240,7 +237,6 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
 		fcntl(PARENT_READ_ERR, F_SETFL, fcntl(PARENT_READ_ERR, F_GETFL) | O_NONBLOCK);
 
 		fd_set read_fds;
-		uint read_fds_sz = 2;
 		int maxfd = PARENT_READ_FD > PARENT_READ_ERR ? PARENT_READ_FD : PARENT_READ_ERR;
 
 		bool stdout_eof = false;
@@ -336,9 +332,6 @@ int execvp(const std::string& cmd, const std::vector<const char*>& argv, std::st
 
 	// Append null to end of _argv for extra safety
 	_argv.push_back(nullptr);
-
-	int outfd[2];
-	int infd[2];
 
 	// Pipes for parent to write and read
 	pipe(pipes[PARENT_READ_PIPE]);
