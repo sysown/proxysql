@@ -436,6 +436,7 @@ MySQL_Session::MySQL_Session() {
 	healthy=1;
 	autocommit=true;
 	autocommit_handled=false;
+	sending_set_autocommit=false;
 	autocommit_on_hostgroup=-1;
 	killed=false;
 	session_type=PROXYSQL_SESSION_MYSQL;
@@ -501,6 +502,7 @@ void MySQL_Session::init() {
 void MySQL_Session::reset() {
 	autocommit=true;
 	autocommit_handled=false;
+	sending_set_autocommit=false;
 	autocommit_on_hostgroup=-1;
 	current_hostgroup=-1;
 	default_hostgroup=-1;
@@ -776,6 +778,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	autocommit_handled=false;
+	sending_set_autocommit=false;
 	size_t sal=strlen("set autocommit");
 	char * _ptr = (char *)pkt->ptr;
 #ifdef DEBUG
@@ -873,6 +876,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 						client_myds->myconn->set_autocommit(autocommit);
 						autocommit_on_hostgroup=FindOneActiveTransaction();
 						free(_new_pkt.ptr);
+						sending_set_autocommit=true;
 						return false;
 					} else {
 						// as there is no active transaction, we do no need to forward it
@@ -1747,6 +1751,20 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 
 bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	if (mysql_thread___forward_autocommit == true) {
+		return false;
+	}
+	if (sending_set_autocommit) {
+		// if sending_set_autocommit==true, the next query proxysql is going
+		// to run defines autocommit, for example:
+		// * SET autocommit=1 , or
+		// * SET sql_mode='', autocommit=1
+		// for this reason, matching autocommit beforehand is not required
+		// and we return
+		//
+		// Nonetheless, we need to set autocommit in backend's MySQL_Connection
+		MySQL_Connection *mc = mybe->server_myds->myconn;
+		mc->set_autocommit(autocommit);
+		mc->options.last_set_autocommit = ( mc->options.autocommit ? 1 : 0 );
 		return false;
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %d , backend: %d\n", this, client_myds->myconn->options.autocommit, mybe->server_myds->myconn->options.autocommit);
@@ -5128,6 +5146,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 									client_myds->myconn->set_autocommit(autocommit);
 									autocommit_on_hostgroup=FindOneActiveTransaction();
 									exit_after_SetParse = false;
+									sending_set_autocommit=true;
 								} else {
 									// as there is no active transaction, we do no need to forward it
 									// just change internal state
