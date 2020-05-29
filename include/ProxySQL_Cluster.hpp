@@ -6,6 +6,9 @@
 #include "wqueue.h"
 #include <vector>
 
+#include <prometheus/counter.h>
+#include <prometheus/gauge.h>
+
 #define PROXYSQL_NODE_METRICS_LEN	5
 
 #define CLUSTER_QUERY_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'"
@@ -114,6 +117,67 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port);
 };
 
+struct p_cluster_counter {
+	enum metric {
+		pulled_mysql_query_rules_success = 0,
+		pulled_mysql_query_rules_failure,
+
+		pulled_mysql_servers_success,
+		pulled_mysql_servers_failure,
+		pulled_mysql_servers_replication_hostgroups_success,
+		pulled_mysql_servers_replication_hostgroups_failure,
+		pulled_mysql_servers_group_replication_hostgroups_success,
+		pulled_mysql_servers_group_replication_hostgroups_failure,
+		pulled_mysql_servers_galera_hostgroups_success,
+		pulled_mysql_servers_galera_hostgroups_failure,
+		pulled_mysql_servers_aws_aurora_hostgroups_success,
+		pulled_mysql_servers_aws_aurora_hostgroups_failure,
+		pulled_mysql_servers_runtime_checks_success,
+		pulled_mysql_servers_runtime_checks_failure,
+
+		pulled_mysql_users_success,
+		pulled_mysql_users_failure,
+
+		pulled_proxysql_servers_success,
+		pulled_proxysql_servers_failure,
+
+		sync_conflict_mysql_query_rules_share_epoch,
+		sync_conflict_mysql_servers_share_epoch,
+		sync_conflict_proxysql_servers_share_epoch,
+		sync_conflict_mysql_users_share_epoch,
+
+		sync_delayed_mysql_query_rules_version_one,
+		sync_delayed_mysql_servers_version_one,
+		sync_delayed_mysql_users_version_one,
+		sync_delayed_proxysql_servers_version_one,
+
+		__size
+	};
+};
+
+struct p_cluster_gauge {
+	enum metric {
+		__size
+	};
+};
+
+struct cluster_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges
+	};
+};
+
+/**
+ * @brief Simple struct for holding a query, and three messages to report
+ *  the progress of the query execution.
+ */
+struct fetch_query {
+	const char* query;
+	p_cluster_counter::metric success_counter;
+	p_cluster_counter::metric failure_counter;
+	std::string msgs[3];
+};
 
 class ProxySQL_Cluster {
 	private:
@@ -122,6 +186,12 @@ class ProxySQL_Cluster {
 	ProxySQL_Cluster_Nodes nodes;
 	char *cluster_username;
 	char *cluster_password;
+	struct {
+		std::array<prometheus::Counter*, p_cluster_counter::__size> p_counter_array {};
+		std::array<prometheus::Gauge*, p_cluster_gauge::__size> p_gauge_array {};
+	} metrics;
+	int fetch_and_store(MYSQL* conn, const fetch_query& f_query, MYSQL_RES** result);
+	friend class ProxySQL_Node_Entry;
 	public:
 	pthread_mutex_t update_mysql_query_rules_mutex;
 	pthread_mutex_t update_mysql_servers_mutex;

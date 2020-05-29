@@ -1890,6 +1890,7 @@ bool MySQL_HostGroups_Manager::commit() {
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
+					proxy_info("Checksum for table %s is %llu\n", "mysql_servers", hash1_);
 				}
 				delete resultset;
 			}
@@ -1909,6 +1910,7 @@ bool MySQL_HostGroups_Manager::commit() {
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
+					proxy_info("Checksum for table %s is %llu\n", "mysql_replication_hostgroups", hash1_);
 				}
 				delete resultset;
 			}
@@ -1928,6 +1930,7 @@ bool MySQL_HostGroups_Manager::commit() {
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
+					proxy_info("Checksum for table %s is %llu\n", "mysql_group_replication_hostgroups", hash1_);
 				}
 				delete resultset;
 			}
@@ -1947,6 +1950,7 @@ bool MySQL_HostGroups_Manager::commit() {
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
+					proxy_info("Checksum for table %s is %llu\n", "mysql_galera_hostgroups", hash1_);
 				}
 				delete resultset;
 			}
@@ -1966,6 +1970,7 @@ bool MySQL_HostGroups_Manager::commit() {
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
+					proxy_info("Checksum for table %s is %llu\n", "mysql_aws_aurora_hostgroups", hash1_);
 				}
 				delete resultset;
 			}

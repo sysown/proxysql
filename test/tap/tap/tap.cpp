@@ -410,6 +410,9 @@ static void end_timer(ulong start_time,char *buff)
 	    CLOCKS_PER_SEC,buff,1);
 }
 
+int tests_failed() {
+  return g_test.failed;
+}
 
 /**
    @mainpage Testing C and C++ using MyTAP

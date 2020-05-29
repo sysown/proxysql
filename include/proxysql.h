@@ -105,6 +105,7 @@ enum MySQL_response_type mysql_response(unsigned char *, unsigned int);
 
 void proxy_error_func(const char *, ...);
 void print_backtrace(void);
+void proxy_info_(const char* msg, ...);
 
 #ifdef DEBUG
 void init_debug_struct();

@@ -29,12 +29,30 @@ int select_config_file(MYSQL* mysql, std::string& resultset);
 #endif
 
 /**
+ * @brief Simple struct that holds the 'timeout options' for 'wexecvp'.
+ */
+struct to_opts {
+	uint timeout_us;
+	uint it_delay_us;
+	uint select_to_us;
+};
+
+/**
  * @brief Execute the given comand, and stores it's output.
  *
  * @param file File to be executed.
  * @param argv Arguments to be given to the executable.
  * @param result The output of the file execution. If the execution succeed it contains `stdout` output,
  *  in case of failure `stderr` contents are returned.
+ * @param opts In case of pipe readin error, this timeout options are used for trying to terminate
+ *  the child process nicely, before seding a SIGKILL to it:
+ *    - timeout_us: Member specifies the total timeout to wait for the child to exit.
+ *    - it_delay_us: Member specifies the waiting delay between checks.
+ * @return int Zero in case of success, or the errno returned by `execvp` in case of failure.
+ */
+int wexecvp(const std::string& file, const std::vector<const char*>& argv, const to_opts* opts, std::string& s_stdout, std::string& s_stderr);
+
+/*
  * @return int Zero in case of success, or the errno returned by `execvp` in case of failure.
  */
 int execvp(const std::string& file, const std::vector<const char*>& argv, std::string& result);

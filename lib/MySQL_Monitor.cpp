@@ -4525,6 +4525,8 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 				}
 				free(pthreads_array);
 				free(hgs_array);
+				pthreads_array = NULL;
+				hgs_array = NULL;
 			}
 			hgs_num = 0;
 			pthread_mutex_lock(&aws_aurora_mutex);
