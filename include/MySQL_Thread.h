@@ -505,6 +505,7 @@ class MySQL_Threads_Handler
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
+		int threads_initialized = 0;
 		/// Prometheus metrics arrays
 		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
 		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
