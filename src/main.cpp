@@ -1358,6 +1358,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 
 	do { /* nothing */ } while (load_ != 1);
 	load_ = 0;
+	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 
 	{
 		cpu_timer t;
