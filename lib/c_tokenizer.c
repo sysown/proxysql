@@ -354,7 +354,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						continue;
 					}
 					// supress spaces before closing brakets
-					if (p >= r && (*s == ')')) {
+					if (p >= r && is_space_char(prev_char) && (*s == ')')) {
 						prev_char = *s;
 						--p_r;
 						*p_r++ = *s;
@@ -374,11 +374,13 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 									if (*(s+2) == 'l' || *(s+2) == 'L') {
 										if (*(s+3) == 'l' || *(s+3) == 'L') {
 											if (i==len-4) {
+												prev_char = '?';
 												*p_r++ = '?';
 												*p_r = 0;
 												return r;
 											} else {
 												if (is_token_char(*(s+4))){
+													prev_char = '?';
 													*p_r++ = '?';
 													s+=4;
 													i+=4;
@@ -510,6 +512,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r--;
 						}
 					}
+					prev_char = '?';
 					*p_r++ = '?';
 					flag = 0;
 					break;
@@ -545,6 +548,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r--;
 						}
 					}
+					prev_char = '?';
 					*p_r++ = '?';
 					flag = 0;
 					if(i < len)
