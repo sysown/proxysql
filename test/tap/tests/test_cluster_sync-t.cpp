@@ -90,7 +90,7 @@ int setup_config_file(const CommandLine& cl) {
 	int fhost_res = config_setting_set_string(f_pserver_hostname, bridge_addr.substr(0, bridge_addr.size() - 1).c_str());
 	int fport_res = config_setting_set_int(f_pserver_port, cl.admin_port);
 	int shost_res = config_setting_set_string(s_pserver_hostname, cl.host);
-	int sport_res = config_setting_set_int(s_pserver_port, 7032);
+	int sport_res = config_setting_set_int(s_pserver_port, 6032);
 
 	if (fhost_res == CONFIG_FALSE || fport_res == CONFIG_FALSE || shost_res == CONFIG_FALSE || sport_res == CONFIG_FALSE) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Invalid config file - Error while trying to set the values from env variables.");
@@ -149,7 +149,7 @@ int main(int, char**) {
 	int bridge_res = exec("ip -4 addr show docker0 | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}'", bridge_addr);
 
 	std::string update_proxysql_servers = "";
-	string_format(t_update_proxysql_servers, update_proxysql_servers, bridge_addr.substr(0, bridge_addr.size() - 1).c_str(), cl.admin_port, cl.host, 7032);
+	string_format(t_update_proxysql_servers, update_proxysql_servers, bridge_addr.substr(0, bridge_addr.size() - 1).c_str(), cl.admin_port, cl.host, 6032);
 
 	// Setup the config file using the env variables in 'CommandLine'
 	if (setup_config_file(cl)) {
@@ -1150,10 +1150,10 @@ int main(int, char**) {
 			std::make_tuple("admin-cluster_mysql_users_save_to_disk"           , "true"                      ),
 			std::make_tuple("admin-cluster_mysql_variables_diffs_before_sync"  , "4"                         ),
 			std::make_tuple("admin-cluster_mysql_variables_save_to_disk"       , "true"                      ),
-			std::make_tuple("admin-cluster_password"                           , ""                          ),
 			std::make_tuple("admin-cluster_proxysql_servers_diffs_before_sync" , "4"                         ),
 			std::make_tuple("admin-cluster_proxysql_servers_save_to_disk"      , "true"                      ),
-			std::make_tuple("admin-cluster_username"                           , ""                          ),
+		//	std::make_tuple("admin-cluster_username"                           , ""                          ), Known issue, can't clear
+		//	std::make_tuple("admin-cluster_password"                           , ""                          ), Known issue, can't clear
 			std::make_tuple("admin-debug"                                      , "false"                     ),
 			std::make_tuple("admin-hash_passwords"                             , "true"                      ),
 			std::make_tuple("admin-mysql_ifaces"                               , "0.0.0.0:6032"              ),
@@ -1164,7 +1164,7 @@ int main(int, char**) {
 			std::make_tuple("admin-restapi_port"                               , "6071"                      ),
 			std::make_tuple("admin-stats_credentials"                          , "stats:stats"               ),
 			std::make_tuple("admin-vacuum_stats"                               , "true"                      ),
-			std::make_tuple("admin-version"                                    , "2.1.0-231-gbc0963e3_DEBUG" ),
+		//	std::make_tuple("admin-version"                                    , "2.1.0-231-gbc0963e3_DEBUG" ), This changes at runtime, but it's not stored
 			std::make_tuple("admin-web_enabled"                                , "false"                     ),
 			std::make_tuple("admin-web_port"                                   , "6080"                      )
 		};
