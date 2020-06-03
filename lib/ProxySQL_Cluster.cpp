@@ -385,7 +385,9 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				strcpy(checksums_values.admin_variables.checksum, row[3]);
 				checksums_values.admin_variables.last_changed = now;
 				checksums_values.admin_variables.diff_check = 1;
+				proxy_info("Cluster: detected a new checksum for admin_variables from peer %s:%d, version %llu, epoch %llu, checksum %s . Not syncing yet ...\n", hostname, port, checksums_values.admin_variables.version, checksums_values.admin_variables.epoch, checksums_values.admin_variables.checksum);
 			} else {
+				proxy_info("Cluster: checksum for admin_variables from peer %s:%d matches with local checksum %s, we won't sync.\n", hostname, port, GloVars.checksums_values.admin_variables.checksum);
 				checksums_values.admin_variables.diff_check++;
 			}
 			if (strcmp(checksums_values.admin_variables.checksum, GloVars.checksums_values.admin_variables.checksum) == 0) {
@@ -461,6 +463,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				strcpy(checksums_values.mysql_variables.checksum, row[3]);
 				checksums_values.mysql_variables.last_changed = now;
 				checksums_values.mysql_variables.diff_check = 1;
+				proxy_info("Cluster: detected a new checksum for mysql_variables from peer %s:%d, version %llu, epoch %llu, checksum %s . Not syncing yet ...\n", hostname, port, checksums_values.mysql_variables.version, checksums_values.mysql_variables.epoch, checksums_values.mysql_variables.checksum);
+				if (strcmp(checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.checksum) == 0) {
+					proxy_info("Cluster: checksum for mysql_variables from peer %s:%d matches with local checksum %s , we won't sync.\n", hostname, port, GloVars.checksums_values.mysql_variables.checksum);
+				}
 			} else {
 				checksums_values.mysql_variables.diff_check++;
 			}
@@ -494,6 +500,9 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		ProxySQL_Checksum_Value_2 *v = NULL;
 		v = &checksums_values.admin_variables;
 		v->last_updated = now;
+		if (strcmp(v->checksum, GloVars.checksums_values.admin_variables.checksum) == 0) {
+			v->diff_check = 0;
+		}
 		if (v->diff_check)
 			v->diff_check++;
 		v = &checksums_values.mysql_query_rules;
@@ -519,6 +528,9 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			v->diff_check++;
 		v = &checksums_values.mysql_variables;
 		v->last_updated = now;
+		if (strcmp(v->checksum, GloVars.checksums_values.mysql_variables.checksum) == 0) {
+			v->diff_check = 0;
+		}
 		if (v->diff_check)
 			v->diff_check++;
 		v = &checksums_values.proxysql_servers;
@@ -537,6 +549,8 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0);
 	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_users_diffs_before_sync,0);
 	unsigned int diff_ps = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync,0);
+	unsigned int diff_mv = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync,0);
+	unsigned int diff_av = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_admin_variables_diffs_before_sync,0);
 	ProxySQL_Checksum_Value_2 *v = NULL;
 	if (diff_mqr) {
 		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.mysql_query_rules.version,0);
@@ -643,6 +657,62 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			if (v->diff_check && (v->diff_check % (diff_ps*10)) == 0) {
 					proxy_warning("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps*10));
 				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_proxysql_servers_version_one]->Increment();
+			}
+		}
+	}
+	if (diff_mv) {
+		v = &checksums_values.mysql_variables;
+		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.mysql_variables.version, 0);
+		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.mysql_variables.epoch, 0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.mysql_variables.checksum, 0);
+
+		if (v->version > 1) {
+			if (
+				(own_version == 1) // we just booted
+				||
+				(v->epoch > own_epoch) // epoch is newer
+			) {
+				if (v->diff_check >= diff_mv) {
+					proxy_info("Cluster: detected a peer %s:%d with mysql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					GloProxyCluster->pull_global_variables_from_peer("mysql");
+				}
+			}
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mv*10)) == 0)) {
+				proxy_error("Cluster: detected a peer %s:%d with mysql_variables version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_mv*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_mysql_variables_share_epoch]->Increment();
+			}
+		} else {
+			if (v->diff_check && (v->diff_check % (diff_mv*10)) == 0) {
+				proxy_warning("Cluster: detected a peer %s:%d with mysql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_mv*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_mysql_variables_version_one]->Increment();
+			}
+		}
+	}
+	if (diff_av) {
+		v = &checksums_values.admin_variables;
+		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.admin_variables.version, 0);
+		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.admin_variables.epoch, 0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.admin_variables.checksum, 0);
+
+		if (v->version > 1) {
+			if (
+				(own_version == 1) // we just booted
+				||
+				(v->epoch > own_epoch) // epoch is newer
+			) {
+				if (v->diff_check >= diff_av) {
+					proxy_info("Cluster: detected a peer %s:%d with admin_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					GloProxyCluster->pull_global_variables_from_peer("admin");
+				}
+			}
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_av*10)) == 0)) {
+				proxy_error("Cluster: detected a peer %s:%d with admin_variables version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD ADMIN VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_av*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_admin_variables_share_epoch]->Increment();
+			}
+		} else {
+			if (v->diff_check && (v->diff_check % (diff_av*10)) == 0) {
+				proxy_warning("Cluster: detected a peer %s:%d with admin_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD ADMIN VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_av*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_admin_variables_version_one]->Increment();
 			}
 		}
 	}
@@ -1290,6 +1360,123 @@ __exit_pull_mysql_servers_from_peer:
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_servers_mutex);
 }
 
+void ProxySQL_Cluster::pull_global_variables_from_peer(const std::string& var_type) {
+	char * hostname = NULL;
+	uint16_t port = 0;
+	char* vars_type_str = nullptr;
+	p_cluster_counter::metric success_metric = p_cluster_counter::metric(-1);
+	p_cluster_counter::metric failure_metric = p_cluster_counter::metric(-1);
+
+	if (var_type == "mysql") {
+		vars_type_str = const_cast<char*>("MySQL");
+		success_metric = p_cluster_counter::pulled_mysql_variables_success;
+		failure_metric = p_cluster_counter::pulled_mysql_variables_failure;
+	} else if (var_type == "admin") {
+		vars_type_str = const_cast<char*>("Admin");
+		success_metric = p_cluster_counter::pulled_admin_variables_success;
+		failure_metric = p_cluster_counter::pulled_admin_variables_failure;
+	} else {
+		proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s", var_type.c_str());
+		assert(0);
+	}
+
+	pthread_mutex_lock(&GloProxyCluster->update_mysql_variables_mutex);
+	if (var_type == "mysql") {
+		nodes.get_peer_to_sync_mysql_variables(&hostname, &port);
+	} else {
+		nodes.get_peer_to_sync_admin_variables(&hostname, &port);
+	}
+
+	if (hostname) {
+		char *username = NULL;
+		char *password = NULL;
+		MYSQL *rc_conn = nullptr;
+		int rc_query = 0;
+		int rc = 0;
+		MYSQL *conn = mysql_init(NULL);
+
+		if (conn == NULL) {
+			proxy_error("Unable to run mysql_init()\n");
+			goto __exit_pull_mysql_variables_from_peer;
+		}
+
+		GloProxyCluster->get_credentials(&username, &password);
+		if (strlen(username)) { // do not monitor if the username is empty
+			unsigned int timeout = 1;
+			unsigned int timeout_long = 60;
+			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
+			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
+			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
+			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
+			proxy_info("Cluster: Fetching %s variables from peer %s:%d started\n", vars_type_str, hostname, port);
+			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+
+			if (rc_conn) {
+				std::string s_query = "";
+				string_format("SELECT * FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", s_query, var_type.c_str());
+				mysql_query(conn, s_query.c_str());
+
+				if (rc_query == 0) {
+					MYSQL_RES *result = mysql_store_result(conn);
+					std::string d_query = "";
+					string_format("DELETE FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", d_query, var_type.c_str());
+					GloAdmin->admindb->execute(d_query.c_str());
+
+					MYSQL_ROW row;
+					char *q = (char *)"INSERT OR REPLACE INTO global_variables (variable_name, variable_value) VALUES (?1 , ?2)";
+					sqlite3_stmt *statement1 = NULL;
+					rc = GloAdmin->admindb->prepare_v2(q, &statement1);
+					ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+					while ((row = mysql_fetch_row(result))) {
+						rc=(*proxy_sqlite3_bind_text)(statement1, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // variable_name
+						rc=(*proxy_sqlite3_bind_text)(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // variable_value
+
+						SAFE_SQLITE3_STEP2(statement1);
+						rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+						rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+					}
+
+					mysql_free_result(result);
+					proxy_info("Cluster: Fetching %s Variables from peer %s:%d completed\n", vars_type_str, hostname, port);
+					proxy_info("Cluster: Loading to runtime %s Variables from peer %s:%d\n", vars_type_str, hostname, port);
+
+					if (var_type == "mysql") {
+						GloAdmin->load_mysql_variables_to_runtime();
+
+						if (GloProxyCluster->cluster_mysql_variables_save_to_disk == true) {
+							proxy_info("Cluster: Saving to disk MySQL Variables from peer %s:%d\n", hostname, port);
+							GloAdmin->flush_mysql_variables__from_memory_to_disk();
+						}
+					} else {
+						GloAdmin->load_admin_variables_to_runtime();
+
+						if (GloProxyCluster->cluster_admin_variables_save_to_disk == true) {
+							proxy_info("Cluster: Saving to disk Admin Variables from peer %s:%d\n", hostname, port);
+							GloAdmin->flush_admin_variables__from_memory_to_disk();
+						}
+					}
+					metrics.p_counter_array[success_metric]->Increment();
+				} else {
+					proxy_info("Cluster: Fetching %s Variables from peer %s:%d failed: %s\n", vars_type_str, hostname, port, mysql_error(conn));
+					metrics.p_counter_array[failure_metric]->Increment();
+				}
+			} else {
+				proxy_info("Cluster: Fetching %s Variables from peer %s:%d failed: %s\n", vars_type_str, hostname, port, mysql_error(conn));
+				metrics.p_counter_array[failure_metric]->Increment();
+			}
+		}
+__exit_pull_mysql_variables_from_peer:
+		if (conn) {
+			if (conn->net.pvio) {
+				mysql_close(conn);
+			}
+		}
+		free(hostname);
+	}
+	pthread_mutex_unlock(&GloProxyCluster->update_mysql_variables_mutex);
+}
+
 void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 	char * hostname = NULL;
 	uint16_t port = 0;
@@ -1699,6 +1886,91 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t 
 	}
 }
 
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint16_t *port) {
+	unsigned long long version = 0;
+	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
+	char *hostname = NULL;
+	uint16_t p = 0;
+	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync,0);
+	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
+		ProxySQL_Node_Entry * node = it->second;
+		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.mysql_variables;
+		if (v->version > 1) {
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check > diff_mu) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					hostname=strdup(node->get_hostname());
+					p = node->get_port();
+				}
+			}
+		}
+		it++;
+	}
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with mysql_variables epoch %llu, but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+		}
+	}
+	if (hostname) {
+		*host = hostname;
+		*port = p;
+		proxy_info("Cluster: detected peer %s:%d with mysql_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
+	}
+}
+
+
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint16_t *port) {
+	unsigned long long version = 0;
+	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
+	char *hostname = NULL;
+	uint16_t p = 0;
+	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_admin_variables_diffs_before_sync,0);
+	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
+		ProxySQL_Node_Entry * node = it->second;
+		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.admin_variables;
+		if (v->version > 1) {
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check > diff_mu) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					hostname=strdup(node->get_hostname());
+					p = node->get_port();
+				}
+			}
+		}
+		it++;
+	}
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with admin_variables epoch %llu, but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+		}
+	}
+	if (hostname) {
+		*host = hostname;
+		*port = p;
+		proxy_info("Cluster: detected peer %s:%d with admin_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
+	}
+}
+
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
@@ -2052,6 +2324,34 @@ cluster_metrics_map = std::make_tuple(
 			metric_tags { { "status", "failure" } }
 		),
 
+		// mysql_variables_*
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_variables_success,
+			"pulled_mysql_variables",
+			"Number of times 'mysql_variables' have been pulled from a peer.",
+			metric_tags { { "status", "success" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_variables_failure,
+			"pulled_mysql_variables",
+			"Number of times 'mysql_variables' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+
+		// admin_variables_*
+		std::make_tuple (
+			p_cluster_counter::pulled_admin_variables_success,
+			"pulled_admin_variables",
+			"Number of times 'admin_variables' have been pulled from a peer.",
+			metric_tags { { "status", "success" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_admin_variables_failure,
+			"pulled_admin_variables",
+			"Number of times 'admin_variables' have been pulled from a peer.",
+			metric_tags { { "status", "failure" } }
+		),
+
 		// sync_conflict same epoch
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_mysql_query_rules_share_epoch,
@@ -2075,6 +2375,18 @@ cluster_metrics_map = std::make_tuple(
 			p_cluster_counter::sync_conflict_mysql_users_share_epoch,
 			"sync_conflict_mysql_users_share_epoch",
 			"Number of times 'mysql_users' has not been synced because they share the same epoch.",
+			metric_tags { { "type", "error" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_conflict_mysql_variables_share_epoch,
+			"sync_conflict_mysql_variables_share_epoch",
+			"Number of times 'mysql_variables' has not been synced because they share the same epoch.",
+			metric_tags { { "type", "error" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_conflict_admin_variables_share_epoch,
+			"sync_conflict_admin_variables_share_epoch",
+			"Number of times 'admin_variables' has not been synced because they share the same epoch.",
 			metric_tags { { "type", "error" } }
 		),
 
@@ -2102,7 +2414,20 @@ cluster_metrics_map = std::make_tuple(
 			"sync_delayed_proxysql_servers_version_one",
 			"Number of times 'proxysql_servers' has not been synced because version one doesn't allow sync.",
 			metric_tags { { "type", "warning" } }
-		)
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_delayed_mysql_variables_version_one,
+			"sync_delayed_mysql_variables_version_one",
+			"Number of times 'mysql_variables' has not been synced because version one doesn't allow sync.",
+			metric_tags { { "type", "warning" } }
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_delayed_admin_variables_version_one,
+			"sync_delayed_admin_variables_version_one",
+			"Number of times 'admin_variables' has not been synced because version one doesn't allow sync.",
+			metric_tags { { "type", "warning" } }
+		),
+
 	},
 	cluster_gauge_vector {}
 );
