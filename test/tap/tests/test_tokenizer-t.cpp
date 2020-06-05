@@ -53,11 +53,18 @@ const std::vector<std::string> queries {
 	// invalid request grouping
 	"SELECT * tablename where id IN (1,2,3,4,5,6,7,8,  AND j in (1,2,3,4,5,6  and k=1",
 	// more random requests
+	"SELECT * FROM tablename WHERE id IN (1, 212312,3,4, 51231,6,7,8,9,10)",
 	"select concat(@@version, ' ',@@version_comment)",
 	"select concat(@@version, \" \",@@version_comment)",
 	"select concat(@@version, '',@@version_comment)",
 	"select (abc)",
-	"select schema()"
+	"select schema()",
+	"SELECT * FROM tbl AS t1 JOIN (SELECT id FROM tbl ORDER BY RAND() LIMIT 10) as t2 ON t1.id=t2.id",
+	"SELECT c FROM sbtest1 WHERE id=2396269\\G",
+	"CREATE TABLE `authors` (`id` INT(11) NOT NULL AUTO_INCREMENT, `first_name` VARCHAR(50) NOT NULL COLLATE 'utf8_unicode_ci', `last_name` VARCHAR(50) NOT NULL COLLATE 'utf8_unicode_ci', `email` VARCHAR(100) NOT NULL COLLATE 'utf8_unicode_ci', `birthdate` DATE NOT NULL, `added` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`id`), UNIQUE INDEX `email` (`email`)",
+	"IN (1,2,3,4,@var1)",
+	"IN 'foo', 'foo'",
+	"IN 'foo', 21019, 91293"
 };
 
 const std::vector<std::string> exp_results {
@@ -94,11 +101,18 @@ const std::vector<std::string> exp_results {
 	// invalid request grouping
 	"SELECT * tablename where id IN (?,?,?,... AND j in (?,?,?,... and k=?",
 	// more random requests
-	"select concat(@@version, ?,@@version_comment)",
-	"select concat(@@version, ?,@@version_comment)",
-	"select concat(@@version, ?,@@version_comment)",
+	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
+	"select concat(@@version,?,@@version_comment)",
+	"select concat(@@version,?,@@version_comment)",
+	"select concat(@@version,?,@@version_comment)",
 	"select (abc)",
-	"select schema()"
+	"select schema()",
+	"SELECT * FROM tbl AS t1 JOIN (SELECT id FROM tbl ORDER BY RAND() LIMIT ?) as t2 ON t1.id=t2.id",
+	"SELECT c FROM sbtest1 WHERE id=?\\G",
+	"CREATE TABLE `authors` (`id` INT(?) NOT NULL AUTO_INCREMENT,`first_name` VARCHAR(?) NOT NULL COLLATE ?,`last_name` VARCHAR(?) NOT NULL COLLATE ?,`email` VARCHAR(?) NOT NULL COLLATE ?,`birthdate` DATE NOT NULL,`added` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY (`id`),UNIQUE INDEX `email` (`email`)",
+	"IN (?,?,?,...,@var1)",
+	"IN ?,?",
+	"IN ?,?,?"
 };
 
 const std::vector<std::string> queries_grouping {
@@ -155,13 +169,15 @@ std::string increase_mark_num(const std::string query, uint32_t num) {
 	return result;
 }
 
+const int QUERY_BUFFER_SIZE = 512;
+
 int main(int argc, char** argv) {
 	if (queries.size() != exp_results.size()) {
 		ok(0, "queries and exp_results sizes doesn't match");
 		return exit_status();
 	}
 
-	char buf[QUERY_DIGEST_BUF];
+	char buf[QUERY_BUFFER_SIZE];
 
 	for (size_t i = 0; i < queries.size(); i++) {
 		const auto& query = queries[i];
