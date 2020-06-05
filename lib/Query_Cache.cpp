@@ -4,6 +4,7 @@
 #include "query_cache.hpp"
 #include "proxysql_atomic.h"
 #include "SpookyV2.h"
+#include "MySQL_Protocol.h"
 
 #define THR_UPDATE_CNT(__a, __b, __c, __d) \
 	do {\
@@ -367,11 +368,53 @@ unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, co
 	return result;
 }
 
-bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl, unsigned long long create_ms, unsigned long long curtime_ms, unsigned long long expire_ms) {
+bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl, unsigned long long create_ms, unsigned long long curtime_ms, unsigned long long expire_ms, bool deprecate_eof_active) {
 	QC_entry_t *entry = (QC_entry_t *)malloc(sizeof(QC_entry_t));
 	entry->klen=kl;
 	entry->length=vl;
 	entry->ref_count=0;
+	entry->column_eof_pkt_offset=0;
+	entry->row_eof_pkt_offset=0;
+	entry->ok_pkt_offset=0;
+
+	// Find the first EOF location
+	unsigned char* it = vp;
+	it += sizeof(mysql_hdr);
+	uint64_t c_count = 0;
+	int c_count_len = mysql_decode_length(const_cast<unsigned char*>(it), &c_count);
+	it += c_count_len;
+
+	for (uint64_t i = 0; i < c_count; i++) {
+		mysql_hdr hdr;
+		memcpy(&hdr, it ,sizeof(mysql_hdr));
+		it += sizeof(mysql_hdr) + hdr.pkt_length;
+	}
+
+	if (deprecate_eof_active == false) {
+		// Store EOF position and jump to rows
+		entry->column_eof_pkt_offset = it - vp;
+		mysql_hdr hdr;
+		memcpy(&hdr, it, sizeof(mysql_hdr));
+		it += sizeof(mysql_hdr) + hdr.pkt_length;
+	}
+
+	// Find the second EOF location or the OK packet
+	for (;;) {
+		mysql_hdr hdr;
+		memcpy(&hdr, it ,sizeof(mysql_hdr));
+		unsigned char* payload = it + sizeof(mysql_hdr);
+
+		if (hdr.pkt_length < 9 && *payload == 0xfe) {
+			if (deprecate_eof_active) {
+				entry->ok_pkt_offset = it - vp;
+			} else {
+				entry->row_eof_pkt_offset = it - vp;
+			}
+			break;
+		} else {
+			it += sizeof(mysql_hdr) + hdr.pkt_length;
+		}
+	}
 
 	entry->value=(char *)malloc(vl);
 	memcpy(entry->value,vp,vl);

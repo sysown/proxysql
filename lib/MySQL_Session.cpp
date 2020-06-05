@@ -5974,6 +5974,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 						client_myds->resultset_length=MyRS->resultset_size;
 						unsigned char *aa=client_myds->resultset2buffer(false);
 						while (client_myds->resultset->len) client_myds->resultset->remove_index(client_myds->resultset->len-1,NULL);
+						bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 						GloQC->set(
 							client_myds->myconn->userinfo->hash ,
 							(const unsigned char *)CurrentQuery.QueryPointer,
@@ -5982,7 +5983,8 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 							client_myds->resultset_length ,
 							thread->curtime/1000 ,
 							thread->curtime/1000 ,
-							thread->curtime/1000 + qpo->cache_ttl
+							thread->curtime/1000 + qpo->cache_ttl,
+							deprecate_eof_active
 						);
 						l_free(client_myds->resultset_length,aa);
 						client_myds->resultset_length=0;
