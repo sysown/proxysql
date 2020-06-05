@@ -26,6 +26,9 @@ struct __QC_entry_t {
 	unsigned long long create_ms; // when the entry was created, monotonic, millisecond granularity
 	unsigned long long expire_ms; // when the entry will expire, monotonic , millisecond granularity
 	unsigned long long access_ms; // when the entry was read last , monotonic , millisecond granularity
+	uint32_t column_eof_pkt_offset = 0;
+	uint32_t row_eof_pkt_offset = 0;
+	uint32_t ok_pkt_offset = 0;
 	uint32_t ref_count; // reference counter
 };
 
@@ -49,6 +52,7 @@ class Query_Cache {
 	Query_Cache();
 	~Query_Cache();
 	void print_version();
+	bool set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, unsigned char *vp, uint32_t vl, unsigned long long create_ms, unsigned long long curtime_ms, unsigned long long expire_ms, bool deprecate_eof_active);
 	bool set(uint64_t , const unsigned char *, uint32_t, unsigned char *, uint32_t, unsigned long long, unsigned long long, unsigned long long);
 	unsigned char * get(uint64_t , const unsigned char *, const uint32_t, uint32_t *, unsigned long long, unsigned long long);
 	uint64_t flush();
