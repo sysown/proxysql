@@ -197,6 +197,40 @@ static inline char is_arithmetic_op(char op) {
 	}
 }
 
+static inline char* collapse_qmarks(const char* r, char* p_r, char* prev_char, int grouping_lim) {
+	uint found_marks = 0;
+	char* b_p = p_r;
+
+	while (1) {
+		if (b_p - 2 < r) {
+			break;
+		} else {
+			b_p = b_p - 2;
+		}
+
+		if (*b_p != '?' || *(b_p + 1) != ',') {
+			break;
+		} else {
+			found_marks++;
+		}
+	}
+	if (found_marks < grouping_lim && *b_p != '.') {
+		*prev_char = '?';
+		*p_r++ = '?';
+	} else if (*(p_r - 1) == ',') {
+		p_r--;
+	}
+	if (found_marks == grouping_lim) {
+		*p_r++ = ',';
+		*p_r++ = '.';
+		*p_r++ = '.';
+		*p_r++ = '.';
+		*prev_char = '.';
+	}
+
+	return p_r;
+}
+
 char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comment, char *buf){
 	int i = 0;
 
@@ -344,10 +378,16 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					// supress spaces before and after commas
 					if (p >= r && is_space_char(prev_char) && ((*s == ',') || (*p == ','))) {
 						--p_r;
-						// only copy the comma if we are not grouping a query
-						if (!grouping_limit_exceeded) {
+						// This means that we are not in a grouping sequence anymore, but
+						// the previous one ended with '...,' and we need to suppress the comma
+						if ((*p == ',') && *(p - 1) == '.') {
+							--p_r;
+							*p_r++ = ' ';
+							*p_r++ = *s;
+						} else {
 							*p_r++ = *s;
 						}
+
 						prev_char = ',';
 						s++;
 						i++;
@@ -512,6 +552,12 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r--;
 						}
 					}
+					// Suppress the spaces before a replaced string
+					if ( _p >= r && is_space_char(*(_p + 2))) {
+						if ( _p >= r && *(_p+1) == ',') {
+							p_r--;
+						}
+					}
 					prev_char = '?';
 					*p_r++ = '?';
 					flag = 0;
@@ -548,6 +594,12 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r--;
 						}
 					}
+					// Suppress the spaces before a replaced string
+					if ( _p >= r && is_space_char(*(_p + 2))) {
+						if ( _p >= r && *(_p+1) == ',') {
+							p_r--;
+						}
+					}
 					prev_char = '?';
 					*p_r++ = '?';
 					flag = 0;
@@ -581,7 +633,10 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r--;
 						}
 					}
-					*p_r++ = '?';
+
+					// Check the number of ? already placed
+					p_r = collapse_qmarks(r, p_r, &prev_char, grouping_lim);
+
 					i++;
 					continue;
 				}
@@ -622,20 +677,10 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 								p_r--;
 							}
 						}
-						if (grouping_count < grouping_lim) {
-							*p_r++ = '?';
-							if (grouping_digest) {
-								grouping_count++;
-							}
-						} else {
-							if (!grouping_limit_exceeded) {
-								*p_r++ = '.';
-								*p_r++ = '.';
-								*p_r++ = '.';
 
-								grouping_limit_exceeded=1;
-							}
-						}
+						// Check the number of ? already placed
+						p_r = collapse_qmarks(r, p_r, &prev_char, grouping_lim);
+
 						if(len == i+1)
 						{
 							if(is_token_char(*s))
@@ -652,21 +697,11 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 		// =================================================
 		// COPY CHAR
 		// =================================================
-		// convert every space char to ' '
-		if (*s != ',' && !is_digit_char(*s) && !is_space_char(*s)) {
-			grouping_digest = 0;
-			grouping_count = 0;
-			grouping_limit_exceeded = 0;
-		}
 
 		if (lowercase==0) {
-			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
-				*p_r++ = !is_space_char(*s) ? *s : ' ';
-			}
+			*p_r++ = !is_space_char(*s) ? *s : ' ';
 		} else {
-			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
-				*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
-			}
+			*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
 		}
 		prev_char = *s++;
 
