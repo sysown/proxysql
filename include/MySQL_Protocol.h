@@ -59,6 +59,7 @@ class MySQL_Prepared_Stmt_info {
 	MySQL_Prepared_Stmt_info(unsigned char *, unsigned int);
 };
 
+uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
 
 class MySQL_Protocol {
 	private:
