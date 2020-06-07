@@ -5747,6 +5747,7 @@ __exit_kill_session:
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_mirror_queue() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5763,6 +5764,7 @@ unsigned long long MySQL_Threads_Handler::get_total_mirror_queue() {
 
 
 unsigned long long MySQL_Threads_Handler::get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx) {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5781,6 +5783,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(enum MySQL_Thread_
 }
 
 unsigned int MySQL_Threads_Handler::get_active_transations() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5797,6 +5800,7 @@ unsigned int MySQL_Threads_Handler::get_active_transations() {
 
 #ifdef IDLE_THREADS
 unsigned int MySQL_Threads_Handler::get_non_idle_client_connections() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5813,6 +5817,7 @@ unsigned int MySQL_Threads_Handler::get_non_idle_client_connections() {
 #endif // IDLE_THREADS
 
 unsigned long long MySQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5829,6 +5834,7 @@ unsigned long long MySQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5854,6 +5860,7 @@ unsigned long long MySQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_mysql_session_internal_bytes() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
