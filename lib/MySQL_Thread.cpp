@@ -3167,7 +3167,7 @@ MySQL_Thread::~MySQL_Thread() {
 				if (sess->session_type == PROXYSQL_SESSION_ADMIN || sess->session_type == PROXYSQL_SESSION_STATS) {
 					char _buf[1024];
 					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
-					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
+					if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf); }
 				}
 				delete sess;
 			}
@@ -5625,6 +5625,7 @@ __exit_kill_session:
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_mirror_queue() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5638,6 +5639,7 @@ unsigned long long MySQL_Threads_Handler::get_total_mirror_queue() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_prepare() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5651,6 +5653,7 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_prepare() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_execute() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5664,6 +5667,7 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_execute() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_close() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5677,6 +5681,7 @@ unsigned long long MySQL_Threads_Handler::get_total_backend_stmt_close() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_prepare() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5690,6 +5695,7 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_prepare() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_execute() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5703,6 +5709,7 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_execute() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_close() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5716,6 +5723,7 @@ unsigned long long MySQL_Threads_Handler::get_total_frontend_stmt_close() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_total_queries() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5729,6 +5737,7 @@ unsigned long long MySQL_Threads_Handler::get_total_queries() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_slow_queries() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5742,6 +5751,7 @@ unsigned long long MySQL_Threads_Handler::get_slow_queries() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_gtid_queries() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5755,6 +5765,7 @@ unsigned long long MySQL_Threads_Handler::get_gtid_queries() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_gtid_session_collected() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5768,6 +5779,7 @@ unsigned long long MySQL_Threads_Handler::get_gtid_session_collected() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_recv() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5781,6 +5793,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_recv() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_sent() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5794,6 +5807,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_backends_bytes_sent() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_queries_frontends_bytes_recv() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5807,6 +5821,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_frontends_bytes_recv() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_queries_frontends_bytes_sent() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5820,6 +5835,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_frontends_bytes_sent() {
 }
 
 unsigned int MySQL_Threads_Handler::get_active_transations() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5834,6 +5850,7 @@ unsigned int MySQL_Threads_Handler::get_active_transations() {
 
 #ifdef IDLE_THREADS
 unsigned int MySQL_Threads_Handler::get_non_idle_client_connections() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5848,6 +5865,7 @@ unsigned int MySQL_Threads_Handler::get_non_idle_client_connections() {
 #endif // IDLE_THREADS
 
 unsigned long long MySQL_Threads_Handler::get_query_processor_time() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5861,6 +5879,7 @@ unsigned long long MySQL_Threads_Handler::get_query_processor_time() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_backend_query_time() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5874,6 +5893,7 @@ unsigned long long MySQL_Threads_Handler::get_backend_query_time() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5887,6 +5907,7 @@ unsigned long long MySQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -5910,6 +5931,7 @@ unsigned long long MySQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_mysql_session_internal_bytes() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6084,6 +6106,7 @@ void MySQL_Thread::return_local_connections() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_latency_awareness() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6097,6 +6120,7 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_latency_awarenes
 }
 
 unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_immediate() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6110,6 +6134,7 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_immediate() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_success() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6123,6 +6148,7 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_success() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_failure() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6136,6 +6162,7 @@ unsigned long long MySQL_Threads_Handler::get_ConnPool_get_conn_failure() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_generated_pkt_err() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6149,6 +6176,7 @@ unsigned long long MySQL_Threads_Handler::get_generated_pkt_err() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_backend_lagging_during_query() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6162,6 +6190,7 @@ unsigned long long MySQL_Threads_Handler::get_backend_lagging_during_query() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_backend_offline_during_query() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6175,6 +6204,7 @@ unsigned long long MySQL_Threads_Handler::get_backend_offline_during_query() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6188,6 +6218,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms__delayed() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6201,6 +6232,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms__delayed()
 }
 
 unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms__total_wait_time_us() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6214,6 +6246,7 @@ unsigned long long MySQL_Threads_Handler::get_queries_with_max_lag_ms__total_wai
 }
 
 unsigned long long MySQL_Threads_Handler::get_max_connect_timeout() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6227,6 +6260,7 @@ unsigned long long MySQL_Threads_Handler::get_max_connect_timeout() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_hostgroup_locked() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6240,6 +6274,7 @@ unsigned long long MySQL_Threads_Handler::get_hostgroup_locked() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_hostgroup_locked_set_cmds() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6253,6 +6288,7 @@ unsigned long long MySQL_Threads_Handler::get_hostgroup_locked_set_cmds() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_hostgroup_locked_queries() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6266,6 +6302,7 @@ unsigned long long MySQL_Threads_Handler::get_hostgroup_locked_queries() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_unexpected_com_quit() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6279,6 +6316,7 @@ unsigned long long MySQL_Threads_Handler::get_unexpected_com_quit() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_unexpected_packet() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6292,6 +6330,7 @@ unsigned long long MySQL_Threads_Handler::get_unexpected_packet() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_automatic_detected_sqli() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6305,6 +6344,7 @@ unsigned long long MySQL_Threads_Handler::get_automatic_detected_sqli() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_whitelisted_sqli_fingerprint() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6318,6 +6358,7 @@ unsigned long long MySQL_Threads_Handler::get_whitelisted_sqli_fingerprint() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_aws_aurora_replicas_skipped_during_query() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6331,6 +6372,7 @@ unsigned long long MySQL_Threads_Handler::get_aws_aurora_replicas_skipped_during
 }
 
 unsigned long long MySQL_Threads_Handler::get_killed_connections() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
@@ -6344,6 +6386,7 @@ unsigned long long MySQL_Threads_Handler::get_killed_connections() {
 }
 
 unsigned long long MySQL_Threads_Handler::get_killed_queries() {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
 	for (i=0;i<num_threads;i++) {
