@@ -79,7 +79,10 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 
 	} else if (idx == SQL_CHARACTER_SET_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
-		ci = proxysql_find_charset_nr(atoi(value));
+		if (!value)
+			ci = proxysql_find_charset_collate(mysql_tracked_variables[idx].default_value);
+		else
+			ci = proxysql_find_charset_nr(atoi(value));
 		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
 	} else if (idx == SQL_COLLATION_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
