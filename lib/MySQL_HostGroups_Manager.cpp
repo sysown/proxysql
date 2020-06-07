@@ -182,6 +182,7 @@ static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int re
 }
 
 static void gtid_timer_cb (struct ev_loop *loop, struct ev_timer *timer, int revents) {
+	if (GloMTH == nullptr) { return; }
 	ev_timer_stop(loop, timer);
 	ev_timer_set(timer, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
 	if (glovars.shutdown) {
