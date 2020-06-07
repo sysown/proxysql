@@ -3330,7 +3330,7 @@ __get_pkts_from_client:
 //								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
-								GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL);
+								if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
 								l_free(pkt.size,pkt.ptr);
 								handler_ret = -1;
 								return handler_ret;
@@ -3417,7 +3417,7 @@ __get_pkts_from_client:
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						if (c==_MYSQL_COM_QUIT) {
 							proxy_error("Unexpected COM_QUIT from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
-							GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL);
+							if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 							l_free(pkt.size,pkt.ptr);
 							if (thread) {

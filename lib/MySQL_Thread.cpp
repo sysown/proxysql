@@ -3167,7 +3167,7 @@ MySQL_Thread::~MySQL_Thread() {
 				if (sess->session_type == PROXYSQL_SESSION_ADMIN || sess->session_type == PROXYSQL_SESSION_STATS) {
 					char _buf[1024];
 					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
-					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf);
+					if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, sess, NULL, _buf); }
 				}
 				delete sess;
 			}
