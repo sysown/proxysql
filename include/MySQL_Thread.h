@@ -394,6 +394,7 @@ class MySQL_Threads_Handler
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
+		int threads_initialized = 0;
 	} status_variables;
 	unsigned int num_threads;
 	proxysql_mysql_thread_t *mysql_threads;
