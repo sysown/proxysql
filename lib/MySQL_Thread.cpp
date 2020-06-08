@@ -2979,6 +2979,9 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 char ** MySQL_Threads_Handler::get_variables_list() {
 	size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 	unsigned int i;
+/*
+	// ALL THIS CODE IS BEING DISABLED IN 2.0.13
+	// IT WILL BE REINTRODUCED IN 2.1 WITH A DIFFERENT MEANING
 	char **ret=(char **)malloc(sizeof(char *)*(l+SQL_NAME_LAST));
 	for (i=0; i < SQL_NAME_LAST ; i++) {
 		char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
@@ -2988,12 +2991,20 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	for (i=SQL_NAME_LAST;i<l+SQL_NAME_LAST;i++) {
 		ret[i]=(i == l+SQL_NAME_LAST-1 ? NULL : strdup(mysql_thread_variables_names[i-SQL_NAME_LAST]));
 	}
+*/
+	char **ret=(char **)malloc(sizeof(char *)*(l));
+	for (i=0;i<l;i++) {
+		ret[i]=(i == l-1 ? NULL : strdup(mysql_thread_variables_names[i]));
+	}
 	return ret;
 }
 
 // Returns true if the given name is the name of an existing mysql variable
 // scan both mysql_thread_variables_names AND mysql_tracked_variables
 bool MySQL_Threads_Handler::has_variable(const char *name) {
+/*
+	// ALL THIS CODE IS BEING DISABLED IN 2.0.13
+	// IT WILL BE REINTRODUCED IN 2.1 WITH A DIFFERENT MEANING
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
 			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
@@ -3006,6 +3017,7 @@ bool MySQL_Threads_Handler::has_variable(const char *name) {
 			}
 		}
 	}
+*/
 	size_t no_vars = sizeof(mysql_thread_variables_names) / sizeof(char *);
 	for (unsigned int i = 0; i < no_vars-1 ; ++i) {
 		size_t var_len = strlen(mysql_thread_variables_names[i]);
