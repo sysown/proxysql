@@ -5770,11 +5770,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		if (session_fast_forward == false) {
 			if (qpo->min_gtid) {
 				gtid_uuid = qpo->min_gtid;
+				with_gtid = true;
 			} else if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
 				if (_gtid_from_backend) {
 					if (_gtid_from_backend->gtid_uuid[0]) {
 						gtid_uuid = _gtid_from_backend->gtid_uuid;
+						with_gtid = true;
 					}
 				}
 			}
