@@ -283,9 +283,6 @@ MySQL_Connection::MySQL_Connection() {
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
-	has_prepared_statement=false;
-	processing_prepared_statement_prepare=false;
-	processing_prepared_statement_execute=false;
 	parent=NULL;
 	userinfo=new MySQL_Connection_userinfo();
 	fd=-1;
