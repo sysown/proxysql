@@ -135,6 +135,7 @@ class Query_Processor_Output {
 	int firewall_whitelist_mode;
 	char *comment; // #643
 	char *min_gtid;
+	bool create_new_conn;
 	std::string *new_query;
 	void * operator new(size_t size) {
 		return l_alloc(size);
@@ -173,6 +174,7 @@ class Query_Processor_Output {
 		comment=NULL; // #643
 		min_gtid=NULL;
 		firewall_whitelist_mode = WUS_NOT_FOUND;
+		create_new_conn=0;
 	}
 	void destroy() {
 		if (error_msg) {
