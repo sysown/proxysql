@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
 		restore_admin(mysqladmin);
 		return exit_status();
 	}
-	query = "SELECT t1.id id1, t1.k k1, t1.c c1, t1.pad pad1, t2.id id2, t2.k k2, t2.c c2, t2.pad pad2 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 LIMIT 10000000";
+	query = "SELECT t1.id id1, t1.k k1, t1.c c1, t1.pad pad1, t2.id id2, t2.k k2, t2.c c2, t2.pad pad2 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 LIMIT 10000";
 	if (mysql_stmt_prepare(stmt2,query.c_str(), query.size())) {
 		fprintf(stderr, "Query error %s\n", mysql_error(mysql));
 		mysql_close(mysql);
@@ -321,7 +321,7 @@ int main(int argc, char** argv) {
 
 	/* Test case #3. */
 	#define LARGE_STRING_SIZE 30000000 
-	std::string query1 = "SELECT id, k, REPEAT(c,100+ROUND(RAND()*200000)) cc FROM test.sbtest1 LIMIT 10";
+	std::string query1 = "SELECT id, k, REPEAT(c,100+ROUND(RAND()*200)) cc FROM test.sbtest1 LIMIT 10";
 	if (mysql_stmt_prepare(stmt3, query1.c_str(), query1.size())) {
 		fprintf(stderr, "Query error %s\n", mysql_error(mysql));
 		mysql_close(mysql);
