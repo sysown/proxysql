@@ -2489,6 +2489,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					proxy_warning("Invalid gtid value=%s\n", value);
 				}
 			}
+			if (!strcasecmp(key, "create_new_connection")) {
+				int32_t val = atoi(value);
+				if (val == 1) {
+					qpo->create_new_conn = true;
+				}
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
