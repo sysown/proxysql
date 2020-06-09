@@ -40,7 +40,9 @@ std::map<std::string,std::vector<string>> SetParser::parse1() {
 #define VAR_VALUE_P1 "(((?:CONCAT\\()*(?:((?: )*REPLACE|IFNULL|CONCAT)\\()+(?: )*(?:NULL|@OLD_SQL_MODE|@@sql_mode),(?:(?:'|\\w|,| |\"|\\))+(?:\\))*)|(?:[@\\w/\\d:\\+\\-]|,)+|(?:)))"
 
 	const string pattern="(?:" NAMES SPACES QUOTES NAME_VALUE QUOTES "(?: +COLLATE +" QUOTES NAME_VALUE QUOTES "|)" "|" SESSION_P1 VAR_P1 SPACES "(?:|:)=" SPACES QUOTES VAR_VALUE_P1 QUOTES ") *,? *";
+VALGRIND_DISABLE_ERROR_REPORTING
 	re2::RE2 re(pattern, *opt2);
+VALGRIND_ENABLE_ERROR_REPORTING
 	string var;
 	string value1, value2, value3, value4, value5;
 	re2::StringPiece input(query);
