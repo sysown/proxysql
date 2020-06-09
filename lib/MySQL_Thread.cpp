@@ -364,7 +364,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_format",
 	(char *)"auditlog_filename",
 	(char *)"auditlog_filesize",
-	(char *)"default_charset",
+	//(char *)"default_charset", // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 	(char *)"handle_unknown_charset",
 	(char *)"free_connections_pct",
 	(char *)"connection_warming",
@@ -793,6 +793,8 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	}
 	if (!strncmp(name,"default_",8)) {
 		for (int i=0; i<SQL_NAME_LAST; i++) {
+			if (mysql_tracked_variables[i].is_global_variable==false)
+				continue;
 			char buf[128];
 			sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
 			if (!strcmp(name,buf)) {
@@ -1094,9 +1096,18 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		return strdup(variables.default_session_track_gtids);
 	}
-	for (int i=0; i<SQL_NAME_LAST; i++) {
-		if (variables.default_variables[i]==NULL) {
-			variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
+	if (strlen(name) > 8) {
+		if (strncmp(name, "default_", 8) == 0) {
+			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
+				if (mysql_tracked_variables[i].is_global_variable) {
+					size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
+					if (strlen(name) == (var_len+8)) {
+						if (!strncmp(name+8, mysql_tracked_variables[i].internal_variable_name, var_len)) {
+							return strdup(variables.default_variables[i]);
+						}
+					}
+				}
+			}
 		}
 	}
 	if (!strcasecmp(name,"firewall_whitelist_errormsg")) return strdup(variables.firewall_whitelist_errormsg);
@@ -2446,9 +2457,11 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 
 	if (!strncmp(name,"default_",8)) {
 		for (int i=0; i<SQL_NAME_LAST; i++) {
+			if (mysql_tracked_variables[i].is_global_variable==false)
+				continue;
 			char buf[128];
 			sprintf(buf, "default_%s", mysql_tracked_variables[i].internal_variable_name);
-			if (!strcasecmp(name,buf)) {
+			if (!strcmp(name,buf)) {
 				if (variables.default_variables[i]) free(variables.default_variables[i]);
 				variables.default_variables[i] = NULL;
 				if (vallen) {
@@ -2977,47 +2990,49 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 
 // return variables from both mysql_thread_variables_names AND mysql_tracked_variables
 char ** MySQL_Threads_Handler::get_variables_list() {
-	size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
+	const size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 	unsigned int i;
-/*
-	// ALL THIS CODE IS BEING DISABLED IN 2.0.13
-	// IT WILL BE REINTRODUCED IN 2.1 WITH A DIFFERENT MEANING
-	char **ret=(char **)malloc(sizeof(char *)*(l+SQL_NAME_LAST));
+	size_t ltv = 0;
 	for (i=0; i < SQL_NAME_LAST ; i++) {
-		char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
-		sprintf(m,"default_%s", mysql_tracked_variables[i].internal_variable_name);
-		ret[i] = m;
+		if (mysql_tracked_variables[i].is_global_variable)
+			ltv++;
 	}
-	for (i=SQL_NAME_LAST;i<l+SQL_NAME_LAST;i++) {
-		ret[i]=(i == l+SQL_NAME_LAST-1 ? NULL : strdup(mysql_thread_variables_names[i-SQL_NAME_LAST]));
+	char **ret=(char **)malloc(sizeof(char *)*(l+ltv)); // not adding + 1 because mysql_thread_variables_names is already NULL terminated
+	size_t fv = 0;
+	for (i=0; i < SQL_NAME_LAST ; i++) {
+		if (mysql_tracked_variables[i].is_global_variable) {
+			char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
+			sprintf(m,"default_%s", mysql_tracked_variables[i].internal_variable_name);
+			ret[fv] = m;
+			fv++;
+		}
 	}
-*/
-	char **ret=(char **)malloc(sizeof(char *)*(l));
-	for (i=0;i<l;i++) {
-		ret[i]=(i == l-1 ? NULL : strdup(mysql_thread_variables_names[i]));
+	// this is an extra check.
+	assert(fv==ltv);
+	for (i=ltv;i<l+ltv-1;i++) {
+		ret[i]=(strdup(mysql_thread_variables_names[i-ltv]));
 	}
+	ret[l+ltv-1] = NULL; // last value
 	return ret;
 }
 
 // Returns true if the given name is the name of an existing mysql variable
 // scan both mysql_thread_variables_names AND mysql_tracked_variables
 bool MySQL_Threads_Handler::has_variable(const char *name) {
-/*
-	// ALL THIS CODE IS BEING DISABLED IN 2.0.13
-	// IT WILL BE REINTRODUCED IN 2.1 WITH A DIFFERENT MEANING
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
 			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
-				size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
-				if (strlen(name) == (var_len+8)) {
-					if (!strncmp(name+8, (mysql_tracked_variables[i].internal_variable_name), var_len)) {
-						return true;
+				if (mysql_tracked_variables[i].is_global_variable) {
+					size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
+					if (strlen(name) == (var_len+8)) {
+						if (!strncmp(name+8, mysql_tracked_variables[i].internal_variable_name, var_len)) {
+							return true;
+						}
 					}
 				}
 			}
 		}
 	}
-*/
 	size_t no_vars = sizeof(mysql_thread_variables_names) / sizeof(char *);
 	for (unsigned int i = 0; i < no_vars-1 ; ++i) {
 		size_t var_len = strlen(mysql_thread_variables_names[i]);
@@ -4450,10 +4465,13 @@ void MySQL_Thread::refresh_variables() {
 	for (int i=0; i<SQL_NAME_LAST; i++) {
 		if (mysql_thread___default_variables[i]) {
 			free(mysql_thread___default_variables[i]);
+			mysql_thread___default_variables[i] = NULL;
 		}
 		char buf[128];
-		sprintf(buf,"default_%s",mysql_tracked_variables[i].internal_variable_name);
-		mysql_thread___default_variables[i] = GloMTH->get_variable_string(buf);
+		if (mysql_tracked_variables[i].is_global_variable) {
+			sprintf(buf,"default_%s",mysql_tracked_variables[i].internal_variable_name);
+			mysql_thread___default_variables[i] = GloMTH->get_variable_string(buf);
+		}
 	}
 
 	if (mysql_thread___server_version) free(mysql_thread___server_version);
@@ -4603,6 +4621,10 @@ MySQL_Thread::MySQL_Thread() {
 	variables.stats_time_backend_query=false;
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
+
+	for (int i=0; i<SQL_NAME_LAST; i++) {
+		mysql_thread___default_variables[i] = NULL;
+	}
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
