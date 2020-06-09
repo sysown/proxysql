@@ -5445,6 +5445,10 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		return;
 	} else {
 		GloMTH->wrlock();
+		char * previous_default_charset = GloMTH->get_variable_string((char *)"default_charset");
+		char * previous_default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
+		assert(previous_default_charset);
+		assert(previous_default_collation_connection);
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			const char *value = r->fields[1];
@@ -5545,16 +5549,33 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 				if (strcmp(cic->csname,ci->csname)==0) {
 					// mysql-default_collation_connection and mysql-default_charset are compatible
 				} else {
-					proxy_error("Found an incompatible value for mysql-default_charset: %s\n", default_charset);
-					proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", cic->csname, cic->name);
-					sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", cic->csname);
-					db->execute(q);
-					GloMTH->set_variable("default_charset",cic->csname);
+					proxy_error("Found incompatible values for mysql-default_charset (%s) and mysql-default_collation_connection (%s)\n", default_charset, default_collation_connection);
+					bool use_collation = true;
+					if (strcmp(default_charset, previous_default_charset)) { // charset changed
+						if (strcmp(default_collation_connection, previous_default_collation_connection)==0) { // collation didn't change
+							// the user has changed the charset but not the collation
+							// we use charset as source of truth
+							use_collation = false;
+						}
+					}
+					if (use_collation) {
+						proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", cic->csname, cic->name);
+						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", cic->csname);
+						db->execute(q);
+						GloMTH->set_variable("default_charset",cic->csname);
+					} else {
+						proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
+						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
+						db->execute(q);
+						GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+					}
 				}
 			}
 		}
 		free(default_charset);
 		free(default_collation_connection);
+		free(previous_default_charset);
+		free(previous_default_collation_connection);
 		GloMTH->commit();
 		GloMTH->wrunlock();
 	}
