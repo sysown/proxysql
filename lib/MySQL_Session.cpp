@@ -4215,8 +4215,6 @@ void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STM
 		if (mybe->server_myds->myprot.current_PreStmt->pending_num_params+mybe->server_myds->myprot.current_PreStmt->pending_num_columns) {
 			mybe->server_myds->DSS=STATE_EOF1;
 		} else {
-			mybe->server_myds->myconn->processing_prepared_statement_prepare=false;
-			client_myds->myconn->processing_prepared_statement_prepare=false;
 			mybe->server_myds->DSS=STATE_READY;
 			status=WAITING_CLIENT_DATA;
 			client_myds->DSS=STATE_SLEEP;
@@ -4706,8 +4704,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(PtrSize_t *pkt) {
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
-		client_myds->myconn->has_prepared_statement=true;
-		client_myds->myconn->processing_prepared_statement_prepare=true;
 		mybe=find_or_create_backend(default_hostgroup);
 		mybe->server_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -4721,7 +4717,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t *pkt) {
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
-		client_myds->myconn->processing_prepared_statement_execute=true;
 		mybe=find_or_create_backend(default_hostgroup);
 		mybe->server_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
