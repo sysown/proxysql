@@ -933,6 +933,18 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
+	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
+	j["qpo"]["reconnect"] = qpo->reconnect;
+	j["qpo"]["sticky_conn"] = qpo->sticky_conn;
+	j["qpo"]["cache_timeout"] = qpo->cache_timeout;
+	j["qpo"]["cache_ttl"] = qpo->cache_ttl;
+	j["qpo"]["delay"] = qpo->delay;
+	j["qpo"]["destination_hostgroup"] = qpo->destination_hostgroup;
+	j["qpo"]["firewall_whitelist_mode"] = qpo->firewall_whitelist_mode;
+	j["qpo"]["multiplex"] = qpo->multiplex;
+	j["qpo"]["timeout"] = qpo->timeout;
+	j["qpo"]["retries"] = qpo->retries;
+	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
 	j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
 #ifdef DEBUG
 	j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
