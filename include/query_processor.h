@@ -277,6 +277,7 @@ class Query_Processor {
 	unsigned long long global_mysql_firewall_whitelist_rules_result___size;
 	volatile unsigned int version;
 	unsigned long long rules_mem_used;
+	unsigned long long new_req_conns_count;
 	public:
 	Query_Processor();
 	~Query_Processor();
@@ -322,6 +323,7 @@ class Query_Processor {
 
 	unsigned long long get_query_digests_total_size();
 	unsigned long long get_rules_mem_used();
+	unsigned long long get_new_req_conns_count();
 
 	// fast routing
 	SQLite3_result * fast_routing_resultset;
