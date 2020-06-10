@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
 
 	std::random_device rd;  //Will be used to obtain a seed for the random number engine
 	std::mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
-	std::uniform_int_distribution<> dis(1000, 10000);
+	std::uniform_int_distribution<> dis(100000, 1000000);
 
 	if(cl.getEnv())
 		return exit_status();
