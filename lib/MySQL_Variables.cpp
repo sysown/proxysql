@@ -243,7 +243,11 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 					if (idx == SQL_COLLATION_CONNECTION) {
 						ci = proxysql_find_charset_collate(mysql_thread___default_variables[idx]);
 					} else {
-						ci = proxysql_find_charset_name(mysql_thread___default_variables[idx]);
+						if (mysql_thread___default_variables[idx]) {
+							ci = proxysql_find_charset_name(mysql_thread___default_variables[idx]);
+						} else {
+							ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+						}
 					}
 
 					if (!ci) {
@@ -265,7 +269,11 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 					if (idx == SQL_COLLATION_CONNECTION) {
 						ci = proxysql_find_charset_collate(mysql_thread___default_variables[idx]);
 					} else {
-						ci = proxysql_find_charset_name(mysql_thread___default_variables[idx]);
+						if (mysql_thread___default_variables[idx]) {
+							ci = proxysql_find_charset_name(mysql_thread___default_variables[idx]);
+						} else {
+							ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+						}
 					}
 
 					if (!ci) {
