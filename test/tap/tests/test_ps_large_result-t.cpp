@@ -191,7 +191,7 @@ int main(int argc, char** argv) {
 		restore_admin(mysqladmin);
 		return exit_status();
 	}
-	query = "SELECT t1.id id1, t1.k k1, t1.c c1, t1.pad pad1, t2.id id2, t2.k k2, t2.c c2, t2.pad pad2 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 LIMIT 100000";
+	query = "SELECT t1.id id1, t1.k k1, t1.c c1, t1.pad pad1, t2.id id2, t2.k k2, t2.c c2, t2.pad pad2 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 LIMIT 10000";
 	if (mysql_stmt_prepare(stmt2,query.c_str(), query.size())) {
 		fprintf(stderr, "Query error %s\n", mysql_error(mysql));
 		mysql_close(mysql);
@@ -297,7 +297,7 @@ int main(int argc, char** argv) {
 	{
 		row_count2++;
 	}
-	ok(row_count2==100000, "Fetched 10000 rows");
+	ok(row_count2==10000000, "Fetched 10000000 rows");
 	ok(true, "Fetched 4GB");
 
 	
