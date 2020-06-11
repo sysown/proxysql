@@ -733,6 +733,8 @@ __thread unsigned int mysql_thread___handle_unknown_charset;
 __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___connection_warming;
+// sfrezefo hack for azure username
+__thread bool mysql_thread___azure_gen1_username;
 __thread bool mysql_thread___have_compress;
 __thread bool mysql_thread___have_ssl;
 __thread bool mysql_thread___client_found_rows;
@@ -878,6 +880,8 @@ extern __thread unsigned int mysql_thread___handle_unknown_charset;
 extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___connection_warming;
+// sfrezefo hack for azure username
+extern __thread bool mysql_thread___azure_gen1_username;
 extern __thread bool mysql_thread___have_compress;
 extern __thread bool mysql_thread___have_ssl;
 extern __thread bool mysql_thread___client_found_rows;

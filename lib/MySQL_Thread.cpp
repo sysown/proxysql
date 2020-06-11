@@ -372,6 +372,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"session_idle_ms",
 #endif // IDLE_THREADS
 	(char *)"have_ssl",
+	// sfrezefo hack for azure username
+	(char *)"azure_gen1_username",
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
@@ -608,6 +610,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.server_capabilities = CLIENT_MYSQL | CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;;
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
+	// sfrezefo hack for azure username
+	variables.azure_gen1_username=false;
 	variables.have_compress=true;
 	variables.have_ssl = false; // disable by default for performance reason
 	variables.client_found_rows=true;
@@ -905,6 +909,9 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"autocommit_false_is_transaction")) return (int)variables.autocommit_false_is_transaction;
 			if (!strcmp(name,"autocommit_false_not_reusable")) return (int)variables.autocommit_false_not_reusable;
 			if (!strcmp(name,"automatic_detect_sqli")) return (int)variables.automatic_detect_sqli;
+			// sfrezefo hack for azure username
+			if (!strcmp(name,"azure_gen1_username")) return (int)variables.azure_gen1_username;
+
 			break;
 		case 'b':
 			if (!strcmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
@@ -1499,6 +1506,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		return strdup((variables.session_debug ? "true" : "false"));
 	}
 #endif /* DEBUG */
+    // sfrezefo hack for azure username
+	if (!strcasecmp(name,"azure_gen1_username")) {
+		return strdup((variables.azure_gen1_username ? "true" : "false"));
+	}
 	if (!strcasecmp(name,"have_compress")) {
 		return strdup((variables.have_compress ? "true" : "false"));
 	}
@@ -2671,6 +2682,18 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		return false;
 	}
 #endif /* DEBUG */
+    // sfrezefo hack for azure username
+	if (!strcasecmp(name,"azure_gen1_username")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.azure_gen1_username=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.azure_gen1_username=false;
+			return true;
+		}
+		return false;
+	}
 	if (!strcasecmp(name,"have_compress")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.have_compress=true;
@@ -4494,6 +4517,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___handle_unknown_charset=GloMTH->get_variable_uint((char *)"handle_unknown_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
+	// sfrezefo hack for azure username
+	mysql_thread___azure_gen1_username=(bool)GloMTH->get_variable_int((char *)"azure_gen1_username");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___have_ssl=(bool)GloMTH->get_variable_int((char *)"have_ssl");
 	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");

@@ -922,7 +922,23 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
 		MYSQL *myrc=NULL;
 		if (port) {
-			myrc=mysql_real_connect(mysql, hostname, mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
+			// sfrezefo hack for azure
+			if((mysql_thread___azure_gen1_username) && (strstr(hostname, "mysql.database.azure.com") || strstr(hostname, "mariadb.database.azure.com"))) {
+				char newusername[128];
+				strcpy(newusername, mysql_thread___monitor_username);
+				strcat(newusername,"@");
+				char *firstdot = hostname;
+				char *endhostname = hostname + strlen(hostname);
+				int i = strlen(newusername);
+				while ((*firstdot != '.') && (firstdot != endhostname)) {
+					newusername[i++] = *firstdot;
+					firstdot++;
+				}
+				newusername[i]='\0';
+				myrc=mysql_real_connect(mysql, hostname, newusername, mysql_thread___monitor_password, NULL, port, NULL, 0);
+			} else {
+				myrc=mysql_real_connect(mysql, hostname, mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
+			}
 		} else {
 			myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
 		}

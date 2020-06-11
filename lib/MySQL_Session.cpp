@@ -140,7 +140,23 @@ void * kill_query_thread(void *arg) {
 			default:
 				break;
 		}
-		ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
+		// sfrezefo hack for  azure username
+		if((mysql_thread___azure_gen1_username) && (strstr(ka->hostname, "mysql.database.azure.com") || strstr(ka->hostname, "mariadb.database.azure.com"))) {
+			char newusername[128];
+			strcpy(newusername, ka->username);
+			strcat(newusername,"@");
+			char *firstdot = ka->hostname;
+			char *endhostname = ka->hostname + strlen(ka->hostname);
+			int i = strlen(newusername);
+			while ((*firstdot != '.') && (firstdot != endhostname)) {
+				newusername[i++] = *firstdot;
+				firstdot++;
+			}
+			newusername[i]='\0';
+			ret=mysql_real_connect(mysql,ka->hostname,newusername,ka->password,NULL,ka->port,NULL,0);
+		} else {
+			ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
+		}
 	} else {
 		switch (ka->kill_type) {
 			case KILL_QUERY:

@@ -104,6 +104,8 @@ class MySQL_Connection {
 	MySQL_ResultSet *MyRS_reuse;
 	MySrvC *parent;
 	MySQL_Connection_userinfo *userinfo;
+	// sfrezefo as async call requires it to live longer than calling block
+	char newusername[128];
 	MySQL_Data_Stream *myds;
 	enum MySerStatus server_status; // this to solve a side effect of #774
 

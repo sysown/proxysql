@@ -317,6 +317,8 @@ class MySQL_Threads_Handler
 		bool query_digests_normalize_digest_text;
 		bool query_digests_track_hostname;
 		bool default_reconnect;
+		// sfrezefo hack for azure username
+		bool azure_gen1_username;
 		bool have_compress;
 		bool have_ssl;
 		bool client_found_rows;
