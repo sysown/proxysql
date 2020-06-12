@@ -52,8 +52,12 @@ int main(int argc, char *argv[]) {
 			mysql_free_result(tr_res);
 		}
 
-		int32_t server_status = j_status["backends"][0]["conn"]["mysql"]["server_status"];
-		ok(server_status & 0x01, "Connection status should reflect being in a transaction");
+		for (auto& backend : j_status["backends"]) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
+				int32_t server_status = backend["conn"]["mysql"]["server_status"];
+				ok(server_status & 0x01, "Connection status should reflect being in a transaction");
+			}
+		}
 
 		mysql_close(proxysql_mysql);
 	}
@@ -104,7 +108,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (auto& backend : j_status["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				int32_t user_variable_status = backend["conn"]["status"]["user_variable"];
 				ok(user_variable_status == true, "Connection status should reflect that a 'user_variable' have been set.");
 			}
@@ -135,7 +139,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (auto& backend : j_status["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool prepared_stmt = backend["conn"]["status"]["prepared_statement"];
 				ok(prepared_stmt == true, "Connection status should reflect that a 'prepared statement' have been prepared.");
 
@@ -187,14 +191,14 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (const auto& backend : vj_status[0]["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool lock_tables = backend["conn"]["status"]["lock_tables"];
 				ok(lock_tables == true, "Connection status should reflect that 'LOCK TABLE' have been executed.");
 			}
 		}
 
 		for (const auto& backend : vj_status[1]["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool unlock_tables = backend["conn"]["status"]["lock_tables"];
 				ok(unlock_tables == false, "Connection status should reflect that 'UNLOCK TABLE' have been executed.");
 			}
@@ -235,7 +239,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (const auto& backend : j_status["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool temp_table = backend["conn"]["status"]["temporary_table"];
 				ok(temp_table == true, "Connection status should reflect that a 'CREATE TEMPORARY TABLE' have been executed.");
 
@@ -275,7 +279,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (auto& backend : j_status["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool lock_tables = backend["conn"]["status"]["get_lock"];
 				ok(lock_tables == true, "Connection status should reflect that a 'GET_LOCK' have been executed.");
 
@@ -312,7 +316,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (const auto& backend : j_status["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool user_variable = backend["conn"]["status"]["user_variable"];
 				ok(user_variable == true, "Connection status should have 'status.user_variable' set due to 'SET @variable'.");
 
@@ -350,7 +354,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (const auto& backend : j_status["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool MultiplexDisabled = backend["conn"]["MultiplexDisabled"];
 				ok(MultiplexDisabled == false, "Connection status should have 'MultiplexDisabled' set to false even with 'START TRANSACTION'.");
 
@@ -401,14 +405,14 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (const auto& backend : vj_status[0]["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool MultiplexDisabled = backend["conn"]["MultiplexDisabled"];
 				ok(MultiplexDisabled == true, "Connection status should have 'MultiplexDisabled' set to 'true' 'DUE TO 'LOCK TABLES'.");
 			}
 		}
 
 		for (const auto& backend : vj_status[1]["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				ok(backend.contains("conn") == false, "Connection should be returned to the connection pool due to 'UNLOCK TABLES'.");
 			}
 		}
@@ -443,12 +447,14 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (const auto& backend : j_status["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool sql_log_bin0 = backend["conn"]["status"]["sql_log_bin0"];
 				ok(sql_log_bin0 == true, "Connection status should have 'status.sql_log_bin0' set to 'true' 'DUE TO 'SET SQL_LOG_BIN'.");
 
 				bool MultiplexDisabled = backend["conn"]["MultiplexDisabled"];
 				ok(MultiplexDisabled == true, "Connection status should have 'MultiplexDisabled' set to 'true' 'DUE TO 'SET SQL_LOG_BIN'.");
+			} else {
+				ok(false, "'backends' doens't contains 'conn' objects with the relevant session information");
 			}
 		}
 
@@ -532,7 +538,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (const auto& backend : vj_status[0]["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				bool found_rows = backend["conn"]["status"]["has_savepoint"];
 				ok(found_rows == true, "Connection status should have 'status.has_savepoint' set to 'true' 'DUE TO 'SAVEPOINT'.");
 
@@ -542,7 +548,7 @@ int main(int argc, char *argv[]) {
 		}
 
 		for (const auto& backend : vj_status[1]["backends"]) {
-			if (backend != nullptr) {
+			if (backend != nullptr && backend.contains("conn") && backend["conn"].contains("status")) {
 				ok(backend.contains("conn") == false, "Connection should be returned to the connection pool due to 'COMMIT'.");
 
 				bool MultiplexDisabled = backend["conn"]["MultiplexDisabled"];
