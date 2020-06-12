@@ -34,8 +34,6 @@ int main(int argc, char *argv[]) {
 	{
 		MYSQL* proxysql_mysql = mysql_init(NULL);
 
-		// Waiting for proxysql to be ready
-		uint con_waited = 0;
 		if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 			return -1;
@@ -554,4 +552,6 @@ int main(int argc, char *argv[]) {
 
 		mysql_close(proxysql_mysql);
 	}
+
+	return exit_status();
 }
