@@ -109,3 +109,6 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
 
 2793_compression: reg_test_2793-compression-t.cpp
 	g++ -DDEBUG reg_test_2793-compression-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o reg_test_2793-compression-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+test_session_status_flags: test_session_status_flags-t.cpp
+	g++ -DDEBUG test_session_status_flags-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_session_status_flags-t -DGITVERSION=\"$(GIT_VERSION)\"
