@@ -4894,7 +4894,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nqn.c_str());
 			}
 #endif
-			if (index(dig,';')) {
+			if (index(dig,';') && (index(dig,';') != dig + strlen(dig)-1)) {
 				string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 				proxy_warning("Unable to parse multi-statements command with SET statement: setting lock hostgroup . Command: %s\n", nqn.c_str());
 				*lock_hostgroup = true;
@@ -5766,11 +5766,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		if (session_fast_forward == false) {
 			if (qpo->min_gtid) {
 				gtid_uuid = qpo->min_gtid;
+				with_gtid = true;
 			} else if (qpo->gtid_from_hostgroup >= 0) {
 				_gtid_from_backend = find_backend(qpo->gtid_from_hostgroup);
 				if (_gtid_from_backend) {
 					if (_gtid_from_backend->gtid_uuid[0]) {
 						gtid_uuid = _gtid_from_backend->gtid_uuid;
+						with_gtid = true;
 					}
 				}
 			}
