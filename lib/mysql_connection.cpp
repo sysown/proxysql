@@ -449,147 +449,24 @@ bool MySQL_Connection::is_expired(unsigned long long timeout) {
 	return false;
 }
 
-void MySQL_Connection::set_status_transaction(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_TRANSACTION;
+void MySQL_Connection::set_status(bool set, uint32_t status_flag) {
+	if (set) {
+		this->status_flags |= status_flag;
 	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_TRANSACTION;
+		this->status_flags &= ~status_flag;
 	}
 }
 
-void MySQL_Connection::set_status_compression(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_COMPRESSION;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_COMPRESSION;
-	}
+bool MySQL_Connection::get_status(uint32_t status_flag) {
+	return this->status_flags & status_flag;
 }
 
-void MySQL_Connection::set_status_get_lock(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_GET_LOCK;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_GET_LOCK;
-	}
-}
-
-void MySQL_Connection::set_status_found_rows(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_FOUND_ROWS;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_FOUND_ROWS;
-	}
-}
-
-void MySQL_Connection::set_status_lock_tables(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_LOCK_TABLES;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_LOCK_TABLES;
-	}
-}
-
-void MySQL_Connection::set_status_temporary_table(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
-	}
-}
-
-void MySQL_Connection::set_status_no_backslash_escapes(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
-	}
-}
-
-void MySQL_Connection::set_status_user_variable(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_USER_VARIABLE;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_USER_VARIABLE;
-	}
-}
-
-void MySQL_Connection::set_status_has_savepoint(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT;
-	}
-}
-
-void MySQL_Connection::set_status_prepared_statement(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
-	}
-}
-
-void MySQL_Connection::set_status_no_multiplex(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
-	}
-}
-
-// pay attention here. set_status_sql_log_bin0 sets it sql_log_bin is ZERO
-// sql_log_bin=0 => true
-// sql_log_bin=1 => false
 void MySQL_Connection::set_status_sql_log_bin0(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 	} else {
 		status_flags &= ~STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 	}
-}
-
-bool MySQL_Connection::get_status_transaction() {
-	return status_flags & STATUS_MYSQL_CONNECTION_TRANSACTION;
-}
-
-bool MySQL_Connection::get_status_compression() {
-	return status_flags & STATUS_MYSQL_CONNECTION_COMPRESSION;
-}
-
-bool MySQL_Connection::get_status_user_variable() {
-	return status_flags & STATUS_MYSQL_CONNECTION_USER_VARIABLE;
-}
-
-bool MySQL_Connection::get_status_has_savepoint() {
-	return status_flags & STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT;
-}
-
-bool MySQL_Connection::get_status_get_lock() {
-	return status_flags & STATUS_MYSQL_CONNECTION_GET_LOCK;
-}
-
-bool MySQL_Connection::get_status_found_rows() {
-	return status_flags & STATUS_MYSQL_CONNECTION_FOUND_ROWS;
-}
-
-bool MySQL_Connection::get_status_lock_tables() {
-	return status_flags & STATUS_MYSQL_CONNECTION_LOCK_TABLES;
-}
-
-bool MySQL_Connection::get_status_temporary_table() {
-	return status_flags & STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
-}
-
-bool MySQL_Connection::get_status_no_backslash_escapes() {
-	return status_flags & STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
-}
-
-bool MySQL_Connection::get_status_prepared_statement() {
-	return status_flags & STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
-}
-
-bool MySQL_Connection::get_status_no_multiplex() {
-	return status_flags & STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
 }
 
 bool MySQL_Connection::get_status_sql_log_bin0() {
@@ -1965,7 +1842,7 @@ bool MySQL_Connection::IsActiveTransaction() {
 			}
 		}
 		if (ret == false) {
-			if (get_status_has_savepoint()) {
+			if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)) {
 				// there are savepoints
 				ret = true;
 			}
@@ -2101,16 +1978,16 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			if (myds->sess->qpo) {
 				mul=myds->sess->qpo->multiplex;
 				if (mul==0) {
-					set_status_no_multiplex(true);
+					set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 				} else {
 					if (mul==1) {
-						set_status_no_multiplex(false);
+						set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 					}
 				}
 			}
 		}
 	}
-	if (get_status_user_variable()==false) { // we search for variables only if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE)==false) { // we search for variables only if not already set
 //			if (
 //				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
 //				&&
@@ -2123,12 +2000,12 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 					if (mul!=2) {
 						if (index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
 							if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
-								set_status_user_variable(true);
+								set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 							}
 						} else {
 							for (unsigned int i = 0; i < sizeof(session_vars)/sizeof(char *); i++) {
 								if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
-									set_status_user_variable(true);
+									set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 									break;
 								}
 							}
@@ -2138,7 +2015,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				case 1: // new algorithm
 					if (myds->sess->locked_on_hostgroup > -1) {
 						// locked_on_hostgroup was set, so some variable wasn't parsed
-						set_status_user_variable(true);
+						set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 					}
 					break;
 				default:
@@ -2147,47 +2024,47 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		} else {
 			if (mul!=2 && index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
 				if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
-					set_status_user_variable(true);
+					set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 				}
 			}
 		}
 	}
-	if (get_status_prepared_statement()==false) { // we search if prepared was already executed
+	if (get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT)==false) { // we search if prepared was already executed
 		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {
-			set_status_prepared_statement(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
 		}
 	}
-	if (get_status_temporary_table()==false) { // we search for temporary if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE)==false) { // we search for temporary if not already set
 		if (!strncasecmp(query_digest_text,"CREATE TEMPORARY TABLE ", strlen("CREATE TEMPORARY TABLE "))) {
-			set_status_temporary_table(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
 		}
 	}
-	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES)==false) { // we search for lock tables only if not already set
 		if (!strncasecmp(query_digest_text,"LOCK TABLE", strlen("LOCK TABLE"))) {
-			set_status_lock_tables(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_LOCK_TABLES);
 		}
 	}
-	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES)==false) { // we search for lock tables only if not already set
 		if (!strncasecmp(query_digest_text,"FLUSH TABLES WITH READ LOCK", strlen("FLUSH TABLES WITH READ LOCK"))) { // issue 613
-			set_status_lock_tables(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_LOCK_TABLES);
 		}
 	}
-	if (get_status_lock_tables()==true) {
+	if (get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES)==true) {
 		if (!strncasecmp(query_digest_text,"UNLOCK TABLES", strlen("UNLOCK TABLES"))) {
-			set_status_lock_tables(false);
+			set_status(false, STATUS_MYSQL_CONNECTION_LOCK_TABLES);
 		}
 	}
-	if (get_status_get_lock()==false) { // we search for get_lock if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_GET_LOCK)==false) { // we search for get_lock if not already set
 		if (strcasestr(query_digest_text,"GET_LOCK(")) {
-			set_status_get_lock(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_GET_LOCK);
 		}
 	}
-	if (get_status_found_rows()==false) { // we search for SQL_CALC_FOUND_ROWS if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS)==false) { // we search for SQL_CALC_FOUND_ROWS if not already set
 		if (strcasestr(query_digest_text,"SQL_CALC_FOUND_ROWS")) {
-			set_status_found_rows(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_FOUND_ROWS);
 		}
 	}
-	if (get_status_has_savepoint()==false) {
+	if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)==false) {
 		if (mysql) {
 			if (
 				(mysql->server_status & SERVER_STATUS_IN_TRANS)
@@ -2195,7 +2072,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) == 0)
 			) {
 				if (!strncasecmp(query_digest_text,"SAVEPOINT ", strlen("SAVEPOINT "))) {
-					set_status_has_savepoint(true);
+					set_status(true, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
 				}
 			}
 		}
@@ -2213,7 +2090,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			||
 			!strcasecmp(query_digest_text,"ROLLBACK")
 		) {
-			set_status_has_savepoint(false);
+			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
 		}
 	}
 }
