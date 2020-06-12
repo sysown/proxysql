@@ -10,6 +10,8 @@
 #include "query_processor.h"
 #include "MySQL_Variables.h"
 
+#include <atomic>
+
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
@@ -508,6 +510,14 @@ void MySQL_Connection::set_status_user_variable(bool v) {
 	}
 }
 
+void MySQL_Connection::set_status_has_savepoint(bool v) {
+	if (v) {
+		status_flags |= STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT;
+	} else {
+		status_flags &= ~STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT;
+	}
+}
+
 void MySQL_Connection::set_status_prepared_statement(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
@@ -545,6 +555,10 @@ bool MySQL_Connection::get_status_compression() {
 
 bool MySQL_Connection::get_status_user_variable() {
 	return status_flags & STATUS_MYSQL_CONNECTION_USER_VARIABLE;
+}
+
+bool MySQL_Connection::get_status_has_savepoint() {
+	return status_flags & STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT;
 }
 
 bool MySQL_Connection::get_status_get_lock() {
@@ -1947,6 +1961,12 @@ bool MySQL_Connection::IsActiveTransaction() {
 				ret = true;
 			}
 		}
+		if (ret == false) {
+			if (get_status_has_savepoint()) {
+				// there are savepoints
+				ret = true;
+			}
+		}
 	}
 	return ret;
 }
@@ -1979,7 +1999,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES|STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) ) {
 		ret=true;
 	}
 	if (auto_increment_delay_token) return true;
@@ -2162,6 +2182,35 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	if (get_status_found_rows()==false) { // we search for SQL_CALC_FOUND_ROWS if not already set
 		if (strcasestr(query_digest_text,"SQL_CALC_FOUND_ROWS")) {
 			set_status_found_rows(true);
+		}
+	}
+	if (get_status_has_savepoint()==false) {
+		if (mysql) {
+			if (
+				(mysql->server_status & SERVER_STATUS_IN_TRANS)
+				||
+				((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) == 0)
+			) {
+				if (!strncasecmp(query_digest_text,"SAVEPOINT ", strlen("SAVEPOINT "))) {
+					set_status_has_savepoint(true);
+				}
+			}
+		}
+	} else {
+		if (
+			(
+				// make sure we don't have a transaction running
+				// checking just for COMMIT and ROLLBACK is not enough, because `SET autocommit=1` can commit too
+				(mysql->server_status & SERVER_STATUS_AUTOCOMMIT)
+				&&
+				( (mysql->server_status & SERVER_STATUS_IN_TRANS) == 0 )
+			)
+			||
+			!strcasecmp(query_digest_text,"COMMIT")
+			||
+			!strcasecmp(query_digest_text,"ROLLBACK")
+		) {
+			set_status_has_savepoint(false);
 		}
 	}
 }
