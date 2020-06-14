@@ -518,6 +518,7 @@ Query_Processor::Query_Processor() {
 	rules_fast_routing = kh_init(khStrInt); // create a hashtable
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
+	new_req_conns_count = 0;
 };
 
 Query_Processor::~Query_Processor() {
@@ -597,6 +598,10 @@ unsigned long long Query_Processor::get_rules_mem_used() {
 	s = rules_mem_used;
 	wrunlock();
 	return s;
+}
+
+unsigned long long Query_Processor::get_new_req_conns_count() {
+	return __sync_fetch_and_add(&new_req_conns_count, 0);
 }
 
 QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *comment) {
@@ -2468,6 +2473,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					qpo->min_gtid = buf;
 				} else {
 					proxy_warning("Invalid gtid value=%s\n", value);
+				}
+			}
+			if (!strcasecmp(key, "create_new_connection")) {
+				int32_t val = atoi(value);
+				if (val == 1) {
+					qpo->create_new_conn = true;
 				}
 			}
 		}
