@@ -875,7 +875,7 @@ int MySQL_Data_Stream::buffer2array() {
 		return ret;
 	}
 
-	if (myconn->get_status_compression()==true) {
+	if (myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION)==true) {
 		if ((queueIN.pkt.size==0) && queue_data(queueIN)>=7) {
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Reading the header of a new compressed packet\n", sess);
  			memcpy(&queueIN.hdr,queue_r_ptr(queueIN), sizeof(mysql_hdr));
@@ -918,7 +918,7 @@ int MySQL_Data_Stream::buffer2array() {
 		ret+=b;
 	}
 	if ((queueIN.pkt.size>0) && (queueIN.pkt.size==queueIN.partial) ) {
-		if (myconn->get_status_compression()==true) {
+		if (myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION)==true) {
 			Bytef *dest = NULL;
 			uLongf destLen;
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . Copied the whole compressed packet\n", sess);
@@ -1143,7 +1143,7 @@ int MySQL_Data_Stream::array2buffer() {
 					queueOUT.pkt.ptr=NULL;
 				}
 		//VALGRIND_ENABLE_ERROR_REPORTING;
-				if (myconn->get_status_compression()==true) {
+				if (myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION)==true) {
 					proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Compression enabled\n", sess, this);
 					generate_compressed_packet();	// it is copied directly into queueOUT.pkt					
 				} else {
@@ -1157,12 +1157,12 @@ int MySQL_Data_Stream::array2buffer() {
 						// enable compression
 						if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
 							if (myconn->options.compression_min_length) {
-								myconn->set_status_compression(true);
+								myconn->set_status(true, STATUS_MYSQL_CONNECTION_COMPRESSION);
 							}
 						} else {
 							//explicitly disable compression
 							myconn->options.compression_min_length=0;
-							myconn->set_status_compression(false);
+							myconn->set_status(false, STATUS_MYSQL_CONNECTION_COMPRESSION);
 						}
 					}
 				}
