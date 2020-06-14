@@ -421,7 +421,7 @@ void * my_conn_thread(void *arg) {
 			mysql=mysqlconns[r1];
 			vars = varsperconn[r1];
 		}
-		if (strcmp(username,(char *)"root")) {
+		if (multi_users || strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
 				std::lock_guard<std::mutex> lock(mtx_);
 				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
