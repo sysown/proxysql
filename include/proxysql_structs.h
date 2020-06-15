@@ -167,6 +167,10 @@ enum variable_name {
 	SQL_LOG_BIN,
 	SQL_WSREP_SYNC_WAIT,
 	SQL_GROUP_CONCAT_MAX_LEN,
+	SQL_FOREIGN_KEY_CHECKS,
+	SQL_BIG_SELECTS,
+	SQL_INNODB_LOCK_WAIT_TIMEOUT,
+	SQL_LONG_QUERY_TIME,
 	SQL_NAME_LAST
 };
 
@@ -1016,6 +1020,10 @@ mysql_variable_st mysql_tracked_variables[] {
     { SQL_LOG_BIN,              SETTING_VARIABLE,     false, false, true, false, false, (char *)"sql_log_bin", (char *)"sql_log_bin", (char *)"1" } ,
     { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" } ,
     { SQL_GROUP_CONCAT_MAX_LEN, SETTING_VARIABLE,     false, false, true, true,  false, (char *)"group_concat_max_len", (char *)"group_concat_max_len", (char *)"1024" } ,
+    { SQL_FOREIGN_KEY_CHECKS,   SETTING_VARIABLE,     false, false, true, false, true, (char *)"foreign_key_checks", (char *)"foreign_key_checks", (char *)"1" } ,
+    { SQL_BIG_SELECTS,          SETTING_VARIABLE,     false, false, true, false, true, (char *)"sql_big_selects", (char *)"sql_big_selects", (char *)"ON" } ,
+    { SQL_INNODB_LOCK_WAIT_TIMEOUT, SETTING_VARIABLE, false, false, true, true,  false, (char *)"innodb_lock_wait_timeout", (char *)"innodb_lock_wait_timeout", (char *)"50" } ,
+    { SQL_LONG_QUERY_TIME,      SETTING_VARIABLE,     false, false, true, true,  false, (char *)"long_query_time", (char *)"long_query_time", (char *)"10" } ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];
