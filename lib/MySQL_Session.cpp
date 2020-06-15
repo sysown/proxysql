@@ -974,8 +974,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
 	j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
 	j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
-	j["conn"]["status"]["compression"] = client_myds->myconn->get_status_compression();
-	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status_transaction();
+	j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_TRANSACTION);
 	j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 	for (unsigned int k=0; k<mybes->len; k++) {
 		MySQL_Backend *_mybe = NULL;
@@ -1017,13 +1017,15 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["autocommit"] = ( _myds->myconn->options.autocommit ? "ON" : "OFF" );
 				j["backends"][i]["conn"]["last_set_autocommit"] = _myds->myconn->options.last_set_autocommit;
 				j["backends"][i]["conn"]["no_backslash_escapes"] = _myconn->options.no_backslash_escapes;
-				j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status_get_lock();
-				j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status_lock_tables();
-				j["backends"][i]["conn"]["status"]["has_savepoint"] = _myconn->get_status_has_savepoint();
-				j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status_temporary_table();
-				j["backends"][i]["conn"]["status"]["user_variable"] = _myconn->get_status_user_variable();
-				j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status_found_rows();
-				j["backends"][i]["conn"]["status"]["no_multiplex"] = _myconn->get_status_no_multiplex();
+				j["backends"][i]["conn"]["status"]["get_lock"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_GET_LOCK);
+				j["backends"][i]["conn"]["status"]["lock_tables"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES);
+				j["backends"][i]["conn"]["status"]["has_savepoint"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+				j["backends"][i]["conn"]["status"]["temporary_table"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
+				j["backends"][i]["conn"]["status"]["user_variable"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE);
+				j["backends"][i]["conn"]["status"]["found_rows"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS);
+				j["backends"][i]["conn"]["status"]["no_multiplex"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
+				j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
 				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
 				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
@@ -2054,12 +2056,12 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 	}
 	if (rc==0) {
 		if (!strcmp("0", mysql_variables.client_get_value(this, SQL_LOG_BIN)) || !strcasecmp("OFF",  mysql_variables.client_get_value(this, SQL_LOG_BIN))) {
-			// pay attention here. set_status_sql_log_bin0 sets it sql_log_bin is ZERO
-			// sql_log_bin=0 => true
-			// sql_log_bin=1 => false
-			myconn->set_status_sql_log_bin0(true);
+			// Pay attention here. STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0 sets sql_log_bin to ZERO:
+			//   - sql_log_bin=0 => true
+			//   - sql_log_bin=1 => false
+			myconn->set_status(true, STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0);
 		} else if (!strcmp("1", mysql_variables.client_get_value(this, SQL_LOG_BIN)) || !strcasecmp("ON",  mysql_variables.client_get_value(this, SQL_LOG_BIN))) {
-			myconn->set_status_sql_log_bin0(false);
+			myconn->set_status(false, STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0);
 		}
 		myds->revents|=POLLOUT; // we also set again POLLOUT to send a query immediately!
 		myds->DSS = STATE_MARIADB_GENERIC;
@@ -2503,7 +2505,7 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		if (default_hostgroup<0) {
 			// we are connected to a Admin module backend
 			// we pretend to set a user variable to disable multiplexing
-			myconn->set_status_user_variable(true);
+			myconn->set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 		}
 		enum session_status st=status;
 		if (mybe->server_myds->myconn->async_state_machine==ASYNC_IDLE) {
@@ -6391,7 +6393,7 @@ void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *mycon
 					myds->myconn->reduce_auto_increment_delay_token();
 					if (locked_on_hostgroup >= 0) {
 						if (qpo->multiplex == -1) {
-							myds->myconn->set_status_no_multiplex(true);
+							myds->myconn->set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 						}
 					}
 					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
