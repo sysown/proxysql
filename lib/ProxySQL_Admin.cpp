@@ -3924,6 +3924,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	if (!strncasecmp("select @@sql_mode", query_no_space, strlen("select @@sql_mode"))) {
+		l_free(query_length,query);
+		char *q = const_cast<char*>("SELECT \"\" as \"@@sql_mode\"");
+		query_length = strlen(q) + strlen(PROXYSQL_VERSION) + 1;
+		query = static_cast<char*>(l_alloc(query_length));
+		sprintf(query, q, PROXYSQL_VERSION);
+		goto __run_query;
+	}
+
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
