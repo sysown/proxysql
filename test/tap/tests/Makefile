@@ -112,3 +112,6 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
 
 test_session_status_flags: test_session_status_flags-t.cpp
 	g++ -DDEBUG test_session_status_flags-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_session_status_flags-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+test_mysqlsh: test_mysqlsh-t.cpp
+	g++ -DDEBUG test_mysqlsh-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_mysqlsh-t -DGITVERSION=\"$(GIT_VERSION)\"
