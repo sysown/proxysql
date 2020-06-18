@@ -459,7 +459,7 @@ bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 }
 
 
-bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, string& value1, bool& exit_after_SetParse, bool * lock_hostgroup) {
+bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 	int __tmp_value = -1;
 	if (
@@ -491,7 +491,7 @@ bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, strin
 			}
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		}
-		exit_after_SetParse = true;
+		//exit_after_SetParse = true;
 	} else {
 		sess->unable_to_parse_set_statement(lock_hostgroup);
 		return false;
@@ -501,7 +501,7 @@ bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, strin
 
 
 
-bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string& value1, bool& exit_after_SetParse, bool * lock_hostgroup) {
+bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
 	int vl = strlen(value1.c_str());
 	const char *v = value1.c_str();
 	bool only_digit_chars = true;
@@ -525,7 +525,7 @@ bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string
 				return false;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		}
-		exit_after_SetParse = true;
+		//exit_after_SetParse = true;
 	} else {
 		sess->unable_to_parse_set_statement(lock_hostgroup);
 		return false;

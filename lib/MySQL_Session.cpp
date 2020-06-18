@@ -436,6 +436,7 @@ MySQL_Session::MySQL_Session() {
 	healthy=1;
 	autocommit=true;
 	autocommit_handled=false;
+	sending_set_autocommit=false;
 	autocommit_on_hostgroup=-1;
 	killed=false;
 	session_type=PROXYSQL_SESSION_MYSQL;
@@ -501,6 +502,7 @@ void MySQL_Session::init() {
 void MySQL_Session::reset() {
 	autocommit=true;
 	autocommit_handled=false;
+	sending_set_autocommit=false;
 	autocommit_on_hostgroup=-1;
 	current_hostgroup=-1;
 	default_hostgroup=-1;
@@ -776,6 +778,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 
 bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	autocommit_handled=false;
+	sending_set_autocommit=false;
 	size_t sal=strlen("set autocommit");
 	char * _ptr = (char *)pkt->ptr;
 #ifdef DEBUG
@@ -873,6 +876,7 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 						client_myds->myconn->set_autocommit(autocommit);
 						autocommit_on_hostgroup=FindOneActiveTransaction();
 						free(_new_pkt.ptr);
+						sending_set_autocommit=true;
 						return false;
 					} else {
 						// as there is no active transaction, we do no need to forward it
@@ -1759,6 +1763,20 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 
 bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	if (mysql_thread___forward_autocommit == true) {
+		return false;
+	}
+	if (sending_set_autocommit) {
+		// if sending_set_autocommit==true, the next query proxysql is going
+		// to run defines autocommit, for example:
+		// * SET autocommit=1 , or
+		// * SET sql_mode='', autocommit=1
+		// for this reason, matching autocommit beforehand is not required
+		// and we return
+		//
+		// Nonetheless, we need to set autocommit in backend's MySQL_Connection
+		MySQL_Connection *mc = mybe->server_myds->myconn;
+		mc->set_autocommit(autocommit);
+		mc->options.last_set_autocommit = ( mc->options.autocommit ? 1 : 0 );
 		return false;
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %d , backend: %d\n", this, client_myds->myconn->options.autocommit, mybe->server_myds->myconn->options.autocommit);
@@ -4845,7 +4863,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		This algorithm will be become obsolete once we implement session
 		tracking for MySQL 5.7+
 */
-	bool exit_after_SetParse = false;
+	bool exit_after_SetParse = true;
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	if (qpo->new_query) {
 		// the query was rewritten
@@ -5068,7 +5086,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
-						exit_after_SetParse = true;
 					// the following two blocks of code will be simplified later
 					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
 						int idx = SQL_NAME_LAST;
@@ -5081,7 +5098,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (idx != SQL_NAME_LAST) {
-							if (mysql_variables.parse_variable_boolean(this,idx, *values, exit_after_SetParse, lock_hostgroup)==false) {
+							if (mysql_variables.parse_variable_boolean(this,idx, *values, lock_hostgroup)==false) {
 								return false;
 							}
 						}
@@ -5096,7 +5113,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (idx != SQL_NAME_LAST) {
-							if (mysql_variables.parse_variable_number(this,idx, *values, exit_after_SetParse, lock_hostgroup)==false) {
+							if (mysql_variables.parse_variable_number(this,idx, *values, lock_hostgroup)==false) {
 								return false;
 							}
 						}
@@ -5139,7 +5156,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 									autocommit=true;
 									client_myds->myconn->set_autocommit(autocommit);
 									autocommit_on_hostgroup=FindOneActiveTransaction();
-									exit_after_SetParse = true;
+									exit_after_SetParse = false;
+									sending_set_autocommit=true;
 								} else {
 									// as there is no active transaction, we do no need to forward it
 									// just change internal state
@@ -5154,7 +5172,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						} else {
 							if (autocommit_handled==true) {
-								exit_after_SetParse = true;
+								exit_after_SetParse = false;
 							}
 						}
 					} else if (var == "time_zone") {
@@ -5171,7 +5189,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection Time zone to %s\n", value1.c_str());
 						}
-						exit_after_SetParse = true;
 					} else if (var == "session_track_gtids") {
 						std::string value1 = *values;
 						if ((strcasecmp(value1.c_str(),"OWN_GTID")==0) || (strcasecmp(value1.c_str(),"OFF")==0)) {
@@ -5185,7 +5202,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection session_track_gtids to %s\n", value1.c_str());
 								client_myds->myconn->options.session_track_gtids=strdup(value1.c_str());
 							}
-							exit_after_SetParse = true;
 						} else {
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
@@ -5264,7 +5280,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
 								}
 							}
-							exit_after_SetParse = true;
 						} else {
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
@@ -5307,7 +5322,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						} else {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection charset to %d\n", c->nr);
 							client_myds->myconn->set_charset(c->nr, NAMES);
-							exit_after_SetParse = true;
 						}
 					} else if (var == "tx_isolation") {
 						std::string value1 = *values;
@@ -5321,7 +5335,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 						}
-						exit_after_SetParse = true;
 					} else {
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");
@@ -5438,7 +5451,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
 						}
-						exit_after_SetParse = true;
 					} else if (var == "read") {
 						std::string value1 = *values;
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SESSION TRANSACTION READ value %s\n", value1.c_str());
@@ -5448,7 +5460,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION READ to %s\n", value1.c_str());
 						}
-						exit_after_SetParse = true;
 					} else {
 						unable_to_parse_set_statement(lock_hostgroup);
 						return false;
@@ -5493,7 +5504,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				} else {
 					proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection charset to %d\n", c->nr);
 					client_myds->myconn->set_charset(c->nr, CHARSET);
-					exit_after_SetParse = true;
 				}
 				if (exit_after_SetParse) {
 					if (command_type == _MYSQL_COM_QUERY) {

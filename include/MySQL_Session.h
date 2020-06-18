@@ -182,6 +182,7 @@ class MySQL_Session
 	// bool
 	bool autocommit;
 	bool autocommit_handled;
+	bool sending_set_autocommit;
 	bool killed;
 	bool locked_on_hostgroup_and_all_variables_set;
 	//bool admin;
