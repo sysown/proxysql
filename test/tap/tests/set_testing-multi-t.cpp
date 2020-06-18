@@ -435,6 +435,11 @@ void * my_conn_thread(void *arg) {
 		}
 		std::vector<std::string> commands = split(testCases[r2].command.c_str(), ';');
 		for (auto c : commands) {
+			if (multi_users) {
+				if (c == " ") {
+					c = "DO 1";
+				}
+			}
 			if (mysql_query(mysql, c.c_str())) {
 				if (silent==0) {
 					fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", c.c_str(), mysql_errno(mysql), mysql_error(mysql));
