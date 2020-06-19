@@ -5766,9 +5766,16 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		return;
 	} else {
 		GloMTH->wrlock();
+		char * previous_default_charset = GloMTH->get_variable_string((char *)"default_charset");
+		char * previous_default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
+		assert(previous_default_charset);
+		assert(previous_default_collation_connection);
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			const char *value = r->fields[1];
+/*
+			// COMPLETELY DISABLING THIS because we disable must mysql-default_ variables
+			//
 			if (!strcasecmp(r->fields[0], "default_character_set_results") || !strcasecmp(r->fields[0], "default_character_set_client") ||
 					!strcasecmp(r->fields[0], "default_character_set_database") || !strcasecmp(r->fields[0], "default_character_set_connection") ||
 					!strcasecmp(r->fields[0], "default_charset")) {
@@ -5785,6 +5792,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 					GloMTH->set_variable(r->fields[0],ci->csname);
 				}
 			} else {
+*/
 				bool rc=GloMTH->set_variable(r->fields[0],value);
 				if (rc==false) {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],value);
@@ -5815,32 +5823,80 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						variables.mysql_show_processlist_extended = atoi(value);
 					}
 				}
-			}
+//			}
 		}
 
-		char* connection = GloMTH->get_variable_string((char *)"default_character_set_connection");
-		char* collation= GloMTH->get_variable_string((char *)"default_collation_connection");
-		const MARIADB_CHARSET_INFO *ci = NULL;
 		char q[1000];
-		ci = proxysql_find_charset_name(connection);
-		if (strcasecmp(ci->name, collation)) {
-			proxy_warning("Changing default_collation_connection to %s\n", ci->name);
-			bool rc=GloMTH->set_variable("default_collation_connection",ci->name);
-			sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")","default_collation_connection",ci->name);
-			GloMTH->set_variable("default_collation_connection",ci->name);
-			if (ci->nr == 45) {
-				rc=GloMTH->set_variable("default_collation_connection","utf8mb4_general_ci");
-				db->execute("INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"utf8mb4_general_ci\")");
-				GloMTH->set_variable("default_collation_connection","utf8mb4_general_ci");
+		char * default_charset = GloMTH->get_variable_string((char *)"default_charset");
+		char * default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
+		assert(default_charset);
+		assert(default_collation_connection);
+		MARIADB_CHARSET_INFO * ci = NULL;
+		ci = proxysql_find_charset_name(default_charset);
+		if (ci == NULL) {
+			// invalid charset
+			proxy_error("Found an incorrect value for mysql-default_charset: %s\n", default_charset);
+			// let's try to get a charset from collation connection
+			ci = proxysql_find_charset_collate(default_collation_connection);
+			if (ci == NULL) {
+				proxy_error("Found an incorrect value for mysql-default_collation_connection: %s\n", default_collation_connection);
+				const char *p = mysql_tracked_variables[SQL_CHARACTER_SET].default_value;
+				ci = proxysql_find_charset_name(p);
+				assert(ci);
+				proxy_info("Resetting mysql-default_charset to hardcoded default value: %s\n", ci->csname);
+				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", ci->csname);
+				db->execute(q);
+				GloMTH->set_variable((char *)"default_charset",ci->csname);
+				proxy_info("Resetting mysql-default_collation_connection to hardcoded default value: %s\n", ci->name);
+				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
+				db->execute(q);
+				GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+			} else {
+				proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", ci->csname, ci->name);
+				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", ci->csname);
+				db->execute(q);
+				GloMTH->set_variable((char *)"default_charset",ci->csname);
 			}
 		} else {
-			GloMTH->set_variable("default_collation_connection",ci->name);
-			sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")","default_collation_connection",ci->name);
-			db->execute(q);
+			MARIADB_CHARSET_INFO * cic = NULL;
+			cic = proxysql_find_charset_collate(default_collation_connection);
+			if (cic == NULL) {
+				proxy_error("Found an incorrect value for mysql-default_collation_connection: %s\n", default_collation_connection);
+				proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
+				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
+				db->execute(q);
+				GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+			} else {
+				if (strcmp(cic->csname,ci->csname)==0) {
+					// mysql-default_collation_connection and mysql-default_charset are compatible
+				} else {
+					proxy_error("Found incompatible values for mysql-default_charset (%s) and mysql-default_collation_connection (%s)\n", default_charset, default_collation_connection);
+					bool use_collation = true;
+					if (strcmp(default_charset, previous_default_charset)) { // charset changed
+						if (strcmp(default_collation_connection, previous_default_collation_connection)==0) { // collation didn't change
+							// the user has changed the charset but not the collation
+							// we use charset as source of truth
+							use_collation = false;
+						}
+					}
+					if (use_collation) {
+						proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", cic->csname, cic->name);
+						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", cic->csname);
+						db->execute(q);
+						GloMTH->set_variable("default_charset",cic->csname);
+					} else {
+						proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
+						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
+						db->execute(q);
+						GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+					}
+				}
+			}
 		}
-		free(connection);
-		free(collation);
-
+		free(default_charset);
+		free(default_collation_connection);
+		free(previous_default_charset);
+		free(previous_default_collation_connection);
 		GloMTH->commit();
 		if (checksum_variables.checksum_mysql_variables) {
 			pthread_mutex_lock(&GloVars.checksum_mutex);
