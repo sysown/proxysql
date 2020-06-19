@@ -103,15 +103,3 @@ aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 
 test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_tokenizer-t -DGITVERSION=\"$(GIT_VERSION)\"
-
-1493_mixed_compression: reg_test_1493-mixed_compression-t.cpp
-	g++ -DDEBUG test_mixed_compression-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o reg_test_1493-mixed_compression-t -DGITVERSION=\"$(GIT_VERSION)\"
-
-2793_compression: reg_test_2793-compression-t.cpp
-	g++ -DDEBUG reg_test_2793-compression-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o reg_test_2793-compression-t -DGITVERSION=\"$(GIT_VERSION)\"
-
-test_session_status_flags: test_session_status_flags-t.cpp
-	g++ -DDEBUG test_session_status_flags-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_session_status_flags-t -DGITVERSION=\"$(GIT_VERSION)\"
-
-test_mysqlsh: test_mysqlsh-t.cpp
-	g++ -DDEBUG test_mysqlsh-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_mysqlsh-t -DGITVERSION=\"$(GIT_VERSION)\"

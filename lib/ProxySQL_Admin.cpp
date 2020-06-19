@@ -7910,6 +7910,16 @@ void ProxySQL_Admin::stats___mysql_global() {
 		}
 	}
 
+	if (GloQPro) {
+		unsigned long long mu = GloQPro->get_new_req_conns_count();
+		vn=(char *)"new_req_conns_count";
+		sprintf(bu,"%llu",mu);
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+	}
+
 	statsdb->execute("COMMIT");
 }
 

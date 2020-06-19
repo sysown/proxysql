@@ -939,6 +939,18 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
+	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
+	j["qpo"]["reconnect"] = qpo->reconnect;
+	j["qpo"]["sticky_conn"] = qpo->sticky_conn;
+	j["qpo"]["cache_timeout"] = qpo->cache_timeout;
+	j["qpo"]["cache_ttl"] = qpo->cache_ttl;
+	j["qpo"]["delay"] = qpo->delay;
+	j["qpo"]["destination_hostgroup"] = qpo->destination_hostgroup;
+	j["qpo"]["firewall_whitelist_mode"] = qpo->firewall_whitelist_mode;
+	j["qpo"]["multiplex"] = qpo->multiplex;
+	j["qpo"]["timeout"] = qpo->timeout;
+	j["qpo"]["retries"] = qpo->retries;
+	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
 	j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
 #ifdef DEBUG
 	j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
@@ -5765,7 +5777,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 		}
-		if (session_fast_forward == false) {
+		if (session_fast_forward == false || qpo->create_new_conn == false) {
 			if (qpo->min_gtid) {
 				gtid_uuid = qpo->min_gtid;
 				with_gtid = true;
@@ -5806,9 +5818,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		}
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, uuid, trxid, -1);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, session_fast_forward, NULL, 0, (int)qpo->max_lag_ms);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
 			}
 		} else {
 			thread->status_variables.stvar[st_var_ConnPool_get_conn_immediate]++;
