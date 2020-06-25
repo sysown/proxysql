@@ -248,7 +248,7 @@ Top-level sections:
 * `mysql_users`: contains rows for the `mysql_users` table from the admin interface. Basically, these define the users which can connect to the proxy, and the users with which the proxy can connect to the backend servers. Rows are encoded as per the `.cfg` file format, here is an example:
 	
 	```bash
-	mysql_users:
+	mysql_users =
 	(
 		{
 			username = "root"
@@ -263,7 +263,7 @@ Top-level sections:
 * `mysql_query_rules`: contains rows for the `mysql_query_rules` table from the admin interface. Basically, these define the rules used to classify and route the incoming MySQL traffic, according to various criteria (patterns matched, user used to run the query, etc.). Rows are encoded as per the `.cfg` file format, here is an example (Note: the example is a very generic query routing rule and it is recommended to create specific rules for queries rather than using a generic rule such as this):
 	
 	```bash
-	mysql_query_rules:
+	mysql_query_rules =
 	(
 		{
 			rule_id=1
