@@ -1679,6 +1679,7 @@ void * monitor_galera_thread(void *arg) {
 #endif // DEBUG
 
 	mmsd->t1=start_time;
+	mmsd->interr=0; // reset the value
 
 	bool crc=false;
 	if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
