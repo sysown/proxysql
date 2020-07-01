@@ -4731,6 +4731,7 @@ void MySQL_Thread::process_all_sessions() {
 }
 
 void MySQL_Thread::refresh_variables() {
+	pthread_mutex_lock(&GloVars.global.ext_glomth_mutex);
 	if (GloMTH==NULL) {
 		return;
 	}
@@ -4910,6 +4911,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
 	GloMTH->wrunlock();
+	pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 }
 
 MySQL_Thread::MySQL_Thread() {
