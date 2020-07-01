@@ -4603,6 +4603,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 
 
 void *child_mysql(void *arg) {
+	if (GloMTH == nullptr) { return NULL; }
 
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
