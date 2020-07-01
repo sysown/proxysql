@@ -574,11 +574,17 @@ int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 
 ProxySQL_Config& ProxySQL_Admin::proxysql_config() {
 	static ProxySQL_Config instance = ProxySQL_Config(admindb);
+	if (instance.admindb != admindb) {
+		instance.admindb = admindb;
+	}
 	return instance;
 }
 
 ProxySQL_Restapi& ProxySQL_Admin::proxysql_restapi() {
 	static ProxySQL_Restapi instance = ProxySQL_Restapi(admindb);
+	if (instance.admindb != admindb) {
+		instance.admindb = admindb;
+	}
 	return instance;
 }
 

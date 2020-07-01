@@ -7,8 +7,8 @@ class SQLite3DB;
 extern const char* config_header;
 
 class ProxySQL_Config {
-	SQLite3DB* admindb;
 public:
+	SQLite3DB* admindb;
 	ProxySQL_Config(SQLite3DB* db);
 	virtual ~ProxySQL_Config();
 
