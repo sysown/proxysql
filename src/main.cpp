@@ -1153,8 +1153,10 @@ void ProxySQL_Main_shutdown_all_modules() {
 	}
 	if (GloMTH) {
 		cpu_timer t;
+		pthread_mutex_lock(&GloVars.global.ext_glomth_mutex);
 		delete GloMTH;
 		GloMTH=NULL;
+		pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 #ifdef DEBUG
 		std::cerr << "GloMTH shutdown in ";
 #endif
