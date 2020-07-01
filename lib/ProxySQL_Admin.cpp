@@ -1002,7 +1002,11 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			rc=__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
 		}
 		if (rc) {
+			__sync_bool_compare_and_swap(&GloMTH->status_variables.threads_initialized, 1, 0);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Starting ProxySQL following PROXYSQL START command\n");
+			while(__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
+				usleep(1000);
+			}
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		} else {
 			proxy_warning("ProxySQL was already started when received PROXYSQL START command\n");
@@ -1033,6 +1037,11 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloMTH->commit();
 		glovars.reload=2;
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		GloMTH->signal_all_threads(0);
+		while (__sync_fetch_and_add(&glovars.shutdown,0)==1) {
+			usleep(1000);
+		}
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
 
