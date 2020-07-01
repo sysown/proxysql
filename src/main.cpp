@@ -766,6 +766,7 @@ void * mysql_worker_thread_func(void *arg) {
 	worker->run();
 	//delete worker;
 	delete worker;
+	mysql_thread->worker=NULL;
 //	l_mem_destroy(__thr_sfp);
 	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_mysql_threads,tmp_stack_size);
 	return NULL;
