@@ -1,3 +1,13 @@
+/**
+ * @file set_testing-t.cpp
+ * @brief This file tests multiple settings combinations for MySQL variables, and checks that they are
+ *  actually being tracked correctly.
+ * @details The test input is a 'csv' file with name 'set_testing-t.csv'. The file format consists in
+ *  two primary columns which specifies the variables to set (first) and the expected result of setting
+ *  those variables (second), and an optional third column which hold variables that shouldn't be checked
+ *  anymore after the 'SET STATEMENTS' from the same line are executed.
+ */
+
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -35,6 +45,7 @@ using nlohmann::json;
 struct TestCase {
 	std::string command;
 	json expected_vars;
+	json reset_vars;
 };
 
 std::vector<TestCase> testCases;
@@ -45,18 +56,27 @@ int readTestCases(const std::string& fileName) {
 	FILE* fp = fopen(fileName.c_str(), "r");
 	if (!fp) return 0;
 
-	char buf[MAX_LINE], col1[MAX_LINE], col2[MAX_LINE];
+	char buf[MAX_LINE], col1[MAX_LINE], col2[MAX_LINE], col3[MAX_LINE] = {0};
 	int n = 0;
 	for(;;) {
 		if (fgets(buf, sizeof(buf), fp) == NULL) break;
-		n = sscanf(buf, " \"%[^\"]\", \"%[^\"]\"", col1, col2);
+		n = sscanf(buf, " \"%[^\"]\", \"%[^\"]\", \"%[^\"]\"", col1, col2, col3);
 		if (n == 0) break;
 
 		char *p = col2;
 		while(*p++) if(*p == '\'') *p = '\"';
 
 		json vars = json::parse(col2);
-		testCases.push_back({col1, vars});
+
+		p = col3;
+		while(col3[0] != 0 && *p++) if(*p == '\'') *p = '\"';
+
+		json reset_vars;
+		if (p != col3) {
+			reset_vars = json::parse(col3);
+		}
+
+		testCases.push_back({col1, vars, reset_vars});
 	}
 
 	fclose(fp);
@@ -363,6 +383,8 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 	}
 }
 
+std::vector<std::string> forgotten_vars {};
+
 void * my_conn_thread(void *arg) {
 	g_seed = time(NULL) ^ getpid() ^ pthread_self();
 	unsigned int select_OK=0;
@@ -488,11 +510,23 @@ void * my_conn_thread(void *arg) {
 		json proxysql_vars;
 		queryInternalStatus(mysql, proxysql_vars);
 
+		if (!testCases[r2].reset_vars.empty()) {
+			for (const auto& var : testCases[r2].reset_vars) {
+				if (std::find(forgotten_vars.begin(), forgotten_vars.end(), var) == forgotten_vars.end()) {
+					forgotten_vars.push_back(var);
+				}
+			}
+		}
+
 		bool testPassed = true;
 		int variables_tested = 0;
 		for (auto& el : vars.items()) {
 			auto k = mysql_vars.find(el.key());
 			auto s = proxysql_vars["conn"].find(el.key());
+
+			if (std::find(forgotten_vars.begin(), forgotten_vars.end(), el.key()) != forgotten_vars.end()) {
+				continue;
+			}
 
 			if (k == mysql_vars.end())
 				fprintf(stderr, "Variable %s->%s in mysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
