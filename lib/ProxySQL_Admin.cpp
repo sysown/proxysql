@@ -1002,6 +1002,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			rc=__sync_bool_compare_and_swap(&GloVars.global.nostart,1,0);
 		}
 		if (rc) {
+			// Set the status variable 'threads_initialized' to 0 because it's initialized back
+			// in main 'init_phase3'. After GloMTH have been initialized again.
 			__sync_bool_compare_and_swap(&GloMTH->status_variables.threads_initialized, 1, 0);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Starting ProxySQL following PROXYSQL START command\n");
 			while(__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
@@ -1037,10 +1039,16 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloMTH->commit();
 		glovars.reload=2;
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+		// After setting the shutdown flag, we should wake all threads and wait for
+		// the shutdown phase to complete.
 		GloMTH->signal_all_threads(0);
 		while (__sync_fetch_and_add(&glovars.shutdown,0)==1) {
 			usleep(1000);
 		}
+		// After shutdown phase is completed, we must to send a 'OK' to the
+		// mysql client, otherwise, since this session might not be drop due
+		// to the waiting condition, the client wont disconnect and will
+		// keep forever waiting for acknowledgement.
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
