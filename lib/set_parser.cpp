@@ -137,7 +137,7 @@ std::string SetParser::parse_character_set() {
 
 	std::map<std::string,std::vector<string>> result;
 
-	const string pattern="((charset)|(character +set))(?: )(\\S+)";
+	const string pattern="((charset)|(character +set))(?: )(?:'?)([^'|\\s]*)(?:'?)";
 	re2::RE2 re(pattern, *opt2);
 	string var;
 	string value1, value2, value3, value4;
