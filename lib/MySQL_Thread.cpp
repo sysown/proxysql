@@ -2937,13 +2937,18 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 		variables.default_session_track_gtids=NULL;
 		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_session_track_gtids=strdup(value);
+			// we only accept 2 value for session_track_gtids = OFF or OWN_GTID
+			if (strcasecmp(value,(char *)"OFF") == 0) {
+				// for convention, we stored the value as uppercase
+				variables.default_session_track_gtids=strdup((char *)"OFF");
+				return true;
+			} else if (strcasecmp(value,(char *)"OWN_GTID") == 0) {
+				// for convention, we stored the value as uppercase
+				variables.default_session_track_gtids=strdup((char *)"OWN_GTID");
+				return true;
+			}
 		}
-		if (variables.default_session_track_gtids==NULL) {
-			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS); // default
-		}
-		return true;
+		return false; // we couldn't set it to a valid value. It will be reset to default
 	}
 
 
