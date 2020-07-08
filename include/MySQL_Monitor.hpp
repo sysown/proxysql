@@ -276,7 +276,6 @@ class MySQL_Monitor {
 	void populate_monitor_mysql_server_galera_log();
 	void populate_monitor_mysql_server_aws_aurora_log();
 	void populate_monitor_mysql_server_aws_aurora_check_status();
-	char * galera_find_last_node(int);
 	std::vector<string> * galera_find_possible_last_nodes(int);
 	bool server_responds_to_ping(char *address, int port);
 	// FIXME : add AWS Aurora actions

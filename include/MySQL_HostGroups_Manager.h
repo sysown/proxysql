@@ -317,8 +317,9 @@ class MySQL_HostGroups_Manager {
 	pthread_mutex_t mysql_errors_mutex;
 	umap_mysql_errors mysql_errors_umap;
 
+	bool unsafe_commit();
+
 	public:
-	std::mutex galera_set_writer_mutex;
 	pthread_rwlock_t gtid_rwlock;
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;
 	struct ev_async * gtid_ev_async;
@@ -371,7 +372,6 @@ class MySQL_HostGroups_Manager {
 	void init();
 	void wrlock();
 	void wrunlock();
-	bool server_add(unsigned int hid, char *add, uint16_t p=3306, uint16_t gp=0, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100, unsigned int _max_replication_lag=0, unsigned int _use_ssl=0, unsigned int _max_latency_ms=0, char *comment=NULL);
 	int servers_add(SQLite3_result *resultset); // faster version of server_add
 	bool commit();
 

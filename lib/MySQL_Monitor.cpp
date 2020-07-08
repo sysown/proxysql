@@ -551,6 +551,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	pthread_mutex_init(&aws_aurora_mutex,NULL);
 	AWS_Aurora_Hosts_resultset=NULL;
 	AWS_Aurora_Hosts_resultset_checksum = 0;
+
 	shutdown=false;
 	monitor_enabled=true;	// default
 	// create new SQLite datatabase
@@ -2157,8 +2158,6 @@ void * MySQL_Monitor::monitor_connect() {
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		char *error=NULL;
-		int cols=0;
-		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
 		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
@@ -2179,7 +2178,8 @@ void * MySQL_Monitor::monitor_connect() {
 		next_loop_at=t1+1000*mysql_thread___monitor_connect_interval;
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		resultset = MyHGM->execute_query(query, &error);
+
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_connect_loop;
@@ -2302,7 +2302,8 @@ void * MySQL_Monitor::monitor_ping() {
 		next_loop_at=t1+1000*mysql_thread___monitor_ping_interval;
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		resultset = MyHGM->execute_query(query, &error);
+
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 			goto __end_monitor_ping_loop;
@@ -2362,46 +2363,45 @@ __end_monitor_ping_loop:
 			resultset=NULL;
 		}
 
-		// now it is time to shun all problematic hosts
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NOT NULL AND b.ping_error NOT LIKE 'Access denied for user\%'";
+		query=(char *)"SELECT DISTINCT hostname, port FROM mysql_servers WHERE status NOT LIKE 'OFFLINE\%'";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-// we disable valgrind here. Probably a bug in SQLite3
-VALGRIND_DISABLE_ERROR_REPORTING;
-		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-VALGRIND_ENABLE_ERROR_REPORTING;
+		resultset = MyHGM->execute_query(query, &error);
+
 		if (error) {
 			proxy_error("Error on %s : %s\n", query, error);
 		} else {
 			// get all addresses and ports
-			int i=0;
-			int j=0;
+			int num_servers = 0;
 			char **addresses=(char **)malloc(resultset->rows_count * sizeof(char *));
 			char **ports=(char **)malloc(resultset->rows_count * sizeof(char *));
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
-				addresses[i]=strdup(r->fields[0]);
-				ports[i]=strdup(r->fields[1]);
-				i++;
+				addresses[num_servers]=strdup(r->fields[0]);
+				ports[num_servers]=strdup(r->fields[1]);
+				++num_servers;
 			}
 			if (resultset) {
 				delete resultset;
 				resultset=NULL;
 			}
+
 			char *new_query=NULL;
+
+			// now it is time to shun all problematic hosts
 			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' AND ping_error NOT LIKE 'ProxySQL Error: Access denied for user%%' AND ping_error NOT LIKE 'Your password has expired.%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
-			for (j=0;j<i;j++) {
-				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
+			for (int i = 0; i < num_servers; ++i) {
+				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[i])+strlen(ports[i])+16);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
-				sprintf(buff,new_query,addresses[j],ports[j],max_failures,max_failures);
+				sprintf(buff,new_query,addresses[i],ports[i],max_failures,max_failures);
 				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
 				if (!error) {
 					if (resultset) {
 						if (resultset->rows_count) {
 							// disable host
 							bool rc_shun = false;
-							rc_shun = MyHGM->shun_and_killall(addresses[j],atoi(ports[j]));
+							rc_shun = MyHGM->shun_and_killall(addresses[i],atoi(ports[i]));
 							if (rc_shun) {
-								proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections. Disabling other checks until the node comes back online.\n", addresses[j], ports[j], max_failures);
+								proxy_error("Server %s:%s missed %d heartbeats, shunning it and killing all the connections. Disabling other checks until the node comes back online.\n", addresses[i], ports[i], max_failures);
 							}
 						}
 						delete resultset;
@@ -2413,46 +2413,11 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				free(buff);
 			}
 
-			while (i) { // now free all the addresses/ports
-				i--;
-				free(addresses[i]);
-				free(ports[i]);
-			}
-			free(addresses);
-			free(ports);
-		}
-
-
-		// now it is time to update current_lantency_ms
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NULL";
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-VALGRIND_DISABLE_ERROR_REPORTING;
-		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-VALGRIND_ENABLE_ERROR_REPORTING;
-		if (error) {
-			proxy_error("Error on %s : %s\n", query, error);
-		} else {
-			// get all addresses and ports
-			int i=0;
-			int j=0;
-			char **addresses=(char **)malloc(resultset->rows_count * sizeof(char *));
-			char **ports=(char **)malloc(resultset->rows_count * sizeof(char *));
-			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-				SQLite3_row *r=*it;
-				addresses[i]=strdup(r->fields[0]);
-				ports[i]=strdup(r->fields[1]);
-				i++;
-			}
-			if (resultset) {
-				delete resultset;
-				resultset=NULL;
-			}
-			char *new_query=NULL;
-
+			// now it is time to update current_lantency_ms
 			new_query=(char *)"SELECT hostname,port,COALESCE(CAST(AVG(ping_success_time_us) AS INTEGER),10000) FROM (SELECT hostname,port,ping_success_time_us,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT 3) a WHERE ping_error IS NULL GROUP BY hostname,port";
-			for (j=0;j<i;j++) {
-				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
-				sprintf(buff,new_query,addresses[j],ports[j]);
+			for (int i = 0; i < num_servers; ++i) {
+				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[i])+strlen(ports[i])+16);
+				sprintf(buff,new_query,addresses[i],ports[i]);
 				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
 				if (!error) {
 					if (resultset) {
@@ -2460,7 +2425,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 							for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 								SQLite3_row *r=*it; // this should be called just once, but we create a generic for loop
 								// update current_latency_ms
-								MyHGM->set_server_current_latency_us(addresses[j],atoi(ports[j]), atoi(r->fields[2]));
+								MyHGM->set_server_current_latency_us(addresses[i],atoi(ports[i]), atoi(r->fields[2]));
 							}
 						}
 						delete resultset;
@@ -2471,10 +2436,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				}
 				free(buff);
 			}
-			while (i) { // now free all the addresses/ports
-				i--;
-				free(addresses[i]);
-				free(ports[i]);
+
+			while (num_servers--) { // now free all the addresses/ports
+				free(addresses[num_servers]);
+				free(ports[num_servers]);
 			}
 			free(addresses);
 			free(ports);
@@ -2686,10 +2651,6 @@ void * MySQL_Monitor::monitor_group_replication() {
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		unsigned int glover;
-//		char *error=NULL;
-//		SQLite3_result *resultset=NULL;
-		// add support for SSL
-//		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=writer_hostgroup hostgroup_id=reader_hostgroup WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -2705,17 +2666,9 @@ void * MySQL_Monitor::monitor_group_replication() {
 		}
 		next_loop_at=t1+1000*mysql_thread___monitor_groupreplication_healthcheck_interval;
 		pthread_mutex_lock(&group_replication_mutex);
-//		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-//		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-//		resultset = MyHGM->execute_query(query, &error);
-//		assert(resultset);
 		if (Group_Replication_Hosts_resultset==NULL) {
 				proxy_error("Group replication hosts result set is absent\n");
 				goto __end_monitor_group_replication_loop;
-//		}
-//		if (error) {
-//			proxy_error("Error on %s : %s\n", query, error);
-//			goto __end_monitor_read_only_loop;
 		} else {
 			if (Group_Replication_Hosts_resultset->rows_count==0) {
 				goto __end_monitor_group_replication_loop;
@@ -2749,33 +2702,6 @@ void * MySQL_Monitor::monitor_group_replication() {
 
 __end_monitor_group_replication_loop:
 		pthread_mutex_unlock(&group_replication_mutex);
-		if (mysql_thread___monitor_enabled==true) {
-/*
-			sqlite3_stmt *statement=NULL;
-			sqlite3 *mondb=monitordb->get_db();
-			int rc;
-			char *query=NULL;
-			query=(char *)"DELETE FROM mysql_server_read_only_log WHERE time_start_us < ?1";
-			rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
-			ASSERT_SQLITE_OK(rc, monitordb);
-			if (mysql_thread___monitor_history < mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 )) { // issue #626
-				if (mysql_thread___monitor_ping_interval < 3600000)
-					mysql_thread___monitor_history = mysql_thread___monitor_ping_interval * (mysql_thread___monitor_ping_max_failures + 1 );
-			}
-			unsigned long long time_now=realtime_time();
-			rc=sqlite3_bind_int64(statement, 1, time_now-(unsigned long long)mysql_thread___monitor_history*1000); ASSERT_SQLITE_OK(rc, monitordb);
-			SAFE_SQLITE3_STEP2(statement);
-			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, monitordb);
-			sqlite3_finalize(statement);
-*/
-		}
-
-
-//		if (resultset)
-//			delete resultset;
-
-
 
 __sleep_monitor_group_replication:
 		t2=monotonic_time();
@@ -3527,65 +3453,6 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 	}
 	sqlite3_finalize(statement1);
 	pthread_mutex_unlock(&GloMyMon->galera_mutex);
-}
-
-char * MySQL_Monitor::galera_find_last_node(int writer_hostgroup) {
-/*
-	sqlite3 *mondb=monitordb->get_db();
-	int rc;
-	//char *query=NULL;
-	char *query1=NULL;
-	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-	sqlite3_stmt *statement1=NULL;
-*/
-	char *str = NULL;
-	pthread_mutex_lock(&GloMyMon->galera_mutex);
-/*
-	rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
-	ASSERT_SQLITE_OK(rc, monitordb);
-	monitordb->execute((char *)"DELETE FROM mysql_server_galera_log");
-*/
-	std::map<std::string, Galera_monitor_node *>::iterator it2;
-	Galera_monitor_node *node=NULL;
-	Galera_monitor_node *writer_node=NULL;
-	unsigned int writer_nodes = 0;
-	unsigned long long curtime = monotonic_time();
-	unsigned long long ti = mysql_thread___monitor_galera_healthcheck_interval;
-	ti *= 2;
-	std::string s = "";
-	for (it2=GloMyMon->Galera_Hosts_Map.begin(); it2!=GloMyMon->Galera_Hosts_Map.end(); ++it2) {
-		node=it2->second;
-		if (node->writer_hostgroup == (unsigned int)writer_hostgroup) {
-			Galera_status_entry_t * st = node->last_entry();
-			if (st) {
-				if (st->start_time >= curtime - ti) { // only consider recent checks
-					if (st->error == NULL) { // no check error
-						if (st->read_only == false) { // the server is writable (this check is arguable)
-							if (st->wsrep_sst_donor_rejects_queries == false) {
-								if (writer_nodes == 0) {
-									s=it2->first;
-									writer_node = node;
-								}
-								writer_nodes++;
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	if (writer_node && writer_nodes == 1) {
-		// we have only one node let
-		// we don't care if status
-		str = strdup(s.c_str());
-/*
-		std::size_t found=s.find_last_of(":");
-		std::string host=s.substr(0,found);
-		std::string port=s.substr(found+1);
-*/
-	}
-	pthread_mutex_unlock(&GloMyMon->galera_mutex);
-	return str;
 }
 
 std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_hostgroup) {
