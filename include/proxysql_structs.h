@@ -167,7 +167,8 @@ enum variable_name {
 	SQL_LOG_BIN,
 	SQL_WSREP_SYNC_WAIT,
 	SQL_GROUP_CONCAT_MAX_LEN,
-	SQL_NAME_LAST
+	SQL_QUERY_CACHE_TYPE,
+	SQL_NAME_LAST,
 };
 
 enum session_status {
@@ -1016,6 +1017,7 @@ mysql_variable_st mysql_tracked_variables[] {
     { SQL_LOG_BIN,              SETTING_VARIABLE,     false, false, true, false, false, (char *)"sql_log_bin", (char *)"sql_log_bin", (char *)"1" , false} ,
     { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" , false} ,
     { SQL_GROUP_CONCAT_MAX_LEN, SETTING_VARIABLE,     false, false, true, true,  false, (char *)"group_concat_max_len", (char *)"group_concat_max_len", (char *)"1024" , false} ,
+    { SQL_QUERY_CACHE_TYPE, SETTING_VARIABLE,     false, false, true, false,  false, (char *)"query_cache_type", (char *)"query_cache_type", (char *)"0" , false} ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];

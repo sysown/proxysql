@@ -5175,6 +5175,20 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								exit_after_SetParse = false;
 							}
 						}
+					} else if (var == "query_cache_type") {
+						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET query_cache_type value %s\n", value1.c_str());
+						uint32_t query_cache_type_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (mysql_variables.client_get_hash(this, SQL_QUERY_CACHE_TYPE) != query_cache_type_int) {
+							if (!mysql_variables.client_set_value(this, SQL_QUERY_CACHE_TYPE, value1.c_str()))
+								return false;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection query_cache_type to %s\n", value1.c_str());
+						}
 					} else if (var == "time_zone") {
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");
