@@ -5203,6 +5203,34 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection Time zone to %s\n", value1.c_str());
 						}
+					} else if (var == "max_execution_time") {
+						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET max_execution_time value %s\n", value1.c_str());
+						uint32_t max_execution_time_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (mysql_variables.client_get_hash(this, SQL_MAX_EXECUTION_TIME) != max_execution_time_int) {
+							if (!mysql_variables.client_set_value(this, SQL_MAX_EXECUTION_TIME, value1.c_str()))
+								return false;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection max_execution_time to %s\n", value1.c_str());
+						}
+					} else if (var == "time_zone") {
+						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET Time Zone value %s\n", value1.c_str());
+						uint32_t time_zone_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (mysql_variables.client_get_hash(this, SQL_TIME_ZONE) != time_zone_int) {
+							if (!mysql_variables.client_set_value(this, SQL_TIME_ZONE, value1.c_str()))
+								return false;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection Time zone to %s\n", value1.c_str());
+						}
 					} else if (var == "session_track_gtids") {
 						std::string value1 = *values;
 						if ((strcasecmp(value1.c_str(),"OWN_GTID")==0) || (strcasecmp(value1.c_str(),"OFF")==0)) {
