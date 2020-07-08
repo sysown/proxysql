@@ -1585,6 +1585,11 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 // true should jump to handler_again
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
+/* this function seems to be used only by
+  handler_again___verify_backend_session_track_gtids
+  Yet, the check on GTID is far from generic.
+  We need to deprecate this function
+*/
 bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status) {
 	// be_int = backend int (hash)
 	// be_var = backend value
@@ -1707,6 +1712,7 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.session_track_gtids, mybe->server_myds->myconn->options.session_track_gtids);
+	// we need to precompute and hardcode the values for OFF and OWN_GTID
 	ret = handler_again___verify_backend__generic_variable(
 			&mybe->server_myds->myconn->options.session_track_gtids_int,
 			&mybe->server_myds->myconn->options.session_track_gtids,
