@@ -3801,6 +3801,8 @@ __run_skip_1a:
 			maintenance_loop=true;
 			servers_table_version_previous = servers_table_version_current;
 			servers_table_version_current = MyHGM->get_servers_table_version();
+			// during a maintenance loop (every 1 second) we read has_gtid_port from MyHGM
+			retrieve_gtids_required = MyHGM->has_gtid_port;
 		} else {
 			maintenance_loop=false;
 		}
@@ -4572,6 +4574,7 @@ MySQL_Thread::MySQL_Thread() {
 
 	last_maintenance_time=0;
 	maintenance_loop=true;
+	retrieve_gtids_required = false;
 
 	status_variables.backend_stmt_prepare=0;
 	status_variables.backend_stmt_execute=0;
