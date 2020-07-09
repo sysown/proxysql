@@ -3617,6 +3617,21 @@ handler_again:
 
 								for (auto i = 0; i < SQL_NAME_LAST; i++) {
 									auto client_hash = client_myds->myconn->var_hash[i];
+#ifdef DEBUG
+									if (GloVars.global.gdbg) {
+										switch (i) {
+											case SQL_CHARACTER_SET:
+											case SQL_SET_NAMES:
+											case SQL_CHARACTER_SET_RESULTS:
+											case SQL_CHARACTER_SET_CONNECTION:
+											case SQL_CHARACTER_SET_CLIENT:
+											case SQL_COLLATION_CONNECTION:
+												proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session %p , variable %s has value %s\n" , this, mysql_tracked_variables[i].set_variable_name , client_myds->myconn->variables[i].value);
+											default:
+												break;
+										}
+									}
+#endif // DEBUG
 									if (client_hash) {
 										auto server_hash = myconn->var_hash[i];
 										if (client_hash != server_hash) {
