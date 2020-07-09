@@ -130,6 +130,7 @@ class MySQL_Thread
 	MySQL_Connection **my_idle_conns;
   bool processing_idles;
 	bool maintenance_loop;
+	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray *cached_connections;
 

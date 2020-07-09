@@ -4,6 +4,7 @@
 #include "cpp.h"
 #include "proxysql_gtid.h"
 
+#include <atomic>
 #include <thread>
 #include <iostream>
 #include <mutex>
@@ -502,6 +503,12 @@ class MySQL_HostGroups_Manager {
 	void p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code);
 
 	wqueue<MySQL_Connection *> queue;
+	// has_gtid_port is set to true if *any* of the servers in mysql_servers has gtid_port enabled
+	// it is configured during commit()
+	// NOTE: this variable is currently NOT used, but in future will be able
+	// to deprecate mysql-default_session_track_gtids because proxysql will
+	// be automatically able to determine when to enable GTID tracking
+	std::atomic<bool> has_gtid_port;
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
 	void init();

@@ -1585,76 +1585,6 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 // true should jump to handler_again
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
-/* this function seems to be used only by
-  handler_again___verify_backend_session_track_gtids
-  Yet, the check on GTID is far from generic.
-  We need to deprecate this function
-*/
-bool MySQL_Session::handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status) {
-	// be_int = backend int (hash)
-	// be_var = backend value
-	// def = default
-	// fe_int = frontend int (has)
-	// fe_var = frontend value
-	if (*be_int == 0) {
-		// it is the first time we use this backend. Set value to default
-		if (*be_var) {
-			free(*be_var);
-			*be_var = NULL;
-		}
-		*be_var = strdup(def);
-		uint32_t tmp_int = SpookyHash::Hash32(*be_var, strlen(*be_var), 10);
-		*be_int = tmp_int;
-
-		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				assert(0);
-				break;
-		}
-		NEXT_IMMEDIATE_NEW(next_sess_status);
-	}
-
-	if (*fe_int) {
-		if (*fe_int != *be_int) {
-			{
-				*be_int = *fe_int;
-				if (*be_var) {
-					free(*be_var);
-					*be_var = NULL;
-				}
-				if (fe_var) {
-					*be_var = strdup(fe_var);
-				}
-			}
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					assert(0);
-					break;
-			}
-			NEXT_IMMEDIATE_NEW(next_sess_status);
-		}
-	}
-	return false;
-}
-
 bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 	if ((client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)) {
 
@@ -1712,15 +1642,62 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.session_track_gtids, mybe->server_myds->myconn->options.session_track_gtids);
+	// we first verify that the backend supports it
+	// if backend is old (or if it is not mysql) ignore this setting
+	if ((mybe->server_myds->myconn->mysql->server_capabilities & CLIENT_SESSION_TRACKING) == 0) {
+		// the backend doesn't support CLIENT_SESSION_TRACKING
+		return ret; // exit immediately
+	}
+	uint32_t b_int = mybe->server_myds->myconn->options.session_track_gtids_int;
+	uint32_t f_int = client_myds->myconn->options.session_track_gtids_int;
+
 	// we need to precompute and hardcode the values for OFF and OWN_GTID
-	ret = handler_again___verify_backend__generic_variable(
-			&mybe->server_myds->myconn->options.session_track_gtids_int,
-			&mybe->server_myds->myconn->options.session_track_gtids,
-			mysql_thread___default_session_track_gtids,
-			&client_myds->myconn->options.session_track_gtids_int,
-			client_myds->myconn->options.session_track_gtids,
-			SETTING_SESSION_TRACK_GTIDS
-			);
+	// for performance reason we hardcoded the values
+	// OFF = 114160514
+	if (
+		(b_int == 114160514) // OFF
+		||
+		(b_int == 0) // not configured yet
+	) {
+		if (strcmp(mysql_thread___default_session_track_gtids, (char *)"OWN_GTID")==0) {
+			// backend connection doesn't have session_track_gtids enabled
+			ret = true;
+		} else {
+			if (f_int != 0 && f_int != 114160514) {
+				// client wants GTID
+				ret = true;
+			}
+		}
+	}
+
+	if (ret) {
+		// we deprecated handler_again___verify_backend__generic_variable
+		// and moved the logic here
+		if (mybe->server_myds->myconn->options.session_track_gtids) { // reset current value
+			free(mybe->server_myds->myconn->options.session_track_gtids);
+			mybe->server_myds->myconn->options.session_track_gtids = NULL;
+		}
+		// because the only two possible values are OWN_GTID and OFF
+		// and because we don't mind receiving GTIDs , if we reach here
+		// it means we are setting it to OWN_GTID, either because the client
+		// wants it, or because it is the default
+		// therefore we hardcode "OWN_GTID"
+		mybe->server_myds->myconn->options.session_track_gtids = strdup((char *)"OWN_GTID");
+		mybe->server_myds->myconn->options.session_track_gtids_int =
+			SpookyHash::Hash32((char *)"OWN_GTID", strlen((char *)"OWN_GTID"), 10);
+		// we now switch status to set session_track_gtids
+		switch(status) {
+			case PROCESSING_QUERY:
+			case PROCESSING_STMT_PREPARE:
+			case PROCESSING_STMT_EXECUTE:
+				previous_status.push(status);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_GTIDS);
+	}
 	return ret;
 }
 
@@ -5183,7 +5160,18 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						exit_after_SetParse = true;
 					} else if (var == "session_track_gtids") {
 						std::string value1 = *values;
-						if ((strcasecmp(value1.c_str(),"OWN_GTID")==0) || (strcasecmp(value1.c_str(),"OFF")==0)) {
+						if ((strcasecmp(value1.c_str(),"OWN_GTID")==0) || (strcasecmp(value1.c_str(),"OFF")==0) || (strcasecmp(value1.c_str(),"ALL_GTIDS")==0)) {
+							if (strcasecmp(value1.c_str(),"ALL_GTIDS")==0) {
+								// we convert session_track_gtids=ALL_GTIDS to session_track_gtids=OWN_GTID
+								std::string a = "";
+								if (client_myds && client_myds->addr.addr) {
+									a = " . Client ";
+									a+= client_myds->addr.addr;
+									a+= ":" + std::to_string(client_myds->addr.port);
+								}
+								proxy_warning("SET session_track_gtids=ALL_GTIDS is not allowed. Switching to session_track_gtids=OWN_GTID%s\n", a.c_str());
+								value1 = "OWN_GTID";
+							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET session_track_gtids value %s\n", value1.c_str());
 							uint32_t session_track_gtids_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 							if (client_myds->myconn->options.session_track_gtids_int != session_track_gtids_int) {
