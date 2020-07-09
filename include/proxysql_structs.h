@@ -1019,7 +1019,7 @@ mysql_variable_st mysql_tracked_variables[] {
     { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" , false} ,
     { SQL_GROUP_CONCAT_MAX_LEN, SETTING_VARIABLE,     false, false, true, true,  false, (char *)"group_concat_max_len", (char *)"group_concat_max_len", (char *)"1024" , false} ,
     { SQL_QUERY_CACHE_TYPE, SETTING_VARIABLE,     false, false, true, false,  false, (char *)"query_cache_type", (char *)"query_cache_type", (char *)"0" , false} ,
-    { SQL_MAX_EXECUTION_TIME, SETTING_VARIABLE,     false, false, true, false,  false, (char *)"MAX_EXECUTION_TIME", (char *)"MAX_EXECUTION_TIME", (char *)"0" , false} ,
+    { SQL_MAX_EXECUTION_TIME, SETTING_VARIABLE,     false, false, true, false,  false, (char *)"max_execution_time", (char *)"max_execution_time", (char *)"0" , false} ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];
