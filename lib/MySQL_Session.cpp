@@ -2795,7 +2795,11 @@ int MySQL_Session::handler() {
 		if (mybe) { 
                 	if (mybe->server_myds) {
 				goto handler_again;
+			} else {
+				return -1;
 			}
+		} else {
+			return -1;	
 		}
 	} else {
 		if (mirror==true) {
