@@ -1503,6 +1503,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 		__sync_fetch_and_add(&MyHGM->status.backend_change_user, 1);
 		//myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		myds->myconn->reset();
+		myds->DSS = STATE_MARIADB_GENERIC;
 		myconn->async_state_machine=ASYNC_IDLE;
 //		if (mysql_thread___multiplexing && (myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 			myds->return_MySQL_Connection_To_Pool();
