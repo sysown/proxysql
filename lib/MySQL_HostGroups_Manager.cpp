@@ -15,12 +15,10 @@
 
 #include <mutex>
 
-#define USE_MYSRVC_ARRAY
-
-#ifdef USE_MYSRVC_ARRAY
+#ifdef TEST_AURORA
 static unsigned long long array_mysrvc_total = 0;
 static unsigned long long array_mysrvc_cands = 0;
-#endif // USE_MYSRVC_ARRAY
+#endif // TEST_AURORA
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
   do {\
@@ -172,6 +170,7 @@ static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int re
 }
 
 static void gtid_timer_cb (struct ev_loop *loop, struct ev_timer *timer, int revents) {
+	if (GloMTH == nullptr) { return; }
 	ev_timer_stop(loop, timer);
 	ev_timer_set(timer, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
 	if (glovars.shutdown) {
@@ -2280,7 +2279,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	unsigned int sum=0;
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
-#ifdef USE_MYSRVC_ARRAY
 #ifdef TEST_AURORA
 	unsigned long long a1 = array_mysrvc_total/10000;
 	array_mysrvc_total += l;
@@ -2295,7 +2293,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	if (l>32) {
 		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
 	}
-#endif // USE_MYSRVC_ARRAY
 	if (l) {
 		//int j=0;
 		for (j=0; j<l; j++) {
@@ -2307,30 +2304,24 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 								mysrvcCandidates[num_candidates]=mysrvc;
 								num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 							}
 						} else {
 							if (max_lag_ms >= 0) {
 								if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 									mysrvcCandidates[num_candidates]=mysrvc;
 									num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 								} else {
 									sess->thread->status_variables.aws_aurora_replicas_skipped_during_query++;
 								}
 							} else {
 								sum+=mysrvc->weight;
 								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 								mysrvcCandidates[num_candidates]=mysrvc;
 								num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 							}
 						}
 					}
@@ -2367,28 +2358,22 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 										if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 											mysrvcCandidates[num_candidates]=mysrvc;
 											num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 										}
 									} else {
 										if (max_lag_ms >= 0) {
 											if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 												sum+=mysrvc->weight;
 												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 												mysrvcCandidates[num_candidates]=mysrvc;
 												num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 											}
 										} else {
 											sum+=mysrvc->weight;
 											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 											mysrvcCandidates[num_candidates]=mysrvc;
 											num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 										}
 									}
 								}
@@ -2398,7 +2383,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
-#ifdef USE_MYSRVC_ARRAY
 		if (max_lag_ms) { // we are using AWS Aurora, as this logic is implemented only here
 			unsigned int min_num_replicas = sess->thread->variables.aurora_max_lag_ms_only_read_from_replicas;
 			if (min_num_replicas) {
@@ -2425,7 +2409,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
-#endif // USE_MYSRVC_ARRAY
 		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
@@ -2450,28 +2433,22 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 									mysrvcCandidates[num_candidates]=mysrvc;
 									num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 								}
 							} else {
 								if (max_lag_ms >= 0) {
 									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 										sum+=mysrvc->weight;
 										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 										mysrvcCandidates[num_candidates]=mysrvc;
 										num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 									}
 								} else {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
 									mysrvcCandidates[num_candidates]=mysrvc;
 									num_candidates++;
-#endif // USE_MYSRVC_ARRAY
 								}
 							}
 						}
@@ -2481,12 +2458,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		}
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
-#ifdef USE_MYSRVC_ARRAY
 			if (l>32) {
 				free(mysrvcCandidates);
 			}
+#ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
-#endif // USE_MYSRVC_ARRAY
+#endif // TEST_AURORA
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
@@ -2494,75 +2471,35 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		unsigned int New_TotalUsedConn=0;
 
 		// we will now scan again to ignore overloaded servers
-#ifdef USE_MYSRVC_ARRAY
 		for (j=0; j<num_candidates; j++) {
 			mysrvc = mysrvcCandidates[j];
-#else
-		for (j=0; j<l; j++) {
-			mysrvc=mysrvs->idx(j);
-			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
-#endif // USE_MYSRVC_ARRAY
-				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
-#ifdef USE_MYSRVC_ARRAY
-#else
+			unsigned int len=mysrvc->ConnectionsUsed->conns_length();
+			if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
 
-				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-#endif // USE_MYSRVC_ARRAY
-						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-
-#ifdef USE_MYSRVC_ARRAY
-							New_sum+=mysrvc->weight;
-							New_TotalUsedConn+=len;
-#else
-							if (gtid_trxid) {
-								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-									New_sum+=mysrvc->weight;
-									New_TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-								}
-							} else {
-								if (max_lag_ms >= 0) {
-									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-										New_sum+=mysrvc->weight;
-										New_TotalUsedConn+=len;
-									}
-								} else {
-									New_sum+=mysrvc->weight;
-									New_TotalUsedConn+=len;
-								}
-							}
-#endif // USE_MYSRVC_ARRAY
-#ifdef USE_MYSRVC_ARRAY
-						} else {
-							// remove the candidate
-							if (j+1 < num_candidates) {
-								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-							}
-							j--;
-							num_candidates--;
-#endif // USE_MYSRVC_ARRAY
-						}
-#ifdef USE_MYSRVC_ARRAY
-#else
-					}
+				New_sum+=mysrvc->weight;
+				New_TotalUsedConn+=len;
+			} else {
+				// remove the candidate
+				if (j+1 < num_candidates) {
+					mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
 				}
+				j--;
+				num_candidates--;
 			}
-#endif // USE_MYSRVC_ARRAY
 		}
 
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
-#ifdef USE_MYSRVC_ARRAY
 			if (l>32) {
 				free(mysrvcCandidates);
 			}
+#ifdef TEST_AURORA
 			array_mysrvc_cands += num_candidates;
-#endif // USE_MYSRVC_ARRAY
+#endif // TEST_AURORA
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-#ifdef USE_MYSRVC_ARRAY
 		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
 		if (sess->thread->variables.min_num_servers_lantency_awareness) {
 			if (num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
@@ -2603,7 +2540,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
-#endif // USE_MYSRVC_ARRAY
 
 
 		unsigned int k;
@@ -2615,62 +2551,28 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		k++;
 		New_sum=0;
 
-#ifdef USE_MYSRVC_ARRAY
 		for (j=0; j<num_candidates; j++) {
 			mysrvc = mysrvcCandidates[j];
-#else
-		for (j=0; j<l; j++) {
-			mysrvc=mysrvs->idx(j);
-			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
-				unsigned int len=mysrvc->ConnectionsUsed->conns_length();
-				if (len < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-#endif // USE_MYSRVC_ARRAY
-#ifdef USE_MYSRVC_ARRAY
-							New_sum+=mysrvc->weight;
-#else
-							if (gtid_trxid) {
-								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-									New_sum+=mysrvc->weight;
-									//TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length(); // this line is a bug
-								}
-							} else {
-								if (max_lag_ms >= 0) {
-									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-										New_sum+=mysrvc->weight;
-									}
-								} else {
-									New_sum+=mysrvc->weight;
-								}
-							}
-#endif // USE_MYSRVC_ARRAY
-							if (k<=New_sum) {
-								proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
-#ifdef USE_MYSRVC_ARRAY
-								if (l>32) {
-									free(mysrvcCandidates);
-								}
-								array_mysrvc_cands += num_candidates;
-#endif // USE_MYSRVC_ARRAY
-								return mysrvc;
-							}
-#ifdef USE_MYSRVC_ARRAY
-#else
-						}
-					}
+			New_sum+=mysrvc->weight;
+			if (k<=New_sum) {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC %p, server %s:%d\n", mysrvc, mysrvc->address, mysrvc->port);
+				if (l>32) {
+					free(mysrvcCandidates);
 				}
+#ifdef TEST_AURORA
+				array_mysrvc_cands += num_candidates;
+#endif // TEST_AURORA
+				return mysrvc;
 			}
-#endif // USE_MYSRVC_ARRAY
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
-#ifdef USE_MYSRVC_ARRAY
 	if (l>32) {
 		free(mysrvcCandidates);
 	}
+#ifdef TEST_AURORA
 	array_mysrvc_cands += num_candidates;
-#endif // USE_MYSRVC_ARRAY
+#endif // TEST_AURORA
 	return NULL; // if we reach here, we couldn't find any target
 }
 
@@ -4131,7 +4033,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 		char *query=NULL;
 		char *q=NULL;
 		char *error=NULL;
-		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 		query=(char *)malloc(strlen(q)+256);
 		sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4199,7 +4101,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 			resultset=NULL;
 		}
 		if (info->writer_is_also_reader==2) {
-			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 			query=(char *)malloc(strlen(q)+256);
 			sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4328,7 +4230,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status=0";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 	sprintf(query,q,_hostname,_port);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -4379,7 +4281,13 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				mydb->execute(query);
 				//free(query);
 			} else {
-				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d";
+				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
+				sprintf(query,q,info->offline_hostgroup,_hostname,_port,_writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
+				mydb->execute(query);
+				q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d)";
+				sprintf(query,q,_hostname,_port, info->backup_writer_hostgroup, info->reader_hostgroup);
+				mydb->execute(query);
+				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d AND hostgroup_id = %d";
 				sprintf(query,q,_hostname,_port,_writer_hostgroup);
 				mydb->execute(query);
 			}
@@ -4562,7 +4470,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
+	q=(char *)"SELECT hostgroup_id,status FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4601,7 +4509,9 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				SQLite3_row *r=*it;
 				int hostgroup=atoi(r->fields[0]);
 				if (hostgroup==_writer_hostgroup) {
-					found_writer=true;
+					int status=atoi(r->fields[1]);
+					if (status==0)
+						found_writer=true;
 				}
 				if (read_HG>=0) {
 					if (hostgroup==read_HG) {
@@ -4781,7 +4691,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 		char *query=NULL;
 		char *q=NULL;
 		char *error=NULL;
-		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 		query=(char *)malloc(strlen(q)+256);
 		sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4803,15 +4713,35 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
+					int to_keep = info->max_writers;
 					if (GloMTH->variables.hostgroup_manager_verbose > 1) {
 						proxy_info("Galera: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
 					}
-					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
+					//for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
+					// note: we change the iterator from reverse_iterator to forward iterator
+					for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 						SQLite3_row *r=*it;
-						if (to_move) {
-							int hostgroup=atoi(r->fields[0]);
-							if (hostgroup==info->writer_hostgroup) {
-								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+						int hostgroup=atoi(r->fields[0]);
+						if (hostgroup==info->writer_hostgroup) {
+							if (to_keep) {
+								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0 WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
+								sprintf(query,q,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+								mydb->execute(query);
+								free(query);
+								to_keep--;
+								continue;
+							}
+							if (to_move) {
+								// if the  server is already in writer hostgroup, we set to shunned #2656
+								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=1 WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
+								sprintf(query,q,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+								mydb->execute(query);
+								free(query);
+								//q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								// we copy the server from the writer hostgroup in the backup writer hostgroup #2656
+								q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, weight, 0, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
 								sprintf(query,q,info->backup_writer_hostgroup,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
 								mydb->execute(query);
@@ -4834,6 +4764,9 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 									q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 									query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
 									sprintf(query,q,info->writer_hostgroup,info->backup_writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+									if (GloMTH->variables.hostgroup_manager_verbose) {
+										proxy_info("Galera: %s\n", query);
+									}
 									mydb->execute(query);
 									free(query);
 									to_move--;
@@ -4910,7 +4843,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 			resultset=NULL;
 		}
 		if (info->writer_is_also_reader==2) {
-			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 			query=(char *)malloc(strlen(q)+256);
 			sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);

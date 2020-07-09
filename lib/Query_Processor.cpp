@@ -480,12 +480,14 @@ Query_Processor::Query_Processor() {
   commands_counters_desc[MYSQL_COM_QUERY_OPTIMIZE]=(char *)"OPTIMIZE";
   commands_counters_desc[MYSQL_COM_QUERY_PREPARE]=(char *)"PREPARE";
   commands_counters_desc[MYSQL_COM_QUERY_PURGE]=(char *)"PURGE";
+  commands_counters_desc[MYSQL_COM_QUERY_RELEASE_SAVEPOINT]=(char *)"RELEASE_SAVEPOINT";
   commands_counters_desc[MYSQL_COM_QUERY_RENAME_TABLE]=(char *)"RENAME_TABLE";
   commands_counters_desc[MYSQL_COM_QUERY_RESET_MASTER]=(char *)"RESET_MASTER";
   commands_counters_desc[MYSQL_COM_QUERY_RESET_SLAVE]=(char *)"RESET_SLAVE";
   commands_counters_desc[MYSQL_COM_QUERY_REPLACE]=(char *)"REPLACE";
   commands_counters_desc[MYSQL_COM_QUERY_REVOKE]=(char *)"REVOKE";
   commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK]=(char *)"ROLLBACK";
+  commands_counters_desc[MYSQL_COM_QUERY_ROLLBACK_SAVEPOINT]=(char *)"ROLLBACK_SAVEPOINT";
   commands_counters_desc[MYSQL_COM_QUERY_SAVEPOINT]=(char *)"SAVEPOINT";
   commands_counters_desc[MYSQL_COM_QUERY_SELECT]=(char *)"SELECT";
   commands_counters_desc[MYSQL_COM_QUERY_SELECT_FOR_UPDATE]=(char *)"SELECT_FOR_UPDATE";
@@ -516,6 +518,7 @@ Query_Processor::Query_Processor() {
 	rules_fast_routing = kh_init(khStrInt); // create a hashtable
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
+	new_req_conns_count = 0;
 };
 
 Query_Processor::~Query_Processor() {
@@ -595,6 +598,10 @@ unsigned long long Query_Processor::get_rules_mem_used() {
 	s = rules_mem_used;
 	wrunlock();
 	return s;
+}
+
+unsigned long long Query_Processor::get_new_req_conns_count() {
+	return __sync_fetch_and_add(&new_req_conns_count, 0);
 }
 
 QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *comment) {
@@ -2262,6 +2269,14 @@ __remove_paranthesis:
 			break;
 		case 'r':
 		case 'R':
+			if (!strcasecmp("RELEASE",token)) { // RELEASE
+				token=(char *)tokenize(&tok);
+				if (token==NULL) break;
+				if (!strcasecmp("SAVEPOINT",token)) {
+					ret=MYSQL_COM_QUERY_RELEASE_SAVEPOINT;
+					break;
+				}
+			}
 			if (!strcasecmp("RENAME",token)) { // RENAME
 				token=(char *)tokenize(&tok);
 				if (token==NULL) break;
@@ -2292,7 +2307,20 @@ __remove_paranthesis:
 				break;
 			}
 			if (!strcasecmp("ROLLBACK",token)) { // ROLLBACK
-				ret=MYSQL_COM_QUERY_ROLLBACK;
+				token=(char *)tokenize(&tok);
+				if (token==NULL) {
+					ret=MYSQL_COM_QUERY_ROLLBACK;
+					break;
+				} else {
+					if (!strcasecmp("TO",token)) {
+						token=(char *)tokenize(&tok);
+						if (token==NULL) break;
+						if (!strcasecmp("SAVEPOINT",token)) {
+							ret=MYSQL_COM_QUERY_ROLLBACK_SAVEPOINT;
+							break;
+						}
+					}
+				}
 				break;
 			}
 			break;
@@ -2445,6 +2473,12 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					qpo->min_gtid = buf;
 				} else {
 					proxy_warning("Invalid gtid value=%s\n", value);
+				}
+			}
+			if (!strcasecmp(key, "create_new_connection")) {
+				int32_t val = atoi(value);
+				if (val == 1) {
+					qpo->create_new_conn = true;
 				}
 			}
 		}

@@ -135,6 +135,7 @@ class Query_Processor_Output {
 	int firewall_whitelist_mode;
 	char *comment; // #643
 	char *min_gtid;
+	bool create_new_conn;
 	std::string *new_query;
 	void * operator new(size_t size) {
 		return l_alloc(size);
@@ -173,6 +174,7 @@ class Query_Processor_Output {
 		comment=NULL; // #643
 		min_gtid=NULL;
 		firewall_whitelist_mode = WUS_NOT_FOUND;
+		create_new_conn=0;
 	}
 	void destroy() {
 		if (error_msg) {
@@ -275,6 +277,7 @@ class Query_Processor {
 	unsigned long long global_mysql_firewall_whitelist_rules_result___size;
 	volatile unsigned int version;
 	unsigned long long rules_mem_used;
+	unsigned long long new_req_conns_count;
 	public:
 	Query_Processor();
 	~Query_Processor();
@@ -320,6 +323,7 @@ class Query_Processor {
 
 	unsigned long long get_query_digests_total_size();
 	unsigned long long get_rules_mem_used();
+	unsigned long long get_new_req_conns_count();
 
 	// fast routing
 	SQLite3_result * fast_routing_resultset;

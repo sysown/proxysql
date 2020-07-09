@@ -18,6 +18,7 @@ using json = nlohmann::json;
 #define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 #define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
+#define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 
 class Variable {
 public:
@@ -146,6 +147,7 @@ class MySQL_Connection {
 	void set_status_no_backslash_escapes(bool);
 	void set_status_prepared_statement(bool);
 	void set_status_user_variable(bool);
+	void set_status_has_savepoint(bool);
 	void set_status_no_multiplex(bool);
 	void set_status_sql_log_bin0(bool);
 	void set_status_found_rows(bool);
@@ -157,6 +159,7 @@ class MySQL_Connection {
 	bool get_status_no_backslash_escapes();
 	bool get_status_prepared_statement();
 	bool get_status_user_variable();
+	bool get_status_has_savepoint();
 	bool get_status_no_multiplex();
 	bool get_status_sql_log_bin0();
 	bool get_status_found_rows();
