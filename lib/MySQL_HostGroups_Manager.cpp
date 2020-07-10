@@ -1604,7 +1604,9 @@ bool MySQL_HostGroups_Manager::commit() {
 	wrlock();
 	// purge table
 	purge_mysql_servers_table();
-
+	// if any server has gtid_port enabled, use_gtid is set to true
+	// and then has_gtid_port is set too
+	bool use_gtid = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
@@ -1706,6 +1708,11 @@ bool MySQL_HostGroups_Manager::commit() {
 				SAFE_SQLITE3_STEP2(statement1);
 				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, mydb);
+				if (mysrvc->gtid_port) {
+					// this server has gtid_port configured, we set use_gtid
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address);
+					use_gtid = true;
+				}
 			} else {
 				bool run_update=false;
 				MySrvC *mysrvc=(MySrvC *)ptr;
@@ -1785,10 +1792,20 @@ bool MySQL_HostGroups_Manager::commit() {
 					rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, mydb);
 				}
+				if (mysrvc->gtid_port) {
+					// this server has gtid_port configured, we set use_gtid
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address);
+					use_gtid = true;
+				}
 			}
 		}
 		(*proxy_sqlite3_finalize)(statement1);
 		(*proxy_sqlite3_finalize)(statement2);
+	}
+	if (use_gtid) {
+		has_gtid_port = true;
+	} else {
+		has_gtid_port = false;
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");

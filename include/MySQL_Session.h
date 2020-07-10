@@ -113,7 +113,6 @@ class MySQL_Session
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_multi_statement();
-	bool handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
