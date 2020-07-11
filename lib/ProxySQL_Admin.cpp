@@ -5841,6 +5841,21 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						}
 					}
 				} else {
+					if (
+						(strcmp(r->fields[0],"default_collation_connection")==0)
+						|| (strcmp(r->fields[0],"default_charset")==0)
+					) {
+						char *val=GloMTH->get_variable(r->fields[0]);
+						char q[1000];
+						if (val) {
+							if (strcmp(val,value)) {
+								proxy_warning("Variable %s with value \"%s\" is being replaced with value \"%s\".\n", r->fields[0],value, val);
+								sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
+								db->execute(q);
+							}
+							free(val);
+						}
+					}
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],value);
 					if (strcmp(r->fields[0],(char *)"show_processlist_extended")==0) {
 						variables.mysql_show_processlist_extended = atoi(value);
