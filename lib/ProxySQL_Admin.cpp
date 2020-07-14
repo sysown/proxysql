@@ -8498,7 +8498,7 @@ void ProxySQL_Admin::flush_debug_filters_database_to_runtime(SQLite3DB *db) {
 	std::string query = "SELECT filename, line, funct FROM debug_filters";
 	admindb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
 	if (error) {
-		proxy_error("Error on %s : %s\n", query, error);
+		proxy_error("Error on %s : %s\n", query.c_str(), error);
 		assert(0);
 	} else {
 		std::set<std::string> filters;
