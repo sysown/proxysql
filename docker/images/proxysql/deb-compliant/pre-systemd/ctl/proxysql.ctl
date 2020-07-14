@@ -12,7 +12,7 @@ Depends: libgnutls28 | libgnutls30 | libgnutls-deb0-28
 # Readme: README.md
 Files: proxysql /usr/bin/
  etc/proxysql.cnf /
- etc/logrotate.d/proxysql /etc/logrotate.d/proxysql
+ etc/logrotate.d/proxysql /
  etc/init.d/proxysql /
  tools/proxysql_galera_checker.sh /usr/share/proxysql/
  tools/proxysql_galera_writer.pl /usr/share/proxysql/
