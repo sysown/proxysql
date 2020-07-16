@@ -2776,9 +2776,15 @@ int MySQL_Session::handler() {
 	if (client_myds==NULL) {
 		// if we are here, probably we are trying to ping backends
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Processing session %p without client_myds\n", this);
-		assert(mybe);
-		assert(mybe->server_myds);
-		goto handler_again;
+		if (mybe) { 
+                	if (mybe->server_myds) {
+				goto handler_again;
+			} else {
+				return -1;
+			}
+		} else {
+			return -1;	
+		}
 	} else {
 		if (mirror==true) {
 			if (mirrorPkt.ptr) { // this is the first time we call handler()
