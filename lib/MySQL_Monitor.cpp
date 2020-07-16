@@ -1812,7 +1812,7 @@ __end_process_galera_result:
 			}
 		} else {
 			if (fields) { // if we didn't get any error, but fileds is NULL, we are likely hitting bug #1994
-				if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
+				if (primary_partition == false || wsrep_desync == true || (wsrep_local_state!=4 && !wsrep_sst_donor_rejects_queries)) {
 					if (primary_partition == false) {
 						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
 					} else {
