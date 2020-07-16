@@ -1614,7 +1614,7 @@ int main(int argc, const char * argv[]) {
 		cpu_timer t;
 		ProxySQL_Main_process_global_variables(argc, argv);
 		GloVars.global.start_time=monotonic_time(); // always initialize it
-		srand(GloVars.global.start_time*pthread_self());
+		srand(GloVars.global.start_time*thread_id());
 		randID = rand();
 #ifdef DEBUG
 		std::cerr << "Main init global variables completed in ";
