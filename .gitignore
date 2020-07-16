@@ -173,3 +173,6 @@ heaptrack.*
 
 #prometheus in 1.4
 deps/prometheus-cpp/prometheus-cpp-0.9.0/
+
+#cmake generated files
+include/backtrace.h
