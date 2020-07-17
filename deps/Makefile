@@ -43,7 +43,8 @@ libssl: libssl/openssl/libssl.a
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
-	cd libhttpserver && tar -zxf libhttpserver-master_20191121.tar.gz
+	cd libhttpserver && rm -rf libhttpserver-0.18 || true
+	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
 	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
@@ -191,6 +192,7 @@ cleanpart:
 cleanall:
 	cd libinjection && rm -rf libinjection-3.10.0 || true
 	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
+	cd libhttpserver && rm -rf libhttpserver-0.18.1 || true
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd jemalloc && rm -rf jemalloc-4.3.1 || true
 	cd jemalloc && rm -rf jemalloc-5.2.0 || true
