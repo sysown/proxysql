@@ -1,4 +1,5 @@
 
+UNAME_S := $(shell uname -s)
 
 PROXYDEBUG := $(shell echo $(PROXYDEBUG))
 ifeq ($(PROXYDEBUG),1)
@@ -27,6 +28,9 @@ endif
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-3.10.0 || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/make_parens.py
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse_map.py
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse2c.py
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 libinjection: libinjection/libinjection/src/libinjection.a
 
@@ -43,8 +47,11 @@ libssl: libssl/openssl/libssl.a
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
-	cd libhttpserver && rm -rf libhttpserver-0.18 || true
+	cd libhttpserver && rm -rf libhttpserver-0.18.1 || true
 	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
+ifeq ($(UNAME_S),FreeBSD)
+	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
+endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
 	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
