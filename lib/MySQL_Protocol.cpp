@@ -22,11 +22,6 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 #undef max_allowed_packet
 #endif
 
-#if defined(__FreeBSD__) || defined(__APPLE__)
-typedef uint8_t uint8;
-typedef uint8_t uchar;
-#endif
-
 //#define RESULTSET_BUFLEN 16300
 
 #ifndef CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
@@ -128,7 +123,7 @@ static inline int write_encoded_length_and_string(unsigned char *p, uint64_t val
 	return l+val;
 }
 
-void proxy_compute_sha1_hash_multi(uint8 *digest, const char *buf1, int len1, const char *buf2, int len2) {
+void proxy_compute_sha1_hash_multi(uint8_t *digest, const char *buf1, int len1, const char *buf2, int len2) {
   PROXY_TRACE();
   
   SHA_CTX sha1_context;
@@ -138,7 +133,7 @@ void proxy_compute_sha1_hash_multi(uint8 *digest, const char *buf1, int len1, co
   SHA1_Final(digest, &sha1_context);
 }
 
-void proxy_compute_sha1_hash(uint8 *digest, const char *buf, int len) {
+void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
   PROXY_TRACE();
   
   SHA_CTX sha1_context;
@@ -147,13 +142,13 @@ void proxy_compute_sha1_hash(uint8 *digest, const char *buf, int len) {
   SHA1_Final(digest, &sha1_context);
 }
 
-void proxy_compute_two_stage_sha1_hash(const char *password, size_t pass_len, uint8 *hash_stage1, uint8 *hash_stage2) {
+void proxy_compute_two_stage_sha1_hash(const char *password, size_t pass_len, uint8_t *hash_stage1, uint8_t *hash_stage2) {
   proxy_compute_sha1_hash(hash_stage1, password, pass_len);
   proxy_compute_sha1_hash(hash_stage2, (const char *) hash_stage1, SHA_DIGEST_LENGTH);
 }
 
-void proxy_my_crypt(char *to, const uchar *s1, const uchar *s2, uint len) {
-  const uint8 *s1_end= s1 + len;
+void proxy_my_crypt(char *to, const uint8_t *s1, const uint8_t *s2, uint len) {
+  const uint8_t *s1_end= s1 + len;
   while (s1 < s1_end)
     *to++= *s1++ ^ *s2++;
 }
@@ -187,23 +182,23 @@ void unhex_pass(uint8_t *out, const char *in) {
 
 void proxy_scramble(char *to, const char *message, const char *password)
 {
-	uint8 hash_stage1[SHA_DIGEST_LENGTH];
-	uint8 hash_stage2[SHA_DIGEST_LENGTH];
+	uint8_t hash_stage1[SHA_DIGEST_LENGTH];
+	uint8_t hash_stage2[SHA_DIGEST_LENGTH];
 	proxy_compute_two_stage_sha1_hash(password, strlen(password), hash_stage1, hash_stage2);
-	proxy_compute_sha1_hash_multi((uint8 *) to, message, SCRAMBLE_LENGTH, (const char *) hash_stage2, SHA_DIGEST_LENGTH);
-	proxy_my_crypt(to, (const uchar *) to, hash_stage1, SCRAMBLE_LENGTH);
+	proxy_compute_sha1_hash_multi((uint8_t *) to, message, SCRAMBLE_LENGTH, (const char *) hash_stage2, SHA_DIGEST_LENGTH);
+	proxy_my_crypt(to, (const uint8_t *) to, hash_stage1, SCRAMBLE_LENGTH);
 	return;
 }
 
 bool proxy_scramble_sha1(char *pass_reply,  const char *message, const char *sha1_sha1_pass, char *sha1_pass) {
 	bool ret=false;
-	uint8 hash_stage1[SHA_DIGEST_LENGTH];
-	uint8 hash_stage2[SHA_DIGEST_LENGTH];
-	uint8 hash_stage3[SHA_DIGEST_LENGTH];
-	uint8 to[SHA_DIGEST_LENGTH];
+	uint8_t hash_stage1[SHA_DIGEST_LENGTH];
+	uint8_t hash_stage2[SHA_DIGEST_LENGTH];
+	uint8_t hash_stage3[SHA_DIGEST_LENGTH];
+	uint8_t to[SHA_DIGEST_LENGTH];
 	unhex_pass(hash_stage2,sha1_sha1_pass);
-	proxy_compute_sha1_hash_multi((uint8 *) to, message, SCRAMBLE_LENGTH, (const char *) hash_stage2, SHA_DIGEST_LENGTH);
-	proxy_my_crypt((char *)hash_stage1,(const uchar *) pass_reply, to, SCRAMBLE_LENGTH);
+	proxy_compute_sha1_hash_multi((uint8_t *) to, message, SCRAMBLE_LENGTH, (const char *) hash_stage2, SHA_DIGEST_LENGTH);
+	proxy_my_crypt((char *)hash_stage1,(const uint8_t *) pass_reply, to, SCRAMBLE_LENGTH);
 	proxy_compute_sha1_hash(hash_stage3, (const char *) hash_stage1, SHA_DIGEST_LENGTH);
 	if (memcmp(hash_stage2,hash_stage3,SHA_DIGEST_LENGTH)==0) {
 		memcpy(sha1_pass,hash_stage1,SHA_DIGEST_LENGTH);
@@ -1910,8 +1905,8 @@ __do_auth:
 						unhex_pass(hash_stage2,sha1_2);
 */
 						proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
-						uint8 hash_stage1[SHA_DIGEST_LENGTH];
-						uint8 hash_stage2[SHA_DIGEST_LENGTH];
+						uint8_t hash_stage1[SHA_DIGEST_LENGTH];
+						uint8_t hash_stage2[SHA_DIGEST_LENGTH];
 						SHA_CTX sha1_context;
 						SHA1_Init(&sha1_context);
 						SHA1_Update(&sha1_context, pass, pass_len);
