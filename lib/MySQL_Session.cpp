@@ -1234,13 +1234,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	) {
 		char *unstripped=strndup((char *)pkt->ptr+15,pkt->size-15);
 		char *csname=trim_spaces_and_quotes_in_place(unstripped);
-		bool collation_specified = false;
 		//unsigned int charsetnr = 0;
 		const MARIADB_CHARSET_INFO * c;
 		char * collation_name_unstripped = NULL;
 		char * collation_name = NULL;
 		if (strcasestr(csname," COLLATE ")) {
-			collation_specified = true;
 			collation_name_unstripped = strcasestr(csname," COLLATE ") + strlen(" COLLATE ");
 			collation_name = trim_spaces_and_quotes_in_place(collation_name_unstripped);
 			char *_s1=index(csname,' ');
