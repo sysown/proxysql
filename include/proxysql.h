@@ -50,10 +50,6 @@
 
 #include <sys/ioctl.h>
 
-#if !defined(__FreeBSD__) && !defined(__APPLE__)
-#define HAVE_BOOL
-//#include "my_pthread.h"
-#endif
 #include "mysql.h"
 #include "mariadb_com.h"
 
