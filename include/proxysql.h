@@ -53,6 +53,11 @@
 #if !defined(__FreeBSD__) && !defined(__APPLE__)
 #define HAVE_BOOL
 #include "ma_global.h"
+/**
+ * @brief 'test' macro needs to be undefined since it's added by 'ma_global'
+ *  and can collide with member functions from 'std' library. (i.e. <set>)
+ */
+#undef test
 //#include "my_pthread.h"
 #endif
 #include "mysql.h"
