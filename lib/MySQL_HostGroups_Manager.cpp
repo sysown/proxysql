@@ -2706,7 +2706,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 							}
 						} else {
 							if (max_lag_ms >= 0) {
-								if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+								if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 									mysrvcCandidates[num_candidates]=mysrvc;
@@ -2760,7 +2760,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 										}
 									} else {
 										if (max_lag_ms >= 0) {
-											if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+											if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 												sum+=mysrvc->weight;
 												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 												mysrvcCandidates[num_candidates]=mysrvc;
@@ -2835,7 +2835,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								}
 							} else {
 								if (max_lag_ms >= 0) {
-									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+									if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 										sum+=mysrvc->weight;
 										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 										mysrvcCandidates[num_candidates]=mysrvc;
@@ -2899,7 +2899,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
 		if (sess->thread->variables.min_num_servers_lantency_awareness) {
-			if (num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
+			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
 				unsigned int servers_with_latency = 0;
 				unsigned int total_latency_us = 0;
 				// scan and verify that all servers have some latency
@@ -3004,14 +3004,12 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
 			bool conn_found = false;
 			unsigned int k;
-			unsigned int options_matching_idx;
 			bool options_matching_found = false;
 			for (k = i; conn_found == false && k < l; k++) {
 				conn = (MySQL_Connection *)conns->index(k);
 				if (conn->match_tracked_options(client_conn)) {
 					if (options_matching_found == false) {
 						options_matching_found = true;
-						options_matching_idx = k;
 					}
 					if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
 						conn_found = true;
@@ -3025,7 +3023,6 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					if (conn->match_tracked_options(client_conn)) {
 						if (options_matching_found == false) {
 							options_matching_found = true;
-							options_matching_idx = k;
 						}
 						if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
 							conn_found = true;

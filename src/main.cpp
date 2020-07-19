@@ -323,16 +323,6 @@ struct cpu_timer
 };
 
 
-static void lock_callback(int mode, int type, const char *file, int line) { 
-	(void)file;
-	(void)line;
-	if(mode & CRYPTO_LOCK) {
-		pthread_mutex_lock(&(lockarray[type]));
-	} else {
-		pthread_mutex_unlock(&(lockarray[type]));
-	}
-}
-
 static unsigned long thread_id(void) {
 	unsigned long ret;
 	ret = (unsigned long)pthread_self();
@@ -346,7 +336,8 @@ static void init_locks(void) {
 		pthread_mutex_init(&(lockarray[i]), NULL);
 	}
 	CRYPTO_set_id_callback((unsigned long (*)())thread_id);
-	CRYPTO_set_locking_callback((void (*)(int, int, const char *, int))lock_callback);
+	// deprecated
+	//CRYPTO_set_locking_callback((void (*)(int, int, const char *, int))lock_callback);
 }
 
 X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, int days, X509 *ca_x509, EVP_PKEY *ca_pkey) {
@@ -1830,7 +1821,9 @@ __start_label:
 					}
 					if (time_next_version_check == 0)
 						time_next_version_check = curtime;
-					time_next_version_check += 24*3600*(1000*1000);
+					unsigned long long inter = 24*3600*1000;
+					inter *= 1000;
+					time_next_version_check += inter;
 				}
 			}
 			inner_loops++;

@@ -2825,7 +2825,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		fileName.erase(fileName.find_last_not_of("\t\n\v\f\r ") + 1);
 		if (fileName.size() == 0) {
 			proxy_error("ProxySQL Admin Error: empty file name\n");
-			SPA->send_MySQL_ERR(&sess->client_myds->myprot, "ProxySQL Admin Error: empty file name");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL Admin Error: empty file name");
 			return false;
 		}
 		std::string data;
@@ -2840,7 +2840,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (rc) {
 			std::stringstream ss;
 			proxy_error("ProxySQL Admin Error: Cannot extract configuration\n");
-			SPA->send_MySQL_ERR(&sess->client_myds->myprot, "ProxySQL Admin Error: Cannot extract configuration");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL Admin Error: Cannot extract configuration");
 			return false;
 		} else {
 			std::ofstream out;
@@ -2932,7 +2932,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool stats_proxysql_servers_checksums = false;
 	bool stats_proxysql_servers_metrics = false;
-	bool stats_proxysql_servers_status = false;
+	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
 	if (strcasestr(query_no_space,"processlist"))
 		// This will match the following usecases:
@@ -2951,13 +2951,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		char *_ret = NULL;
 		c = (char *)query_no_space;
 		_ret = NULL;
-		while (_ret = strstr(c,"stats_mysql_query_digest_reset")) {
+		while ((_ret = strstr(c,"stats_mysql_query_digest_reset"))) {
 			ndr++;
 			c = _ret + strlen("stats_mysql_query_digest_reset");
 		}
 		c = (char *)query_no_space;
 		_ret = NULL;
-		while (_ret = strstr(c,"stats_mysql_query_digest")) {
+		while ((_ret = strstr(c,"stats_mysql_query_digest"))) {
 			nd++;
 			c = _ret + strlen("stats_mysql_query_digest");
 		}
@@ -2995,9 +2995,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_metrics"))
 		{ stats_proxysql_servers_metrics = true; refresh = true; }
+	// temporary disabled because not implemented
+/*
 	if (strstr(query_no_space,"stats_proxysql_servers_status"))
 		{ stats_proxysql_servers_status = true; refresh = true; }
-
+*/
 	if (strstr(query_no_space,"stats_mysql_prepared_statements_info")) {
 		stats_mysql_prepared_statements_info=true; refresh=true;
 	}
@@ -3120,6 +3122,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_proxysql_servers_checksums) {
 			stats___proxysql_servers_checksums();
 		}
+		// temporary disabled because not implemented
 //		if (stats_proxysql_servers_status) {
 //			stats___proxysql_servers_status();
 //		}
@@ -5921,7 +5924,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", cic->csname, cic->name);
 						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", cic->csname);
 						db->execute(q);
-						GloMTH->set_variable("default_charset",cic->csname);
+						GloMTH->set_variable((char *)"default_charset",cic->csname);
 					} else {
 						proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
 						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);

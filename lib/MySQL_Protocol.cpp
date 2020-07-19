@@ -2283,7 +2283,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 }
 
 bool MySQL_Protocol::generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt) {
-	PtrSize_t n_pkt;
 	unsigned int o_pkt_size = pkt->size;
 	char *pkt_ptr = (char *)pkt->ptr;
 

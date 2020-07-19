@@ -604,7 +604,7 @@ void ProxySQL_Statistics::system_memory_sets() {
 			}
 			free(error);
 		} else {
-			char buf[256];
+			char buf[512];
 			if (resultset->rows_count == 0) {
 				sprintf(buf,"INSERT INTO system_memory_hour SELECT timestamp/3600*3600 , AVG(allocated), AVG(resident), AVG(active), AVG(mapped), AVG(metadata), AVG(retained) FROM system_memory WHERE timestamp < %ld GROUP BY timestamp/3600", (ts/3600)*3600);
 				statsdb_disk->execute(buf);
