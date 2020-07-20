@@ -3399,6 +3399,8 @@ __get_pkts_from_client:
 
 			case CONNECTING_CLIENT:
 				switch (client_myds->DSS) {
+					case STATE_PROXY_PROTOCOL:
+						break;
 					case STATE_SERVER_HANDSHAKE:
 						handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
 						break;

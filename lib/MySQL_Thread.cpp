@@ -16,6 +16,7 @@
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+#include "Proxy_Protocol.h"
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -96,6 +97,8 @@ mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
 };
 
 extern mysql_variable_st mysql_tracked_variables[];
+
+thread_local std::vector<proxy_protocol_subnet_t> mysql_thread___proxy_protocol_subnets;
 
 const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	const MARIADB_CHARSET_INFO * c = mariadb_compiled_charsets;
@@ -439,6 +442,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
+	(char *)"proxy_protocol_frontend_nets",
 	(char *)"monitor_enabled",
 	(char *)"monitor_history",
 	(char *)"monitor_connect_interval",
@@ -1104,6 +1108,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
+	variables.proxy_protocol_frontend_nets = strdup("");
 	variables.server_version=strdup((char *)"5.5.30");
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
@@ -1347,6 +1352,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
+	if (!strcmp(name, "proxy_protocol_frontend_nets")) return strdup(variables.proxy_protocol_frontend_nets);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
@@ -1648,6 +1654,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
+	if (!strcasecmp(name,"proxy_protocol_frontend_nets")) return strdup(variables.proxy_protocol_frontend_nets);
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
 		sprintf(intbuf,"%d",variables.server_capabilities);
@@ -2965,6 +2972,11 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			}
 		}
 	}
+	if (!strcasecmp(name,"proxy_protocol_frontend_nets")) {
+		free(variables.proxy_protocol_frontend_nets);
+		variables.proxy_protocol_frontend_nets=strdup(value);
+		return true;
+	}
 	if (!strcasecmp(name,"server_version")) {
 		if (vallen) {
 			free(variables.server_version);
@@ -3779,6 +3791,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	}
 	if (variables.default_schema) free(variables.default_schema);
 	if (variables.interfaces) free(variables.interfaces);
+	if (variables.proxy_protocol_frontend_nets) free(variables.proxy_protocol_frontend_nets);
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
@@ -5099,6 +5112,11 @@ void MySQL_Thread::refresh_variables() {
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
+	{
+		char *s = GloMTH->get_variable_string((char *)"proxy_protocol_frontend_nets");
+		Proxy_Protocol::parse_subnets(s, mysql_thread___proxy_protocol_subnets);
+		free(s);
+	}
 	GloMTH->wrunlock();
 	pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 }
@@ -5201,30 +5219,9 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
 		}
-		sess->client_myds->client_addrlen=addrlen;
-		sess->client_myds->client_addr=addr;
 
-		switch (sess->client_myds->client_addr->sa_family) {
-			case AF_INET: {
-				struct sockaddr_in *ipv4 = (struct sockaddr_in *)sess->client_myds->client_addr;
-				char buf[INET_ADDRSTRLEN];
-				inet_ntop(sess->client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-				sess->client_myds->addr.addr = strdup(buf);
-				sess->client_myds->addr.port = htons(ipv4->sin_port);
-				break;
-			}
-			case AF_INET6: {
-				struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)sess->client_myds->client_addr;
-				char buf[INET6_ADDRSTRLEN];
-				inet_ntop(sess->client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-				sess->client_myds->addr.addr = strdup(buf);
-				sess->client_myds->addr.port = htons(ipv6->sin6_port);
-				break;
-			}
-			default:
-				sess->client_myds->addr.addr = strdup("localhost");
-				break;
-		}
+		// Update client_myds' client IP and port details
+		sess->client_myds->update_client_addr(addr);
 
 		iface_info *ifi=NULL;
 		ifi=GloMTH->MLM_find_iface_from_fd(myds->fd); // here we try to get the info about the proxy bind address
@@ -5233,6 +5230,17 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 			sess->client_myds->proxy_addr.port=ifi->port;
 		}
 		sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
+
+		// Check if the peer IP matches a subnet for which we should parse
+		// PROXY protocol headers
+		if (Proxy_Protocol::match_subnet(addr, addrlen, mysql_thread___proxy_protocol_subnets)) {
+			sess->set_status(CONNECTING_CLIENT);
+			// We'll change this back to STATE_SERVER_HANDSHAKE once the proxy protocol header is parsed
+			sess->client_myds->setDSS(STATE_PROXY_PROTOCOL);
+		}
+		//proxy_info("accepted from %s:%d, PROXY protocol: %s, client_myds:%p\n",
+		//	sess->client_myds->addr.addr, sess->client_myds->addr.port, sess->client_myds->DSS == STATE_PROXY_PROTOCOL? "YES": "NO", sess->client_myds);
+
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);

@@ -219,6 +219,8 @@ typedef struct {
 enum mysql_data_stream_status {
 	STATE_NOT_INITIALIZED,
 	STATE_NOT_CONNECTED,
+	/* parse HAProxy PROXY protocol header before server handshake */
+	STATE_PROXY_PROTOCOL,
 	STATE_SERVER_HANDSHAKE,
 	STATE_CLIENT_HANDSHAKE,
 	STATE_CLIENT_AUTH_OK,
@@ -406,6 +408,11 @@ typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
 typedef struct __SQP_query_parser_t SQP_par_t;
+typedef struct {
+  unsigned short family;
+  unsigned short bits;
+  unsigned char addr[16];
+} proxy_protocol_subnet_t;
 #endif /* PROXYSQL_TYPEDEFS */
 
 //#ifdef __cplusplus
@@ -972,6 +979,7 @@ extern __thread char * mysql_thread___monitor_password;
 extern __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
 
 extern __thread char * mysql_thread___add_ldap_user_comment;
+
 
 #ifdef DEBUG
 extern __thread bool mysql_thread___session_debug;

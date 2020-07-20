@@ -157,6 +157,7 @@ class MySQL_Data_Stream
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
+	void update_client_addr(struct sockaddr *);
 	void shut_soft();
 	void shut_hard();
 	int read_from_net();

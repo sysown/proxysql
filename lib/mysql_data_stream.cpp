@@ -7,6 +7,7 @@
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
+#include "Proxy_Protocol.h"
 
 /*
 
@@ -381,6 +382,45 @@ void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int
 	//if (myconn==NULL) myconn = new MySQL_Connection();
 	if (myconn) myconn->fd=fd;
 }
+
+
+// Update the client MySQL datastream peer sockaddr and ASCII representation
+void MySQL_Data_Stream::update_client_addr(struct sockaddr *addr) {
+	this->client_addr=addr;
+
+	if (this->addr.addr) {
+		/* Handle an update from the PROXY protocol implementation */
+		free(this->addr.addr);
+		this->addr.port = 0;
+	}
+
+	switch (this->client_addr->sa_family) {
+		case AF_INET: {
+			struct sockaddr_in *ipv4 = (struct sockaddr_in *)this->client_addr;
+			char buf[INET_ADDRSTRLEN];
+
+			this->client_addrlen = sizeof(*ipv4);
+			inet_ntop(this->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+			this->addr.addr = strdup(buf);
+			this->addr.port = htons(ipv4->sin_port);
+			break;
+		}
+		case AF_INET6: {
+			struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)this->client_addr;
+			char buf[INET6_ADDRSTRLEN];
+
+			this->client_addrlen = sizeof(*ipv6);
+			inet_ntop(this->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+			this->addr.addr = strdup(buf);
+			this->addr.port = htons(ipv6->sin6_port);
+			break;
+		}
+		default:
+			this->addr.addr = strdup("localhost");
+			break;
+	}
+}
+
 
 // Soft shutdown of socket : it only deactivate the data stream
 // TODO: should check the status of the data stream, and identify if it is safe to reconnect or if the session should be destroyed
@@ -827,6 +867,31 @@ int MySQL_Data_Stream::write_to_net_poll() {
 int MySQL_Data_Stream::read_pkts() {
 	int rc=0;
 	int r=0;
+
+	if(unlikely(DSS == STATE_PROXY_PROTOCOL)) {
+		struct sockaddr *sa;
+		size_t s = queue_data(queueIN), n = 0;
+		unsigned char *start = queue_r_ptr(queueIN),
+			*end = (unsigned char *)memchr(start, '\n', s);
+
+		if (end) {
+			n = end+1-start;
+			sa = (struct sockaddr *)calloc(1, sizeof(struct sockaddr_storage));
+			bool success = Proxy_Protocol::parse_header(start, n, (struct sockaddr_storage *)sa);
+			if (success) {
+				this->update_client_addr(sa);
+			}
+			else {
+				free(sa);
+			}
+
+			queue_r(queueIN, n);
+			DSS = STATE_SERVER_HANDSHAKE;
+		}
+
+		if (s == n) return rc;
+	}
+
 	while((r=buffer2array())) rc+=r;
 	return rc;
 }
