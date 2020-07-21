@@ -8,6 +8,7 @@
 #include <thread>
 #include <iostream>
 #include <mutex>
+#include <unordered_set>
 
 #include "thread.h"
 #include "wqueue.h"
@@ -176,6 +177,8 @@ class MySrvList {	// MySQL Server List
 	private:
 	MyHGC *myhgc;
 	int find_idx(MySrvC *);
+	PtrArray *servers_to_cleanup;
+
 	public:
 	PtrArray *servers;
 	unsigned int cnt() { return servers->len; }
@@ -183,7 +186,10 @@ class MySrvList {	// MySQL Server List
 	~MySrvList();
 	void add(MySrvC *);
 	void remove(MySrvC *);
+	void move_to_cleanup(unsigned int i);
 	MySrvC * idx(unsigned int i) {return (MySrvC *)servers->index(i); }
+
+	bool cleanup_servers();
 };
 
 class MyHGC {	// MySQL Host Group Container
@@ -287,7 +293,10 @@ class MySQL_HostGroups_Manager {
 	Galera_Info *get_galera_node_info(int hostgroup);
 
 	void rebuild_mysql_servers_table_if_dirty();
+	void rebuild_mysql_servers_table();
 	void cleanup_mysql_servers_data_structure();
+
+	void move_servers_to_cleanup(const std::unordered_set<MySrvC*>& servers_to_move);
 
 	SQLite3_result *incoming_replication_hostgroups;
 

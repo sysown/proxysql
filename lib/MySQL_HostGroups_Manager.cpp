@@ -783,6 +783,7 @@ MySrvConnList::~MySrvConnList() {
 MySrvList::MySrvList(MyHGC *_myhgc) {
 	myhgc=_myhgc;
 	servers=new PtrArray();
+	servers_to_cleanup=new PtrArray();
 }
 
 void MySrvList::add(MySrvC *s) {
@@ -807,6 +808,26 @@ void MySrvList::remove(MySrvC *s) {
 	int i=find_idx(s);
 	assert(i>=0);
 	servers->remove_index_fast((unsigned int)i);
+}
+
+void MySrvList::move_to_cleanup(unsigned int i) {
+	MySrvC *mysrvc = (MySrvC *)servers->remove_index_fast(i);
+	servers_to_cleanup->add(mysrvc);
+}
+
+bool MySrvList::cleanup_servers() {
+	for (unsigned int i = 0; i < servers_to_cleanup->len; i++) {
+		MySrvC *mysrvc = (MySrvC *)servers_to_cleanup->index(i);
+		if (
+			(mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD)
+			&& (mysrvc->ConnectionsUsed->conns_length() == 0)
+			&& (mysrvc->ConnectionsFree->conns_length() == 0)
+		) {
+			// no more connections for OFFLINE_HARD server, removing it
+			mysrvc=(MySrvC *)servers_to_cleanup->remove_index_fast(i);
+			delete mysrvc;
+		}
+	}
 }
 
 void MySrvConnList::drop_all_connections() {
@@ -919,11 +940,18 @@ MySrvC::~MySrvC() {
 
 MySrvList::~MySrvList() {
 	myhgc=NULL;
+
 	while (servers->len) {
 		MySrvC *mysrvc=(MySrvC *)servers->remove_index_fast(0);
 		delete mysrvc;
 	}
 	delete servers;
+
+	while (servers_to_cleanup->len) {
+		MySrvC *mysrvc=(MySrvC *)servers_to_cleanup->remove_index_fast(0);
+		delete mysrvc;
+	}
+	delete servers_to_cleanup;
 }
 
 
@@ -1000,6 +1028,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	incoming_group_replication_hostgroups=NULL;
 	incoming_galera_hostgroups=NULL;
 	incoming_aws_aurora_hostgroups = NULL;
+	is_mysql_servers_table_dirty = false;
 	pthread_rwlock_init(&gtid_rwlock, NULL);
 	gtid_missing_nodes = false;
 	gtid_ev_loop=NULL;
@@ -1225,7 +1254,7 @@ bool MySQL_HostGroups_Manager::unsafe_commit() {
 		}
 		if (resultset) { delete resultset; resultset=NULL; }
 	}
-  char *query=NULL;
+	char *query=NULL;
 	query=(char *)"SELECT mem_pointer, t1.hostgroup_id, t1.hostname, t1.port FROM mysql_servers t1 LEFT OUTER JOIN mysql_servers_incoming t2 ON (t1.hostgroup_id=t2.hostgroup_id AND t1.hostname=t2.hostname AND t1.port=t2.port) WHERE t2.hostgroup_id IS NULL";
   mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	if (error) {
@@ -1235,11 +1264,13 @@ bool MySQL_HostGroups_Manager::unsafe_commit() {
 			proxy_info("Dumping mysql_servers LEFT JOIN mysql_servers_incoming\n");
 			resultset->dump_to_stderr();
 		}
+		std::unordered_set<MySrvC*> servers_changed_to_offline_hard;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			long long ptr=atoll(r->fields[0]);
 			proxy_warning("Removed server at address %lld, hostgroup %s, address %s port %s. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", ptr, r->fields[1], r->fields[2], r->fields[3]);
 			MySrvC *mysrvc=(MySrvC *)ptr;
+			servers_changed_to_offline_hard.insert(mysrvc);
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
 			mysrvc->ConnectionsFree->drop_all_connections();
 			unsafe_set_mysql_servers_table_dirty();
@@ -1249,6 +1280,7 @@ bool MySQL_HostGroups_Manager::unsafe_commit() {
 			mydb->execute(q2);
 			free(q2);
 		}
+		move_servers_to_cleanup(servers_changed_to_offline_hard);
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 
@@ -1578,6 +1610,20 @@ bool MySQL_HostGroups_Manager::unsafe_commit() {
 	return true;
 }
 
+void MySQL_HostGroups_Manager::move_servers_to_cleanup(const std::unordered_set<MySrvC*>& servers_to_move) {
+	if (!servers_to_move.empty()) {
+		for (unsigned int i=0; i<MyHostGroups->len; i++) {
+			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+			for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+				MySrvC *mysrvc = myhgc->mysrvs->idx(j);
+				if (servers_to_move.count(mysrvc)) {
+					myhgc->mysrvs->move_to_cleanup(j);
+				}
+			}
+		}
+	}
+}
+
 bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
 	bool ret = false;
 	pthread_rwlock_rdlock(&gtid_rwlock);
@@ -1681,30 +1727,25 @@ inline void MySQL_HostGroups_Manager::unsafe_set_mysql_servers_table_dirty() {
 
 void MySQL_HostGroups_Manager::rebuild_mysql_servers_table_if_dirty() {
 	if (is_mysql_servers_table_dirty) {
-		cleanup_mysql_servers_data_structure();
-
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
-		mydb->execute("DELETE FROM mysql_servers");
-		generate_mysql_servers_table();
-
-		is_mysql_servers_table_dirty = false;
+		rebuild_mysql_servers_table();
 	}
+}
+
+
+void MySQL_HostGroups_Manager::rebuild_mysql_servers_table() {
+	cleanup_mysql_servers_data_structure();
+
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+	mydb->execute("DELETE FROM mysql_servers");
+	generate_mysql_servers_table();
+
+	is_mysql_servers_table_dirty = false;
 }
 
 void MySQL_HostGroups_Manager::cleanup_mysql_servers_data_structure() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		MySrvC *mysrvc=NULL;
-		for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
-			mysrvc=myhgc->mysrvs->idx(j);
-			if (mysrvc->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-				if (mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) {
-					// no more connections for OFFLINE_HARD server, removing it
-					mysrvc=(MySrvC *)myhgc->mysrvs->servers->remove_index_fast(j);
-					delete mysrvc;
-				}
-			}
-		}
+		myhgc->mysrvs->cleanup_servers();
 	}
 }
 
