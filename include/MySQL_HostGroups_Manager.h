@@ -158,10 +158,9 @@ class MySrvC {	// MySQL Server Container
 	MySrvC(char *, uint16_t, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment);
 	~MySrvC();
 	void connect_error(int);
-	void shun_and_killall();
 	/**
 	 * Update the maximum number of used connections
-	 * @return 
+	 * @return
 	 *  the maximum number of used connections
 	 */
 	unsigned int update_max_connections_used()
@@ -276,16 +275,19 @@ class MySQL_HostGroups_Manager {
 #else
 	rwlock_t rwlock;
 #endif
+	bool is_mysql_servers_table_dirty;
 	PtrArray *MyHostGroups;
 
 	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);
 
 	void add(MySrvC *, unsigned int);
-	void purge_mysql_servers_table();
 	void generate_mysql_servers_table(int *_onlyhg=NULL);
 	void generate_mysql_replication_hostgroups_table();
 	Galera_Info *get_galera_node_info(int hostgroup);
+
+	void rebuild_mysql_servers_table_if_dirty();
+	void cleanup_mysql_servers_data_structure();
 
 	SQLite3_result *incoming_replication_hostgroups;
 
@@ -375,6 +377,8 @@ class MySQL_HostGroups_Manager {
 	int servers_add(SQLite3_result *resultset); // faster version of server_add
 	bool commit();
 
+	inline void unsafe_set_mysql_servers_table_dirty();
+
 	void set_incoming_replication_hostgroups(SQLite3_result *);
 	void set_incoming_group_replication_hostgroups(SQLite3_result *);
 	void set_incoming_galera_hostgroups(SQLite3_result *);
@@ -386,7 +390,7 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *dump_table_mysql_galera_hostgroups();
 	SQLite3_result *dump_table_mysql_aws_aurora_hostgroups();
 	MyHGC * MyHGC_lookup(unsigned int);
-	
+
 	void MyConn_add_to_pool(MySQL_Connection *);
 
 	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
