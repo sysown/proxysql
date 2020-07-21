@@ -4522,7 +4522,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id,status FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
+	q=(char *)"SELECT hostgroup_id, status FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
 
@@ -4558,20 +4558,12 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 		}
 		pthread_mutex_unlock(&Galera_Info_mutex);
 
-		if (resultset->rows_count) {
-			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-				SQLite3_row *r=*it;
-				int hostgroup=atoi(r->fields[0]);
-				if (hostgroup==_writer_hostgroup) {
-					int status=atoi(r->fields[1]);
-					if (status==0)
-						found_writer=true;
-				}
-				if (read_HG>=0) {
-					if (hostgroup==read_HG) {
-						found_reader=true;
-					}
-				}
+		for (size_t i = 0, l = resultset->rows.size(); i < l; ++i) {
+			int status = atoi(resultset->rows[i]->fields[1]);
+			if (status == 0) {
+				int hostgroup = atoi(resultset->rows[i]->fields[0]);
+				found_writer |= hostgroup == _writer_hostgroup;
+				found_reader |= (read_HG >= 0) && (hostgroup == read_HG);
 			}
 		}
 
