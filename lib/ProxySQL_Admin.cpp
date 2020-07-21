@@ -10065,11 +10065,13 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	//MyHGH->wrlock();
+
+	MyHGM->wrlock();
+
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		MyHGM->servers_add(resultset);
+		MyHGM->unsafe_servers_add(resultset);
 	}
 	if (resultset) delete resultset;
 	resultset=NULL;
@@ -10088,7 +10090,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 	if (resultset) delete resultset;
 	resultset=NULL;
 
-	query=(char *)"SELECT a.* FROM mysql_replication_hostgroups a LEFT JOIN mysql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL";	
+	query=(char *)"SELECT a.* FROM mysql_replication_hostgroups a LEFT JOIN mysql_replication_hostgroups b ON a.writer_hostgroup=b.reader_hostgroup WHERE b.reader_hostgroup IS NULL";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_replication);
 
@@ -10097,7 +10099,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->set_incoming_replication_hostgroups(resultset_replication);
+		MyHGM->unsafe_set_incoming_replication_hostgroups(resultset_replication);
 	}
 	//if (resultset) delete resultset;
 	//resultset=NULL;
@@ -10126,7 +10128,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->set_incoming_group_replication_hostgroups(resultset_group_replication);
+		MyHGM->unsafe_set_incoming_group_replication_hostgroups(resultset_group_replication);
 	}
 
 	// support for Galera, table mysql_galera_hostgroups
@@ -10153,7 +10155,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->set_incoming_galera_hostgroups(resultset_galera);
+		MyHGM->unsafe_set_incoming_galera_hostgroups(resultset_galera);
 	}
 
 	// support for AWS Aurora, table mysql_aws_aurora_hostgroups
@@ -10184,10 +10186,13 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->set_incoming_aws_aurora_hostgroups(resultset_aws_aurora);
+		MyHGM->unsafe_set_incoming_aws_aurora_hostgroups(resultset_aws_aurora);
 	}
 	// commit all the changes
-	MyHGM->commit();
+	MyHGM->unsafe_commit();
+
+	MyHGM->wrunlock();
+
 	GloAdmin->save_mysql_servers_runtime_to_database(true);
 
 	// clean up

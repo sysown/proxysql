@@ -1098,7 +1098,7 @@ unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 	return __sync_fetch_and_add(&status.servers_table_version,0);
 }
 
-int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
+int MySQL_HostGroups_Manager::unsafe_servers_add(SQLite3_result *resultset) {
 	if (resultset==NULL) {
 		return 0;
 	}
@@ -2305,12 +2305,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								||
 								(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
 							) {
-								unsafe_set_mysql_servers_table_dirty();
 								mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 								mysrvc->shunned_automatic=false;
 								mysrvc->shunned_and_kill_all_connections=false;
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
 								mysrvc->time_last_detected_error=0;
+								MyHGM->unsafe_set_mysql_servers_table_dirty();
+
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 									if (gtid_trxid) {
@@ -2387,11 +2388,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				mysrvc=mysrvs->idx(j);
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
 					if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
-						unsafe_set_mysql_servers_table_dirty();
 						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 						mysrvc->shunned_automatic=false;
 						mysrvc->connect_ERR_at_time_last_detected_error=0;
 						mysrvc->time_last_detected_error=0;
+						MyHGM->unsafe_set_mysql_servers_table_dirty();
+
 						// if a server is taken back online, consider it immediately
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 							if (gtid_trxid) {
@@ -2936,30 +2938,27 @@ __exit_get_multiple_idle_connections:
 	return num_conn_current;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::unsafe_set_incoming_replication_hostgroups(SQLite3_result *s) {
 	incoming_replication_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::unsafe_set_incoming_group_replication_hostgroups(SQLite3_result *s) {
 	if (incoming_group_replication_hostgroups) {
 		delete incoming_group_replication_hostgroups;
-		incoming_group_replication_hostgroups = NULL;
 	}
 	incoming_group_replication_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_galera_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::unsafe_set_incoming_galera_hostgroups(SQLite3_result *s) {
 	if (incoming_galera_hostgroups) {
 		delete incoming_galera_hostgroups;
-		incoming_galera_hostgroups = NULL;
 	}
 	incoming_galera_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_aws_aurora_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::unsafe_set_incoming_aws_aurora_hostgroups(SQLite3_result *s) {
 	if (incoming_aws_aurora_hostgroups) {
 		delete incoming_aws_aurora_hostgroups;
-		incoming_aws_aurora_hostgroups = NULL;
 	}
 	incoming_aws_aurora_hostgroups=s;
 }
