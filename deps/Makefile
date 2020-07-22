@@ -184,8 +184,8 @@ re2/re2/obj/libre2.a:
 re2: re2/re2/obj/libre2.a
 
 pcre/pcre/.libs/libpcre.a:
-	cd pcre && rm -rf pcre-8.39
-	cd pcre && tar -zxf pcre-8.39.tar.gz
+	cd pcre && rm -rf pcre-8.44
+	cd pcre && tar -zxf pcre-8.44.tar.gz
 	cd pcre/pcre && ./configure
 	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
 pcre: pcre/pcre/.libs/libpcre.a
@@ -209,7 +209,7 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd re2 && rm -rf re2-2018-07-01
-	cd pcre && rm -rf pcre-8.39
+	cd pcre && rm -rf pcre-8.44
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true
