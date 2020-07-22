@@ -35,7 +35,8 @@ libssl/openssl/libssl.a:
 #	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.0h || true
-	cd libssl && tar -zxf openssl-1.1.1d.tar.gz
+	cd libssl && rm -rf openssl-1.1.1g || true
+	cd libssl && tar -zxf openssl-1.1.1g.tar.gz
 	cd libssl/openssl  && ./config no-ssl3
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
@@ -221,6 +222,7 @@ cleanall:
 	cd libssl && rm -rf openssl-1.1.0h || true
 	cd libssl && rm -rf openssl-1.1.1b || true
 	cd libssl && rm -rf openssl-1.1.1d || true
+	cd libssl && rm -rf openssl-1.1.1g || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-0.9.0 || true
 .PHONY: cleanall
