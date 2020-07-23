@@ -816,7 +816,7 @@ void MySrvList::move_to_cleanup(unsigned int i) {
 }
 
 bool MySrvList::cleanup_servers() {
-	for (unsigned int i = 0; i < servers_to_cleanup->len; i++) {
+	for (unsigned int i = 0, l = servers_to_cleanup->len; i < l; ) {
 		MySrvC *mysrvc = (MySrvC *)servers_to_cleanup->index(i);
 		if (
 			(mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD)
@@ -826,6 +826,9 @@ bool MySrvList::cleanup_servers() {
 			// no more connections for OFFLINE_HARD server, removing it
 			mysrvc=(MySrvC *)servers_to_cleanup->remove_index_fast(i);
 			delete mysrvc;
+			--l;
+		} else {
+			++i;
 		}
 	}
 }
@@ -1612,12 +1615,15 @@ bool MySQL_HostGroups_Manager::unsafe_commit() {
 
 void MySQL_HostGroups_Manager::move_servers_to_cleanup(const std::unordered_set<MySrvC*>& servers_to_move) {
 	if (!servers_to_move.empty()) {
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		for (unsigned int i = 0, li = MyHostGroups->len; i < li; ++i) {
 			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-			for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
+			for (unsigned int j = 0, lj = myhgc->mysrvs->servers->len; j < lj; ) {
 				MySrvC *mysrvc = myhgc->mysrvs->idx(j);
 				if (servers_to_move.count(mysrvc)) {
 					myhgc->mysrvs->move_to_cleanup(j);
+					--lj;
+				} else {
+					++j;
 				}
 			}
 		}
