@@ -456,8 +456,10 @@ bool GTID_Server_Data::read_next_gtid() {
 	char rec_msg[80];
 	if (strncmp(data+pos,(char *)"ST=",3)==0) {
 		// we are reading the bootstrap
-		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
-		memcpy(bs,data+pos+3,l+1-3);
+		char *bs = (char *)malloc(l+1+1-3); // length + 1 (null byte) + 1 (newline) - 3 (header)
+		memcpy(bs, data+pos+3, l-3);
+		bs[l-3] = '\0';
+		bs[l-3+1] = '\n';
 		char *saveptr1=NULL;
 		char *saveptr2=NULL;
 		//char *saveptr3=NULL;
