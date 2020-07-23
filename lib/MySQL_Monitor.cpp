@@ -1774,8 +1774,19 @@ void * monitor_galera_thread(void *arg) {
 		}
 	} else {
 		if (crc==false) {
+#ifdef TEST_GALERA
+			if ( rand()%3 == 0) { // drop the connection once every 3 checks
+				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
+				mysql_close(mmsd->mysql);
+				mmsd->mysql=NULL;
+			} else {
+				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+				mmsd->mysql=NULL;
+			}
+#else
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 			mmsd->mysql=NULL;
+#endif // TEST_GALERA
 		}
 	}
 
