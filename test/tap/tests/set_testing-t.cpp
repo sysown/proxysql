@@ -536,7 +536,7 @@ void * my_conn_thread(void *arg) {
 				fprintf(stderr, "Variable %s->%s in proxysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 
-			if (k.value() != el.value() || s.value() != el.value()) {
+			if ((k.value() != el.value() || s.value() != el.value()) && el.key() != "session_track_gtids") {
 				__sync_fetch_and_add(&g_failed, 1);
 				testPassed = false;
 				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
