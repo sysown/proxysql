@@ -76,14 +76,17 @@ int main(int argc, char** argv) {
 		mysql_free_result(proxy_res);
 	}
 
-	MYSQL_QUERY(proxysql_admin, "SELECT ConnUsed, ConnFree FROM stats.stats_mysql_connection_pool WHERE hostgroup=1");
+	MYSQL_QUERY(proxysql_admin, "SELECT ConnUsed, ConnFree, srv_port FROM stats.stats_mysql_connection_pool WHERE hostgroup=1");
 	proxy_res = mysql_store_result(proxysql_admin);
 	std::vector<int> new_cur_connections {};
 
 	while ((row = mysql_fetch_row(proxy_res))) {
 		int row_used_conn = atoi(row[0]);
 		int row_free_conn = atoi(row[1]);
+		int srv_port = atoi(row[2]);
 		new_cur_connections.push_back(row_used_conn + row_free_conn);
+
+		diag("srv_port: %d - ConnUsed: %d, ConnFree: %d", srv_port, row_used_conn, row_free_conn);
 	}
 
 	mysql_free_result(proxy_res);
