@@ -1298,10 +1298,11 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN") && !strncasecmp("PROXYSQL SHUTDOWN",query_no_space, query_no_space_length)) {
-		proxy_info("Received PROXYSQL SHUTDOWN command\n");
-		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN SLOW") && !strncasecmp("PROXYSQL SHUTDOWN SLOW",query_no_space, query_no_space_length)) {
+		glovars.proxy_restart_on_error=false;
 		glovars.reload=0;
+		proxy_info("Received PROXYSQL SHUTDOWN SLOW command\n");
+		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		return false;
 	}
 
@@ -1355,6 +1356,13 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	if (query_no_space_length==strlen("PROXYSQL KILL") && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL KILL command\n");
+		exit(EXIT_SUCCESS);
+	}
+
+	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN") && !strncasecmp("PROXYSQL SHUTDOWN",query_no_space, query_no_space_length)) {
+		// in 2.1 , PROXYSQL SHUTDOWN behaves like PROXYSQL KILL : quick exit
+		// the former PROXYQL SHUTDOWN is now replaced with PROXYSQL SHUTDOWN SLOW
+		proxy_info("Received PROXYSQL SHUTDOWN command\n");
 		exit(EXIT_SUCCESS);
 	}
 
