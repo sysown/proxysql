@@ -53,14 +53,15 @@ int main(int argc, char** argv) {
 	}
 
 	// We should check and store all the actual free connections
-	MYSQL_QUERY(proxysql_admin, "SELECT ConnFree FROM stats.stats_mysql_connection_pool WHERE hostgroup=1");
+	MYSQL_QUERY(proxysql_admin, "SELECT ConnUsed, ConnFree FROM stats.stats_mysql_connection_pool WHERE hostgroup=1");
 	MYSQL_RES* proxy_res = mysql_store_result(proxysql_admin);
 
-	std::vector<int> free_connections {};
+	std::vector<int> cur_connections {};
 	MYSQL_ROW row;
 	while ((row = mysql_fetch_row(proxy_res))) {
-		int row_free_conn = atoi(row[0]);
-		free_connections.push_back(row_free_conn);
+		int row_used_conn = atoi(row[0]);
+		int row_free_conn = atoi(row[1]);
+		cur_connections.push_back(row_used_conn + row_free_conn);
 	}
 
 	mysql_free_result(proxy_res);
@@ -74,24 +75,28 @@ int main(int argc, char** argv) {
 		mysql_free_result(proxy_res);
 	}
 
-	MYSQL_QUERY(proxysql_admin, "SELECT ConnFree FROM stats.stats_mysql_connection_pool WHERE hostgroup=1");
+	MYSQL_QUERY(proxysql_admin, "SELECT ConnUsed, ConnFree, srv_port FROM stats.stats_mysql_connection_pool WHERE hostgroup=1");
 	proxy_res = mysql_store_result(proxysql_admin);
-	std::vector<int> new_free_connections {};
+	std::vector<int> new_cur_connections {};
 
 	while ((row = mysql_fetch_row(proxy_res))) {
-		int row_free_conn = atoi(row[0]);
-		new_free_connections.push_back(row_free_conn);
+		int row_used_conn = atoi(row[0]);
+		int row_free_conn = atoi(row[1]);
+		int srv_port = atoi(row[2]);
+		new_cur_connections.push_back(row_used_conn + row_free_conn);
+
+		diag("srv_port: %d - ConnUsed: %d, ConnFree: %d", srv_port, row_used_conn, row_free_conn);
 	}
 
 	mysql_free_result(proxy_res);
 
-	int new_total_free_conn = 0;
+	int new_total_conn = 0;
 	// Sum the differences between previous free and new free connections
-	for (int i = 0; i < free_connections.size(); i++) {
-		new_total_free_conn += new_free_connections[i] - free_connections[i];
+	for (int i = 0; i < cur_connections.size(); i++) {
+		new_total_conn += new_cur_connections[i] - cur_connections[i];
 	}
 
-	ok(rand_conn == new_total_free_conn, "The number of queries executed with annotations should be equal to the number of new connections: %d == %d", rand_conn, new_total_free_conn);
+	ok(rand_conn == new_total_conn, "The number of queries executed with annotations should be equal to the number of new connections: %d == %d", rand_conn, new_total_conn);
 
 	return exit_status();
 }
