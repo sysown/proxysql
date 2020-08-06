@@ -82,6 +82,7 @@ else
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.68 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.68.tar.gz
 endif
+	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
