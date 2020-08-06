@@ -10,7 +10,7 @@
 
 #include <sstream>
 
-#include <ma_global.h>
+//#include <ma_global.h>
 
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
