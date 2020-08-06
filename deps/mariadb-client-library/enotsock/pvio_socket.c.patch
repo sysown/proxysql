@@ -1,0 +1,40 @@
+@@ -376,6 +376,8 @@
+ #if !defined(MSG_NOSIGNAL) && !defined(SO_NOSIGPIPE) && !defined(_WIN32)
+   sigaction(SIGPIPE, &oldact, NULL);
+ #endif
++  if (r == -1 && errno == ENOTSOCK)
++	  debug_enotsock(__FILE__, __LINE__, __func__);
+   return r;
+ }
+ 
+@@ -386,6 +388,8 @@
+    r = recv(socket, (char*) buffer, IF_WIN((int)length, length), flags);
+   }
+   while (r == -1 && IS_SOCKET_EINTR(socket_errno));
++  if (r == -1 && errno == ENOTSOCK)
++	  debug_enotsock(__FILE__, __LINE__, __func__);
+   return r;
+ }
+ 
+@@ -635,6 +639,8 @@
+   do {
+     rc= connect(csock->socket, (struct sockaddr*) name, (int)namelen);
+   } while (rc == -1 && (errno == EINTR || errno == EAGAIN));
++  if (rc == -1 && errno == ENOTSOCK)
++	  debug_enotsock(__FILE__, __LINE__, __func__);
+   /* in case a timeout values was set we need to check error values
+      EINPROGRESS */
+   if (timeout != 0 && rc == -1 && errno == EINPROGRESS)
+@@ -646,8 +652,11 @@
+       int error;
+       socklen_t error_len= sizeof(error);
+       if ((rc = getsockopt(csock->socket, SOL_SOCKET, SO_ERROR, 
+-                           (char *)&error, &error_len)) < 0)
++                           (char *)&error, &error_len)) < 0) {
++        if (rc == -1 && errno == ENOTSOCK)
++	  debug_enotsock(__FILE__, __LINE__, __func__);
+         return errno;
++      }
+       else if (error) 
+         return error;
+     }

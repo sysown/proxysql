@@ -147,6 +147,9 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
+	cd mariadb-client-library/mariadb_client && patch include/ma_global.h < ../enotsock/ma_global.h.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../enotsock/mariadb_lib.c.patch
+	cd mariadb-client-library/mariadb_client && patch plugins/pvio/pvio_socket.c < ../enotsock/pvio_socket.c.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
 

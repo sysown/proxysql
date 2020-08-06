@@ -1,0 +1,9 @@
+@@ -20,7 +20,7 @@
+ 
+ #ifndef _global_h
+ #define _global_h
+-
++void debug_enotsock(const char *, int, const char *);
+ #ifdef _WIN32
+ #include <winsock2.h>
+ #include <windows.h>

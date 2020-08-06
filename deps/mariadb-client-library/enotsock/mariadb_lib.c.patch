@@ -1,0 +1,12 @@
+@@ -119,6 +119,11 @@
+ uint mysql_port=0;
+ my_string mysql_unix_port=0;
+ 
++
++void __attribute__ ((noinline)) debug_enotsock(const char *filename, int line, const char *func) {
++	fprintf(stderr,"Debugging ENOTSOCK: %s:%d:%s\n", filename, line, func);
++}
++
+ #define CONNECT_TIMEOUT 0
+ 
+ struct st_mariadb_methods MARIADB_DEFAULT_METHODS;
