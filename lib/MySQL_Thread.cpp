@@ -3833,10 +3833,12 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 
 	if (mysql_thread___use_tcp_keepalive) {
 		setsockopt(sess->client_myds->fd, SOL_SOCKET, SO_KEEPALIVE, (char *) &arg_on, sizeof(arg_on));
+#ifdef TCP_KEEPIDLE
 		if (mysql_thread___tcp_keepalive_time > 0) {
 			int keepalive_time = mysql_thread___tcp_keepalive_time;
 			setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_KEEPIDLE, (char *) &keepalive_time, sizeof(keepalive_time));
 		}
+#endif
 	}
 
 #ifdef __APPLE__
