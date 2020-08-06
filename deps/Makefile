@@ -27,6 +27,9 @@ endif
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-3.10.0 || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/make_parens.py
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse_map.py
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse2c.py
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 libinjection: libinjection/libinjection/src/libinjection.a
 
