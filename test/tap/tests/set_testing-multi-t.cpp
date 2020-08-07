@@ -35,6 +35,7 @@ using nlohmann::json;
 struct TestCase {
 	std::string command;
 	json expected_vars;
+	json reset_vars;
 };
 
 std::vector<TestCase> testCases;
@@ -45,18 +46,27 @@ int readTestCases(const std::string& fileName) {
 	FILE* fp = fopen(fileName.c_str(), "r");
 	if (!fp) return 0;
 
-	char buf[MAX_LINE], col1[MAX_LINE], col2[MAX_LINE];
+	char buf[MAX_LINE], col1[MAX_LINE], col2[MAX_LINE], col3[MAX_LINE] = {0};
 	int n = 0;
 	for(;;) {
 		if (fgets(buf, sizeof(buf), fp) == NULL) break;
-		n = sscanf(buf, " \"%[^\"]\", \"%[^\"]\"", col1, col2);
+		n = sscanf(buf, " \"%[^\"]\", \"%[^\"]\", \"%[^\"]\"", col1, col2, col3);
 		if (n == 0) break;
 
 		char *p = col2;
 		while(*p++) if(*p == '\'') *p = '\"';
 
 		json vars = json::parse(col2);
-		testCases.push_back({col1, vars});
+
+		p = col3;
+		while(col3[0] != 0 && *p++) if(*p == '\'') *p = '\"';
+
+		json reset_vars;
+		if (p != col3) {
+			reset_vars = json::parse(col3);
+		}
+
+		testCases.push_back({col1, vars, reset_vars});
 	}
 
 	fclose(fp);
@@ -365,6 +375,37 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 	}
 }
 
+std::vector<std::string> forgotten_vars {};
+
+/**
+ * @brief Checks that after setting 'session_track_gtids', the new set value follows ProxySQL rules
+ * for this particular variable. This is:
+ * - backend connections are by default set to `mysql-default_session_track_gtids`.
+ * - if `mysql-default_session_track_gtids=OFF` (the default), `session_track_gtids` is not changed on backend.
+ * - if the client asks for `session_track_gtids=OFF`, proxysql ignores it (it just acknowledge it).
+ * - if the client asks for `session_track_gtids=OWN_GTID`, proxysql will apply it.
+ * - if the client asks for `session_track_gtids=ALL_GTIDS`, proxysql will switch to OWN_GTID and generate a warning.
+ * - if the backend doesn't support `session_track_gtids` (for example in MySQL 5.5 and MySQL 5.6), proxysql won't apply it. It knows checking server capabilities
+ *
+ * @param expVal The value to which 'session_track_gtids' have been set.
+ * @param sVal The ProxySQL session value for 'session_track_gtids'.
+ * @param mVal The MySQL session value for 'session_track_gtids'.
+ * @return True in case the check succeed, false otherwise.
+ */
+bool check_session_track_gtids(const std::string& expVal, const std::string& sVal, const std::string& mVal) {
+	bool res = false;
+
+	if (expVal == "OFF") {
+		res = expVal == sVal;
+	} else if (expVal == "OWN_GTID" && (sVal == mVal && sVal == "OWN_GTID")) {
+		res = true;
+	} else if (expVal == "ALL_GTIDS" && (sVal == mVal && sVal == "OWN_GTID")) {
+		res = true;
+	}
+
+	return res;
+}
+
 void * my_conn_thread(void *arg) {
 	g_seed = time(NULL) ^ getpid() ^ pthread_self();
 	unsigned int select_OK=0;
@@ -504,11 +545,23 @@ void * my_conn_thread(void *arg) {
 		json proxysql_vars;
 		queryInternalStatus(mysql, proxysql_vars);
 
+		if (!testCases[r2].reset_vars.empty()) {
+			for (const auto& var : testCases[r2].reset_vars) {
+				if (std::find(forgotten_vars.begin(), forgotten_vars.end(), var) == forgotten_vars.end()) {
+					forgotten_vars.push_back(var);
+				}
+			}
+		}
+
 		bool testPassed = true;
 		int variables_tested = 0;
 		for (auto& el : vars.items()) {
 			auto k = mysql_vars.find(el.key());
 			auto s = proxysql_vars["conn"].find(el.key());
+
+			if (std::find(forgotten_vars.begin(), forgotten_vars.end(), el.key()) != forgotten_vars.end()) {
+				continue;
+			}
 
 			if (k == mysql_vars.end())
 				fprintf(stderr, "Variable %s->%s in mysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
@@ -518,13 +571,17 @@ void * my_conn_thread(void *arg) {
 				fprintf(stderr, "Variable %s->%s in proxysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 
-			if (k.value() != el.value() || s.value() != el.value()) {
+			if (
+				(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
+				(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
+			) {
 				__sync_fetch_and_add(&g_failed, 1);
 				testPassed = false;
 				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
-				exit(0);
+				// In case of failing test, exit completely.
+				exit(EXIT_FAILURE);
 			} else {
 				variables_tested++;
 			}

@@ -89,3 +89,4 @@
 "SET CHARACTER SET 'utf8'", "{'character_set_results':'utf8', 'character_set_client':'utf8'}", "['character_set_connection', 'collation_connection']"
 "SET time_zone='+04:00', sql_mode='NO_ENGINE_SUBSTITUTION', max_join_size=10000; SET CHARACTER SET 'latin1'", "{'time_zone':'+04:00', 'sql_mode':'NO_ENGINE_SUBSTITUTION', 'max_join_size':'10000', 'character_set_results':'latin1', 'character_set_client':'latin1'}", "['character_set_connection', 'collation_connection']"
 "SET time_zone='+04:00', sql_mode='NO_ENGINE_SUBSTITUTION', max_join_size=10000; SET CHARSET 'latin1'", "{'time_zone':'+04:00', 'sql_mode':'NO_ENGINE_SUBSTITUTION', 'max_join_size':'10000', 'character_set_results':'latin1', 'character_set_client':'latin1'}", "['character_set_connection', 'collation_connection']"
+"SET session_track_gtids=ALL_GTIDS", "{'session_track_gtids':'ALL_GTIDS'}"
