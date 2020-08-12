@@ -1879,6 +1879,25 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 			NEXT_IMMEDIATE_NEW(CHANGING_SCHEMA);
 		}
 	}
+	// if we reach here, the username is the same
+	if (myds->myconn->requires_CHANGE_USER(client_myds->myconn)) {
+		// if we reach here, even if the username is the same,
+		// the backend connection has some session variable set
+		// that the client never asked for
+		// because we can't unset variables, we will reset the connection
+		switch(status) {
+			case PROCESSING_QUERY:
+			case PROCESSING_STMT_PREPARE:
+			case PROCESSING_STMT_EXECUTE:
+				previous_status.push(status);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
+		NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
+	}
 	return false;
 }
 
@@ -5842,20 +5861,58 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 					}
 				}
 				uuid[n]='\0';
+
+#ifdef STRESSTEST_POOL
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, uuid, trxid, -1);
+#endif // STRESSTEST_POOL
 			} else {
+#ifdef STRESSTEST_POOL
 				mc=thread->get_MyConn_local(mybe->hostgroup_id, this, NULL, 0, (int)qpo->max_lag_ms);
+#endif // STRESSTEST_POOL
 			}
 		}
+#ifdef STRESSTEST_POOL
+		// Check STRESSTEST_POOL in MySQL_HostGroups_Manager.h
+		// Note: this works only if session_fast_forward==false and create_new_conn is false too
+#define NUM_SLOW_LOOPS 1000
+		// if STRESSTESTPOOL_MEASURE is define, time is measured in Query_Processor_time_nsec
+		// even if not the right variable
+//#define STRESSTESTPOOL_MEASURE
+#ifdef STRESSTESTPOOL_MEASURE
+		timespec begint;
+		timespec endt;
+		clock_gettime(CLOCK_MONOTONIC,&begint);
+#endif // STRESSTESTPOOL_MEASURE
+		for (unsigned int loops=0; loops < NUM_SLOW_LOOPS; loops++) {
+#endif // STRESSTEST_POOL
 		if (mc==NULL) {
 			if (trxid) {
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
 			} else {
 				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
 			}
+#ifdef STRESSTEST_POOL
+			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {
+				if (mc->mysql) {
+					mybe->server_myds->attach_connection(mc);
+					mybe->server_myds->DSS=STATE_NOT_INITIALIZED;
+					mybe->server_myds->return_MySQL_Connection_To_Pool();
+					mc=NULL;
+				}
+			}
+#endif // STRESSTEST_POOL
 		} else {
 			thread->status_variables.ConnPool_get_conn_immediate++;
 		}
+#ifdef STRESSTEST_POOL
+#ifdef STRESSTESTPOOL_MEASURE
+		clock_gettime(CLOCK_MONOTONIC,&endt);
+		thread->status_variables.query_processor_time=thread->status_variables.query_processor_time +
+			(endt.tv_sec*1000000000+endt.tv_nsec) -
+			(begint.tv_sec*1000000000+begint.tv_nsec);
+#endif // STRESSTESTPOOL_MEASURE
+		}
+#endif // STRESSTEST_POOL
 		if (mc) {
 			mybe->server_myds->attach_connection(mc);
 			thread->status_variables.ConnPool_get_conn_success++;
