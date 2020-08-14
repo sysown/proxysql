@@ -172,5 +172,8 @@ heaptrack.*
 .project
 .settings/
 
+#vscode
+.vscode/
+
 #tap tests
 *-t
