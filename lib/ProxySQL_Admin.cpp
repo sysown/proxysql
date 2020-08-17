@@ -254,8 +254,6 @@ extern char * binary_sha1;
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
-int rc, arg_on=1, arg_off=0;
-
 pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -4578,6 +4576,7 @@ void* child_telnet_also(void* arg)
 static void * admin_main_loop(void *arg)
 {
 	int i;
+	int rc;
 	int version=0;
 	struct pollfd *fds=((struct _main_args *)arg)->fds;
 	int nfds=((struct _main_args *)arg)->nfds;
@@ -7402,6 +7401,8 @@ void ProxySQL_Admin::stats___mysql_global() {
 }
 
 void ProxySQL_Admin::stats___mysql_processlist() {
+	int rc;
+
 	if (!GloMTH) return;
 	mysql_thread___show_processlist_extended = variables.mysql_show_processlist_extended;
 	SQLite3_result * resultset=GloMTH->SQL3_Processlist();
@@ -7579,6 +7580,7 @@ void ProxySQL_Admin::stats___mysql_connection_pool(bool _reset) {
 }
 
 void ProxySQL_Admin::stats___mysql_free_connections() {
+	int rc;
 
 	if (!MyHGM) return;
 	SQLite3_result * resultset=MyHGM->SQL3_Free_Connections();
@@ -9245,6 +9247,8 @@ void ProxySQL_Admin::__add_active_clickhouse_users(char *__user) {
 
 
 void ProxySQL_Admin::dump_checksums_values_table() {
+	int rc;
+
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 	if (GloVars.checksums_values.updates_cnt == GloVars.checksums_values.dumped_at) {
 		// exit immediately
