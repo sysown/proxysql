@@ -338,10 +338,7 @@ extern ClickHouse_Server *GloClickHouseServer;
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
-static int rc, arg_on=1, arg_off=0;
-
 static pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
-
 
 static char * ClickHouse_Server_variables_names[] = {
 	(char *)"hostname",
@@ -1311,6 +1308,7 @@ __exit_child_mysql:
 
 static void * sqlite3server_main_loop(void *arg)
 {
+	int rc;
 	int i;
 	int version=0;
 	struct sockaddr_in addr;
