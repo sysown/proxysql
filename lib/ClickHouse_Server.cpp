@@ -1308,6 +1308,7 @@ __exit_child_mysql:
 
 static void * sqlite3server_main_loop(void *arg)
 {
+	int rc;
 	int i;
 	int version=0;
 	struct sockaddr_in addr;
