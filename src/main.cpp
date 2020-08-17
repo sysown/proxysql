@@ -766,6 +766,7 @@ void * mysql_worker_thread_func(void *arg) {
 	worker->run();
 	//delete worker;
 	delete worker;
+	mysql_thread->worker=NULL;
 //	l_mem_destroy(__thr_sfp);
 	__sync_fetch_and_sub(&GloVars.statuses.stack_memory_mysql_threads,tmp_stack_size);
 	return NULL;
@@ -1172,8 +1173,10 @@ void ProxySQL_Main_shutdown_all_modules() {
 	}
 	if (GloMTH) {
 		cpu_timer t;
+		pthread_mutex_lock(&GloVars.global.ext_glomth_mutex);
 		delete GloMTH;
 		GloMTH=NULL;
+		pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 #ifdef DEBUG
 		std::cerr << "GloMTH shutdown in ";
 #endif
