@@ -1,0 +1,13 @@
+diff --git a/src/httpserver/http_request.hpp b/src/httpserver/http_request.hpp
+index 139272b..3c8213b 100644
+--- a/src/httpserver/http_request.hpp
++++ b/src/httpserver/http_request.hpp
+@@ -231,7 +231,7 @@ class http_request
+          * @param b http_request b to copy attributes from.
+         **/
+         http_request(const http_request& b) = default;
+-        http_request(http_request&& b) noexcept = default;
++        http_request(http_request&& b) = default;
+
+         http_request& operator=(const http_request& b) = default;
+         http_request& operator=(http_request&& b) = default;
