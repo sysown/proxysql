@@ -10,7 +10,7 @@ CXX=clang++-3.6 CC=clang-3.6 CPPFLAGS="-I/usr/include/c++/4.8/ -I/usr/include/x8
 
 ====
 
-## On FreeBSD
+## On FreeBSD , legacy ProxySQL (1.x)
 
 ## compile using gcc 4.8
 CC=gcc48 CXX=g++48 LIBS="-Wl,-rpath=/usr/local/lib/gcc48 -liconv" CPPFLAGS=-D_GLIBCXX_USE_C99 gmake
@@ -20,3 +20,9 @@ CC=gcc49 CXX=g++49 LIBS="-Wl,-rpath=/usr/local/lib/gcc49 -liconv" CPPFLAGS=-D_GL
 
 ## compile using clang 3.7
 CC=clang37 CXX=clang++37 gmake
+
+## On FreeBSD , ProxySQL 2.0.14 onward
+
+pkg install bash cmake gmake git lang/gcc patch python3 libtool automake python2 python
+CC=/usr/local/bin/gcc CXX=/usr/local/bin/g++ gmake -j 4 build_deps
+CC=/usr/local/bin/gcc CXX=/usr/local/bin/g++ gmake -j 4

@@ -2706,7 +2706,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 							}
 						} else {
 							if (max_lag_ms >= 0) {
-								if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+								if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 									mysrvcCandidates[num_candidates]=mysrvc;
@@ -2760,7 +2760,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 										}
 									} else {
 										if (max_lag_ms >= 0) {
-											if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+											if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 												sum+=mysrvc->weight;
 												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 												mysrvcCandidates[num_candidates]=mysrvc;
@@ -2835,7 +2835,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								}
 							} else {
 								if (max_lag_ms >= 0) {
-									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+									if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 										sum+=mysrvc->weight;
 										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 										mysrvcCandidates[num_candidates]=mysrvc;
@@ -2899,7 +2899,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
 		if (sess->thread->variables.min_num_servers_lantency_awareness) {
-			if (num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
+			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
 				unsigned int servers_with_latency = 0;
 				unsigned int total_latency_us = 0;
 				// scan and verify that all servers have some latency
@@ -3004,14 +3004,12 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
 			bool conn_found = false;
 			unsigned int k;
-			unsigned int options_matching_idx;
 			bool options_matching_found = false;
 			for (k = i; conn_found == false && k < l; k++) {
 				conn = (MySQL_Connection *)conns->index(k);
 				if (conn->match_tracked_options(client_conn)) {
 					if (options_matching_found == false) {
 						options_matching_found = true;
-						options_matching_idx = k;
 					}
 					if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
 						conn_found = true;
@@ -3025,7 +3023,6 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					if (conn->match_tracked_options(client_conn)) {
 						if (options_matching_found == false) {
 							options_matching_found = true;
-							options_matching_idx = k;
 						}
 						if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
 							conn_found = true;
@@ -3114,10 +3111,15 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			// overall, the backend seems healthy and so it is the connection. Try to reset it
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
-			to_del=false;
-			//c->userinfo->set(mysql_thread___monitor_username,mysql_thread___monitor_password,mysql_thread___default_schema,NULL);
-			queue.add(c);
+			int myerr=mysql_errno(c->mysql);
+			if (myerr >= 2000 && myerr < 3000) {
+				// client library error . We must not try to save the connection
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset MySQL_Connection %p, server %s:%d . Error code %d\n", c, mysrvc->address, mysrvc->port, myerr);
+			} else {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+				to_del=false;
+				queue.add(c);
+			}
 		} else {
 		// the connection seems health, but we are trying to destroy it
 		// probably because there is a long running query

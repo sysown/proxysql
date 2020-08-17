@@ -3,11 +3,10 @@
 #include <thread>
 #include "btree_map.h"
 #include "proxysql.h"
-#if defined(__FreeBSD__) || defined(__APPLE__)
+
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
-#endif
-#include <fcntl.h>
-#include <unistd.h>
 
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
@@ -182,6 +181,9 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 }
 
 
+static char * know_latest_version = NULL;
+static unsigned int randID = 0;
+
 static char * main_check_latest_version() {
 	CURL *curl_handle;
 	CURLcode res;
@@ -202,6 +204,7 @@ static char * main_check_latest_version() {
 			s+= binary_sha1;
 		s += ")" ;
 	}
+	s += " " + std::to_string(randID);
 	curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, s.c_str());
 	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 10);
 	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
@@ -226,10 +229,19 @@ static char * main_check_latest_version() {
 	return chunk.memory;
 }
 
+
 void * main_check_latest_version_thread(void *arg) {
 	char * latest_version = main_check_latest_version();
 	if (latest_version) {
-		proxy_info("Latest ProxySQL version available: %s\n", latest_version);
+		if (
+			(know_latest_version == NULL) // first check
+			|| (strcmp(know_latest_version,latest_version)) // new version detected
+		) {
+			if (know_latest_version)
+				free(know_latest_version);
+			know_latest_version = strdup(latest_version);
+			proxy_info("Latest ProxySQL version available: %s\n", latest_version);
+		}
 	}
 	free(latest_version);
 	return NULL;
@@ -311,16 +323,6 @@ struct cpu_timer
 };
 
 
-static void lock_callback(int mode, int type, const char *file, int line) { 
-	(void)file;
-	(void)line;
-	if(mode & CRYPTO_LOCK) {
-		pthread_mutex_lock(&(lockarray[type]));
-	} else {
-		pthread_mutex_unlock(&(lockarray[type]));
-	}
-}
-
 static unsigned long thread_id(void) {
 	unsigned long ret;
 	ret = (unsigned long)pthread_self();
@@ -334,7 +336,8 @@ static void init_locks(void) {
 		pthread_mutex_init(&(lockarray[i]), NULL);
 	}
 	CRYPTO_set_id_callback((unsigned long (*)())thread_id);
-	CRYPTO_set_locking_callback((void (*)(int, int, const char *, int))lock_callback);
+	// deprecated
+	//CRYPTO_set_locking_callback((void (*)(int, int, const char *, int))lock_callback);
 }
 
 X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, int days, X509 *ca_x509, EVP_PKEY *ca_pkey) {
@@ -1615,6 +1618,8 @@ int main(int argc, const char * argv[]) {
 		cpu_timer t;
 		ProxySQL_Main_process_global_variables(argc, argv);
 		GloVars.global.start_time=monotonic_time(); // always initialize it
+		srand(GloVars.global.start_time*thread_id());
+		randID = rand();
 #ifdef DEBUG
 		std::cerr << "Main init global variables completed in ";
 #endif
@@ -1796,26 +1801,34 @@ __start_label:
 #endif
 	}
 
-	if (GloVars.global.version_check) {
-		pthread_attr_t attr;
-		pthread_attr_init(&attr);
-		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-		pthread_t thr;
-		if (pthread_create(&thr, &attr, main_check_latest_version_thread, NULL) !=0 ) {
-			perror("Thread creation");
-			exit(EXIT_FAILURE);
-		}
-	}
 	{
 		unsigned int missed_heartbeats = 0;
 		unsigned long long previous_time = monotonic_time();
 		unsigned int inner_loops = 0;
+		unsigned long long time_next_version_check = 0;
 		while (glovars.shutdown==0) {
 			usleep(200000);
 			if (disable_watchdog) {
 				continue;
 			}
 			unsigned long long curtime = monotonic_time();
+			if (GloVars.global.version_check) {
+				if (curtime > time_next_version_check) {
+					pthread_attr_t attr;
+					pthread_attr_init(&attr);
+					pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+					pthread_t thr;
+					if (pthread_create(&thr, &attr, main_check_latest_version_thread, NULL) !=0 ) {
+						perror("Thread creation");
+						exit(EXIT_FAILURE);
+					}
+					if (time_next_version_check == 0)
+						time_next_version_check = curtime;
+					unsigned long long inter = 24*3600*1000;
+					inter *= 1000;
+					time_next_version_check += inter;
+				}
+			}
 			inner_loops++;
 			if (curtime >= inner_loops*300000 + previous_time ) {
 				// if this happens, it means that this very simple loop is blocked

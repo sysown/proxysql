@@ -114,6 +114,7 @@ deps/libmicrohttpd/libmicrohttpd-0.9.68/
 
 #libhttpserver
 deps/libhttpserver/libhttpserver-master_20191121/
+deps/libhttpserver/libhttpserver-0.18.1/
 
 #clickhouse
 deps/clickhouse-cpp/clickhouse-cpp/

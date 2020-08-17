@@ -6036,7 +6036,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 //				c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
 
 				if (max_lag_ms >= 0) {
-					if (max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
+					if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
 						status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
 						continue;
 					}

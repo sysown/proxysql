@@ -89,9 +89,6 @@ static char *s_strdup(char *s) {
 }
 
 static int __SQLite3_Server_refresh_interval=1000;
-static bool testTimeoutSequence[] = {true, false, true, false, true, false, true, false};
-static int testIndex = 7;
-static int testLag = 10;
 
 extern Query_Cache *GloQC;
 extern MySQL_Authentication *GloMyAuth;

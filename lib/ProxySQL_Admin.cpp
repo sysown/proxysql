@@ -444,6 +444,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
+#define ADMIN_SQLITE_TABLE_DEBUG_FILTERS "CREATE TABLE debug_filters (filename VARCHAR NOT NULL , line INT NOT NULL , funct VARCHAR NOT NULL , PRIMARY KEY (filename, line, funct) )"
 #endif /* DEBUG */
 
 #define ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS_V1_4 "CREATE TABLE mysql_group_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , backup_writer_hostgroup INT CHECK (backup_writer_hostgroup>=0 AND backup_writer_hostgroup<>writer_hostgroup) NOT NULL , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND backup_writer_hostgroup<>reader_hostgroup AND reader_hostgroup>0) , offline_hostgroup INT NOT NULL CHECK (offline_hostgroup<>writer_hostgroup AND offline_hostgroup<>reader_hostgroup AND backup_writer_hostgroup<>offline_hostgroup AND offline_hostgroup>=0) , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , max_writers INT NOT NULL CHECK (max_writers >= 0) DEFAULT 1 , writer_is_also_reader INT CHECK (writer_is_also_reader IN (0,1)) NOT NULL DEFAULT 0 , max_transactions_behind INT CHECK (max_transactions_behind>=0) NOT NULL DEFAULT 0 , comment VARCHAR , UNIQUE (reader_hostgroup) , UNIQUE (offline_hostgroup) , UNIQUE (backup_writer_hostgroup))"
@@ -1487,10 +1488,20 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length==strlen("LOAD DEBUG FROM DISK") && !strncasecmp("LOAD DEBUG FROM DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
-			l_free(*ql,*q);
-			*q=l_strdup("INSERT OR REPLACE INTO main.debug_levels SELECT * FROM disk.debug_levels");
-			*ql=strlen(*q)+1;
-			return true;
+			// we are now copying the data from memory to disk
+			// tables involved are:
+			// * debug_levels
+			// * debug_filters
+			// We only delete from filters and not from levels because the
+			// levels are hardcoded and fixed in number, while filters can
+			// be arbitrary
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->admindb->execute("DELETE FROM main.debug_filters");
+			SPA->admindb->execute("INSERT OR REPLACE INTO main.debug_levels SELECT * FROM disk.debug_levels");
+			SPA->admindb->execute("INSERT INTO main.debug_filters SELECT * FROM disk.debug_filters");
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded debug levels/filters to MEMORY\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
 		}
 
 		if (
@@ -1501,10 +1512,20 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			(query_no_space_length==strlen("SAVE DEBUG TO DISK") && !strncasecmp("SAVE DEBUG TO DISK",query_no_space, query_no_space_length))
 		) {
 			proxy_info("Received %s command\n", query_no_space);
-			l_free(*ql,*q);
-			*q=l_strdup("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
-			*ql=strlen(*q)+1;
-			return true;
+			// we are now copying the data from disk to memory
+			// tables involved are:
+			// * debug_levels
+			// * debug_filters
+			// We only delete from filters and not from levels because the
+			// levels are hardcoded and fixed in number, while filters can
+			// be arbitrary
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			SPA->admindb->execute("DELETE FROM disk.debug_filters");
+			SPA->admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
+			SPA->admindb->execute("INSERT INTO disk.debug_filters SELECT * FROM main.debug_filters");
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved debug levels/filters to DISK\n");
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+			return false;
 		}
 
 		if (
@@ -1520,11 +1541,11 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			int rc=SPA->load_debug_to_runtime();
 			if (rc) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded debug levels to RUNTIME\n");
+				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded debug levels/filters to RUNTIME\n");
 				SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 1, "Error while loading debug levels to RUNTIME\n");
-				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Error while loading debug levels to RUNTIME");
+				proxy_debug(PROXY_DEBUG_ADMIN, 1, "Error while loading debug levels/filters to RUNTIME\n");
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Error while loading debug levels/filters to RUNTIME");
 			}
 			return false;
 		}
@@ -1541,7 +1562,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_debug_from_runtime();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved debug levels from RUNTIME\n");
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved debug levels/filters from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
@@ -2835,7 +2856,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		fileName.erase(fileName.find_last_not_of("\t\n\v\f\r ") + 1);
 		if (fileName.size() == 0) {
 			proxy_error("ProxySQL Admin Error: empty file name\n");
-			SPA->send_MySQL_ERR(&sess->client_myds->myprot, "ProxySQL Admin Error: empty file name");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL Admin Error: empty file name");
 			return false;
 		}
 		std::string data;
@@ -2850,7 +2871,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		if (rc) {
 			std::stringstream ss;
 			proxy_error("ProxySQL Admin Error: Cannot extract configuration\n");
-			SPA->send_MySQL_ERR(&sess->client_myds->myprot, "ProxySQL Admin Error: Cannot extract configuration");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL Admin Error: Cannot extract configuration");
 			return false;
 		} else {
 			std::ofstream out;
@@ -2942,7 +2963,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool stats_proxysql_servers_checksums = false;
 	bool stats_proxysql_servers_metrics = false;
-	bool stats_proxysql_servers_status = false;
+	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
 	if (strcasestr(query_no_space,"processlist"))
 		// This will match the following usecases:
@@ -2961,13 +2982,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		char *_ret = NULL;
 		c = (char *)query_no_space;
 		_ret = NULL;
-		while (_ret = strstr(c,"stats_mysql_query_digest_reset")) {
+		while ((_ret = strstr(c,"stats_mysql_query_digest_reset"))) {
 			ndr++;
 			c = _ret + strlen("stats_mysql_query_digest_reset");
 		}
 		c = (char *)query_no_space;
 		_ret = NULL;
-		while (_ret = strstr(c,"stats_mysql_query_digest")) {
+		while ((_ret = strstr(c,"stats_mysql_query_digest"))) {
 			nd++;
 			c = _ret + strlen("stats_mysql_query_digest");
 		}
@@ -3005,9 +3026,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_metrics"))
 		{ stats_proxysql_servers_metrics = true; refresh = true; }
+	// temporary disabled because not implemented
+/*
 	if (strstr(query_no_space,"stats_proxysql_servers_status"))
 		{ stats_proxysql_servers_status = true; refresh = true; }
-
+*/
 	if (strstr(query_no_space,"stats_mysql_prepared_statements_info")) {
 		stats_mysql_prepared_statements_info=true; refresh=true;
 	}
@@ -3130,6 +3153,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_proxysql_servers_checksums) {
 			stats___proxysql_servers_checksums();
 		}
+		// temporary disabled because not implemented
 //		if (stats_proxysql_servers_status) {
 //			stats___proxysql_servers_status();
 //		}
@@ -5273,6 +5297,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin, "runtime_restapi_routes", ADMIN_SQLITE_TABLE_RUNTIME_RESTAPI_ROUTES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_admin,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
+	insert_into_tables_defs(tables_defs_admin,"debug_filters", ADMIN_SQLITE_TABLE_DEBUG_FILTERS);
 #endif /* DEBUG */
 #ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse
@@ -5300,6 +5325,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config, "restapi_routes", ADMIN_SQLITE_TABLE_RESTAPI_ROUTES);
 #ifdef DEBUG
 	insert_into_tables_defs(tables_defs_config,"debug_levels", ADMIN_SQLITE_TABLE_DEBUG_LEVELS);
+	insert_into_tables_defs(tables_defs_config,"debug_filters", ADMIN_SQLITE_TABLE_DEBUG_FILTERS);
 #endif /* DEBUG */
 #ifdef PROXYSQLCLICKHOUSE
 	// ClickHouse
@@ -5850,6 +5876,21 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						}
 					}
 				} else {
+					if (
+						(strcmp(r->fields[0],"default_collation_connection")==0)
+						|| (strcmp(r->fields[0],"default_charset")==0)
+					) {
+						char *val=GloMTH->get_variable(r->fields[0]);
+						char q[1000];
+						if (val) {
+							if (strcmp(val,value)) {
+								proxy_warning("Variable %s with value \"%s\" is being replaced with value \"%s\".\n", r->fields[0],value, val);
+								sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],val);
+								db->execute(q);
+							}
+							free(val);
+						}
+					}
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Set variable %s with value \"%s\"\n", r->fields[0],value);
 					if (strcmp(r->fields[0],(char *)"show_processlist_extended")==0) {
 						variables.mysql_show_processlist_extended = atoi(value);
@@ -5915,7 +5956,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", cic->csname, cic->name);
 						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", cic->csname);
 						db->execute(q);
-						GloMTH->set_variable("default_charset",cic->csname);
+						GloMTH->set_variable((char *)"default_charset",cic->csname);
 					} else {
 						proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
 						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
@@ -8991,6 +9032,91 @@ void ProxySQL_Admin::flush_debug_levels_runtime_to_database(SQLite3DB *db, bool 
 #endif /* DEBUG */
 
 #ifdef DEBUG
+
+int ProxySQL_Admin::load_debug_to_runtime() {
+	int numrows = flush_debug_levels_database_to_runtime(admindb);
+	if (numrows) { // so far so good
+		// we now load filters
+		flush_debug_filters_database_to_runtime(admindb);	
+	}
+	return numrows;
+}
+
+// because  debug_mutex is static in debug.cpp
+// we get a list of filters debug, where a copy constructor is called
+// it is not optimal in term of performance, but this is not critical
+void ProxySQL_Admin::flush_debug_filters_runtime_to_database(SQLite3DB *db) {
+	std::set<std::string> filters;
+	proxy_debug_get_filters(filters);
+	admindb->execute((char *)"DELETE FROM debug_filters");
+	for (std::set<std::string>::iterator it = filters.begin(); it != filters.end(); ++it) {
+		// we are splitting each key in 3 parts, separated by :
+		// we call c_split_2 twice
+		char *a = NULL;
+		char *b = NULL;
+		char *c = NULL;
+		std::string s = *it;
+		char *key = strdup(s.c_str());
+		c_split_2(key, (const char *)":", &a, &b);
+		assert(a);
+		assert(b);
+		free(b);
+		b = NULL;
+		c_split_2(index(key,':')+1, (const char *)":", &b, &c);
+		assert(b);
+		assert(c);
+		std::string query = "INSERT INTO debug_filters VALUES ('";
+		query += a;
+		query += "',";
+		query += b; // line
+		query += ",'";
+		query += c; // funct
+		query += "')";
+		admindb->execute(query.c_str());
+		free(a);
+		free(b);
+		free(c);
+		free(key);
+	}
+}
+
+void ProxySQL_Admin::save_debug_from_runtime() {
+	flush_debug_levels_runtime_to_database(admindb, true);
+	flush_debug_filters_runtime_to_database(admindb);
+}
+
+// because  debug_mutex is static in debug.cpp
+// we generate a set and sent it to debug, where a copy constructor is called
+// it is not optimal in term of performance, but this is not critical
+void ProxySQL_Admin::flush_debug_filters_database_to_runtime(SQLite3DB *db) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	std::string query = "SELECT filename, line, funct FROM debug_filters";
+	admindb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+		assert(0);
+	} else {
+		std::set<std::string> filters;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			std::string key; // we create a string with the row
+			// remember the format is filename:line:funct
+			// no column can be null
+			key = r->fields[0];
+			key += ":";
+			key += r->fields[1];
+			key += ":";
+			key += r->fields[2];
+			filters.emplace(key);
+		}
+		proxy_debug_load_filters(filters);
+	}
+	if (resultset) delete resultset;
+}
+
 int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
   int i;
   char *query=(char *)"SELECT verbosity FROM debug_levels WHERE module=\"%s\"";
@@ -9038,6 +9164,7 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 	admindb->execute("INSERT OR IGNORE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
 #ifdef DEBUG
 	admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
+	admindb->execute("INSERT OR IGNORE INTO main.debug_filters SELECT * FROM disk.debug_filters");
 #endif /* DEBUG */
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
@@ -9069,6 +9196,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
 #ifdef DEBUG
 	admindb->execute("INSERT OR REPLACE INTO main.debug_levels SELECT * FROM disk.debug_levels");
+	admindb->execute("INSERT OR REPLACE INTO main.debug_filters SELECT * FROM disk.debug_filters");
 #endif /* DEBUG */
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
@@ -9098,6 +9226,7 @@ void ProxySQL_Admin::__delete_disktable() {
 	admindb->execute("DELETE FROM disk.proxysql_servers");
 #ifdef DEBUG
 	admindb->execute("DELETE FROM disk.debug_levels");
+	admindb->execute("DELETE FROM disk.debug_filters");
 #endif /* DEBUG */
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
@@ -9126,6 +9255,7 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	admindb->execute("INSERT OR REPLACE INTO disk.proxysql_servers SELECT * FROM main.proxysql_servers");
 #ifdef DEBUG
 	admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
+	admindb->execute("INSERT OR REPLACE INTO disk.debug_filters SELECT * FROM main.debug_filters");
 #endif /* DEBUG */
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {

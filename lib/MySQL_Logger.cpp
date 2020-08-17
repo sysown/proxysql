@@ -125,7 +125,7 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 		time_t timer=start_time/1000/1000;
 		struct tm* tm_info;
 		tm_info = localtime(&timer);
-		char buffer1[64];
+		char buffer1[36];
 		char buffer2[64];
 		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
 		sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(start_time%1000000)/1000);
@@ -208,7 +208,7 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 				time_t timer= (orig_time)/1000/1000;
 				struct tm* tm_info;
 				tm_info = localtime(&timer);
-				char buffer1[64];
+				char buffer1[36];
 				char buffer2[64];
 				strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
 				sprintf(buffer2,"%s.%03u", buffer1, (unsigned)(orig_time%1000000)/1000);
@@ -384,7 +384,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 		time_t timer=start_time/1000/1000;
 		struct tm* tm_info;
 		tm_info = localtime(&timer);
-		char buffer1[64];
+		char buffer1[36];
 		char buffer2[64];
 		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
 		sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(start_time%1000000));
@@ -395,7 +395,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 		time_t timer=end_time/1000/1000;
 		struct tm* tm_info;
 		tm_info = localtime(&timer);
-		char buffer1[64];
+		char buffer1[36];
 		char buffer2[64];
 		strftime(buffer1, 32, "%Y-%m-%d %H:%M:%S", tm_info);
 		sprintf(buffer2,"%s.%06u", buffer1, (unsigned)(end_time%1000000));
@@ -813,7 +813,6 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 
 	uint64_t curtime_real=realtime_time();
-	uint64_t curtime_mono=sess->thread->curtime;
 	int cl=0;
 	char *ca=(char *)""; // default
 	if (sess->client_myds->addr.addr) {
@@ -862,11 +861,6 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
-	if (sl) {
-		int hid=-1;
-		hid=myds->myconn->parent->myhgc->hid;
-//		me.set_server(hid,sa,sl);
-	}
 
 	if (xi) {
 		me.set_extra_info(xi);

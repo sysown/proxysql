@@ -3,6 +3,7 @@
 #include <stack>
 
 #include <algorithm>
+#include <set>
 
 #ifndef EZOPTION
 #define EZOPTION
@@ -49,10 +50,6 @@
 
 #include <sys/ioctl.h>
 
-#if !defined(__FreeBSD__) && !defined(__APPLE__)
-#define HAVE_BOOL
-//#include "my_pthread.h"
-#endif
 #include "mysql.h"
 #include "mariadb_com.h"
 
@@ -111,6 +108,8 @@ void proxy_info_(const char* msg, ...);
 void init_debug_struct();
 void init_debug_struct_from_cmdline();
 void proxy_debug_func(enum debug_module, int, int, const char *, int, const char *, const char *, ...);
+void proxy_debug_get_filters(std::set<std::string>&);
+void proxy_debug_load_filters(std::set<std::string>&);
 #endif
 
 #ifdef __cplusplus
