@@ -2120,7 +2120,6 @@ void * monitor_replication_lag_thread(void *arg) {
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-		unsigned long long now=monotonic_time();
 #ifdef DEBUG
 		unsigned long long now=monotonic_time();
 		proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (now-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
