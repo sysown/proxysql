@@ -995,8 +995,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 			rc=sqlite3_bind_int64(statement, 9, 0); ASSERT_SQLITE_OK(rc, sessdb);
 			rc=sqlite3_bind_text(statement, 10, (char *)"Primary", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 
-			char *pxt_maint_mode = rand()%2==0?(char*)"ENABLED":(char*)"DISABLED";
-			rc=sqlite3_bind_text(statement, 11, pxt_maint_mode, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
+			rc=sqlite3_bind_text(statement, 11, (char *)"DISABLED", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
@@ -1163,7 +1162,7 @@ bool SQLite3_Server::init() {
 	tables_defs_galera = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_galera,
 		(const char *)"HOST_STATUS_GALERA",
-		(const char *)"CREATE TABLE HOST_STATUS_GALERA (hostgroup_id INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , wsrep_local_state VARCHAR , read_only VARCHAR , wsrep_local_recv_queue VARCHAR , wsrep_desync VARCHAR , wsrep_reject_queries VARCHAR , wsrep_sst_donor_rejects_queries VARCHAR , wsrep_cluster_status VARCHAR , pxc_maint_mode VARCHAR , PRIMARY KEY (hostgroup_id, hostname, port))");
+		(const char *)"CREATE TABLE HOST_STATUS_GALERA (hostgroup_id INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , wsrep_local_state VARCHAR , read_only VARCHAR , wsrep_local_recv_queue VARCHAR , wsrep_desync VARCHAR , wsrep_reject_queries VARCHAR , wsrep_sst_donor_rejects_queries VARCHAR , wsrep_cluster_status VARCHAR , pxc_maint_mode VARCHAR NOT NULL CHECK (pxc_maint_mode IN ('DISABLED', 'SHUTDOWN', 'MAINTENANCE')) DEFAULT 'DISABLED' , PRIMARY KEY (hostgroup_id, hostname, port))");
 	check_and_build_standard_tables(sessdb, tables_defs_galera);
 	GloAdmin->enable_galera_testing();
 #endif // TEST_GALERA
