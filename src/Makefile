@@ -8,7 +8,7 @@ endif
 DEPS_PATH=../deps
 
 ifneq (,$(wildcard /etc/system-release))
-	CENTOSVER := $(shell cat /etc/system-release | awk '{print $$3}')
+	CENTOSVER := $(shell rpm --eval %rhel)
 else
 	CENTOSVER := Unknown
 endif
@@ -112,7 +112,7 @@ endif
 ifeq ($(UNAME_S),FreeBSD)
 	MYLIBS+= -lexecinfo
 endif
-ifeq ($(CENTOSVER),6.7)
+ifeq ($(CENTOSVER),6)
 	MYLIBS+= -lgcrypt
 endif
 
