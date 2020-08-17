@@ -1,0 +1,13 @@
+diff --git a/src/httpserver/deferred_response.hpp b/src/httpserver/deferred_response.hpp
+index 170d5e8..9431986 100644
+--- a/src/httpserver/deferred_response.hpp
++++ b/src/httpserver/deferred_response.hpp
+@@ -55,7 +55,7 @@ class deferred_response : public string_response
+         }
+
+         deferred_response(const deferred_response& other) = default;
+-        deferred_response(deferred_response&& other) noexcept = default;
++        deferred_response(deferred_response&& other) = default;
+         deferred_response& operator=(const deferred_response& b) = default;
+         deferred_response& operator=(deferred_response&& b) = default;
+
