@@ -1,0 +1,13 @@
+diff --git a/src/httpserver/file_response.hpp b/src/httpserver/file_response.hpp
+index cb80c11..d08f8d4 100644
+--- a/src/httpserver/file_response.hpp
++++ b/src/httpserver/file_response.hpp
+@@ -46,7 +46,7 @@ class file_response : public http_response
+         }
+
+         file_response(const file_response& other) = default;
+-        file_response(file_response&& other) noexcept = default;
++        file_response(file_response&& other) = default;
+
+         file_response& operator=(const file_response& b) = default;
+         file_response& operator=(file_response&& b) = default;
