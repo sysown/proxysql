@@ -341,7 +341,7 @@ GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _p
 	w = _w;
 	size = 1024; // 1KB buffer
 	data = (char *)malloc(size);
-	uuid_server[0] = 0;
+	memset(uuid_server, 0, sizeof(uuid_server));
 	pos = 0;
 	len = 0;
 	address = strdup(_address);
@@ -457,7 +457,8 @@ bool GTID_Server_Data::read_next_gtid() {
 	if (strncmp(data+pos,(char *)"ST=",3)==0) {
 		// we are reading the bootstrap
 		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
-		memcpy(bs,data+pos+3,l+1-3);
+		memcpy(bs, data+pos+3, l-3);
+		bs[l-3] = '\0';
 		char *saveptr1=NULL;
 		char *saveptr2=NULL;
 		//char *saveptr3=NULL;
