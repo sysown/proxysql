@@ -1117,6 +1117,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 
 	if (query_no_space_length==strlen("PROXYSQL SHUTDOWN") && !strncasecmp("PROXYSQL SHUTDOWN",query_no_space, query_no_space_length)) {
+		glovars.proxy_restart_on_error=false;
 		proxy_info("Received PROXYSQL SHUTDOWN command\n");
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=0;
