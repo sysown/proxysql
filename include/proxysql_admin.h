@@ -9,7 +9,8 @@
 #include "ProxySQL_RESTAPI_Server.hpp"
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
-
+class ProxySQL_Config;
+class ProxySQL_Restapi;
 
 class Scheduler_Row {
 	public:
@@ -240,6 +241,7 @@ class ProxySQL_Admin {
 	void save_mysql_firewall_from_runtime(bool);
 	void save_mysql_firewall_whitelist_users_from_runtime(bool, SQLite3_result *);
 	void save_mysql_firewall_whitelist_rules_from_runtime(bool, SQLite3_result *);
+	void save_mysql_firewall_whitelist_sqli_fingerprints_from_runtime(bool, SQLite3_result *);
 
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
@@ -269,12 +271,8 @@ class ProxySQL_Admin {
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 
-	int Read_Global_Variables_from_configfile(const char *prefix);
-	int Read_MySQL_Users_from_configfile();
-	int Read_MySQL_Query_Rules_from_configfile();
-	int Read_MySQL_Servers_from_configfile();
-	int Read_Scheduler_from_configfile();
-	int Read_ProxySQL_Servers_from_configfile();
+	ProxySQL_Config& proxysql_config();
+	ProxySQL_Restapi& proxysql_restapi();
 
 	void flush_error_log();
 	bool GenericRefreshStatistics(const char *query_no_space, unsigned int query_no_space_length, bool admin);

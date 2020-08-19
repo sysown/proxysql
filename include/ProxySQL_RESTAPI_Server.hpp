@@ -8,11 +8,10 @@
 
 class ProxySQL_RESTAPI_Server {
 	private:
-	//httpserver::webserver *ws;
-	httpserver::webserver * ws;
+	std::unique_ptr<httpserver::webserver> ws;
 	int port;
 	pthread_t thread_id;
-	httpserver::http_resource *hr;
+	std::unique_ptr<httpserver::http_resource> endpoint;
 	public:
 	ProxySQL_RESTAPI_Server(int p);
 	~ProxySQL_RESTAPI_Server();

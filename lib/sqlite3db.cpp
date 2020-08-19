@@ -189,6 +189,24 @@ int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
 	return rc;
 }
 
+SQLite3_result* SQLite3DB::execute_statement(const char *str, char **_error, int *_cols, int *_affected_rows) {
+	SQLite3_result* resultset;
+
+	char *myerror;
+	char **error = (_error == NULL ? &myerror : _error);
+
+	int mycols;
+	int *cols = (_cols == NULL ? &mycols : _cols);
+
+	int my_affected_rows;
+	int *affected_rows = (_affected_rows == NULL ? &my_affected_rows : _affected_rows);
+
+	if (execute_statement(str, error, cols, affected_rows, &resultset))
+		return resultset;
+
+	return NULL;
+}
+
 bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int *affected_rows, SQLite3_result **resultset) {
 	int rc;
 	sqlite3_stmt *statement=NULL;

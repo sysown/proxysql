@@ -17,6 +17,7 @@
 #include "query_processor.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
+#include "proxysql_restapi.h"
 
 
 #include <libdaemon/dfork.h>
@@ -213,6 +214,7 @@ void * main_check_latest_version_thread(void *arg) {
 	if (latest_version) {
 		proxy_info("Latest ProxySQL version available: %s\n", latest_version);
 	}
+	free(latest_version);
 	return NULL;
 }
 
@@ -961,8 +963,9 @@ void ProxySQL_Main_init_Auth_module() {
 
 void ProxySQL_Main_init_Query_module() {
 	GloQPro = new Query_Processor();
-  GloQPro->print_version();
+	GloQPro->print_version();
 	GloAdmin->init_mysql_query_rules();
+	GloAdmin->init_mysql_firewall();
 }
 
 void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
@@ -1259,6 +1262,7 @@ void ProxySQL_Main_init_phase3___start_all() {
 		GloAdmin->init_mysql_servers();
 		GloAdmin->init_proxysql_servers();
 		GloAdmin->load_scheduler_to_runtime();
+		GloAdmin->proxysql_restapi().load_restapi_to_runtime();
 #ifdef DEBUG
 		std::cerr << "Main phase3 : GloAdmin initialized in ";
 #endif
@@ -1295,6 +1299,14 @@ void ProxySQL_Main_init_phase3___start_all() {
 		std::cerr << "Main phase3 : MySQL Threads Handler listeners started in ";
 #endif
 	}
+	if ( GloVars.global.sqlite3_server == true ) {
+		cpu_timer t;
+		ProxySQL_Main_init_SQLite3Server();
+		sleep(1);
+#ifdef DEBUG
+		std::cerr << "Main phase3 : SQLite3 Server initialized in ";
+#endif
+	}
 	if (GloVars.global.monitor==true)
 		{
 			cpu_timer t;
@@ -1303,13 +1315,6 @@ void ProxySQL_Main_init_phase3___start_all() {
 			std::cerr << "Main phase3 : MySQL Monitor initialized in ";
 #endif
 		}
-	if ( GloVars.global.sqlite3_server == true ) {
-		cpu_timer t;
-		ProxySQL_Main_init_SQLite3Server();
-#ifdef DEBUG
-		std::cerr << "Main phase3 : SQLite3 Server initialized in ";
-#endif
-	}
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
 		cpu_timer t;
@@ -1496,6 +1501,14 @@ bool ProxySQL_daemonize_phase3() {
 	return true;
 }
 
+void my_terminate(void) {
+	proxy_error("ProxySQL crashed due to exception\n");
+	print_backtrace();
+}
+
+namespace {
+	static const bool SET_TERMINATE = std::set_terminate(my_terminate);
+}
 
 int main(int argc, const char * argv[]) {
 
@@ -1762,6 +1775,7 @@ __start_label:
 					if (missed_heartbeats >= (unsigned int)GloVars.restart_on_missing_heartbeats) {
 						if (GloVars.restart_on_missing_heartbeats) {
 							proxy_error("Watchdog: reached %u missed heartbeats. Aborting!\n", missed_heartbeats);
+							proxy_error("Watchdog: see details at https://github.com/sysown/proxysql/wiki/Watchdog\n");
 							assert(0);
 						}
 					}

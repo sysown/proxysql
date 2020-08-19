@@ -140,15 +140,23 @@ class MonMySrvC {
 	public:
 	char *address;
 	uint16_t port;
-	PtrArray *conns;
+	std::unique_ptr<PtrArray> conns;
 	MonMySrvC(char *a, uint16_t p) {
 		address = strdup(a);
 		port = p;
-		conns = new PtrArray();
+		conns = std::unique_ptr<PtrArray>(new PtrArray());
 	};
 	~MonMySrvC() {
 		free(address);
-		delete conns;
+		if (conns) {
+			while (conns->len) {
+				MYSQL* mysql = static_cast<MYSQL*>(conns->index(0));
+				if (mysql) {
+					mysql_close(mysql); mysql=NULL;
+				}
+				conns->remove_index_fast(0);
+			}
+		}
 	}
 };
 
@@ -172,6 +180,17 @@ public:
 		pthread_mutex_init(&m2, NULL);
 #endif // DEBUG
 	};
+	~MySQL_Monitor_Connection_Pool() {
+		if (servers) {
+			while(servers->len) {
+				MonMySrvC *srv = static_cast<MonMySrvC *>(servers->index(0));
+				if (srv) {
+					delete srv;
+				}
+				servers->remove_index_fast(0);
+			}
+		}
+	}
 	void conn_register(MySQL_Monitor_State_Data *mmsd) {
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
@@ -697,6 +716,10 @@ void * monitor_connect_thread(void *arg) {
 			(strncmp(mmsd->mysql_error_msg,"ProxySQL Error: Access denied for user",strlen("ProxySQL Error: Access denied for user"))==0)
 		) {
 			proxy_error("Server %s:%d is returning \"Access denied\" for monitoring user\n", mmsd->hostname, mmsd->port);
+		}
+		else if (strncmp(mmsd->mysql_error_msg,"Your password has expired.",strlen("Your password has expired."))==0)
+		{
+			proxy_error("Server %s:%d is returning \"Your password has expired.\" for monitoring user\n", mmsd->hostname, mmsd->port);
 		}
 	} else {
 		connect_success = true;
@@ -1546,7 +1569,8 @@ void * monitor_galera_thread(void *arg) {
 	mmsd->interr=0; // reset the value
 	{
 #ifdef TEST_GALERA
-		char *q1 = (char *)"SELECT wsrep_local_state , read_only , wsrep_local_recv_queue , wsrep_desync , wsrep_reject_queries , wsrep_sst_donor_rejects_queries , wsrep_cluster_status FROM HOST_STATUS_GALERA WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+		char *q1 = (char *)"SELECT wsrep_local_state , read_only , wsrep_local_recv_queue , wsrep_desync , wsrep_reject_queries , wsrep_sst_donor_rejects_queries , "
+			" wsrep_cluster_status, pxc_maint_mode FROM HOST_STATUS_GALERA WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 		char *q2 = (char *)malloc(strlen(q1)+strlen(mmsd->hostname)+32);
 		sprintf(q2,q1, mmsd->writer_hostgroup, mmsd->hostname, mmsd->port);
 		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, q2);
@@ -1555,10 +1579,17 @@ void * monitor_galera_thread(void *arg) {
 		char *sv = mmsd->mysql->server_version;
 		if (strncmp(sv,(char *)"5.7",3)==0 || strncmp(sv,(char *)"8",1)==0) {
 			// the backend is either MySQL 5.7 or MySQL 8 : INFORMATION_SCHEMA.GLOBAL_STATUS is deprecated
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , @@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status");
+			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
+			"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
+			"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
+			"(SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , "
+			"(SELECT COALESCE(MAX(VARIABLE_VALUE),'DISABLED') FROM performance_schema.global_variables WHERE variable_name='pxc_maint_mode') pxc_maint_mode ");
 		} else {
 			// any other version
-			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , @@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status");
+			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_STATE') "
+			"wsrep_local_state, @@read_only read_only, (SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_LOCAL_RECV_QUEUE') wsrep_local_recv_queue , "
+			"@@wsrep_desync wsrep_desync, @@wsrep_reject_queries wsrep_reject_queries, @@wsrep_sst_donor_rejects_queries wsrep_sst_donor_rejects_queries, "
+			"(SELECT VARIABLE_VALUE FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME='WSREP_CLUSTER_STATUS') wsrep_cluster_status , SELECT 'DISABLED' pxc_maint_mode");
 		}
 #endif // TEST_GALERA
 	}
@@ -1628,6 +1659,7 @@ __exit_monitor_galera_thread:
 		bool wsrep_reject_queries = true;
 		bool wsrep_sst_donor_rejects_queries = true;
 		long long wsrep_local_recv_queue=0;
+		bool pxc_maint_mode=false;
 		int num_timeouts = 0;
 		MYSQL_FIELD * fields=NULL;
 		if (mmsd->interr == 0 && mmsd->result) {
@@ -1636,7 +1668,7 @@ __exit_monitor_galera_thread:
 			num_fields = mysql_num_fields(mmsd->result);
 			fields = mysql_fetch_fields(mmsd->result);
 			num_rows = mysql_num_rows(mmsd->result);
-			if (fields==NULL || num_fields!=7 || num_rows!=1) {
+			if (fields==NULL || num_fields!=8 || num_rows!=1) {
 				proxy_error("mysql_fetch_fields returns NULL, or mysql_num_fields is incorrect. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
 				if (mmsd->mysql_error_msg==NULL) {
 					mmsd->mysql_error_msg = strdup("Unknown error");
@@ -1685,6 +1717,16 @@ __exit_monitor_galera_thread:
 					primary_partition = true;
 				}
 			}
+			if (row[7]) {
+				std::string s(row[7]);
+				std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+				if (!strncmp("DISABLED",s.c_str(),8)) {
+					pxc_maint_mode=false;
+				}
+				else {
+					pxc_maint_mode=true;
+				}
+			}
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
@@ -1702,11 +1744,11 @@ __end_process_galera_result:
 		if (it2!=GloMyMon->Galera_Hosts_Map.end()) {
 			node=it2->second;
 			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
-			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, mmsd->mysql_error_msg);
+			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, pxc_maint_mode, mmsd->mysql_error_msg);
 		} else {
 			node = new Galera_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
 			//node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , transactions_behind,viable_candidate,read_only,mmsd->mysql_error_msg);
-			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, mmsd->mysql_error_msg);
+			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1) , wsrep_local_recv_queue, primary_partition, read_only, wsrep_local_state, wsrep_desync, wsrep_reject_queries, wsrep_sst_donor_rejects_queries, pxc_maint_mode, mmsd->mysql_error_msg);
 			GloMyMon->Galera_Hosts_Map.insert(std::make_pair(s,node));
 		}
 		if (mmsd->mysql_error_msg) {
@@ -1769,37 +1811,42 @@ __end_process_galera_result:
 			}
 		} else {
 			if (fields) { // if we didn't get any error, but fileds is NULL, we are likely hitting bug #1994
-				if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
-					if (primary_partition == false) {
-						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
-					} else {
-						if (wsrep_desync == true) {
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
+				if (pxc_maint_mode) {
+					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"pxc_maint_mode=YES");
+				}
+				else {
+					if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
+						if (primary_partition == false) {
+							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
 						} else {
-							char msg[80];
-							sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
-							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+							if (wsrep_desync == true) {
+								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_desync=YES");
+							} else {
+								char msg[80];
+								sprintf(msg,"wsrep_local_state=%d",wsrep_local_state);
+								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, msg);
+							}
 						}
-					}
-				} else {
-					//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
+					} else {
+						//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
 						if (wsrep_reject_queries) {
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
-					//	} else {
-					//		// wsrep_sst_donor_rejects_queries
-					//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
-					//	}
-					} else {
-						if (read_only==true) {
-							if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
-								MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+							//	} else {
+							//		// wsrep_sst_donor_rejects_queries
+							//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
+							//	}
+					    } else {
+						    if (read_only==true) {
+								if (wsrep_local_recv_queue > mmsd->max_transactions_behind) {
+									MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+								} else {
+									MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+								}
 							} else {
-								MyHGM->update_galera_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+								// the node is a writer
+								// TODO: for now we don't care about the number of writers
+								MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
 							}
-						} else {
-							// the node is a writer
-							// TODO: for now we don't care about the number of writers
-							MyHGM->update_galera_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
 						}
 					}
 				}
@@ -2363,7 +2410,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				resultset=NULL;
 			}
 			char *new_query=NULL;
-			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' AND ping_error NOT LIKE 'ProxySQL Error: Access denied for user%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
+			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' AND ping_error NOT LIKE 'ProxySQL Error: Access denied for user%%' AND ping_error NOT LIKE 'Your password has expired.%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
 			for (j=0;j<i;j++) {
 				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
@@ -3374,7 +3421,7 @@ Galera_monitor_node::~Galera_monitor_node() {
 }
 
 // return true if status changed
-bool Galera_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, int _local_state, bool _desync, bool _reject, bool _sst_donor_reject, char *_error) {
+bool Galera_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, int _local_state, bool _desync, bool _reject, bool _sst_donor_reject, bool _pxc_maint_mode, char *_error) {
 	bool ret=false;
 	if (idx_last_entry==-1) ret=true;
 	int prev_last_entry=idx_last_entry;
@@ -3391,6 +3438,7 @@ bool Galera_monitor_node::add_entry(unsigned long long _st, unsigned long long _
 	last_entries[idx_last_entry].wsrep_desync = _desync;
 	last_entries[idx_last_entry].wsrep_reject_queries = _reject;
 	last_entries[idx_last_entry].wsrep_sst_donor_rejects_queries = _sst_donor_reject;
+	last_entries[idx_last_entry].pxc_maint_mode = _pxc_maint_mode;
 	if (last_entries[idx_last_entry].error) {
 		free(last_entries[idx_last_entry].error);
 		last_entries[idx_last_entry].error=NULL;
@@ -3464,7 +3512,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
-	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
 	//rc=sqlite3_prepare_v2(mondb, query1, -1, &statement1, 0);
@@ -3493,7 +3541,8 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 				rc=sqlite3_bind_text(statement1, 9, ( node->last_entries[i].wsrep_desync ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 				rc=sqlite3_bind_text(statement1, 10, ( node->last_entries[i].wsrep_reject_queries ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 				rc=sqlite3_bind_text(statement1, 11, ( node->last_entries[i].wsrep_sst_donor_rejects_queries ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
-				rc=sqlite3_bind_text(statement1, 12, node->last_entries[i].error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=sqlite3_bind_text(statement1, 12, ( node->last_entries[i].pxc_maint_mode ? (char *)"YES" : (char *)"NO" ) , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=sqlite3_bind_text(statement1, 13, node->last_entries[i].error , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
 				SAFE_SQLITE3_STEP2(statement1);
 				rc=sqlite3_clear_bindings(statement1); ASSERT_SQLITE_OK(rc, monitordb);
 				rc=sqlite3_reset(statement1); ASSERT_SQLITE_OK(rc, monitordb);
@@ -3928,6 +3977,10 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
 
+		if (mmsd) {
+			delete mmsd;
+			mmsd = NULL;
+		}
 		unsigned int glover;
 		t1=monotonic_time();
 		
@@ -4753,11 +4806,14 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #else
 					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
 #endif // TEST_AURORA
-#ifdef TEST_AURORA
 				} else {
+#ifdef TEST_AURORA
 					action_no++;
 #endif // TEST_AURORA
-					rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
+					if (is_writer ) {
+						// if the server is a writer we run it anyway. This will perform some sanity check
+						rla_rc = MyHGM->aws_aurora_replication_lag_action(wHG, rHG, hse->server_id, current_lag_ms, enable, is_writer);
+					}
 				}
 				//if (is_writer == true && rla_rc == false) {
 				if (rla_rc == false) {

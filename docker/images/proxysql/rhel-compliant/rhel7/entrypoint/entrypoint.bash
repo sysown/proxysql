@@ -1,8 +1,23 @@
 #!/bin/bash
 set -eu
 
+# For troubleshooting...
+# while true; do echo hello; sleep 2; done
+
 echo "==> Build environment:"
 env
+
+echo "==> Dirty patching to ensure OS deps are installed"
+
+if [[ -f "/usr/bin/python" ]]  || [[ -h "/usr/bin/python" ]];
+then 
+    echo "==> Installing dependancies for RHEL compliant version 7"
+    yum -y install gnutls-devel libtool || true
+else
+    echo "==> Installing dependancies for RHEL compliant version 8"
+    yum -y install python2 gnutls-devel libtool || true
+    ln -s /usr/bin/python2.7 /usr/bin/python || true
+fi
 
 echo "==> Cleaning"
 # Delete package if exists

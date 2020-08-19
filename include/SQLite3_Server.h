@@ -16,7 +16,6 @@ class SQLite3_Session {
 class SQLite3_Server {
 	private:
 	volatile int main_shutdown;
-	SQLite3DB *sessdb;
 	int main_poll_nfds;
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
@@ -52,6 +51,7 @@ class SQLite3_Server {
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
 #endif // TEST_AURORA || TEST_GALERA
 	public:
+	SQLite3DB *sessdb;
 #ifdef TEST_AURORA
 	unsigned int cur_aurora_writer[3];
 	unsigned int num_aurora_servers[3];

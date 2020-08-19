@@ -620,7 +620,6 @@ static void * GTID_syncer_run() {
 		proxy_error("could not initialise GTID sync loop\n");
 		exit(EXIT_FAILURE);
 	}
-	MyHGM->gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
 	//ev_async_init(gtid_ev_async, gtid_async_cb);
 	//ev_async_start(gtid_ev_loop, gtid_ev_async);
 	MyHGM->gtid_ev_timer = (struct ev_timer *)malloc(sizeof(struct ev_timer));
@@ -1007,6 +1006,8 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	incoming_aws_aurora_hostgroups = NULL;
 	pthread_rwlock_init(&gtid_rwlock, NULL);
 	gtid_missing_nodes = false;
+	gtid_ev_loop=NULL;
+	gtid_ev_timer=NULL;
 	gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
 
 	{
@@ -1040,7 +1041,6 @@ void MySQL_HostGroups_Manager::shutdown() {
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 	GTID_syncer_thread->join();
 	delete GTID_syncer_thread;
-	free(gtid_ev_async);
 }
 
 MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
@@ -1053,6 +1053,13 @@ MySQL_HostGroups_Manager::~MySQL_HostGroups_Manager() {
 	if (admindb) {
 		delete admindb;
 	}
+	for (auto  info : AWS_Aurora_Info_Map)
+		delete info.second;
+	free(gtid_ev_async);
+	if (gtid_ev_loop)
+		ev_loop_destroy(gtid_ev_loop);
+	if (gtid_ev_timer)
+		free(gtid_ev_timer);
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_destroy(&lock);
 #endif
@@ -1619,7 +1626,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
-	proxy_info("MySQL_HostGroups_Manager::commit() locked for %lluus\n", curtime2-curtime1);
+	proxy_info("MySQL_HostGroups_Manager::commit() locked for %llums\n", curtime2-curtime1);
 
 	if (GloMTH) {
 		GloMTH->signal_all_threads(1);
@@ -1994,7 +2001,9 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup GROUP BY hostgroup_id, hostname, port";
+		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM "
+			" mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR "
+			" hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE active=1 GROUP BY hostname, port";
 		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (resultset) {
 			if (GloMyMon->Group_Replication_Hosts_resultset) {
@@ -2090,7 +2099,9 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup GROUP BY hostgroup_id, hostname, port";
+		char *query=(char *)"SELECT writer_hostgroup, hostname, port, MAX(use_ssl) use_ssl , writer_is_also_reader , max_transactions_behind "
+			" FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR "
+			" hostgroup_id=reader_hostgroup OR hostgroup_id=offline_hostgroup WHERE active=1 GROUP BY hostgroup_id, hostname, port";
 		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (resultset) {
 			if (GloMyMon->Galera_Hosts_resultset) {
@@ -5423,7 +5434,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 		SQLite3_result *resultset=NULL;
 		char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl , max_lag_ms , check_interval_ms , check_timeout_ms , "
 					        "add_lag_ms , min_lag_ms , lag_num_checks  FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR "
-					        "hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY hostname, port";
+					        "hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY writer_hostgroup, hostname, port";
 		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 		if (resultset) {
 			if (GloMyMon->AWS_Aurora_Hosts_resultset) {
@@ -5519,6 +5530,15 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 						}
 					}
 				}
+				if (ret==false)
+					if (is_writer==true)
+						if (enable==true)
+							if (_whid==(int)myhgc->hid)
+								if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+									mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+									proxy_warning("Re-enabling server %s:%d from HG %u because it is a writer\n", address, port, myhgc->hid);
+									ret = true;
+								}
 				//goto __exit_aws_aurora_replication_lag_action;
 			}
 		}
@@ -5545,7 +5565,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	char *q=NULL;
 	char *error=NULL;
 	//q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s%s' AND port=%d AND status<>3 AND hostgroup_id IN (%d, %d)";
 
 	int writer_is_also_reader=0;
 	int new_reader_weight = 1;
@@ -5575,7 +5595,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 	}
 
 	query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+1024*1024);
-	sprintf(query, q, _server_id, domain_name, aurora_port);
+	sprintf(query, q, _server_id, domain_name, aurora_port, _whid, _rhid);
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
 	if (error) {
 		free(error);
@@ -5661,8 +5681,8 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
-			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id<>%d";
-			sprintf(query,q,_writer_hostgroup);	
+			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d";
+			sprintf(query,q,_rhid);
 			mydb->execute(query);
 			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
 			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port);
@@ -5737,6 +5757,9 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			}
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("AWS Aurora: setting host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
+				q = (char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id NOT IN (%d, %d)";
+				sprintf(query, q, _rhid, _whid);
+				mydb->execute(query);
 				commit();
 				wrlock();
 /*

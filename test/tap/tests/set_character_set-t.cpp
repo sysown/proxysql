@@ -8,27 +8,7 @@
 
 #include "tap.h"
 #include "command_line.h"
-
-int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value) {
-	char query[128];
-
-	snprintf(query, sizeof(query),"show variables like '%s'", var_name.c_str());
-	if (mysql_query(mysql, query)) {
-		fprintf(stderr, "Failed to execute SHOW VARIABLES LIKE : no %d, %s\n",
-				mysql_errno(mysql), mysql_error(mysql));
-		return -1;
-	}
-
-	MYSQL_RES *result;
-	MYSQL_ROW row;
-	result = mysql_store_result(mysql);
-
-	int num_fields = mysql_num_fields(result);
-
-	row = mysql_fetch_row(result);
-	var_value = row[1];
-	mysql_free_result(result);
-}
+#include "utils.h"
 
 int main(int argc, char** argv) {
 	CommandLine cl;

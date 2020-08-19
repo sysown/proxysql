@@ -38,7 +38,7 @@ libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmi
 	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
 	cd libhttpserver && tar -zxf libhttpserver-master_20191121.tar.gz
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
-	cd libhttpserver/libhttpserver/build && LDFLAGS=-L=$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I=$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
 

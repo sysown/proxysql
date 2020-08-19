@@ -587,6 +587,8 @@ void MySQL_Logger::events_set_base_filename() {
 }
 
 void MySQL_Logger::events_set_datadir(char *s) {
+	if (events.datadir)
+		free(events.datadir);
 	events.datadir=strdup(s);
 	flush_log();
 };
@@ -615,6 +617,8 @@ void MySQL_Logger::audit_set_base_filename() {
 }
 
 void MySQL_Logger::audit_set_datadir(char *s) {
+	if (audit.datadir)
+		free(audit.datadir);
 	audit.datadir=strdup(s);
 	flush_log();
 };

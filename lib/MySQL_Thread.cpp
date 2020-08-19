@@ -267,12 +267,18 @@ int MySQL_Listeners_Manager::add(const char *iface, unsigned int num_threads, in
 #else
 	s = ( atoi(port) ? listen_on_port(address, atoi(port), PROXYSQL_LISTEN_LEN) : listen_on_unix(address, PROXYSQL_LISTEN_LEN));
 #endif /* SO_REUSEPORT */
-	if (s==-1) return s;
+	if (s==-1) {
+		free(address);
+		free(port);
+		return s;
+	}
 	if (s>0) {
 		ioctl_FIONBIO(s,1);
 		iface_info *ifi=new iface_info((char *)iface, address, atoi(port), s);
 		ifaces->add(ifi);
 	}
+	free(address);
+	free(port);
 	return s;
 }
 
@@ -3252,7 +3258,8 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 	assert(rc==0);
 	mysql_threads=(proxysql_mysql_thread_t *)calloc(num_threads,sizeof(proxysql_mysql_thread_t));
 #ifdef IDLE_THREADS
-	mysql_threads_idles=(proxysql_mysql_thread_t *)calloc(num_threads,sizeof(proxysql_mysql_thread_t));
+	if (GloVars.global.idle_threads)
+		mysql_threads_idles=(proxysql_mysql_thread_t *)calloc(num_threads,sizeof(proxysql_mysql_thread_t));
 #endif // IDLE_THREADS
 }
 
@@ -3264,9 +3271,11 @@ proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, 
 		}
 #ifdef IDLE_THREADS
 	} else {
-		if (pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]) != 0) {
-			proxy_error("Thread creation\n");
-			assert(0);
+		if (GloVars.global.idle_threads) {
+			if (pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]) != 0) {
+				proxy_error("Thread creation\n");
+				assert(0);
+			}
 		}
 #endif // IDLE_THREADS
 	}
@@ -4887,6 +4896,7 @@ MySQL_Thread::MySQL_Thread() {
 	status_variables.hostgroup_locked_queries = 0;
 	status_variables.aws_aurora_replicas_skipped_during_query = 0;
 	status_variables.automatic_detected_sqli = 0;
+	status_variables.whitelisted_sqli_fingerprint = 0;
 
 	match_regexes=NULL;
 
@@ -5463,9 +5473,15 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
-	{	// AWS Aurora replicas skipped during query
+	{	// detected and blocked SQL injection
 		pta[0]=(char *)"automatic_detected_sql_injection";
 		sprintf(buf,"%llu",get_automatic_detected_sqli());
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// detected but whitelisted SQL injection fingerprint
+		pta[0]=(char *)"whitelisted_sqli_fingerprint";
+		sprintf(buf,"%llu",get_whitelisted_sqli_fingerprint());
 		pta[1]=buf;
 		result->add_row(pta);
 	}
@@ -5550,7 +5566,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 			thr=(MySQL_Thread *)mysql_threads[i].worker;
 #ifdef IDLE_THREADS
 		} else {
-			if (mysql_thread___session_idle_show_processlist && mysql_threads_idles) {
+			if (GloVars.global.idle_threads && mysql_thread___session_idle_show_processlist && mysql_threads_idles) {
 				thr=(MySQL_Thread *)mysql_threads_idles[i-num_threads].worker;
 			}
 #endif // IDLE_THREADS
@@ -6583,6 +6599,19 @@ unsigned long long MySQL_Threads_Handler::get_automatic_detected_sqli() {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
 			if (thr)
 				q+=__sync_fetch_and_add(&thr->status_variables.automatic_detected_sqli,0);
+		}
+	}
+	return q;
+}
+
+unsigned long long MySQL_Threads_Handler::get_whitelisted_sqli_fingerprint() {
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.whitelisted_sqli_fingerprint,0);
 		}
 	}
 	return q;

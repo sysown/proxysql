@@ -316,7 +316,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 								if (*(s+1) == 'u' || *(s+1) == 'U') {
 									if (*(s+2) == 'l' || *(s+2) == 'L') {
 										if (*(s+3) == 'l' || *(s+3) == 'L') {
-											if (i==len-3) {
+											if (i==len-4) {
 												*p_r++ = '?';
 												*p_r = 0;
 												return r;

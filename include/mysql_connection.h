@@ -196,6 +196,8 @@ class MySQL_Connection {
 	void store_result_cont(short event);
 	void initdb_start();
 	void initdb_cont(short event);
+	void set_option_start();
+	void set_option_cont(short event);
 	void set_query(char *stmt, unsigned long length);
 	MDB_ASYNC_ST handler(short event);
 	void next_event(MDB_ASYNC_ST new_st);
@@ -208,6 +210,7 @@ class MySQL_Connection {
 	int async_send_simple_command(short event, char *stmt, unsigned long length); // no result set expected
 	int async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt=NULL, stmt_execute_metadata_t *_stmt_meta=NULL);
 	int async_ping(short event);
+	int async_set_option(short event, bool mask);
 
 	void stmt_prepare_start();
 	void stmt_prepare_cont(short event);

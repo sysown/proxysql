@@ -16,4 +16,3 @@ tap:
 tests: tap
 	cd tests && OPTZ="${O0} -ggdb " CC=${CC} CXX=${CXX} ${MAKE}
 
-

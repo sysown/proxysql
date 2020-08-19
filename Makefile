@@ -26,7 +26,11 @@ endif
 ifeq ($(OS),Darwin)
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
-export MAKEOPT=-j ${NPROCS}
+
+# Force to 8 for automatic build
+export MAKEOPT=-j 8
+
+#export MAKEOPT=-j ${NPROCS}
 
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1
@@ -44,9 +48,13 @@ debug: build_deps_debug build_lib_debug build_src_debug
 
 .PHONY: testaurora
 testaurora: build_deps_debug build_lib_testaurora build_src_testaurora
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
+	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgalera
 testgalera: build_deps_debug build_lib_testgalera build_src_testgalera
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
+	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgrouprep
 testgrouprep: build_deps_debug build_lib_testgrouprep build_src_testgrouprep
@@ -152,7 +160,7 @@ clean:
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 
-packages: centos6.7 centos6.7-dbg centos7 centos7-dbg centos7-clickhouse centos8 centos8-dbg centos8-clickhouse ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu16-clickhouse ubuntu18 ubuntu18-dbg ubuntu18-clickhouse debian7 debian7-dbg debian8 debian8-dbg debian9 debian9-dbg debian9-clickhouse debian10 debian10-dbg debian10-clickhouse fedora24 fedora24-dbg  fedora24-clickhouse fedora27 fedora27-dbg fedora27-clickhouse fedora28 fedora28-dbg fedora28-clickhouse
+packages: centos7 centos7-dbg centos7-clickhouse centos8 centos8-dbg centos8-clickhouse ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu16-clickhouse ubuntu18 ubuntu18-dbg ubuntu18-clickhouse debian8 debian8-dbg debian9 debian9-dbg debian9-clickhouse debian10 debian10-dbg debian10-clickhouse fedora24 fedora24-dbg  fedora24-clickhouse fedora27 fedora27-dbg fedora27-clickhouse fedora28 fedora28-dbg fedora28-clickhouse
 .PHONY: packages
 
 centos5: binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm
@@ -305,7 +313,7 @@ binaries/proxysql-${CURVER}-1-dbg-centos7.x86_64.rpm:
 
 binaries/proxysql-${CURVER}-1-centos8.x86_64.rpm:
 		docker-compose up centos8_build
-		docker-compose rm -f
+		#docker-compose rm -f
 
 binaries/proxysql-${CURVER}-clickhouse-1-centos8.x86_64.rpm:
 		docker-compose up centos8_ch_build
@@ -369,7 +377,7 @@ binaries/proxysql_${CURVER}-ubuntu18_amd64.deb:
 
 binaries/proxysql_${CURVER}-debian7_amd64.deb:
 	docker-compose up debian7_build
-	docker-compose rm -f
+	#docker-compose rm -f
 
 binaries/proxysql_${CURVER}-debian8_amd64.deb:
 	docker-compose up debian8_build

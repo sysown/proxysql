@@ -529,6 +529,7 @@ Query_Processor::Query_Processor() {
 	pthread_mutex_init(&global_mysql_firewall_whitelist_mutex, NULL);
 	global_mysql_firewall_whitelist_users_runtime = NULL;
 	global_mysql_firewall_whitelist_rules_runtime = NULL;
+	global_mysql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
 	global_mysql_firewall_whitelist_users_map___size = 0;
 	global_mysql_firewall_whitelist_users_result___size = 0;
 	global_mysql_firewall_whitelist_rules_map___size = 0;
@@ -652,6 +653,10 @@ Query_Processor::~Query_Processor() {
 	if (global_mysql_firewall_whitelist_rules_runtime) {
 		delete global_mysql_firewall_whitelist_rules_runtime;
 		global_mysql_firewall_whitelist_rules_runtime = NULL;
+	}
+	if (global_mysql_firewall_whitelist_sqli_fingerprints_runtime) {
+		delete global_mysql_firewall_whitelist_sqli_fingerprints_runtime;
+		global_mysql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
 	}
 };
 
@@ -2072,6 +2077,8 @@ __exit_process_mysql_query:
 			proxy_error("Firewall problem: unknown user\n");
 			assert(0);
 		}
+	} else {
+		ret->firewall_whitelist_mode = WUS_NOT_FOUND;
 	}
 	return ret;
 };
@@ -2099,7 +2106,7 @@ bool Query_Processor::find_firewall_whitelist_rule(char *username, char *client_
 	s += rand_del;
 	s += schemaname;
 	s += rand_del;
-	s += flagIN;
+	s += to_string(flagIN);
 	std::unordered_map<std::string, void *>:: iterator it;
 	it = global_mysql_firewall_whitelist_rules.find(s);
 	if (it != global_mysql_firewall_whitelist_rules.end()) {
@@ -2772,6 +2779,17 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 					}
 				}
 			}
+			if (!strcasecmp(key,"min_gtid")) {
+				size_t l = strlen(value);
+				if (is_valid_gtid(value, l)) {
+					char *buf=(char*)malloc(l+1);
+					strncpy(buf, value, l);
+					buf[l+1] = '\0';
+					qpo->min_gtid = buf;
+				} else {
+					proxy_warning("Invalid gtid value=%s\n", value);
+				}
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Variables in comment %s , key=%s , value=%s\n", token, key, value);
@@ -2780,6 +2798,24 @@ bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, ch
 	}
 	free_tokenizer( &tok );
 	return ret;
+}
+
+bool Query_Processor::is_valid_gtid(char *gtid, size_t gtid_len) {
+	if (gtid_len < 3) {
+		return false;
+	}
+	char *sep_pos = index(gtid, ':');
+	if (sep_pos == NULL) {
+		return false;
+	}
+	size_t uuid_len = sep_pos - gtid;
+	if (uuid_len < 1) {
+		return false;
+	}
+	if (gtid_len < uuid_len + 2) {
+		return false;
+	}
+	return true;
 }
 
 void Query_Processor::query_parser_free(SQP_par_t *qp) {
@@ -2795,8 +2831,35 @@ void Query_Processor::query_parser_free(SQP_par_t *qp) {
 	}
 };
 
+bool Query_Processor::whitelisted_sqli_fingerprint(char *_s) {
+	bool ret = false;
+	string s = _s;
+	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
+	for (std::vector<std::string>::iterator it = global_mysql_firewall_whitelist_sqli_fingerprints.begin() ; ret == false && it != global_mysql_firewall_whitelist_sqli_fingerprints.end(); ++it) {
+		if (s == *it) {
+			ret = true;
+		}
+	}
+	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
+	return ret;
+}
+
+void Query_Processor::load_mysql_firewall_sqli_fingerprints(SQLite3_result *resultset) {
+	global_mysql_firewall_whitelist_sqli_fingerprints.erase(global_mysql_firewall_whitelist_sqli_fingerprints.begin(), global_mysql_firewall_whitelist_sqli_fingerprints.end());
+	// perform the inserts
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		int active = atoi(r->fields[0]);
+		if (active == 0) {
+			continue;
+		}
+		char * fingerprint = r->fields[1];
+		string s = fingerprint;
+		global_mysql_firewall_whitelist_sqli_fingerprints.push_back(s);
+	}
+}
+
 void Query_Processor::load_mysql_firewall_users(SQLite3_result *resultset) {
-	// remove all pointer array, and set mode to OFF
 	unsigned long long tot_size = 0;
 	std::unordered_map<std::string, int>::iterator it;
 	for (it = global_mysql_firewall_whitelist_users.begin() ; it != global_mysql_firewall_whitelist_users.end(); ++it) {
@@ -2822,6 +2885,8 @@ void Query_Processor::load_mysql_firewall_users(SQLite3_result *resultset) {
 				it2->second = WUS_DETECTING;
 			} else if (strcmp(mode,(char *)"PROTECTING")==0) {
 				it2->second = WUS_PROTECTING;
+			} else if (strcmp(mode,(char *)"OFF")==0) {
+				it2->second = WUS_OFF;
 			}
 		} else {
 			//whitelist_user_setting *wus = (whitelist_user_setting *)malloc(sizeof(whitelist_user_setting));
@@ -3042,7 +3107,7 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 	return ret;
 }
 
-void Query_Processor::get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r) {
+void Query_Processor::get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r, SQLite3_result **sf) {
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	if (global_mysql_firewall_whitelist_rules_runtime) {
 		*r = new SQLite3_result(global_mysql_firewall_whitelist_rules_runtime);
@@ -3050,10 +3115,13 @@ void Query_Processor::get_current_mysql_firewall_whitelist(SQLite3_result **u, S
 	if (global_mysql_firewall_whitelist_users_runtime) {
 		*u = new SQLite3_result(global_mysql_firewall_whitelist_users_runtime);
 	}
+	if (global_mysql_firewall_whitelist_sqli_fingerprints_runtime) {
+		*sf = new SQLite3_result(global_mysql_firewall_whitelist_sqli_fingerprints_runtime);
+	}
 	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
 }
 
-void Query_Processor::load_mysql_firewall(SQLite3_result *u, SQLite3_result *r) {
+void Query_Processor::load_mysql_firewall(SQLite3_result *u, SQLite3_result *r, SQLite3_result *sf) {
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	if (global_mysql_firewall_whitelist_rules_runtime) {
 		delete global_mysql_firewall_whitelist_rules_runtime;
@@ -3066,9 +3134,14 @@ void Query_Processor::load_mysql_firewall(SQLite3_result *u, SQLite3_result *r) 
 		global_mysql_firewall_whitelist_users_runtime = NULL;
 	}
 	global_mysql_firewall_whitelist_users_runtime = u;
-	global_mysql_firewall_whitelist_users_result___size = u->get_size();
+	if (global_mysql_firewall_whitelist_sqli_fingerprints_runtime) {
+		delete global_mysql_firewall_whitelist_sqli_fingerprints_runtime;
+		global_mysql_firewall_whitelist_sqli_fingerprints_runtime = NULL;
+	}
+	global_mysql_firewall_whitelist_sqli_fingerprints_runtime = sf;
 	load_mysql_firewall_users(global_mysql_firewall_whitelist_users_runtime);
 	load_mysql_firewall_rules(global_mysql_firewall_whitelist_rules_runtime);
+	load_mysql_firewall_sqli_fingerprints(global_mysql_firewall_whitelist_sqli_fingerprints_runtime);
 	pthread_mutex_unlock(&global_mysql_firewall_whitelist_mutex);
 	return;
 }
