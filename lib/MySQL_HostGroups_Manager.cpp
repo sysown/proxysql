@@ -2431,11 +2431,16 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
+			static time_t last_hg_log = 0;
 			time_t t;
 			t=time(NULL);
 			int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
 			if (max_wait_sec < 1) { // min wait time should be at least 1 second
 				max_wait_sec = 1;
+			}
+			if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
+				last_hg_log = time(NULL);
+				proxy_error("Hostgroup %u has no servers available! Checking servers shunned for more than %u second%s\n", hid, max_wait_sec, max_wait_sec == 1 ? "" : "s");
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
