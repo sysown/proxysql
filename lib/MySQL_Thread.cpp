@@ -3913,7 +3913,7 @@ __run_skip_1a:
 				for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
 					uint32_t sess_pos=mysess_idx;
 					MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
-					if (mysess->idle_since < min_idle) {
+					if (mysess->idle_since < min_idle || mysess->killed==true) {
 						mysess->killed=true;
 						MySQL_Data_Stream *tmp_myds=mysess->client_myds;
 						int dsidx=tmp_myds->poll_fds_idx;
