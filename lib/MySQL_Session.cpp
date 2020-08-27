@@ -6168,13 +6168,17 @@ int MySQL_Session::FindOneActiveTransaction() {
 }
 
 unsigned long long MySQL_Session::IdleTime() {
-		if (client_myds==0) return 0;
-		if (status!=WAITING_CLIENT_DATA) return 0;
-		int idx=client_myds->poll_fds_idx;
-		unsigned long long last_sent=thread->mypolls.last_sent[idx];
-		unsigned long long last_recv=thread->mypolls.last_recv[idx];
-		unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
-    return thread->curtime - last_time;
+	unsigned long long ret = 0;
+	if (client_myds==0) return 0;
+	if (status!=WAITING_CLIENT_DATA && status!=CONNECTING_CLIENT) return 0;
+	int idx=client_myds->poll_fds_idx;
+	unsigned long long last_sent=thread->mypolls.last_sent[idx];
+	unsigned long long last_recv=thread->mypolls.last_recv[idx];
+	unsigned long long last_time=(last_sent > last_recv ? last_sent : last_recv);
+	if (thread->curtime > last_time) {
+		ret = thread->curtime - last_time;
+	}
+	return ret;
 }
 
 
