@@ -183,8 +183,8 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
 
 re2/re2/obj/libre2.a:
-#	cd re2 && rm -rf re2-2018-07-01
-	cd re2 && rm -rf re2-2020-07-06
+	cd re2 && rm -rf re2-2018-07-01 || true
+	cd re2 && rm -rf re2-2020-07-06 || true
 #	cd re2 && tar -zxf re2-20140304.tgz
 	cd re2 && tar -zxf re2.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
@@ -195,6 +195,7 @@ re2/re2/obj/libre2.a:
 re2: re2/re2/obj/libre2.a
 
 pcre/pcre/.libs/libpcre.a:
+	cd pcre && rm -rf pcre-8.39
 	cd pcre && rm -rf pcre-8.44
 	cd pcre && tar -zxf pcre-8.44.tar.gz
 	cd pcre/pcre && ./configure
@@ -220,8 +221,10 @@ cleanall:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
 	cd libconfig && rm -rf libconfig-1.4.9
-	cd re2 && rm -rf re2-2020-07-06
-	cd pcre && rm -rf pcre-8.44
+	cd re2 && rm -rf re2-2018-07-01 || true
+	cd re2 && rm -rf re2-2020-07-06 || true
+	cd pcre && rm -rf pcre-8.39 || true
+	cd pcre && rm -rf pcre-8.44 || true
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true

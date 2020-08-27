@@ -111,6 +111,7 @@ deps/libconfig/libconfig-1.7.2/
 #libmicrohttpd
 deps/libmicrohttpd/libmicrohttpd-0.9.55/
 deps/libmicrohttpd/libmicrohttpd-0.9.68/
+deps/libmicrohttpd/libmicrohttpd
 
 #libhttpserver
 deps/libhttpserver/libhttpserver-master_20191121/
