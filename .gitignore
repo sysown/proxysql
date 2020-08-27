@@ -125,7 +125,9 @@ deps/lz4/lz4/
 #re2
 deps/re2/re2/
 deps/re2/re2-2018-07-01/
+deps/re2/re2-2020-07-06/
 deps/pcre/pcre-8.39/
+deps/pcre/pcre-8.44/
 deps/pcre/pcre/
 
 # curl
@@ -152,6 +154,7 @@ deps/libev/libev-4.24/
 deps/libssl/openssl-1.1.0h/
 deps/libssl/openssl-1.1.1b/
 deps/libssl/openssl-1.1.1d/
+deps/libssl/openssl-1.1.1g/
 
 #google coredumper
 deps/google-coredumper/google-coredumper/
