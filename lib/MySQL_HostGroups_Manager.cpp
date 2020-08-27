@@ -922,7 +922,7 @@ void MySrvC::connect_error(int err_num) {
 				status=MYSQL_SERVER_STATUS_SHUNNED;
 				shunned_automatic=true;
 				_shu=true;
-				MyHGM->unsafe_set_mysql_servers_table_dirty();
+				MyHGM->set_mysql_servers_table_dirty_locked();
 			} else {
 				_shu=false;
 			}
@@ -1130,7 +1130,7 @@ unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 	return __sync_fetch_and_add(&status.servers_table_version,0);
 }
 
-int MySQL_HostGroups_Manager::unsafe_servers_add(SQLite3_result *resultset) {
+int MySQL_HostGroups_Manager::servers_add_locked(SQLite3_result *resultset) {
 	if (resultset==NULL) {
 		return 0;
 	}
@@ -1223,7 +1223,7 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 bool MySQL_HostGroups_Manager::commit() {
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
-	bool result = unsafe_commit();
+	bool result = commit_locked();
 	wrunlock();
 	unsigned long long curtime2=monotonic_time();
 
@@ -1234,7 +1234,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	return result;
 }
 
-bool MySQL_HostGroups_Manager::unsafe_commit() {
+bool MySQL_HostGroups_Manager::commit_locked() {
 	rebuild_mysql_servers_table_if_dirty();
 
 	// if any server has gtid_port enabled, use_gtid is set to true
@@ -1276,7 +1276,7 @@ bool MySQL_HostGroups_Manager::unsafe_commit() {
 			servers_changed_to_offline_hard.insert(mysrvc);
 			mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
 			mysrvc->ConnectionsFree->drop_all_connections();
-			unsafe_set_mysql_servers_table_dirty();
+			set_mysql_servers_table_dirty_locked();
 			char *q1=(char *)"DELETE FROM mysql_servers WHERE mem_pointer=%lld";
 			char *q2=(char *)malloc(strlen(q1)+32);
 			sprintf(q2,q1,ptr);
@@ -1390,7 +1390,7 @@ bool MySQL_HostGroups_Manager::unsafe_commit() {
 							// but we reset max_replication_lag to 0
 							// therefore we immediately reset the status too
 							mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
-							unsafe_set_mysql_servers_table_dirty();
+							set_mysql_servers_table_dirty_locked();
 						}
 					}
 				}
@@ -1436,7 +1436,7 @@ bool MySQL_HostGroups_Manager::unsafe_commit() {
 		}
 
 		if (!resultset->rows.empty()) {
-			unsafe_set_mysql_servers_table_dirty();
+			set_mysql_servers_table_dirty_locked();
 		}
 
 		sqlite3_finalize(statement1);
@@ -1665,7 +1665,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 	}
 
 	wrlock();
-	unsafe_set_mysql_servers_table_dirty();
+	set_mysql_servers_table_dirty_locked();
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
@@ -1727,7 +1727,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 	pthread_rwlock_unlock(&gtid_rwlock);
 }
 
-inline void MySQL_HostGroups_Manager::unsafe_set_mysql_servers_table_dirty() {
+inline void MySQL_HostGroups_Manager::set_mysql_servers_table_dirty_locked() {
 	is_mysql_servers_table_dirty = false;
 }
 
@@ -2215,7 +2215,7 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	myhgc = MyHGC_create(_hid);
 	assert(myhgc);
 	MyHostGroups->add(myhgc);
-	unsafe_set_mysql_servers_table_dirty();
+	set_mysql_servers_table_dirty_locked();
 	return myhgc;
 }
 
@@ -2357,7 +2357,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								mysrvc->shunned_and_kill_all_connections=false;
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
 								mysrvc->time_last_detected_error=0;
-								MyHGM->unsafe_set_mysql_servers_table_dirty();
+								MyHGM->set_mysql_servers_table_dirty_locked();
 
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
@@ -2439,7 +2439,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 						mysrvc->shunned_automatic=false;
 						mysrvc->connect_ERR_at_time_last_detected_error=0;
 						mysrvc->time_last_detected_error=0;
-						MyHGM->unsafe_set_mysql_servers_table_dirty();
+						MyHGM->set_mysql_servers_table_dirty_locked();
 
 						// if a server is taken back online, consider it immediately
 						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
@@ -2831,7 +2831,7 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding MySrvC %p (%s:%d) for hostgroup %d\n", mysrvc, mysrvc->address, mysrvc->port, _hid);
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	myhgc->mysrvs->add(mysrvc);
-	unsafe_set_mysql_servers_table_dirty();
+	set_mysql_servers_table_dirty_locked();
 }
 
 void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
@@ -2877,7 +2877,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 							(current_replication_lag==-2) // see issue 959
 						) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-							unsafe_set_mysql_servers_table_dirty();
+							set_mysql_servers_table_dirty_locked();
 							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
 							mysrvc->cur_replication_lag_count = 0;
 						}
@@ -2985,25 +2985,25 @@ __exit_get_multiple_idle_connections:
 	return num_conn_current;
 }
 
-void MySQL_HostGroups_Manager::unsafe_set_incoming_replication_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups_locked(SQLite3_result *s) {
 	incoming_replication_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::unsafe_set_incoming_group_replication_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups_locked(SQLite3_result *s) {
 	if (incoming_group_replication_hostgroups) {
 		delete incoming_group_replication_hostgroups;
 	}
 	incoming_group_replication_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::unsafe_set_incoming_galera_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::set_incoming_galera_hostgroups_locked(SQLite3_result *s) {
 	if (incoming_galera_hostgroups) {
 		delete incoming_galera_hostgroups;
 	}
 	incoming_galera_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::unsafe_set_incoming_aws_aurora_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::set_incoming_aws_aurora_hostgroups_locked(SQLite3_result *s) {
 	if (incoming_aws_aurora_hostgroups) {
 		delete incoming_aws_aurora_hostgroups;
 	}
@@ -3592,7 +3592,7 @@ bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 							mysrvc->shunned_automatic=true;
 							mysrvc->shunned_and_kill_all_connections=true;
 							mysrvc->ConnectionsFree->drop_all_connections();
-							unsafe_set_mysql_servers_table_dirty();
+							set_mysql_servers_table_dirty_locked();
 							break;
 						default:
 							break;
@@ -3839,7 +3839,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			mydb->execute(query);
 			//free(query);
 			converge_group_replication_config(_writer_hostgroup);
-			unsafe_commit();
+			commit_locked();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -3915,7 +3915,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			mydb->execute(query);
 			//free(query);
 			converge_group_replication_config(_writer_hostgroup);
-			unsafe_commit();
+			commit_locked();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -4047,7 +4047,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				mydb->execute(query);
 			}
 			converge_group_replication_config(_writer_hostgroup);
-			unsafe_commit();
+			commit_locked();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -4400,7 +4400,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 			}
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
-				unsafe_commit();
+				commit_locked();
 				SQLite3_result *resultset2=NULL;
 				q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
 				//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -4481,7 +4481,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 			mydb->execute(query);
 			//free(query);
 			converge_galera_config(_writer_hostgroup);
-			unsafe_commit();
+			commit_locked();
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
@@ -4689,7 +4689,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 			}
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("Galera: setting host %s:%d as writer\n", _hostname, _port);
-				unsafe_commit();
+				commit_locked();
 				SQLite3_result *resultset2=NULL;
 				q=(char *)"SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, max_writers, writer_is_also_reader FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
 				sprintf(query,q,_writer_hostgroup);
@@ -5475,7 +5475,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_ms);
 						}
 						mysrvc->status = MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
-						unsafe_set_mysql_servers_table_dirty();
+						set_mysql_servers_table_dirty_locked();
 					}
 				} else {
 					if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
@@ -5483,7 +5483,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_ms);
 						}
 						mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
-						unsafe_set_mysql_servers_table_dirty();
+						set_mysql_servers_table_dirty_locked();
 					}
 				}
 				mysrvc->aws_aurora_current_lag_us = current_replication_lag_ms * 1000;
@@ -5518,7 +5518,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 							if (_whid==(int)myhgc->hid)
 								if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 									mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
-									unsafe_set_mysql_servers_table_dirty();
+									set_mysql_servers_table_dirty_locked();
 									proxy_warning("Re-enabling server %s:%d from HG %u because it is a writer\n", address, port, myhgc->hid);
 									ret = true;
 								}
@@ -5744,7 +5744,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				q = (char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id NOT IN (%d, %d)";
 				sprintf(query, q, _rhid, _whid);
 				mydb->execute(query);
-				unsafe_commit();
+				commit_locked();
 /*
 				SQLite3_result *resultset2=NULL;
 				q=(char *)"SELECT writer_hostgroup, reader_hostgroup FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=%d";
@@ -5790,7 +5790,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				mydb->execute(query);
 			}
 			proxy_info("AWS Aurora: setting new auto-discovered host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
-			unsafe_commit();
+			commit_locked();
 			q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
 			sprintf(query,q,_whid,_rhid);
 			mydb->execute(query);
@@ -5869,7 +5869,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			mydb->execute(query);
 			//free(query);
 			//converge_galera_config(_writer_hostgroup);
-			unsafe_commit();
+			commit_locked();
 /*
 			SQLite3_result *resultset2=NULL;
 			q=(char *)"SELECT writer_hostgroup, reader_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
@@ -5925,7 +5925,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 						// we found the server, we just configure it online if it was offline
 						if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 							mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
-							unsafe_set_mysql_servers_table_dirty();
+							set_mysql_servers_table_dirty_locked();
 						}
 					}
 				}

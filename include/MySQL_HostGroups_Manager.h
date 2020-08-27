@@ -381,16 +381,16 @@ class MySQL_HostGroups_Manager {
 	void init();
 	void wrlock();
 	void wrunlock();
-	int unsafe_servers_add(SQLite3_result *resultset); // faster version of server_add
+	int servers_add_locked(SQLite3_result *resultset); // faster version of server_add
 	bool commit();
-	bool unsafe_commit();
+	bool commit_locked();
 
-	inline void unsafe_set_mysql_servers_table_dirty();
+	inline void set_mysql_servers_table_dirty_locked();
 
-	void unsafe_set_incoming_replication_hostgroups(SQLite3_result *);
-	void unsafe_set_incoming_group_replication_hostgroups(SQLite3_result *);
-	void unsafe_set_incoming_galera_hostgroups(SQLite3_result *);
-	void unsafe_set_incoming_aws_aurora_hostgroups(SQLite3_result *);
+	void set_incoming_replication_hostgroups_locked(SQLite3_result *);
+	void set_incoming_group_replication_hostgroups_locked(SQLite3_result *);
+	void set_incoming_galera_hostgroups_locked(SQLite3_result *);
+	void set_incoming_aws_aurora_hostgroups_locked(SQLite3_result *);
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();
