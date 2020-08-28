@@ -1739,7 +1739,7 @@ void MySQL_HostGroups_Manager::rebuild_mysql_servers_table_if_dirty() {
 
 
 void MySQL_HostGroups_Manager::rebuild_mysql_servers_table() {
-	cleanup_mysql_servers_data_structure();
+	cleanup_servers();
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
@@ -1748,7 +1748,7 @@ void MySQL_HostGroups_Manager::rebuild_mysql_servers_table() {
 	is_mysql_servers_table_dirty = false;
 }
 
-void MySQL_HostGroups_Manager::cleanup_mysql_servers_data_structure() {
+void MySQL_HostGroups_Manager::cleanup_servers() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		myhgc->mysrvs->cleanup_servers();

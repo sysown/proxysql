@@ -294,7 +294,7 @@ class MySQL_HostGroups_Manager {
 
 	void rebuild_mysql_servers_table_if_dirty();
 	void rebuild_mysql_servers_table();
-	void cleanup_mysql_servers_data_structure();
+	void cleanup_servers();
 
 	void move_servers_to_cleanup(const std::unordered_set<MySrvC*>& servers_to_move);
 
