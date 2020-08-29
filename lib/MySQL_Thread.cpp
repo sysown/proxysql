@@ -3112,14 +3112,20 @@ void MySQL_Threads_Handler::shutdown_threads() {
 	shutdown_=1;
 	if (mysql_threads) {
 		for (i=0; i<num_threads; i++) {
-			if (mysql_threads[i].worker)
+			if (mysql_threads[i].worker) {
+				pthread_mutex_lock(&mysql_threads[i].worker->thread_mutex);
 				mysql_threads[i].worker->shutdown=1;
+				pthread_mutex_unlock(&mysql_threads[i].worker->thread_mutex);
+			}
 		}
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
 			for (i=0; i<num_threads; i++) {
-				if (mysql_threads_idles[i].worker)
+				if (mysql_threads_idles[i].worker) {
+					pthread_mutex_lock(&mysql_threads[i].worker->thread_mutex);
 					mysql_threads_idles[i].worker->shutdown=1;
+					pthread_mutex_unlock(&mysql_threads[i].worker->thread_mutex);
+				}
 			}
 		}
 #endif /* IDLE_THREADS */
@@ -3795,6 +3801,7 @@ __run_skip_1a:
 		}
 
 		pthread_mutex_lock(&thread_mutex);
+		if (shutdown == 1) { return; }
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
