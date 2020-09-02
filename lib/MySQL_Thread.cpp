@@ -4981,8 +4981,8 @@ MySQL_Thread::MySQL_Thread() {
 
 	status_variables.active_transactions=0;
 
-	for (unsigned int i; i < st_var_END ; i++) {
-		status_variables.stvar[i] == 0;
+	for (unsigned int i = 0; i < st_var_END ; i++) {
+		status_variables.stvar[i] = 0;
 	}
 	match_regexes=NULL;
 
