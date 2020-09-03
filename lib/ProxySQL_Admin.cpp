@@ -4377,9 +4377,15 @@ __run_query:
 		}
 		delete resultset;
 	}
+	if (run_query == true) {
+		pthread_mutex_unlock(&pa->sql_query_global_mutex);
+	} else {
+		// The admin module may have already been freed in case of "PROXYSQL STOP"
+		if (strcasecmp("PROXYSQL STOP",query_no_space))
+			pthread_mutex_unlock(&pa->sql_query_global_mutex);
+	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
-	pthread_mutex_unlock(&pa->sql_query_global_mutex);
 }
 
 void ProxySQL_Admin::vacuum_stats(bool is_admin) {
