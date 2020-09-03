@@ -54,10 +54,10 @@ static MySQL_Monitor *GloMyMon;
 } while (0)
 
 class ConsumerThread : public Thread {
-	wqueue<WorkItem*>& m_queue;
+	wqueue<WorkItem*>* m_queue;
 	int thrn;
 	public:
-	ConsumerThread(wqueue<WorkItem*>& queue, int _n) : m_queue(queue) {
+	ConsumerThread(wqueue<WorkItem*>* queue, int _n) : m_queue(queue) {
 		thrn=_n;
 	}
 	void* run() {
@@ -65,7 +65,7 @@ class ConsumerThread : public Thread {
 		// available to process.
 		for (int i = 0; ( thrn ? i < thrn : 1) ; i++) {
 //VALGRIND_DISABLE_ERROR_REPORTING;
-			WorkItem* item = (WorkItem*)m_queue.remove();
+			WorkItem* item = (WorkItem*)m_queue->remove();
 //VALGRIND_ENABLE_ERROR_REPORTING;
 			if (item==NULL) {
 				if (thrn) {
@@ -430,6 +430,7 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_
 		use_ssl=_use_ssl;
 		ST=0;
 		hostgroup_id=g;
+		interr=0;
 	};
 
 MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
@@ -3179,7 +3180,7 @@ __monitor_run:
 	}
 	ConsumerThread **threads= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*num_threads);
 	for (unsigned int i=0;i<num_threads; i++) {
-		threads[i] = new ConsumerThread(*queue, 0);
+		threads[i] = new ConsumerThread(queue.get(), 0);
 		threads[i]->start(2048,false);
 	}
 	started_threads += num_threads;
@@ -3237,7 +3238,7 @@ __monitor_run:
 					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
 					started_threads += (num_threads - old_num_threads);
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
-						threads[i] = new ConsumerThread(*queue, 0);
+						threads[i] = new ConsumerThread(queue.get(), 0);
 						threads[i]->start(2048,false);
 					}
 				}
@@ -3266,7 +3267,7 @@ __monitor_run:
 					threads= (ConsumerThread **)realloc(threads, sizeof(ConsumerThread *)*num_threads);
 					started_threads += new_threads;
 					for (unsigned int i = old_num_threads ; i < num_threads ; i++) {
-						threads[i] = new ConsumerThread(*queue, 0);
+						threads[i] = new ConsumerThread(queue.get(), 0);
 						threads[i]->start(2048,false);
 					}
 				}
@@ -3286,7 +3287,7 @@ __monitor_run:
 					aux_threads = qsize;
 					started_threads += aux_threads;
 					for (unsigned int i=0; i<qsize; i++) {
-						threads_aux[i] = new ConsumerThread(*queue, 245);
+						threads_aux[i] = new ConsumerThread(queue.get(), 245);
 						threads_aux[i]->start(2048,false);
 					}
 					for (unsigned int i=0; i<qsize; i++) {
