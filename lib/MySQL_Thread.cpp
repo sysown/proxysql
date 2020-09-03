@@ -703,6 +703,11 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 		int fd=MLM->get_fd(idx);
 		for (i=0;i<num_threads;i++) {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+#ifdef SO_REUSEPORT
+			if (GloVars.global.reuseport)
+				while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_del,0,-1));
+			else
+#endif
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_del,0,fd));
 		}
 		for (i=0;i<num_threads;i++) {
@@ -710,6 +715,11 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_del,0));
 		}
 		MLM->del(idx);
+#ifdef SO_REUSEPORT
+		if (GloVars.global.reuseport) {
+			continue;
+		}
+#endif
 		shutdown(fd,SHUT_RDWR);
 		close(fd);
 	}
@@ -3458,7 +3468,11 @@ void MySQL_Thread::poll_listener_del(int sock) {
 	if (i>=0) {
 		MySQL_Data_Stream *myds=mypolls.myds[i];
 		mypolls.remove_index_fast(i);
+#ifdef SO_REUSEPORT
+		if (GloVars.global.reuseport)
+#else
 		myds->fd=-1;	// this to prevent that delete myds will shutdown the fd;
+#endif
 		delete myds;
 	}
 }
@@ -3796,7 +3810,15 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
-			poll_listener_del(n);
+			if (static_cast<int>(n) == -1) {
+				for (unsigned int i = 0; i < mypolls.len; i++) {
+					if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
+						poll_listener_del(mypolls.myds[i]->fd);
+					}
+				}
+			} else {
+				poll_listener_del(n);
+			}
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
