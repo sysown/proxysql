@@ -6234,6 +6234,7 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", q, error);
+		free(error); //fix a memory leak when call admindb->execute_statement function
 		return;
 	} else {
 		GloMyLdapAuth->wrlock();
