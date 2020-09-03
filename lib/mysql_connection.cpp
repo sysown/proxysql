@@ -604,7 +604,41 @@ bool MySQL_Connection::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
-bool MySQL_Connection::match_tracked_options(MySQL_Connection *c) {
+bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn) {
+	char *username = client_conn->userinfo->username;
+	if (strcmp(userinfo->username,username)) {
+		// the two connections use different usernames
+		// The connection need to be reset with CHANGE_USER
+		return true;
+	}
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		if (client_conn->var_hash[i] == 0) {
+			if (var_hash[i]) {
+				// this connection has a variable set that the
+				// client connection doesn't have.
+				// Since connection cannot be unset , this connection
+				// needs to be reset with CHANGE_USER
+				return true;
+			}
+		}
+	}
+	return false;
+}
+unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching) {
+	unsigned int ret=0;
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		if (client_conn->var_hash[i] && i != SQL_CHARACTER_ACTION) { // client has a variable set
+			if (var_hash[i] == client_conn->var_hash[i]) { // server conection has the variable set to the same value
+				ret++;
+			} else {
+				not_matching++;
+			}
+		}
+	}
+	return ret;
+}
+
+bool MySQL_Connection::match_tracked_options(const MySQL_Connection *c) {
 	uint32_t cf1 = options.client_flag; // own client flags
 	uint32_t cf2 = c->options.client_flag; // other client flags
 	if ((cf1 & CLIENT_FOUND_ROWS) == (cf2 & CLIENT_FOUND_ROWS)) {
@@ -656,6 +690,7 @@ void MySQL_Connection::connect_start() {
 		std::stringstream ss;
 		ss << c->nr;
 
+		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());

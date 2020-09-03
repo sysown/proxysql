@@ -2602,11 +2602,66 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 //MySrvC * MySrvList::idx(unsigned int i) { return (MySrvC *)servers->index(i); }
 
+
+void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn) {
+	char *schema = client_conn->userinfo->schemaname;
+	MySQL_Connection * conn=NULL;
+	unsigned int k;
+	for (k = start;  k < end; k++) {
+		conn = (MySQL_Connection *)conns->index(k);
+		if (conn->match_tracked_options(client_conn)) {
+			if (connection_quality_level == 0) {
+				// this is our best candidate so far
+				connection_quality_level = 1;
+				conn_found_idx = k;
+			}
+			if (conn->requires_CHANGE_USER(client_conn)==false) {
+				if (connection_quality_level == 1) {
+					// this is our best candidate so far
+					connection_quality_level = 2;
+					conn_found_idx = k;
+				}
+				unsigned int cnt_match = 0; // number of matching session variables
+				unsigned int not_match = 0; // number of not matching session variables
+				cnt_match = conn->number_of_matching_session_variables(client_conn, not_match);
+				if (strcmp(conn->userinfo->schemaname,schema)==0) {
+					cnt_match++;
+				} else {
+					not_match++;
+				}
+				if (not_match==0) {
+					// it seems we found the perfect connection
+					number_of_matching_session_variables = cnt_match;
+					connection_quality_level = 3;
+					conn_found_idx = k;
+					return; // exit immediately, we found the perfect connection
+				} else {
+					// we didn't find the perfect connection
+					// but maybe is better than what we have so far?
+					if (cnt_match > number_of_matching_session_variables) {
+						// this is our best candidate so far
+						number_of_matching_session_variables = cnt_match;
+						conn_found_idx = k;
+					}
+				}
+			}
+		}
+	}
+}
+
 MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
+	unsigned int conn_found_idx;
 	unsigned int l=conns_length();
+	unsigned int connection_quality_level = 0;
 	bool needs_warming = false;
+	// connection_quality_level:
+	// 0 : not found any good connection, tracked options are not OK
+	// 1 : tracked options are OK , but CHANGE USER is required
+	// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
+	// 3 : tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
+	unsigned int number_of_matching_session_variables = 0; // this includes session variables AND schema
 	if (mysql_thread___connection_warming) {
 		unsigned int total_connections = mysrvc->ConnectionsFree->conns_length()+mysrvc->ConnectionsUsed->conns_length();
 		unsigned int expected_warm_connections = mysql_thread___free_connections_pct*mysrvc->max_connections/100;
@@ -2621,61 +2676,45 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			i=fastrand()%l;
 		}
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
-			// try to match schemaname AND username
-			char *schema = sess->client_myds->myconn->userinfo->schemaname;
-			char *username = sess->client_myds->myconn->userinfo->username;
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
-			bool conn_found = false;
-			unsigned int k;
-			bool options_matching_found = false;
-			for (k = i; conn_found == false && k < l; k++) {
-				conn = (MySQL_Connection *)conns->index(k);
-				if (conn->match_tracked_options(client_conn)) {
-					if (options_matching_found == false) {
-						options_matching_found = true;
-					}
-					if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
-						conn_found = true;
-						i = k;
-					}
-				}
+			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
+			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
+				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			}
-			if (conn_found == false ) {
-				for (k = 0; conn_found == false && k < i; k++) {
-					conn = (MySQL_Connection *)conns->index(k);
-					if (conn->match_tracked_options(client_conn)) {
-						if (options_matching_found == false) {
-							options_matching_found = true;
-						}
-						if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
-							conn_found = true;
-							i = k;
-						}
-					}
-				}
-			}
-			if (conn_found == true) {
-				conn=(MySQL_Connection *)conns->remove_index_fast(i);
-			} else {
-				if (options_matching_found == false) {
+			// connection_quality_level:
+			// 1 : tracked options are OK , but CHANGE USER is required
+			// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
+			switch (connection_quality_level) {
+				case 0: // not found any good connection, tracked options are not OK
 					// we must create a new connection
 					conn = new MySQL_Connection();
 					conn->parent=mysrvc;
 					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
-				} else {
+					break;
+				case 1: //tracked options are OK , but CHANGE USER is required
 					// we may consider creating a new connection
-					unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
-					unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
-					if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
-						conn = new MySQL_Connection();
-						conn->parent=mysrvc;
-						__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
-					} else {
-						conn=(MySQL_Connection *)conns->remove_index_fast(i);
+					{
+						unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
+						unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
+						if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
+							conn = new MySQL_Connection();
+							conn->parent=mysrvc;
+							__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+						} else {
+							conn=(MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
+						}
 					}
-				}
+					break;
+				case 2: // tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
+				case 3:	// tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
+					// here we return the best connection we have, no matter if connection_quality_level is 2 or 3
+					conn=(MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
+					break;
+				default: // this should never happen
+					assert(0);
+					break;
 			}
 		} else {
 			conn=(MySQL_Connection *)conns->remove_index_fast(i);

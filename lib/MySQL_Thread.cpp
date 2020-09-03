@@ -6077,97 +6077,59 @@ void MySQL_Thread::Get_Memory_Stats() {
 
 
 MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+	// some sanity check
+	if (sess == NULL) return NULL;
+	if (sess->client_myds == NULL) return NULL;
+	if (sess->client_myds->myconn == NULL) return NULL;
+	if (sess->client_myds->myconn->userinfo == NULL) return NULL;
 	unsigned int i;
-	unsigned int bc = 0; // best candidate
-	bool pcf = false; // possible candidate found
-	unsigned int npc = 0; // number of possible candidates
-	std::vector<MySrvC *> parents;
+	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
 //	MySQL_Connection *_candidate = NULL; // this will be used when we will pass optional parameters
 	for (i=0; i<cached_connections->len; i++) {
 		c=(MySQL_Connection *)cached_connections->index(i);
-		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) {
-
-			if (gtid_uuid) {
-				// we first check if we already excluded this parent (MySQL Server)
-				MySrvC *mysrvc = c->parent;
-				std::vector<MySrvC *>::iterator it;
-				it = find(parents.begin(), parents.end(), mysrvc);
-				if (it != parents.end()) {
-					// we didn't exclude this server (yet?)
-					bool gtid_found = false;
-					gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
-					if (gtid_found) {
-						//c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
-						//return c;
-
-						if (pcf == false) {
-							bc = i;
-							pcf = true;
-						}
-						//npc++;
-						if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
-							char *schema = sess->client_myds->myconn->userinfo->schemaname;
-							char *username = sess->client_myds->myconn->userinfo->username;
-							if (strcmp(c->userinfo->schemaname,schema)==0 && strcmp(c->userinfo->username,username)==0) {
+		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
+			if (
+				(gtid_uuid == NULL) || // gtid_uuid is not used
+				(gtid_uuid && find(parents.begin(), parents.end(), c->parent) == parents.end()) // the server is currently not excluded
+			) {
+				MySQL_Connection *client_conn = sess->client_myds->myconn;
+				if (c->requires_CHANGE_USER(client_conn)==false) { // CHANGE_USER is not required
+					char *schema = client_conn->userinfo->schemaname;
+					if (strcmp(c->userinfo->schemaname,schema)==0) { // same schema
+						unsigned int not_match = 0; // number of not matching session variables
+						c->number_of_matching_session_variables(client_conn, not_match);
+						if (not_match == 0) { // all session variables match
+							if (gtid_uuid) { // gtid_uuid is used
+								// we first check if we already excluded this parent (MySQL Server)
+								MySrvC *mysrvc = c->parent;
+								std::vector<MySrvC *>::iterator it;
+								it = find(parents.begin(), parents.end(), mysrvc);
+								if (it != parents.end()) {
+									// we didn't exclude this server (yet?)
+									bool gtid_found = false;
+									gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
+									if (gtid_found) { // this server has the correct GTID
+										c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+										return c;
+									} else {
+										parents.push_back(mysrvc); // stop evaluating this server
+									}
+								}
+							} else { // gtid_is not used
+								if (max_lag_ms >= 0) {
+									if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
+										status_variables.aws_aurora_replicas_skipped_during_query++;
+										continue;
+									}
+								}
+								// return the connection
 								c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
 								return c;
 							}
-						} else {
-							c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
-							return c;
 						}
-
-
-
-					} else {
-						parents.push_back(mysrvc); // stop evaluating this server
-//						if (_candidate == NULL) {
-//							_candidate = c; // this server is a potential candidate
-//						}
 					}
 				}
-			} else {
-//				c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
-
-				if (max_lag_ms >= 0) {
-					if ((unsigned int)max_lag_ms < (c->parent->aws_aurora_current_lag_us / 1000)) {
-						status_variables.aws_aurora_replicas_skipped_during_query++;
-						continue;
-					}
-				}
-				if (pcf == false) {
-					bc = i;
-					pcf = true;
-				}
-				npc++;
-				if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
-					char *schema = sess->client_myds->myconn->userinfo->schemaname;
-					char *username = sess->client_myds->myconn->userinfo->username;
-					if (strcmp(c->userinfo->schemaname,schema)==0 && strcmp(c->userinfo->username,username)==0) {
-						c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
-						return c;
-					}
-				} else {
-					c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
-					return c;
-				}
-
-				//return c;
-			}
-		}
-	}
-//	if (_candidate) {
-//		return _candidate;
-//	}
-	if (pcf) { // there was a possible connection, but we skipped trying to find a better one
-		if (gtid_uuid) {
-			c=(MySQL_Connection *)cached_connections->remove_index_fast(bc);
-			return c;
-		} else {
-			if (npc > 5) { // more candidates were evaluated
-				c=(MySQL_Connection *)cached_connections->remove_index_fast(bc);
-				return c;
 			}
 		}
 	}

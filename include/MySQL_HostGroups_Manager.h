@@ -15,11 +15,12 @@
 
 #include "ev.h"
 
-/*
-	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
-	This is for internal testing ONLY!!!!
-#define STRESSTEST_POOL
-*/
+#ifdef DEBUG
+/* */
+//	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
+//	This is for internal testing ONLY!!!!
+//#define STRESSTEST_POOL
+#endif // DEBUG
 
 #define MHM_PTHREAD_MUTEX
 
@@ -116,6 +117,7 @@ class MySrvConnList {
 	}
 	MySQL_Connection *remove(int);
 	MySQL_Connection * get_random_MyConn(MySQL_Session *sess, bool ff);
+	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn);
 	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
 	MySQL_Connection *index(unsigned int);
