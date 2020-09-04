@@ -125,6 +125,7 @@ deps/lz4/lz4/
 #re2
 deps/re2/re2/
 deps/re2/re2-2018-07-01/
+deps/re2/re2-2020-07-06/
 deps/pcre/pcre-8.39/
 deps/pcre/pcre/
 
