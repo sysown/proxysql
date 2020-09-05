@@ -840,6 +840,7 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
 	use_ssl=_use_ssl;
+	cur_replication_lag_retries=0;
 	max_latency_us=_max_latency_ms*1000;
 	current_latency_us=0;
 	aws_aurora_current_lag_us = 0;
@@ -3199,8 +3200,23 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 //						||
 						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
 					) {
-						proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
-						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						if (mysrvc->cur_replication_lag_retries >= GloMTH->variables.monitor_replication_lag_retries) {
+							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, retry number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_retries);
+							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						} else {
+							proxy_info(
+								"Not shunning server %s:%d from HG %u with replication lag of %d second, retry number: '%d' < replication_lag_retries: '%d'\n",
+								address,
+								port,
+								myhgc->hid,
+								current_replication_lag,
+								mysrvc->cur_replication_lag_retries,
+								GloMTH->variables.monitor_replication_lag_retries
+							);
+							mysrvc->cur_replication_lag_retries += 1;
+						}
+					} else {
+						mysrvc->cur_replication_lag_retries = 0;
 					}
 				} else {
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
@@ -3211,6 +3227,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 						) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
+							mysrvc->cur_replication_lag_retries = 0;
 						}
 					}
 				}
