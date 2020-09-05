@@ -275,10 +275,27 @@ void print_commands_stats(MYSQL *mysqladmin) {
 		MYSQL_RES *result = mysql_store_result(mysqladmin);
 		MYSQL_ROW row;
 		std::cerr << "Stats from stats_mysql_commands_counters" << std::endl;
-		
 		while ((row = mysql_fetch_row(result)))
 		{
 			std::cerr << row[0] << " \tCount: " << row[2] << " \tTime: " << row[1] << std::endl;
+		}
+		mysql_free_result(result);
+	}
+}
+
+void print_global_status(MYSQL *mysqladmin) {
+	std::string q = "SELECT * FROM stats_mysql_global ORDER BY Variable_Name";
+	{
+		if (mysql_query(mysqladmin, q.c_str())) {
+			fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysqladmin));
+			exit(EXIT_FAILURE);
+		}
+		MYSQL_RES *result = mysql_store_result(mysqladmin);
+		MYSQL_ROW row;
+		std::cerr << "Stats from Variable_Name" << std::endl;
+		while ((row = mysql_fetch_row(result)))
+		{
+			std::cerr << "stats_mysql_global: " << row[0] << " : " << row[1] << std::endl;
 		}
 		mysql_free_result(result);
 	}
@@ -350,6 +367,7 @@ int main(int argc, char *argv[]) {
 		}
 		mysql_free_result(result);
 	}
+	print_global_status(mysqladmin);
 	print_commands_stats(mysqladmin);
 	num_threads = 4;
 	transactions = 200;
@@ -387,6 +405,7 @@ int main(int argc, char *argv[]) {
 		}
 		mysql_free_result(result);
 	}
+	print_global_status(mysqladmin);
 	print_commands_stats(mysqladmin);
 	std::cerr << std::endl << "MyHGM_myconnpoll_push: " << MyHGM_myconnpoll_push << std::endl;
 	std::cerr << "cnt_SELECT_outside_transactions: " << cnt_SELECT_outside_transactions << std::endl;
