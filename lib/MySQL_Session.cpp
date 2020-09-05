@@ -3476,7 +3476,7 @@ handler_again:
 	switch (status) {
 		case WAITING_CLIENT_DATA:
 			// housekeeping
-			if (mybes) {
+			if (session_type == PROXYSQL_SESSION_MYSQL && mybes) {
 				MySQL_Backend *_mybe;
 				unsigned int i;
 				for (i=0; i < mybes->len; i++) {

@@ -90,7 +90,7 @@ ifeq ($(UNAME_S),Darwin)
 endif
 
 
-MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
+MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -fstack-protector-all -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
 MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH)
 
 default: libproxysql.a

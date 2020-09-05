@@ -220,6 +220,7 @@ static void clock_gettime(int clk_id, struct timespec *tp) {
 
 inline unsigned long long monotonic_time() {
   struct timespec ts;
+  memset(&ts,0, sizeof(struct timespec));
   clock_gettime(CLOCK_MONOTONIC, &ts);
   return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }

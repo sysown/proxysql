@@ -89,7 +89,7 @@ else
 PSQLCH=
 endif
 
-MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\"
+MYCXXFLAGS=-std=c++11 -fstack-protector-all $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\"
 
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))

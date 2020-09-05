@@ -51,10 +51,10 @@ static MySQL_Monitor *GloMyMon;
 } while (0)
 
 class ConsumerThread : public Thread {
-	wqueue<WorkItem*>& m_queue;
+	//wqueue<WorkItem*>& m_queue;
 	int thrn;
 	public:
-	ConsumerThread(wqueue<WorkItem*>& queue, int _n) : m_queue(queue) {
+	ConsumerThread(wqueue<WorkItem*>& queue, int _n) {
 		thrn=_n;
 	}
 	void* run() {
@@ -62,7 +62,8 @@ class ConsumerThread : public Thread {
 		// available to process.
 		for (int i = 0; ( thrn ? i < thrn : 1) ; i++) {
 //VALGRIND_DISABLE_ERROR_REPORTING;
-			WorkItem* item = (WorkItem*)m_queue.remove();
+			//WorkItem* item = (WorkItem*)m_queue.remove();
+			WorkItem* item = (WorkItem*)GloMyMon->queue->remove();
 //VALGRIND_ENABLE_ERROR_REPORTING;
 			if (item==NULL) {
 				if (thrn) {
@@ -94,7 +95,10 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 	struct pollfd pfd;
 	int timeout, res;
 
-	pfd.fd = mysql_get_socket(mysql);
+	//pfd.fd = mysql_get_socket(mysql);
+	// NOTE: here we are making the assumption the connection is successful and completed
+	// DO NOT USE this function for async connect
+	pfd.fd = mysql->net.fd;
 	pfd.events =
 		(status & MYSQL_WAIT_READ ? POLLIN : 0) |
 		(status & MYSQL_WAIT_WRITE ? POLLOUT : 0) |
@@ -736,7 +740,7 @@ void * monitor_connect_thread(void *arg) {
 }
 
 void * monitor_ping_thread(void *arg) {
-	mysql_close(mysql_init(NULL));
+	//mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -746,17 +750,22 @@ void * monitor_ping_thread(void *arg) {
 	bool ping_success = false;
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
+	unsigned long long now;
+	unsigned long long time_now;
+	sqlite3_stmt *statement=NULL;
+	int rc;
+	char *query=NULL;
+	bool crc=false;
+	bool rcb;
 
 	mmsd->t1=start_time;
-	bool crc=false;
 	if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
-		bool rc;
-		rc=mmsd->create_new_connection();
+		rcb=mmsd->create_new_connection();
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_register(mmsd);
 		}
 		crc=true;
-		if (rc==false) {
+		if (rcb==false) {
 			goto __exit_monitor_ping_thread;
 		}
 	} else {
@@ -769,7 +778,7 @@ void * monitor_ping_thread(void *arg) {
 	mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+		now=monotonic_time();
 		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout during ping");
 			goto __exit_monitor_ping_thread;
@@ -795,20 +804,17 @@ void * monitor_ping_thread(void *arg) {
 __exit_monitor_ping_thread:
 	mmsd->t2=monotonic_time();
 	{
-		sqlite3_stmt *statement=NULL;
 		//sqlite3 *mondb=mmsd->mondb->get_db();
-		int rc;
 #ifdef TEST_AURORA
 //		if ((rand() % 10) ==0) {
 #endif // TEST_AURORA
-		char *query=NULL;
 		query=(char *)"INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
 		//rc=sqlite3_prepare_v2(mondb, query, -1, &statement, 0);
 		rc = mmsd->mondb->prepare_v2(query, &statement);
 		ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=sqlite3_bind_text(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=sqlite3_bind_int(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		unsigned long long time_now=realtime_time();
+		time_now=realtime_time();
 		time_now=time_now-(mmsd->t2 - start_time);
 		rc=sqlite3_bind_int64(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -839,8 +845,8 @@ __fast_exit_monitor_ping_thread:
 			mmsd->mysql=NULL;
 		} else {
 			if (crc) {
-				bool rc=mmsd->set_wait_timeout();
-				if (rc) {
+				rcb=mmsd->set_wait_timeout();
+				if (rcb) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
@@ -917,17 +923,41 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		}
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
 		if (timeout==0) timeout=1;
+		mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
 		mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_monitor");
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", hostname);
 		MYSQL *myrc=NULL;
+
+		//int sync_exit_status;
+
+
 		if (port) {
 			myrc=mysql_real_connect(mysql, hostname, mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
 		} else {
 			myrc=mysql_real_connect(mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
 		}
+/*
+		t1 = monotonic_time();
+		if (port) {
+			async_exit_status=mysql_real_connect_start(&myrc, mysql, hostname, mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, port, NULL, 0);
+		} else {
+			async_exit_status=mysql_real_connect_start(&myrc, mysql, "localhost", mysql_thread___monitor_username, mysql_thread___monitor_password, NULL, 0, hostname, 0);
+		}
+
+		while (async_exit_status) {
+			async_exit_status=wait_for_mysql(mysql, async_exit_status);
+			unsigned long long now=monotonic_time();
+			if (now > t1 + mysql_thread___monitor_connect_timeout * 1000) {
+				mysql_error_msg=strdup("timeout during connect");
+				break;
+			}
+		}
+*/
+
 		if (myrc==NULL) {
-			mysql_error_msg=strdup(mysql_error(mysql));
+			if (mysql_error_msg == NULL)
+				mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
 			if (myerrno < 2000) {
 				mysql_close(mysql);

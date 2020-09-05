@@ -662,6 +662,7 @@ static void *child_mysql(void *arg) {
 	GloMTH->wrunlock();
 
 	struct pollfd fds[1];
+	memset(&fds,0,sizeof(struct pollfd));
 	nfds_t nfds=1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
@@ -711,7 +712,7 @@ static void *child_mysql(void *arg) {
 
 __exit_child_mysql:
 	delete sqlite_sess;
-	delete mysql_thr;
+	//delete mysql_thr;
 	return NULL;
 }
 
@@ -724,28 +725,29 @@ static void * sqlite3server_main_loop(void *arg)
 	struct pollfd *fds=((struct _main_args *)arg)->fds;
 	int nfds=((struct _main_args *)arg)->nfds;
 	int *callback_func=((struct _main_args *)arg)->callback_func;
-	volatile int *shutdown=((struct _main_args *)arg)->shutdown;
+	//volatile int *shutdown=((struct _main_args *)arg)->shutdown;
 	char *socket_names[MAX_SQLITE3SERVER_LISTENERS];
 	for (i=0;i<MAX_SQLITE3SERVER_LISTENERS;i++) { socket_names[i]=NULL; }
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	while (glovars.shutdown==0 && *shutdown==0)
+	pthread_attr_t *attr = (pthread_attr_t *)malloc(sizeof(pthread_attr_t));
+	pthread_attr_init(attr);
+	pthread_attr_setdetachstate(attr, PTHREAD_CREATE_DETACHED);
+	//while (glovars.shutdown==0 && *shutdown==0)
+	while (glovars.shutdown==0)
 	{
-		int *client;
+		int *client = NULL;
 		int client_t;
 		socklen_t addr_size = sizeof(addr);
 		pthread_t child;
-		size_t stacks;
+		//size_t stacks;
 		unsigned long long curtime=monotonic_time();
-		unsigned long long next_run=GloAdmin->scheduler_run_once();
+		//unsigned long long next_run=GloAdmin->scheduler_run_once();
 		unsigned long long poll_wait=500000;
-		if (next_run < curtime + 500000) {
-			poll_wait=next_run-curtime;
-		}
-		if (poll_wait > 500000) {
-			poll_wait=500000;
-		}
+		//if (next_run < curtime + 500000) {
+		//	poll_wait=next_run-curtime;
+		//}
+		//if (poll_wait > 500000) {
+		//	poll_wait=500000;
+		//}
 		poll_wait=poll_wait/1000;	// conversion to millisecond
 		int rc;
 		rc=poll(fds,nfds,poll_wait);
@@ -755,12 +757,14 @@ static void * sqlite3server_main_loop(void *arg)
 		}
 		for (i=1;i<nfds;i++) {
 			if (fds[i].revents==POLLIN) {
+				memset(&addr,0,sizeof(struct sockaddr));
+				addr_size = 0;
 				client_t = accept(fds[i].fd, (struct sockaddr*)&addr, &addr_size);
-				pthread_attr_getstacksize (&attr, &stacks);
+				//pthread_attr_getstacksize (&attr, &stacks);
 				pthread_mutex_lock (&sock_mutex);
 				client=(int *)malloc(sizeof(int));
 				*client= client_t;
-				if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 )
+				if ( pthread_create(&child, attr, child_func[callback_func[i]], client) != 0 )
 					perror("Thread creation");
 			}
 			fds[i].revents=0;
@@ -1178,12 +1182,14 @@ bool SQLite3_Server::init() {
 
 	child_func[0]=child_mysql;
 	main_shutdown=0;
+
 	main_poll_nfds=0;
 	main_poll_fds=NULL;
 	main_callback_func=NULL;
 
 	main_callback_func=(int *)malloc(sizeof(int)*MAX_SQLITE3SERVER_LISTENERS);
 	main_poll_fds=(struct pollfd *)malloc(sizeof(struct pollfd)*MAX_SQLITE3SERVER_LISTENERS);
+	memset(main_poll_fds,0,(sizeof(struct pollfd)*MAX_SQLITE3SERVER_LISTENERS));
 	main_poll_nfds=0;
 
 	S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
