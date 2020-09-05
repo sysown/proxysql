@@ -388,6 +388,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_read_only_max_timeout_count",
 	(char *)"monitor_replication_lag_interval",
 	(char *)"monitor_replication_lag_timeout",
+	(char *)"monitor_replication_lag_retries",
 	(char *)"monitor_groupreplication_healthcheck_interval",
 	(char *)"monitor_groupreplication_healthcheck_timeout",
 	(char *)"monitor_groupreplication_healthcheck_max_timeout_count",
@@ -534,6 +535,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_read_only_max_timeout_count=3;
 	variables.monitor_replication_lag_interval=10000;
 	variables.monitor_replication_lag_timeout=1000;
+	variables.monitor_replication_lag_retries=0;
 	variables.monitor_groupreplication_healthcheck_interval=5000;
 	variables.monitor_groupreplication_healthcheck_timeout=800;
 	variables.monitor_groupreplication_healthcheck_max_timeout_count=3;
@@ -861,6 +863,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"monitor_read_only_max_timeout_count")) return (int)variables.monitor_read_only_max_timeout_count;
 			if (!strcmp(name,"monitor_replication_lag_interval")) return (int)variables.monitor_replication_lag_interval;
 			if (!strcmp(name,"monitor_replication_lag_timeout")) return (int)variables.monitor_replication_lag_timeout;
+			if (!strcmp(name,"monitor_replication_lag_retries")) return (int)variables.monitor_replication_lag_retries;
 		}
 		if (a == 'g') {
 			char b = name[9];
@@ -1216,6 +1219,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_replication_lag_timeout")) {
 			sprintf(intbuf,"%d",variables.monitor_replication_lag_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_replication_lag_retries")) {
+			sprintf(intbuf,"%d",variables.monitor_replication_lag_retries);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_groupreplication_healthcheck_interval")) {
@@ -1766,6 +1773,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			int intv=atoi(value);
 			if (intv >= 100 && intv <= 600*1000) {
 				variables.monitor_replication_lag_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_replication_lag_retries")) {
+			int intv=atoi(value);
+			if (intv >= 0 && intv <= std::numeric_limits<int>::max()) {
+				variables.monitor_replication_lag_retries=intv;
 				return true;
 			} else {
 				return false;
@@ -4498,6 +4514,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_read_only_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_read_only_max_timeout_count");
 	mysql_thread___monitor_replication_lag_interval=GloMTH->get_variable_int((char *)"monitor_replication_lag_interval");
 	mysql_thread___monitor_replication_lag_timeout=GloMTH->get_variable_int((char *)"monitor_replication_lag_timeout");
+	mysql_thread___monitor_replication_lag_retries=GloMTH->get_variable_int((char *)"monitor_replication_lag_retries");
 	mysql_thread___monitor_groupreplication_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_interval");
 	mysql_thread___monitor_groupreplication_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_max_timeout_count");
