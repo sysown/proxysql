@@ -267,6 +267,7 @@ class MySQL_Threads_Handler
 		bool monitor_writer_is_also_reader;
 		int monitor_replication_lag_interval;
 		int monitor_replication_lag_timeout;
+		int monitor_replication_lag_count;
 		int monitor_groupreplication_healthcheck_interval;
 		int monitor_groupreplication_healthcheck_timeout;
 		int monitor_groupreplication_healthcheck_max_timeout_count;
