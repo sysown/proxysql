@@ -164,7 +164,7 @@ clean:
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
 
-packages: centos6.7 centos6.7-dbg centos7 centos7-dbg centos7-clickhouse centos8 centos8-dbg centos8-clickhouse ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu16-clickhouse ubuntu18 ubuntu18-dbg ubuntu18-clickhouse debian8 debian8-dbg debian9 debian9-dbg debian9-clickhouse debian10 debian10-dbg debian10-clickhouse fedora24 fedora24-dbg  fedora24-clickhouse fedora27 fedora27-dbg fedora27-clickhouse fedora28 fedora28-dbg fedora28-clickhouse
+packages: centos6.7 centos6.7-dbg centos7 centos7-dbg centos7-clickhouse centos8 centos8-dbg centos8-clickhouse ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu16-clickhouse ubuntu18 ubuntu18-dbg ubuntu18-clickhouse ubuntu20 ubuntu20-dbg ubuntu20-clickhouse debian8 debian8-dbg debian9 debian9-dbg debian9-clickhouse debian10 debian10-dbg debian10-clickhouse fedora24 fedora24-dbg  fedora24-clickhouse fedora27 fedora27-dbg fedora27-clickhouse fedora28 fedora28-dbg fedora28-clickhouse
 .PHONY: packages
 
 centos5: binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm
@@ -218,6 +218,9 @@ ubuntu16: binaries/proxysql_${CURVER}-ubuntu16_amd64.deb
 ubuntu18: binaries/proxysql_${CURVER}-ubuntu18_amd64.deb
 .PHONY: ubuntu18
 
+ubuntu20: binaries/proxysql_${CURVER}-ubuntu20_amd64.deb
+.PHONY: ubuntu20
+
 debian7: binaries/proxysql_${CURVER}-debian7_amd64.deb
 .PHONY: debian7
 
@@ -239,11 +242,17 @@ ubuntu16-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb
 ubuntu18-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu18_amd64.deb
 .PHONY: ubuntu18-dbg
 
+ubuntu20-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu20_amd64.deb
+.PHONY: ubuntu20-dbg
+
 ubuntu16-clickhouse: binaries/proxysql_${CURVER}-clickhouse-ubuntu16_amd64.deb
 .PHONY: ubuntu16-clickhouse
 
 ubuntu18-clickhouse: binaries/proxysql_${CURVER}-clickhouse-ubuntu18_amd64.deb
 .PHONY: ubuntu18-clickhouse
+
+ubuntu20-clickhouse: binaries/proxysql_${CURVER}-clickhouse-ubuntu20_amd64.deb
+.PHONY: ubuntu20-clickhouse
 
 debian7-dbg: binaries/proxysql_${CURVER}-dbg-debian7_amd64.deb
 .PHONY: debian7-dbg
@@ -379,6 +388,10 @@ binaries/proxysql_${CURVER}-ubuntu18_amd64.deb:
 	docker-compose up ubuntu18_build
 	docker-compose rm -f
 
+binaries/proxysql_${CURVER}-ubuntu20_amd64.deb:
+	docker-compose up ubuntu20_build
+	docker-compose rm -f
+
 binaries/proxysql_${CURVER}-debian7_amd64.deb:
 	docker-compose up debian7_build
 	#docker-compose rm -f
@@ -429,6 +442,14 @@ binaries/proxysql_${CURVER}-dbg-ubuntu18_amd64.deb:
 
 binaries/proxysql_${CURVER}-clickhouse-ubuntu18_amd64.deb:
 	docker-compose up ubuntu18_ch_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-dbg-ubuntu20_amd64.deb:
+	docker-compose up ubuntu20_dbg_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-clickhouse-ubuntu20_amd64.deb:
+	docker-compose up ubuntu20_ch_build
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-dbg-debian7_amd64.deb:
