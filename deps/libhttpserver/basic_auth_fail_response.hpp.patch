@@ -1,0 +1,13 @@
+diff --git a/src/httpserver/basic_auth_fail_response.hpp b/src/httpserver/basic_auth_fail_response.hpp
+index c7e2d47..c6eeb60 100644
+--- a/src/httpserver/basic_auth_fail_response.hpp
++++ b/src/httpserver/basic_auth_fail_response.hpp
+@@ -47,7 +47,7 @@ class basic_auth_fail_response : public string_response
+         }
+
+         basic_auth_fail_response(const basic_auth_fail_response& other) = default;
+-        basic_auth_fail_response(basic_auth_fail_response&& other) noexcept = default;
++        basic_auth_fail_response(basic_auth_fail_response&& other) = default;
+         basic_auth_fail_response& operator=(const basic_auth_fail_response& b) = default;
+         basic_auth_fail_response& operator=(basic_auth_fail_response&& b) = default;
+

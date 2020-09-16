@@ -1,0 +1,13 @@
+diff --git a/src/httpserver/string_response.hpp b/src/httpserver/string_response.hpp
+index 87f12c6..ee864a7 100644
+--- a/src/httpserver/string_response.hpp
++++ b/src/httpserver/string_response.hpp
+@@ -46,7 +46,7 @@ class string_response : public http_response
+         }
+
+         string_response(const string_response& other) = default;
+-        string_response(string_response&& other) noexcept = default;
++        string_response(string_response&& other) = default;
+
+         string_response& operator=(const string_response& b) = default;
+         string_response& operator=(string_response&& b) = default;

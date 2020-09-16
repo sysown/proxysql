@@ -49,8 +49,8 @@ public:
 	bool verify_variable(MySQL_Session* session, int idx) const;
 	bool update_variable(MySQL_Session* session, session_status status, int &_rc);
 	bool on_connect_to_backend(MySQL_Connection *myconn);
-	bool parse_variable_boolean(MySQL_Session *sess, int idx, std::string &value1, bool& exit_after_SetParse, bool* lock_hostgroup);
-	bool parse_variable_number(MySQL_Session *sess, int idx, std::string &value1, bool& exit_after_SetParse, bool* lock_hostgroup);
+	bool parse_variable_boolean(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
+	bool parse_variable_number(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
 };
 
 #endif // #ifndef MYSQL_VARIABLES_H

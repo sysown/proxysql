@@ -353,7 +353,7 @@ GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _p
 	w = _w;
 	size = 1024; // 1KB buffer
 	data = (char *)malloc(size);
-	uuid_server[0] = 0;
+	memset(uuid_server, 0, sizeof(uuid_server));
 	pos = 0;
 	len = 0;
 	address = strdup(_address);
@@ -469,7 +469,8 @@ bool GTID_Server_Data::read_next_gtid() {
 	if (strncmp(data+pos,(char *)"ST=",3)==0) {
 		// we are reading the bootstrap
 		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
-		memcpy(bs,data+pos+3,l+1-3);
+		memcpy(bs, data+pos+3, l-3);
+		bs[l-3] = '\0';
 		char *saveptr1=NULL;
 		char *saveptr2=NULL;
 		//char *saveptr3=NULL;
@@ -839,6 +840,7 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
 	use_ssl=_use_ssl;
+	cur_replication_lag_count=0;
 	max_latency_us=_max_latency_ms*1000;
 	current_latency_us=0;
 	aws_aurora_current_lag_us = 0;
@@ -2810,11 +2812,16 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
+			static time_t last_hg_log = 0;
 			time_t t;
 			t=time(NULL);
 			int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
 			if (max_wait_sec < 1) { // min wait time should be at least 1 second
 				max_wait_sec = 1;
+			}
+			if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
+				last_hg_log = time(NULL);
+				proxy_error("Hostgroup %u has no servers available! Checking servers shunned for more than %u second%s\n", hid, max_wait_sec, max_wait_sec == 1 ? "" : "s");
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
@@ -3193,8 +3200,24 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 //						||
 						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
 					) {
-						proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
-						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						// always increase the counter
+						mysrvc->cur_replication_lag_count += 1;
+						if (mysrvc->cur_replication_lag_count >= mysql_thread___monitor_replication_lag_count) {
+							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
+							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						} else {
+							proxy_info(
+								"Not shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d' < replication_lag_count: '%d'\n",
+								address,
+								port,
+								myhgc->hid,
+								current_replication_lag,
+								mysrvc->cur_replication_lag_count,
+								mysql_thread___monitor_replication_lag_count
+							);
+						}
+					} else {
+						mysrvc->cur_replication_lag_count = 0;
 					}
 				} else {
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
@@ -3205,6 +3228,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 						) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
+							mysrvc->cur_replication_lag_count = 0;
 						}
 					}
 				}
@@ -6447,7 +6471,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			sprintf(full_hostname, "%s%s", _server_id, domain_name);
 			bool found = false;
 			GloAdmin->mysql_servers_wrlock();
-			unsigned int max_max_connections = 1000;
+			unsigned int max_max_connections = 10;
 			unsigned int max_use_ssl = 0;
 			wrlock();
 			MyHGC *myhgc=MyHGC_lookup(_rhid);

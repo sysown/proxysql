@@ -11,7 +11,7 @@ MYJEOPT=--enable-xmalloc --enable-prof
 endif
 
 ifneq (,$(wildcard /etc/system-release))
-	CENTOSVER := $(shell cat /etc/system-release | awk '{print $$3}')
+	CENTOSVER := $(shell rpm --eval %rhel)
 else
 	CENTOSVER := Unknown
 endif
@@ -46,10 +46,29 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
 
+GCC_VERSION := $(shell gcc -dumpversion)
+MIN_VERSION := 4.9.0
+REQUIRE_PATCH = false
+
+ifeq ($(MIN_VERSION),$(lastword $(sort $(GCC_VERSION) $(MIN_VERSION))))
+	REQUIRE_PATCH = true
+endif
+
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
 	cd libhttpserver && rm -rf libhttpserver-0.18.1 || true
 	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
+ifeq ($(REQUIRE_PATCH), true)
+	cd libhttpserver/libhttpserver && patch src/httpserver/basic_auth_fail_response.hpp < ../basic_auth_fail_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/create_webserver.hpp < ../create_webserver.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/deferred_response.hpp < ../deferred_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/digest_auth_fail_response.hpp < ../digest_auth_fail_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/file_response.hpp < ../file_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/http_request.hpp < ../http_request.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/http_resource.hpp < ../http_resource.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/http_response.hpp < ../http_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/string_response.hpp < ../string_response.hpp.patch
+endif
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
@@ -76,14 +95,16 @@ libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
 	cd libmicrohttpd && rm -f libmicrohttpd || true
-ifeq ($(CENTOSVER),6.7)
+ifeq ($(CENTOSVER),6)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
 else
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.68 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.68.tar.gz
 endif
+ifeq ($(OS),Darwin)
 	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
+endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 

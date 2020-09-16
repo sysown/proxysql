@@ -4608,9 +4608,15 @@ __run_query:
 		}
 		delete resultset;
 	}
+	if (run_query == true) {
+		pthread_mutex_unlock(&pa->sql_query_global_mutex);
+	} else {
+		// The admin module may have already been freed in case of "PROXYSQL STOP"
+		if (strcasecmp("PROXYSQL STOP",query_no_space))
+			pthread_mutex_unlock(&pa->sql_query_global_mutex);
+	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
-	pthread_mutex_unlock(&pa->sql_query_global_mutex);
 }
 
 void ProxySQL_Admin::vacuum_stats(bool is_admin) {
@@ -6586,6 +6592,7 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", q, error);
+		free(error); //fix a memory leak when call admindb->execute_statement function
 		return;
 	} else {
 		GloMyLdapAuth->wrlock();
@@ -10089,6 +10096,7 @@ void ProxySQL_Admin::save_mysql_ldap_mapping_runtime_to_database(bool _runtime) 
 
 #ifdef PROXYSQLCLICKHOUSE
 void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
+	int rc;
 	char *query=NULL;
 	if (_runtime) {
 		query=(char *)"DELETE FROM main.runtime_clickhouse_users";

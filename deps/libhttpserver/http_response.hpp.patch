@@ -1,0 +1,17 @@
+diff --git a/src/httpserver/http_response.hpp b/src/httpserver/http_response.hpp
+index 33c1df4..7533cd9 100644
+--- a/src/httpserver/http_response.hpp
++++ b/src/httpserver/http_response.hpp
+@@ -59,10 +59,10 @@ class http_response
+          * @param b The http_response object to copy attributes value from.
+         **/
+         http_response(const http_response& b) = default;
+-        http_response(http_response&& b) noexcept = default;
++        http_response(http_response&& b) = default;
+
+         http_response& operator=(const http_response& b) = default;
+-        http_response& operator=(http_response&& b) noexcept = default;
++        http_response& operator=(http_response&& b) = default;
+
+         virtual ~http_response() = default;
+

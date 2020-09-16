@@ -438,6 +438,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_read_only_max_timeout_count",
 	(char *)"monitor_replication_lag_interval",
 	(char *)"monitor_replication_lag_timeout",
+	(char *)"monitor_replication_lag_count",
 	(char *)"monitor_groupreplication_healthcheck_interval",
 	(char *)"monitor_groupreplication_healthcheck_timeout",
 	(char *)"monitor_groupreplication_healthcheck_max_timeout_count",
@@ -1007,6 +1008,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_read_only_max_timeout_count=3;
 	variables.monitor_replication_lag_interval=10000;
 	variables.monitor_replication_lag_timeout=1000;
+	variables.monitor_replication_lag_count=1;
 	variables.monitor_groupreplication_healthcheck_interval=5000;
 	variables.monitor_groupreplication_healthcheck_timeout=800;
 	variables.monitor_groupreplication_healthcheck_max_timeout_count=3;
@@ -1181,6 +1183,11 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 		int fd=MLM->get_fd(idx);
 		for (i=0;i<num_threads;i++) {
 			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+#ifdef SO_REUSEPORT
+			if (GloVars.global.reuseport)
+				while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_del,0,-1));
+			else
+#endif
 			while(!__sync_bool_compare_and_swap(&thr->mypolls.pending_listener_del,0,fd));
 		}
 		for (i=0;i<num_threads;i++) {
@@ -1188,6 +1195,11 @@ int MySQL_Threads_Handler::listener_del(const char *iface) {
 			while(__sync_fetch_and_add(&thr->mypolls.pending_listener_del,0));
 		}
 		MLM->del(idx);
+#ifdef SO_REUSEPORT
+		if (GloVars.global.reuseport) {
+			continue;
+		}
+#endif
 		shutdown(fd,SHUT_RDWR);
 		close(fd);
 	}
@@ -1329,6 +1341,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"monitor_read_only_max_timeout_count")) return (int)variables.monitor_read_only_max_timeout_count;
 			if (!strcmp(name,"monitor_replication_lag_interval")) return (int)variables.monitor_replication_lag_interval;
 			if (!strcmp(name,"monitor_replication_lag_timeout")) return (int)variables.monitor_replication_lag_timeout;
+			if (!strcmp(name,"monitor_replication_lag_count")) return (int)variables.monitor_replication_lag_count;
 		}
 		if (a == 'g') {
 			char b = name[9];
@@ -1685,6 +1698,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_replication_lag_timeout")) {
 			sprintf(intbuf,"%d",variables.monitor_replication_lag_timeout);
+			return strdup(intbuf);
+		}
+		if (!strcasecmp(name,"monitor_replication_lag_count")) {
+			sprintf(intbuf,"%d",variables.monitor_replication_lag_count);
 			return strdup(intbuf);
 		}
 		if (!strcasecmp(name,"monitor_groupreplication_healthcheck_interval")) {
@@ -2239,6 +2256,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			int intv=atoi(value);
 			if (intv >= 100 && intv <= 600*1000) {
 				variables.monitor_replication_lag_timeout=intv;
+				return true;
+			} else {
+				return false;
+			}
+		}
+		if (!strcasecmp(name,"monitor_replication_lag_count")) {
+			int intv=atoi(value);
+			if (intv >= 1 && intv <= 10) {
+				variables.monitor_replication_lag_count=intv;
 				return true;
 			} else {
 				return false;
@@ -3609,14 +3635,20 @@ void MySQL_Threads_Handler::shutdown_threads() {
 	shutdown_=1;
 	if (mysql_threads) {
 		for (i=0; i<num_threads; i++) {
-			if (mysql_threads[i].worker)
+			if (mysql_threads[i].worker) {
+				pthread_mutex_lock(&mysql_threads[i].worker->thread_mutex);
 				mysql_threads[i].worker->shutdown=1;
+				pthread_mutex_unlock(&mysql_threads[i].worker->thread_mutex);
+			}
 		}
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
 			for (i=0; i<num_threads; i++) {
-				if (mysql_threads_idles[i].worker)
+				if (mysql_threads_idles[i].worker) {
+					pthread_mutex_lock(&mysql_threads[i].worker->thread_mutex);
 					mysql_threads_idles[i].worker->shutdown=1;
+					pthread_mutex_unlock(&mysql_threads[i].worker->thread_mutex);
+				}
 			}
 		}
 #endif /* IDLE_THREADS */
@@ -3949,7 +3981,11 @@ void MySQL_Thread::poll_listener_del(int sock) {
 	if (i>=0) {
 		MySQL_Data_Stream *myds=mypolls.myds[i];
 		mypolls.remove_index_fast(i);
+#ifdef SO_REUSEPORT
+		if (GloVars.global.reuseport)
+#else
 		myds->fd=-1;	// this to prevent that delete myds will shutdown the fd;
+#endif
 		delete myds;
 	}
 }
@@ -4140,11 +4176,20 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
-			poll_listener_del(n);
+			if (static_cast<int>(n) == -1) {
+				for (unsigned int i = 0; i < mypolls.len; i++) {
+					if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
+						poll_listener_del(mypolls.myds[i]->fd);
+					}
+				}
+			} else {
+				poll_listener_del(n);
+			}
 			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
 		pthread_mutex_lock(&thread_mutex);
+		if (shutdown == 1) { return; }
 		mypolls.poll_timeout=0; // always reset this to 0 . If a session needs a specific timeout, it will set this one
 
 		curtime=monotonic_time();
@@ -4840,6 +4885,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_read_only_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_read_only_max_timeout_count");
 	mysql_thread___monitor_replication_lag_interval=GloMTH->get_variable_int((char *)"monitor_replication_lag_interval");
 	mysql_thread___monitor_replication_lag_timeout=GloMTH->get_variable_int((char *)"monitor_replication_lag_timeout");
+	mysql_thread___monitor_replication_lag_count=GloMTH->get_variable_int((char *)"monitor_replication_lag_count");
 	mysql_thread___monitor_groupreplication_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_interval");
 	mysql_thread___monitor_groupreplication_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_max_timeout_count");
