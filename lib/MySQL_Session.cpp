@@ -5714,6 +5714,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		}
 	}
 	if (qpo->cache_ttl>0) {
+		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		uint32_t resbuf=0;
 		unsigned char *aa=GloQC->get(
 			client_myds->myconn->userinfo->hash,
@@ -5721,7 +5722,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			CurrentQuery.QueryLength ,
 			&resbuf ,
 			thread->curtime/1000 ,
-			qpo->cache_ttl
+			qpo->cache_ttl,
+			deprecate_eof_active
 		);
 		if (aa) {
 			client_myds->buffer2resultset(aa,resbuf);
