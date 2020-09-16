@@ -1,17 +1,19 @@
 Section: misc
 Priority: optional
-Homepage: http://www.proxysql.com
+Homepage: https://proxysql.com
 Standards-Version: 3.9.2
 
 Package: proxysql
 Version: PKG_VERSION_CURVER
-Maintainer: Rene Cannao <rene.cannao@gmail.com>
+Maintainer: ProxySQL LLC <info@proxysql.com>
 Architecture: amd64
+Depends: libgnutls28 | libgnutls30
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/
  etc/proxysql.cnf /etc/
  etc/logrotate.d/proxysql /etc/logrotate.d/
+ systemd/system/proxysql-initial.service /lib/systemd/system/
  systemd/system/proxysql.service /lib/systemd/system/
  tools/proxysql_galera_checker.sh /usr/share/proxysql/tools/
  tools/proxysql_galera_writer.pl /usr/share/proxysql/tools/

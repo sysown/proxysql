@@ -1,12 +1,13 @@
 Section: misc
 Priority: optional
-Homepage: http://www.proxysql.com
+Homepage: https://proxysql.com
 Standards-Version: 3.9.2
 
 Package: proxysql
 Version: PKG_VERSION_CURVER
-Maintainer: Rene Cannao <rene.cannao@gmail.com>
+Maintainer: ProxySQL LLC <info@proxysql.com>
 Architecture: amd64
+Depends: libgnutls28 | libgnutls30 | libgnutls-deb0-28
 # Changelog: CHANGELOG.md
 # Readme: README.md
 Files: proxysql /usr/bin/

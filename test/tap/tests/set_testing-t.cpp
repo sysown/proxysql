@@ -619,7 +619,6 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='true' where variable_name='mysql-enforce_autocommit_on_reads'");
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
-	mysql_close(mysqladmin);
 */
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)

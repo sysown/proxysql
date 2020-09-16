@@ -958,7 +958,6 @@ void ProxySQL_Main_init_main_modules() {
 	GloQPro=NULL;
 	GloMTH=NULL;
 	GloMyAuth=NULL;
-	GloMyLdapAuth = NULL;
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -1230,7 +1229,7 @@ void ProxySQL_Main_init() {
 
 
 static void LoadPlugins() {
-	//LoadPlugin_sqlite3_plugin();
+	GloMyLdapAuth = NULL;
 	SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
 	if (GloVars.web_interface_plugin) {
 		dlerror();
