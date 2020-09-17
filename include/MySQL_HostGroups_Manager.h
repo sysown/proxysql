@@ -189,7 +189,7 @@ class MySrvList {	// MySQL Server List
 	void move_to_cleanup(unsigned int i);
 	MySrvC * idx(unsigned int i) {return (MySrvC *)servers->index(i); }
 
-	bool cleanup_servers();
+	void cleanup_servers();
 };
 
 class MyHGC {	// MySQL Host Group Container

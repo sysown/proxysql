@@ -815,7 +815,7 @@ void MySrvList::move_to_cleanup(unsigned int i) {
 	servers_to_cleanup->add(mysrvc);
 }
 
-bool MySrvList::cleanup_servers() {
+void MySrvList::cleanup_servers() {
 	for (unsigned int i = 0, l = servers_to_cleanup->len; i < l; ) {
 		MySrvC *mysrvc = (MySrvC *)servers_to_cleanup->index(i);
 		if (
@@ -2854,7 +2854,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 						if (mysrvc->cur_replication_lag_count >= mysql_thread___monitor_replication_lag_count) {
 							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
 							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
-							unsafe_set_mysql_servers_table_dirty();
+							set_mysql_servers_table_dirty_locked();
 						} else {
 							proxy_info(
 								"Not shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d' < replication_lag_count: '%d'\n",
