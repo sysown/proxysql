@@ -1,0 +1,74 @@
+version: '3'
+
+services:
+  pxc-node1:
+    image: "percona/percona-xtradb-cluster:5.6"
+    environment:
+      - "CLUSTER_NAME=${CLUSTER_NAME}"
+      - "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}"
+    command: "--innodb-buffer-pool-size=2G"
+    restart: always
+    ports:
+      - "3310:3306"
+    networks:
+        cluster_net:
+            ipv4_address: 172.28.1.1
+
+  pxc-node2:
+    image: "percona/percona-xtradb-cluster:5.6"
+    environment:
+      - "CLUSTER_NAME=${CLUSTER_NAME}"
+      - "CLUSTER_JOIN=${BOOTSTRAP_NODE_NAME}"
+      - "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}"
+    command: "--innodb-buffer-pool-size=2G"
+    restart: always
+    depends_on:
+      - pxc-node1
+    ports:
+      - "3311:3306"
+    networks:
+      cluster_net:
+        ipv4_address: 172.28.1.2
+
+  pxc-node3:
+    image: "percona/percona-xtradb-cluster:5.6"
+    environment:
+      - "CLUSTER_NAME=${CLUSTER_NAME}"
+      - "CLUSTER_JOIN=${BOOTSTRAP_NODE_NAME}"
+      - "MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}"
+    command: "--innodb-buffer-pool-size=2G"
+    restart: always
+    depends_on:
+      - pxc-node1
+      - pxc-node2
+    ports:
+      - "3312:3306"
+    networks:
+      cluster_net:
+        ipv4_address: 172.28.1.3
+
+  proxysql:
+    image: "proxysql/proxysql:2.0.10"
+    restart: always
+    environment:
+      - "CLUSTER_NAME=${CLUSTER_NAME}"
+    depends_on:
+      - pxc-node1
+      - pxc-node2
+      - pxc-node3
+    ports:
+      - "3300:3306"
+      - "3301:3307"
+      - "3302:3308"
+      - "3303:3309"
+    volumes:
+      - "./proxysql.cnf:/etc/proxysql.cnf:ro"
+    networks:
+      cluster_net:
+        ipv4_address: 172.28.1.4
+
+networks:
+  cluster_net:
+    ipam:
+      config:
+      - subnet: 172.28.0.0/16

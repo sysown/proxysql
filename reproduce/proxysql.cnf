@@ -1,0 +1,116 @@
+admin_variables =
+{
+    admin_credentials = "admin:admin";
+    mysql_ifaces = "127.0.0.1:6032;/tmp/proxysql_admin.sock";
+};
+datadir = "/var/lib/proxysql";
+mysql_galera_hostgroups =
+(
+    {
+        active = 1;
+        backup_writer_hostgroup = 13307;
+        comment = "group1";
+        max_writers = 1;
+        offline_hostgroup = 33307;
+        reader_hostgroup = 23307;
+        writer_hostgroup = 3307;
+        writer_is_also_reader = 1;
+    },
+    {
+        active = 1;
+        backup_writer_hostgroup = 13308;
+        comment = "group2";
+        max_writers = 1;
+        offline_hostgroup = 33308;
+        reader_hostgroup = 23308;
+        writer_hostgroup = 3308;
+        writer_is_also_reader = 1;
+    },
+    {
+        active = 1;
+        backup_writer_hostgroup = 13309;
+        comment = "group3";
+        max_writers = 1;
+        offline_hostgroup = 33309;
+        reader_hostgroup = 23309;
+        writer_hostgroup = 3309;
+        writer_is_also_reader = 1;
+    }
+);
+mysql_query_rules =
+(
+    {
+        active = 1;
+        apply = 1;
+        destination_hostgroup = 3308;
+        proxy_port = 3308;
+        rule_id = 3;
+    }
+);
+mysql_servers =
+(
+    {
+        address = "172.28.1.2";
+        hostgroup = 3308;
+        max_connections = 1000;
+        port = 3306;
+        weight = 1000;
+    },
+    {
+        address = "172.28.1.3";
+        hostgroup = 3308;
+        max_connections = 1000;
+        port = 3306;
+        weight = 100;
+    },
+    {
+        address = "172.28.1.1";
+        hostgroup = 3308;
+        max_connections = 1000;
+        port = 3306;
+        weight = 10;
+    }
+);
+mysql_users =
+(
+    {
+        active = 1;
+        default_hostgroup = 3308;
+        max_connections = 100;
+        password = "*9CFBBC772F3F6C106020035386DA5BBBF1249A11";
+        transaction_persistent = 1;
+        username = "root";
+    }
+);
+mysql_variables =
+{
+    autocommit_false_is_transaction = True;
+    commands_stats = True;
+    connect_retries_on_failure = 10;
+    connect_timeout_server = 150;
+    connect_timeout_server_max = 1001;
+    connection_max_age_ms = 60000;
+    connpoll_reset_queue_length = 1000;
+    default_query_delay = 0;
+    default_query_timeout = 36000000;
+    default_schema = "information_schema";
+    have_compress = True;
+    interfaces = "0.0.0.0:3306;0.0.0.0:3307;0.0.0.0:3308;0.0.0.0:3309";
+    max_connections = 2048;
+    ping_interval_server_msec = 120000;
+    ping_timeout_server = 500;
+    poll_timeout = 2000;
+    server_version = "5.6.48";
+    sessions_sort = True;
+    shun_on_failures = 20;
+    shun_recovery_time_sec = 1;
+    stacksize = 1048576;
+    stats_time_backend_query = True;
+    stats_time_query_processor = True;
+    tcp_keepalive_time = 600;
+    threads = 2;
+    use_tcp_keepalive = True;
+};
+scheduler =
+{
+};

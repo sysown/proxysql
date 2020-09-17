@@ -8,6 +8,7 @@
 #include <thread>
 #include <iostream>
 #include <mutex>
+#include <unordered_set>
 
 #include "thread.h"
 #include "wqueue.h"
@@ -158,10 +159,9 @@ class MySrvC {	// MySQL Server Container
 	MySrvC(char *, uint16_t, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment);
 	~MySrvC();
 	void connect_error(int);
-	void shun_and_killall();
 	/**
 	 * Update the maximum number of used connections
-	 * @return 
+	 * @return
 	 *  the maximum number of used connections
 	 */
 	unsigned int update_max_connections_used()
@@ -177,6 +177,8 @@ class MySrvList {	// MySQL Server List
 	private:
 	MyHGC *myhgc;
 	int find_idx(MySrvC *);
+	PtrArray *servers_to_cleanup;
+
 	public:
 	PtrArray *servers;
 	unsigned int cnt() { return servers->len; }
@@ -184,7 +186,10 @@ class MySrvList {	// MySQL Server List
 	~MySrvList();
 	void add(MySrvC *);
 	void remove(MySrvC *);
+	void move_to_cleanup(unsigned int i);
 	MySrvC * idx(unsigned int i) {return (MySrvC *)servers->index(i); }
+
+	void cleanup_servers();
 };
 
 class MyHGC {	// MySQL Host Group Container
@@ -276,16 +281,22 @@ class MySQL_HostGroups_Manager {
 #else
 	rwlock_t rwlock;
 #endif
+	bool is_mysql_servers_table_dirty;
 	PtrArray *MyHostGroups;
 
 	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);
 
 	void add(MySrvC *, unsigned int);
-	void purge_mysql_servers_table();
 	void generate_mysql_servers_table(int *_onlyhg=NULL);
 	void generate_mysql_replication_hostgroups_table();
 	Galera_Info *get_galera_node_info(int hostgroup);
+
+	void rebuild_mysql_servers_table_if_dirty();
+	void rebuild_mysql_servers_table();
+	void cleanup_servers();
+
+	void move_servers_to_cleanup(const std::unordered_set<MySrvC*>& servers_to_move);
 
 	SQLite3_result *incoming_replication_hostgroups;
 
@@ -318,7 +329,6 @@ class MySQL_HostGroups_Manager {
 	umap_mysql_errors mysql_errors_umap;
 
 	public:
-	std::mutex galera_set_writer_mutex;
 	pthread_rwlock_t gtid_rwlock;
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;
 	struct ev_async * gtid_ev_async;
@@ -371,14 +381,16 @@ class MySQL_HostGroups_Manager {
 	void init();
 	void wrlock();
 	void wrunlock();
-	bool server_add(unsigned int hid, char *add, uint16_t p=3306, uint16_t gp=0, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100, unsigned int _max_replication_lag=0, unsigned int _use_ssl=0, unsigned int _max_latency_ms=0, char *comment=NULL);
-	int servers_add(SQLite3_result *resultset); // faster version of server_add
+	int servers_add_locked(SQLite3_result *resultset); // faster version of server_add
 	bool commit();
+	bool commit_locked();
 
-	void set_incoming_replication_hostgroups(SQLite3_result *);
-	void set_incoming_group_replication_hostgroups(SQLite3_result *);
-	void set_incoming_galera_hostgroups(SQLite3_result *);
-	void set_incoming_aws_aurora_hostgroups(SQLite3_result *);
+	inline void set_mysql_servers_table_dirty_locked();
+
+	void set_incoming_replication_hostgroups_locked(SQLite3_result *);
+	void set_incoming_group_replication_hostgroups_locked(SQLite3_result *);
+	void set_incoming_galera_hostgroups_locked(SQLite3_result *);
+	void set_incoming_aws_aurora_hostgroups_locked(SQLite3_result *);
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();
@@ -386,7 +398,7 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *dump_table_mysql_galera_hostgroups();
 	SQLite3_result *dump_table_mysql_aws_aurora_hostgroups();
 	MyHGC * MyHGC_lookup(unsigned int);
-	
+
 	void MyConn_add_to_pool(MySQL_Connection *);
 
 	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
