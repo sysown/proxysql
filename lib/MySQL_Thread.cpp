@@ -6258,6 +6258,7 @@ void MySQL_Thread::Scan_Sessions_to_Kill(PtrArray *mysess) {
 			}
 }
 
+#ifdef IDLE_THREADS
 bool MySQL_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n) {
 	unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n] ;
 	if (_tmp_idle < ( (curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
@@ -6290,6 +6291,7 @@ bool MySQL_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, 
 	}
 	return false;
 }
+#endif // IDLE_THREADS
 
 bool MySQL_Thread::set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n) {
 	if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
@@ -6307,6 +6309,7 @@ bool MySQL_Thread::set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stre
 	return false;
 }
 
+#ifdef IDLE_THREADS
 void MySQL_Thread::idle_thread_gets_sessions_from_worker_thread() {
 	pthread_mutex_lock(&myexchange.mutex_idles);
 	while (myexchange.idle_mysql_sessions->len) {
@@ -6326,6 +6329,7 @@ void MySQL_Thread::idle_thread_gets_sessions_from_worker_thread() {
 	}
 	pthread_mutex_unlock(&myexchange.mutex_idles);
 }
+#endif // IDLE_THREADS
 
 void MySQL_Thread::handle_mirror_queue_mysql_sessions() {
 	while (mirror_queue_mysql_sessions->len) {
