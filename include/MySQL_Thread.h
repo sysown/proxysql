@@ -448,6 +448,7 @@ class MySQL_Threads_Handler
 		bool use_tcp_keepalive;
 		int tcp_keepalive_time;
 		int throttle_connections_per_sec_to_hostgroup;
+		int max_transaction_idle_time;
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
