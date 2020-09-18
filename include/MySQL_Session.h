@@ -144,6 +144,7 @@ class MySQL_Session
 	unsigned long long pause_until;
 
 	unsigned long long idle_since;
+	unsigned long long transaction_started_at;
 
 	// pointers
 	MySQL_Thread *thread;
@@ -171,7 +172,7 @@ class MySQL_Session
 	int next_query_flagIN;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
-	int active_transactions;
+	unsigned int active_transactions;
 	int autocommit_on_hostgroup;
 	int transaction_persistent_hostgroup;
 	int to_process;
