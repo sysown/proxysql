@@ -414,6 +414,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"firewall_whitelist_enabled",
 	(char *)"firewall_whitelist_errormsg",
 	(char *)"throttle_connections_per_sec_to_hostgroup",
+	(char *)"max_transaction_idle_time",
 	(char *)"max_transaction_time",
 	(char *)"multiplexing",
 	(char *)"log_unhealthy_connections",
@@ -561,6 +562,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.use_tcp_keepalive=false;
 	variables.tcp_keepalive_time=0;
 	variables.throttle_connections_per_sec_to_hostgroup=1000000;
+	variables.max_transaction_idle_time=4*3600*1000;
 	variables.max_transaction_time=4*3600*1000;
 	variables.hostgroup_manager_verbose=1;
 	variables.binlog_reader_connect_retry_msec=3000;
@@ -978,6 +980,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 				if (!strcmp(name,"max_connections")) return (int)variables.max_connections;
 				if (!strcmp(name,"max_stmts_cache")) return (int)variables.max_stmts_cache;
 				if (!strcmp(name,"max_stmts_per_connection")) return (int)variables.max_stmts_per_connection;
+				if (!strcmp(name,"max_transaction_idle_time")) return (int)variables.max_transaction_idle_time;
 				if (!strcmp(name,"max_transaction_time")) return (int)variables.max_transaction_time;
 				if (!strcmp(name,"min_num_servers_lantency_awareness")) return (int)variables.min_num_servers_lantency_awareness;
 			}
@@ -1384,6 +1387,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 
 	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) {
 		sprintf(intbuf,"%d",variables.throttle_connections_per_sec_to_hostgroup);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"max_transaction_idle_time")) {
+		sprintf(intbuf,"%d",variables.max_transaction_idle_time);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"max_transaction_time")) {
@@ -1931,6 +1938,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		int intv=atoi(value);
 		if (intv >= 8192 && intv <= 1024*1024*1024) {
 			variables.max_allowed_packet=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"max_transaction_idle_time")) {
+		int intv=atoi(value);
+		if (intv >= 1000 && intv <= 20*24*3600*1000) {
+			variables.max_transaction_idle_time=intv;
 			return true;
 		} else {
 			return false;
@@ -4335,18 +4351,54 @@ void MySQL_Thread::process_all_sessions() {
 			if (idle_maintenance_thread==false)
 #endif // IDLE_THREADS
 			{
-				sess->active_transactions=sess->NumActiveTransactions();
+				{
+					unsigned long long sess_active_transactions = sess->active_transactions;
+					sess->active_transactions=sess->NumActiveTransactions();
+					// in case we detected a new transaction just now
+					if (sess->active_transactions == 0) {
+						sess->transaction_started_at = 0;
+					} else {
+						if (sess_active_transactions == 0) {
+							sess->transaction_started_at = curtime;
+						}
+					}
+				}
 				total_active_transactions_ += sess->active_transactions;
 				sess->to_process=1;
-				if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
+				if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_idle_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
 					//numTrx = sess->NumActiveTransactions();
 					numTrx = sess->active_transactions;
 					if (numTrx) {
 						// the session has idle transactions, kill it
-						if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_time) sess->killed=true;
+						if (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_idle_time) {
+							sess->killed=true;
+							if (sess->client_myds) {
+								proxy_warning("Killing client connection %s:%d because of (possible) transaction idle for %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, sess_time/1000);
+							}
+						}
 					} else {
 						// the session is idle, kill it
-						if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) sess->killed=true;
+						if (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) {
+							sess->killed=true;
+							if (sess->client_myds) {
+								proxy_warning("Killing client connection %s:%d because inactive for %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, sess_time/1000);
+							}
+						}
+					}
+				} else {
+					if (sess->active_transactions > 0) {
+						// here is all the logic related to max_transaction_time
+						unsigned long long trx_started = sess->transaction_started_at;
+						if (trx_started > 0 && curtime > trx_started) {
+							unsigned long long trx_time = curtime - trx_started;
+							unsigned long long trx_time_ms = trx_time/1000;
+							if (trx_time_ms > (unsigned long long)mysql_thread___max_transaction_time) {
+								sess->killed=true;
+								if (sess->client_myds) {
+									proxy_warning("Killing client connection %s:%d because of (possible) transaction running for %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, trx_time_ms);
+								}
+							}
+						}
 					}
 				}
 				if (servers_table_version_current != servers_table_version_previous) { // bug fix for #1085
@@ -4376,7 +4428,9 @@ void MySQL_Thread::process_all_sessions() {
 			}
 #endif // IDLE_THREADS
 		} else {
-			sess->active_transactions = -1;
+			// NOTE: we used the special value -1 to inform MySQL_Session::handler() to recompute it
+			// removing this logic in 2.0.15
+			//sess->active_transactions = -1;
 		}
 		if (sess->healthy==0) {
 			char _buf[1024];
@@ -4442,6 +4496,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___use_tcp_keepalive=(bool)GloMTH->get_variable_int((char *)"use_tcp_keepalive");
 	mysql_thread___tcp_keepalive_time=GloMTH->get_variable_int((char *)"tcp_keepalive_time");
 	mysql_thread___throttle_connections_per_sec_to_hostgroup=GloMTH->get_variable_int((char *)"throttle_connections_per_sec_to_hostgroup");
+	mysql_thread___max_transaction_idle_time=GloMTH->get_variable_int((char *)"max_transaction_idle_time");
 	mysql_thread___max_transaction_time=GloMTH->get_variable_int((char *)"max_transaction_time");
 	mysql_thread___threshold_query_length=GloMTH->get_variable_int((char *)"threshold_query_length");
 	mysql_thread___threshold_resultset_size=GloMTH->get_variable_int((char *)"threshold_resultset_size");

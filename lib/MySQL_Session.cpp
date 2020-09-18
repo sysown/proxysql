@@ -457,6 +457,8 @@ MySQL_Session::MySQL_Session() {
 	mirrorPkt.ptr=NULL;
 	mirrorPkt.size=0;
 	set_status(NONE);
+	idle_since = 0;
+	transaction_started_at = 0;
 
 	CurrentQuery.sess=this;
 
@@ -2785,8 +2787,11 @@ int MySQL_Session::handler() {
 	unsigned int j;
 	unsigned char c;
 
-	if (active_transactions <= 0) {
+	if (active_transactions == 0) {
 		active_transactions=NumActiveTransactions();
+		if (active_transactions > 0) {
+			transaction_started_at = thread->curtime;
+		}
 	}
 //	FIXME: Sessions without frontend are an ugly hack
 	if (session_fast_forward==false) {
