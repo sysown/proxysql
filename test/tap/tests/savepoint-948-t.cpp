@@ -349,7 +349,7 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_query_rules");
 	MYSQL_QUERY(mysqladmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-	int MyHGM_myconnpoll_push = 0;
+	int MyHGM_myconnpoll_get = 0;
 	std::string q;
 	q = "SELECT * FROM stats_mysql_global WHERE variable_name LIKE 'MyHGM%'";
 	{
@@ -361,8 +361,8 @@ int main(int argc, char *argv[]) {
 		MYSQL_ROW row;
 		while ((row = mysql_fetch_row(result)))
 		{
-			if (strstr(row[0], "MyHGM_myconnpoll_push")) {
-				MyHGM_myconnpoll_push = atoi(row[1]);
+			if (strstr(row[0], "MyHGM_myconnpoll_get")) {
+				MyHGM_myconnpoll_get = atoi(row[1]);
 			}
 		}
 		mysql_free_result(result);
@@ -399,20 +399,20 @@ int main(int argc, char *argv[]) {
 		MYSQL_ROW row;
 		while ((row = mysql_fetch_row(result)))
 		{
-			if (strstr(row[0], "MyHGM_myconnpoll_push")) {
-				MyHGM_myconnpoll_push = atoi(row[1]) - MyHGM_myconnpoll_push;
+			if (strstr(row[0], "MyHGM_myconnpoll_get")) {
+				MyHGM_myconnpoll_get = atoi(row[1]) - MyHGM_myconnpoll_get;
 			}
 		}
 		mysql_free_result(result);
 	}
 	print_global_status(mysqladmin);
 	print_commands_stats(mysqladmin);
-	std::cerr << std::endl << "MyHGM_myconnpoll_push: " << MyHGM_myconnpoll_push << std::endl;
+	std::cerr << std::endl << "MyHGM_myconnpoll_get: " << MyHGM_myconnpoll_get << std::endl;
 	std::cerr << "cnt_SELECT_outside_transactions: " << cnt_SELECT_outside_transactions << std::endl;
 	std::cerr << "cnt_transactions: " << cnt_transactions << std::endl;
 	//ok((MyHGM_myconnpoll_push == cnt_transactions+cnt_SELECT_outside_transactions) , "Number of transactions [%d] , Queries outside transaction [%d] , total connections returned [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_push);
 	// FIXME: until we fix the autocommit bug, we may have some minor mismatch
-	ok((MyHGM_myconnpoll_push <= cnt_transactions+cnt_SELECT_outside_transactions && MyHGM_myconnpoll_push >= cnt_transactions+cnt_SELECT_outside_transactions-10) , "Number of transactions [%d] , Queries outside transaction [%d] , total connections returned [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_push);
+	ok((MyHGM_myconnpoll_get <= cnt_transactions+cnt_SELECT_outside_transactions && MyHGM_myconnpoll_get >= cnt_transactions+cnt_SELECT_outside_transactions-10) , "Number of transactions [%d] , Queries outside transaction [%d] , total connections returned [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_get);
 	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_query_rules");
 	MYSQL_QUERY(mysqladmin, "INSERT INTO mysql_query_rules SELECT * FROM mysql_query_rules_948");
 	MYSQL_QUERY(mysqladmin, "LOAD MYSQL QUERY RULES TO RUNTIME");
