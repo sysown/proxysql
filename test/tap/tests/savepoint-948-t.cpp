@@ -361,7 +361,7 @@ int main(int argc, char *argv[]) {
 		MYSQL_ROW row;
 		while ((row = mysql_fetch_row(result)))
 		{
-			if (strstr(row[0], "MyHGM_myconnpoll_get")) {
+			if (strcmp(row[0], "MyHGM_myconnpoll_get")) {
 				MyHGM_myconnpoll_get = atoi(row[1]);
 			}
 		}
@@ -399,7 +399,7 @@ int main(int argc, char *argv[]) {
 		MYSQL_ROW row;
 		while ((row = mysql_fetch_row(result)))
 		{
-			if (strstr(row[0], "MyHGM_myconnpoll_get")) {
+			if (strcmp(row[0], "MyHGM_myconnpoll_get")) {
 				MyHGM_myconnpoll_get = atoi(row[1]) - MyHGM_myconnpoll_get;
 			}
 		}
