@@ -4,6 +4,8 @@ import diamond.collector
 from diamond.collector import str_to_bool
 import re
 import time
+import pymysql
+pymysql.install_as_MySQLdb()
 
 try:
     import MySQLdb
@@ -77,7 +79,7 @@ class ProxySQLCollector(diamond.collector.Collector):
         return config
 
     def get_db_stats(self, query):
-        cursor = self.db.cursor(cursorclass=MySQLdb.cursors.DictCursor)
+        cursor = self.db.cursor()
 
         try:
             cursor.execute(query)
@@ -87,6 +89,7 @@ class ProxySQLCollector(diamond.collector.Collector):
             return ()
 
     def connect(self, params):
+        params ['cursorclass'] = pymysql.cursors.DictCursor
         try:
             self.db = MySQLdb.connect(**params)
             self.log.debug('ProxySQLCollector: Connected to database.')
