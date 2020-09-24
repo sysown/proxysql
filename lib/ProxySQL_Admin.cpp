@@ -71,6 +71,8 @@ extern char *ssl_key_fp;
 extern char *ssl_cert_fp;
 extern char *ssl_ca_fp;
 
+// ProxySQL_Admin shared variables
+int admin_thread___web_verbosity = 0;
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
@@ -542,6 +544,7 @@ static char * admin_variables_names[]= {
 	(char *)"restapi_port",
 	(char *)"web_enabled",
 	(char *)"web_port",
+	(char *)"web_verbosity",
 	(char *)"prometheus_memory_metrics_interval",
 #ifdef DEBUG
   (char *)"debug",
@@ -5121,6 +5124,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.web_enabled_old = false;
 	variables.web_port = 6080;
 	variables.web_port_old = variables.web_port;
+	variables.web_verbosity = 0;
 	variables.p_memory_metrics_interval = 61;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
@@ -5812,6 +5816,8 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					variables.web_port_old = variables.web_port;
 				}
 			}
+			// Update the admin thread variable for 'web_verbosity'
+			admin_thread___web_verbosity = variables.web_verbosity;
 		}
 	}
 	if (resultset) delete resultset;
@@ -6847,6 +6853,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"web_enabled")) {
 		return strdup((variables.web_enabled ? "true" : "false"));
 	}
+	if (!strcasecmp(name,"web_verbosity")) {
+		sprintf(intbuf, "%d", variables.web_verbosity);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"web_port")) {
 		sprintf(intbuf,"%d",variables.web_port);
 		return strdup(intbuf);
@@ -7365,6 +7375,15 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		int intv=atoi(value);
 		if (intv > 0 && intv < 65535) {
 			variables.web_port=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"web_verbosity")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 10) {
+			variables.web_verbosity=intv;
 			return true;
 		} else {
 			return false;
