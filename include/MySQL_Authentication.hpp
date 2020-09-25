@@ -23,6 +23,7 @@ typedef struct _account_details_t {
 	bool __frontend;	// this is used only during the dump
 	bool __backend;	// this is used only during the dump
 	bool __active;
+	char *attributes;
 	char *comment;
 } account_details_t;
 
@@ -61,7 +62,7 @@ class MySQL_Authentication {
 	public:
 	MySQL_Authentication();
 	~MySQL_Authentication();
-	bool add(char *username, char *password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections, char *comment);
+	bool add(char *username, char *password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections, char* attributes, char *comment);
 	bool del(char *username, enum cred_username_type usertype, bool set_lock=true);
 	bool reset();
 	void print_version();
