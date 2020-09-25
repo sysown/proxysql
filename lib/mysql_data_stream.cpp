@@ -562,6 +562,11 @@ int MySQL_Data_Stream::read_from_net() {
 		} else {
 			int ssl_ret=SSL_get_error(ssl, r);
 			if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
+			if (r==0 && revents==1) {
+				// revents returns 1 , but recv() returns 0 , so there is no data.
+				// Therefore the socket is already closed
+				shut_soft();
+			}
 		}
 	} else {
 		queue_w(queueIN,r);
