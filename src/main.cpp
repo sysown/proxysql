@@ -181,7 +181,7 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 }
 
 
-static char * know_latest_version = NULL;
+char * know_latest_version = NULL;
 static unsigned int randID = 0;
 
 static char * main_check_latest_version() {

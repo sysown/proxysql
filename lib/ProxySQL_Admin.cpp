@@ -73,6 +73,7 @@ extern char *ssl_ca_fp;
 
 // ProxySQL_Admin shared variables
 int admin___web_verbosity = 0;
+char * proxysql_version = NULL;
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
@@ -5046,6 +5047,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 			exit(EXIT_FAILURE);
 		}
 
+	if (proxysql_version == NULL) {
+		proxysql_version = strdup(PROXYSQL_VERSION);
+	}
 	SPA=this;
 
 	//Initialize locker
