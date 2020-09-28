@@ -72,7 +72,7 @@ extern char *ssl_cert_fp;
 extern char *ssl_ca_fp;
 
 // ProxySQL_Admin shared variables
-int admin_thread___web_verbosity = 0;
+int admin___web_verbosity = 0;
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
@@ -5816,8 +5816,8 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					variables.web_port_old = variables.web_port;
 				}
 			}
-			// Update the admin thread variable for 'web_verbosity'
-			admin_thread___web_verbosity = variables.web_verbosity;
+			// Update the admin variable for 'web_verbosity'
+			admin___web_verbosity = variables.web_verbosity;
 		}
 	}
 	if (resultset) delete resultset;

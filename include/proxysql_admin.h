@@ -96,7 +96,7 @@ struct admin_metrics_map_idx {
 };
 
 // ProxySQL_Admin shared variables
-extern int admin_thread___web_verbosity;
+extern int admin__web_verbosity;
 
 class ProxySQL_Admin {
 	private:
