@@ -95,6 +95,9 @@ struct admin_metrics_map_idx {
 	};
 };
 
+// ProxySQL_Admin shared variables
+extern int admin__web_verbosity;
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
@@ -167,6 +170,7 @@ class ProxySQL_Admin {
 		int restapi_port_old;
 		bool web_enabled;
 		bool web_enabled_old;
+		int web_verbosity;
 		int web_port;
 		int web_port_old;
 		int p_memory_metrics_interval;
