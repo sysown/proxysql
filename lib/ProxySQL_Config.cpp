@@ -123,7 +123,8 @@ int ProxySQL_Config::Write_MySQL_Users_to_configfile(std::string& data) {
 				addField(data, "backend", r->fields[9], "");
 				addField(data, "frontend", r->fields[10], "");
 				addField(data, "max_connections", r->fields[11], "");
-				addField(data, "comment", r->fields[12]);
+				addField(data, "attributes", r->fields[12]);
+				addField(data, "comment", r->fields[13]);
 				data += "\t}";
 				isNext = true;
 			}
