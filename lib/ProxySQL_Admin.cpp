@@ -10196,7 +10196,6 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 		free(ad->username);
 		free(ad->password); // this is not initialized with dump_all_users( , false)
 		free(ad->default_schema); // this is not initialized with dump_all_users( , false)
-		free(ad->attributes);
 		free(ad);
 	}
 	if (_runtime) {
