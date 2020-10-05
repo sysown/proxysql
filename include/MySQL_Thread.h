@@ -366,16 +366,23 @@ class MySQL_Threads_Handler
 		int monitor_history;
 		int monitor_connect_interval;
 		int monitor_connect_timeout;
+		//! Monitor ping interval. Unit: 'ms'.
 		int monitor_ping_interval;
 		int monitor_ping_max_failures;
+		//! Monitor ping timeout. Unit: 'ms'.
 		int monitor_ping_timeout;
+		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
+		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_timeout;
 		int monitor_read_only_max_timeout_count;
 		bool monitor_enabled;
+		//! ProxySQL session wait timeout. Unit: 'ms'.
 		bool monitor_wait_timeout;
 		bool monitor_writer_is_also_reader;
+		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;
+		//! Read only check timeout. Unit: 'ms'.
 		int monitor_replication_lag_timeout;
 		int monitor_replication_lag_count;
 		int monitor_groupreplication_healthcheck_interval;
@@ -554,7 +561,7 @@ class MySQL_Threads_Handler
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
-	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx);
+	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
 	unsigned int get_active_transations();
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();

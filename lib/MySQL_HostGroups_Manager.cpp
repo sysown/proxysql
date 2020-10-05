@@ -1006,7 +1006,6 @@ const std::tuple<
 hg_metrics_map = std::make_tuple(
 	hg_counter_vector {
 		std::make_tuple (
-			// TODO: Check this help
 			p_hg_counter::servers_table_version,
 			"proxysql_servers_table_version",
 			"Number of times the \"servers_table\" have been modified.",
@@ -1038,15 +1037,19 @@ hg_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_hg_counter::client_connections_created,
-			"proxysql_client_connections_created",
+			"proxysql_client_connections",
 			"Total number of client connections created.",
-			metric_tags {}
+			metric_tags {
+				{ "status", "created" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::client_connections_aborted,
-			"proxysql_client_connections_aborted",
+			"proxysql_client_connections",
 			"Total number of client failed connections (or closed improperly).",
-			metric_tags {}
+			metric_tags {
+				{ "status", "aborted" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::com_autocommit,
@@ -1146,39 +1149,53 @@ hg_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get,
-			"proxysql_myhgm_myconnpool_get",
+			"proxysql_myhgm_myconnpool",
 			"The number of requests made to the connection pool.",
-			metric_tags {}
+			metric_tags {
+				{ "type", "get" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get_ok,
-			"proxysql_myhgm_myconnpool_get_ok",
+			"proxysql_myhgm_myconnpool",
 			"The number of successful requests to the connection pool (i.e. where a connection was available).",
-			metric_tags {}
+			metric_tags {
+				{ "type", "get" },
+				{ "status", "ok" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get_ping,
-			"proxysql_myhgm_myconnpool_get_ping",
+			"proxysql_myhgm_myconnpool",
 			"The number of connections that were taken from the pool to run a ping to keep them alive.",
-			metric_tags {}
+			metric_tags {
+				{ "type", "get" },
+				{ "purpose", "ping" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_push,
-			"proxysql_myhgm_myconnpool_push",
+			"proxysql_myhgm_myconnpool",
 			"The number of connections returned to the connection pool.",
-			metric_tags {}
+			metric_tags {
+				{ "type", "push" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_reset,
-			"proxysql_myhgm_myconnpool_reset",
+			"proxysql_myhgm_myconnpool",
 			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
-			metric_tags {}
+			metric_tags {
+				{ "type", "reset" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_destroy,
-			"proxysql_myhgm_myconnpool_destroy",
+			"proxysql_myhgm_myconnpool",
 			"The number of connections considered unhealthy and therefore closed.",
-			metric_tags {}
+			metric_tags {
+				{ "type", "destroy" }
+			}
 		)
 	},
 	// prometheus gauges
@@ -1201,27 +1218,35 @@ hg_metrics_map = std::make_tuple(
 		// connection_pool
 		std::make_tuple (
 			p_hg_dyn_counter::conn_pool_bytes_data_recv,
-			"proxysql_connection_pool_bytes_data_recv",
+			"proxysql_connection_pool_data_bytes",
 			"The amount of data received from the backend, excluding metadata.",
-			metric_tags {}
+			metric_tags {
+				{ "traffic_flow", "recv" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_counter::conn_pool_bytes_data_sent,
-			"proxysql_connection_pool_bytes_data_sent",
+			"proxysql_connection_pool_data_bytes",
 			"The amount of data sent to the backend, excluding metadata.",
-			metric_tags {}
+			metric_tags {
+				{ "traffic_flow", "sent" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_conn_err,
-			"proxysql_connection_pool_conn_err",
+			"proxysql_connection_pool_conn",
 			"How many connections weren't established successfully.",
-			metric_tags {}
+			metric_tags {
+				{ "status", "err" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_conn_ok,
-			"proxysql_connection_pool_conn_ok",
+			"proxysql_connection_pool_conn",
 			"How many connections were established successfully.",
-			metric_tags {}
+			metric_tags {
+				{ "status", "ok" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_queries,
@@ -1252,6 +1277,7 @@ hg_metrics_map = std::make_tuple(
 	},
 	// prometheus dynamic counters
 	hg_dyn_gauge_vector {
+		// NOTE: Maybe free-used could be collapsed
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_conn_free,
 			"proxysql_connection_pool_conn_free",

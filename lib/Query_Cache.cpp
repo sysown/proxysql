@@ -323,33 +323,44 @@ qc_metrics_map = std::make_tuple(
 	qc_counter_vector {
 		std::make_tuple (
 			p_qc_counter::query_cache_count_get,
-			"proxysql_query_cache_count_get",
+			"proxysql_query_cache_count",
 			"Number of read requests.",
-			metric_tags {}
+			metric_tags {
+				{ "op", "get" }
+			}
 		),
 		std::make_tuple (
 			p_qc_counter::query_cache_count_get_ok,
-			"proxysql_query_cache_count_get_ok",
+			"proxysql_query_cache_count",
 			"Number of successful read requests.",
-			metric_tags {}
+			metric_tags {
+				{ "op", "get" },
+				{ "status", "ok" }
+			}
 		),
 		std::make_tuple (
 			p_qc_counter::query_cache_count_set,
-			"proxysql_query_cache_count_set",
+			"proxysql_query_cache_count",
 			"Number of write requests.",
-			metric_tags {}
+			metric_tags {
+				{ "op", "set" }
+			}
 		),
 		std::make_tuple (
 			p_qc_counter::query_cache_bytes_in,
-			"proxysql_query_cache_bytes_in",
-			"Number of bytes sent into the Query Cache.",
-			metric_tags {}
+			"proxysql_query_cache_bytes",
+			"Number of bytes written into the Query Cache.",
+			metric_tags {
+				{ "op", "written" }
+			}
 		),
 		std::make_tuple (
 			p_qc_counter::query_cache_bytes_out,
-			"proxysql_query_cache_bytes_out",
+			"proxysql_query_cache_bytes",
 			"Number of bytes read from the Query Cache.",
-			metric_tags {}
+			metric_tags {
+				{ "op", "read" }
+			}
 		),
 		std::make_tuple (
 			p_qc_counter::query_cache_purged,
@@ -368,7 +379,7 @@ qc_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_qc_gauge::query_cache_memory_bytes,
 			"proxysql_query_cache_memory_bytes",
-			"Memory currently used by the query cache (more details later).",
+			"Memory currently used by the query cache.",
 			metric_tags {}
 		)
 	}

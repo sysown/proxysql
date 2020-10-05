@@ -585,7 +585,7 @@ admin_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_admin_counter::jemalloc_allocated,
-			"proxysql_jemalloc_allocated",
+			"proxysql_jemalloc_allocated_bytes",
 			"Bytes allocated by the application.",
 			metric_tags {}
 		)
@@ -606,34 +606,43 @@ admin_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_admin_gauge::jemalloc_resident,
-			"proxysql_jemalloc_resident",
+			"proxysql_jemalloc_bytes",
 			"Bytes in physically resident data pages mapped by the allocator.",
-			metric_tags {}
+			metric_tags {
+				{ "type", "resident" }
+			}
 		),
 		std::make_tuple (
 			p_admin_gauge::jemalloc_active,
-			"proxysql_jemalloc_active",
+			"proxysql_jemalloc_bytes",
 			"Bytes in pages allocated by the application.",
-			metric_tags {}
+			metric_tags {
+				{ "type", "active" }
+			}
 		),
 		std::make_tuple (
 			p_admin_gauge::jemalloc_mapped,
-			"proxysql_jemalloc_mapped",
+			"proxysql_jemalloc_bytes",
 			"Bytes in extents mapped by the allocator.",
-			metric_tags {}
+			metric_tags {
+				{ "type", "mapped" }
+			}
 		),
 		std::make_tuple (
 			p_admin_gauge::jemalloc_metadata,
-			"proxysql_jemalloc_metadata",
+			"proxysql_jemalloc_bytes",
 			"Bytes dedicated to metadata.",
-			metric_tags {}
+			metric_tags {
+				{ "type", "metadata" }
+			}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_admin_gauge::jemalloc_retained,
-			"proxysql_jemalloc_retained",
-			"",
-			metric_tags {}
+			"proxysql_jemalloc_bytes",
+			"Bytes in virtual memory mappings that were retained rather than being returned to the operating system.",
+			metric_tags {
+				{ "type", "retained" }
+			}
 		),
 		std::make_tuple (
 			p_admin_gauge::query_digest_memory_bytes,
@@ -648,59 +657,52 @@ admin_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_admin_gauge::mysql_query_rules_memory_bytes,
 			"proxysql_mysql_query_rules_memory_bytes",
-			"",
+			"Number of bytes used by 'mysql_query_rules' rules.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_admin_gauge::mysql_firewall_users_table,
-			"proxysql_mysql_firewall_users_table",
-			"",
+			"proxysql_mysql_firewall_users_table_bytes",
+			"Number of bytes used by 'mysql_firewall_users' entries.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
+			// TODO: Check why 'global_mysql_firewall_whitelist_users_result___size' never updated
 			p_admin_gauge::mysql_firewall_users_config,
-			"proxysql_mysql_firewall_users_config",
-			"",
+			"proxysql_mysql_firewall_users_config_bytes",
+			"Full 'mysql_firewall_users' config 'resulset' size.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_admin_gauge::mysql_firewall_rules_table,
-			"proxysql_mysql_firewall_rules_table",
-			"",
+			"proxysql_mysql_firewall_rules_table_bytes",
+			"Number of bytes used by 'mysql_firewall_rules' entries.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_admin_gauge::mysql_firewall_rules_config,
-			"proxysql_mysql_firewall_rules_config",
-			"",
+			"proxysql_mysql_firewall_rules_config_bytes",
+			"Full 'mysql_firewall_users' config 'resulset' size.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_admin_gauge::stack_memory_mysql_threads,
-			"proxysql_stack_memory_mysql_threads",
-			"",
+			"proxysql_stack_memory_mysql_threads_bytes",
+			"Stack size used by 'mysql_threads'.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_admin_gauge::stack_memory_admin_threads,
-			"proxysql_stack_memory_admin_threads",
-			"",
+			"proxysql_stack_memory_admin_threads_bytes",
+			"Stack size used by 'admin_threads'.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_admin_gauge::stack_memory_cluster_threads,
 			"proxysql_stack_memory_cluster_threads",
-			"",
+			"Stack size used by 'cluster_threads'.",
 			metric_tags {}
 		),
 		// stmt metrics
