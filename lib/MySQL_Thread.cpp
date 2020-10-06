@@ -5959,11 +5959,16 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		}
 	}
 	if (m_idx != p_th_counter::__size) {
+		const auto& cur_val = status_variables.p_counter_array[m_idx]->Value();
+		double final_val = 0;
+
 		if (conv != 0) {
-			const auto& cur_val = status_variables.p_counter_array[m_idx]->Value();
-			const auto& final_val = (q - (cur_val / conv)) * conv;
-			status_variables.p_counter_array[m_idx]->Increment(final_val);
+			final_val = (q - (cur_val / conv)) * conv;
+		} else {
+			final_val = q - cur_val;
 		}
+
+		status_variables.p_counter_array[m_idx]->Increment(final_val);
 	}
 	return q;
 
