@@ -305,7 +305,6 @@ struct p_th_counter {
 		queries_with_max_lag_ms__delayed,
 		queries_with_max_lag_ms__total_wait_time_us,
 		mysql_unexpected_frontend_com_quit,
-		client_connections_hostgroup_locked,
 		hostgroup_locked_set_cmds,
 		hostgroup_locked_queries,
 		mysql_unexpected_frontend_packets,
@@ -322,6 +321,7 @@ struct p_th_gauge {
 	enum metric {
 		active_transactions = 0,
 		client_connections_non_idle,
+		client_connections_hostgroup_locked,
 		mysql_backend_buffers_bytes,
 		mysql_frontend_buffers_bytes,
 		mysql_session_internal_bytes,
@@ -562,6 +562,7 @@ class MySQL_Threads_Handler
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
 	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
+	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_gauge::metric m_idx, unsigned long long conv = 0);
 	unsigned int get_active_transations();
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();

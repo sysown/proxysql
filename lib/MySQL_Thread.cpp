@@ -44,8 +44,15 @@ typedef struct mythr_st_vars {
 	uint32_t conv;
 } mythr_st_vars_t;
 
+typedef struct mythr_g_st_vars {
+	enum MySQL_Thread_status_variable v_idx;
+	p_th_gauge::metric m_idx;
+	char * name;
+	uint32_t conv;
+} mythr_g_st_vars_t;
+
 // Note: the order here is not important. 
-mythr_st_vars_t MySQL_Thread_status_variables_array[] {
+mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_backend_stmt_prepare, p_th_counter::com_backend_stmt_prepare, (char *)"Com_backend_stmt_prepare" },
 	{ st_var_backend_stmt_execute, p_th_counter::com_backend_stmt_execute, (char *)"Com_backend_stmt_execute" },
 	{ st_var_backend_stmt_close,   p_th_counter::com_backend_stmt_close,   (char *)"Com_backend_stmt_close" },
@@ -68,7 +75,6 @@ mythr_st_vars_t MySQL_Thread_status_variables_array[] {
 	{ st_var_ConnPool_get_conn_failure,   p_th_counter::connpool_get_conn_failure,        (char *)"ConnPool_get_conn_failure" },
 	{ st_var_killed_connections,          p_th_counter::mysql_killed_backend_connections, (char *)"mysql_killed_backend_connections" },
 	{ st_var_killed_queries,              p_th_counter::mysql_killed_backend_queries,     (char *)"mysql_killed_backend_queries" },
-	{ st_var_hostgroup_locked,            p_th_counter::client_connections_hostgroup_locked,  (char *)"Client_Connections_hostgroup_locked" },
 	{ st_var_hostgroup_locked_set_cmds,   p_th_counter::hostgroup_locked_set_cmds,        (char *)"hostgroup_locked_set_cmds" },
 	{ st_var_hostgroup_locked_queries,    p_th_counter::hostgroup_locked_queries,         (char *)"hostgroup_locked_queries" },
 	{ st_var_unexpected_com_quit,         p_th_counter::mysql_unexpected_frontend_com_quit,(char *)"mysql_unexpected_frontend_com_quit" },
@@ -83,6 +89,10 @@ mythr_st_vars_t MySQL_Thread_status_variables_array[] {
 	{ st_var_whitelisted_sqli_fingerprint,p_th_counter::whitelisted_sqli_fingerprint,     (char *)"whitelisted_sqli_fingerprint" },
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
+};
+
+mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
+	{ st_var_hostgroup_locked,            p_th_gauge::client_connections_hostgroup_locked,  (char *)"Client_Connections_hostgroup_locked" }
 };
 
 extern mysql_variable_st mysql_tracked_variables[];
@@ -786,13 +796,6 @@ th_metrics_map = std::make_tuple(
 			"Unexpecte 'COM_QUIT' received from the client.",
 			metric_tags {}
 		),
-		// TODO-FIXME: This is not a counter, needs to be fixed.
-		std::make_tuple (
-			p_th_counter::client_connections_hostgroup_locked,
-			"proxysql_client_connections_hostgroup_locked",
-			"",
-			metric_tags {}
-		),
 		std::make_tuple (
 			// TODO: Add meaningful HELP
 			p_th_counter::hostgroup_locked_set_cmds,
@@ -854,6 +857,12 @@ th_metrics_map = std::make_tuple(
 			p_th_gauge::client_connections_non_idle,
 			"proxysql_client_connections_non_idle",
 			"Number of client connections that are currently handled by the main worker threads.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_th_gauge::client_connections_hostgroup_locked,
+			"proxysql_client_connections_hostgroup_locked",
+			"Number of client connection locked to a specific hostgroup.",
 			metric_tags {}
 		),
 		std::make_tuple (
@@ -5353,15 +5362,32 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
-	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_array)/sizeof(mythr_st_vars_t) ; i++) {
-		if (MySQL_Thread_status_variables_array[i].name) {
-			if (strlen(MySQL_Thread_status_variables_array[i].name)) {
-				pta[0] = MySQL_Thread_status_variables_array[i].name;
+	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_counter_array)/sizeof(mythr_st_vars_t) ; i++) {
+		if (MySQL_Thread_status_variables_counter_array[i].name) {
+			if (strlen(MySQL_Thread_status_variables_counter_array[i].name)) {
+				pta[0] = MySQL_Thread_status_variables_counter_array[i].name;
 				unsigned long long stvar =
 					get_status_variable(
-						MySQL_Thread_status_variables_array[i].v_idx,
-						MySQL_Thread_status_variables_array[i].m_idx,
-						MySQL_Thread_status_variables_array[i].conv
+						MySQL_Thread_status_variables_counter_array[i].v_idx,
+						MySQL_Thread_status_variables_counter_array[i].m_idx,
+						MySQL_Thread_status_variables_counter_array[i].conv
+					);
+				sprintf(buf,"%llu", stvar);
+				pta[1] = buf;
+				result->add_row(pta);
+			}
+		}
+	}
+	// Gauge variables
+	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_gauge_array)/sizeof(mythr_g_st_vars_t) ; i++) {
+		if (MySQL_Thread_status_variables_gauge_array[i].name) {
+			if (strlen(MySQL_Thread_status_variables_gauge_array[i].name)) {
+				pta[0] = MySQL_Thread_status_variables_gauge_array[i].name;
+				unsigned long long stvar =
+					get_status_variable(
+						MySQL_Thread_status_variables_gauge_array[i].v_idx,
+						MySQL_Thread_status_variables_gauge_array[i].m_idx,
+						MySQL_Thread_status_variables_gauge_array[i].conv
 					);
 				sprintf(buf,"%llu", stvar);
 				pta[1] = buf;
@@ -5974,6 +6000,36 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 
 }
 
+unsigned long long MySQL_Threads_Handler::get_status_variable(
+	enum MySQL_Thread_status_variable v_idx,
+	p_th_gauge::metric m_idx,
+	unsigned long long conv
+) {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.stvar[v_idx],0);
+		}
+	}
+	if (m_idx != p_th_gauge::__size) {
+		double final_val = 0;
+
+		if (conv != 0) {
+			final_val = q / conv;
+		} else {
+			final_val = q;
+		}
+
+		status_variables.p_gauge_array[m_idx]->Set(final_val);
+	}
+	return q;
+
+}
+
 unsigned int MySQL_Threads_Handler::get_active_transations() {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
@@ -6084,12 +6140,22 @@ void MySQL_Threads_Handler::p_update_metrics() {
 	get_mysql_backend_buffers_bytes();
 	get_mysql_frontend_buffers_bytes();
 	get_mysql_session_internal_bytes();
-	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_array)/sizeof(mythr_st_vars_t) ; i++) {
-		if (MySQL_Thread_status_variables_array[i].name) {
+	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_counter_array)/sizeof(mythr_st_vars_t) ; i++) {
+		if (MySQL_Thread_status_variables_counter_array[i].name) {
 			get_status_variable(
-				MySQL_Thread_status_variables_array[i].v_idx,
-				MySQL_Thread_status_variables_array[i].m_idx,
-				MySQL_Thread_status_variables_array[i].conv
+				MySQL_Thread_status_variables_counter_array[i].v_idx,
+				MySQL_Thread_status_variables_counter_array[i].m_idx,
+				MySQL_Thread_status_variables_counter_array[i].conv
+			);
+		}
+	}
+	// Gauge variables
+	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_gauge_array)/sizeof(mythr_g_st_vars_t) ; i++) {
+		if (MySQL_Thread_status_variables_gauge_array[i].name) {
+			get_status_variable(
+				MySQL_Thread_status_variables_gauge_array[i].v_idx,
+				MySQL_Thread_status_variables_gauge_array[i].m_idx,
+				MySQL_Thread_status_variables_gauge_array[i].conv
 			);
 		}
 	}
