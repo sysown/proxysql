@@ -318,38 +318,46 @@ using qc_gauge_tuple =
 using qc_counter_vector = std::vector<qc_counter_tuple>;
 using qc_gauge_vector = std::vector<qc_gauge_tuple>;
 
+/**
+ * @brief Metrics map holding the metrics for the 'Query_Cache' module.
+ *
+ * @note Many metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
 const std::tuple<qc_counter_vector, qc_gauge_vector>
 qc_metrics_map = std::make_tuple(
 	qc_counter_vector {
+		// ====================================================================
 		std::make_tuple (
 			p_qc_counter::query_cache_count_get,
-			"proxysql_query_cache_count",
+			"proxysql_query_cache_count_get",
 			"Number of read requests.",
-			metric_tags {
-				{ "op", "get" }
-			}
+			metric_tags {}
 		),
 		std::make_tuple (
 			p_qc_counter::query_cache_count_get_ok,
-			"proxysql_query_cache_count",
+			"proxysql_query_cache_count_get",
 			"Number of successful read requests.",
 			metric_tags {
-				{ "op", "get" },
 				{ "status", "ok" }
 			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_qc_counter::query_cache_count_set,
-			"proxysql_query_cache_count",
+			"proxysql_query_cache_count_set",
 			"Number of write requests.",
-			metric_tags {
-				{ "op", "set" }
-			}
+			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
 			p_qc_counter::query_cache_bytes_in,
 			"proxysql_query_cache_bytes",
-			"Number of bytes written into the Query Cache.",
+			"Number of bytes (read|written) into the Query Cache.",
 			metric_tags {
 				{ "op", "written" }
 			}
@@ -357,11 +365,13 @@ qc_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_qc_counter::query_cache_bytes_out,
 			"proxysql_query_cache_bytes",
-			"Number of bytes read from the Query Cache.",
+			"Number of bytes (read|written) into the Query Cache.",
 			metric_tags {
 				{ "op", "read" }
 			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_qc_counter::query_cache_purged,
 			"proxysql_query_cache_purged",

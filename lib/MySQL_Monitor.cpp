@@ -560,6 +560,14 @@ using mon_gauge_tuple =
 using mon_counter_vector = std::vector<mon_counter_tuple>;
 using mon_gauge_vector = std::vector<mon_gauge_tuple>;
 
+/**
+ * @brief Metrics map holding the metrics for the 'MySQL_Monitor' module.
+ *
+ * @note Some metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
 const std::tuple<mon_counter_vector, mon_gauge_vector>
 mon_metrics_map = std::make_tuple(
 	mon_counter_vector {
@@ -569,10 +577,12 @@ mon_metrics_map = std::make_tuple(
 			"Number of MySQL Monitor workers started.",
 			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_connect_check_ok,
 			"proxysql_mysql_monitor_connect_check",
-			"Number of succeed 'connect checks' from 'monitor_connect_thread'.",
+			"Number of (succeed|failed) 'connect checks' from 'monitor_connect_thread'.",
 			metric_tags {
 				{ "status", "ok" }
 			}
@@ -580,15 +590,18 @@ mon_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_connect_check_err,
 			"proxysql_mysql_monitor_connect_check",
-			"Number of succeed 'connect checks' from 'monitor_connect_thread'.",
+			"Number of (succeed|failed) 'connect checks' from 'monitor_connect_thread'.",
 			metric_tags {
 				{ "status", "err" }
 			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_ping_check_ok,
 			"proxysql_mysql_monitor_ping_check",
-			"Number of succeed 'ping checks' from 'monitor_ping_thread'.",
+			"Number of (succeed|failed) 'ping checks' from 'monitor_ping_thread'.",
 			metric_tags {
 				{ "status", "ok" }
 			}
@@ -596,15 +609,18 @@ mon_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_ping_check_err,
 			"proxysql_mysql_monitor_ping_check",
-			"Number of failed 'ping checks' from 'monitor_ping_thread'.",
+			"Number of (succeed|failed) 'ping checks' from 'monitor_ping_thread'.",
 			metric_tags {
 				{ "status", "err" }
 			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_read_only_check_ok,
 			"proxysql_mysql_monitor_read_only_check",
-			"Number of succeed 'read only checks' from 'monitor_read_only_thread'.",
+			"Number of (succeed|failed) 'read only checks' from 'monitor_read_only_thread'.",
 			metric_tags {
 				{ "status", "ok" }
 			}
@@ -612,15 +628,18 @@ mon_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_read_only_check_err,
 			"proxysql_mysql_monitor_read_only_check",
-			"Number of failed 'read only checks' from 'monitor_read_only_thread'.",
+			"Number of (succeed|failed) 'read only checks' from 'monitor_read_only_thread'.",
 			metric_tags {
 				{ "status", "err" }
 			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_replication_lag_check_ok,
 			"proxysql_mysql_monitor_replication_lag_check",
-			"Number of succeed 'replication lag checks' from 'monitor_replication_lag_thread'.",
+			"Number of (succeed|failed)'replication lag checks' from 'monitor_replication_lag_thread'.",
 			metric_tags {
 				{ "status", "ok" }
 			}
@@ -628,11 +647,12 @@ mon_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_replication_lag_check_err,
 			"proxysql_mysql_monitor_replication_lag_check",
-			"Number of failed 'replication lag checks' from 'monitor_replication_lag_thread'.",
+			"Number of (succeed|failed)'replication lag checks' from 'monitor_replication_lag_thread'.",
 			metric_tags {
 				{ "status", "err" }
 			}
 		)
+		// ====================================================================
 	},
 	mon_gauge_vector {
 		std::make_tuple (

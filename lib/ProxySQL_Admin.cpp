@@ -574,6 +574,14 @@ using admin_gauge_tuple =
 using admin_counter_vector = std::vector<admin_counter_tuple>;
 using admin_gauge_vector = std::vector<admin_gauge_tuple>;
 
+/**
+ * @brief Metrics map holding the metrics for the 'ProxySQL_Admin' module.
+ *
+ * @note Some metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
 const std::tuple<admin_counter_vector, admin_gauge_vector>
 admin_metrics_map = std::make_tuple(
 	admin_counter_vector {
@@ -604,10 +612,13 @@ admin_metrics_map = std::make_tuple(
 			"Memory used by SQLite.",
 			metric_tags {}
 		),
+
+		// ====================================================================
+
 		std::make_tuple (
 			p_admin_gauge::jemalloc_resident,
 			"proxysql_jemalloc_bytes",
-			"Bytes in physically resident data pages mapped by the allocator.",
+			"Jemalloc memory usage stadistics (resident|active|mapped|metadata).",
 			metric_tags {
 				{ "type", "resident" }
 			}
@@ -615,7 +626,7 @@ admin_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_admin_gauge::jemalloc_active,
 			"proxysql_jemalloc_bytes",
-			"Bytes in pages allocated by the application.",
+			"Jemalloc memory usage stadistics (resident|active|mapped|metadata).",
 			metric_tags {
 				{ "type", "active" }
 			}
@@ -623,7 +634,7 @@ admin_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_admin_gauge::jemalloc_mapped,
 			"proxysql_jemalloc_bytes",
-			"Bytes in extents mapped by the allocator.",
+			"Jemalloc memory usage stadistics (resident|active|mapped|metadata).",
 			metric_tags {
 				{ "type", "mapped" }
 			}
@@ -631,7 +642,7 @@ admin_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_admin_gauge::jemalloc_metadata,
 			"proxysql_jemalloc_bytes",
-			"Bytes dedicated to metadata.",
+			"Jemalloc memory usage stadistics (resident|active|mapped|metadata).",
 			metric_tags {
 				{ "type", "metadata" }
 			}
@@ -639,11 +650,13 @@ admin_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_admin_gauge::jemalloc_retained,
 			"proxysql_jemalloc_bytes",
-			"Bytes in virtual memory mappings that were retained rather than being returned to the operating system.",
+			"Jemalloc memory usage stadistics (resident|active|mapped|metadata).",
 			metric_tags {
 				{ "type", "retained" }
 			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_admin_gauge::query_digest_memory_bytes,
 			"proxysql_query_digest_memory_bytes",

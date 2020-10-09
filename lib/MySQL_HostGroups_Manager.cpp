@@ -997,6 +997,14 @@ using hg_gauge_vector = std::vector<hg_gauge_tuple>;
 using hg_dyn_counter_vector = std::vector<hg_dyn_counter_tuple>;
 using hg_dyn_gauge_vector = std::vector<hg_dyn_gauge_tuple>;
 
+/**
+ * @brief Metrics map holding the metrics for the 'MySQL_HostGroups_Manager' module.
+ *
+ * @note Many metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
 const std::tuple<
 	hg_counter_vector,
 	hg_gauge_vector,
@@ -1011,10 +1019,12 @@ hg_metrics_map = std::make_tuple(
 			"Number of times the \"servers_table\" have been modified.",
 			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_counter::server_connections_created,
 			"proxysql_server_connections",
-			"Total number of server connections created.",
+			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
 				{ "status", "created" }
 			}
@@ -1022,7 +1032,7 @@ hg_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_hg_counter::server_connections_delayed,
 			"proxysql_server_connections",
-			"Total number of server connections delayed.",
+			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
 				{ "status", "delayed" }
 			}
@@ -1030,11 +1040,14 @@ hg_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_hg_counter::server_connections_aborted,
 			"proxysql_server_connections",
-			"Total number of backend failed connections (or closed improperly).",
+			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
 				{ "status", "aborted" }
 			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_counter::client_connections_created,
 			"proxysql_client_connections",
@@ -1051,6 +1064,8 @@ hg_metrics_map = std::make_tuple(
 				{ "status", "aborted" }
 			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_hg_counter::com_autocommit,
 			"proxysql_com_autocommit",
@@ -1147,55 +1162,49 @@ hg_metrics_map = std::make_tuple(
 			"Total access denied \"max user connections\".",
 			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get,
-			"proxysql_myhgm_myconnpool",
+			"proxysql_myhgm_myconnpool_get",
 			"The number of requests made to the connection pool.",
-			metric_tags {
-				{ "type", "get" }
-			}
+			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get_ok,
-			"proxysql_myhgm_myconnpool",
+			"proxysql_myhgm_myconnpool_get",
 			"The number of successful requests to the connection pool (i.e. where a connection was available).",
 			metric_tags {
-				{ "type", "get" },
 				{ "status", "ok" }
 			}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get_ping,
-			"proxysql_myhgm_myconnpool",
+			"proxysql_myhgm_myconnpool_get",
 			"The number of connections that were taken from the pool to run a ping to keep them alive.",
 			metric_tags {
-				{ "type", "get" },
 				{ "purpose", "ping" }
 			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_push,
-			"proxysql_myhgm_myconnpool",
+			"proxysql_myhgm_myconnpool_push",
 			"The number of connections returned to the connection pool.",
-			metric_tags {
-				{ "type", "push" }
-			}
+			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_reset,
-			"proxysql_myhgm_myconnpool",
+			"proxysql_myhgm_myconnpool_reset",
 			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
-			metric_tags {
-				{ "type", "reset" }
-			}
+			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_destroy,
-			"proxysql_myhgm_myconnpool",
+			"proxysql_myhgm_myconnpool_destroy",
 			"The number of connections considered unhealthy and therefore closed.",
-			metric_tags {
-				{ "type", "destroy" }
-			}
+			metric_tags {}
 		)
 	},
 	// prometheus gauges
@@ -1216,10 +1225,13 @@ hg_metrics_map = std::make_tuple(
 	// prometheus dynamic counters
 	hg_dyn_counter_vector {
 		// connection_pool
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_dyn_counter::conn_pool_bytes_data_recv,
 			"proxysql_connection_pool_data_bytes",
-			"The amount of data received from the backend, excluding metadata.",
+			"Amount of data (sent|recv) from the backend, excluding metadata.",
 			metric_tags {
 				{ "traffic_flow", "recv" }
 			}
@@ -1227,27 +1239,32 @@ hg_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_hg_dyn_counter::conn_pool_bytes_data_sent,
 			"proxysql_connection_pool_data_bytes",
-			"The amount of data sent to the backend, excluding metadata.",
+			"Amount of data (sent|recv) from the backend, excluding metadata.",
 			metric_tags {
 				{ "traffic_flow", "sent" }
 			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_conn_err,
-			"proxysql_connection_pool_conn",
-			"How many connections weren't established successfully.",
+			"proxysql_connection_pool_conn_est",
+			"How many connections have been tried to be established.",
 			metric_tags {
 				{ "status", "err" }
 			}
 		),
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_conn_ok,
-			"proxysql_connection_pool_conn",
-			"How many connections were established successfully.",
+			"proxysql_connection_pool_conn_est",
+			"How many connections have been tried to be established.",
 			metric_tags {
 				{ "status", "ok" }
 			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_queries,
 			"proxysql_connection_pool_conn_queries",
@@ -1277,18 +1294,21 @@ hg_metrics_map = std::make_tuple(
 	},
 	// prometheus dynamic counters
 	hg_dyn_gauge_vector {
-		// NOTE: Maybe free-used could be collapsed
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_conn_free,
-			"proxysql_connection_pool_conn_free",
-			"How many connections are currently free.",
-			metric_tags {}
+			"proxysql_connection_pool_conn_av",
+			"How many backend connections are currently (free|used).",
+			metric_tags {
+				{ "status", "free" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_conn_used,
-			"proxysql_connection_pool_conn_used",
-			"How many connections are currently used by ProxySQL for sending queries to the backend server.",
-			metric_tags {}
+			"proxysql_connection_pool_conn_av",
+			"How many backend connections are currently (free|used).",
+			metric_tags {
+				{ "status", "used" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_latency_us,
@@ -3550,7 +3570,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 	return result;
 }
 
-void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		const auto& cur_val = counter_id->second->Value();
@@ -3560,16 +3580,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::stri
 		m_map.insert(
 			{
 				endpoint_id,
-				std::addressof(new_counter->Add({
-					{"endpoint", endpoint_addr + ":" + endpoint_port},
-					{"hostgroup", hostgroup_id }
-				}))
+				std::addressof(new_counter->Add(labels))
 			}
 		);
 	}
 }
 
-void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		counter_id->second->Set(value);
@@ -3578,10 +3595,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string
 		m_map.insert(
 			{
 				endpoint_id,
-				std::addressof(new_counter->Add({
-					{"endpoint", endpoint_addr + ":" + endpoint_port},
-					{"hostgroup", hostgroup_id }
-				}))
+				std::addressof(new_counter->Add(labels))
 			}
 		);
 	}
@@ -3597,43 +3611,57 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			std::string endpoint_port = std::to_string(mysrvc->port);
 			std::string hostgroup_id = std::to_string(myhgc->hid);
 			std::string endpoint_id = hostgroup_id + ":" + endpoint_addr + ":" + endpoint_port;
+			const std::map<std::string, std::string> common_labels {
+				{"endpoint", endpoint_addr + ":" + endpoint_port},
+				{"hostgroup", hostgroup_id }
+			};
 
 			// proxysql_connection_pool_bytes_data_recv metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> recv_pool_bytes_labels = common_labels;
+			recv_pool_bytes_labels.insert({"traffic_flow", "recv"});
+			p_update_connection_pool_update_counter(endpoint_id, recv_pool_bytes_labels,
 				status.p_conn_pool_bytes_data_recv_map, mysrvc->bytes_recv, p_hg_dyn_counter::conn_pool_bytes_data_recv);
 
 			// proxysql_connection_pool_bytes_data_sent metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> sent_pool_bytes_labels = common_labels;
+			sent_pool_bytes_labels.insert({"traffic_flow", "sent"});
+			p_update_connection_pool_update_counter(endpoint_id, sent_pool_bytes_labels,
 				status.p_conn_pool_bytes_data_sent_map, mysrvc->bytes_sent, p_hg_dyn_counter::conn_pool_bytes_data_sent);
 
 			// proxysql_connection_pool_conn_err metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> pool_conn_err_labels = common_labels;
+			pool_conn_err_labels.insert({"status", "err"});
+			p_update_connection_pool_update_counter(endpoint_id, pool_conn_err_labels,
 				status.p_connection_pool_conn_err_map, mysrvc->connect_ERR, p_hg_dyn_counter::connection_pool_conn_err);
 
-			// proxysql_connection_pool_conn_free metric
-			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
-				status.p_connection_pool_conn_free_map, mysrvc->ConnectionsFree->conns_length(), p_hg_dyn_gauge::connection_pool_conn_free);
-
-
 			// proxysql_connection_pool_conn_ok metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> pool_conn_ok_labels = common_labels;
+			pool_conn_ok_labels.insert({"status", "ok"});
+			p_update_connection_pool_update_counter(endpoint_id, pool_conn_ok_labels,
 				status.p_connection_pool_conn_ok_map, mysrvc->connect_OK, p_hg_dyn_counter::connection_pool_conn_ok);
 
+			// proxysql_connection_pool_conn_free metric
+			std::map<std::string, std::string> pool_conn_free_labels = common_labels;
+			pool_conn_free_labels.insert({"status", "free"});
+			p_update_connection_pool_update_gauge(endpoint_id, pool_conn_free_labels,
+				status.p_connection_pool_conn_free_map, mysrvc->ConnectionsFree->conns_length(), p_hg_dyn_gauge::connection_pool_conn_free);
+
 			// proxysql_connection_pool_conn_used metric
-			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> pool_conn_used_labels = common_labels;
+			pool_conn_used_labels.insert({"status", "used"});
+			p_update_connection_pool_update_gauge(endpoint_id, pool_conn_used_labels,
 				status.p_connection_pool_conn_used_map, mysrvc->ConnectionsUsed->conns_length(), p_hg_dyn_gauge::connection_pool_conn_used);
 
 			// proxysql_connection_pool_latency_us metric
-			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
 				status.p_connection_pool_latency_us_map, mysrvc->current_latency_us, p_hg_dyn_gauge::connection_pool_latency_us);
 
-
 			// proxysql_connection_pool_queries metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			p_update_connection_pool_update_counter(endpoint_id, common_labels,
 				status.p_connection_pool_queries_map, mysrvc->queries_sent, p_hg_dyn_counter::connection_pool_queries);
 
 			// proxysql_connection_pool_status metric
-			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
 				status.p_connection_pool_status_map, mysrvc->status + 1, p_hg_dyn_gauge::connection_pool_status);
 		}
 	}
