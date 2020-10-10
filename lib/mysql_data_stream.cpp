@@ -1406,8 +1406,8 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		||
 		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection )
 	) {
-	    // do not try to reset connections if the session is already resetting bug: #2460
-		if (mysql_thread___reset_connection_algorithm == 2 && sess->status != RESETTING_CONNECTION ) {
+		// do not try to reset connections if the session is already resetting bug: #2460
+		if (mysql_thread___reset_connection_algorithm == 2 && sess->status != RESETTING_CONNECTION) {
 			sess->create_new_session_and_reset_connection(this);
 		} else {
 			destroy_MySQL_Connection_From_Pool(true);
