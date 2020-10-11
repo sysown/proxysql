@@ -1292,7 +1292,7 @@ hg_metrics_map = std::make_tuple(
 			metric_tags {}
 		)
 	},
-	// prometheus dynamic counters
+	// prometheus dynamic gauges
 	hg_dyn_gauge_vector {
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_conn_free,
