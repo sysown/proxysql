@@ -587,13 +587,13 @@ admin_metrics_map = std::make_tuple(
 	admin_counter_vector {
 		std::make_tuple (
 			p_admin_counter::uptime,
-			"proxysql_uptime_seconds",
+			"proxysql_uptime_seconds_total",
 			"The total uptime of ProxySQL.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_admin_counter::jemalloc_allocated,
-			"proxysql_jemalloc_allocated_bytes",
+			"proxysql_jemalloc_allocated_bytes_total",
 			"Bytes allocated by the application.",
 			metric_tags {}
 		)

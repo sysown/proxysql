@@ -593,7 +593,7 @@ th_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_th_counter::queries_backends_bytes_sent,
-			"proxysql_queries_backends_bytes",
+			"proxysql_queries_backends_bytes_total",
 			"Total number of bytes (sent|received) in backend connections.",
 			metric_tags {
 				{ "traffic_flow", "sent" }
@@ -601,7 +601,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::queries_backends_bytes_recv,
-			"proxysql_queries_backends_bytes",
+			"proxysql_queries_backends_bytes_total",
 			"Total number of bytes (sent|received) in backend connections.",
 			metric_tags {
 				{ "traffic_flow", "received" }
@@ -612,7 +612,7 @@ th_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_th_counter::queries_frontends_bytes_sent,
-			"proxysql_queries_frontends_bytes",
+			"proxysql_queries_frontends_bytes_total",
 			"Total number of bytes (sent|received) in frontend connections.",
 			metric_tags {
 				{ "traffic_flow", "sent" }
@@ -620,7 +620,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::queries_frontends_bytes_recv,
-			"proxysql_queries_frontends_bytes",
+			"proxysql_queries_frontends_bytes_total",
 			"Total number of bytes (sent|received) in frontend connections.",
 			metric_tags {
 				{ "traffic_flow", "received" }
@@ -631,7 +631,7 @@ th_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_th_counter::client_connections_created,
-			"proxysql_client_connections",
+			"proxysql_client_connections_total",
 			"Total number of client connections created or failed (including improperly closed).",
 			metric_tags {
 				{ "status", "created" }
@@ -639,7 +639,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::client_connections_aborted,
-			"proxysql_client_connections",
+			"proxysql_client_connections_total",
 			"Total number of client connections created or failed (including improperly closed).",
 			metric_tags {
 				{ "status", "aborted" }
@@ -649,13 +649,13 @@ th_metrics_map = std::make_tuple(
 
 		std::make_tuple (
 			p_th_counter::query_processor_time_nsec,
-			"proxysql_query_processor_time_seconds",
+			"proxysql_query_processor_time_seconds_total",
 			"The time spent inside the \"Query Processor\" to determine what action needs to be taken with the query (internal module).",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::backend_query_time_nsec,
-			"proxysql_backend_query_time_seconds",
+			"proxysql_backend_query_time_seconds_total",
 			"Time spent making network calls to communicate with the backends.",
 			metric_tags {}
 		),
@@ -663,7 +663,7 @@ th_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_prepare,
-			"proxysql_com_backend_stmt",
+			"proxysql_com_backend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 			metric_tags {
 				{ "op", "prepare" }
@@ -671,7 +671,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_execute,
-			"proxysql_com_backend_stmt",
+			"proxysql_com_backend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 			metric_tags {
 				{ "op", "execute" }
@@ -679,7 +679,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_close,
-			"proxysql_com_backend_stmt",
+			"proxysql_com_backend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
 			metric_tags {
 				{ "op", "close" }
@@ -690,7 +690,7 @@ th_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_prepare,
-			"proxysql_com_frontend_stmt",
+			"proxysql_com_frontend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 			metric_tags {
 				{ "op", "prepare" }
@@ -698,7 +698,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_execute,
-			"proxysql_com_frontend_stmt",
+			"proxysql_com_frontend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 			metric_tags {
 				{ "op", "execute" }
@@ -706,7 +706,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_close,
-			"proxysql_com_frontend_stmt",
+			"proxysql_com_frontend_stmt_total",
 			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
 			metric_tags {
 				{ "op", "close" }
@@ -716,25 +716,25 @@ th_metrics_map = std::make_tuple(
 
 		std::make_tuple (
 			p_th_counter::questions,
-			"proxysql_questions",
+			"proxysql_questions_total",
 			"The total number of client requests / statements executed.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::slow_queries,
-			"proxysql_slow_queries",
+			"proxysql_slow_queries_total",
 			"The total number of queries with an execution time greater than \"mysql-long_query_time\" milliseconds.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::gtid_consistent_queries,
-			"proxysql_gtid_consistent_queries",
+			"proxysql_gtid_consistent_queries_total",
 			"Total queries with GTID consistent read.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::gtid_session_collected,
-			"proxysql_gtid_session_collected",
+			"proxysql_gtid_session_collected_total",
 			"Total queries with GTID session state.",
 			metric_tags {}
 		),
@@ -742,7 +742,7 @@ th_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_latency_awareness,
-			"proxysql_connpool_get_conn_success",
+			"proxysql_connpool_get_conn_success_total",
 			"The connection was picked using the latency awareness algorithm.",
 			metric_tags {
 				{ "algorithm", "latency_awareness" }
@@ -750,7 +750,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_immediate,
-			"proxysql_connpool_get_conn_success",
+			"proxysql_connpool_get_conn_success_total",
 			"The connection is provided from per-thread cache.",
 			metric_tags {
 				{ "origin", "immediate" }
@@ -758,13 +758,13 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_success,
-			"proxysql_connpool_get_conn_success",
+			"proxysql_connpool_get_conn_success_total",
 			"The session is able to get a connection, either from per-thread cache or connection pool.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_failure,
-			"proxysql_connpool_get_conn_failure",
+			"proxysql_connpool_get_conn_failure_total",
 			"The connection pool cannot provide any connection.",
 			metric_tags {}
 		),
@@ -772,49 +772,49 @@ th_metrics_map = std::make_tuple(
 
 		std::make_tuple (
 			p_th_counter::generated_error_packets,
-			"proxysql_generated_error_packets",
+			"proxysql_generated_error_packets_total",
 			"Total generated error packets.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::max_connect_timeouts,
-			"proxysql_max_connect_timeouts",
+			"proxysql_max_connect_timeouts_total",
 			"Maximum connection timeout reached when trying to connect to backend sever.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::backend_lagging_during_query,
-			"proxysql_backend_lagging_during_query",
+			"proxysql_backend_lagging_during_query_total",
 			"Query failed because server was shunned due to lag.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::backend_offline_during_query,
-			"proxysql_backend_offline_during_query",
+			"proxysql_backend_offline_during_query_total",
 			"Query failed because server was offline.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms,
-			"proxysql_queries_with_max_lag_ms",
+			"proxysql_queries_with_max_lag_ms_total",
 			"Received queries that have a 'max_lag' attribute.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms__delayed,
-			"proxysql_queries_with_max_lag_ms__delayed",
+			"proxysql_queries_with_max_lag_ms__delayed_total",
 			"Query delayed because no connection was selected due to 'max_lag' annotation.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms__total_wait_time_us,
-			"proxysql_queries_with_max_lag_ms__total_wait_time_us",
+			"proxysql_queries_with_max_lag_ms__total_wait_time_us_total",
 			"Total waited time due to connection selection because of 'max_lag' annotation.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_unexpected_frontend_com_quit,
-			"proxysql_mysql_unexpected_frontend_com_quit",
+			"proxysql_mysql_unexpected_frontend_com_quit_total",
 			"Unexpecte 'COM_QUIT' received from the client.",
 			metric_tags {}
 		),
@@ -827,43 +827,43 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::hostgroup_locked_queries,
-			"proxysql_hostgroup_locked_queries",
+			"proxysql_hostgroup_locked_queries_total",
 			"Query blocked because connection is locked into some hostgroup but is trying to reach other.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_unexpected_frontend_packets,
-			"proxysql_mysql_unexpected_frontend_packets",
+			"proxysql_mysql_unexpected_frontend_packets_total",
 			"Unexpected packet received from client.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::aws_aurora_replicas_skipped_during_query,
-			"proxysql_aws_aurora_replicas_skipped_during_query",
+			"proxysql_aws_aurora_replicas_skipped_during_query_total",
 			"Replicas skipped due to current lag being higher than 'max_lag' annotation.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::automatic_detected_sql_injection,
-			"proxysql_automatic_detected_sql_injection",
+			"proxysql_automatic_detected_sql_injection_total",
 			"Blocked a detected 'sql injection' attempt.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::whitelisted_sqli_fingerprint,
-			"proxysql_whitelisted_sqli_fingerprint",
+			"proxysql_whitelisted_sqli_fingerprint_total",
 			"Detected a whitelisted 'sql injection' fingerprint.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_killed_backend_connections,
-			"proxysql_mysql_killed_backend_connections",
+			"proxysql_mysql_killed_backend_connections_total",
 			"Number of backend connection killed.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::mysql_killed_backend_queries,
-			"proxysql_mysql_killed_backend_queries",
+			"proxysql_mysql_killed_backend_queries_total",
 			"Killed backend queries.",
 			metric_tags {}
 		)

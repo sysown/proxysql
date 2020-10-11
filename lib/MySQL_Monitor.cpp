@@ -573,7 +573,7 @@ mon_metrics_map = std::make_tuple(
 	mon_counter_vector {
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_workers_started,
-			"proxysql_mysql_monitor_workers_started",
+			"proxysql_mysql_monitor_workers_started_total",
 			"Number of MySQL Monitor workers started.",
 			metric_tags {}
 		),
@@ -581,7 +581,7 @@ mon_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_connect_check_ok,
-			"proxysql_mysql_monitor_connect_check",
+			"proxysql_mysql_monitor_connect_check_total",
 			"Number of (succeed|failed) 'connect checks' from 'monitor_connect_thread'.",
 			metric_tags {
 				{ "status", "ok" }
@@ -589,7 +589,7 @@ mon_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_connect_check_err,
-			"proxysql_mysql_monitor_connect_check",
+			"proxysql_mysql_monitor_connect_check_total",
 			"Number of (succeed|failed) 'connect checks' from 'monitor_connect_thread'.",
 			metric_tags {
 				{ "status", "err" }
@@ -600,7 +600,7 @@ mon_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_ping_check_ok,
-			"proxysql_mysql_monitor_ping_check",
+			"proxysql_mysql_monitor_ping_check_total",
 			"Number of (succeed|failed) 'ping checks' from 'monitor_ping_thread'.",
 			metric_tags {
 				{ "status", "ok" }
@@ -608,7 +608,7 @@ mon_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_ping_check_err,
-			"proxysql_mysql_monitor_ping_check",
+			"proxysql_mysql_monitor_ping_check_total",
 			"Number of (succeed|failed) 'ping checks' from 'monitor_ping_thread'.",
 			metric_tags {
 				{ "status", "err" }
@@ -619,7 +619,7 @@ mon_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_read_only_check_ok,
-			"proxysql_mysql_monitor_read_only_check",
+			"proxysql_mysql_monitor_read_only_check_total",
 			"Number of (succeed|failed) 'read only checks' from 'monitor_read_only_thread'.",
 			metric_tags {
 				{ "status", "ok" }
@@ -627,7 +627,7 @@ mon_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_read_only_check_err,
-			"proxysql_mysql_monitor_read_only_check",
+			"proxysql_mysql_monitor_read_only_check_total",
 			"Number of (succeed|failed) 'read only checks' from 'monitor_read_only_thread'.",
 			metric_tags {
 				{ "status", "err" }
@@ -638,7 +638,7 @@ mon_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_replication_lag_check_ok,
-			"proxysql_mysql_monitor_replication_lag_check",
+			"proxysql_mysql_monitor_replication_lag_check_total",
 			"Number of (succeed|failed)'replication lag checks' from 'monitor_replication_lag_thread'.",
 			metric_tags {
 				{ "status", "ok" }
@@ -646,7 +646,7 @@ mon_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_replication_lag_check_err,
-			"proxysql_mysql_monitor_replication_lag_check",
+			"proxysql_mysql_monitor_replication_lag_check_total",
 			"Number of (succeed|failed)'replication lag checks' from 'monitor_replication_lag_thread'.",
 			metric_tags {
 				{ "status", "err" }
