@@ -6389,11 +6389,9 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 		thread->mypolls.add(POLLIN|POLLOUT, new_myds->fd, new_myds, thread->curtime);
 	}
 
-	// store the idx now in case handler mutates the list of sessions to stop bugs like #2460
-	unsigned int sess_idx = thread->mysql_sessions->len - 1;
 	int rc = new_sess->handler();
 	if (rc == -1) {
-		thread->unregister_session(sess_idx);
+		thread->unregister_session(new_sess);
 		delete new_sess;
 	}
 }

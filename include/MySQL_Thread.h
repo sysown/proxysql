@@ -190,6 +190,7 @@ class MySQL_Thread
   void poll_listener_del(int sock);
   void register_session(MySQL_Session*, bool up_start=true);
   void unregister_session(int);
+  void unregister_session(MySQL_Session*);
   struct pollfd * get_pollfd(unsigned int i);
   bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
   void process_all_sessions();
