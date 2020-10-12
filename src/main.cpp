@@ -1296,7 +1296,15 @@ static void LoadPlugins() {
 	}
 }
 
-
+/**
+ * @brief Unloads all the plugins that hold some resources that
+ *  need to be deallocated.
+ */
+void UnloadPlugins() {
+	if (GloWebInterface) {
+		GloWebInterface->stop();
+	}
+}
 
 void ProxySQL_Main_init_phase2___not_started() {
 	LoadPlugins();
@@ -1892,6 +1900,9 @@ __start_label:
 __shutdown:
 
 	proxy_info("Starting shutdown...\n");
+
+	// First shutdown step is to unload plugins
+	UnloadPlugins();
 
 	ProxySQL_Main_init_phase4___shutdown();
 
