@@ -41,10 +41,18 @@ typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
 	p_th_counter::metric m_idx;
 	char * name;
+	uint32_t conv;
 } mythr_st_vars_t;
 
+typedef struct mythr_g_st_vars {
+	enum MySQL_Thread_status_variable v_idx;
+	p_th_gauge::metric m_idx;
+	char * name;
+	uint32_t conv;
+} mythr_g_st_vars_t;
+
 // Note: the order here is not important. 
-mythr_st_vars_t MySQL_Thread_status_variables_array[] {
+mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_backend_stmt_prepare, p_th_counter::com_backend_stmt_prepare, (char *)"Com_backend_stmt_prepare" },
 	{ st_var_backend_stmt_execute, p_th_counter::com_backend_stmt_execute, (char *)"Com_backend_stmt_execute" },
 	{ st_var_backend_stmt_close,   p_th_counter::com_backend_stmt_close,   (char *)"Com_backend_stmt_close" },
@@ -59,15 +67,14 @@ mythr_st_vars_t MySQL_Thread_status_variables_array[] {
 	{ st_var_queries_backends_bytes_sent,  p_th_counter::queries_backends_bytes_sent,  (char *)"Queries_backends_bytes_sent" },
 	{ st_var_queries_frontends_bytes_recv, p_th_counter::queries_frontends_bytes_recv, (char *)"Queries_frontends_bytes_recv" },
 	{ st_var_queries_frontends_bytes_sent, p_th_counter::queries_frontends_bytes_sent, (char *)"Queries_frontends_bytes_sent" },
-	{ st_var_query_processor_time , p_th_counter::query_processor_time_nsec,  (char *)"Query_Processor_time_nsec" },
-	{ st_var_backend_query_time ,   p_th_counter::backend_query_time_nsec,  (char *)"Backend_query_time_nsec" },
+	{ st_var_query_processor_time , p_th_counter::query_processor_time_nsec,  (char *)"Query_Processor_time_nsec", 1000*1000*1000 },
+	{ st_var_backend_query_time ,   p_th_counter::backend_query_time_nsec,  (char *)"Backend_query_time_nsec", 1000*1000*1000 },
 	{ st_var_ConnPool_get_conn_latency_awareness , p_th_counter::connpool_get_conn_latency_awareness, (char *)"ConnPool_get_conn_latency_awareness" },
 	{ st_var_ConnPool_get_conn_immediate, p_th_counter::connpool_get_conn_immediate,      (char *)"ConnPool_get_conn_immediate" },
 	{ st_var_ConnPool_get_conn_success,   p_th_counter::connpool_get_conn_success,        (char *)"ConnPool_get_conn_success" },
 	{ st_var_ConnPool_get_conn_failure,   p_th_counter::connpool_get_conn_failure,        (char *)"ConnPool_get_conn_failure" },
 	{ st_var_killed_connections,          p_th_counter::mysql_killed_backend_connections, (char *)"mysql_killed_backend_connections" },
 	{ st_var_killed_queries,              p_th_counter::mysql_killed_backend_queries,     (char *)"mysql_killed_backend_queries" },
-	{ st_var_hostgroup_locked,            p_th_counter::client_connections_hostgroup_locked,  (char *)"Client_Connections_hostgroup_locked" },
 	{ st_var_hostgroup_locked_set_cmds,   p_th_counter::hostgroup_locked_set_cmds,        (char *)"hostgroup_locked_set_cmds" },
 	{ st_var_hostgroup_locked_queries,    p_th_counter::hostgroup_locked_queries,         (char *)"hostgroup_locked_queries" },
 	{ st_var_unexpected_com_quit,         p_th_counter::mysql_unexpected_frontend_com_quit,(char *)"mysql_unexpected_frontend_com_quit" },
@@ -82,6 +89,10 @@ mythr_st_vars_t MySQL_Thread_status_variables_array[] {
 	{ st_var_whitelisted_sqli_fingerprint,p_th_counter::whitelisted_sqli_fingerprint,     (char *)"whitelisted_sqli_fingerprint" },
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
+};
+
+mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
+	{ st_var_hostgroup_locked,            p_th_gauge::client_connections_hostgroup_locked,  (char *)"Client_Connections_hostgroup_locked" }
 };
 
 extern mysql_variable_st mysql_tracked_variables[];
@@ -568,208 +579,243 @@ using th_gauge_tuple =
 using th_counter_vector = std::vector<th_counter_tuple>;
 using th_gauge_vector = std::vector<th_gauge_tuple>;
 
+/**
+ * @brief Metrics map holding the metrics for the MySQL_Thread module.
+ *
+ * @note Many metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
 const std::tuple<th_counter_vector, th_gauge_vector>
 th_metrics_map = std::make_tuple(
 	th_counter_vector {
+		// ====================================================================
 		std::make_tuple (
 			p_th_counter::queries_backends_bytes_sent,
-			"proxysql_queries_backends_bytes_sent",
-			"Total number of bytes sent to backend.",
-			metric_tags {}
+			"proxysql_queries_backends_bytes_total",
+			"Total number of bytes (sent|received) in backend connections.",
+			metric_tags {
+				{ "traffic_flow", "sent" }
+			}
 		),
 		std::make_tuple (
 			p_th_counter::queries_backends_bytes_recv,
-			"proxysql_queries_backends_bytes_recv",
-			"Total number of bytes received from backend.",
-			metric_tags {}
+			"proxysql_queries_backends_bytes_total",
+			"Total number of bytes (sent|received) in backend connections.",
+			metric_tags {
+				{ "traffic_flow", "received" }
+			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_th_counter::queries_frontends_bytes_sent,
-			"proxysql_queries_frontends_bytes_sent",
-			"Total number of bytes sent to frontend.",
-			metric_tags {}
+			"proxysql_queries_frontends_bytes_total",
+			"Total number of bytes (sent|received) in frontend connections.",
+			metric_tags {
+				{ "traffic_flow", "sent" }
+			}
 		),
 		std::make_tuple (
 			p_th_counter::queries_frontends_bytes_recv,
-			"proxysql_queries_frontends_bytes_recv",
-			"Total number of bytes received from frontend.",
-			metric_tags {}
+			"proxysql_queries_frontends_bytes_total",
+			"Total number of bytes (sent|received) in frontend connections.",
+			metric_tags {
+				{ "traffic_flow", "received" }
+			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_th_counter::client_connections_created,
-			"proxysql_client_connections_created",
-			"Total number of client connections created.",
-			metric_tags {}
+			"proxysql_client_connections_total",
+			"Total number of client connections created or failed (including improperly closed).",
+			metric_tags {
+				{ "status", "created" }
+			}
 		),
 		std::make_tuple (
 			p_th_counter::client_connections_aborted,
-			"proxysql_client_connections_aborted",
-			"Number of client failed connections (or closed improperly).",
-			metric_tags {}
+			"proxysql_client_connections_total",
+			"Total number of client connections created or failed (including improperly closed).",
+			metric_tags {
+				{ "status", "aborted" }
+			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
-			// TODO: Change unit
 			p_th_counter::query_processor_time_nsec,
-			"proxysql_query_processor_time_nsec",
+			"proxysql_query_processor_time_seconds_total",
 			"The time spent inside the \"Query Processor\" to determine what action needs to be taken with the query (internal module).",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Change unit
 			p_th_counter::backend_query_time_nsec,
-			"proxysql_backend_query_time_nsec",
+			"proxysql_backend_query_time_seconds_total",
 			"Time spent making network calls to communicate with the backends.",
 			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_prepare,
-			"proxysql_com_backend_stmt_prepare",
-			"Represents the number of \"PREPARE\" executed by ProxySQL against the backends.",
-			metric_tags {}
+			"proxysql_com_backend_stmt_total",
+			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
+			metric_tags {
+				{ "op", "prepare" }
+			}
 		),
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_execute,
-			"proxysql_com_backend_stmt_execute",
-			"Represents the number of \"EXECUTE\" executed by ProxySQL against the backends.",
-			metric_tags {}
+			"proxysql_com_backend_stmt_total",
+			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
+			metric_tags {
+				{ "op", "execute" }
+			}
 		),
 		std::make_tuple (
 			p_th_counter::com_backend_stmt_close,
-			"proxysql_com_backend_stmt_close",
-			"Represents the number of \"CLOSE\" executed by ProxySQL against the backends.",
-			metric_tags {}
+			"proxysql_com_backend_stmt_total",
+			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by ProxySQL against the backends.",
+			metric_tags {
+				{ "op", "close" }
+			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_prepare,
-			"proxysql_com_frontend_stmt_prepare",
-			"Represents the number of \"PREPARE\" executed by clients.",
-			metric_tags {}
+			"proxysql_com_frontend_stmt_total",
+			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
+			metric_tags {
+				{ "op", "prepare" }
+			}
 		),
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_execute,
-			"proxysql_com_frontend_stmt_execute",
-			"Represents the number of \"EXECUTE\" executed by clients.",
-			metric_tags {}
+			"proxysql_com_frontend_stmt_total",
+			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
+			metric_tags {
+				{ "op", "execute" }
+			}
 		),
 		std::make_tuple (
 			p_th_counter::com_frontend_stmt_close,
-			"proxysql_com_frontend_stmt_close",
-			"Represents the number of \"CLOSE\" executed by clients.",
-			metric_tags {}
+			"proxysql_com_frontend_stmt_total",
+			"Represents the number of statements (PREPARE|EXECUTE|CLOSE) executed by clients.",
+			metric_tags {
+				{ "op", "close" }
+			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_th_counter::questions,
-			"proxysql_questions",
+			"proxysql_questions_total",
 			"The total number of client requests / statements executed.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Change unit
 			p_th_counter::slow_queries,
-			"proxysql_slow_queries",
+			"proxysql_slow_queries_total",
 			"The total number of queries with an execution time greater than \"mysql-long_query_time\" milliseconds.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::gtid_consistent_queries,
-			"proxysql_gtid_consistent_queries",
+			"proxysql_gtid_consistent_queries_total",
 			"Total queries with GTID consistent read.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::gtid_session_collected,
-			"proxysql_gtid_session_collected",
+			"proxysql_gtid_session_collected_total",
 			"Total queries with GTID session state.",
 			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::connpool_get_conn_latency_awareness,
-			"proxysql_connpool_get_conn_latency_awareness",
-			"",
-			metric_tags {}
+			"proxysql_connpool_get_conn_success_total",
+			"The connection was picked using the latency awareness algorithm.",
+			metric_tags {
+				{ "algorithm", "latency_awareness" }
+			}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::connpool_get_conn_immediate,
-			"proxysql_connpool_get_conn_immediate",
-			"",
-			metric_tags {}
+			"proxysql_connpool_get_conn_success_total",
+			"The connection is provided from per-thread cache.",
+			metric_tags {
+				{ "origin", "immediate" }
+			}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::connpool_get_conn_success,
-			"proxysql_connpool_get_conn_success",
-			"",
+			"proxysql_connpool_get_conn_success_total",
+			"The session is able to get a connection, either from per-thread cache or connection pool.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::connpool_get_conn_failure,
-			"proxysql_connpool_get_conn_failure",
-			"",
+			"proxysql_connpool_get_conn_failure_total",
+			"The connection pool cannot provide any connection.",
 			metric_tags {}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_th_counter::generated_error_packets,
-			"proxysql_generated_error_packets",
+			"proxysql_generated_error_packets_total",
 			"Total generated error packets.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::max_connect_timeouts,
-			"proxysql_max_connect_timeouts",
-			"",
+			"proxysql_max_connect_timeouts_total",
+			"Maximum connection timeout reached when trying to connect to backend sever.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::backend_lagging_during_query,
-			"proxysql_backend_lagging_during_query",
-			"",
+			"proxysql_backend_lagging_during_query_total",
+			"Query failed because server was shunned due to lag.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::backend_offline_during_query,
-			"proxysql_backend_offline_during_query",
-			"Number of times a backend was offline during a query.",
+			"proxysql_backend_offline_during_query_total",
+			"Query failed because server was offline.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::queries_with_max_lag_ms,
-			"proxysql_queries_with_max_lag_ms",
-			"",
+			"proxysql_queries_with_max_lag_ms_total",
+			"Received queries that have a 'max_lag' attribute.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::queries_with_max_lag_ms__delayed,
-			"proxysql_queries_with_max_lag_ms__delayed",
-			"",
+			"proxysql_queries_with_max_lag_ms__delayed_total",
+			"Query delayed because no connection was selected due to 'max_lag' annotation.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::queries_with_max_lag_ms__total_wait_time_us,
-			"proxysql_queries_with_max_lag_ms__total_wait_time_us",
-			"",
+			"proxysql_queries_with_max_lag_ms__total_wait_time_us_total",
+			"Total waited time due to connection selection because of 'max_lag' annotation.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::mysql_unexpected_frontend_com_quit,
-			"proxysql_mysql_unexpected_frontend_com_quit",
-			"",
-			metric_tags {}
-		),
-		std::make_tuple (
-			// TODO: Add meaningful HELP
-			p_th_counter::client_connections_hostgroup_locked,
-			"proxysql_client_connections_hostgroup_locked",
-			"",
+			"proxysql_mysql_unexpected_frontend_com_quit_total",
+			"Unexpecte 'COM_QUIT' received from the client.",
 			metric_tags {}
 		),
 		std::make_tuple (
@@ -780,52 +826,45 @@ th_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::hostgroup_locked_queries,
-			"proxysql_hostgroup_locked_queries",
-			"",
+			"proxysql_hostgroup_locked_queries_total",
+			"Query blocked because connection is locked into some hostgroup but is trying to reach other.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::mysql_unexpected_frontend_packets,
-			"proxysql_mysql_unexpected_frontend_packets",
-			"",
+			"proxysql_mysql_unexpected_frontend_packets_total",
+			"Unexpected packet received from client.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::aws_aurora_replicas_skipped_during_query,
-			"proxysql_aws_aurora_replicas_skipped_during_query",
-			"",
+			"proxysql_aws_aurora_replicas_skipped_during_query_total",
+			"Replicas skipped due to current lag being higher than 'max_lag' annotation.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::automatic_detected_sql_injection,
-			"proxysql_automatic_detected_sql_injection",
-			"",
+			"proxysql_automatic_detected_sql_injection_total",
+			"Blocked a detected 'sql injection' attempt.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::whitelisted_sqli_fingerprint,
-			"proxysql_whitelisted_sqli_fingerprint",
-			"",
+			"proxysql_whitelisted_sqli_fingerprint_total",
+			"Detected a whitelisted 'sql injection' fingerprint.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::mysql_killed_backend_connections,
-			"proxysql_mysql_killed_backend_connections",
-			"",
+			"proxysql_mysql_killed_backend_connections_total",
+			"Number of backend connection killed.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::mysql_killed_backend_queries,
-			"proxysql_mysql_killed_backend_queries",
-			"",
+			"proxysql_mysql_killed_backend_queries_total",
+			"Killed backend queries.",
 			metric_tags {}
 		)
 	},
@@ -840,6 +879,12 @@ th_metrics_map = std::make_tuple(
 			p_th_gauge::client_connections_non_idle,
 			"proxysql_client_connections_non_idle",
 			"Number of client connections that are currently handled by the main worker threads.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_th_gauge::client_connections_hostgroup_locked,
+			"proxysql_client_connections_hostgroup_locked",
+			"Number of client connection locked to a specific hostgroup.",
 			metric_tags {}
 		),
 		std::make_tuple (
@@ -861,14 +906,12 @@ th_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_gauge::mirror_concurrency,
 			"proxysql_mirror_concurrency",
 			"Mirror current concurrency",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_gauge::mirror_queue_lengths,
 			"proxysql_mirror_queue_lengths",
 			"Mirror queue length",
@@ -877,18 +920,16 @@ th_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_th_gauge::mysql_thread_workers,
 			"proxysql_mysql_thread_workers",
-			"Number of MySQL Thread workers i.e. “mysql-threads”",
+			"Number of MySQL Thread workers i.e. 'mysql-threads'",
 			metric_tags {}
 		),
 		// global_variables
-		// TODO: Change unit
 		std::make_tuple (
 			p_th_gauge::mysql_wait_timeout,
 			"proxysql_mysql_wait_timeout",
 			"If a proxy session has been idle for more than this threshold, the proxy will kill the session.",
 			metric_tags {}
 		),
-		// TODO: Change unit
 		std::make_tuple (
 			p_th_gauge::mysql_max_connections,
 			"proxysql_mysql_max_connections",
@@ -901,60 +942,52 @@ th_metrics_map = std::make_tuple(
 			"Enables or disables MySQL Monitor.",
 			metric_tags {}
 		),
-		// TODO: Change unit
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_ping_interval,
 			"proxysql_mysql_monitor_ping_interval",
-			"How frequently a ping check is performed, in milliseconds.",
+			"How frequently a ping check is performed, in seconds.",
 			metric_tags {}
 		),
-		// TODO: Change unit
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_ping_timeout,
-			"proxysql_mysql_monitor_ping_timeout",
-			"Ping timeout in milliseconds.",
+			"proxysql_mysql_monitor_ping_timeout_seconds",
+			"Ping timeout in seconds.",
 			metric_tags {}
 		),
-		// TODO: Check help
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_ping_max_failures,
 			"proxysql_mysql_monitor_ping_max_failures",
-			"If a host misses mysql-monitor_ping_max_failures pings in a row, the node is considered unreachable and that should immediately kill all connections.",
+			"Reached maximum ping attempts from monitor.",
 			metric_tags {}
 		),
-		// TODO: Check unit
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_read_only_interval,
-			"proxysql_mysql_monitor_read_only_interval",
-			"How frequently a read only check is performed, in milliseconds.",
+			"proxysql_mysql_monitor_read_only_interval_seconds",
+			"How frequently a read only check is performed, in seconds.",
 			metric_tags {}
 		),
-		// TODO: Check unit
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_read_only_timeout,
-			"proxysql_mysql_monitor_read_only_timeout",
-			"Read only check timeout in milliseconds.",
+			"proxysql_mysql_monitor_read_only_timeout_seconds",
+			"Read only check timeout in seconds.",
 			metric_tags {}
 		),
-		// TODO: Check help
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_writer_is_also_reader,
 			"proxysql_mysql_monitor_writer_is_also_reader",
-			"When a node change its read_only value from 1 to 0, this variable determines if the node should be present in both hostgroups or not.",
+			"Encodes different behaviors for nodes depending on their 'READ_ONLY' flag value.",
 			metric_tags {}
 		),
-		// TODO: Check unit
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_interval,
-			"mysql_monitor_replication_lag_interval",
-			"How frequently a replication lag check is performed, in milliseconds.",
+			"mysql_monitor_replication_lag_interval_seconds",
+			"How frequently a replication lag check is performed, in seconds.",
 			metric_tags {}
 		),
-		// TODO: Check unit
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_timeout,
-			"mysql_monitor_replication_lag_timeout",
-			"Replication lag check timeout in milliseconds.",
+			"mysql_monitor_replication_lag_timeout_seconds",
+			"Replication lag check timeout in seconds.",
 			metric_tags {}
 		),
 		// TODO: Current help looks too complicated to be exposed as a metric help.
@@ -5351,11 +5384,34 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
-	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_array)/sizeof(mythr_st_vars_t) ; i++) {
-		if (MySQL_Thread_status_variables_array[i].name) {
-			if (strlen(MySQL_Thread_status_variables_array[i].name)) {
-				pta[0] = MySQL_Thread_status_variables_array[i].name;
-				sprintf(buf,"%llu", get_status_variable(MySQL_Thread_status_variables_array[i].v_idx, MySQL_Thread_status_variables_array[i].m_idx));
+	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_counter_array)/sizeof(mythr_st_vars_t) ; i++) {
+		if (MySQL_Thread_status_variables_counter_array[i].name) {
+			if (strlen(MySQL_Thread_status_variables_counter_array[i].name)) {
+				pta[0] = MySQL_Thread_status_variables_counter_array[i].name;
+				unsigned long long stvar =
+					get_status_variable(
+						MySQL_Thread_status_variables_counter_array[i].v_idx,
+						MySQL_Thread_status_variables_counter_array[i].m_idx,
+						MySQL_Thread_status_variables_counter_array[i].conv
+					);
+				sprintf(buf,"%llu", stvar);
+				pta[1] = buf;
+				result->add_row(pta);
+			}
+		}
+	}
+	// Gauge variables
+	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_gauge_array)/sizeof(mythr_g_st_vars_t) ; i++) {
+		if (MySQL_Thread_status_variables_gauge_array[i].name) {
+			if (strlen(MySQL_Thread_status_variables_gauge_array[i].name)) {
+				pta[0] = MySQL_Thread_status_variables_gauge_array[i].name;
+				unsigned long long stvar =
+					get_status_variable(
+						MySQL_Thread_status_variables_gauge_array[i].v_idx,
+						MySQL_Thread_status_variables_gauge_array[i].m_idx,
+						MySQL_Thread_status_variables_gauge_array[i].conv
+					);
+				sprintf(buf,"%llu", stvar);
 				pta[1] = buf;
 				result->add_row(pta);
 			}
@@ -5935,7 +5991,11 @@ unsigned long long MySQL_Threads_Handler::get_total_mirror_queue() {
 }
 
 
-unsigned long long MySQL_Threads_Handler::get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx) {
+unsigned long long MySQL_Threads_Handler::get_status_variable(
+	enum MySQL_Thread_status_variable v_idx,
+	p_th_counter::metric m_idx,
+	unsigned long long conv
+) {
 	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
 	unsigned long long q=0;
 	unsigned int i;
@@ -5948,7 +6008,45 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(enum MySQL_Thread_
 	}
 	if (m_idx != p_th_counter::__size) {
 		const auto& cur_val = status_variables.p_counter_array[m_idx]->Value();
-		status_variables.p_counter_array[m_idx]->Increment(q - cur_val);
+		double final_val = 0;
+
+		if (conv != 0) {
+			final_val = (q - (cur_val / conv)) * conv;
+		} else {
+			final_val = q - cur_val;
+		}
+
+		status_variables.p_counter_array[m_idx]->Increment(final_val);
+	}
+	return q;
+
+}
+
+unsigned long long MySQL_Threads_Handler::get_status_variable(
+	enum MySQL_Thread_status_variable v_idx,
+	p_th_gauge::metric m_idx,
+	unsigned long long conv
+) {
+	if ((__sync_fetch_and_add(&status_variables.threads_initialized, 0) == 0) || this->shutdown_) return 0;
+	unsigned long long q=0;
+	unsigned int i;
+	for (i=0;i<num_threads;i++) {
+		if (mysql_threads) {
+			MySQL_Thread *thr=(MySQL_Thread *)mysql_threads[i].worker;
+			if (thr)
+				q+=__sync_fetch_and_add(&thr->status_variables.stvar[v_idx],0);
+		}
+	}
+	if (m_idx != p_th_gauge::__size) {
+		double final_val = 0;
+
+		if (conv != 0) {
+			final_val = q / conv;
+		} else {
+			final_val = q;
+		}
+
+		status_variables.p_gauge_array[m_idx]->Set(final_val);
 	}
 	return q;
 
@@ -6064,21 +6162,36 @@ void MySQL_Threads_Handler::p_update_metrics() {
 	get_mysql_backend_buffers_bytes();
 	get_mysql_frontend_buffers_bytes();
 	get_mysql_session_internal_bytes();
-	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_array)/sizeof(mythr_st_vars_t) ; i++) {
-		if (MySQL_Thread_status_variables_array[i].name) {
-			get_status_variable(MySQL_Thread_status_variables_array[i].v_idx, MySQL_Thread_status_variables_array[i].m_idx);
+	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_counter_array)/sizeof(mythr_st_vars_t) ; i++) {
+		if (MySQL_Thread_status_variables_counter_array[i].name) {
+			get_status_variable(
+				MySQL_Thread_status_variables_counter_array[i].v_idx,
+				MySQL_Thread_status_variables_counter_array[i].m_idx,
+				MySQL_Thread_status_variables_counter_array[i].conv
+			);
+		}
+	}
+	// Gauge variables
+	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_gauge_array)/sizeof(mythr_g_st_vars_t) ; i++) {
+		if (MySQL_Thread_status_variables_gauge_array[i].name) {
+			get_status_variable(
+				MySQL_Thread_status_variables_gauge_array[i].v_idx,
+				MySQL_Thread_status_variables_gauge_array[i].m_idx,
+				MySQL_Thread_status_variables_gauge_array[i].conv
+			);
 		}
 	}
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_wait_timeout]->Set(this->variables.wait_timeout);
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_interval]->Set(this->variables.monitor_ping_interval);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_interval]->Set(this->variables.monitor_ping_interval*1000);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_max_connections]->Set(this->variables.max_connections);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_enabled]->Set(this->variables.monitor_enabled);
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_timeout]->Set(this->variables.monitor_ping_timeout);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_timeout]->Set(this->variables.monitor_ping_timeout*1000);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_ping_max_failures]->Set(this->variables.monitor_ping_max_failures);
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_interval]->Set(this->variables.monitor_read_only_interval);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_interval]->Set(this->variables.monitor_read_only_interval*1000);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_timeout]->Set(this->variables.monitor_read_only_timeout*1000);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_writer_is_also_reader]->Set(this->variables.monitor_writer_is_also_reader);
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_interval]->Set(this->variables.monitor_replication_lag_interval);
-	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_timeout]->Set(this->variables.monitor_replication_lag_timeout);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_interval]->Set(this->variables.monitor_replication_lag_interval*1000);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_timeout]->Set(this->variables.monitor_replication_lag_timeout*1000);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_history]->Set(this->variables.monitor_history);
 }
 
