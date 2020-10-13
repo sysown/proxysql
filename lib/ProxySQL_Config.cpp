@@ -48,7 +48,12 @@ ProxySQL_Config:: ~ProxySQL_Config() {
 void ProxySQL_Config::addField(std::string& data, const char* name, const char* value, const char* dq) {
 	std::stringstream ss;
 	if (!value || !strlen(value)) return;
-	ss << "\t\t" << name << "=" << dq << value << dq << "\n";
+
+	// Escape the double quotes in all the fields contents
+	std::string esc_value { value };
+	RE2::GlobalReplace(&esc_value, "\"", "\\\\\"");
+
+	ss << "\t\t" << name << "=" << dq << esc_value.c_str() << dq << "\n";
 	data += ss.str();
 }
 
@@ -466,10 +471,6 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
 			data += "mysql_query_rules:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
-				// Prepare fields
-				std::string attributes { r->fields[33] };
-				RE2::GlobalReplace(&attributes, "\"", "\\\\\"");
-
 				if (isNext)
 					data += ",\n";
 				data += "\t{\n";
@@ -506,7 +507,7 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
 				addField(data, "gtid_from_hostgroup", r->fields[30], "");
 				addField(data, "log", r->fields[31], "");
 				addField(data, "apply", r->fields[32], "");
-				addField(data, "attributes", attributes.c_str());
+				addField(data, "attributes", r->fields[33]);
 				addField(data, "comment", r->fields[34]);
 
 				data += "\t}";
