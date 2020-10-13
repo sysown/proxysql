@@ -1,5 +1,4 @@
 #include "proxysql_config.h"
-#include "re2/re2.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -109,10 +108,6 @@ int ProxySQL_Config::Write_MySQL_Users_to_configfile(std::string& data) {
 			data += "mysql_users:\n(\n";
 			bool isNext = false;
 			for (auto r : sqlite_resultset->rows) {
-				// Prepare fields
-				std::string attributes { r->fields[12] };
-				RE2::GlobalReplace(&attributes, "\"", "\\\\\"");
-
 				if (isNext)
 					data += ",\n";
 				data += "\t{\n";
@@ -128,7 +123,7 @@ int ProxySQL_Config::Write_MySQL_Users_to_configfile(std::string& data) {
 				addField(data, "backend", r->fields[9], "");
 				addField(data, "frontend", r->fields[10], "");
 				addField(data, "max_connections", r->fields[11], "");
-				addField(data, "attributes", attributes.c_str());
+				addField(data, "attributes", r->fields[12]);
 				addField(data, "comment", r->fields[13]);
 				data += "\t}";
 				isNext = true;
