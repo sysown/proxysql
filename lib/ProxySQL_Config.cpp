@@ -746,7 +746,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 		else
 			attributes = "NULL";
 		if (comment_exists)
-			comment="\"" + comment + "\"";
+			comment="'" + comment + "'";
 		else
 			comment = "NULL";
 
