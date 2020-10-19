@@ -2085,56 +2085,84 @@ cluster_metrics_map = std::make_tuple(
 		// ====================================================================
 
 		// sync_conflict same epoch
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_mysql_query_rules_share_epoch,
-			"sync_conflict_mysql_query_rules_share_epoch_total",
-			"Number of times 'mysql_query_rules' has not been synced because they share the same epoch.",
-			metric_tags {}
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_query_rules" },
+				{ "reason", "severs_share_epoch" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_mysql_servers_share_epoch,
-			"sync_conflict_mysql_servers_share_epoch_total",
-			"Number of times 'mysql_servers' has not been synced because they share the same epoch.",
-			metric_tags {}
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_servers" },
+				{ "reason", "severs_share_epoch" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_proxysql_servers_share_epoch,
-			"sync_conflict_proxysql_servers_share_epoch_total",
-			"Number of times 'proxysql_servers' has not been synced because they share the same epoch.",
-			metric_tags {}
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "proxysql_servers" },
+				{ "reason", "severs_share_epoch" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_mysql_users_share_epoch,
-			"sync_conflict_mysql_users_share_epoch_total",
-			"Number of times 'mysql_users' has not been synced because they share the same epoch.",
-			metric_tags {}
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_users" },
+				{ "reason", "severs_share_epoch" }
+			}
 		),
+		// ====================================================================
 
 		// sync_delayed due to version one
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_mysql_query_rules_version_one,
-			"sync_delayed_mysql_query_rules_version_one_total",
-			"Number of times 'mysql_query_rules' has not been synced because version one doesn't allow sync.",
-			metric_tags {}
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_query_rules" },
+				{ "reason", "version_one" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_mysql_servers_version_one,
-			"sync_delayed_mysql_servers_version_one_total",
-			"Number of times 'mysql_servers' has not been synced because version one doesn't allow sync.",
-			metric_tags {}
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_servers" },
+				{ "reason", "version_one" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_mysql_users_version_one,
-			"sync_delayed_mysql_users_version_one_total",
-			"Number of times 'mysql_users' has not been synced because version one doesn't allow sync.",
-			metric_tags {}
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_users" },
+				{ "reason", "version_one" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_proxysql_servers_version_one,
-			"sync_delayed_proxysql_servers_version_one_total",
-			"Number of times 'proxysql_servers' has not been synced because version one doesn't allow sync.",
-			metric_tags {}
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "proxysql_servers" },
+				{ "reason", "version_one" }
+			}
 		)
+		// ====================================================================
 	},
 	cluster_gauge_vector {}
 );

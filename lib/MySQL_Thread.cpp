@@ -742,19 +742,15 @@ th_metrics_map = std::make_tuple(
 		// ====================================================================
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_latency_awareness,
-			"proxysql_connpool_get_conn_success_total",
+			"proxysql_connpool_get_conn_success_latency_awareness_total",
 			"The connection was picked using the latency awareness algorithm.",
-			metric_tags {
-				{ "algorithm", "latency_awareness" }
-			}
+			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_immediate,
-			"proxysql_connpool_get_conn_success_total",
+			"proxysql_connpool_get_conn_success_immediate_total",
 			"The connection is provided from per-thread cache.",
-			metric_tags {
-				{ "origin", "immediate" }
-			}
+			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::connpool_get_conn_success,

@@ -1172,19 +1172,15 @@ hg_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get_ok,
-			"proxysql_myhgm_myconnpool_get_total",
+			"proxysql_myhgm_myconnpool_get_ok_total",
 			"The number of successful requests to the connection pool (i.e. where a connection was available).",
-			metric_tags {
-				{ "status", "ok" }
-			}
+			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get_ping,
-			"proxysql_myhgm_myconnpool_get_total",
+			"proxysql_myhgm_myconnpool_get_ping_total",
 			"The number of connections that were taken from the pool to run a ping to keep them alive.",
-			metric_tags {
-				{ "purpose", "ping" }
-			}
+			metric_tags {}
 		),
 		// ====================================================================
 

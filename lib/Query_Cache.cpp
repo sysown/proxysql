@@ -333,8 +333,10 @@ qc_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_qc_counter::query_cache_count_get,
 			"proxysql_query_cache_count_get_total",
-			"Number of read requests.",
-			metric_tags {}
+			"Number of failed read requests.",
+			metric_tags {
+				{ "status", "err" }
+			}
 		),
 		std::make_tuple (
 			p_qc_counter::query_cache_count_get_ok,
@@ -441,7 +443,7 @@ Query_Cache::Query_Cache() {
 
 void Query_Cache::p_update_metrics() {
 	this->metrics.p_gauge_array[p_qc_gauge::query_cache_memory_bytes]->Set(get_data_size_total());
-	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get], Glo_cntGet);
+	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get], Glo_cntGet - Glo_cntGetOK);
 	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_get_ok], Glo_cntGetOK);
 	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_count_set], Glo_cntSet);
 	p_update_counter(this->metrics.p_counter_array[p_qc_counter::query_cache_bytes_in], Glo_dataIN);
