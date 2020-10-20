@@ -3870,7 +3870,6 @@ handler_again:
 					RequestEnd(myds);
 					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 					if (rc==-1) {
 						int myerr=mysql_errno(myconn->mysql);
 						char *errmsg = NULL;
@@ -3880,6 +3879,7 @@ handler_again:
 								errmsg = strdup(mysql_stmt_error(CurrentQuery.mysql_stmt));
 							}
 						}
+						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 						CurrentQuery.mysql_stmt=NULL; // immediately reset mysql_stmt
 						// the query failed
 						if (
