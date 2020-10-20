@@ -2092,7 +2092,7 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' has not been able to be synced.",
 			metric_tags {
 				{ "module_name", "mysql_query_rules" },
-				{ "reason", "severs_share_epoch" }
+				{ "reason", "servers_share_epoch" }
 			}
 		),
 		std::make_tuple (
@@ -2101,7 +2101,7 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' has not been able to be synced.",
 			metric_tags {
 				{ "module_name", "mysql_servers" },
-				{ "reason", "severs_share_epoch" }
+				{ "reason", "servers_share_epoch" }
 			}
 		),
 		std::make_tuple (
@@ -2110,7 +2110,7 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' has not been able to be synced.",
 			metric_tags {
 				{ "module_name", "proxysql_servers" },
-				{ "reason", "severs_share_epoch" }
+				{ "reason", "servers_share_epoch" }
 			}
 		),
 		std::make_tuple (
@@ -2119,7 +2119,7 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' has not been able to be synced.",
 			metric_tags {
 				{ "module_name", "mysql_users" },
-				{ "reason", "severs_share_epoch" }
+				{ "reason", "servers_share_epoch" }
 			}
 		),
 		// ====================================================================
