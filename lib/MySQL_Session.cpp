@@ -3479,6 +3479,423 @@ __get_pkts_from_client:
 }
 
 
+// this function returns:
+// 0 : no action
+// -1 : the calling function will return
+// 1 : call to NEXT_IMMEDIATE
+int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds) {
+	MySQL_Connection *myconn = myds->myconn;
+	// the query failed
+	if (
+		// due to #774 , we now read myconn->server_status instead of myconn->parent->status
+		(myconn->server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
+		||
+		(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
+		||
+		(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
+	) {
+		if (mysql_thread___connect_timeout_server_max) {
+			myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
+		}
+		bool retry_conn=false;
+		if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+			thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
+			proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+		} else {
+			thread->status_variables.stvar[st_var_backend_offline_during_query]++;
+			proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+		}
+		if (myds->query_retries_on_failure > 0) {
+			myds->query_retries_on_failure--;
+			if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+				if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+				// transfer to frontend has started, we cannot retry
+				} else {
+					retry_conn=true;
+					proxy_warning("Retrying query.\n");
+				}
+			}
+		}
+		myds->destroy_MySQL_Connection_From_Pool(false);
+		myds->fd=0;
+		if (retry_conn) {
+			myds->DSS=STATE_NOT_INITIALIZED;
+			//previous_status.push(PROCESSING_QUERY);
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				case PROCESSING_STMT_EXECUTE:
+					previous_status.push(PROCESSING_STMT_EXECUTE);
+					break;
+				default:
+					assert(0);
+					break;
+			}
+			return 1;
+		}
+		return -1;
+	}
+	return 0;
+}
+
+void MySQL_Session::SetQueryTimeout() {
+	mybe->server_myds->wait_until=0;
+	if (qpo) {
+		if (qpo->timeout > 0) {
+			unsigned long long qr_timeout=qpo->timeout;
+			mybe->server_myds->wait_until=thread->curtime;
+			mybe->server_myds->wait_until+=qr_timeout*1000;
+		}
+	}
+	if (mysql_thread___default_query_timeout) {
+		if (mybe->server_myds->wait_until==0) {
+			mybe->server_myds->wait_until=thread->curtime;
+			unsigned long long def_query_timeout=mysql_thread___default_query_timeout;
+			mybe->server_myds->wait_until+=def_query_timeout*1000;
+		}
+	}
+}
+
+// this function used to be inline.
+// now it returns:
+// true: NEXT_IMMEDIATE(st) needs to be called
+// false: continue
+bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
+	thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
+	GloMyStmt->wrlock();
+	uint32_t client_stmtid;
+	uint64_t global_stmtid;
+	//bool is_new;
+	MySQL_STMT_Global_info *stmt_info=NULL;
+		stmt_info=GloMyStmt->add_prepared_statement(
+			(char *)client_myds->myconn->userinfo->username,
+			(char *)client_myds->myconn->userinfo->schemaname,
+			(char *)CurrentQuery.QueryPointer,
+			CurrentQuery.QueryLength,
+			CurrentQuery.mysql_stmt,
+			false);
+		if (CurrentQuery.QueryParserArgs.digest_text) {
+			if (stmt_info->digest_text==NULL) {
+				stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
+				stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
+				stmt_info->MyComQueryCmd=CurrentQuery.MyComQueryCmd; // copy MyComQueryCmd
+			}
+		}
+	global_stmtid=stmt_info->statement_id;
+	myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
+	if (previous_status.size() == 0)
+	client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
+	CurrentQuery.mysql_stmt=NULL;
+	st=status;
+	size_t sts=previous_status.size();
+	if (sts) {
+		myds->myconn->async_state_machine=ASYNC_IDLE;
+		myds->DSS=STATE_MARIADB_GENERIC;
+		st=previous_status.top();
+		previous_status.pop();
+		GloMyStmt->unlock();
+		return true;
+		//NEXT_IMMEDIATE(st);
+	} else {
+		client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,client_stmtid);
+		if (stmt_info->num_params == 0) {
+			prepared_stmt_with_no_params = true;
+		}
+		LogQuery(myds);
+		GloMyStmt->unlock();
+	}
+	return false;
+}
+
+
+// this function used to be inline
+void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds) {
+	thread->status_variables.stvar[st_var_backend_stmt_execute]++;
+	MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
+	LogQuery(myds);
+	if (CurrentQuery.stmt_meta) {
+		if (CurrentQuery.stmt_meta->pkt) {
+			uint32_t stmt_global_id=0;
+			memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
+			SLDH->reset(stmt_global_id);
+			free(CurrentQuery.stmt_meta->pkt);
+			CurrentQuery.stmt_meta->pkt=NULL;
+		}
+	}
+	CurrentQuery.mysql_stmt=NULL;
+}
+
+// this function used to be inline.
+// now it returns:
+// true: NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
+// false: continue
+bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, int myerr, char **errmsg) {
+	MySQL_Connection *myconn = myds->myconn;
+	bool retry_conn=false;
+	// client error, serious
+	proxy_error("Detected a broken connection during query on (%d,%s,%d,%lu) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myds->fd, myds->myconn->fd,  myerr, ( *errmsg ? *errmsg : mysql_error(myconn->mysql)));
+	if (myds->query_retries_on_failure > 0) {
+		myds->query_retries_on_failure--;
+		if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+			if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
+			// transfer to frontend has started, we cannot retry
+			} else {
+				retry_conn=true;
+				proxy_warning("Retrying query.\n");
+			}
+		}
+	}
+	myds->destroy_MySQL_Connection_From_Pool(false);
+	myds->fd=0;
+	if (retry_conn) {
+		myds->DSS=STATE_NOT_INITIALIZED;
+		//previous_status.push(PROCESSING_QUERY);
+		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+			case PROCESSING_QUERY:
+				previous_status.push(PROCESSING_QUERY);
+				break;
+			case PROCESSING_STMT_PREPARE:
+				previous_status.push(PROCESSING_STMT_PREPARE);
+				break;
+			case PROCESSING_STMT_EXECUTE:
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		if (*errmsg) {
+			free(*errmsg);
+			*errmsg = NULL;
+		}
+		return true;
+	}
+	if (*errmsg) {
+		free(*errmsg);
+		*errmsg = NULL;
+	}
+	return false;
+}
+
+
+// this function was inline
+void MySQL_Session::handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn, int myerr, char *errmsg) {
+	if (mysql_thread___verbose_query_error) {
+		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %d, %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)), CurrentQuery.QueryParserArgs.digest_text );
+	} else {
+		proxy_warning("Error during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
+	}
+	MyHGM->add_mysql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, (char *)( errmsg ? errmsg : mysql_error(myconn->mysql)));
+}
+
+
+// this function used to be inline.
+// now it returns:
+// true:
+//		if handler_ret == -1 : return
+//		if handler_ret == 0 : NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
+// false: continue
+bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret) {
+	bool retry_conn=false;
+	MySQL_Connection * myconn = myds->myconn;
+	switch (myerr) {
+		case 1317:  // Query execution was interrupted
+			if (killed==true) { // this session is being kiled
+				handler_ret = -1;
+				return true;
+			}
+			if (myds->killed_at) {
+				// we intentionally killed the query
+				break;
+			}
+			break;
+		case 1047: // WSREP has not yet prepared node for application use
+		case 1053: // Server shutdown in progress
+			myconn->parent->connect_error(myerr);
+			if (myds->query_retries_on_failure > 0) {
+				myds->query_retries_on_failure--;
+				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+					retry_conn=true;
+					proxy_warning("Retrying query.\n");
+				}
+			}
+			switch (myerr) {
+				case 1047: // WSREP has not yet prepared node for application use
+				case 1053: // Server shutdown in progress
+					myds->destroy_MySQL_Connection_From_Pool(false);
+					break;
+				default:
+					if (mysql_thread___reset_connection_algorithm == 2) {
+						create_new_session_and_reset_connection(myds);
+					} else {
+						myds->destroy_MySQL_Connection_From_Pool(true);
+					}
+					break;
+			}
+			myconn = myds->myconn;
+			myds->fd=0;
+			if (retry_conn) {
+				myds->DSS=STATE_NOT_INITIALIZED;
+				//previous_status.push(PROCESSING_QUERY);
+			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
+				case PROCESSING_QUERY:
+					previous_status.push(PROCESSING_QUERY);
+					break;
+				case PROCESSING_STMT_PREPARE:
+					previous_status.push(PROCESSING_STMT_PREPARE);
+					break;
+				default:
+					assert(0);
+					break;
+				}
+				if (*errmsg) {
+					free(*errmsg);
+					*errmsg = NULL;
+				}
+				return true; // it will call NEXT_IMMEDIATE(CONNECTING_SERVER);
+				//NEXT_IMMEDIATE(CONNECTING_SERVER);
+			}
+			//handler_ret = -1;
+			//return handler_ret;
+			break;
+		case 1153: // ER_NET_PACKET_TOO_LARGE
+			proxy_warning("Error ER_NET_PACKET_TOO_LARGE during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myerr, mysql_error(myconn->mysql));
+			break;
+		default:
+			break; // continue normally
+	}
+	return false;
+}
+
+// this function used to be inline.
+void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass) {
+	switch (status) {
+		case PROCESSING_QUERY:
+			if (myconn) {
+				MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myds);
+			} else {
+				MySQL_Result_to_MySQL_wire(NULL, NULL, myds);
+			}
+			break;
+		case PROCESSING_STMT_PREPARE:
+			{
+				char sqlstate[10];
+				if (myconn && myconn->mysql) {
+					sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
+				} else {
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
+					GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
+				}
+				client_myds->pkt_sid++;
+				if (previous_status.size()) {
+					// an STMT_PREPARE failed
+					// we have a previous status, probably STMT_EXECUTE,
+					//    but returning to that status is not safe after STMT_PREPARE failed
+					// for this reason we exit immediately
+					wrong_pass=true;
+				}
+			}
+			break;
+		case PROCESSING_STMT_EXECUTE:
+			{
+				char sqlstate[10];
+				if (myconn && myconn->mysql) {
+					sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+				} else {
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
+				}
+				client_myds->pkt_sid++;
+			}
+			break;
+		default:
+			assert(0);
+			break;
+	}
+}
+
+// this function was inline
+void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
+	if (myds->myconn) {
+		myds->myconn->reduce_auto_increment_delay_token();
+		if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+			myds->DSS=STATE_NOT_INITIALIZED;
+			if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+				if (mysql_thread___reset_connection_algorithm == 2) {
+					create_new_session_and_reset_connection(myds);
+				} else {
+					myds->destroy_MySQL_Connection_From_Pool(true);
+				}
+			} else {
+				myds->return_MySQL_Connection_To_Pool();
+			}
+		} else {
+			myconn->async_state_machine=ASYNC_IDLE;
+			myds->DSS=STATE_MARIADB_GENERIC;
+		}
+	}
+}
+
+// this function was inline
+int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
+	int rc = 0;
+	switch (status) {
+		case PROCESSING_QUERY:
+			rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize);
+			break;
+		case PROCESSING_STMT_PREPARE:
+			rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt);
+			break;
+		case PROCESSING_STMT_EXECUTE:
+			rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt, CurrentQuery.stmt_meta);
+			break;
+		default:
+			assert(0);
+			break;
+	}
+	return rc;
+}
+
+// this function was inline
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
+	if (mybes) {
+		MySQL_Backend *_mybe;
+		unsigned int i;
+		for (i=0; i < mybes->len; i++) {
+			_mybe=(MySQL_Backend *)mybes->index(i);
+			if (_mybe->server_myds) {
+				MySQL_Data_Stream *_myds=_mybe->server_myds;
+				if (_myds->myconn) {
+					if (_myds->myconn->multiplex_delayed) {
+						if (_myds->wait_until <= thread->curtime) {
+							_myds->wait_until=0;
+							_myds->myconn->multiplex_delayed=false;
+							_myds->DSS=STATE_NOT_INITIALIZED;
+							_myds->return_MySQL_Connection_To_Pool();
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// this function was inline
+void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
+	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
+		if (mysql_thread___client_session_track_gtid) {
+			gtid_hid = current_hostgroup;
+			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
+		}
+	}
+}
+
 int MySQL_Session::handler() {
 	int handler_ret = 0;
 	bool prepared_stmt_with_no_params = false;
@@ -3531,26 +3948,7 @@ handler_again:
 	switch (status) {
 		case WAITING_CLIENT_DATA:
 			// housekeeping
-			if (mybes) {
-				MySQL_Backend *_mybe;
-				unsigned int i;
-				for (i=0; i < mybes->len; i++) {
-					_mybe=(MySQL_Backend *)mybes->index(i);
-					if (_mybe->server_myds) {
-						MySQL_Data_Stream *_myds=_mybe->server_myds;
-						if (_myds->myconn) {
-							if (_myds->myconn->multiplex_delayed) {
-								if (_myds->wait_until <= thread->curtime) {
-									_myds->wait_until=0;
-									_myds->myconn->multiplex_delayed=false;
-									_myds->DSS=STATE_NOT_INITIALIZED;
-									_myds->return_MySQL_Connection_To_Pool();
-								}
-							}
-						}
-					}
-				}
-			}
+			handler___status_WAITING_CLIENT_DATA();
 			break;
 		case FAST_FORWARD:
 			if (mybe->server_myds->mypolls==NULL) {
@@ -3722,44 +4120,14 @@ handler_again:
 				}
 
 				if (myconn->async_state_machine==ASYNC_IDLE) {
-					mybe->server_myds->wait_until=0;
-					if (qpo) {
-						if (qpo->timeout > 0) {
-							unsigned long long qr_timeout=qpo->timeout;
-							mybe->server_myds->wait_until=thread->curtime;
-							mybe->server_myds->wait_until+=qr_timeout*1000;
-						}
-					}
-					if (mysql_thread___default_query_timeout) {
-						if (mybe->server_myds->wait_until==0) {
-							mybe->server_myds->wait_until=thread->curtime;
-							unsigned long long def_query_timeout=mysql_thread___default_query_timeout;
-							mybe->server_myds->wait_until+=def_query_timeout*1000;
-						}
-					}
+					SetQueryTimeout();
 				}
 				int rc;
 				timespec begint;
 				if (thread->variables.stats_time_backend_query) {
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 				}
-				switch (status) {
-					case PROCESSING_QUERY:
-						rc=myconn->async_query(myds->revents, myds->mysql_real_query.QueryPtr,myds->mysql_real_query.QuerySize);
-						break;
-					case PROCESSING_STMT_PREPARE:
-						rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt);
-						break;
-					case PROCESSING_STMT_EXECUTE:
-						// PROCESSING_STMT_EXECUTE FIXME
-						{
-							rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt, CurrentQuery.stmt_meta);
-						}
-						break;
-					default:
-						assert(0);
-						break;
-				}
+				rc = RunQuery(myds, myconn);
 				timespec endt;
 				if (thread->variables.stats_time_backend_query) {
 					clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
@@ -3770,12 +4138,7 @@ handler_again:
 				gtid_hid = -1;
 				if (rc==0) {
 
-					if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
-						if (mysql_thread___client_session_track_gtid) {
-							gtid_hid = current_hostgroup;
-							memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
-						}
-					}
+					handler_rc0_Process_GTID(myconn);
 
 					// check if multiplexing needs to be disabled
 					char *qdt=CurrentQuery.get_digest_text();
@@ -3803,65 +4166,14 @@ handler_again:
 							break;
 						case PROCESSING_STMT_PREPARE:
 							{
-								thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
-								GloMyStmt->wrlock();
-								uint32_t client_stmtid;
-								uint64_t global_stmtid;
-								//bool is_new;
-								MySQL_STMT_Global_info *stmt_info=NULL;
-									stmt_info=GloMyStmt->add_prepared_statement(
-										(char *)client_myds->myconn->userinfo->username,
-										(char *)client_myds->myconn->userinfo->schemaname,
-										(char *)CurrentQuery.QueryPointer,
-										CurrentQuery.QueryLength,
-										CurrentQuery.mysql_stmt,
-										false);
-									if (CurrentQuery.QueryParserArgs.digest_text) {
-										if (stmt_info->digest_text==NULL) {
-											stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
-											stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
-											stmt_info->MyComQueryCmd=CurrentQuery.MyComQueryCmd; // copy MyComQueryCmd
-										}
-									}
-								global_stmtid=stmt_info->statement_id;
-								myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
-								if (previous_status.size() == 0)
-								client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
-								CurrentQuery.mysql_stmt=NULL;
-								enum session_status st=status;
-								size_t sts=previous_status.size();
-								if (sts) {
-									myconn->async_state_machine=ASYNC_IDLE;
-									myds->DSS=STATE_MARIADB_GENERIC;
-									st=previous_status.top();
-									previous_status.pop();
-									GloMyStmt->unlock();
+								enum session_status st;
+								if (handler_rc0_PROCESSING_STMT_PREPARE(st, myds, prepared_stmt_with_no_params)) {
 									NEXT_IMMEDIATE(st);
-								} else {
-									client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,client_stmtid);
-									if (stmt_info->num_params == 0) {
-										prepared_stmt_with_no_params = true;
-									}
-									LogQuery(myds);
-									GloMyStmt->unlock();
 								}
 							}
 							break;
 						case PROCESSING_STMT_EXECUTE:
-							{
-								thread->status_variables.stvar[st_var_backend_stmt_execute]++;
-								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
-								LogQuery(myds);
-								if (CurrentQuery.stmt_meta)
-									if (CurrentQuery.stmt_meta->pkt) {
-										uint32_t stmt_global_id=0;
-										memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
-										SLDH->reset(stmt_global_id);
-										free(CurrentQuery.stmt_meta->pkt);
-										CurrentQuery.stmt_meta->pkt=NULL;
-									}
-							}
-							CurrentQuery.mysql_stmt=NULL;
+							handler_rc0_PROCESSING_STMT_EXECUTE(myds);
 							break;
 						default:
 							assert(0);
@@ -3871,6 +4183,7 @@ handler_again:
 					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
 					if (rc==-1) {
+						// the query failed
 						int myerr=mysql_errno(myconn->mysql);
 						char *errmsg = NULL;
 						if (myerr == 0) {
@@ -3881,245 +4194,31 @@ handler_again:
 						}
 						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 						CurrentQuery.mysql_stmt=NULL; // immediately reset mysql_stmt
-						// the query failed
-						if (
-							// due to #774 , we now read myconn->server_status instead of myconn->parent->status
-							(myconn->server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the query failed because the server is offline hard
-							||
-							(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED && myconn->parent->shunned_automatic==true && myconn->parent->shunned_and_kill_all_connections==true) // the query failed because the server is shunned due to a serious failure
-							||
-							(myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
-						) {
-							if (mysql_thread___connect_timeout_server_max) {
-								myds->max_connect_time=thread->curtime+mysql_thread___connect_timeout_server_max*1000;
-							}
-							bool retry_conn=false;
-							if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
-								thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
-								proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
-							} else {
-								thread->status_variables.stvar[st_var_backend_offline_during_query]++;
-								proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
-							}
-							if (myds->query_retries_on_failure > 0) {
-								myds->query_retries_on_failure--;
-								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-									if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
-									// transfer to frontend has started, we cannot retry
-									} else {
-										retry_conn=true;
-										proxy_warning("Retrying query.\n");
-									}
-								}
-							}
-							myds->destroy_MySQL_Connection_From_Pool(false);
-							myds->fd=0;
-							if (retry_conn) {
-								myds->DSS=STATE_NOT_INITIALIZED;
-								//previous_status.push(PROCESSING_QUERY);
-								switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-									case PROCESSING_QUERY:
-										previous_status.push(PROCESSING_QUERY);
-										break;
-									case PROCESSING_STMT_PREPARE:
-										previous_status.push(PROCESSING_STMT_PREPARE);
-										break;
-									case PROCESSING_STMT_EXECUTE:
-										previous_status.push(PROCESSING_STMT_EXECUTE);
-										break;
-									default:
-										assert(0);
-										break;
-								}
-								NEXT_IMMEDIATE(CONNECTING_SERVER);
-							}
-							handler_ret = -1;
-							return handler_ret;
-						}
-						if (myerr >= 2000 && myerr < 3000) {
-							bool retry_conn=false;
-							// client error, serious
-							proxy_error("Detected a broken connection during query on (%d,%s,%d,%lu) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myds->fd, myds->myconn->fd,  myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
-							if (myds->query_retries_on_failure > 0) {
-								myds->query_retries_on_failure--;
-								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-									if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
-									// transfer to frontend has started, we cannot retry
-									} else {
-										retry_conn=true;
-										proxy_warning("Retrying query.\n");
-									}
-								}
-							}
-							myds->destroy_MySQL_Connection_From_Pool(false);
-							myds->fd=0;
-							if (retry_conn) {
-								myds->DSS=STATE_NOT_INITIALIZED;
-								//previous_status.push(PROCESSING_QUERY);
-								switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-									case PROCESSING_QUERY:
-										previous_status.push(PROCESSING_QUERY);
-										break;
-									case PROCESSING_STMT_PREPARE:
-										previous_status.push(PROCESSING_STMT_PREPARE);
-										break;
-									case PROCESSING_STMT_EXECUTE:
-										previous_status.push(PROCESSING_STMT_EXECUTE);
-										break;
-									default:
-										assert(0);
-										break;
-								}
-								if (errmsg) {
-									free(errmsg);
-									errmsg = NULL;
-								}
-								NEXT_IMMEDIATE(CONNECTING_SERVER);
-							}
-							if (errmsg) {
-								free(errmsg);
-								errmsg = NULL;
-							}
+						int rc1 = handler_ProcessingQueryError_CheckBackendConnectionStatus(myds);
+						if (rc1 == -1) {
 							handler_ret = -1;
 							return handler_ret;
 						} else {
-							if (mysql_thread___verbose_query_error) {
-								proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %d, %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)), CurrentQuery.QueryParserArgs.digest_text );
+							if (rc1 == 1)
+								NEXT_IMMEDIATE(CONNECTING_SERVER);
+						}
+						if (myerr >= 2000 && myerr < 3000) {
+							if (handler_minus1_ClientLibraryError(myds, myerr, &errmsg)) {
+								NEXT_IMMEDIATE(CONNECTING_SERVER);
 							} else {
-								proxy_warning("Error during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)));
+								handler_ret = -1;
+								return handler_ret;
 							}
-							MyHGM->add_mysql_errors(myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, (char *)( errmsg ? errmsg : mysql_error(myconn->mysql)));
-							bool retry_conn=false;
-							switch (myerr) {
-								case 1317:  // Query execution was interrupted
-									if (killed==true) { // this session is being kiled
-										handler_ret = -1;
-										return handler_ret;
-									}
-									if (myds->killed_at) {
-										// we intentionally killed the query
-										break;
-									}
-									break;
-								case 1047: // WSREP has not yet prepared node for application use
-								case 1053: // Server shutdown in progress
-									myconn->parent->connect_error(myerr);
-									if (myds->query_retries_on_failure > 0) {
-										myds->query_retries_on_failure--;
-										if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-											retry_conn=true;
-											proxy_warning("Retrying query.\n");
-										}
-									}
-									switch (myerr) {
-										case 1047: // WSREP has not yet prepared node for application use
-										case 1053: // Server shutdown in progress
-											myds->destroy_MySQL_Connection_From_Pool(false);
-											break;
-										default:
-											if (mysql_thread___reset_connection_algorithm == 2) {
-												create_new_session_and_reset_connection(myds);
-											} else {
-												myds->destroy_MySQL_Connection_From_Pool(true);
-											}
-											break;
-									}
-									myconn = myds->myconn; // re-initialize
-									myds->fd=0;
-									if (retry_conn) {
-										myds->DSS=STATE_NOT_INITIALIZED;
-										//previous_status.push(PROCESSING_QUERY);
-									switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-										case PROCESSING_QUERY:
-											previous_status.push(PROCESSING_QUERY);
-											break;
-										case PROCESSING_STMT_PREPARE:
-											previous_status.push(PROCESSING_STMT_PREPARE);
-											break;
-										default:
-											assert(0);
-											break;
-										}
-										if (errmsg) {
-											free(errmsg);
-											errmsg = NULL;
-										}
-										NEXT_IMMEDIATE(CONNECTING_SERVER);
-									}
-									//handler_ret = -1;
-									//return handler_ret;
-									break;
-								case 1153: // ER_NET_PACKET_TOO_LARGE
-									proxy_warning("Error ER_NET_PACKET_TOO_LARGE during query on (%d,%s,%d,%lu): %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myerr, mysql_error(myconn->mysql));
-									break;
-								default:
-									break; // continue normally
+						} else {
+							handler_minus1_LogErrorDuringQuery(myconn, myerr, errmsg);
+							if (handler_minus1_HandleErrorCodes(myds, myerr, &errmsg, handler_ret)) {
+								if (handler_ret == 0)
+									NEXT_IMMEDIATE(CONNECTING_SERVER);
+								return handler_ret;
 							}
-
-							switch (status) {
-								case PROCESSING_QUERY:
-									if (myconn) {
-										MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myds);
-									} else {
-										MySQL_Result_to_MySQL_wire(NULL, NULL, myds);
-									}
-									break;
-								case PROCESSING_STMT_PREPARE:
-									{
-										char sqlstate[10];
-										if (myconn && myconn->mysql) {
-											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
-											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
-											GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
-										} else {
-											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
-											GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_CLOSE, this, NULL);
-										}
-										client_myds->pkt_sid++;
-										if (previous_status.size()) {
-											// an STMT_PREPARE failed
-											// we have a previous status, probably STMT_EXECUTE,
-											//    but returning to that status is not safe after STMT_PREPARE failed
-											// for this reason we exit immediately
-											wrong_pass=true;
-										}
-									}
-									break;
-								case PROCESSING_STMT_EXECUTE:
-									{
-										char sqlstate[10];
-										if (myconn && myconn->mysql) {
-											sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
-											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
-										} else {
-											client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
-										}
-										client_myds->pkt_sid++;
-									}
-									break;
-								default:
-									assert(0);
-									break;
-							}
+							handler_minus1_GenerateErrorMessage(myds, myconn, wrong_pass);
 							RequestEnd(myds);
-							if (myds->myconn) {
-								myds->myconn->reduce_auto_increment_delay_token();
-								if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-									myds->DSS=STATE_NOT_INITIALIZED;
-									if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
-										if (mysql_thread___reset_connection_algorithm == 2) {
-											create_new_session_and_reset_connection(myds);
-										} else {
-											myds->destroy_MySQL_Connection_From_Pool(true);
-										}
-									} else {
-										myds->return_MySQL_Connection_To_Pool();
-									}
-								} else {
-									myconn->async_state_machine=ASYNC_IDLE;
-									myds->DSS=STATE_MARIADB_GENERIC;
-								}
-							}
+							handler_minus1_HandleBackendConnection(myds, myconn);
 						}
 					} else {
 						switch (rc) {
