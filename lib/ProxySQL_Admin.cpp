@@ -7629,12 +7629,14 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 		retained  = 0,
 		sz        = sizeof(size_t);
 
+#ifndef NOJEM
 	mallctl("stats.resident", &resident, &sz, NULL, 0);
 	mallctl("stats.active", &active, &sz, NULL, 0);
 	mallctl("stats.allocated", &allocated, &sz, NULL, 0);
 	mallctl("stats.mapped", &mapped, &sz, NULL, 0);
 	mallctl("stats.metadata", &metadata, &sz, NULL, 0);
 	mallctl("stats.retained", &retained, &sz, NULL, 0);
+#endif // NOJEM
 
 	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_resident]->Set(resident);
 	this->metrics.p_gauge_array[p_admin_gauge::jemalloc_active]->Set(active);
