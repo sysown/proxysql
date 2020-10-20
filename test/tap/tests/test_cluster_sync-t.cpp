@@ -1024,7 +1024,7 @@ int main(int, char**) {
 			std::make_tuple("mysql-query_digests_track_hostname"                           , "false"                      ),
 			std::make_tuple("mysql-servers_stats"                                          , "true"                       ),
 			std::make_tuple("mysql-default_reconnect"                                      , "true"                       ),
-			std::make_tuple("mysql-session_debug"                                          , "true"                       ),
+			// std::make_tuple("mysql-session_debug"                                       , "true"                       ), Deprecated
 			std::make_tuple("mysql-ssl_p2s_ca"                                             , ""                           ),
 			std::make_tuple("mysql-ssl_p2s_cert"                                           , ""                           ),
 			std::make_tuple("mysql-ssl_p2s_key"                                            , ""                           ),
@@ -1154,7 +1154,7 @@ int main(int, char**) {
 			std::make_tuple("admin-cluster_proxysql_servers_save_to_disk"      , "true"                      ),
 		//	std::make_tuple("admin-cluster_username"                           , ""                          ), Known issue, can't clear
 		//	std::make_tuple("admin-cluster_password"                           , ""                          ), Known issue, can't clear
-			std::make_tuple("admin-debug"                                      , "false"                     ),
+		//	std::make_tuple("admin-debug"                                      , "false"                     ), Should not be synced
 			std::make_tuple("admin-hash_passwords"                             , "true"                      ),
 			std::make_tuple("admin-mysql_ifaces"                               , "0.0.0.0:6032"              ),
 			std::make_tuple("admin-prometheus_memory_metrics_interval"         , "61"                        ),
