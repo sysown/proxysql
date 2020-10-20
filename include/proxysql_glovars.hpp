@@ -92,6 +92,7 @@ class ProxySQL_GlobalVariables {
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
+		pthread_mutex_t ext_glomth_mutex;
 	} global;
 	struct mysql {
 		char *server_version;

@@ -1,4 +1,5 @@
 
+UNAME_S := $(shell uname -s)
 
 PROXYDEBUG := $(shell echo $(PROXYDEBUG))
 ifeq ($(PROXYDEBUG),1)
@@ -10,7 +11,7 @@ MYJEOPT=--enable-xmalloc --enable-prof
 endif
 
 ifneq (,$(wildcard /etc/system-release))
-	CENTOSVER := $(shell cat /etc/system-release | awk '{print $$3}')
+	CENTOSVER := $(shell rpm --eval %rhel)
 else
 	CENTOSVER := Unknown
 endif
@@ -27,6 +28,9 @@ endif
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-3.10.0 || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/make_parens.py
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse_map.py
+	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse2c.py
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 libinjection: libinjection/libinjection/src/libinjection.a
 
@@ -35,15 +39,39 @@ libssl/openssl/libssl.a:
 #	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.0h || true
-	cd libssl && tar -zxf openssl-1.1.1d.tar.gz
+	cd libssl && rm -rf openssl-1.1.1g || true
+	cd libssl && tar -zxf openssl-1.1.1g.tar.gz
 	cd libssl/openssl  && ./config no-ssl3
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
 
+GCC_VERSION := $(shell gcc -dumpversion)
+MIN_VERSION := 4.9.0
+REQUIRE_PATCH = false
+
+ifeq ($(MIN_VERSION),$(lastword $(sort $(GCC_VERSION) $(MIN_VERSION))))
+	REQUIRE_PATCH = true
+endif
+
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
-	cd libhttpserver && tar -zxf libhttpserver-master_20191121.tar.gz
+	cd libhttpserver && rm -rf libhttpserver-0.18.1 || true
+	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
+ifeq ($(REQUIRE_PATCH), true)
+	cd libhttpserver/libhttpserver && patch src/httpserver/basic_auth_fail_response.hpp < ../basic_auth_fail_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/create_webserver.hpp < ../create_webserver.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/deferred_response.hpp < ../deferred_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/digest_auth_fail_response.hpp < ../digest_auth_fail_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/file_response.hpp < ../file_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/http_request.hpp < ../http_request.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/http_resource.hpp < ../http_resource.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/http_response.hpp < ../http_response.hpp.patch
+	cd libhttpserver/libhttpserver && patch src/httpserver/string_response.hpp < ../string_response.hpp.patch
+endif
+ifeq ($(UNAME_S),FreeBSD)
+	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
+endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
 	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
@@ -67,12 +95,15 @@ libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
 	cd libmicrohttpd && rm -f libmicrohttpd || true
-ifeq ($(CENTOSVER),6.7)
+ifeq ($(CENTOSVER),6)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
 else
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.68 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.68.tar.gz
+endif
+ifeq ($(OS),Darwin)
+	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
 endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
@@ -101,7 +132,7 @@ clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a: 
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
-	cd libdaemon/libdaemon && ./configure --disable-examples
+	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && ./configure --disable-examples
 	cd libdaemon/libdaemon && CC=${CC} CXX=${CXX} ${MAKE}
 
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
@@ -119,8 +150,8 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
-	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.4-src.tar.gz
+	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
+	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
 	 cd mariadb-client-library/mariadb_client && patch ./CMakeLists.txt < ../CMakeLists.txt.patch
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
@@ -173,7 +204,8 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
 
 re2/re2/obj/libre2.a:
-	cd re2 && rm -rf re2-2018-07-01
+	cd re2 && rm -rf re2-2018-07-01 || true
+	cd re2 && rm -rf re2-2020-07-06 || true
 #	cd re2 && tar -zxf re2-20140304.tgz
 	cd re2 && tar -zxf re2.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
@@ -185,7 +217,8 @@ re2: re2/re2/obj/libre2.a
 
 pcre/pcre/.libs/libpcre.a:
 	cd pcre && rm -rf pcre-8.39
-	cd pcre && tar -zxf pcre-8.39.tar.gz
+	cd pcre && rm -rf pcre-8.44
+	cd pcre && tar -zxf pcre-8.44.tar.gz
 	cd pcre/pcre && ./configure
 	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
 pcre: pcre/pcre/.libs/libpcre.a
@@ -194,6 +227,7 @@ cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
+	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
 	cd jemalloc && rm -rf jemalloc-4.2.1
 	cd sqlite3/sqlite3 && rm -rf *
 .PHONY: cleanpart
@@ -201,15 +235,19 @@ cleanpart:
 cleanall:
 	cd libinjection && rm -rf libinjection-3.10.0 || true
 	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
+	cd libhttpserver && rm -rf libhttpserver-0.18.1 || true
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd jemalloc && rm -rf jemalloc-4.3.1 || true
 	cd jemalloc && rm -rf jemalloc-5.2.0 || true
 	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
+	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
 	cd libconfig && rm -rf libconfig-1.4.9
-	cd re2 && rm -rf re2-2018-07-01
-	cd pcre && rm -rf pcre-8.39
+	cd re2 && rm -rf re2-2018-07-01 || true
+	cd re2 && rm -rf re2-2020-07-06 || true
+	cd pcre && rm -rf pcre-8.39 || true
+	cd pcre && rm -rf pcre-8.44 || true
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true
@@ -221,6 +259,7 @@ cleanall:
 	cd libssl && rm -rf openssl-1.1.0h || true
 	cd libssl && rm -rf openssl-1.1.1b || true
 	cd libssl && rm -rf openssl-1.1.1d || true
+	cd libssl && rm -rf openssl-1.1.1g || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-0.9.0 || true
 .PHONY: cleanall

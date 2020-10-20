@@ -1,0 +1,8 @@
+@@ -528,6 +528,7 @@ MHD_socket_cork_ (MHD_socket sock,
+        TCP_CORK always flushes socket buffer. */
+     if (0 > send (sock,
+                   &dummy,
++                  0,
+                   0))
+       return 0; /* even force flush failed!? */
+     return 1; /* success */

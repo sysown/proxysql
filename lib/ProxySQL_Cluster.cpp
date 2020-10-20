@@ -2205,124 +2205,157 @@ using cluster_gauge_tuple =
 using cluster_counter_vector = std::vector<cluster_counter_tuple>;
 using cluster_gauge_vector = std::vector<cluster_gauge_tuple>;
 
+/**
+ * @brief Metrics map holding the metrics for the 'ProxySQL_Cluster' module.
+ *
+ * @note Many metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
 const std::tuple<cluster_counter_vector, cluster_gauge_vector>
 cluster_metrics_map = std::make_tuple(
 	cluster_counter_vector {
 		// mysql_query_rules
+
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_query_rules_success,
-			"pulled_mysql_query_rules",
+			"pulled_mysql_query_rules_total",
 			"Number of times 'mysql_query_rules' have been pulled from a peer.",
 			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_query_rules_failure,
-			"pulled_mysql_query_rules",
+			"pulled_mysql_query_rules_total",
 			"Number of times 'mysql_query_rules' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
 
 		// mysql_servers_*
+
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_success,
-			"pulled_mysql_servers",
+			"pulled_mysql_servers_total",
 			"Number of times 'mysql_servers' have been pulled from a peer.",
 			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_failure,
-			"pulled_mysql_servers",
+			"pulled_mysql_servers_total",
 			"Number of times 'mysql_servers' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_replication_hostgroups_success,
-			"pulled_mysql_servers_replication_hostgroups",
+			"pulled_mysql_servers_replication_hostgroups_total",
 			"Number of times 'mysql_servers_replication_hostgroups' have been pulled from a peer.",
 			metric_tags { { "status", "successs" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_replication_hostgroups_failure,
-			"pulled_mysql_servers_replication_hostgroups",
+			"pulled_mysql_servers_replication_hostgroups_total",
 			"Number of times 'mysql_servers_replication_hostgroups' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_group_replication_hostgroups_success,
-			"pulled_mysql_servers_group_replication_hostgroups",
+			"pulled_mysql_servers_group_replication_hostgroups_total",
 			"Number of times 'mysql_servers_group_replication_hostgroups' have been pulled from a peer.",
 			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_group_replication_hostgroups_failure,
-			"pulled_mysql_servers_group_replication_hostgroups",
+			"pulled_mysql_servers_group_replication_hostgroups_total",
 			"Number of times 'mysql_servers_group_replication_hostgroups' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_galera_hostgroups_success,
-			"pulled_mysql_servers_galera_hostgroups",
+			"pulled_mysql_servers_galera_hostgroups_total",
 			"Number of times 'mysql_servers_galera_hostgroups' have been pulled from a peer.",
 			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_galera_hostgroups_failure,
-			"pulled_mysql_servers_galera_hostgroups",
+			"pulled_mysql_servers_galera_hostgroups_total",
 			"Number of times 'mysql_servers_galera_hostgroups' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_success,
-			"pulled_mysql_servers_aws_aurora_hostgroups",
+			"pulled_mysql_servers_aws_aurora_hostgroups_total",
 			"Number of times 'mysql_servers_aws_aurora_hostgroups' have been pulled from a peer.",
 			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_failure,
-			"pulled_mysql_servers_aws_aurora_hostgroups",
+			"pulled_mysql_servers_aws_aurora_hostgroups_total",
 			"Number of times 'mysql_servers_aws_aurora_hostgroups' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_runtime_checks_success,
-			"pulled_mysql_servers_runtime_checks",
+			"pulled_mysql_servers_runtime_checks_total",
 			"Number of times '' have been pulled from a peer.",
 			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_servers_runtime_checks_failure,
-			"pulled_mysql_servers_runtime_checks",
+			"pulled_mysql_servers_runtime_checks_total",
 			"Number of times 'mysql_servers_runtime_checks' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
 
 		// mysql_users_*
+
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_users_success,
-			"pulled_mysql_users",
+			"pulled_mysql_users_total",
 			"Number of times 'mysql_users' have been pulled from a peer.",
 			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_users_failure,
-			"pulled_mysql_users",
+			"pulled_mysql_users_total",
 			"Number of times 'mysql_users' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
 
 		// proxysql_servers_*
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::pulled_proxysql_servers_success,
-			"pulled_proxysql_servers",
+			"pulled_proxysql_servers_total",
 			"Number of times 'mysql_proxysql_servers' have been pulled from a peer.",
 			metric_tags { { "status", "success" } }
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_proxysql_servers_failure,
-			"pulled_proxysql_servers",
+			"pulled_proxysql_servers_total",
 			"Number of times 'mysql_proxysql_servers' have been pulled from a peer.",
 			metric_tags { { "status", "failure" } }
 		),
+		// ====================================================================
 
 		// mysql_variables_*
 		std::make_tuple (
@@ -2353,81 +2386,120 @@ cluster_metrics_map = std::make_tuple(
 		),
 
 		// sync_conflict same epoch
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_mysql_query_rules_share_epoch,
-			"sync_conflict_mysql_query_rules_share_epoch",
-			"Number of times 'mysql_query_rules' has not been synced because they share the same epoch.",
-			metric_tags { { "type", "error" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_query_rules" },
+				{ "reason", "servers_share_epoch" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_mysql_servers_share_epoch,
-			"sync_conflict_mysql_servers_share_epoch",
-			"Number of times 'mysql_servers' has not been synced because they share the same epoch.",
-			metric_tags { { "type", "error" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_servers" },
+				{ "reason", "servers_share_epoch" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_proxysql_servers_share_epoch,
-			"sync_conflict_proxysql_servers_share_epoch",
-			"Number of times 'proxysql_servers' has not been synced because they share the same epoch.",
-			metric_tags { { "type", "error" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "proxysql_servers" },
+				{ "reason", "servers_share_epoch" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_mysql_users_share_epoch,
-			"sync_conflict_mysql_users_share_epoch",
-			"Number of times 'mysql_users' has not been synced because they share the same epoch.",
-			metric_tags { { "type", "error" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_users" },
+				{ "reason", "servers_share_epoch" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_mysql_variables_share_epoch,
-			"sync_conflict_mysql_variables_share_epoch",
-			"Number of times 'mysql_variables' has not been synced because they share the same epoch.",
-			metric_tags { { "type", "error" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_variables" },
+				{ "reason", "servers_share_epoch" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_conflict_admin_variables_share_epoch,
-			"sync_conflict_admin_variables_share_epoch",
-			"Number of times 'admin_variables' has not been synced because they share the same epoch.",
-			metric_tags { { "type", "error" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "admin_variables" },
+				{ "reason", "servers_share_epoch" }
+			}
 		),
+		// ====================================================================
 
 		// sync_delayed due to version one
+		// ====================================================================
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_mysql_query_rules_version_one,
-			"sync_delayed_mysql_query_rules_version_one",
-			"Number of times 'mysql_query_rules' has not been synced because version one doesn't allow sync.",
-			metric_tags { { "type", "warning" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_query_rules" },
+				{ "reason", "version_one" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_mysql_servers_version_one,
-			"sync_delayed_mysql_servers_version_one",
-			"Number of times 'mysql_servers' has not been synced because version one doesn't allow sync.",
-			metric_tags { { "type", "warning" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_servers" },
+				{ "reason", "version_one" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_mysql_users_version_one,
-			"sync_delayed_mysql_users_version_one",
-			"Number of times 'mysql_users' has not been synced because version one doesn't allow sync.",
-			metric_tags { { "type", "warning" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_users" },
+				{ "reason", "version_one" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_proxysql_servers_version_one,
-			"sync_delayed_proxysql_servers_version_one",
-			"Number of times 'proxysql_servers' has not been synced because version one doesn't allow sync.",
-			metric_tags { { "type", "warning" } }
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "proxysql_servers" },
+				{ "reason", "version_one" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_mysql_variables_version_one,
 			"sync_delayed_mysql_variables_version_one",
-			"Number of times 'mysql_variables' has not been synced because version one doesn't allow sync.",
-			metric_tags { { "type", "warning" } }
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "mysql_variables" },
+				{ "reason", "version_one" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_admin_variables_version_one,
 			"sync_delayed_admin_variables_version_one",
-			"Number of times 'admin_variables' has not been synced because version one doesn't allow sync.",
-			metric_tags { { "type", "warning" } }
-		),
-
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "admin_variables" },
+				{ "reason", "version_one" }
+			}
+		)
+		// ====================================================================
 	},
 	cluster_gauge_vector {}
 );

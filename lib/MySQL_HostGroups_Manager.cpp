@@ -182,6 +182,7 @@ static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int re
 }
 
 static void gtid_timer_cb (struct ev_loop *loop, struct ev_timer *timer, int revents) {
+	if (GloMTH == nullptr) { return; }
 	ev_timer_stop(loop, timer);
 	ev_timer_set(timer, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
 	if (glovars.shutdown) {
@@ -352,7 +353,7 @@ GTID_Server_Data::GTID_Server_Data(struct ev_io *_w, char *_address, uint16_t _p
 	w = _w;
 	size = 1024; // 1KB buffer
 	data = (char *)malloc(size);
-	uuid_server[0] = 0;
+	memset(uuid_server, 0, sizeof(uuid_server));
 	pos = 0;
 	len = 0;
 	address = strdup(_address);
@@ -468,7 +469,8 @@ bool GTID_Server_Data::read_next_gtid() {
 	if (strncmp(data+pos,(char *)"ST=",3)==0) {
 		// we are reading the bootstrap
 		char *bs = (char *)malloc(l+1-3); // length + 1 (null byte) - 3 (header)
-		memcpy(bs,data+pos+3,l+1-3);
+		memcpy(bs, data+pos+3, l-3);
+		bs[l-3] = '\0';
 		char *saveptr1=NULL;
 		char *saveptr2=NULL;
 		//char *saveptr3=NULL;
@@ -838,6 +840,7 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
 	use_ssl=_use_ssl;
+	cur_replication_lag_count=0;
 	max_latency_us=_max_latency_ms*1000;
 	current_latency_us=0;
 	aws_aurora_current_lag_us = 0;
@@ -994,6 +997,14 @@ using hg_gauge_vector = std::vector<hg_gauge_tuple>;
 using hg_dyn_counter_vector = std::vector<hg_dyn_counter_tuple>;
 using hg_dyn_gauge_vector = std::vector<hg_dyn_gauge_tuple>;
 
+/**
+ * @brief Metrics map holding the metrics for the 'MySQL_HostGroups_Manager' module.
+ *
+ * @note Many metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
 const std::tuple<
 	hg_counter_vector,
 	hg_gauge_vector,
@@ -1003,177 +1014,191 @@ const std::tuple<
 hg_metrics_map = std::make_tuple(
 	hg_counter_vector {
 		std::make_tuple (
-			// TODO: Check this help
 			p_hg_counter::servers_table_version,
-			"proxysql_servers_table_version",
+			"proxysql_servers_table_version_total",
 			"Number of times the \"servers_table\" have been modified.",
 			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_counter::server_connections_created,
-			"proxysql_server_connections",
-			"Total number of server connections created.",
+			"proxysql_server_connections_total",
+			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
 				{ "status", "created" }
 			}
 		),
 		std::make_tuple (
 			p_hg_counter::server_connections_delayed,
-			"proxysql_server_connections",
-			"Total number of server connections delayed.",
+			"proxysql_server_connections_total",
+			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
 				{ "status", "delayed" }
 			}
 		),
 		std::make_tuple (
 			p_hg_counter::server_connections_aborted,
-			"proxysql_server_connections",
-			"Total number of backend failed connections (or closed improperly).",
+			"proxysql_server_connections_total",
+			"Total number of server connections (created|delayed|aborted).",
 			metric_tags {
 				{ "status", "aborted" }
 			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_counter::client_connections_created,
-			"proxysql_client_connections_created",
+			"proxysql_client_connections_total",
 			"Total number of client connections created.",
-			metric_tags {}
+			metric_tags {
+				{ "status", "created" }
+			}
 		),
 		std::make_tuple (
 			p_hg_counter::client_connections_aborted,
-			"proxysql_client_connections_aborted",
+			"proxysql_client_connections_total",
 			"Total number of client failed connections (or closed improperly).",
-			metric_tags {}
+			metric_tags {
+				{ "status", "aborted" }
+			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_hg_counter::com_autocommit,
-			"proxysql_com_autocommit",
+			"proxysql_com_autocommit_total",
 			"Total queries autocommited.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_autocommit_filtered,
-			"proxysql_com_autocommit_filtered",
+			"proxysql_com_autocommit_filtered_total",
 			"Total queries filtered autocommit.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_rollback,
-			"proxysql_com_rollback",
+			"proxysql_com_rollback_total",
 			"Total queries rollbacked.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_rollback_filtered,
-			"proxysql_com_rollback_filtered",
+			"proxysql_com_rollback_filtered_total",
 			"Total queries filtered rollbacked.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_backend_change_user,
-			"proxysql_com_backend_change_user",
+			"proxysql_com_backend_change_user_total",
 			"Total CHANGE_USER queries backend.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_backend_init_db,
-			"proxysql_com_backend_init_db",
+			"proxysql_com_backend_init_db_total",
 			"Total queries backend INIT DB.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_backend_set_names,
-			"proxysql_com_backend_set_names",
+			"proxysql_com_backend_set_names_total",
 			"Total queries backend SET NAMES.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_frontend_init_db,
-			"proxysql_com_frontend_init_db",
+			"proxysql_com_frontend_init_db_total",
 			"Total INIT DB queries frontend.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_frontend_set_names,
-			"proxysql_com_frontend_set_names",
+			"proxysql_com_frontend_set_names_total",
 			"Total SET NAMES frontend queries.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_frontend_use_db,
-			"proxysql_com_frontend_use_db",
+			"proxysql_com_frontend_use_db_total",
 			"Total USE DB queries frontend.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_commit_cnt,
-			"proxysql_com_commit_cnt",
+			"proxysql_com_commit_cnt_total",
 			"Total queries commit.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::com_commit_cnt_filtered,
-			"proxysql_com_commit_cnt_filtered",
+			"proxysql_com_commit_cnt_filtered_total",
 			"Total queries commit filtered.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::selects_for_update__autocommit0,
-			"proxysql_selects_for_update__autocommit0",
+			"proxysql_selects_for_update__autocommit0_total",
 			"Total queries that are SELECT for update or equivalent.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::access_denied_wrong_password,
-			"proxysql_access_denied_wrong_password",
+			"proxysql_access_denied_wrong_password_total",
 			"Total access denied \"wrong password\".",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::access_denied_max_connections,
-			"proxysql_access_denied_max_connections",
+			"proxysql_access_denied_max_connections_total",
 			"Total access denied \"max connections\".",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::access_denied_max_user_connections,
-			"proxysql_access_denied_max_user_connections",
+			"proxysql_access_denied_max_user_connections_total",
 			"Total access denied \"max user connections\".",
 			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get,
-			"proxysql_myhgm_myconnpool_get",
+			"proxysql_myhgm_myconnpool_get_total",
 			"The number of requests made to the connection pool.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get_ok,
-			"proxysql_myhgm_myconnpool_get_ok",
+			"proxysql_myhgm_myconnpool_get_ok_total",
 			"The number of successful requests to the connection pool (i.e. where a connection was available).",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_get_ping,
-			"proxysql_myhgm_myconnpool_get_ping",
+			"proxysql_myhgm_myconnpool_get_ping_total",
 			"The number of connections that were taken from the pool to run a ping to keep them alive.",
 			metric_tags {}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_push,
-			"proxysql_myhgm_myconnpool_push",
+			"proxysql_myhgm_myconnpool_push_total",
 			"The number of connections returned to the connection pool.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_reset,
-			"proxysql_myhgm_myconnpool_reset",
+			"proxysql_myhgm_myconnpool_reset_total",
 			"The number of connections that have been reset / re-initialized using \"COM_CHANGE_USER\"",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_counter::myhgm_myconnpool_destroy,
-			"proxysql_myhgm_myconnpool_destroy",
+			"proxysql_myhgm_myconnpool_destroy_total",
 			"The number of connections considered unhealthy and therefore closed.",
 			metric_tags {}
 		)
@@ -1196,80 +1221,100 @@ hg_metrics_map = std::make_tuple(
 	// prometheus dynamic counters
 	hg_dyn_counter_vector {
 		// connection_pool
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_dyn_counter::conn_pool_bytes_data_recv,
-			"proxysql_connection_pool_bytes_data_recv",
-			"The amount of data received from the backend, excluding metadata.",
-			metric_tags {}
+			"proxysql_connpool_data_bytes_total",
+			"Amount of data (sent|recv) from the backend, excluding metadata.",
+			metric_tags {
+				{ "traffic_flow", "recv" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_counter::conn_pool_bytes_data_sent,
-			"proxysql_connection_pool_bytes_data_sent",
-			"The amount of data sent to the backend, excluding metadata.",
-			metric_tags {}
+			"proxysql_connpool_data_bytes_total",
+			"Amount of data (sent|recv) from the backend, excluding metadata.",
+			metric_tags {
+				{ "traffic_flow", "sent" }
+			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_conn_err,
-			"proxysql_connection_pool_conn_err",
-			"How many connections weren't established successfully.",
-			metric_tags {}
+			"proxysql_connpool_conns_total",
+			"How many connections have been tried to be established.",
+			metric_tags {
+				{ "status", "err" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_conn_ok,
-			"proxysql_connection_pool_conn_ok",
-			"How many connections were established successfully.",
-			metric_tags {}
+			"proxysql_connpool_conns_total",
+			"How many connections have been tried to be established.",
+			metric_tags {
+				{ "status", "ok" }
+			}
 		),
+		// ====================================================================
+
 		std::make_tuple (
 			p_hg_dyn_counter::connection_pool_queries,
-			"proxysql_connection_pool_conn_queries",
+			"proxysql_connpool_conns_queries_total",
 			"The number of queries routed towards this particular backend server.",
 			metric_tags {}
 		),
 		// gtid
 		std::make_tuple (
 			p_hg_dyn_counter::gtid_executed,
-			"proxysql_gtid_executed",
+			"proxysql_gtid_executed_total",
 			"Tracks the number of executed gtid per host and port.",
 			metric_tags {}
 		),
 		// mysql_error
 		std::make_tuple (
 			p_hg_dyn_counter::proxysql_mysql_error,
-			"proxysql_mysql_error",
-			"Tracks the mysql errors generated by proxysql, identifying them by: hostgroup + hostname + port + error_code.",
+			"proxysql_mysql_error_total",
+			"Tracks the mysql errors generated by proxysql.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_dyn_counter::mysql_error,
-			"mysql_error",
-			"Tracks the mysql errors encountered, identifying them by: hostgroup + hostname + port + error_code.",
+			"mysql_error_total",
+			"Tracks the mysql errors encountered.",
 			metric_tags {}
 		)
 	},
-	// prometheus dynamic counters
+	// prometheus dynamic gauges
 	hg_dyn_gauge_vector {
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_conn_free,
-			"proxysql_connection_pool_conn_free",
-			"How many connections are currently free.",
-			metric_tags {}
+			"proxysql_connpool_conns",
+			"How many backend connections are currently (free|used).",
+			metric_tags {
+				{ "status", "free" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_conn_used,
-			"proxysql_connection_pool_conn_used",
-			"How many connections are currently used by ProxySQL for sending queries to the backend server.",
-			metric_tags {}
+			"proxysql_connpool_conns",
+			"How many backend connections are currently (free|used).",
+			metric_tags {
+				{ "status", "used" }
+			}
 		),
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_latency_us,
-			"proxysql_connection_pool_conn_latency_us",
+			"proxysql_connpool_conns_latency_us",
 			"The currently ping time in microseconds, as reported from Monitor.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_status,
-			"proxysql_connection_pool_conn_status",
+			"proxysql_connpool_conns_status",
 			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).",
 			metric_tags {}
 		)
@@ -1603,7 +1648,9 @@ bool MySQL_HostGroups_Manager::commit() {
 	wrlock();
 	// purge table
 	purge_mysql_servers_table();
-
+	// if any server has gtid_port enabled, use_gtid is set to true
+	// and then has_gtid_port is set too
+	bool use_gtid = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
@@ -1705,6 +1752,11 @@ bool MySQL_HostGroups_Manager::commit() {
 				SAFE_SQLITE3_STEP2(statement1);
 				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, mydb);
+				if (mysrvc->gtid_port) {
+					// this server has gtid_port configured, we set use_gtid
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address);
+					use_gtid = true;
+				}
 			} else {
 				bool run_update=false;
 				MySrvC *mysrvc=(MySrvC *)ptr;
@@ -1784,10 +1836,20 @@ bool MySQL_HostGroups_Manager::commit() {
 					rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, mydb);
 					rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, mydb);
 				}
+				if (mysrvc->gtid_port) {
+					// this server has gtid_port configured, we set use_gtid
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address);
+					use_gtid = true;
+				}
 			}
 		}
 		(*proxy_sqlite3_finalize)(statement1);
 		(*proxy_sqlite3_finalize)(statement2);
+	}
+	if (use_gtid) {
+		has_gtid_port = true;
+	} else {
+		has_gtid_port = false;
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
@@ -2688,7 +2750,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 							}
 						} else {
 							if (max_lag_ms >= 0) {
-								if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+								if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 									sum+=mysrvc->weight;
 									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 									mysrvcCandidates[num_candidates]=mysrvc;
@@ -2742,7 +2804,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 										}
 									} else {
 										if (max_lag_ms >= 0) {
-											if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+											if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 												sum+=mysrvc->weight;
 												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 												mysrvcCandidates[num_candidates]=mysrvc;
@@ -2792,11 +2854,16 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
+			static time_t last_hg_log = 0;
 			time_t t;
 			t=time(NULL);
 			int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
 			if (max_wait_sec < 1) { // min wait time should be at least 1 second
 				max_wait_sec = 1;
+			}
+			if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
+				last_hg_log = time(NULL);
+				proxy_error("Hostgroup %u has no servers available! Checking servers shunned for more than %u second%s\n", hid, max_wait_sec, max_wait_sec == 1 ? "" : "s");
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
@@ -2817,7 +2884,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								}
 							} else {
 								if (max_lag_ms >= 0) {
-									if (max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+									if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
 										sum+=mysrvc->weight;
 										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
 										mysrvcCandidates[num_candidates]=mysrvc;
@@ -2881,7 +2948,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
 		if (sess->thread->variables.min_num_servers_lantency_awareness) {
-			if (num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
+			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
 				unsigned int servers_with_latency = 0;
 				unsigned int total_latency_us = 0;
 				// scan and verify that all servers have some latency
@@ -2961,11 +3028,67 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 
 //MySrvC * MySrvList::idx(unsigned int i) { return (MySrvC *)servers->index(i); }
 
+void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn) {
+	char *schema = client_conn->userinfo->schemaname;
+	MySQL_Connection * conn=NULL;
+	unsigned int k;
+	for (k = start;  k < end; k++) {
+		conn = (MySQL_Connection *)conns->index(k);
+		if (conn->match_tracked_options(client_conn)) {
+			if (connection_quality_level == 0) {
+				// this is our best candidate so far
+				connection_quality_level = 1;
+				conn_found_idx = k;
+			}
+			if (conn->requires_CHANGE_USER(client_conn)==false) {
+				if (connection_quality_level == 1) {
+					// this is our best candidate so far
+					connection_quality_level = 2;
+					conn_found_idx = k;
+				}
+				unsigned int cnt_match = 0; // number of matching session variables
+				unsigned int not_match = 0; // number of not matching session variables
+				cnt_match = conn->number_of_matching_session_variables(client_conn, not_match);
+				if (strcmp(conn->userinfo->schemaname,schema)==0) {
+					cnt_match++;
+				} else {
+					not_match++;
+				}
+				if (not_match==0) {
+					// it seems we found the perfect connection
+					number_of_matching_session_variables = cnt_match;
+					connection_quality_level = 3;
+					conn_found_idx = k;
+					return; // exit immediately, we found the perfect connection
+				} else {
+					// we didn't find the perfect connection
+					// but maybe is better than what we have so far?
+					if (cnt_match > number_of_matching_session_variables) {
+						// this is our best candidate so far
+						number_of_matching_session_variables = cnt_match;
+						conn_found_idx = k;
+					}
+				}
+			}
+		}
+	}
+}
+
+
+
 MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
+	unsigned int conn_found_idx;
 	unsigned int l=conns_length();
+	unsigned int connection_quality_level = 0;
 	bool needs_warming = false;
+	// connection_quality_level:
+	// 0 : not found any good connection, tracked options are not OK
+	// 1 : tracked options are OK , but CHANGE USER is required
+	// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
+	// 3 : tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
+	unsigned int number_of_matching_session_variables = 0; // this includes session variables AND schema
 	if (mysql_thread___connection_warming) {
 		unsigned int total_connections = mysrvc->ConnectionsFree->conns_length()+mysrvc->ConnectionsUsed->conns_length();
 		unsigned int expected_warm_connections = mysql_thread___free_connections_pct*mysrvc->max_connections/100;
@@ -2980,53 +3103,25 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			i=fastrand()%l;
 		}
 		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
-			// try to match schemaname AND username
-			char *schema = sess->client_myds->myconn->userinfo->schemaname;
-			char *username = sess->client_myds->myconn->userinfo->username;
 			MySQL_Connection * client_conn = sess->client_myds->myconn;
-			bool conn_found = false;
-			unsigned int k;
-			unsigned int options_matching_idx;
-			bool options_matching_found = false;
-			for (k = i; conn_found == false && k < l; k++) {
-				conn = (MySQL_Connection *)conns->index(k);
-				if (conn->match_tracked_options(client_conn)) {
-					if (options_matching_found == false) {
-						options_matching_found = true;
-						options_matching_idx = k;
-					}
-					if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
-						conn_found = true;
-						i = k;
-					}
-				}
+			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
+			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
+				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			}
-			if (conn_found == false ) {
-				for (k = 0; conn_found == false && k < i; k++) {
-					conn = (MySQL_Connection *)conns->index(k);
-					if (conn->match_tracked_options(client_conn)) {
-						if (options_matching_found == false) {
-							options_matching_found = true;
-							options_matching_idx = k;
-						}
-						if (strcmp(conn->userinfo->schemaname,schema)==0 && strcmp(conn->userinfo->username,username)==0) {
-							conn_found = true;
-							i = k;
-						}
-					}
-				}
-			}
-			if (conn_found == true) {
-				conn=(MySQL_Connection *)conns->remove_index_fast(i);
-			} else {
-				if (options_matching_found == false) {
+			// connection_quality_level:
+			// 1 : tracked options are OK , but CHANGE USER is required
+			// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
+			switch (connection_quality_level) {
+				case 0: // not found any good connection, tracked options are not OK
 					// we must create a new connection
 					conn = new MySQL_Connection();
 					conn->parent=mysrvc;
 					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
-				} else {
+					break;
+				case 1: //tracked options are OK , but CHANGE USER is required
 					// we may consider creating a new connection
+					{
 					unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
 					unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
 					if ((conns_used > conns_free) && (mysrvc->max_connections > (conns_free/2 + conns_used/2)) ) {
@@ -3035,9 +3130,18 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 						__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
 					} else {
-						conn=(MySQL_Connection *)conns->remove_index_fast(i);
+						conn=(MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
 					}
-				}
+					}
+					break;
+				case 2: // tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
+				case 3: // tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
+					// here we return the best connection we have, no matter if connection_quality_level is 2 or 3
+					conn=(MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
+					break;
+				default: // this should never happen
+					assert(0);
+					break;
 			}
 		} else {
 			conn=(MySQL_Connection *)conns->remove_index_fast(i);
@@ -3096,10 +3200,15 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			// overall, the backend seems healthy and so it is the connection. Try to reset it
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
-			to_del=false;
-			//c->userinfo->set(mysql_thread___monitor_username,mysql_thread___monitor_password,mysql_thread___default_schema,NULL);
-			queue.add(c);
+			int myerr=mysql_errno(c->mysql);
+			if (myerr >= 2000 && myerr < 3000) {
+				// client library error . We must not try to save the connection
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Not trying to reset MySQL_Connection %p, server %s:%d . Error code %d\n", c, mysrvc->address, mysrvc->port, myerr);
+			} else {
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Trying to reset MySQL_Connection %p, server %s:%d\n", c, mysrvc->address, mysrvc->port);
+				to_del=false;
+				queue.add(c);
+			}
 		} else {
 		// the connection seems health, but we are trying to destroy it
 		// probably because there is a long running query
@@ -3173,8 +3282,24 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 //						||
 						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
 					) {
-						proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
-						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						// always increase the counter
+						mysrvc->cur_replication_lag_count += 1;
+						if (mysrvc->cur_replication_lag_count >= mysql_thread___monitor_replication_lag_count) {
+							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
+							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						} else {
+							proxy_info(
+								"Not shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d' < replication_lag_count: '%d'\n",
+								address,
+								port,
+								myhgc->hid,
+								current_replication_lag,
+								mysrvc->cur_replication_lag_count,
+								mysql_thread___monitor_replication_lag_count
+							);
+						}
+					} else {
+						mysrvc->cur_replication_lag_count = 0;
 					}
 				} else {
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
@@ -3185,6 +3310,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 						) {
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
+							mysrvc->cur_replication_lag_count = 0;
 						}
 					}
 				}
@@ -3440,7 +3566,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 	return result;
 }
 
-void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		const auto& cur_val = counter_id->second->Value();
@@ -3450,16 +3576,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::stri
 		m_map.insert(
 			{
 				endpoint_id,
-				std::addressof(new_counter->Add({
-					{"endpoint", endpoint_addr + ":" + endpoint_port},
-					{"hostgroup", hostgroup_id }
-				}))
+				std::addressof(new_counter->Add(labels))
 			}
 		);
 	}
 }
 
-void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		counter_id->second->Set(value);
@@ -3468,10 +3591,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string
 		m_map.insert(
 			{
 				endpoint_id,
-				std::addressof(new_counter->Add({
-					{"endpoint", endpoint_addr + ":" + endpoint_port},
-					{"hostgroup", hostgroup_id }
-				}))
+				std::addressof(new_counter->Add(labels))
 			}
 		);
 	}
@@ -3487,43 +3607,57 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			std::string endpoint_port = std::to_string(mysrvc->port);
 			std::string hostgroup_id = std::to_string(myhgc->hid);
 			std::string endpoint_id = hostgroup_id + ":" + endpoint_addr + ":" + endpoint_port;
+			const std::map<std::string, std::string> common_labels {
+				{"endpoint", endpoint_addr + ":" + endpoint_port},
+				{"hostgroup", hostgroup_id }
+			};
 
 			// proxysql_connection_pool_bytes_data_recv metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> recv_pool_bytes_labels = common_labels;
+			recv_pool_bytes_labels.insert({"traffic_flow", "recv"});
+			p_update_connection_pool_update_counter(endpoint_id, recv_pool_bytes_labels,
 				status.p_conn_pool_bytes_data_recv_map, mysrvc->bytes_recv, p_hg_dyn_counter::conn_pool_bytes_data_recv);
 
 			// proxysql_connection_pool_bytes_data_sent metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> sent_pool_bytes_labels = common_labels;
+			sent_pool_bytes_labels.insert({"traffic_flow", "sent"});
+			p_update_connection_pool_update_counter(endpoint_id, sent_pool_bytes_labels,
 				status.p_conn_pool_bytes_data_sent_map, mysrvc->bytes_sent, p_hg_dyn_counter::conn_pool_bytes_data_sent);
 
 			// proxysql_connection_pool_conn_err metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> pool_conn_err_labels = common_labels;
+			pool_conn_err_labels.insert({"status", "err"});
+			p_update_connection_pool_update_counter(endpoint_id, pool_conn_err_labels,
 				status.p_connection_pool_conn_err_map, mysrvc->connect_ERR, p_hg_dyn_counter::connection_pool_conn_err);
 
-			// proxysql_connection_pool_conn_free metric
-			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
-				status.p_connection_pool_conn_free_map, mysrvc->ConnectionsFree->conns_length(), p_hg_dyn_gauge::connection_pool_conn_free);
-
-
 			// proxysql_connection_pool_conn_ok metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> pool_conn_ok_labels = common_labels;
+			pool_conn_ok_labels.insert({"status", "ok"});
+			p_update_connection_pool_update_counter(endpoint_id, pool_conn_ok_labels,
 				status.p_connection_pool_conn_ok_map, mysrvc->connect_OK, p_hg_dyn_counter::connection_pool_conn_ok);
 
+			// proxysql_connection_pool_conn_free metric
+			std::map<std::string, std::string> pool_conn_free_labels = common_labels;
+			pool_conn_free_labels.insert({"status", "free"});
+			p_update_connection_pool_update_gauge(endpoint_id, pool_conn_free_labels,
+				status.p_connection_pool_conn_free_map, mysrvc->ConnectionsFree->conns_length(), p_hg_dyn_gauge::connection_pool_conn_free);
+
 			// proxysql_connection_pool_conn_used metric
-			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			std::map<std::string, std::string> pool_conn_used_labels = common_labels;
+			pool_conn_used_labels.insert({"status", "used"});
+			p_update_connection_pool_update_gauge(endpoint_id, pool_conn_used_labels,
 				status.p_connection_pool_conn_used_map, mysrvc->ConnectionsUsed->conns_length(), p_hg_dyn_gauge::connection_pool_conn_used);
 
 			// proxysql_connection_pool_latency_us metric
-			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
 				status.p_connection_pool_latency_us_map, mysrvc->current_latency_us, p_hg_dyn_gauge::connection_pool_latency_us);
 
-
 			// proxysql_connection_pool_queries metric
-			p_update_connection_pool_update_counter(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			p_update_connection_pool_update_counter(endpoint_id, common_labels,
 				status.p_connection_pool_queries_map, mysrvc->queries_sent, p_hg_dyn_counter::connection_pool_queries);
 
 			// proxysql_connection_pool_status metric
-			p_update_connection_pool_update_gauge(endpoint_id, endpoint_addr, endpoint_port, hostgroup_id,
+			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
 				status.p_connection_pool_status_map, mysrvc->status + 1, p_hg_dyn_gauge::connection_pool_status);
 		}
 	}
@@ -4549,7 +4683,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 		char *query=NULL;
 		char *q=NULL;
 		char *error=NULL;
-		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 		query=(char *)malloc(strlen(q)+256);
 		sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4617,7 +4751,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 			resultset=NULL;
 		}
 		if (info->writer_is_also_reader==2) {
-			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 			query=(char *)malloc(strlen(q)+256);
 			sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4746,7 +4880,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d";
+	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status=0";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 	sprintf(query,q,_hostname,_port);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -4797,7 +4931,13 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				mydb->execute(query);
 				//free(query);
 			} else {
-				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d";
+				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
+				sprintf(query,q,info->offline_hostgroup,_hostname,_port,_writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
+				mydb->execute(query);
+				q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d)";
+				sprintf(query,q,_hostname,_port, info->backup_writer_hostgroup, info->reader_hostgroup);
+				mydb->execute(query);
+				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d AND hostgroup_id = %d";
 				sprintf(query,q,_hostname,_port,_writer_hostgroup);
 				mydb->execute(query);
 			}
@@ -4980,7 +5120,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
+	q=(char *)"SELECT hostgroup_id,status FROM mysql_servers JOIN mysql_galera_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
 	mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -5019,7 +5159,9 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				SQLite3_row *r=*it;
 				int hostgroup=atoi(r->fields[0]);
 				if (hostgroup==_writer_hostgroup) {
-					found_writer=true;
+					int status=atoi(r->fields[1]);
+					if (status==0)
+						found_writer=true;
 				}
 				if (read_HG>=0) {
 					if (hostgroup==read_HG) {
@@ -5199,7 +5341,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 		char *query=NULL;
 		char *q=NULL;
 		char *error=NULL;
-		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 		query=(char *)malloc(strlen(q)+256);
 		sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -5221,15 +5363,35 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
+					int to_keep = info->max_writers;
 					if (GloMTH->variables.hostgroup_manager_verbose > 1) {
 						proxy_info("Galera: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
 					}
-					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
+					//for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
+					// note: we change the iterator from reverse_iterator to forward iterator
+					for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 						SQLite3_row *r=*it;
-						if (to_move) {
-							int hostgroup=atoi(r->fields[0]);
-							if (hostgroup==info->writer_hostgroup) {
-								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+						int hostgroup=atoi(r->fields[0]);
+						if (hostgroup==info->writer_hostgroup) {
+							if (to_keep) {
+								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0 WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
+								sprintf(query,q,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+								mydb->execute(query);
+								free(query);
+								to_keep--;
+								continue;
+							}
+							if (to_move) {
+								// if the  server is already in writer hostgroup, we set to shunned #2656
+								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=1 WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
+								sprintf(query,q,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+								mydb->execute(query);
+								free(query);
+								//q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								// we copy the server from the writer hostgroup in the backup writer hostgroup #2656
+								q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, weight, 0, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
 								sprintf(query,q,info->backup_writer_hostgroup,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
 								mydb->execute(query);
@@ -5252,6 +5414,9 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 									q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 									query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
 									sprintf(query,q,info->writer_hostgroup,info->backup_writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+									if (GloMTH->variables.hostgroup_manager_verbose) {
+										proxy_info("Galera: %s\n", query);
+									}
 									mydb->execute(query);
 									free(query);
 									to_move--;
@@ -5328,7 +5493,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 			resultset=NULL;
 		}
 		if (info->writer_is_also_reader==2) {
-			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC";
+			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 			query=(char *)malloc(strlen(q)+256);
 			sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -6396,7 +6561,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			sprintf(full_hostname, "%s%s", _server_id, domain_name);
 			bool found = false;
 			GloAdmin->mysql_servers_wrlock();
-			unsigned int max_max_connections = 1000;
+			unsigned int max_max_connections = 10;
 			unsigned int max_use_ssl = 0;
 			wrlock();
 			MyHGC *myhgc=MyHGC_lookup(_rhid);

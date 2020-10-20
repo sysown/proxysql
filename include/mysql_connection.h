@@ -18,6 +18,7 @@ using json = nlohmann::json;
 #define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 #define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
+#define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 
 class Variable {
 public:
@@ -104,6 +105,11 @@ class MySQL_Connection {
 	MySrvC *parent;
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;
+	/**
+	 * @brief Keeps tracks of the 'server_status'. Do not confuse with the 'server_status' from the
+	 *  'MYSQL' connection itself. This flag keeps track of the configured server status from the
+	 *  parent 'MySrvC'.
+	 */
 	enum MySerStatus server_status; // this to solve a side effect of #774
 
 	bytes_stats_t bytes_info; // bytes statistics
@@ -114,6 +120,10 @@ class MySQL_Connection {
 	} statuses;
 
 	unsigned long largest_query_length;
+	/**
+	 * @brief This represents the internal knowledge of ProxySQL about the connection. It keeps track of those
+	 *  states which *are not reflected* into 'server_status', but are relevant for connection handling.
+	 */
 	uint32_t status_flags;
 	int async_exit_status; // exit status of MariaDB Client Library Non blocking API
 	int interr;	// integer return
@@ -124,9 +134,6 @@ class MySQL_Connection {
 	bool async_fetch_row_start;
 	bool send_quit;
 	bool reusable;
-	bool has_prepared_statement;
-	bool processing_prepared_statement_prepare;
-	bool processing_prepared_statement_execute;
 	bool processing_multi_statement;
 	bool multiplex_delayed;
 	bool unknown_transaction_status;
@@ -138,28 +145,10 @@ class MySQL_Connection {
 	bool set_no_backslash_escapes(bool);
 	unsigned int set_charset(unsigned int, enum charset_action);
 
-	void set_status_transaction(bool);
-	void set_status_compression(bool);
-	void set_status_get_lock(bool);
-	void set_status_lock_tables(bool);
-	void set_status_temporary_table(bool);
-	void set_status_no_backslash_escapes(bool);
-	void set_status_prepared_statement(bool);
-	void set_status_user_variable(bool);
-	void set_status_no_multiplex(bool);
+	void set_status(bool set, uint32_t status_flag);
 	void set_status_sql_log_bin0(bool);
-	void set_status_found_rows(bool);
-	bool get_status_transaction();
-	bool get_status_compression();
-	bool get_status_get_lock();
-	bool get_status_lock_tables();
-	bool get_status_temporary_table();
-	bool get_status_no_backslash_escapes();
-	bool get_status_prepared_statement();
-	bool get_status_user_variable();
-	bool get_status_no_multiplex();
+	bool get_status(uint32_t status_flag);
 	bool get_status_sql_log_bin0();
-	bool get_status_found_rows();
 	void connect_start();
 	void connect_cont(short event);
 	void change_user_start();
@@ -226,7 +215,9 @@ class MySQL_Connection {
 	bool get_gtid(char *buff, uint64_t *trx_id);
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
-	bool match_tracked_options(MySQL_Connection *c);
+	bool match_tracked_options(const MySQL_Connection *c);
+	bool requires_CHANGE_USER(const MySQL_Connection *client_conn);
+	unsigned int number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return mysql ? mysql->thread_id : 0; }
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */

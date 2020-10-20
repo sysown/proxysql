@@ -1,0 +1,13 @@
+diff --git a/src/httpserver/http_resource.hpp b/src/httpserver/http_resource.hpp
+index 7841b96..fd6e6ea 100644
+--- a/src/httpserver/http_resource.hpp
++++ b/src/httpserver/http_resource.hpp
+@@ -217,7 +217,7 @@ class http_resource
+          * Copy constructor
+         **/
+         http_resource(const http_resource& b) = default;
+-        http_resource(http_resource&& b) noexcept = default;
++        http_resource(http_resource&& b) = default;
+         http_resource& operator=(const http_resource& b) = default;
+         http_resource& operator=(http_resource&& b) = default;
+

@@ -9,8 +9,8 @@ Release: 1
 License: GPL+
 Group: Development/Tools
 SOURCE0 : %{name}-%{version}.tar.gz
-URL: http://www.proxysql.com/
-
+URL: https://proxysql.com/
+Requires: gnutls
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 
 %description
@@ -84,6 +84,7 @@ fi
 %config(noreplace) %attr(640,root,%{name}) %{_sysconfdir}/logrotate.d/%{name}
 %{_bindir}/*
 %{_sysconfdir}/systemd/system/%{name}.service
+%{_sysconfdir}/systemd/system/%{name}-initial.service
 /usr/share/proxysql/tools/proxysql_galera_checker.sh
 /usr/share/proxysql/tools/proxysql_galera_writer.pl
 

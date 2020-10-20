@@ -560,85 +560,111 @@ using mon_gauge_tuple =
 using mon_counter_vector = std::vector<mon_counter_tuple>;
 using mon_gauge_vector = std::vector<mon_gauge_tuple>;
 
+/**
+ * @brief Metrics map holding the metrics for the 'MySQL_Monitor' module.
+ *
+ * @note Some metrics in this map, share a common "id name", because
+ *  they differ only by label, because of this, HELP is shared between
+ *  them. For better visual identification of this groups they are
+ *  sepparated using a line separator comment.
+ */
 const std::tuple<mon_counter_vector, mon_gauge_vector>
 mon_metrics_map = std::make_tuple(
 	mon_counter_vector {
 		std::make_tuple (
 			p_mon_counter::mysql_monitor_workers_started,
-			"proxysql_mysql_monitor_workers_started",
+			"proxysql_mysql_monitor_workers_started_total",
 			"Number of MySQL Monitor workers started.",
 			metric_tags {}
 		),
+
+		// ====================================================================
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_connect_check_ok,
-			"proxysql_mysql_monitor_connect_check_ok",
-			"",
-			metric_tags {}
+			"proxysql_mysql_monitor_connect_check_total",
+			"Number of (succeed|failed) 'connect checks' from 'monitor_connect_thread'.",
+			metric_tags {
+				{ "status", "ok" }
+			}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_connect_check_err,
-			"proxysql_mysql_monitor_connect_check_err",
-			"",
-			metric_tags {}
+			"proxysql_mysql_monitor_connect_check_total",
+			"Number of (succeed|failed) 'connect checks' from 'monitor_connect_thread'.",
+			metric_tags {
+				{ "status", "err" }
+			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_ping_check_ok,
-			"proxysql_mysql_monitor_ping_check_ok",
-			"",
-			metric_tags {}
+			"proxysql_mysql_monitor_ping_check_total",
+			"Number of (succeed|failed) 'ping checks' from 'monitor_ping_thread'.",
+			metric_tags {
+				{ "status", "ok" }
+			}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_ping_check_err,
-			"proxysql_mysql_monitor_ping_check_err",
-			"",
-			metric_tags {}
+			"proxysql_mysql_monitor_ping_check_total",
+			"Number of (succeed|failed) 'ping checks' from 'monitor_ping_thread'.",
+			metric_tags {
+				{ "status", "err" }
+			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_read_only_check_ok,
-			"proxysql_mysql_monitor_read_only_check_ok",
-			"",
-			metric_tags {}
+			"proxysql_mysql_monitor_read_only_check_total",
+			"Number of (succeed|failed) 'read only checks' from 'monitor_read_only_thread'.",
+			metric_tags {
+				{ "status", "ok" }
+			}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_read_only_check_err,
-			"proxysql_mysql_monitor_read_only_check_err",
-			"",
-			metric_tags {}
+			"proxysql_mysql_monitor_read_only_check_total",
+			"Number of (succeed|failed) 'read only checks' from 'monitor_read_only_thread'.",
+			metric_tags {
+				{ "status", "err" }
+			}
 		),
+		// ====================================================================
+
+		// ====================================================================
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_replication_lag_check_ok,
-			"proxysql_mysql_monitor_replication_lag_check_ok",
-			"",
-			metric_tags {}
+			"proxysql_mysql_monitor_replication_lag_check_total",
+			"Number of (succeed|failed)'replication lag checks' from 'monitor_replication_lag_thread'.",
+			metric_tags {
+				{ "status", "ok" }
+			}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_counter::mysql_monitor_replication_lag_check_err,
-			"proxysql_mysql_monitor_replication_lag_check_err",
-			"",
-			metric_tags {}
+			"proxysql_mysql_monitor_replication_lag_check_total",
+			"Number of (succeed|failed)'replication lag checks' from 'monitor_replication_lag_thread'.",
+			metric_tags {
+				{ "status", "err" }
+			}
 		)
+		// ====================================================================
 	},
 	mon_gauge_vector {
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_gauge::mysql_monitor_workers,
 			"proxysql_mysql_monitor_workers",
-			"",
+			"Number of monitor workers threads.",
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful help
 			p_mon_gauge::mysql_monitor_workers_aux,
 			"proxysql_mysql_monitor_workers_aux",
-			"",
+			"Number of auxiliary monitor threads.",
 			metric_tags {}
 		)
 	}
@@ -1460,16 +1486,6 @@ __exit_monitor_group_replication_thread:
 				}
 				goto __end_process_group_replication_result2;
 			}
-/*
-			if (num_fields!=3) {
-				proxy_error("Incorrect number of fields, please report a bug\n");
-				goto __end_process_group_replication_result;
-			}
-			if (num_rows!=1) {
-				proxy_error("Incorrect number of rows, please report a bug\n");
-				goto __end_process_group_replication_result;
-			}
-*/
 			MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 			if (!strcasecmp(row[0],"YES")) {
 				viable_candidate=true;
@@ -1486,7 +1502,6 @@ __exit_monitor_group_replication_thread:
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
-__end_process_group_replication_result:
 		//proxy_info("GR: %s:%d , viable=%s , ro=%s, trx=%ld, err=%s\n", mmsd->hostname, mmsd->port, (viable_candidate ? "YES": "NO") , (read_only ? "YES": "NO") , transactions_behind, ( mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "") );
 		if (mmsd->mysql_error_msg) {
 			//proxy_warning("GR: %s:%d , viable=%s , ro=%s, trx=%ld, err=%s\n", mmsd->hostname, mmsd->port, (viable_candidate ? "YES": "NO") , (read_only ? "YES": "NO") , transactions_behind, ( mmsd->mysql_error_msg ? mmsd->mysql_error_msg : "") );
@@ -1675,10 +1690,11 @@ void * monitor_galera_thread(void *arg) {
 	unsigned long long start_time=mysql_thr->curtime;
 
 #ifdef DEBUG
-	MYSQL *mysqlcopy = NULL;
+	MYSQL *mysqlcopy __attribute__((unused)) = NULL;
 #endif // DEBUG
 
 	mmsd->t1=start_time;
+	mmsd->interr=0; // reset the value
 
 	bool crc=false;
 	if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
@@ -1773,8 +1789,19 @@ void * monitor_galera_thread(void *arg) {
 		}
 	} else {
 		if (crc==false) {
+#ifdef TEST_GALERA
+			if ( rand()%3 == 0) { // drop the connection once every 3 checks
+				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
+				mysql_close(mmsd->mysql);
+				mmsd->mysql=NULL;
+			} else {
+				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
+				mmsd->mysql=NULL;
+			}
+#else
 			GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 			mmsd->mysql=NULL;
+#endif // TEST_GALERA
 		}
 	}
 
@@ -1814,16 +1841,6 @@ __exit_monitor_galera_thread:
 				}
 				goto __end_process_galera_result2;
 			}
-/*
-			if (num_fields!=7) {
-				proxy_error("Incorrect number of fields, please report a bug\n");
-				goto __end_process_galera_result;
-			}
-			if (num_rows!=1) {
-				proxy_error("Incorrect number of rows, please report a bug\n");
-				goto __end_process_galera_result;
-			}
-*/
 			MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 			if (row[0]) {
 				wsrep_local_state = atoi(row[0]);
@@ -1869,7 +1886,6 @@ __exit_monitor_galera_thread:
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
-__end_process_galera_result:
 		if (mmsd->mysql_error_msg) {
 		}
 		unsigned long long time_now=realtime_time();
@@ -2055,7 +2071,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	mysql_thr->refresh_variables();
 
 #ifdef DEBUG
-	MYSQL *mysqlcopy = NULL;
+	MYSQL *mysqlcopy __attribute__((unused)) = NULL;
 #endif // DEBUG
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
@@ -2141,8 +2157,8 @@ void * monitor_replication_lag_thread(void *arg) {
 	if (mmsd->interr) { // replication lag check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-		unsigned long long now=monotonic_time();
 #ifdef DEBUG
+		unsigned long long now=monotonic_time();
 		proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (now-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 #endif // DEBUG
 		if (mmsd->mysql) {
@@ -2833,7 +2849,6 @@ __sleep_monitor_read_only:
 void * MySQL_Monitor::monitor_group_replication() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
-	unsigned int latest_table_servers_version=0;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -2963,7 +2978,6 @@ __sleep_monitor_group_replication:
 void * MySQL_Monitor::monitor_galera() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
-	unsigned int latest_table_servers_version=0;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
@@ -3262,8 +3276,8 @@ __monitor_run:
 			My_Conn_Pool->purge_some_connections();
 		}
 		usleep(200000);
-		int qsize=queue->size();
-		if (qsize > mysql_thread___monitor_threads_queue_maxsize/4) {
+		unsigned int qsize=queue->size();
+		if (qsize > (unsigned int)mysql_thread___monitor_threads_queue_maxsize/4) {
 			proxy_warning("Monitor queue too big: %d\n", qsize);
 			unsigned int threads_max = (unsigned int)mysql_thread___monitor_threads_max;
 			if (threads_max > num_threads) {
@@ -3286,7 +3300,7 @@ __monitor_run:
 			// check again. Do we need also aux threads?
 			usleep(50000);
 			qsize=queue->size();
-			if (qsize > mysql_thread___monitor_threads_queue_maxsize) {
+			if (qsize > (unsigned int)mysql_thread___monitor_threads_queue_maxsize) {
 				qsize=qsize/50;
 				unsigned int threads_max = (unsigned int)mysql_thread___monitor_threads_max;
 				if ((qsize + num_threads) > (threads_max * 2)) { // allow a small bursts
@@ -3297,11 +3311,11 @@ __monitor_run:
 					ConsumerThread **threads_aux= (ConsumerThread **)malloc(sizeof(ConsumerThread *)*qsize);
 					aux_threads = qsize;
 					started_threads += aux_threads;
-					for (int i=0; i<qsize; i++) {
+					for (unsigned int i=0; i<qsize; i++) {
 						threads_aux[i] = new ConsumerThread(*queue, 245);
 						threads_aux[i]->start(2048,false);
 					}
-					for (int i=0; i<qsize; i++) {
+					for (unsigned int i=0; i<qsize; i++) {
 						threads_aux[i]->join();
 						delete threads_aux[i];
 					}
@@ -3721,7 +3735,7 @@ char * MySQL_Monitor::galera_find_last_node(int writer_hostgroup) {
 	std::string s = "";
 	for (it2=GloMyMon->Galera_Hosts_Map.begin(); it2!=GloMyMon->Galera_Hosts_Map.end(); ++it2) {
 		node=it2->second;
-		if (node->writer_hostgroup == writer_hostgroup) {
+		if (node->writer_hostgroup == (unsigned int)writer_hostgroup) {
 			Galera_status_entry_t * st = node->last_entry();
 			if (st) {
 				if (st->start_time >= curtime - ti) { // only consider recent checks
@@ -3764,7 +3778,7 @@ std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_
 	ti *= 2;
 	for (it2=GloMyMon->Galera_Hosts_Map.begin(); it2!=GloMyMon->Galera_Hosts_Map.end(); ++it2) {
 		node=it2->second;
-		if (node->writer_hostgroup == writer_hostgroup) {
+		if (node->writer_hostgroup == (unsigned int)writer_hostgroup) {
 			Galera_status_entry_t * st = node->last_entry();
 			if (st) {
 				if (st->start_time >= curtime - ti) { // only consider recent checks
@@ -3990,7 +4004,6 @@ AWS_Aurora_monitor_node::~AWS_Aurora_monitor_node() {
 bool AWS_Aurora_monitor_node::add_entry(AWS_Aurora_status_entry *ase) {
 	bool ret=false;
 	if (idx_last_entry==-1) ret=true;
-	int prev_last_entry=idx_last_entry;
 	idx_last_entry++;
 	if (idx_last_entry>=AWS_Aurora_Nentries) {
 		idx_last_entry=0;
@@ -4070,7 +4083,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	// count the number of hosts
 	for (std::vector<SQLite3_row *>::iterator it = GloMyMon->AWS_Aurora_Hosts_resultset->rows.begin() ; it != GloMyMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		if (atoi(r->fields[0]) == wHG) {
+		if (atoi(r->fields[0]) == (int)wHG) {
 			num_hosts++;
 			if (max_lag_ms == 0) {
 				max_lag_ms = atoi(r->fields[5]);
@@ -4092,7 +4105,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	host_def_t *hpa = (host_def_t *)malloc(sizeof(host_def_t)*num_hosts);
 	for (std::vector<SQLite3_row *>::iterator it = GloMyMon->AWS_Aurora_Hosts_resultset->rows.begin() ; it != GloMyMon->AWS_Aurora_Hosts_resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		if (atoi(r->fields[0]) == wHG) {
+		if (atoi(r->fields[0]) == (int)wHG) {
 			hpa[cur_host_idx].host = strdup(r->fields[2]);
 			hpa[cur_host_idx].port = atoi(r->fields[3]);
 			hpa[cur_host_idx].use_ssl = atoi(r->fields[4]);
@@ -4311,7 +4324,6 @@ __exit_monitor_aws_aurora_HG_thread:
 			AWS_Aurora_status_entry *ase_l = new AWS_Aurora_status_entry(time_now, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
 			if (mmsd->interr == 0 && mmsd->result) {
 				int num_fields=0;
-				int num_rows=0;
 				num_fields = mysql_num_fields(mmsd->result);
 				if (num_fields!=5) {
 					proxy_error("Incorrect number of fields, please report a bug\n");
@@ -4472,17 +4484,12 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 
 void * MySQL_Monitor::monitor_aws_aurora() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int latest_table_servers_version=0;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
 	mysql_thr->curtime=monotonic_time();
 	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
 	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-
-	unsigned long long t1;
-	unsigned long long t2;
-	unsigned long long next_loop_at=0;
 
 	uint64_t last_raw_checksum = 0;
 
@@ -4497,7 +4504,6 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
 		unsigned int glover;
-		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
@@ -4506,7 +4512,6 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
 			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
-			next_loop_at=0;
 		}
 
 		// if list of servers or HG or options has changed, triggers new checks
@@ -4515,7 +4520,6 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 		pthread_mutex_unlock(&aws_aurora_mutex);
 		if (new_raw_checksum != last_raw_checksum) {
 			proxy_info("Detected new/changed definition for AWS Aurora monitoring\n");
-			next_loop_at = 0;
 			last_raw_checksum = new_raw_checksum;
 			if (pthreads_array) {
 				// wait all threads to terminate
@@ -4540,7 +4544,7 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 					bool found = false;
 					// very simple search. Far from optimal, but assuming very few HGs it is fast enough
 					for (unsigned int i=0; i < hgs_num; i++) {
-						if (tmp_hgs_array[i] == wHG) {
+						if (tmp_hgs_array[i] == (unsigned int)wHG) {
 							found = true;
 						}
 					}
@@ -4728,7 +4732,6 @@ __exit_monitor_aws_aurora_thread:
 		AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
 		if (mmsd->interr == 0 && mmsd->result) {
 			int num_fields=0;
-			int num_rows=0;
 			num_fields = mysql_num_fields(mmsd->result);
 			if (num_fields!=5) {
 				proxy_error("Incorrect number of fields, please report a bug\n");
@@ -4813,7 +4816,7 @@ unsigned int MySQL_Monitor::estimate_lag(char* server_id, AWS_Aurora_status_entr
 	unsigned int mlag = 0;
 	unsigned int lag = 0;
 
-	for (int i = 1; i <= lag_num_checks; i++) {
+	for (unsigned int i = 1; i <= lag_num_checks; i++) {
 		if (!aase[idx] || !aase[idx]->host_statuses)
 			break;
 		for (auto hse : *(aase[idx]->host_statuses)) {
@@ -4831,8 +4834,8 @@ unsigned int MySQL_Monitor::estimate_lag(char* server_id, AWS_Aurora_status_entr
 }
 
 void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
-	unsigned int i = 0;
 #ifdef TEST_AURORA
+	unsigned int i = 0;
 	bool verbose = false;
 	unsigned int action_yes = 0;
 	unsigned int action_no = 0;

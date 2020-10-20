@@ -95,6 +95,9 @@ struct admin_metrics_map_idx {
 	};
 };
 
+// ProxySQL_Admin shared variables
+extern int admin__web_verbosity;
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
@@ -167,6 +170,7 @@ class ProxySQL_Admin {
 		int restapi_port_old;
 		bool web_enabled;
 		bool web_enabled_old;
+		int web_verbosity;
 		int web_port;
 		int web_port_old;
 		int p_memory_metrics_interval;
@@ -192,6 +196,8 @@ class ProxySQL_Admin {
 #ifdef DEBUG
 	void flush_debug_levels_runtime_to_database(SQLite3DB *db, bool replace);
 	int flush_debug_levels_database_to_runtime(SQLite3DB *db);
+	void flush_debug_filters_runtime_to_database(SQLite3DB *db);
+	void flush_debug_filters_database_to_runtime(SQLite3DB *db);
 #endif /* DEBUG */
 
 	void __insert_or_ignore_maintable_select_disktable();
@@ -284,9 +290,13 @@ class ProxySQL_Admin {
 	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
 	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
 #ifdef DEBUG
-	int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }
-	void save_debug_from_runtime() { return flush_debug_levels_runtime_to_database(admindb, true); }
-#endif /* DEBUG */
+	// these two following functions used to just call and return one function each
+	// this approach was replaced when we introduced debug filters
+	//int load_debug_to_runtime() { return flush_debug_levels_database_to_runtime(admindb); }
+	//void save_debug_from_runtime() { return flush_debug_levels_runtime_to_database(admindb, true); }
+	int load_debug_to_runtime();
+	void save_debug_from_runtime();
+#endif // DEBUG
 	void flush_mysql_users__from_memory_to_disk();
 	void flush_mysql_users__from_disk_to_memory();
 	void flush_mysql_servers__from_memory_to_disk();

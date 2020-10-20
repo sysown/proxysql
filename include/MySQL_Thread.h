@@ -130,6 +130,7 @@ class MySQL_Thread
 	MySQL_Connection **my_idle_conns;
   bool processing_idles;
 	bool maintenance_loop;
+	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
 	PtrArray *cached_connections;
 
@@ -150,10 +151,10 @@ class MySQL_Thread
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();
+	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
 #endif // IDLE_THREADS
 
 	unsigned int find_session_idx_in_mysql_sessions(MySQL_Session *sess);
-	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
 	bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
 	void handle_mirror_queue_mysql_sessions();
 	void handle_kill_queues();
@@ -304,7 +305,6 @@ struct p_th_counter {
 		queries_with_max_lag_ms__delayed,
 		queries_with_max_lag_ms__total_wait_time_us,
 		mysql_unexpected_frontend_com_quit,
-		client_connections_hostgroup_locked,
 		hostgroup_locked_set_cmds,
 		hostgroup_locked_queries,
 		mysql_unexpected_frontend_packets,
@@ -321,6 +321,7 @@ struct p_th_gauge {
 	enum metric {
 		active_transactions = 0,
 		client_connections_non_idle,
+		client_connections_hostgroup_locked,
 		mysql_backend_buffers_bytes,
 		mysql_frontend_buffers_bytes,
 		mysql_session_internal_bytes,
@@ -365,17 +366,25 @@ class MySQL_Threads_Handler
 		int monitor_history;
 		int monitor_connect_interval;
 		int monitor_connect_timeout;
+		//! Monitor ping interval. Unit: 'ms'.
 		int monitor_ping_interval;
 		int monitor_ping_max_failures;
+		//! Monitor ping timeout. Unit: 'ms'.
 		int monitor_ping_timeout;
+		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
+		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_timeout;
 		int monitor_read_only_max_timeout_count;
 		bool monitor_enabled;
+		//! ProxySQL session wait timeout. Unit: 'ms'.
 		bool monitor_wait_timeout;
 		bool monitor_writer_is_also_reader;
+		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;
+		//! Read only check timeout. Unit: 'ms'.
 		int monitor_replication_lag_timeout;
+		int monitor_replication_lag_count;
 		int monitor_groupreplication_healthcheck_interval;
 		int monitor_groupreplication_healthcheck_timeout;
 		int monitor_groupreplication_healthcheck_max_timeout_count;
@@ -403,6 +412,7 @@ class MySQL_Threads_Handler
 		int connect_retries_delay;
 		int connection_delay_multiplex_ms;
 		int connection_max_age_ms;
+		int connect_timeout_client;
 		int connect_timeout_server;
 		int connect_timeout_server_max;
 		int free_connections_pct;
@@ -416,7 +426,7 @@ class MySQL_Threads_Handler
 		char *interfaces;
 		char *server_version;
 		char *keep_multiplexing_variables;
-		unsigned int default_charset;
+		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 		unsigned int handle_unknown_charset;
 		bool servers_stats;
 		bool commands_stats;
@@ -445,6 +455,7 @@ class MySQL_Threads_Handler
 		bool use_tcp_keepalive;
 		int tcp_keepalive_time;
 		int throttle_connections_per_sec_to_hostgroup;
+		int max_transaction_idle_time;
 		int max_transaction_time;
 		int threshold_query_length;
 		int threshold_resultset_size;
@@ -505,6 +516,7 @@ class MySQL_Threads_Handler
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
+		int threads_initialized = 0;
 		/// Prometheus metrics arrays
 		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
 		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
@@ -549,7 +561,8 @@ class MySQL_Threads_Handler
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
-	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx);
+	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
+	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_gauge::metric m_idx, unsigned long long conv = 0);
 	unsigned int get_active_transations();
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();

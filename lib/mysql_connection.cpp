@@ -10,27 +10,33 @@
 #include "query_processor.h"
 #include "MySQL_Variables.h"
 
+#include <atomic>
+
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 	if (idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
-		if (!value)
+		if (!value) {
 			ci = proxysql_find_charset_name(mysql_tracked_variables[idx].default_value);
-		else
+		} else if (strcasecmp("NULL", value) && strcasecmp("binary", value)) {
 			ci = proxysql_find_charset_nr(atoi(value));
+		}
 		if (!ci) {
 			if (idx == SQL_CHARACTER_SET_RESULTS && (!strcasecmp("NULL", value) || !strcasecmp("binary", value))) {
-				j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
-			}
-			else {
+				if (!strcasecmp("NULL", value)) {
+					j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = "";
+				} else {
+					j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
+				}
+			} else {
 				proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
 				assert(0);
 			}
+		} else {
+			j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
 		}
-
-		j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
 	} else if (idx == SQL_CHARACTER_SET_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		if (!value)
@@ -60,25 +66,31 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 void Variable::fill_client_internal_session(json &j, int idx) {
 	if (idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
-		if (!value)
+		if (!value) {
 			ci = proxysql_find_charset_name(mysql_tracked_variables[idx].default_value);
-		else
+		} else if (strcasecmp("NULL", value) && strcasecmp("binary", value)) {
 			ci = proxysql_find_charset_nr(atoi(value));
+		}
 		if (!ci) {
 			if (idx == SQL_CHARACTER_SET_RESULTS && (!strcasecmp("NULL", value) || !strcasecmp("binary", value))) {
-				j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
-			}
-			else {
+				if (!strcasecmp("NULL", value)) {
+					j["conn"][mysql_tracked_variables[idx].internal_variable_name] = "";
+				} else {
+					j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
+				}
+			} else {
 				proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
 				assert(0);
 			}
+		} else {
+			j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
 		}
-
-		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
-
 	} else if (idx == SQL_CHARACTER_SET_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
-		ci = proxysql_find_charset_nr(atoi(value));
+		if (!value)
+			ci = proxysql_find_charset_collate(mysql_tracked_variables[idx].default_value);
+		else
+			ci = proxysql_find_charset_nr(atoi(value));
 		j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
 	} else if (idx == SQL_COLLATION_CONNECTION) {
 		const MARIADB_CHARSET_INFO *ci = NULL;
@@ -283,9 +295,6 @@ MySQL_Connection::MySQL_Connection() {
 	myds=NULL;
 	inserted_into_pool=0;
 	reusable=false;
-	has_prepared_statement=false;
-	processing_prepared_statement_prepare=false;
-	processing_prepared_statement_execute=false;
 	parent=NULL;
 	userinfo=new MySQL_Connection_userinfo();
 	fd=-1;
@@ -447,89 +456,18 @@ bool MySQL_Connection::is_expired(unsigned long long timeout) {
 	return false;
 }
 
-void MySQL_Connection::set_status_transaction(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_TRANSACTION;
+void MySQL_Connection::set_status(bool set, uint32_t status_flag) {
+	if (set) {
+		this->status_flags |= status_flag;
 	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_TRANSACTION;
+		this->status_flags &= ~status_flag;
 	}
 }
 
-void MySQL_Connection::set_status_compression(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_COMPRESSION;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_COMPRESSION;
-	}
+bool MySQL_Connection::get_status(uint32_t status_flag) {
+	return this->status_flags & status_flag;
 }
 
-void MySQL_Connection::set_status_get_lock(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_GET_LOCK;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_GET_LOCK;
-	}
-}
-
-void MySQL_Connection::set_status_found_rows(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_FOUND_ROWS;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_FOUND_ROWS;
-	}
-}
-
-void MySQL_Connection::set_status_lock_tables(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_LOCK_TABLES;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_LOCK_TABLES;
-	}
-}
-
-void MySQL_Connection::set_status_temporary_table(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
-	}
-}
-
-void MySQL_Connection::set_status_no_backslash_escapes(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
-	}
-}
-
-void MySQL_Connection::set_status_user_variable(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_USER_VARIABLE;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_USER_VARIABLE;
-	}
-}
-
-void MySQL_Connection::set_status_prepared_statement(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
-	}
-}
-
-void MySQL_Connection::set_status_no_multiplex(bool v) {
-	if (v) {
-		status_flags |= STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
-	} else {
-		status_flags &= ~STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
-	}
-}
-
-// pay attention here. set_status_sql_log_bin0 sets it sql_log_bin is ZERO
-// sql_log_bin=0 => true
-// sql_log_bin=1 => false
 void MySQL_Connection::set_status_sql_log_bin0(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
@@ -538,51 +476,47 @@ void MySQL_Connection::set_status_sql_log_bin0(bool v) {
 	}
 }
 
-bool MySQL_Connection::get_status_transaction() {
-	return status_flags & STATUS_MYSQL_CONNECTION_TRANSACTION;
-}
-
-bool MySQL_Connection::get_status_compression() {
-	return status_flags & STATUS_MYSQL_CONNECTION_COMPRESSION;
-}
-
-bool MySQL_Connection::get_status_user_variable() {
-	return status_flags & STATUS_MYSQL_CONNECTION_USER_VARIABLE;
-}
-
-bool MySQL_Connection::get_status_get_lock() {
-	return status_flags & STATUS_MYSQL_CONNECTION_GET_LOCK;
-}
-
-bool MySQL_Connection::get_status_found_rows() {
-	return status_flags & STATUS_MYSQL_CONNECTION_FOUND_ROWS;
-}
-
-bool MySQL_Connection::get_status_lock_tables() {
-	return status_flags & STATUS_MYSQL_CONNECTION_LOCK_TABLES;
-}
-
-bool MySQL_Connection::get_status_temporary_table() {
-	return status_flags & STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE;
-}
-
-bool MySQL_Connection::get_status_no_backslash_escapes() {
-	return status_flags & STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES;
-}
-
-bool MySQL_Connection::get_status_prepared_statement() {
-	return status_flags & STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT;
-}
-
-bool MySQL_Connection::get_status_no_multiplex() {
-	return status_flags & STATUS_MYSQL_CONNECTION_NO_MULTIPLEX;
-}
-
 bool MySQL_Connection::get_status_sql_log_bin0() {
 	return status_flags & STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
 }
 
-bool MySQL_Connection::match_tracked_options(MySQL_Connection *c) {
+bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn) {
+	char *username = client_conn->userinfo->username;
+	if (strcmp(userinfo->username,username)) {
+		// the two connections use different usernames
+		// The connection need to be reset with CHANGE_USER
+		return true;
+	}
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		if (client_conn->var_hash[i] == 0) {
+			if (var_hash[i]) {
+				// this connection has a variable set that the
+				// client connection doesn't have.
+				// Since connection cannot be unset , this connection
+				// needs to be reset with CHANGE_USER
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching) {
+	unsigned int ret=0;
+	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+		if (client_conn->var_hash[i] && i != SQL_CHARACTER_ACTION) { // client has a variable set
+			if (var_hash[i] == client_conn->var_hash[i]) { // server conection has the variable set to the same value
+				ret++;
+			} else {
+				not_matching++;
+			}
+		}
+	}
+	return ret;
+}
+
+
+bool MySQL_Connection::match_tracked_options(const MySQL_Connection *c) {
 	uint32_t cf1 = options.client_flag; // own client flags
 	uint32_t cf2 = c->options.client_flag; // other client flags
 	if ((cf1 & CLIENT_FOUND_ROWS) == (cf2 & CLIENT_FOUND_ROWS)) {
@@ -634,6 +568,7 @@ void MySQL_Connection::connect_start() {
 		std::stringstream ss;
 		ss << c->nr;
 
+		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
@@ -1950,6 +1885,12 @@ bool MySQL_Connection::IsActiveTransaction() {
 				ret = true;
 			}
 		}
+		if (ret == false) {
+			if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)) {
+				// there are savepoints
+				ret = true;
+			}
+		}
 	}
 	return ret;
 }
@@ -1982,7 +1923,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES|STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) ) {
 		ret=true;
 	}
 	if (auto_increment_delay_token) return true;
@@ -2081,16 +2022,16 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			if (myds->sess->qpo) {
 				mul=myds->sess->qpo->multiplex;
 				if (mul==0) {
-					set_status_no_multiplex(true);
+					set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 				} else {
 					if (mul==1) {
-						set_status_no_multiplex(false);
+						set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 					}
 				}
 			}
 		}
 	}
-	if (get_status_user_variable()==false) { // we search for variables only if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE)==false) { // we search for variables only if not already set
 //			if (
 //				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
 //				&&
@@ -2103,12 +2044,12 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 					if (mul!=2) {
 						if (index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
 							if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
-								set_status_user_variable(true);
+								set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 							}
 						} else {
 							for (unsigned int i = 0; i < sizeof(session_vars)/sizeof(char *); i++) {
 								if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
-									set_status_user_variable(true);
+									set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 									break;
 								}
 							}
@@ -2118,7 +2059,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				case 1: // new algorithm
 					if (myds->sess->locked_on_hostgroup > -1) {
 						// locked_on_hostgroup was set, so some variable wasn't parsed
-						set_status_user_variable(true);
+						set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 					}
 					break;
 				default:
@@ -2127,44 +2068,73 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		} else {
 			if (mul!=2 && index(query_digest_text,'@')) { // mul = 2 has a special meaning : do not disable multiplex for variables in THIS QUERY ONLY
 				if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
-					set_status_user_variable(true);
+					set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 				}
 			}
 		}
 	}
-	if (get_status_prepared_statement()==false) { // we search if prepared was already executed
+	if (get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT)==false) { // we search if prepared was already executed
 		if (!strncasecmp(query_digest_text,"PREPARE ", strlen("PREPARE "))) {
-			set_status_prepared_statement(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
 		}
 	}
-	if (get_status_temporary_table()==false) { // we search for temporary if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE)==false) { // we search for temporary if not already set
 		if (!strncasecmp(query_digest_text,"CREATE TEMPORARY TABLE ", strlen("CREATE TEMPORARY TABLE "))) {
-			set_status_temporary_table(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE);
 		}
 	}
-	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES)==false) { // we search for lock tables only if not already set
 		if (!strncasecmp(query_digest_text,"LOCK TABLE", strlen("LOCK TABLE"))) {
-			set_status_lock_tables(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_LOCK_TABLES);
 		}
 	}
-	if (get_status_lock_tables()==false) { // we search for lock tables only if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES)==false) { // we search for lock tables only if not already set
 		if (!strncasecmp(query_digest_text,"FLUSH TABLES WITH READ LOCK", strlen("FLUSH TABLES WITH READ LOCK"))) { // issue 613
-			set_status_lock_tables(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_LOCK_TABLES);
 		}
 	}
-	if (get_status_lock_tables()==true) {
+	if (get_status(STATUS_MYSQL_CONNECTION_LOCK_TABLES)==true) {
 		if (!strncasecmp(query_digest_text,"UNLOCK TABLES", strlen("UNLOCK TABLES"))) {
-			set_status_lock_tables(false);
+			set_status(false, STATUS_MYSQL_CONNECTION_LOCK_TABLES);
 		}
 	}
-	if (get_status_get_lock()==false) { // we search for get_lock if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_GET_LOCK)==false) { // we search for get_lock if not already set
 		if (strcasestr(query_digest_text,"GET_LOCK(")) {
-			set_status_get_lock(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_GET_LOCK);
 		}
 	}
-	if (get_status_found_rows()==false) { // we search for SQL_CALC_FOUND_ROWS if not already set
+	if (get_status(STATUS_MYSQL_CONNECTION_FOUND_ROWS)==false) { // we search for SQL_CALC_FOUND_ROWS if not already set
 		if (strcasestr(query_digest_text,"SQL_CALC_FOUND_ROWS")) {
-			set_status_found_rows(true);
+			set_status(true, STATUS_MYSQL_CONNECTION_FOUND_ROWS);
+		}
+	}
+	if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)==false) {
+		if (mysql) {
+			if (
+				(mysql->server_status & SERVER_STATUS_IN_TRANS)
+				||
+				((mysql->server_status & SERVER_STATUS_AUTOCOMMIT) == 0)
+			) {
+				if (!strncasecmp(query_digest_text,"SAVEPOINT ", strlen("SAVEPOINT "))) {
+					set_status(true, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+				}
+			}
+		}
+	} else {
+		if (
+			(
+				// make sure we don't have a transaction running
+				// checking just for COMMIT and ROLLBACK is not enough, because `SET autocommit=1` can commit too
+				(mysql->server_status & SERVER_STATUS_AUTOCOMMIT)
+				&&
+				( (mysql->server_status & SERVER_STATUS_IN_TRANS) == 0 )
+			)
+			||
+			!strcasecmp(query_digest_text,"COMMIT")
+			||
+			!strcasecmp(query_digest_text,"ROLLBACK")
+		) {
+			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
 		}
 	}
 }

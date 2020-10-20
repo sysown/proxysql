@@ -100,6 +100,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
 	pthread_mutex_init(&checksum_mutex,NULL);
+	pthread_mutex_init(&global.ext_glomth_mutex,NULL);
 	epoch_version = 0;
 	checksums_values.updates_cnt = 0;
 	checksums_values.dumped_at = 0;
@@ -120,7 +121,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->overview="High Performance Advanced Proxy for MySQL";
 	opt->syntax="proxysql [OPTIONS]";
 	std::string s = "\n\nProxySQL " ;
-	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2019 ProxySQL LLC\nThis program is free and without warranty\n";
+	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2020 ProxySQL LLC\nThis program is free and without warranty\n";
 	opt->footer =s.c_str();
 
 	opt->add((const char *)"",0,0,0,(const char *)"Display usage instructions.",(const char *)"-h",(const char *)"-help",(const char *)"--help",(const char *)"--usage");

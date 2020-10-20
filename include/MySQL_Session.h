@@ -113,7 +113,6 @@ class MySQL_Session
 	bool handler_again___verify_backend_autocommit();
 	bool handler_again___verify_backend_session_track_gtids();
 	bool handler_again___verify_backend_multi_statement();
-	bool handler_again___verify_backend__generic_variable(uint32_t *be_int, char **be_var, char *def, uint32_t *fe_int, char *fe_var, enum session_status next_sess_status);
 	bool handler_again___verify_backend_user_schema();
 	bool handler_again___status_SETTING_INIT_CONNECT(int *);
 	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
@@ -150,6 +149,7 @@ class MySQL_Session
 	unsigned long long pause_until;
 
 	unsigned long long idle_since;
+	unsigned long long transaction_started_at;
 
 	// pointers
 	MySQL_Thread *thread;
@@ -177,7 +177,7 @@ class MySQL_Session
 	int next_query_flagIN;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
-	int active_transactions;
+	unsigned int active_transactions;
 	int autocommit_on_hostgroup;
 	int transaction_persistent_hostgroup;
 	int to_process;
@@ -187,6 +187,7 @@ class MySQL_Session
 	// bool
 	bool autocommit;
 	bool autocommit_handled;
+	bool sending_set_autocommit;
 	bool killed;
 	bool locked_on_hostgroup_and_all_variables_set;
 	//bool admin;

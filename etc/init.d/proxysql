@@ -18,7 +18,7 @@
 
 OLDDATADIR="/var/run/proxysql"
 DATADIR="/var/lib/proxysql"
-OPTS="-c /etc/proxysql.cnf -D $DATADIR"
+OPTS="--idle-threads -c /etc/proxysql.cnf -D $DATADIR"
 PIDFILE="$DATADIR/proxysql.pid"
 USER="proxysql"
 

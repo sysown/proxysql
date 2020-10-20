@@ -1,4 +1,4 @@
-<a><img src="https://proxysql.com/assets/images/sm-share-default.png" alt="ProxySQL"></a>
+<a><img src="https://i0.wp.com/proxysql.com/wp-content/uploads/2020/04/ProxySQL-Colour-Logo.png?fit=800%2C278&ssl=1" alt="ProxySQL"></a>
 
 Introduction	
 ============	
@@ -143,7 +143,15 @@ Admin> proxysql restart
 
 #### Reinitializing ProxySQL from the config file (after first startup the DB file is used instead of the config file):
 ```bash
+# If you are using the init script run:
+/etc/init.d/proxysql initial
+# or
 service proxysql initial
+ 
+# If you are using the systemd unit file run:
+systemctl start proxysql-initial
+# or
+service proxysql-initial start
 ```
 
 ### Upgrades

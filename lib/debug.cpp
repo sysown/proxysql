@@ -1,7 +1,7 @@
+#include <set>
 #include "proxysql.h"
 #include "proxysql_atomic.h"
 #include <cxxabi.h>
-
 
 #ifdef DEBUG
 #ifdef DEBUG_EXTERN
@@ -9,19 +9,13 @@
 #endif /* DEBUG_EXTERN */
 #endif /* DEBUG */
 
-#define PROXYSQL_DEBUG_PTHREAD_MUTEX
-
 #ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC SYSTEM_CLOCK
 #endif // CLOCK_MONOTONIC
 
 #ifdef DEBUG
 static unsigned long long pretime=0;
-#ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
 static pthread_mutex_t debug_mutex;
-#else
-static spinlock debug_spinlock;
-#endif
 #endif /* DEBUG */
 
 static inline unsigned long long debug_monotonic_time() {
@@ -35,9 +29,82 @@ static inline unsigned long long debug_monotonic_time() {
 
 #ifdef DEBUG
 
+
+// this set will have all the filters related to debug
+// for convention, the key is:
+// filename:line:function
+// this key structure applies also if line is 0 or function is empty
+// filename is mandatory
+std::set<std::string> debug_filters;
+
+static bool filter_debug_entry(const char *__file, int __line, const char *__func) {
+	pthread_mutex_lock(&debug_mutex);
+	bool to_filter = false;
+	if (debug_filters.size()) { // if the set is empty we aren't performing any filter, so we won't search
+		std::string key(__file);
+		key += ":" + std::to_string(__line);
+		key += ":";
+		key += __func;
+		// we start with a full search
+		if (debug_filters.find(key) != debug_filters.end()) {
+			to_filter = true;
+		} else {
+			// we now search filename + line
+			key = __file;
+			key += ":" + std::to_string(__line);
+			// remember to add the final ":"
+			key += ":";
+			if (debug_filters.find(key) != debug_filters.end()) {
+				to_filter = true;
+			} else {
+				// we now search filename + function
+				key = __file;
+				// no line = 0
+				key += ":0:";
+				key += __func;
+				if (debug_filters.find(key) != debug_filters.end()) {
+					to_filter = true;
+				} else {
+					// we now search filename only
+					key = __file;
+					// remember to add ":" even if no line
+					key += ":0:";
+					if (debug_filters.find(key) != debug_filters.end()) {
+						to_filter = true;
+					} else {
+						// if we reached here, we couldn't find any filter
+					}
+				}
+			}
+		}
+	}
+	pthread_mutex_unlock(&debug_mutex);
+	return to_filter;
+}
+
+// we use this function to sent the filters to Admin
+// we hold here the mutex on debug_mutex
+void proxy_debug_get_filters(std::set<std::string>& f) {
+	pthread_mutex_lock(&debug_mutex);
+	f = debug_filters;
+	pthread_mutex_unlock(&debug_mutex);
+}
+
+// we use this function to get the filters from Admin
+// we hold here the mutex on debug_mutex
+void proxy_debug_load_filters(std::set<std::string>& f) {
+	pthread_mutex_lock(&debug_mutex);
+	debug_filters.erase(debug_filters.begin(), debug_filters.end());
+	debug_filters = f;
+	pthread_mutex_unlock(&debug_mutex);
+}
+
 void proxy_debug_func(enum debug_module module, int verbosity, int thr, const char *__file, int __line, const char *__func, const char *fmt, ...) {
 	assert(module<PROXY_DEBUG_UNKNOWN);
-	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity) return;
+	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity)
+		return;
+	if (filter_debug_entry(__file, __line, __func)) // check if the entry must be filtered
+		return;
 	char debugbuff[DEBUG_MSG_MAXSIZE];
 	char longdebugbuff[DEBUG_MSG_MAXSIZE*8];
 	longdebugbuff[0]=0;
@@ -46,11 +113,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		va_start(ap, fmt);
 		vsnprintf(debugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
 		va_end(ap);
-#ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
 		pthread_mutex_lock(&debug_mutex);
-#else
-		spin_lock(&debug_spinlock);
-#endif
 		unsigned long long curtime=debug_monotonic_time();
 		//fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
 		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d#%s LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, GloVars.global.gdbg_lvl[module].name, verbosity, debugbuff);
@@ -88,14 +151,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 	}
 #endif
 	if (strlen(longdebugbuff)) fprintf(stderr, "%s", longdebugbuff);
-#ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
 	pthread_mutex_unlock(&debug_mutex);
-#else
-	spin_unlock(&debug_spinlock);
-#endif
-	if (GloVars.global.foreground) {
-		return;
-	}
 };
 #endif
 
@@ -144,11 +200,7 @@ void print_backtrace(void)
 #ifdef DEBUG
 void init_debug_struct() {	
 	int i;
-#ifdef PROXYSQL_DEBUG_PTHREAD_MUTEX
-		pthread_mutex_init(&debug_mutex,NULL);
-#else
-	spinlock_init(&debug_spinlock);
-#endif
+	pthread_mutex_init(&debug_mutex,NULL);
 	pretime=debug_monotonic_time();
 	GloVars.global.gdbg_lvl= (debug_level *) malloc(PROXY_DEBUG_UNKNOWN*sizeof(debug_level));
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {

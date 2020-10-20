@@ -4,6 +4,7 @@
 #include "cpp.h"
 #include "proxysql_gtid.h"
 
+#include <atomic>
 #include <thread>
 #include <iostream>
 #include <mutex>
@@ -17,11 +18,12 @@
 
 #include "ev.h"
 
-/*
-	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
-	This is for internal testing ONLY!!!!
-#define STRESSTEST_POOL
-*/
+#ifdef DEBUG
+/* */
+//	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
+//	This is for internal testing ONLY!!!!
+//#define STRESSTEST_POOL
+#endif // DEBUG
 
 #define MHM_PTHREAD_MUTEX
 
@@ -118,6 +120,7 @@ class MySrvConnList {
 	}
 	MySQL_Connection *remove(int);
 	MySQL_Connection * get_random_MyConn(MySQL_Session *sess, bool ff);
+	void get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn);
 	unsigned int conns_length() { return conns->len; }
 	void drop_all_connections();
 	MySQL_Connection *index(unsigned int);
@@ -139,6 +142,7 @@ class MySrvC {	// MySQL Server Container
 	unsigned int max_connections_used; // The maximum number of connections that has been opened
 	unsigned int connect_OK;
 	unsigned int connect_ERR;
+	unsigned int cur_replication_lag_count;
 	// note that these variables are in microsecond, while user defines max lantency in millisecond
 	unsigned int current_latency_us;
 	unsigned int max_latency_us;
@@ -410,8 +414,8 @@ class MySQL_HostGroups_Manager {
 	 */
 	pthread_mutex_t p_err_map_access;
 
-	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
-	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::string& endpoint_addr, std::string& endpoint_port, std::string& hostgroup_id, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
+	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
+	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
 
 	public:
 	std::mutex galera_set_writer_mutex;
@@ -502,6 +506,12 @@ class MySQL_HostGroups_Manager {
 	void p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code);
 
 	wqueue<MySQL_Connection *> queue;
+	// has_gtid_port is set to true if *any* of the servers in mysql_servers has gtid_port enabled
+	// it is configured during commit()
+	// NOTE: this variable is currently NOT used, but in future will be able
+	// to deprecate mysql-default_session_track_gtids because proxysql will
+	// be automatically able to determine when to enable GTID tracking
+	std::atomic<bool> has_gtid_port;
 	MySQL_HostGroups_Manager();
 	~MySQL_HostGroups_Manager();
 	void init();

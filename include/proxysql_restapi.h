@@ -22,8 +22,8 @@ public:
 };
 
 class ProxySQL_Restapi {
-	SQLite3DB* admindb;
 public:
+	SQLite3DB* admindb;
 	ProxySQL_Restapi(SQLite3DB* db);
 	virtual ~ProxySQL_Restapi();
 
