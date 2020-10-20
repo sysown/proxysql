@@ -1086,6 +1086,7 @@ int main(int, char**) {
 
 		uint waited = 0;
 		bool not_synced_query = false;
+		std::string last_failed_query {};
 		while (waited < SYNC_TIMEOUT) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
@@ -1097,6 +1098,7 @@ int main(int, char**) {
 				mysql_free_result(mysql_vars_res);
 
 				if (row_value == 0) {
+					last_failed_query = query;
 					not_synced_query = true;
 					break;
 				}
@@ -1108,6 +1110,10 @@ int main(int, char**) {
 			} else {
 				break;
 			}
+		}
+
+		if (not_synced_query) {
+			std::cout << "FAILED_SYNC_CHECK: '" << last_failed_query << "'\n";
 		}
 
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
@@ -1210,6 +1216,7 @@ int main(int, char**) {
 
 		uint waited = 0;
 		bool not_synced_query = false;
+		std::string last_failed_query {};
 		while (waited < SYNC_TIMEOUT) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
@@ -1222,6 +1229,7 @@ int main(int, char**) {
 
 				if (row_value == 0) {
 					not_synced_query = true;
+					last_failed_query = query;
 					break;
 				}
 			}
@@ -1232,6 +1240,10 @@ int main(int, char**) {
 			} else {
 				break;
 			}
+		}
+
+		if (not_synced_query) {
+			std::cout << "FAILED_SYNC_CHECK: '" << last_failed_query << "'\n";
 		}
 
 		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
