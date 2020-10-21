@@ -396,3 +396,31 @@ int execvp(const std::string& cmd, const std::vector<const char*>& argv, std::st
 
 	return err;
 }
+
+int exec(const std::string& cmd, std::string& result) {
+	char buffer[128];
+	std::string result_ = "";
+	int err = 0;
+
+	// Try to invoke the shell
+	FILE* pipe = popen(cmd.c_str(), "r");
+	if (!pipe) {
+		return errno;
+	}
+
+	try {
+		while (fgets(buffer, sizeof buffer, pipe) != NULL) {
+			result_ += buffer;
+		}
+	} catch (...) {
+		err = -1;
+	}
+
+	pclose(pipe);
+
+	if (err == 0) {
+		// Return the result
+		result = result_;
+	}
+	return err;
+}

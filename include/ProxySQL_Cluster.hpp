@@ -114,6 +114,8 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port);
 	void get_peer_to_sync_mysql_servers(char **host, uint16_t *port, char **peer_checksum);
 	void get_peer_to_sync_mysql_users(char **host, uint16_t *port);
+	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port);
+	void get_peer_to_sync_admin_variables(char **host, uint16_t* port);
 	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port);
 };
 
@@ -141,15 +143,25 @@ struct p_cluster_counter {
 		pulled_proxysql_servers_success,
 		pulled_proxysql_servers_failure,
 
+		pulled_mysql_variables_success,
+		pulled_mysql_variables_failure,
+
+		pulled_admin_variables_success,
+		pulled_admin_variables_failure,
+
 		sync_conflict_mysql_query_rules_share_epoch,
 		sync_conflict_mysql_servers_share_epoch,
 		sync_conflict_proxysql_servers_share_epoch,
 		sync_conflict_mysql_users_share_epoch,
+		sync_conflict_mysql_variables_share_epoch,
+		sync_conflict_admin_variables_share_epoch,
 
 		sync_delayed_mysql_query_rules_version_one,
 		sync_delayed_mysql_servers_version_one,
 		sync_delayed_mysql_users_version_one,
 		sync_delayed_proxysql_servers_version_one,
+		sync_delayed_mysql_variables_version_one,
+		sync_delayed_admin_variables_version_one,
 
 		__size
 	};
@@ -165,6 +177,14 @@ struct cluster_metrics_map_idx {
 	enum index {
 		counters = 0,
 		gauges
+	};
+};
+
+struct variable_type {
+	enum type {
+		mysql,
+		admin,
+		__size
 	};
 };
 
@@ -196,6 +216,7 @@ class ProxySQL_Cluster {
 	pthread_mutex_t update_mysql_query_rules_mutex;
 	pthread_mutex_t update_mysql_servers_mutex;
 	pthread_mutex_t update_mysql_users_mutex;
+	pthread_mutex_t update_mysql_variables_mutex;
 	pthread_mutex_t update_proxysql_servers_mutex;
 	int cluster_check_interval_ms;
 	int cluster_check_status_frequency;
@@ -244,6 +265,14 @@ class ProxySQL_Cluster {
 	void pull_mysql_query_rules_from_peer();
 	void pull_mysql_servers_from_peer();
 	void pull_mysql_users_from_peer();
+	/**
+	 * @brief Pulls from peer the specified global variables by the type parameter.
+	 * @param type A string specifying the type of global variables to pull from the peer, supported
+	 *  values right now are:
+	 *    - 'mysql'.
+     *    - 'admin'.
+	 */
+	void pull_global_variables_from_peer(const std::string& type);
 	void pull_proxysql_servers_from_peer();
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */

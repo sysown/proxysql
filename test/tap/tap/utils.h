@@ -57,4 +57,13 @@ int wexecvp(const std::string& file, const std::vector<const char*>& argv, const
  */
 int execvp(const std::string& file, const std::vector<const char*>& argv, std::string& result);
 
+/**
+ * @brief Executes a command using popen and returns the output in the string supplied as second parameter.
+ *
+ * @param cmd The command to be executed.
+ * @param result String with the output of the executed command.
+ * @return int The error code returned by popen.
+ */
+int exec(const std::string& cmd, std::string& result);
+
 #endif // #define UTILS_H

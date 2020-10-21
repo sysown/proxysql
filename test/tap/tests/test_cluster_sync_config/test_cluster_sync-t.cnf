@@ -1,9 +1,9 @@
-datadir=""
+datadir="/tmp/proxysql/test/tap/tests/test_cluster_sync_config"
 
 admin_variables=
 {
     admin_credentials="admin:admin;radmin:radmin"
-    mysql_ifaces="0.0.0.0:7032"
+    mysql_ifaces="0.0.0.0:6032"
     cluster_username="radmin"
     cluster_password="radmin"
     cluster_check_interval_ms=200
@@ -15,6 +15,7 @@ admin_variables=
     cluster_mysql_query_rules_diffs_before_sync=3
     cluster_mysql_servers_diffs_before_sync=3
     cluster_mysql_users_diffs_before_sync=3
+    cluster_admin_variables_diffs_before_sync=3
     cluster_proxysql_servers_diffs_before_sync=3
 }
 
@@ -26,7 +27,7 @@ mysql_variables=
 	default_query_timeout=36000000
 	have_compress=true
 	poll_timeout=2000
-	interfaces="0.0.0.0:7033"
+	interfaces="0.0.0.0:6033"
 	default_schema="information_schema"
 	stacksize=1048576
 	server_version="5.5.30"

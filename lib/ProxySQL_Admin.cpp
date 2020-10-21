@@ -3180,6 +3180,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 		if (admin) {
 			if (dump_global_variables) {
+				pthread_mutex_lock(&GloVars.checksum_mutex);
 				admindb->execute("DELETE FROM runtime_global_variables");	// extra
 				flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_mysql_variables___runtime_to_database(admindb, false, false, false, true);
@@ -3188,6 +3189,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 #endif /* PROXYSQLCLICKHOUSE */
 				flush_sqliteserver_variables___runtime_to_database(admindb, false, false, false, true);
 				flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
+				pthread_mutex_unlock(&GloVars.checksum_mutex);
 			}
 			if (runtime_mysql_servers) {
 				int old_hostgroup_manager_verbose = mysql_thread___hostgroup_manager_verbose;
@@ -6009,7 +6011,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			int cols=0;
 			int affected_rows=0;
 			SQLite3_result *resultset=NULL;
-			char *q=(char *)"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' ORDER BY variable_name";
+			char *q=(char *)"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
 			admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
 			uint64_t hash1 = resultset->raw_checksum();
 			uint32_t d32[2];
@@ -9453,6 +9455,38 @@ void ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
 	admindb->execute("INSERT INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("DELETE FROM disk.mysql_query_rules_fast_routing");
 	admindb->execute("INSERT INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_mysql_variables__from_disk_to_memory() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_admin_variables__from_disk_to_memory() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'admin-%'");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::flush_admin_variables__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'admin-%'");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
