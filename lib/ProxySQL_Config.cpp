@@ -387,7 +387,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO restapi VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
+	char *q=(char *)"INSERT OR REPLACE INTO restapi_routes VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
 	for (i=0; i< count; i++) {
 		const Setting &route = routes[i];
 		int id;
