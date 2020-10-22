@@ -4881,32 +4881,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(PtrSize_t *pkt) {
-	if (session_type == PROXYSQL_SESSION_MYSQL) {
-		mybe=find_or_create_backend(default_hostgroup);
-		mybe->server_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-	} else {
-		l_free(pkt->size,pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported");
-		client_myds->DSS=STATE_SLEEP;
-	}
-}
-
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t *pkt) {
-	if (session_type == PROXYSQL_SESSION_MYSQL) {
-		mybe=find_or_create_backend(default_hostgroup);
-		mybe->server_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-	} else {
-		l_free(pkt->size,pkt->ptr);
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported");
-		client_myds->DSS=STATE_SLEEP;
-	}
-}
-
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
