@@ -3203,13 +3203,83 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 	return true;
 }
+
+
+// this function was inline inside MySQL_Session::get_pkts_from_client
+// where:
+// status = NONE or default
+//
+// this is triggered when proxysql receives a packet when doesn't expect any
+// for example while it is supposed to be sending resultset to client
+void MySQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
+	char buf[INET6_ADDRSTRLEN];
+	switch (client_myds->client_addr->sa_family) {
+		case AF_INET: {
+			struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
+			inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+			break;
+		}
+		case AF_INET6: {
+			struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
+			inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+			break;
+		}
+		default:
+			sprintf(buf, "localhost");
+			break;
+		}
+	if (pkt.size == 5) {
+		unsigned char c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
+		if (c==_MYSQL_COM_QUIT) {
+			proxy_error("Unexpected COM_QUIT from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+			if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
+			l_free(pkt.size,pkt.ptr);
+			if (thread) {
+				thread->status_variables.stvar[st_var_unexpected_com_quit]++;
+			}
+			return;
+		}
+	}
+	proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+	if (thread) {
+		thread->status_variables.stvar[st_var_unexpected_packet]++;
+	}
+	return;
+}
+
+// this function was inline inside MySQL_Session::get_pkts_from_client
+// where:
+// status = WAITING_CLIENT_DATA
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
+	if (mirror==false) {
+		char buf[INET6_ADDRSTRLEN];
+		switch (client_myds->client_addr->sa_family) {
+			case AF_INET: {
+				struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
+				inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+				break;
+			}
+			case AF_INET6: {
+				struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
+				inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+				break;
+			}
+			default:
+				sprintf(buf, "localhost");
+				break;
+		}
+		proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+	}
+}
+
 int MySQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 	int handler_ret = 0;
 	unsigned char c;
 
 __get_pkts_from_client:
 
-	//for (j=0; j<client_myds->PSarrayIN->len;) {
 	// implement a more complex logic to run even in case of mirror
 	// if client_myds , this is a regular client
 	// if client_myds == NULL , it is a mirror
@@ -3491,28 +3561,7 @@ __get_pkts_from_client:
 						}
 						break;
 					default:
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
-						{
-							if (mirror==false) {
-                                                        char buf[INET6_ADDRSTRLEN];
-                                                        switch (client_myds->client_addr->sa_family) {
-                                                        case AF_INET: {
-                                                                struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
-                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-                                                                break;
-                                                                }
-                                                        case AF_INET6: {
-                                                                struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
-                                                                inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-                                                                break;
-                                                        }
-                                                        default:
-                                                                sprintf(buf, "localhost");
-                                                                break;
-                                                        }
-								proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
-							}
-						}
+						handler___status_WAITING_CLIENT_DATA___default();
 						handler_ret = -1;
 						return handler_ret;
 						break;
@@ -3524,44 +3573,9 @@ __get_pkts_from_client:
 				break;
 			case session_status___NONE:
 			default:
-				{
-					char buf[INET6_ADDRSTRLEN];
-					switch (client_myds->client_addr->sa_family) {
-						case AF_INET: {
-							struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
-							inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-							break;
-						}
-						case AF_INET6: {
-							struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
-							inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-							break;
-						}
-						default:
-							sprintf(buf, "localhost");
-							break;
-						}
-					if (pkt.size == 5) {
-						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
-						if (c==_MYSQL_COM_QUIT) {
-							proxy_error("Unexpected COM_QUIT from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
-							if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
-							l_free(pkt.size,pkt.ptr);
-							if (thread) {
-								thread->status_variables.stvar[st_var_unexpected_com_quit]++;
-							}
-							handler_ret = -1;
-							return handler_ret;
-						}
-					}
-					proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
-					if (thread) {
-						thread->status_variables.stvar[st_var_unexpected_packet]++;
-					}
-					handler_ret = -1;
-					return handler_ret;
-				}
+				handler___status_NONE_or_default(pkt);
+				handler_ret = -1;
+				return handler_ret;
 				break;
 		}
 	}
