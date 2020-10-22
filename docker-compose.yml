@@ -55,6 +55,7 @@ services:
       - CURVER
       - PKG_RELEASE=centos7
       - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
   centos7_dbg_build:
@@ -97,6 +98,7 @@ services:
       - CURVER
       - PKG_RELEASE=centos8
       - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
   centos8_dbg_build:
@@ -209,6 +211,7 @@ services:
       - CURVER
       - PKG_RELEASE=fedora32
       - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
   debian8_build:
@@ -264,6 +267,7 @@ services:
       - CURVER
       - PKG_RELEASE=debian9
       - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
   debian9_dbg_build:
@@ -334,6 +338,7 @@ services:
       - CURVER
       - PKG_RELEASE=debian10
       - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
   debian10_dbg_build:
@@ -431,6 +436,7 @@ services:
       - CURVER
       - PKG_RELEASE=ubuntu18
       - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu18_dbg_build:
@@ -473,6 +479,7 @@ services:
       - CURVER
       - PKG_RELEASE=ubuntu20
       - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu20_dbg_build:
