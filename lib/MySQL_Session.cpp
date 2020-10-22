@@ -3042,7 +3042,167 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+// this function was inline inside MySQL_Session::get_pkts_from_client
+// ClickHouse doesn't support COM_INIT_DB , so we replace it
+// with a COM_QUERY running USE
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt) {
+	PtrSize_t _new_pkt;
+	_new_pkt.ptr=malloc(pkt.size+4); // USE + space
+	memcpy(_new_pkt.ptr , pkt.ptr, 4);
+	unsigned char *_c=(unsigned char *)_new_pkt.ptr;
+	_c+=4; *_c=0x03;
+	_c+=1; *_c='U';
+	_c+=1; *_c='S';
+	_c+=1; *_c='E';
+	_c+=1; *_c=' ';
+	memcpy((char *)_new_pkt.ptr+9 , (char *)pkt.ptr+5, pkt.size-5);
+	l_free(pkt.size,pkt.ptr);
+	pkt.size+=4;
+	pkt.ptr = _new_pkt.ptr;
+}
 
+// this function was inline inside MySQL_Session::get_pkts_from_client
+// where:
+// status = WAITING_CLIENT_DATA
+// client_myds->DSS = STATE_SLEEP
+// enum_mysql_command = _MYSQL_COM_QUERY
+// it processes the session not MYSQL_SESSION
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt) {
+	switch (session_type) {
+		case PROXYSQL_SESSION_ADMIN:
+		case PROXYSQL_SESSION_STATS:
+		// this is processed by the admin module
+			handler_function(this, (void *)GloAdmin, &pkt);
+			l_free(pkt.size,pkt.ptr);
+			break;
+		case PROXYSQL_SESSION_SQLITE:
+			handler_function(this, (void *)GloSQLite3Server, &pkt);
+			l_free(pkt.size,pkt.ptr);
+			break;
+#ifdef PROXYSQLCLICKHOUSE
+		case PROXYSQL_SESSION_CLICKHOUSE:
+			handler_function(this, (void *)GloClickHouseServer, &pkt);
+			l_free(pkt.size,pkt.ptr);
+			break;
+#endif /* PROXYSQLCLICKHOUSE */
+		default:
+			assert(0);
+	}
+}
+
+
+// this function was inline inside MySQL_Session::get_pkts_from_client
+// where:
+// status = WAITING_CLIENT_DATA
+// client_myds->DSS = STATE_SLEEP
+// enum_mysql_command = _MYSQL_COM_QUERY
+// it searches for SQL injection
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi() {
+	if (client_myds->com_field_list == false) {
+		if (qpo->firewall_whitelist_mode != WUS_OFF) {
+			struct libinjection_sqli_state state;
+			int issqli;
+			const char * input = (char *)CurrentQuery.QueryPointer;
+			size_t slen = CurrentQuery.QueryLength;
+			libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
+			issqli = libinjection_is_sqli(&state);
+			if (issqli) {
+				bool allow_sqli = false;
+				allow_sqli = GloQPro->whitelisted_sqli_fingerprint(state.fingerprint);
+				if (allow_sqli) {
+					thread->status_variables.stvar[st_var_whitelisted_sqli_fingerprint]++;
+				} else {
+					thread->status_variables.stvar[st_var_automatic_detected_sqli]++;
+					char * username = client_myds->myconn->userinfo->username;
+					char * client_address = client_myds->addr.addr;
+					proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
+					fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
+					fprintf(stderr,"\n");
+					RequestEnd(NULL);
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
+// this function was inline inside MySQL_Session::get_pkts_from_client
+// where:
+// status = WAITING_CLIENT_DATA
+// client_myds->DSS = STATE_SLEEP_MULTI_PACKET
+//
+// replacing the single goto with return true
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt) {
+						if (client_myds->multi_pkt.ptr==NULL) {
+							// not initialized yet
+							client_myds->multi_pkt.ptr=pkt.ptr;
+							client_myds->multi_pkt.size=pkt.size;
+						} else {
+							PtrSize_t tmp_pkt;
+							tmp_pkt.ptr=client_myds->multi_pkt.ptr;
+							tmp_pkt.size=client_myds->multi_pkt.size;
+							client_myds->multi_pkt.size = pkt.size + tmp_pkt.size-sizeof(mysql_hdr);
+							client_myds->multi_pkt.ptr = l_alloc(client_myds->multi_pkt.size);
+							memcpy(client_myds->multi_pkt.ptr, tmp_pkt.ptr, tmp_pkt.size);
+							memcpy((char *)client_myds->multi_pkt.ptr + tmp_pkt.size , (char *)pkt.ptr+sizeof(mysql_hdr) , pkt.size-sizeof(mysql_hdr)); // the header is not copied
+							l_free(tmp_pkt.size , tmp_pkt.ptr);
+							l_free(pkt.size , pkt.ptr);
+						}
+						if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) { // there are more packets
+							//goto __get_pkts_from_client;
+							return true;
+						} else {
+							// no more packets, move everything back to pkt and proceed
+							pkt.ptr=client_myds->multi_pkt.ptr;
+							pkt.size=client_myds->multi_pkt.size;
+							client_myds->multi_pkt.size=0;
+							client_myds->multi_pkt.ptr=NULL;
+							client_myds->DSS=STATE_SLEEP;
+						}
+	return false;
+}
+
+
+// this function was inline inside MySQL_Session::get_pkts_from_client
+// where:
+// status = WAITING_CLIENT_DATA
+// client_myds->DSS = STATE_SLEEP
+// enum_mysql_command in a large list of possible values
+// the most common values for enum_mysql_command are handled from the calling function
+// here we only process the not so common ones
+// we return false if the enum_mysql_command is not found
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass) {
+	unsigned char c;
+	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
+	switch ((enum_mysql_command)c) {
+		case _MYSQL_COM_CHANGE_USER:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(pkt, wrong_pass);
+			break;
+		case _MYSQL_COM_PING:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(pkt);
+			break;
+		case _MYSQL_COM_SET_OPTION:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(pkt);
+			break;
+		case _MYSQL_COM_STATISTICS:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(pkt);
+			break;
+		case _MYSQL_COM_INIT_DB:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(pkt);
+			break;
+		case _MYSQL_COM_FIELD_LIST:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(pkt);
+			break;
+		case _MYSQL_COM_PROCESS_KILL:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(pkt);
+			break;
+		default:
+			return false;
+			break;
+	}
+	return true;
+}
 int MySQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 	int handler_ret = 0;
 	unsigned char c;
@@ -3094,31 +3254,13 @@ __get_pkts_from_client:
 				}
 				switch (client_myds->DSS) {
 					case STATE_SLEEP_MULTI_PACKET:
-						if (client_myds->multi_pkt.ptr==NULL) {
-							// not initialized yet
-							client_myds->multi_pkt.ptr=pkt.ptr;
-							client_myds->multi_pkt.size=pkt.size;
-						} else {
-							PtrSize_t tmp_pkt;
-							tmp_pkt.ptr=client_myds->multi_pkt.ptr;
-							tmp_pkt.size=client_myds->multi_pkt.size;
-							client_myds->multi_pkt.size = pkt.size + tmp_pkt.size-sizeof(mysql_hdr);
-							client_myds->multi_pkt.ptr = l_alloc(client_myds->multi_pkt.size);
-							memcpy(client_myds->multi_pkt.ptr, tmp_pkt.ptr, tmp_pkt.size);
-							memcpy((char *)client_myds->multi_pkt.ptr + tmp_pkt.size , (char *)pkt.ptr+sizeof(mysql_hdr) , pkt.size-sizeof(mysql_hdr)); // the header is not copied
-							l_free(tmp_pkt.size , tmp_pkt.ptr);
-							l_free(pkt.size , pkt.ptr);
-						}
-						if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) { // there are more packets
+						if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(pkt)) {
+							// if handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET
+							// returns true it meansa we need to reiterate
 							goto __get_pkts_from_client;
-						} else {
-							// no more packets, move everything back to pkt and proceed
-							pkt.ptr=client_myds->multi_pkt.ptr;
-							pkt.size=client_myds->multi_pkt.size;
-							client_myds->multi_pkt.size=0;
-							client_myds->multi_pkt.ptr=NULL;
-							client_myds->DSS=STATE_SLEEP;
 						}
+						// Note: the above function can change DSS to STATE_SLEEP
+						// in that case we don't break from the witch but continue
 						if (client_myds->DSS!=STATE_SLEEP) // if DSS==STATE_SLEEP , we continue
 							break;
 					case STATE_SLEEP:	// only this section can be executed ALSO by mirror
@@ -3152,24 +3294,7 @@ __get_pkts_from_client:
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 						if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 							if ((enum_mysql_command)c == _MYSQL_COM_INIT_DB) {
-								PtrSize_t _new_pkt;
-								_new_pkt.ptr=malloc(pkt.size+4); // USE + space
-								memcpy(_new_pkt.ptr , pkt.ptr, 4);
-								unsigned char *_c=(unsigned char *)_new_pkt.ptr;
-								_c+=4; *_c=0x03;
-								_c+=1; *_c='U';
-								_c+=1; *_c='S';
-								_c+=1; *_c='E';
-								_c+=1; *_c=' ';
-//								(unsigned char *)_new_pkt.ptr[4]=0x03;
-//								(unsigned char *)_new_pkt.ptr[5]='U';
-//								(unsigned char *)_new_pkt.ptr[6]='S';
-//								(unsigned char *)_new_pkt.ptr[7]='E';
-//								(unsigned char *)_new_pkt.ptr[8]=' ';
-								memcpy((char *)_new_pkt.ptr+9 , (char *)pkt.ptr+5, pkt.size-5);
-								l_free(pkt.size,pkt.ptr);
-								pkt.size+=4;
-								pkt.ptr = _new_pkt.ptr;
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(pkt);
 								c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
 							}
 						}
@@ -3230,32 +3355,9 @@ __get_pkts_from_client:
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (mirror==false && rc_break==false) {
 										if (mysql_thread___automatic_detect_sqli) {
-											if (client_myds->com_field_list == false) {
-												if (qpo->firewall_whitelist_mode != WUS_OFF) {
-													struct libinjection_sqli_state state;
-													int issqli;
-													const char * input = (char *)CurrentQuery.QueryPointer;
-													size_t slen = CurrentQuery.QueryLength;
-													libinjection_sqli_init(&state, input, slen, FLAG_SQL_MYSQL);
-													issqli = libinjection_is_sqli(&state);
-													if (issqli) {
-														bool allow_sqli = false;
-														allow_sqli = GloQPro->whitelisted_sqli_fingerprint(state.fingerprint);
-														if (allow_sqli) {
-															thread->status_variables.stvar[st_var_whitelisted_sqli_fingerprint]++;
-														} else {
-															thread->status_variables.stvar[st_var_automatic_detected_sqli]++;
-															char * username = client_myds->myconn->userinfo->username;
-															char * client_address = client_myds->addr.addr;
-															proxy_error("SQLinjection detected with fingerprint of '%s' from client %s@%s . Query listed below:\n", state.fingerprint, username, client_address);
-															fwrite(CurrentQuery.QueryPointer, CurrentQuery.QueryLength, 1, stderr);
-															fprintf(stderr,"\n");
-															handler_ret = -1;
-															RequestEnd(NULL);
-															return handler_ret;
-														}
-													}
-												}
+											if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi()) {
+												handler_ret = -1;
+												return handler_ret;
 											}
 										}
 									}
@@ -3348,30 +3450,14 @@ __get_pkts_from_client:
 									mybe->server_myds->statuses.questions++;
 									client_myds->setDSS_STATE_QUERY_SENT_NET();
 								} else {
-									switch (session_type) {
-										case PROXYSQL_SESSION_ADMIN:
-										case PROXYSQL_SESSION_STATS:
-										// this is processed by the admin module
-											handler_function(this, (void *)GloAdmin, &pkt);
-											l_free(pkt.size,pkt.ptr);
-											break;
-										case PROXYSQL_SESSION_SQLITE:
-											handler_function(this, (void *)GloSQLite3Server, &pkt);
-											l_free(pkt.size,pkt.ptr);
-											break;
-#ifdef PROXYSQLCLICKHOUSE
-										case PROXYSQL_SESSION_CLICKHOUSE:
-											handler_function(this, (void *)GloClickHouseServer, &pkt);
-											l_free(pkt.size,pkt.ptr);
-											break;
-#endif /* PROXYSQLCLICKHOUSE */
-										default:
-											assert(0);
-									}
+									handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
 								}
 								break;
-							case _MYSQL_COM_CHANGE_USER:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(&pkt, &wrong_pass);
+							case _MYSQL_COM_STMT_PREPARE:
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(pkt);
+								break;
+							case _MYSQL_COM_STMT_EXECUTE:
+								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(pkt);
 								break;
 							case _MYSQL_COM_STMT_RESET:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(pkt);
@@ -3382,12 +3468,6 @@ __get_pkts_from_client:
 							case _MYSQL_COM_STMT_SEND_LONG_DATA:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
 								break;
-							case _MYSQL_COM_STMT_PREPARE:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(pkt);
-								break;
-							case _MYSQL_COM_STMT_EXECUTE:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(pkt);
-								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 								if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
@@ -3395,30 +3475,18 @@ __get_pkts_from_client:
 								handler_ret = -1;
 								return handler_ret;
 								break;
-							case _MYSQL_COM_PING:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(&pkt);
-								break;
-							case _MYSQL_COM_SET_OPTION:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(&pkt);
-								break;
-							case _MYSQL_COM_STATISTICS:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(&pkt);
-								break;
-							case _MYSQL_COM_INIT_DB:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(&pkt);
-								break;
-							case _MYSQL_COM_FIELD_LIST:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(&pkt);
-								break;
-							case _MYSQL_COM_PROCESS_KILL:
-								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(&pkt);
-								break;
 							default:
-								proxy_error("RECEIVED AN UNKNOWN COMMAND: %d -- PLEASE REPORT A BUG\n", c);
-								l_free(pkt.size,pkt.ptr);
-								handler_ret = -1; // immediately drop the connection
-								return handler_ret;
-								// assert(0); // see issue #859
+								// in this switch we only handle the most common commands.
+								// The not common commands are handled by "default" , that
+								// calls the following function
+								// handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various
+								if (handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(&pkt, &wrong_pass)==false) {
+									// If even this cannot find the command, we return an error to the client
+									proxy_error("RECEIVED AN UNKNOWN COMMAND: %d -- PLEASE REPORT A BUG\n", c);
+									l_free(pkt.size,pkt.ptr);
+									handler_ret = -1; // immediately drop the connection
+									return handler_ret;
+								}
 								break;
 						}
 						break;
