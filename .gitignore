@@ -93,6 +93,9 @@ deps/libevent/libevent-2.0.22-stable/
 
 deps/libev/libev-4.24/
 
+#libssl
+deps/libssl/openssl-1.1.1g/
+
 #memcached
 deps/memcached/memcached-1.4.20/
 
@@ -127,8 +130,6 @@ deps/protobuf/protobuf-2.6.1/
 
 deps/sqlite3/sqlite-amalgamation-3150000/
 deps/sqlite3/sqlite-amalgamation-3190200/
-
-deps/libssl/
 
 deps/clickhouse-cpp
 deps/cityhash/cityhash/

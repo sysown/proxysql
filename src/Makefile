@@ -40,10 +40,14 @@ MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
 MICROHTTPD_IDIR=$(MICROHTTPD_DIR)/include
 MICROHTTPD_LDIR=$(MICROHTTPD_DIR)/microhttpd/.libs
 
+SSL_DIR=$(DEPS_PATH)/libssl/openssl/
+SSL_IDIR=$(SSL_DIR)/include
+SSL_LDIR=$(SSL_DIR)
+
 IDIR=../include
 LDIR=../lib
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR)
-LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(DAEMONPATH_IDIR) -I$(SQLITE3_DIR) -I$(CLICKHOUSE_CPP_DIR) -I$(MICROHTTPD_IDIR) -I$(SSL_IDIR)
+LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(SSL_LDIR)
 
 UNAME_S := $(shell uname -s)
 
@@ -59,9 +63,9 @@ MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH)
 LDFLAGS+=
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -lssl -lcrypto -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
 else
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lmicrohttpd -lcurl -lssl -lcrypto -Wl,-Bdynamic -lpthread -lm -lz -lrt -lcrypto -lssl $(EXTRALINK)
 endif
 
 ifeq ($(UNAME_S),Darwin)
@@ -84,6 +88,7 @@ ifeq ($(UNAME_S),Darwin)
 	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/curl/curl/lib/.libs/libcurl.a ../deps/sqlite3/sqlite3/sqlite3.o
 endif
 
+LIBPROXYSQLAR+= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 ODIR= obj
 
 EXECUTABLE=proxysql
