@@ -485,12 +485,7 @@ MySQL_Session::MySQL_Session() {
 	memset(gtid_buf,0,sizeof(gtid_buf));
 
 	match_regexes=NULL;
-/*
-	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*3);
-	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-	match_regexes[1]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_MODE( *)(:|)=( *)");
-	match_regexes[2]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)TIME_ZONE( *)(:|)=( *)");
-*/
+
 	init(); // we moved this out to allow CHANGE_USER
 
 	last_insert_id=0; // #1093
@@ -580,19 +575,7 @@ MySQL_Session::~MySQL_Session() {
 	}
 	assert(qpo);
 	delete qpo;
-	{
-/*
-		Session_Regex *sr=NULL;
-		sr=match_regexes[0];
-		delete sr;
-		sr=match_regexes[1];
-		delete sr;
-		sr=match_regexes[2];
-		delete sr;
-	free(match_regexes);
-*/
 	match_regexes=NULL;
-	}
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
@@ -1131,39 +1114,6 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			return true;
 		}
 	}
-/*
-	if (
-		(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
-		||
-		(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
-	) {
-		char buf[32];
-		sprintf(buf,"%llu",last_insert_id);
-		unsigned int nTrx=NumActiveTransactions();
-		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-		if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-		MySQL_Data_Stream *myds=client_myds;
-		MySQL_Protocol *myprot=&client_myds->myprot;
-		myds->DSS=STATE_QUERY_SENT_DS;
-		int sid=1;
-		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
-		myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"LAST_INSERT_ID()",(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
-		myds->DSS=STATE_COLUMN_DEFINITION;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
-		char **p=(char **)malloc(sizeof(char*)*1);
-		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
-		l[0]=strlen(buf);;
-		p[0]=buf;
-		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
-		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
-		myds->DSS=STATE_SLEEP;
-		l_free(pkt->size,pkt->ptr);
-		free(p);
-		free(l);
-		return true;
-	}
-*/
 	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
 		PtrSize_t pkt_2;
@@ -1442,12 +1392,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		} else {
 			thread->mirror_queue_mysql_sessions->add(newsess);
 		}
-
-
-//		if (i==0) {
-//		} else {
-//			delete newsess;
-//		}
 	}
 }
 
@@ -1489,11 +1433,9 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 			return -1;
 		} else {
 			// rc==1 , nothing to do for now
-// tring to fix bug
 			if (myds->mypolls==NULL) {
 				thread->mypolls.add(POLLIN|POLLOUT, myds->fd, myds, thread->curtime);
 			}
-// tring to fix bug
 		}
 	}
 	return 0;
@@ -3297,7 +3239,6 @@ __get_pkts_from_client:
 						break;
 					case STATE_SSL_INIT:
 						handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(&pkt, &wrong_pass);
-						//handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(&pkt);
 						break;
 					default:
 						proxy_error("Detected not valid state client state: %d\n", client_myds->DSS);
@@ -4062,12 +4003,6 @@ handler_again:
 			}
 			client_myds->PSarrayOUT->copy_add(mybe->server_myds->PSarrayIN, 0, mybe->server_myds->PSarrayIN->len);
 			while (mybe->server_myds->PSarrayIN->len) mybe->server_myds->PSarrayIN->remove_index(mybe->server_myds->PSarrayIN->len-1,NULL);
-			// copy all packets from backend to frontend
-			//for (unsigned int k=0; k < mybe->server_myds->PSarrayIN->len; k++) {
-			//	PtrSize_t pkt;
-			//	mybe->server_myds->PSarrayIN->remove_index(0,&pkt);
-			//	client_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
-			//}
 			break;
 		case CONNECTING_CLIENT:
 			//fprintf(stderr,"CONNECTING_CLIENT\n");
@@ -4585,37 +4520,6 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
-/*
-		while (!SSL_is_init_finished(client_myds->ssl)) {
-            int ret = SSL_do_handshake(client_myds->ssl);
-            int ret2;
-            if (ret != 1) {
-                //ERR_print_errors_fp(stderr);
-                ret2 = SSL_get_error(client_myds->ssl, ret);
-                fprintf(stderr,"%d\n",ret2);
-            }
-
-		}			
-*/
-//		if (!SSL_is_init_finished(client_myds->ssl)) {
-//			int n = SSL_do_handshake(client_myds->ssl);
-//			
-//		}
-		//ioctl_FIONBIO(client_myds->fd,0);
-
-//		bool connected = false;
-//		while (connected) {	
-//		if (!SSL_accept(client_myds->ssl)==-1) {
-//		if (SSL_do_handshake(client_myds->ssl)==-1) {
-//			ERR_print_errors_fp(stderr);
-//		} else {
-//			connected = true;
-//		}
-//		}
-		//ioctl_FIONBIO(client_myds->fd,1);
-		//int my_ssl_error;
-		//int n = SSL_accept(client_myds->ssl);
-		//my_ssl_error = SSL_get_error(client_mmyds->ssl);
 		return;
 	}
 
@@ -4818,19 +4722,6 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					}
 				}
 			}
-//		} else {
-/*
-			// use SSL
-			client_myds->DSS=STATE_SSL_INIT;
-			client_myds->ssl=SSL_new(GloVars.global.ssl_ctx);
-			SSL_set_fd(client_myds->ssl, client_myds->fd);
-			ioctl_FIONBIO(client_myds->fd,0);
-			if (SSL_accept(client_myds->ssl)==-1) {
-				ERR_print_errors_fp(stderr);
-			}
-			ioctl_FIONBIO(client_myds->fd,1);
-*/
-//		}
 	} else {
 		l_free(pkt->size,pkt->ptr);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Wrong credentials for frontend: disconnecting\n", this, client_myds);
@@ -4893,24 +4784,6 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->DSS=STATE_SLEEP;
 	}
 }
-
-void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(PtrSize_t *pkt) {
-/*
-	if (client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size)==true) {
-		l_free(pkt->size,pkt->ptr);
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,3,0,0,0,0,NULL);
-		mybe->server_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
-		status=WAITING_CLIENT_DATA;
-		client_myds->DSS=STATE_SLEEP;
-	} else {
-		l_free(pkt->size,pkt->ptr);
-		// FIXME: this should become close connection
-		perror("Hitting a not implemented feature: https://github.com/sysown/proxysql-0.2/issues/124");
-		assert(0);
-	}	
-*/
-}
-
 
 // Note: as commented in issue #546 and #547 , some clients ignore the status of CLIENT_MULTI_STATEMENTS
 // therefore tracking it is not needed, unless in future this should become a security enhancement,
@@ -5004,14 +4877,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
 		char *schemaname=strndup((char *)pkt->ptr+sizeof(mysql_hdr)+5,pkt->size-sizeof(mysql_hdr)-5);
 		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
-/*
-		//remove leading spaces
-		while(isspace((unsigned char)*schemanameptr)) schemanameptr++;
-		// remove trailing semicolon , issue #915
-		if (schemanameptr[strlen(schemanameptr)-1]==';') {
-			schemanameptr[strlen(schemanameptr)-1]='\0';
-		}
-*/
 		// handle cases like "USE `schemaname`
 		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
 			schemanameptr[strlen(schemanameptr)-1]='\0';
