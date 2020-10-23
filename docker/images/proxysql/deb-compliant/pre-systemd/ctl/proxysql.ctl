@@ -6,7 +6,7 @@ Standards-Version: 3.9.2
 Package: proxysql
 Version: PKG_VERSION_CURVER
 Maintainer: ProxySQL LLC <info@proxysql.com>
-Architecture: amd64
+Architecture: PKG_ARCH
 Depends: libgnutls28 | libgnutls30 | libgnutls-deb0-28
 # Changelog: CHANGELOG.md
 # Readme: README.md

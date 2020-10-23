@@ -4,7 +4,7 @@ set -eu
 
 
 if [[ "$PROXYSQL_BUILD_ARCH" == *"arm64" ]]; then
-    ARCH="aarch64"
+    ARCH="arm64"
 else    
     ARCH="amd64"
 fi      
@@ -46,9 +46,12 @@ if [[ -z ${build_target} ]] ; then
 else
   ${MAKE} ${MAKEOPT} "${build_target}"
 fi
+
+touch /opt/proxysql/src/proxysql
 # Prepare package files and build RPM
 cp /root/ctl/proxysql.ctl /opt/proxysql/proxysql.ctl
 sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" /opt/proxysql/proxysql.ctl
+sed -i "s/PKG_ARCH/${ARCH}/g" /opt/proxysql/proxysql.ctl
 cp /opt/proxysql/src/proxysql /opt/proxysql/
 equivs-build proxysql.ctl
 mv "/opt/proxysql/proxysql_${CURVER}_$ARCH.deb" "./binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.deb"
