@@ -183,10 +183,10 @@ int main(int argc, char** argv) {
 	
 			const auto& query = queries_grouping[i];
 			const auto& exp_res = increase_mark_num(exp_queries_grouping[i], j);
-	
+
 			char* c_res = mysql_query_digest_and_first_comment(const_cast<char*>(query.c_str()), query.length(), NULL, buf);
 			std::string result(c_res);
-	
+
 			ok(result == exp_res, "Grouping digest should be equal to exp result: '%s' == '%s'", result.c_str(), exp_res.c_str());
 		}
 	}
