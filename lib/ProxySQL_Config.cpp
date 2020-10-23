@@ -1,4 +1,5 @@
 #include "proxysql_config.h"
+#include "re2/re2.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -47,7 +48,12 @@ ProxySQL_Config:: ~ProxySQL_Config() {
 void ProxySQL_Config::addField(std::string& data, const char* name, const char* value, const char* dq) {
 	std::stringstream ss;
 	if (!value || !strlen(value)) return;
-	ss << "\t\t" << name << "=" << dq << value << dq << "\n";
+
+	// Escape the double quotes in all the fields contents
+	std::string esc_value { value };
+	RE2::GlobalReplace(&esc_value, "\"", "\\\\\"");
+
+	ss << "\t\t" << name << "=" << dq << esc_value.c_str() << dq << "\n";
 	data += ss.str();
 }
 
@@ -504,7 +510,8 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
 				addField(data, "gtid_from_hostgroup", r->fields[30], "");
 				addField(data, "log", r->fields[31], "");
 				addField(data, "apply", r->fields[32], "");
-				addField(data, "comment", r->fields[33]);
+				addField(data, "attributes", r->fields[33]);
+				addField(data, "comment", r->fields[34]);
 
 				data += "\t}";
 				isNext = true;
@@ -528,7 +535,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s)";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s)";
 	for (i=0; i< count; i++) {
 		const Setting &rule = mysql_query_rules[i];
 		int rule_id;
@@ -592,6 +599,10 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 
 		int apply=0;
 
+		// attributes
+		bool attributes_exists=false;
+		std::string attributes {};
+
 		bool comment_exists=false;
 		std::string comment;
 
@@ -643,6 +654,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 
 		rule.lookupValue("apply", apply);
 		if (rule.lookupValue("comment", comment)) comment_exists=true;
+		if (rule.lookupValue("attributes", attributes)) attributes_exists=true;
 
 
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
@@ -682,6 +694,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			strlen(std::to_string(gtid_from_hostgroup).c_str()) + 4 +
 			strlen(std::to_string(log).c_str()) + 4 +
 			strlen(std::to_string(apply).c_str()) + 4 +
+			( attributes_exists ? strlen(attributes.c_str()) : 0 ) + 4 +
 			( comment_exists ? strlen(comment.c_str()) : 0 ) + 4 +
 			64;
 		char *query=(char *)malloc(query_len);
@@ -731,8 +744,12 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			re_modifiers="\"" + re_modifiers + "\"";
 		else
 			re_modifiers = "NULL";
+		if (attributes_exists)
+			attributes="'" + attributes + "'";
+		else
+			attributes = "NULL";
 		if (comment_exists)
-			comment="\"" + comment + "\"";
+			comment="'" + comment + "'";
 		else
 			comment = "NULL";
 
@@ -770,6 +787,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			( gtid_from_hostgroup >= 0 ? std::to_string(gtid_from_hostgroup).c_str() : "NULL") ,
 			( log >= 0 ? std::to_string(log).c_str() : "NULL") ,
 			( apply == 0 ? 0 : 1) ,
+			attributes.c_str(),
 			comment.c_str()
 		);
 		//fprintf(stderr, "%s\n", query);
