@@ -354,7 +354,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						continue;
 					}
 					// supress spaces before closing brakets
-					if (p >= r && (*s == ')')) {
+					if (p >= r && *p == '.' && is_space_char(prev_char) && (*s == ')')) {
 						prev_char = *s;
 						--p_r;
 						*p_r++ = *s;
