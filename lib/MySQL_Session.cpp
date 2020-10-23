@@ -3039,6 +3039,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 // client_myds->DSS = STATE_SLEEP
 // enum_mysql_command = _MYSQL_COM_QUERY
 // it searches for SQL injection
+// it returns true if it detected an SQL injection
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi() {
 	if (client_myds->com_field_list == false) {
 		if (qpo->firewall_whitelist_mode != WUS_OFF) {
@@ -3076,32 +3077,32 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 //
 // replacing the single goto with return true
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt) {
-						if (client_myds->multi_pkt.ptr==NULL) {
-							// not initialized yet
-							client_myds->multi_pkt.ptr=pkt.ptr;
-							client_myds->multi_pkt.size=pkt.size;
-						} else {
-							PtrSize_t tmp_pkt;
-							tmp_pkt.ptr=client_myds->multi_pkt.ptr;
-							tmp_pkt.size=client_myds->multi_pkt.size;
-							client_myds->multi_pkt.size = pkt.size + tmp_pkt.size-sizeof(mysql_hdr);
-							client_myds->multi_pkt.ptr = l_alloc(client_myds->multi_pkt.size);
-							memcpy(client_myds->multi_pkt.ptr, tmp_pkt.ptr, tmp_pkt.size);
-							memcpy((char *)client_myds->multi_pkt.ptr + tmp_pkt.size , (char *)pkt.ptr+sizeof(mysql_hdr) , pkt.size-sizeof(mysql_hdr)); // the header is not copied
-							l_free(tmp_pkt.size , tmp_pkt.ptr);
-							l_free(pkt.size , pkt.ptr);
-						}
-						if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) { // there are more packets
-							//goto __get_pkts_from_client;
-							return true;
-						} else {
-							// no more packets, move everything back to pkt and proceed
-							pkt.ptr=client_myds->multi_pkt.ptr;
-							pkt.size=client_myds->multi_pkt.size;
-							client_myds->multi_pkt.size=0;
-							client_myds->multi_pkt.ptr=NULL;
-							client_myds->DSS=STATE_SLEEP;
-						}
+	if (client_myds->multi_pkt.ptr==NULL) {
+		// not initialized yet
+		client_myds->multi_pkt.ptr=pkt.ptr;
+		client_myds->multi_pkt.size=pkt.size;
+	} else {
+		PtrSize_t tmp_pkt;
+		tmp_pkt.ptr=client_myds->multi_pkt.ptr;
+		tmp_pkt.size=client_myds->multi_pkt.size;
+		client_myds->multi_pkt.size = pkt.size + tmp_pkt.size-sizeof(mysql_hdr);
+		client_myds->multi_pkt.ptr = l_alloc(client_myds->multi_pkt.size);
+		memcpy(client_myds->multi_pkt.ptr, tmp_pkt.ptr, tmp_pkt.size);
+		memcpy((char *)client_myds->multi_pkt.ptr + tmp_pkt.size , (char *)pkt.ptr+sizeof(mysql_hdr) , pkt.size-sizeof(mysql_hdr)); // the header is not copied
+		l_free(tmp_pkt.size , tmp_pkt.ptr);
+		l_free(pkt.size , pkt.ptr);
+	}
+	if (pkt.size==(0xFFFFFF+sizeof(mysql_hdr))) { // there are more packets
+		//goto __get_pkts_from_client;
+		return true;
+	} else {
+		// no more packets, move everything back to pkt and proceed
+		pkt.ptr=client_myds->multi_pkt.ptr;
+		pkt.size=client_myds->multi_pkt.size;
+		client_myds->multi_pkt.size=0;
+		client_myds->multi_pkt.ptr=NULL;
+		client_myds->DSS=STATE_SLEEP;
+	}
 	return false;
 }
 
@@ -3506,8 +3507,7 @@ __get_pkts_from_client:
 						handler_ret = -1;
 						return handler_ret;
 						break;
-			}
-				
+				}	
 				break;
 			case FAST_FORWARD:
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
@@ -3617,20 +3617,20 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 	uint64_t global_stmtid;
 	//bool is_new;
 	MySQL_STMT_Global_info *stmt_info=NULL;
-		stmt_info=GloMyStmt->add_prepared_statement(
-			(char *)client_myds->myconn->userinfo->username,
-			(char *)client_myds->myconn->userinfo->schemaname,
-			(char *)CurrentQuery.QueryPointer,
-			CurrentQuery.QueryLength,
-			CurrentQuery.mysql_stmt,
-			false);
-		if (CurrentQuery.QueryParserArgs.digest_text) {
-			if (stmt_info->digest_text==NULL) {
-				stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
-				stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
-				stmt_info->MyComQueryCmd=CurrentQuery.MyComQueryCmd; // copy MyComQueryCmd
-			}
+	stmt_info=GloMyStmt->add_prepared_statement(
+		(char *)client_myds->myconn->userinfo->username,
+		(char *)client_myds->myconn->userinfo->schemaname,
+		(char *)CurrentQuery.QueryPointer,
+		CurrentQuery.QueryLength,
+		CurrentQuery.mysql_stmt,
+		false);
+	if (CurrentQuery.QueryParserArgs.digest_text) {
+		if (stmt_info->digest_text==NULL) {
+			stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
+			stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
+			stmt_info->MyComQueryCmd=CurrentQuery.MyComQueryCmd; // copy MyComQueryCmd
 		}
+	}
 	global_stmtid=stmt_info->statement_id;
 	myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
 	if (previous_status.size() == 0)
@@ -3748,6 +3748,7 @@ void MySQL_Session::handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn,
 bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret) {
 	bool retry_conn=false;
 	MySQL_Connection * myconn = myds->myconn;
+	handler_ret = 0; // default
 	switch (myerr) {
 		case 1317:  // Query execution was interrupted
 			if (killed==true) { // this session is being kiled
