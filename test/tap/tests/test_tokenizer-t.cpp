@@ -51,7 +51,15 @@ const std::vector<std::string> queries {
 	"SELECT * FROM tablename WHERE id IN (1,2,3,4,5,6,7,8,9,10)",
 	"SELECT * FROM tablename WHERE id IN (1,2,3,4)",
 	// invalid request grouping
-	"SELECT * tablename where id IN (1,2,3,4,5,6,7,8,  AND j in (1,2,3,4,5,6  and k=1"
+	"SELECT * tablename where id IN (1,2,3,4,5,6,7,8,  AND j in (1,2,3,4,5,6  and k=1",
+	// random insert queries
+	"INSERT INTO db.table(col1) VALUES ('val')",
+	"INSERT INTO db.table (col1) VALUES ('val')",
+	"INSERT INTO db.table( col1) VALUES ( 'val' )",
+	"INSERT INTO db.table( col1) VALUES ( 'val' )",
+	"INSERT INTO db.table  ( col1 )  VALUES ( 'val' )",
+	"INSERT INTO db.table (col1, col2,col3,col4) VALUES ('val',2,3,'foo')",
+	"INSERT INTO db.table ( col1, col2,col3,col4 ) VALUES ('val',2,3,'foo')"
 };
 
 const std::vector<std::string> exp_results {
@@ -86,7 +94,15 @@ const std::vector<std::string> exp_results {
 	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
 	"SELECT * FROM tablename WHERE id IN (?,?,?,...)",
 	// invalid request grouping
-	"SELECT * tablename where id IN (?,?,?,... AND j in (?,?,?,... and k=?"
+	"SELECT * tablename where id IN (?,?,?,... AND j in (?,?,?,... and k=?",
+	// random insert queries
+	"INSERT INTO db.table(col1) VALUES (?)",
+	"INSERT INTO db.table (col1) VALUES (?)",
+	"INSERT INTO db.table( col1) VALUES ( ? )",
+	"INSERT INTO db.table( col1) VALUES ( ? )",
+	"INSERT INTO db.table ( col1 ) VALUES ( ? )",
+	"INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)",
+	"INSERT INTO db.table ( col1,col2,col3,col4 ) VALUES (?,?,?,?)"
 };
 
 const std::vector<std::string> queries_grouping {
