@@ -302,9 +302,10 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V1_3_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V1_4_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_0_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
-#define ADMIN_SQLITE_TABLE_MYSQL_USERS ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_0_0
+#define ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_1_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
+#define ADMIN_SQLITE_TABLE_MYSQL_USERS ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_1_0
 
-#define ADMIN_SQLITE_RUNTIME_MYSQL_USERS "CREATE TABLE runtime_mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
+#define ADMIN_SQLITE_RUNTIME_MYSQL_USERS "CREATE TABLE runtime_mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '', comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 
 #define ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING_V2_0_0 "CREATE TABLE mysql_ldap_mapping (priority INTEGER CHECK (priority >= 1 AND priority <= 1000000) PRIMARY KEY , frontend_entity VARCHAR NOT NULL , backend_entity VARCHAR NOT NULL , comment VARCHAR NOT NULL DEFAULT '' , UNIQUE (frontend_entity))"
 #define ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING_V2_0_0
@@ -6909,7 +6910,7 @@ void ProxySQL_Admin::add_credentials(char *credentials, int hostgroup_id) {
 		c_split_2(token, ":", &user, &pass);
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Adding %s credential: \"%s\", user:%s, pass:%s\n", type, token, user, pass);
 		if (GloMyAuth) { // this check if required if GloMyAuth doesn't exist yet
-			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0,1000,(char *)"");
+			GloMyAuth->add(user,pass,USERNAME_FRONTEND,0,hostgroup_id,(char *)"main",0,0,0,1000,(char*)"",(char *)"");
 		}
 		free(user);
 		free(pass);
@@ -9711,14 +9712,14 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *
 	char *query=NULL;
 	if (__user==NULL) {
 		if (hash1) {
-			str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 ORDER BY username";
+			str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,attributes,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 ORDER BY username";
 		} else {
-			str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0";
+			str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,attributes,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0";
 		}
 		query=(char *)malloc(strlen(str)+15);
 		sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"));
 	} else {
-		str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
+		str=(char *)"SELECT username,password,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,max_connections,attributes,comment FROM main.mysql_users WHERE %s=1 AND active=1 AND default_hostgroup>=0 AND username='%s'";
 		query=(char *)malloc(strlen(str)+strlen(__user)+15);
 		sprintf(query,str,(usertype==USERNAME_BACKEND ? "backend" : "frontend"),__user);
 	}
@@ -9789,7 +9790,8 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *
 				(strcmp(r->fields[6],"1")==0 ? true : false) , // transaction_persistent
 				(strcmp(r->fields[7],"1")==0 ? true : false), // fast_forward
 				( atoi(r->fields[8])>0 ? atoi(r->fields[8]) : 0),  // max_connections
-				(r->fields[9]==NULL ? (char *)"" : r->fields[9]) //comment
+				(r->fields[9] == NULL ? (char *)"" : r->fields[9]), // attributes
+				(r->fields[10]==NULL ? (char *)"" : r->fields[10]) //comment
 			);
 			if (variables.hash_passwords) {
 				free(password); // because we always generate a new string
@@ -10011,10 +10013,10 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 //	char *qfr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username='%s' AND frontend=1),0),1,%d)";
 //	char *qbr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username='%s' AND backend=1),0),%d)";
 
-	char *qf_stmt1=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,COALESCE((SELECT backend FROM mysql_users WHERE username=?9 AND frontend=1),0),1,?10,?11)";
-	char *qb_stmt1=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,COALESCE((SELECT frontend FROM mysql_users WHERE username=?9 AND backend=1),0),?10,?11)";
-	char *qfr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username=?9 AND frontend=1),0),1,?10,?11)";
-	char *qbr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username=?9 AND backend=1),0),?10,?11)";
+	char *qf_stmt1=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,0,1,?9,?10,?11)";
+	char *qb_stmt1=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,0,?9,?10,?11)";
+	char *qfr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,0,1,?9,?10,?11)";
+	char *qbr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,attributes,comment) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,0,?9,?10,?11)";
 	num_users=GloMyAuth->dump_all_users(&ads);
 	if (num_users==0) return;
 	char *q_stmt1_f=NULL;
@@ -10081,8 +10083,8 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 6, ad->schema_locked); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, ad->transaction_persistent); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 8, ad->fast_forward); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_text)(statement1, 9, ad->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 10, ad->max_connections); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 9, ad->max_connections); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 10, ad->attributes, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			rc=(*proxy_sqlite3_bind_text)(statement1, 11, ad->comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
@@ -10092,6 +10094,7 @@ void ProxySQL_Admin::save_mysql_users_runtime_to_database(bool _runtime) {
 		free(ad->password); // this is not initialized with dump_all_users( , false)
 		free(ad->default_schema); // this is not initialized with dump_all_users( , false)
 		free(ad->comment);
+		free(ad->attributes);
 		free(ad);
 	}
 	if (_runtime) {
@@ -11584,6 +11587,21 @@ void ProxySQL_Admin::disk_upgrade_mysql_users() {
 		configdb->build_table((char *)"mysql_users",(char *)ADMIN_SQLITE_TABLE_MYSQL_USERS,false);
 		// copy fields from old table
 		configdb->execute("INSERT INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) SELECT * FROM mysql_users_v140");
+	}
+	// adding mysql_users.attributes. See #3083
+	rci=configdb->check_table_structure((char *)"mysql_users",(char *)ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_0_0);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version pre-2.1.0 of table mysql_users\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_users in progress\n");
+		// drop any existing table with suffix _v210
+		configdb->execute("DROP TABLE IF EXISTS mysql_users_v200");
+		// rename current table to add suffix _v210
+		configdb->execute("ALTER TABLE mysql_users RENAME TO mysql_users_v200");
+		// create new table
+		configdb->build_table((char *)"mysql_users",(char *)ADMIN_SQLITE_TABLE_MYSQL_USERS,false);
+		// copy fields from old table
+		configdb->execute("INSERT INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections,comment) SELECT * FROM mysql_users_v200");
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 }
