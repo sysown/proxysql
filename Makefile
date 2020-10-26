@@ -320,7 +320,7 @@ binaries/proxysql-${CURVER}-1-dbg-centos7.x86_64.rpm:
 
 binaries/proxysql-${CURVER}-1-centos8.x86_64.rpm:
 	docker-compose up centos8_build
-	#docker-compose rm -f
+	docker-compose rm -f
 
 binaries/proxysql-${CURVER}-1-dbg-centos8.x86_64.rpm:
 	docker-compose up centos8_dbg_build
