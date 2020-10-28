@@ -3527,6 +3527,14 @@ void MySQL_Thread::unregister_session(int idx) {
 	mysql_sessions->remove_index_fast(idx);
 }
 
+void MySQL_Thread::unregister_session(MySQL_Session *_sess) {
+	if (mysql_sessions==NULL) return;
+	if (mysql_sessions->pdata[mysql_sessions->len-1] == _sess) {
+		mysql_sessions->remove_index_fast(mysql_sessions->len - 1);
+	} else {
+		mysql_sessions->remove_fast(_sess);
+	}
+}
 
 // main loop
 void MySQL_Thread::run() {
