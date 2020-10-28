@@ -3,11 +3,8 @@
 set -eu
 
 
-if [[ "$PROXYSQL_BUILD_ARCH" == *"arm64" ]]; then
-    ARCH="arm64"
-else    
-    ARCH="amd64"
-fi      
+ARCH=$PROXYSQL_BUILD_ARCH
+
 echo "==> $ARCH architecture detected for package"
 
 # Dirty patch to ensure OS deps are installed:
