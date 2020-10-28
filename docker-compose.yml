@@ -58,7 +58,7 @@ services:
       - CURVER
       - PKG_RELEASE=centos7
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=arm64
+      - PROXYSQL_BUILD_ARCH=aarch64
     command:
       - /opt/entrypoint/entrypoint.bash
   centos7_dbg_build:
@@ -103,7 +103,7 @@ services:
       - CURVER
       - PKG_RELEASE=centos8
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=arm64
+      - PROXYSQL_BUILD_ARCH=aarch64
     command:
       - /opt/entrypoint/entrypoint.bash
   centos8_dbg_build:
@@ -223,7 +223,7 @@ services:
       - CURVER
       - PKG_RELEASE=fedora32
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=arm64
+      - PROXYSQL_BUILD_ARCH=aarch64
     command:
       - /opt/entrypoint/entrypoint.bash
   debian8_build:
