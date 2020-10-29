@@ -3598,6 +3598,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string
 }
 
 void MySQL_HostGroups_Manager::p_update_connection_pool() {
+	std::vector<string> cur_servers_ids {};
 	wrlock();
 	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
 		MyHGC *myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
@@ -3611,6 +3612,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 				{"endpoint", endpoint_addr + ":" + endpoint_port},
 				{"hostgroup", hostgroup_id }
 			};
+			cur_servers_ids.push_back(endpoint_id);
 
 			// proxysql_connection_pool_bytes_data_recv metric
 			std::map<std::string, std::string> recv_pool_bytes_labels = common_labels;
@@ -3661,6 +3663,39 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 				status.p_connection_pool_status_map, mysrvc->status + 1, p_hg_dyn_gauge::connection_pool_status);
 		}
 	}
+
+	// Remove the non-present servers for the gauge metrics
+	vector<string> keys {};
+	vector<string> f_keys {};
+
+	for (const auto& key : status.p_connection_pool_status_map) {
+		keys.push_back(key.first);
+	}
+
+	for (const auto& key : keys) {
+		if (std::find(cur_servers_ids.begin(), cur_servers_ids.end(), key) == cur_servers_ids.end()) {
+			f_keys.push_back(key);
+		}
+	}
+
+	for (const auto& key : f_keys) {
+		auto gauge = status.p_connection_pool_status_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_status]->Remove(gauge);
+		status.p_connection_pool_status_map.erase(key);
+
+		gauge = status.p_connection_pool_conn_used_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_free]->Remove(gauge);
+		status.p_connection_pool_conn_used_map.erase(key);
+
+		gauge = status.p_connection_pool_conn_free_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_used]->Remove(gauge);
+		status.p_connection_pool_conn_free_map.erase(key);
+
+		gauge = status.p_connection_pool_latency_us_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_latency_us]->Remove(gauge);
+		status.p_connection_pool_latency_us_map.erase(key);
+	}
+
 	wrunlock();
 }
 
