@@ -77,8 +77,6 @@ class MySQL_Session
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
 
-	void handler___status_CONNECTING_CLIENT___STATE_SSL_INIT(PtrSize_t *);
-
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *);
@@ -86,8 +84,6 @@ class MySQL_Session
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
 
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(PtrSize_t *);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t *);
 	void handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
@@ -133,6 +129,35 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt);
+
+	// these functions have code that used to be inline, and split into functions for readibility
+	int handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds);
+	void SetQueryTimeout();
+	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params);
+	void handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds);
+	bool handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, int myerr, char **errmsg);
+	void handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn, int myerr, char *errmsg);
+	bool handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret);
+	void handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass);
+	void handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
+	int RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
+	void handler___status_WAITING_CLIENT_DATA();
+	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
+	void handler___status_WAITING_CLIENT_DATA___default();
+	void handler___status_NONE_or_default(PtrSize_t& pkt);
+
+	void handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt);
+	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt);
+	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt);
+	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt);
+	int handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq);
 
 	public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
