@@ -6,7 +6,7 @@
 #include <sstream>
 
 Restapi_Row::Restapi_Row(unsigned int _id, bool _is_active, unsigned int _in, const std::string& _method, const std::string& _uri, const std::string& _script, const std::string& _comment) :
-	id(_id), is_active(_is_active), interval_ms(_in), method(_method), uri(_uri), script(_script), comment(_comment) {}
+	id(_id), is_active(_is_active), timeout_ms(_in), method(_method), uri(_uri), script(_script), comment(_comment) {}
 
 ProxySQL_Restapi::ProxySQL_Restapi(SQLite3DB* db) {
 	assert(db);
@@ -37,8 +37,8 @@ void ProxySQL_Restapi::update_restapi_table(SQLite3_result *resultset) {
 		if (atoi(r->fields[1])) {
 			is_active=true;
 		}
-		unsigned int interval_ms=strtoul(r->fields[2], NULL, 10);
-		Restapi_Rows.push_back({id, is_active, interval_ms, r->fields[3], r->fields[4], r->fields[5], r->fields[6]});
+		unsigned int timeout_ms=strtoul(r->fields[2], NULL, 10);
+		Restapi_Rows.push_back({id, is_active, timeout_ms, r->fields[3], r->fields[4], r->fields[5], r->fields[6]});
 	}
 
 	// increase version
@@ -79,7 +79,7 @@ void ProxySQL_Restapi::save_restapi_runtime_to_database(bool _runtime) {
 	for (auto r : Restapi_Rows) {
 		std::stringstream ss;
 		ss << "INSERT INTO " << table << " VALUES(" << r.id << "," <<  r.is_active << ","
-			<< r.interval_ms << ",'" << r.method << "','" << r.uri << "','" << r.script << "','" << r.comment << "')";
+			<< r.timeout_ms << ",'" << r.method << "','" << r.uri << "','" << r.script << "','" << r.comment << "')";
 
 		admindb->execute(ss.str().c_str());
 	}
