@@ -223,6 +223,7 @@ class ProxySQL_Admin {
 	void disk_upgrade_mysql_servers();
 	void disk_upgrade_mysql_users();
 	void disk_upgrade_scheduler();
+	void disk_upgrade_rest_api_routes();
 
 #ifdef DEBUG
 	void add_credentials(char *type, char *credentials, int hostgroup_id);

@@ -12,7 +12,7 @@ class Restapi_Row {
 public:
 	unsigned int id;
 	bool is_active;
-	unsigned int interval_ms;
+	unsigned int timeout_ms;
 	std::string method;
 	std::string uri;
 	std::string script;
