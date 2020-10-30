@@ -11641,9 +11641,9 @@ void ProxySQL_Admin::disk_upgrade_rest_api_routes() {
 		// upgrade is required
 		proxy_warning("Detected version pre-2.1.0 of table restapi_routes\n");
 		proxy_warning("ONLINE UPGRADE of table restapi_routes in progress\n");
-		// drop any existing table with suffix _v210
+		// drop any existing table with suffix _v2015
 		configdb->execute("DROP TABLE IF EXISTS restapi_routes_v2015");
-		// rename current table to add suffix _v210
+		// rename current table to add suffix _v2015
 		configdb->execute("ALTER TABLE restapi_routes RENAME TO restapi_routes_v2015");
 		// create new table
 		configdb->build_table((char *)"restapi_routes",(char *)ADMIN_SQLITE_TABLE_RESTAPI_ROUTES,false);
