@@ -2417,29 +2417,41 @@ cluster_metrics_map = std::make_tuple(
 		// mysql_variables_*
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_variables_success,
-			"pulled_mysql_variables",
-			"Number of times 'mysql_variables' have been pulled from a peer.",
-			metric_tags { { "status", "success" } }
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_variables" },
+				{ "status", "success" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_mysql_variables_failure,
-			"pulled_mysql_variables",
-			"Number of times 'mysql_variables' have been pulled from a peer.",
-			metric_tags { { "status", "failure" } }
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_variables" },
+				{ "status", "failure" }
+			}
 		),
 
 		// admin_variables_*
 		std::make_tuple (
 			p_cluster_counter::pulled_admin_variables_success,
-			"pulled_admin_variables",
-			"Number of times 'admin_variables' have been pulled from a peer.",
-			metric_tags { { "status", "success" } }
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "admin_variables" },
+				{ "status", "success" }
+			}
 		),
 		std::make_tuple (
 			p_cluster_counter::pulled_admin_variables_failure,
-			"pulled_admin_variables",
-			"Number of times 'admin_variables' have been pulled from a peer.",
-			metric_tags { { "status", "failure" } }
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "admin_variables" },
+				{ "status", "failure" }
+			}
 		),
 
 		// sync_conflict same epoch
@@ -2540,7 +2552,7 @@ cluster_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_mysql_variables_version_one,
-			"sync_delayed_mysql_variables_version_one",
+			"proxysql_cluster_syn_conflict_total",
 			"Number of times a 'module' has not been able to be synced.",
 			metric_tags {
 				{ "module_name", "mysql_variables" },
@@ -2549,7 +2561,7 @@ cluster_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_cluster_counter::sync_delayed_admin_variables_version_one,
-			"sync_delayed_admin_variables_version_one",
+			"proxysql_cluster_syn_conflict_total",
 			"Number of times a 'module' has not been able to be synced.",
 			metric_tags {
 				{ "module_name", "admin_variables" },

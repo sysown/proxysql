@@ -934,7 +934,7 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_enabled,
-			"mysql_monitor_enabled",
+			"proxysql_mysql_monitor_enabled",
 			"Enables or disables MySQL Monitor.",
 			metric_tags {}
 		),
@@ -976,21 +976,20 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_interval,
-			"mysql_monitor_replication_lag_interval_seconds",
+			"proxysql_mysql_monitor_replication_lag_interval_seconds",
 			"How frequently a replication lag check is performed, in seconds.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_timeout,
-			"mysql_monitor_replication_lag_timeout_seconds",
+			"proxysql_mysql_monitor_replication_lag_timeout_seconds",
 			"Replication lag check timeout in seconds.",
 			metric_tags {}
 		),
-		// TODO: Current help looks too complicated to be exposed as a metric help.
 		std::make_tuple (
 			p_th_gauge::mysql_monitor_history,
-			"mysql_monitor_history",
-			".",
+			"proxysql_mysql_monitor_history_timeout_seconds",
+			"The duration for which the events for the checks made by the Monitor module are kept, in seconds.",
 			metric_tags {}
 		)
 	}
