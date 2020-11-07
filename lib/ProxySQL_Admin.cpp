@@ -4358,6 +4358,24 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
 
+	if (!strncasecmp("SHOW PROMETHEUS METRICS", query_no_space, strlen("SHOW PROMETHEUS METRICS"))) {
+		char* pta[1];
+		pta[0] = NULL;
+		SQLite3_result* resultset = new SQLite3_result(1);
+		resultset->add_column_definition(SQLITE_TEXT,"Data");
+
+		if (__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
+			auto result = pa->serial_exposer({});
+			pta[0] = (char*)result.second.c_str();
+		}
+
+		resultset->add_row(pta);
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		delete resultset;
+		run_query = false;
+
+		goto __run_query;
+	}
 
 	if (!strncasecmp("SHOW GLOBAL VARIABLES LIKE 'version'", query_no_space, strlen("SHOW GLOBAL VARIABLES LIKE 'version'"))) {
 		l_free(query_length,query);
@@ -5498,6 +5516,13 @@ bool ProxySQL_Admin::init() {
 	}
 	do { usleep(50); } while (__sync_fetch_and_sub(&load_main_,0)==0);
 	load_main_=0;
+
+	// Register the global prometheus registry in the 'serial_exposer'
+	if (registered_prometheus_collectable == false) {
+		this->serial_exposer.RegisterCollectable(GloVars.prometheus_registry);
+		registered_prometheus_collectable = true;
+	}
+
 #ifdef DEBUG
 	std::cerr << "Admin initialized in ";
 #endif
@@ -5768,7 +5793,6 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					AdminRestApiServer = new ProxySQL_RESTAPI_Server(
 						variables.restapi_port, {{"/metrics", prometheus_callback}}
 					);
-					this->serial_exposer.RegisterCollectable(GloVars.prometheus_registry);
 				} else {
 					delete AdminRestApiServer;
 					AdminRestApiServer = NULL;

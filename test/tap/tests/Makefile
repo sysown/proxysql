@@ -106,3 +106,6 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
 
 test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_gtid_forwarding-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_gtid_forwarding-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_admin_prometheus_metrics_dump-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_admin_prometheus_metrics_dump-t -DGITVERSION=\"$(GIT_VERSION)\"
