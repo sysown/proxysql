@@ -537,6 +537,11 @@ void MySQL_Session::reset() {
 			}
 		}
 	}
+	if (client_myds) {
+		if (client_myds->myconn) {
+			client_myds->myconn->reset();
+		}
+	}
 }
 
 MySQL_Session::~MySQL_Session() {
