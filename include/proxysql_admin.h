@@ -112,6 +112,7 @@ class ProxySQL_Admin {
 	struct pollfd *main_poll_fds;
 	int *main_callback_func;
 
+	bool registered_prometheus_collectable;
 
 #ifdef PA_PTHREAD_MUTEX
 	pthread_rwlock_t rwlock;
@@ -425,5 +426,7 @@ class ProxySQL_Admin {
 
 	unsigned int ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int, bool);
 	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual);
+
+	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
