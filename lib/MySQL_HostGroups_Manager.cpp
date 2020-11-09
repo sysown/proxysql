@@ -860,6 +860,14 @@ void MySrvC::connect_error(int err_num) {
 		return;
 	if (err_num >= 1054 && err_num <= 1075)
 		return;
+	if (err_num >= 1099 && err_num <= 1104)
+		return;
+	if (err_num >= 1106 && err_num <= 1113)
+		return;
+	if (err_num >= 1116 && err_num <= 1118)
+		return;
+	if (err_num == 1136 || (err_num >= 1138 && err_num <= 1149))
+		return;
 	switch (err_num) {
 		case 1007: // Can't create database
 		case 1008: // Can't drop database
@@ -872,6 +880,7 @@ void MySrvC::connect_error(int err_num) {
 		case 1051: // Unknown table
 		case 1052: // Column is ambiguous
 */
+		case 1120:
 		case 1203: // User %s already has more than 'max_user_connections' active connections
 		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
 			return;
