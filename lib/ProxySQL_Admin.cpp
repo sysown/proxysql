@@ -5831,14 +5831,35 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							free(key_pem);
 							free(cert_pem);
 					} else {
-						GloWebInterface->start(variables.web_port);
+						if (GloWebInterface) {
+							int sfd = 0;
+							struct sockaddr_in tmp_addr;
+
+							sfd = socket(AF_INET, SOCK_STREAM, 0);
+							memset(&tmp_addr, 0, sizeof(tmp_addr));
+							tmp_addr.sin_family = AF_INET;
+							tmp_addr.sin_port = htons(variables.web_port);
+							tmp_addr.sin_addr.s_addr = INADDR_ANY;
+
+							if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+								proxy_error(
+									"Unable to start WebInterfacePlugin, port '%d' already in use.\n",
+									variables.web_port
+								);
+							} else {
+								close(sfd);
+								GloWebInterface->start(variables.web_port);
+							}
+						}
 					}
 				} else {
 					if (GloVars.web_interface_plugin == NULL) {
 						MHD_stop_daemon(Admin_HTTP_Server);
 						Admin_HTTP_Server = NULL;
 					} else {
-						GloWebInterface->stop();
+						if (GloWebInterface) {
+							GloWebInterface->stop();
+						}
 					}
 				}
 				variables.web_enabled_old = variables.web_enabled;
@@ -5864,7 +5885,9 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							free(key_pem);
 							free(cert_pem);
 						} else {
-							GloWebInterface->start(variables.web_port);
+							if (GloWebInterface) {
+								GloWebInterface->start(variables.web_port);
+							}
 						}
 					}
 					variables.web_port_old = variables.web_port;
