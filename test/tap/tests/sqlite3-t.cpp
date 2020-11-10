@@ -9,7 +9,15 @@
 #include "proxysql.h"
 
 int main() {
-	plan(8);
+	plan(9);
+
+	{
+		int i=sqlite3_config(SQLITE_CONFIG_URI, 1);
+		if (i!=SQLITE_OK) {
+			fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
+		}
+		ok(i==SQLITE_OK, "Setting SQLITE_CONFIG_URI");
+	}
 
 	SQLite3DB *db;	// in memory
 	db = new SQLite3DB();
