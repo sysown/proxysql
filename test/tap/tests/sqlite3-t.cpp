@@ -11,8 +11,17 @@
 #include "sqlite3db.h"
 
 int main() {
-	plan(8);
 	SQLite3DB::LoadPlugin(NULL);
+	plan(9);
+
+	{
+		int i=sqlite3_config(SQLITE_CONFIG_URI, 1);
+		if (i!=SQLITE_OK) {
+			fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
+		}
+		ok(i==SQLITE_OK, "Setting SQLITE_CONFIG_URI");
+	}
+
 	SQLite3DB *db;	// in memory
 	db = new SQLite3DB();
 	db->open((char *)"file:mem_db?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
