@@ -5842,6 +5842,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							tmp_addr.sin_addr.s_addr = INADDR_ANY;
 
 							if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+								close(sfd);
 								proxy_error(
 									"Unable to start WebInterfacePlugin, port '%d' already in use.\n",
 									variables.web_port
