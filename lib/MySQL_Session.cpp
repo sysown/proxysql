@@ -4375,6 +4375,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	if (
 		(handshake_response_return == false) && (client_myds->switching_auth_stage == 1)
 	) {
+		l_free(pkt->size,pkt->ptr);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Returning\n", this, client_myds);
 		return;
 	}
