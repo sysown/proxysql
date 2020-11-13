@@ -1790,7 +1790,7 @@ __exit_monitor_galera_thread:
 			}
 		} else {
 			if (fields) { // if we didn't get any error, but fileds is NULL, we are likely hitting bug #1994
-				if (primary_partition == false || wsrep_desync == true || wsrep_local_state!=4) {
+				if (primary_partition == false || wsrep_desync == true || (wsrep_local_state != 4 && ! (wsrep_local_state == 2 && ! wsrep_sst_donor_rejects_queries))) {
 					if (primary_partition == false) {
 						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"primary_partition=NO");
 					} else {
@@ -1803,13 +1803,8 @@ __exit_monitor_galera_thread:
 						}
 					}
 				} else {
-					//if (wsrep_sst_donor_rejects_queries || wsrep_reject_queries) {
 					if (wsrep_reject_queries) {
 						MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_reject_queries=true");
-						//	} else {
-						//		// wsrep_sst_donor_rejects_queries
-						//		MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"wsrep_sst_donor_rejects_queries=true");
-						//	}
 					} else {
 						if (pxc_maint_mode) {
 							MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"pxc_maint_mode=YES", true);
