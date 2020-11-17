@@ -5833,6 +5833,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					} else {
 						if (GloWebInterface) {
 							int sfd = 0;
+							int reuseaddr = 1;
 							struct sockaddr_in tmp_addr;
 
 							sfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -5841,15 +5842,23 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							tmp_addr.sin_port = htons(variables.web_port);
 							tmp_addr.sin_addr.s_addr = INADDR_ANY;
 
-							if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+							if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuseaddr, sizeof(reuseaddr)) == -1) {
 								close(sfd);
 								proxy_error(
-									"Unable to start WebInterfacePlugin, port '%d' already in use.\n",
+									"Unable to start WebInterfacePlugin, failed to set 'SO_REUSEADDR' to check port availability.\n",
 									variables.web_port
 								);
 							} else {
-								close(sfd);
-								GloWebInterface->start(variables.web_port);
+								if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+									close(sfd);
+									proxy_error(
+										"Unable to start WebInterfacePlugin, port '%d' already in use.\n",
+										variables.web_port
+									);
+								} else {
+									close(sfd);
+									GloWebInterface->start(variables.web_port);
+								}
 							}
 						}
 					}
