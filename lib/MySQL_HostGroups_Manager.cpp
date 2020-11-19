@@ -4918,6 +4918,64 @@ bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, 
 	return ret;
 }
 
+void print_galera_nodes_last_status() {
+	std::unique_ptr<SQLite3_result> result { new SQLite3_result(13) };
+
+	result->add_column_definition(SQLITE_TEXT,"hostname");
+	result->add_column_definition(SQLITE_TEXT,"port");
+	result->add_column_definition(SQLITE_TEXT,"start_time");
+	result->add_column_definition(SQLITE_TEXT,"check_time");
+	result->add_column_definition(SQLITE_TEXT,"primary_partition");
+	result->add_column_definition(SQLITE_TEXT,"read_only");
+	result->add_column_definition(SQLITE_TEXT,"wsrep_local_recv_queue");
+	result->add_column_definition(SQLITE_TEXT,"wsrep_local_state");
+	result->add_column_definition(SQLITE_TEXT,"wsrep_desync");
+	result->add_column_definition(SQLITE_TEXT,"wsrep_reject_queries");
+	result->add_column_definition(SQLITE_TEXT,"wsrep_sst_donor_rejects_queries");
+	result->add_column_definition(SQLITE_TEXT,"pxc_maint_mode");
+	result->add_column_definition(SQLITE_TEXT,"error");
+
+	pthread_mutex_lock(&GloMyMon->galera_mutex);
+
+	for (auto node_it = GloMyMon->Galera_Hosts_Map.begin(); node_it != GloMyMon->Galera_Hosts_Map.end(); node_it++) {
+		std::string s { node_it->first };
+		std::size_t colon_pos { s.find_last_of(":") };
+		std::string host { s.substr(0, colon_pos) };
+		std::string port { s.substr(colon_pos + 1) };
+		Galera_monitor_node* node { node_it->second };
+
+		if (node->last_entry()->start_time) {
+			std::string error { "" };
+
+			if (node->last_entry()->error) {
+				error = std::string { node->last_entry()->error };
+			}
+
+			result->add_row(
+				host.c_str(),
+				port.c_str(),
+				std::to_string(node->last_entry()->start_time).c_str(),
+				std::to_string(node->last_entry()->check_time).c_str(),
+				std::to_string(node->last_entry()->primary_partition).c_str(),
+				std::to_string(node->last_entry()->read_only).c_str(),
+				std::to_string(node->last_entry()->wsrep_local_recv_queue).c_str(),
+				std::to_string(node->last_entry()->wsrep_local_state).c_str(),
+				std::to_string(node->last_entry()->wsrep_desync).c_str(),
+				std::to_string(node->last_entry()->wsrep_reject_queries).c_str(),
+				std::to_string(node->last_entry()->wsrep_sst_donor_rejects_queries).c_str(),
+				std::to_string(node->last_entry()->pxc_maint_mode).c_str(),
+				error.c_str(),
+				NULL
+			);
+		}
+	}
+
+	pthread_mutex_unlock(&GloMyMon->galera_mutex);
+
+	proxy_info("Galera: Node status changed by ProxySQL, dumping all galera nodes status:\n");
+	result->dump_to_stderr();
+}
+
 void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *_error, bool soft) {
 	bool set_offline = false;
 	int cols=0;
@@ -5027,6 +5085,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 			}
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("Galera: setting host %s:%d offline because: %s\n", _hostname, _port, _error);
+				print_galera_nodes_last_status();
 				commit();
 				wrlock();
 				SQLite3_result *resultset2=NULL;
@@ -5057,6 +5116,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				wrunlock();
 			} else {
 				proxy_warning("Galera: skipping setting offline node %s:%d from hostgroup %d because won't change the list of ONLINE nodes\n", _hostname, _port, _writer_hostgroup);
+				print_galera_nodes_last_status();
 			}
 		}
 	}
@@ -5089,6 +5149,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 	if (resultset && info) { // we lock only if needed
 		if (resultset->rows_count) {
 			proxy_warning("Galera: setting host %s:%d (part of cluster with writer_hostgroup=%d) in read_only because: %s\n", _hostname, _port, _writer_hostgroup, _error);
+			print_galera_nodes_last_status();
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
@@ -5325,6 +5386,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 			}
 			if (checksum_incoming!=checksum_current) {
 				proxy_warning("Galera: setting host %s:%d as writer\n", _hostname, _port);
+				print_galera_nodes_last_status();
 				commit();
 				wrlock();
 				SQLite3_result *resultset2=NULL;

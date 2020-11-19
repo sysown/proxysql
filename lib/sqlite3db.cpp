@@ -113,7 +113,6 @@ void SQLite3_row::add_fields(char **_fields) {
 		ds=data_size;
 }
 
-
 SQLite3DB::SQLite3DB() {
 	db=NULL;
 	url=NULL;
@@ -582,6 +581,34 @@ int SQLite3_result::add_row(char **_fields) {
 		pthread_mutex_unlock(&m);
 	}
 	return SQLITE_ROW;
+}
+
+/**
+ * @brief Adds a new row to the resulset using a NULL terminated variadic list of
+ *  'const char*' as argument.
+ *
+ * NOTE: This function is unsafe, the final 'NULL' element should be supplied,
+ * otherwise a segfault is likely to happen.
+ *
+ * @param _field Initial element of variadic arguments supplied.
+ * @param ... Variadic NULL terminated list of 'const char*' holding the rest
+ *  of fields to add.
+ *
+ * @return SQLITE_ROW
+ */
+int SQLite3_result::add_row(const char* _field, ...) {
+	va_list ap;
+	va_start(ap, _field);
+	vector<const char*> fields {};
+
+	while (_field) {
+		fields.push_back(_field);
+		_field = va_arg(ap, const char *);
+	}
+
+	va_end(ap);
+
+	return this->add_row(const_cast<char**>(&fields[0]));
 }
 
 int SQLite3_result::add_row(SQLite3_row *old_row) {
