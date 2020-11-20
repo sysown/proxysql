@@ -10676,6 +10676,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		(*proxy_sqlite3_finalize)(statement);
 	}
 	if(resultset) delete resultset;
+	resultset = NULL;
 
 	// dump mysql_galera_hostgroups
 	if (_runtime) {
@@ -10718,6 +10719,8 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		}
 		(*proxy_sqlite3_finalize)(statement);
 	}
+	if(resultset) delete resultset;
+	resultset = NULL;
 
 	// dump mysql_aws_aurora_hostgroups
 
