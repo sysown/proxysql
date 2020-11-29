@@ -2313,6 +2313,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
+	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (
 		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
