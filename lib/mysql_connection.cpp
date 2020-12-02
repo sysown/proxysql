@@ -1616,15 +1616,9 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	assert(mysql);
 	assert(ret_mysql);
 	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
-	if (
-		(server_status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
-		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED && parent->shunned_automatic==true && parent->shunned_and_kill_all_connections==true) // the server is SHUNNED due to a serious issue
-		||
-		(server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) // slave is lagging! see #774
-	) {
+	if (IsServerOffline())
 		return -1;
-	}
+
 	if (myds) {
 		if (myds->DSS != STATE_MARIADB_QUERY) {
 			myds->DSS = STATE_MARIADB_QUERY;
@@ -1750,6 +1744,10 @@ int MySQL_Connection::async_change_user(short event) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
+	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	if (IsServerOffline())
+		return -1;
+
 	switch (async_state_machine) {
 		case ASYNC_CHANGE_USER_SUCCESSFUL:
 			unknown_transaction_status = false;
@@ -1793,6 +1791,10 @@ int MySQL_Connection::async_select_db(short event) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
+	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	if (IsServerOffline())
+		return -1;
+
 	switch (async_state_machine) {
 		case ASYNC_INITDB_SUCCESSFUL:
 			unknown_transaction_status = false;
@@ -1830,6 +1832,10 @@ int MySQL_Connection::async_set_autocommit(short event, bool ac) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
+	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	if (IsServerOffline())
+		return -1;
+
 	switch (async_state_machine) {
 		case ASYNC_SET_AUTOCOMMIT_SUCCESSFUL:
 			unknown_transaction_status = false;
@@ -1869,6 +1875,10 @@ int MySQL_Connection::async_set_names(short event, unsigned int c) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
+	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	if (IsServerOffline())
+		return -1;
+
 	switch (async_state_machine) {
 		case ASYNC_SET_NAMES_SUCCESSFUL:
 			unknown_transaction_status = false;
@@ -1908,6 +1918,10 @@ int MySQL_Connection::async_set_option(short event, bool mask) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
+	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
+	if (IsServerOffline())
+		return -1;
+
 	switch (async_state_machine) {
 		case ASYNC_SET_OPTION_SUCCESSFUL:
 			unknown_transaction_status = false;
@@ -2299,6 +2313,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
+	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
 	if (
 		(parent->status==MYSQL_SERVER_STATUS_OFFLINE_HARD) // the server is OFFLINE as specific by the user
 		||
