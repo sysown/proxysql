@@ -20,7 +20,7 @@ PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
 endif
 .PHONY: default
 
