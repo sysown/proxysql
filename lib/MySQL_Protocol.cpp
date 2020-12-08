@@ -2506,13 +2506,13 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 						pkt.size=tmp_pkt_size;
 						pkt.ptr=malloc(pkt.size);
 						add_row2(r,(unsigned char *)pkt.ptr);
-						PSarrayOUT.add(pkt.ptr,pkt.size);
 						if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
 							// generate a heartbeat every 256MB
 							unsigned long long curtime=monotonic_time();
 							c_myds->sess->thread->atomic_curtime=curtime;
 						}
 						resultset_size+=pkt.size;
+						PSarrayOUT.add_compress(pkt.ptr,pkt.size);
 						r=r->next; // next row
 					} else { // we have small row
 						r2 = r;
@@ -2538,13 +2538,13 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 								tmp2 += sizeof(mysql_hdr);
 								r = r->next;
 							}
-							PSarrayOUT.add(pkt.ptr,pkt.size);
 							if (resultset_size/0xFFFFFFF != ((resultset_size+pkt.size)/0xFFFFFFF)) {
 								// generate a heartbeat every 256MB
 								unsigned long long curtime=monotonic_time();
 								c_myds->sess->thread->atomic_curtime=curtime;
 							}
 							resultset_size+=pkt.size;
+							PSarrayOUT.add_compress(pkt.ptr,pkt.size);
 						}
 					}
 				}

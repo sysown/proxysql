@@ -115,12 +115,12 @@ cityhash/cityhash/src/.libs/libcityhash.a:
 	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
-lz4/lz4/liblz4.a:
+lz4/lz4/lib/liblz4.a:
 	cd lz4 && rm -rf lz4-1.7.5 || true
 	cd lz4 && rm -rf lz4-1.9.3 || true
 	cd lz4 && tar -zxf v1.9.3.tar.gz
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
-lz4: lz4/lz4/liblz4.a
+lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp || true
