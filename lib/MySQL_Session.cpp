@@ -1498,7 +1498,23 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 				proxy_error("Change user timeout during COM_CHANGE_USER on %s , %d\n", myconn->parent->address, myconn->parent->port);
 			} else { // rc==-1
 				int myerr=mysql_errno(myconn->mysql);
-				proxy_error("Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
+				// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+				// wasn't stablished because the server was detected to be down, *prior*
+				// to the connection attempt, and the session should be destroyed.
+				if (myerr != 0) {
+					proxy_error("Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n",
+						myconn->parent->myhgc->hid,
+						myconn->parent->address,
+						myconn->parent->port,
+						myds->fd,
+						myds->myconn->fd,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd=0;
@@ -1904,10 +1920,24 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection while setting INIT CONNECT on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection while setting INIT CONNECT on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection while setting INIT CONNECT on %s:%d hg %d : %d, %s\n",
+						myconn->parent->address,
+						myconn->parent->port,
+						current_hostgroup,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 								retry_conn=true;
@@ -1995,10 +2025,24 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection while setting LDAP USER VARIABLE on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection while setting LDAP USER VARIABLE on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection while setting LDAP USER VARIABLE on %s:%d hg %d : %d, %s\n",
+						myconn->parent->address,
+						myconn->parent->port,
+						current_hostgroup,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
 				}
@@ -2072,10 +2116,24 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection while setting SQL_LOG_BIN on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection while setting SQL_LOG_BIN on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection while setting SQL_LOG_BIN on %s:%d hg %d : %d, %s\n",
+						myconn->parent->address,
+						myconn->parent->port,
+						current_hostgroup,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
 				}
@@ -2137,13 +2195,26 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				if (myerr == 2019) {
 					proxy_error("Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %u\n", charset, myconn->parent->address, myconn->parent->port, mysql_tracked_variables[SQL_CHARACTER_SET].default_value);
 				}
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection during SET NAMES on %s , %d : %d, %s\n",
+						myconn->parent->address,
+						myconn->parent->port,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
 				}
@@ -2241,10 +2312,25 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection while setting %s on %s:%d hg %d : %d, %s\n", var_name, myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection while setting %s on %s:%d hg %d : %d, %s\n", var_name, myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection while setting %s on %s:%d hg %d : %d, %s\n",
+						var_name,
+						myconn->parent->address,
+						myconn->parent->port,
+						current_hostgroup,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
@@ -2344,10 +2430,23 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection during setting MYSQL_OPTION_MULTI_STATEMENTS on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection during setting MYSQL_OPTION_MULTI_STATEMENTS on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection during setting MYSQL_OPTION_MULTI_STATEMENTS on %s , %d : %d, %s\n",
+						myconn->parent->address,
+						myconn->parent->port,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
@@ -2410,10 +2509,23 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection during INIT_DB on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection during INIT_DB on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection during INIT_DB on %s , %d : %d, %s\n",
+						myconn->parent->address,
+						myconn->parent->port,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
@@ -2634,10 +2746,23 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection during change user on %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection during change user on %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection during change user on %s, %d : %d, %s\n",
+						myconn->parent->address,
+						myconn->parent->port,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
 				}
@@ -2727,10 +2852,23 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			if (myerr >= 2000) {
+			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
+			// wasn't stablished because the server was detected to be down, *prior*
+			// to the connection attempt, and the session should be destroyed.
+			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
-				proxy_error("Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				if (myerr != 0) {
+					proxy_error("Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
+				} else {
+					proxy_error(
+						"Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n",
+						myconn->parent->address,
+						myconn->parent->port,
+						myerr,
+						"Detected offline server prior to statement execution"
+					);
+				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
 				}
