@@ -3124,11 +3124,43 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
 			switch (connection_quality_level) {
 				case 0: // not found any good connection, tracked options are not OK
-					// we must create a new connection
-					conn = new MySQL_Connection();
-					conn->parent=mysrvc;
-					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+					// we must check if connections need to be freed before
+					// creating a new connection
+					{
+						unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
+						unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
+						unsigned int pct_max_connections = (3 * mysrvc->max_connections) / 4;
+						unsigned int connections_to_free = 0;
+
+						if (pct_max_connections <= (conns_free + conns_used)) {
+							connections_to_free = (conns_free + conns_used) - pct_max_connections;
+							connections_to_free = connections_to_free == 0 ? 1 : connections_to_free;
+						}
+
+						while (conns_free && connections_to_free) {
+							MySQL_Connection* conn = mysrvc->ConnectionsFree->remove(0);
+							delete conn;
+
+							conns_free = mysrvc->ConnectionsFree->conns_length();
+							connections_to_free -= 1;
+						}
+
+						conns_used = mysrvc->ConnectionsUsed->conns_length();
+
+						if (mysrvc->max_connections > (conns_used + conns_free)) {
+							// we must create a new connection
+							conn = new MySQL_Connection();
+							conn->parent=mysrvc;
+							__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+						} else {
+							// no suitable connection was found, and the number of
+							// used connections already reached 'max_connections'
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "No suitable connection found, 'max_connections' reached for server %s:%d\n", conn->parent->address, conn->parent->port);
+							__sync_fetch_and_add(&MyHGM->status.server_connections_delayed, 1);
+							return NULL;
+						}
+					}
 					break;
 				case 1: //tracked options are OK , but CHANGE USER is required
 					// we may consider creating a new connection
