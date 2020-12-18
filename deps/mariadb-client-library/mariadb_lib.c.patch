@@ -1,8 +1,8 @@
 diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
-index 8c2a99b..cf6114a 100644
+index d43b68c..05fd121 100644
 --- libmariadb/mariadb_lib.c
 +++ libmariadb/mariadb_lib.c
-@@ -1643,9 +1643,16 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
+@@ -1515,9 +1515,16 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
  
    mysql->client_flag= client_flag;
  
@@ -19,7 +19,7 @@ index 8c2a99b..cf6114a 100644
  
    if (mysql->client_flag & CLIENT_COMPRESS)
      net->compress= 1;
-@@ -1696,6 +1703,15 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
+@@ -1568,6 +1575,15 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
    return(mysql);
  
  error:
@@ -35,7 +35,7 @@ index 8c2a99b..cf6114a 100644
    /* Free alloced memory */
    end_server(mysql);
    /* only free the allocated memory, user needs to call mysql_close */
-@@ -1775,7 +1791,7 @@ my_bool STDCALL mariadb_reconnect(MYSQL *mysql)
+@@ -1647,7 +1663,7 @@ my_bool STDCALL mariadb_reconnect(MYSQL *mysql)
    if (!mysql_real_connect(&tmp_mysql,mysql->host,mysql->user,mysql->passwd,
  			  mysql->db, mysql->port, mysql->unix_socket,
  			  mysql->client_flag | CLIENT_REMEMBER_OPTIONS) ||
@@ -44,7 +44,7 @@ index 8c2a99b..cf6114a 100644
    {
      if (ctxt)
        my_context_install_suspend_resume_hook(ctxt, NULL, NULL);
-@@ -1821,6 +1837,7 @@ void ma_invalidate_stmts(MYSQL *mysql, const char *function_name)
+@@ -1693,6 +1709,7 @@ void ma_invalidate_stmts(MYSQL *mysql, const char *function_name)
  {
    if (mysql->stmts)
    {
@@ -52,7 +52,7 @@ index 8c2a99b..cf6114a 100644
      LIST *li_stmt= mysql->stmts;
  
      for (; li_stmt; li_stmt= li_stmt->next)
-@@ -1829,6 +1846,7 @@ void ma_invalidate_stmts(MYSQL *mysql, const char *function_name)
+@@ -1701,6 +1718,7 @@ void ma_invalidate_stmts(MYSQL *mysql, const char *function_name)
        stmt->mysql= NULL;
        SET_CLIENT_STMT_ERROR(stmt, CR_STMT_CLOSED, SQLSTATE_UNKNOWN, function_name);
      }
@@ -60,7 +60,7 @@ index 8c2a99b..cf6114a 100644
      mysql->stmts= NULL;
    }
  }
-@@ -2115,6 +2133,44 @@ mysql_close(MYSQL *mysql)
+@@ -1970,6 +1988,44 @@ mysql_close(MYSQL *mysql)
    return;
  }
  
@@ -105,8 +105,8 @@ index 8c2a99b..cf6114a 100644
  
  /**************************************************************************
  ** Do a query. If query returned rows, free old rows.
-@@ -2189,6 +2245,8 @@ int ma_read_ok_packet(MYSQL *mysql, uchar *pos, ulong length)
-             char *data;
+@@ -2036,6 +2092,8 @@ int ma_read_ok_packet(MYSQL *mysql, uchar *pos, ulong length)
+             old_pos= pos;
              si_type= (enum enum_session_state_type)net_field_length(&pos);
              switch(si_type) {
 +            case SESSION_TRACK_GTIDS:
@@ -114,7 +114,7 @@ index 8c2a99b..cf6114a 100644
              case SESSION_TRACK_SCHEMA:
              case SESSION_TRACK_STATE_CHANGE:
              case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
-@@ -3670,18 +3728,27 @@ void STDCALL mysql_get_character_set_info(MYSQL *mysql, MY_CHARSET_INFO *cs)
+@@ -3474,18 +3532,27 @@ void STDCALL mysql_get_character_set_info(MYSQL *mysql, MY_CHARSET_INFO *cs)
    mariadb_get_charset_info(mysql, cs);
  }
  
@@ -147,7 +147,7 @@ index 8c2a99b..cf6114a 100644
      if (!mysql_real_query(mysql, buff, (unsigned long)strlen(buff)))
      {
        mysql->charset= cs;
-@@ -3691,6 +3758,7 @@ int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname)
+@@ -3494,6 +3561,7 @@ int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname)
    }
  
  error:
