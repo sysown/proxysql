@@ -2443,6 +2443,13 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	}
 	//}
 	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
+		init_with_stmt(_stmt);
+	}
+}
+
+
+void MySQL_ResultSet::init_with_stmt(MYSQL_STMT *_stmt) {
+	MySQL_Data_Stream * c_myds = *(myprot->myds);
 		buffer_to_PSarrayOut();
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
@@ -2551,7 +2558,6 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 			}
 		}
 		add_eof();
-	}
 }
 
 MySQL_ResultSet::~MySQL_ResultSet() {
