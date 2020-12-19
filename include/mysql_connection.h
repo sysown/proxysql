@@ -188,6 +188,7 @@ class MySQL_Connection {
 	void stmt_execute_store_result_start();
 	void stmt_execute_store_result_cont(short event);
 
+	void process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT();
 
 	void async_free_result();
 	bool IsActiveTransaction(); /* {

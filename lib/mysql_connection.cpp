@@ -713,6 +713,18 @@ void MySQL_Connection::connect_start() {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
+	{
+		// FIXME: THIS IS FOR TESTING PURPOSE ONLY
+		// DO NOT ENABLE THIS CODE FOR PRODUCTION USE
+		// we drastically reduce the receive buffer to make sure that
+		// mysql_stmt_store_result_[start|continue] doesn't complete
+		// in a single call
+		int rcvbuf = 10240;
+		if(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0) {
+			proxy_error("Failed to call setsockopt\n");
+			exit(EXIT_FAILURE);
+		}
+	}
 }
 
 void MySQL_Connection::connect_cont(short event) {
@@ -1175,16 +1187,11 @@ handler_again:
 			//	async_fetch_row_start=true;
 			//}
 			if (async_exit_status) {
-				next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT);
-			//} else {
-			//	NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
-			//}
-			} else {
 				// this copied mostly from ASYNC_USE_RESULT_CONT
 				//async_fetch_row_start=false;
 				unsigned int br=0;
 				MYSQL_ROWS *r=query.stmt->result.data;
-				int rows_read_inner = 0;
+				long long unsigned int rows_read_inner = 0;
 
 				if (r) {
 					rows_read_inner++;
@@ -1195,10 +1202,15 @@ handler_again:
 						r = r->next;
 					}
 					if (rows_read_inner > 1) {
+						process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT();
 					}
 				}
+				next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT);
+			} else {
+				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
+			}
 				
-				if (mysql_row) {
+/*				if (mysql_row) {
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
@@ -1228,7 +1240,8 @@ handler_again:
 					MyRS->add_eof();
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
-			}
+*/
+//			}
 			break;
 		case ASYNC_STMT_EXECUTE_END:
 			{
@@ -1553,57 +1566,58 @@ handler_again:
 	return async_state_machine;
 }
 
-process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT
-						// there is more than 1 row
-						unsigned long long total_size=0;
-						int irs = 0;
-						MYSQL_ROWS *ir = query.stmt->result.data;
-						for (irs = 0; irs < query.stmt->result.rows -1 ; irs++) {
-							// while iterating the rows we also count the bytes
-							total_size+=ir->length;
-							if (ir->length > 0xFFFFFF) {
-								total_size+=(ir->length / 0xFFFFFF) * sizeof(mysql_hdr);
-							}
-							total_size+=sizeof(mysql_hdr);
+void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT() {
+	// there is more than 1 row
+	unsigned long long total_size=0;
+	long long unsigned int irs = 0;
+	MYSQL_ROWS *ir = query.stmt->result.data;
+	for (irs = 0; irs < query.stmt->result.rows -1 ; irs++) {
+		// while iterating the rows we also count the bytes
+		total_size+=ir->length;
+		if (ir->length > 0xFFFFFF) {
+			total_size+=(ir->length / 0xFFFFFF) * sizeof(mysql_hdr);
+		}
+		total_size+=sizeof(mysql_hdr);
 
-							// TODO: here we need to copy the rows in the MyRS
-							// before that we need to prepare MyRS
-							// without the two above, the final result set will only have few rows (possible only one)
+		// TODO: here we need to copy the rows in the MyRS
+		// before that we need to prepare MyRS
+		// without the two above, the final result set will only have few rows (possible only one)
 
-							ir = ir->next;
-							//rows_read++;
-						}
-						// at this point, ir points to the last row
-						// next, we create a new MYSQL_ROWS that is a copy of the last row
-						MYSQL_ROWS *lcopy = (MYSQL_ROWS *)malloc(sizeof(MYSQL_ROWS) + ir->length);
-						lcopy->length = ir->length;
-						lcopy->data= (MYSQL_ROW)(lcopy + 1);
-						memcpy((char *)lcopy->data, (char *)ir->data, ir->length);
-						// next we proceed to reset all the buffer
-						query.stmt->result.rows = 0;
-						ma_free_root(&query.stmt->result.alloc, MYF(MY_KEEP_PREALLOC));
-						query.stmt->result.data= NULL;
-						query.stmt->result_cursor= NULL;
-						// we will now copy back the last row and make it the only row available
-						MYSQL_ROWS *current = (MYSQL_ROWS *)ma_alloc_root(&query.stmt->result.alloc, sizeof(MYSQL_ROWS) + lcopy->length);
-						current->data= (MYSQL_ROW)(current + 1);
-						MYSQL_ROWS **pprevious = &query.stmt->result.data;
-						//current->next = NULL;
-						*pprevious= current;
-						pprevious= &current->next;
-						memcpy((char *)current->data, (char *)lcopy->data, lcopy->length);
-						// we free the copy
-						free(lcopy);
-						// change the rows count to 1
-						query.stmt->result.rows = 1;
-						// we should also configure the cursor, but because we scan it using our own
-						// algorithm, this is not needed
+		ir = ir->next;
+		//rows_read++;
+	}
+	// at this point, ir points to the last row
+	// next, we create a new MYSQL_ROWS that is a copy of the last row
+	MYSQL_ROWS *lcopy = (MYSQL_ROWS *)malloc(sizeof(MYSQL_ROWS) + ir->length);
+	lcopy->length = ir->length;
+	lcopy->data= (MYSQL_ROW)(lcopy + 1);
+	memcpy((char *)lcopy->data, (char *)ir->data, ir->length);
+	// next we proceed to reset all the buffer
+	query.stmt->result.rows = 0;
+	ma_free_root(&query.stmt->result.alloc, MYF(MY_KEEP_PREALLOC));
+	query.stmt->result.data= NULL;
+	query.stmt->result_cursor= NULL;
+	// we will now copy back the last row and make it the only row available
+	MYSQL_ROWS *current = (MYSQL_ROWS *)ma_alloc_root(&query.stmt->result.alloc, sizeof(MYSQL_ROWS) + lcopy->length);
+	current->data= (MYSQL_ROW)(current + 1);
+	MYSQL_ROWS **pprevious = &query.stmt->result.data;
+	//current->next = NULL;
+	*pprevious= current;
+	pprevious= &current->next;
+	memcpy((char *)current->data, (char *)lcopy->data, lcopy->length);
+	// we free the copy
+	free(lcopy);
+	// change the rows count to 1
+	query.stmt->result.rows = 1;
+	// we should also configure the cursor, but because we scan it using our own
+	// algorithm, this is not needed
 
-						// now we update bytes counter
-						__sync_fetch_and_add(&parent->bytes_recv,total_size);
-						myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=total_size;
-						myds->bytes_info.bytes_recv += total_size;
-						bytes_info.bytes_recv += total_size;
+	// now we update bytes counter
+	__sync_fetch_and_add(&parent->bytes_recv,total_size);
+	myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=total_size;
+	myds->bytes_info.bytes_recv += total_size;
+	bytes_info.bytes_recv += total_size;
+}
 
 void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
 #ifdef DEBUG
