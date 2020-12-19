@@ -2388,7 +2388,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	//}
 	//reset_pid=true;
 	result=_res;
-	resultset_size=0;
+	//resultset_size=0;
 	num_rows=0;
 	num_fields=mysql_field_count(mysql);
 	PtrSize_t pkt;
