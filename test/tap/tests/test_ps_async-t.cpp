@@ -188,6 +188,8 @@ int restore_admin(MYSQL* mysqladmin) {
 	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
 	MYSQL_QUERY(mysqladmin, "load mysql servers from disk");
 	MYSQL_QUERY(mysqladmin, "load mysql servers to runtime");
+	MYSQL_QUERY(mysqladmin, "load mysql variables from disk");
+	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 }
 
 int main(int argc, char** argv) {
@@ -238,6 +240,9 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY(mysqladmin, "delete from mysql_servers where hostgroup_id=1");
 	MYSQL_QUERY(mysqladmin, "load mysql servers to runtime");
+
+	MYSQL_QUERY(mysqladmin, "set mysql-threshold_resultset_size=5000");
+	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
 	MYSQL_QUERY(mysql, "drop database if exists test");
 	MYSQL_QUERY(mysql, "create database if not exists test");

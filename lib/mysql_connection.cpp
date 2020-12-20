@@ -1161,6 +1161,30 @@ handler_again:
 				query.stmt_result=mysql_stmt_result_metadata(query.stmt);
 				if (query.stmt_result==NULL) {
 					NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
+				} else {
+					if (myds->sess->mirror==false) {
+						if (MyRS_reuse == NULL) {
+							MyRS = new MySQL_ResultSet();
+							MyRS->init(&myds->sess->client_myds->myprot, query.stmt_result, mysql, query.stmt);
+						} else {
+							MyRS = MyRS_reuse;
+							MyRS_reuse = NULL;
+							MyRS->init(&myds->sess->client_myds->myprot, query.stmt_result, mysql, query.stmt);
+						}
+					} else {
+/*
+						// we do not support mirroring with prepared statements
+						if (MyRS_reuse == NULL) {
+							MyRS = new MySQL_ResultSet();
+							MyRS->init(NULL, mysql_result, mysql);
+						} else {
+							MyRS = MyRS_reuse;
+							MyRS_reuse = NULL;
+							MyRS->init(NULL, mysql_result, mysql);
+						}
+*/
+					}
+					//async_fetch_row_start=false;
 				}
 			}
 			stmt_execute_store_result_start();
@@ -1202,7 +1226,16 @@ handler_again:
 						r = r->next;
 					}
 					if (rows_read_inner > 1) {
-						process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT();
+						process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(processed_bytes);
+						if (
+							(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
+								||
+							( mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
+						) {
+							next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we temporarily pause
+						} else {
+							NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we continue looping
+						}
 					}
 				}
 				next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT);
@@ -1566,7 +1599,7 @@ handler_again:
 	return async_state_machine;
 }
 
-void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT() {
+void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes) {
 	// there is more than 1 row
 	unsigned long long total_size=0;
 	long long unsigned int irs = 0;
@@ -1579,12 +1612,22 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT() {
 		}
 		total_size+=sizeof(mysql_hdr);
 
-		// TODO: here we need to copy the rows in the MyRS
-		// before that we need to prepare MyRS
-		// without the two above, the final result set will only have few rows (possible only one)
-
-		ir = ir->next;
 		//rows_read++;
+		//MYSQL_ROW mysql_row = ir->data;
+		//if (mysql_row) {
+		unsigned int br=MyRS->add_row(ir);
+		__sync_fetch_and_add(&parent->bytes_recv,br);
+		myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
+		myds->bytes_info.bytes_recv += br;
+		bytes_info.bytes_recv += br;
+		processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
+		//}
+		ir = ir->next;
+	}
+	// generate a heartbeat, always
+	if (myds && myds->sess && myds->sess->thread) {
+		unsigned long long curtime=monotonic_time();
+		myds->sess->thread->atomic_curtime=curtime;
 	}
 	// at this point, ir points to the last row
 	// next, we create a new MYSQL_ROWS that is a copy of the last row
