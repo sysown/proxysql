@@ -1624,11 +1624,6 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 		//}
 		ir = ir->next;
 	}
-	// generate a heartbeat, always
-	if (myds && myds->sess && myds->sess->thread) {
-		unsigned long long curtime=monotonic_time();
-		myds->sess->thread->atomic_curtime=curtime;
-	}
 	// at this point, ir points to the last row
 	// next, we create a new MYSQL_ROWS that is a copy of the last row
 	MYSQL_ROWS *lcopy = (MYSQL_ROWS *)malloc(sizeof(MYSQL_ROWS) + ir->length);
