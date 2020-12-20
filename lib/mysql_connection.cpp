@@ -1212,8 +1212,6 @@ handler_again:
 			//}
 			if (async_exit_status) {
 				// this copied mostly from ASYNC_USE_RESULT_CONT
-				//async_fetch_row_start=false;
-				unsigned int br=0;
 				MYSQL_ROWS *r=query.stmt->result.data;
 				long long unsigned int rows_read_inner = 0;
 
@@ -1242,39 +1240,6 @@ handler_again:
 			} else {
 				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
 			}
-				
-/*				if (mysql_row) {
-					unsigned int br=MyRS->add_row(mysql_row);
-					__sync_fetch_and_add(&parent->bytes_recv,br);
-					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
-					myds->bytes_info.bytes_recv += br;
-					bytes_info.bytes_recv += br;
-					processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
-					if (
-						(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
-							||
-						( mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
-					) {
-						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause
-					} else {
-						NEXT_IMMEDIATE(ASYNC_USE_RESULT_CONT); // we continue looping
-					}
-				} else {
-					if (mysql) {
-						int _myerrno=mysql_errno(mysql);
-						if (_myerrno) {
-							if (myds) {
-								MyRS->add_err(myds);
-								NEXT_IMMEDIATE(ASYNC_QUERY_END);
-							}
-						}
-					}
-					// we reach here if there was no error
-					MyRS->add_eof();
-					NEXT_IMMEDIATE(ASYNC_QUERY_END);
-				}
-*/
-//			}
 			break;
 		case ASYNC_STMT_EXECUTE_END:
 			{
