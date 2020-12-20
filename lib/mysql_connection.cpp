@@ -713,18 +713,18 @@ void MySQL_Connection::connect_start() {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
-	{
-		// FIXME: THIS IS FOR TESTING PURPOSE ONLY
-		// DO NOT ENABLE THIS CODE FOR PRODUCTION USE
-		// we drastically reduce the receive buffer to make sure that
-		// mysql_stmt_store_result_[start|continue] doesn't complete
-		// in a single call
-		int rcvbuf = 10240;
-		if(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0) {
-			proxy_error("Failed to call setsockopt\n");
-			exit(EXIT_FAILURE);
-		}
-	}
+//	{
+//		// FIXME: THIS IS FOR TESTING PURPOSE ONLY
+//		// DO NOT ENABLE THIS CODE FOR PRODUCTION USE
+//		// we drastically reduce the receive buffer to make sure that
+//		// mysql_stmt_store_result_[start|continue] doesn't complete
+//		// in a single call
+//		int rcvbuf = 10240;
+//		if(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0) {
+//			proxy_error("Failed to call setsockopt\n");
+//			exit(EXIT_FAILURE);
+//		}
+//	}
 }
 
 void MySQL_Connection::connect_cont(short event) {
