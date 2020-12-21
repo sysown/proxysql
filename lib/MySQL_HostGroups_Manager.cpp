@@ -5633,41 +5633,6 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 						mydb->execute(query);
 						free(query);
 					}
-
-					int r_cols = 0;
-					int r_affected_rows = 0;
-					char* r_error = NULL;
-					SQLite3_result* r_resultset = NULL;
-
-					// if there are no readers at this point, the current writer should be used as a reader.
-					q=(char*)"SELECT COUNT(*) FROM mysql_servers_incoming WHERE hostgroup_id=%d AND status=0";
-					query=(char*)malloc(strlen(q) + 128);
-					sprintf(query, q, info->reader_hostgroup);
-					mydb->execute_statement(query, &r_error, &r_cols, &r_affected_rows, &r_resultset);
-					free(query);
-
-					if (r_resultset && r_resultset->rows_count) {
-						SQLite3_row* res = r_resultset->rows[0];
-						int num_readers = atoi(res->fields[0]);
-
-						// no actual readers right now, select the first available writer using the common
-						// ordering 'weight DESC, hostname DESC, port DESC' and use it as a reader.
-						if (num_readers == 0) {
-							q=(char*)"INSERT OR REPLACE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND status=0 ORDER BY weight DESC, hostname DESC, port DESC LIMIT 1";
-							query=(char *)malloc(strlen(q) + 128);
-							sprintf(query, q, info->reader_hostgroup, info->writer_hostgroup);
-							mydb->execute(query);
-							free(query);
-						} else if (num_readers > 1) {
-							// there are readers available, we should remove the previously placed writer
-							// from the reader hostgroup.
-							q=(char*)"DELETE FROM mysql_servers_incoming WHERE (hostgroup_id, hostname, port) IN (SELECT r.hostgroup_id,r.hostname,r.port FROM mysql_servers_incoming r JOIN (SELECT hostname,port FROM mysql_servers_incoming WHERE hostgroup_id=%d AND status=0 ORDER BY weight DESC, hostname DESC, port DESC) s ON r.hostname=s.hostname AND r.port=s.port WHERE r.hostgroup_id=%d)";
-							query=(char *)malloc(strlen(q) + 128);
-							sprintf(query, q, info->writer_hostgroup, info->reader_hostgroup);
-							mydb->execute(query);
-							free(query);
-						}
-					}
 				}
 				delete resultset;
 				resultset=NULL;
