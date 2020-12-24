@@ -101,7 +101,7 @@ index 8c2a99b..249e981 100644
 +  else
 +  {
 +    if (is_data_packet) {
-+        bool deprecate_eof =
++        unsigned long deprecate_eof =
 +            mysql->server_capabilities & CLIENT_DEPRECATE_EOF;
 +        *is_data_packet = TRUE;
 +
