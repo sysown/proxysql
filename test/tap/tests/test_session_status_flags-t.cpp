@@ -7,6 +7,7 @@
 #include <mysql.h>
 #include <string.h>
 #include <string>
+#include <unistd.h>
 #include "json.hpp"
 
 #include "tap.h"
@@ -477,6 +478,10 @@ int main(int argc, char *argv[]) {
 		for (const auto& query : lock_tables_queries) {
 			json j_status;
 			MYSQL_QUERY(proxysql_mysql, query.c_str());
+			if (query.compare(create_test_table)==0) {
+				diag("Sleeping 2 seconds because this script doesn't check replication lag");
+				sleep(2);
+			}
 			MYSQL_RES* tr_res = mysql_store_result(proxysql_mysql);
 			if (query == "PROXYSQL INTERNAL SESSION") {
 				parse_result_json_column(tr_res, j_status);
@@ -591,6 +596,10 @@ int main(int argc, char *argv[]) {
 
 		for (const auto& query : found_rows) {
 			MYSQL_QUERY(proxysql_mysql, query.c_str());
+			if (query.compare(create_test_table)==0) {
+				diag("Sleeping 2 seconds because this script doesn't check replication lag");
+				sleep(2);
+			}
 			MYSQL_RES* tr_res = mysql_store_result(proxysql_mysql);
 			if (query == "PROXYSQL INTERNAL SESSION") {
 				parse_result_json_column(tr_res, j_status);
