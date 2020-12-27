@@ -20,6 +20,7 @@ class ProxySQLCollector(diamond.collector.Collector):
     _GAUGE_KEYS = [
         'Active_Transactions',
         'Client_Connections_connected',
+        'Client_Connections_non_idle',
         'ConnPool_memory_bytes',
         'MySQL_Monitor_Workers',
         'MySQL_Thread_Workers',
