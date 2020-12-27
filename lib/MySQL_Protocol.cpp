@@ -1582,6 +1582,14 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	}
 
 	capabilities     = CPY4(pkt);
+	// see bug #2916. If CLIENT_MULTI_STATEMENTS is set by the client
+	// we enforce setting CLIENT_MULTI_RESULTS, this is the proper and expected
+	// behavior (refer to 'https://dev.mysql.com/doc/c-api/8.0/en/c-api-multiple-queries.html').
+	// Don't enforcing this would cause a mismatch between client and backend
+	// connections flags.
+	if (capabilities & CLIENT_MULTI_STATEMENTS) {
+		capabilities |= CLIENT_MULTI_RESULTS;
+	}
 	(*myds)->myconn->options.client_flag = capabilities;
 	pkt     += sizeof(uint32_t);
 	max_pkt  = CPY4(pkt);
