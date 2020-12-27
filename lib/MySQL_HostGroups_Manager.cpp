@@ -4956,17 +4956,17 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 							}
 						}
 					}
-					if (num_backup_writers) { // there are backup writers, only these will be used as readers
-						// just delete the readers which are right now part of the writer hostgroup, preserving
-						// any current reader which is only in the reader hostgroup. This is because if a server
-						// is only part of the reader hostgroup at this point, means that it's there because of a
-						// reason beyond ProxySQL control, e.g. having READ_ONLY=1.
-						q=(char*)"DELETE FROM mysql_servers_incoming where hostgroup_id=%d and (hostname,port) in (SELECT hostname,port FROM mysql_servers_incoming WHERE hostgroup_id=%d)";
-						query=(char*)malloc(strlen(q) + 128);
-						sprintf(query, q, info->reader_hostgroup, info->writer_hostgroup);
-						mydb->execute(query);
-						free(query);
+					// just delete the readers which are right now part of the writer hostgroup, preserving
+					// any current reader which is only in the reader hostgroup. This is because if a server
+					// is only part of the reader hostgroup at this point, means that it's there because of a
+					// reason beyond ProxySQL control, e.g. having READ_ONLY=1.
+					q=(char*)"DELETE FROM mysql_servers_incoming where hostgroup_id=%d and (hostname,port) in (SELECT hostname,port FROM mysql_servers_incoming WHERE hostgroup_id=%d)";
+					query=(char*)malloc(strlen(q) + 128);
+					sprintf(query, q, info->reader_hostgroup, info->writer_hostgroup);
+					mydb->execute(query);
+					free(query);
 
+					if (num_backup_writers) { // there are backup writers, only these will be used as readers
 						q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d";
 						query=(char *)malloc(strlen(q) + 128);
 						sprintf(query,q, info->reader_hostgroup, info->backup_writer_hostgroup);
