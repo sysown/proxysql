@@ -728,7 +728,7 @@ admin_metrics_map = std::make_tuple(
 		// stmt metrics
 		std::make_tuple (
 			p_admin_gauge::stmt_client_active_total,
-			"proxysql_stmt_client_active_total",
+			"proxysql_stmt_client_active",
 			"The total number of prepared statements that are in use by clients.",
 			metric_tags {}
 		),
@@ -740,7 +740,7 @@ admin_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_admin_gauge::stmt_server_active_total,
-			"proxysql_stmt_server_active_total",
+			"proxysql_stmt_server_active",
 			"The total number of prepared statements currently available across all backend connections.",
 			metric_tags {}
 		),
