@@ -798,6 +798,130 @@ bool MySQL_Protocol::generate_pkt_column_count(bool send, void **ptr, unsigned i
 	return true;
 }
 
+
+// this is an optimized version of generate_pkt_field() that uses MYSQL_FIELD
+// in order to avoid recomputing the length of the various fields
+// it also cannot handle field_list
+bool MySQL_Protocol::generate_pkt_field2(void **ptr, unsigned int *len, uint8_t sequence_id, MYSQL_FIELD *field, MySQL_ResultSet *myrs) {
+	if ((*myds)->sess->mirror==true) {
+		return true;
+	}
+	//char *def=(char *)"def";
+	//uint32_t def_strlen = field->catalog_length;
+	char def_prefix;
+	uint8_t def_len=mysql_encode_length(field->catalog_length, &def_prefix);
+
+	//uint32_t schema_strlen=strlen(schema);
+	char schema_prefix;
+	uint8_t schema_len=mysql_encode_length(field->db_length, &schema_prefix);
+
+	//uint32_t table_strlen=strlen(table);
+	char table_prefix;
+	uint8_t table_len=mysql_encode_length(field->table_length, &table_prefix);
+
+	//uint32_t org_table_strlen=strlen(org_table);
+	char org_table_prefix;
+	uint8_t org_table_len=mysql_encode_length(field->org_table_length, &org_table_prefix);
+
+	//uint32_t name_strlen=strlen(name);
+	char name_prefix;
+	uint8_t name_len=mysql_encode_length(field->name_length, &name_prefix);
+
+	//uint32_t org_name_strlen=strlen(org_name);
+	char org_name_prefix;
+	uint8_t org_name_len=mysql_encode_length(field->org_name_length, &org_name_prefix);
+
+/*
+	char defvalue_length_prefix;
+	uint8_t defvalue_length_len=0;
+	if (field_list) {
+		defvalue_length_len=mysql_encode_length(field->def_length, &defvalue_length_prefix);
+	}
+*/
+	mysql_hdr myhdr;
+	myhdr.pkt_id=sequence_id;
+	myhdr.pkt_length = def_len + field->catalog_length
+		+ schema_len + field->db_length
+		+ table_len + field->table_length
+		+ org_table_len + field->org_table_length
+		+ name_len + field->name_length
+		+ org_name_len + field->org_name_length
+		+ 1  // filler
+		+ sizeof(uint16_t) // charset
+		+ sizeof(uint32_t) // column_length
+		+ sizeof(uint8_t)  // type
+		+ sizeof(uint16_t) // flags
+		+ sizeof(uint8_t)  // decimals
+		+ 2; // filler
+/*
+	if (field_list) {
+		myhdr.pkt_length += defvalue_length_len + strlen(defvalue);
+	}
+*/
+	unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
+	unsigned char *_ptr = NULL;
+/* myrs always passed
+	if (myrs) {
+*/
+		if ( size<=(RESULTSET_BUFLEN-myrs->buffer_used) ) {
+			// there is space in the buffer, add the data to it
+			_ptr = myrs->buffer + myrs->buffer_used;
+			myrs->buffer_used += size;
+		} else {
+			// there is no space in the buffer, we flush the buffer and recreate it
+			myrs->buffer_to_PSarrayOut();
+			// now we can check again if there is space in the buffer
+			if ( size<=(RESULTSET_BUFLEN-myrs->buffer_used) ) {
+				// there is space in the NEW buffer, add the data to it
+				_ptr = myrs->buffer + myrs->buffer_used;
+				myrs->buffer_used += size;
+			} else {
+				// a new buffer is not enough to store the new row
+				_ptr=(unsigned char *)l_alloc(size);
+			}
+		}
+/* myrs always passed
+	} else {
+		_ptr=(unsigned char *)l_alloc(size);
+	}
+*/
+	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
+	int l=sizeof(mysql_hdr);
+
+	l+=write_encoded_length_and_string(_ptr+l, field->catalog_length, def_len, def_prefix, field->catalog);
+	l+=write_encoded_length_and_string(_ptr+l, field->db_length, schema_len, schema_prefix, field->db);
+	l+=write_encoded_length_and_string(_ptr+l, field->table_length, table_len, table_prefix, field->table);
+	l+=write_encoded_length_and_string(_ptr+l, field->org_table_length, org_table_len, org_table_prefix, field->org_table);
+	l+=write_encoded_length_and_string(_ptr+l, field->name_length, name_len, name_prefix, field->name);
+	l+=write_encoded_length_and_string(_ptr+l, field->org_name_length, org_name_len, org_name_prefix, field->org_name);
+	_ptr[l]=0x0c; l++;
+	memcpy(_ptr+l,&field->charsetnr,sizeof(uint16_t)); l+=sizeof(uint16_t);
+	memcpy(_ptr+l,&field->length,sizeof(uint32_t)); l+=sizeof(uint32_t);
+	_ptr[l]=field->type; l++;
+	memcpy(_ptr+l,&field->flags,sizeof(uint16_t)); l+=sizeof(uint16_t);
+	_ptr[l]=field->decimals; l++;
+	_ptr[l]=0x00; l++;
+	_ptr[l]=0x00; l++;
+	if (len) { *len=size; }
+	if (ptr) { *ptr=(void *)_ptr; }
+#ifdef DEBUG
+	if (dump_pkt) { __dump_pkt(__func__,_ptr,size); }
+#endif
+/* myrs always passed
+	if (myrs) {
+*/
+		if (_ptr >= myrs->buffer && _ptr < myrs->buffer+RESULTSET_BUFLEN) {
+			// we are writing within the buffer, do not add to PSarrayOUT
+		} else {
+			// we are writing outside the buffer, add to PSarrayOUT
+			myrs->PSarrayOUT.add(_ptr,size);
+		}
+/* myrs always passed
+	}
+*/
+	return true;
+}
+
 bool MySQL_Protocol::generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue, MySQL_ResultSet *myrs) {
 
 	if ((*myds)->sess->mirror==true) {
@@ -2415,7 +2539,9 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	for (unsigned int i=0; i<num_fields; i++) {
 		MYSQL_FIELD *field=mysql_fetch_field(result);
 		if (c_myds->com_field_list==false) {
-			myprot->generate_pkt_field(false,&pkt.ptr,&pkt.size,sid,field->db,field->table,field->org_table,field->name,field->org_name,field->charsetnr,field->length,field->type,field->flags,field->decimals,false,0,NULL,this);
+			// we are replacing generate_pkt_field() with a more efficient version
+			//myprot->generate_pkt_field(false,&pkt.ptr,&pkt.size,sid,field->db,field->table,field->org_table,field->name,field->org_name,field->charsetnr,field->length,field->type,field->flags,field->decimals,false,0,NULL,this);
+			myprot->generate_pkt_field2(&pkt.ptr,&pkt.size,sid,field,this);
 			resultset_size+=pkt.size;
 			sid++;
 		} else {
