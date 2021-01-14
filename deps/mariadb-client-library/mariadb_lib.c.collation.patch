@@ -1,0 +1,33 @@
+@@ -1017,7 +1017,10 @@ mysql_init(MYSQL *mysql)
+     goto error;
+   mysql->options.report_data_truncation= 1;
+   mysql->options.connect_timeout=CONNECT_TIMEOUT;
+-  mysql->charset= mysql_find_charset_name(MARIADB_DEFAULT_CHARSET);
++  // in proxysql we set mysql->charset to NULL during mysql_init()
++  // proxysql will explicitly set it a value if needed
++  mysql->charset = NULL;
++  //mysql->charset= mysql_find_charset_name(MARIADB_DEFAULT_CHARSET);
+   mysql->methods= &MARIADB_DEFAULT_METHODS;
+   strcpy(mysql->net.sqlstate, "00000");
+   mysql->net.last_error[0]= mysql->net.last_errno= 0;
+@@ -1497,11 +1500,15 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql
+     }
+   }
+ 
+-  /* Set character set */
+-  if (mysql->options.charset_name)
+-    mysql->charset= mysql_find_charset_name(mysql->options.charset_name);
+-  else
+-    mysql->charset=mysql_find_charset_name(MARIADB_DEFAULT_CHARSET);
++  if (!mysql->charset) { // in proxysql we do not set charset during mysql_init
++    /* Set character set */
++    if (mysql->options.charset_name)
++      mysql->charset= mysql_find_charset_name(mysql->options.charset_name);
++    else
++      mysql->charset=mysql_find_charset_name(MARIADB_DEFAULT_CHARSET);
++  } else {
++    // proxysql has explicitly set charset
++  }
+ 
+   if (!mysql->charset)
+   {
