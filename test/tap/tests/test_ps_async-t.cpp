@@ -181,6 +181,7 @@ int select_config_file(MYSQL* mysql, std::string& resultset) {
 		fprintf(stderr, "error\n");
 	}
 
+	return 0;
 }
 
 int restore_admin(MYSQL* mysqladmin) {
@@ -190,6 +191,8 @@ int restore_admin(MYSQL* mysqladmin) {
 	MYSQL_QUERY(mysqladmin, "load mysql servers to runtime");
 	MYSQL_QUERY(mysqladmin, "load mysql variables from disk");
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
+
+	return 0;
 }
 
 int main(int argc, char** argv) {
@@ -288,8 +291,7 @@ int main(int argc, char** argv) {
 	if (!stmt2a)
 	{
 		ok(false, " mysql_stmt_init(), out of memory\n");
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 	// NOTE: the first 2 columns we select are 3 ids, so we can later print and verify
 	query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3, t1.k k1, t1.c c1, t1.pad pad1, t2.k k2, t2.c c2, t2.pad pad2 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 ORDER BY t1.id, t2.id LIMIT " + std::to_string(NUM_ROWS_READ);
@@ -299,8 +301,7 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "Query error %s\n", mysql_error(mysql));
 		mysql_close(mysql);
 		mysql_library_end();
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 
@@ -308,8 +309,7 @@ int main(int argc, char** argv) {
 	{
 		fprintf(stderr, " mysql_stmt_execute(), failed\n");
 		ok(false, " %s\n", mysql_stmt_error(stmt2a));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	int row_count2a=0;
@@ -417,8 +417,7 @@ int main(int argc, char** argv) {
 	{
 		fprintf(stderr, " failed while closing the statement\n");
 		ok(false, " %s\n", mysql_error(mysql));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 	}
 
