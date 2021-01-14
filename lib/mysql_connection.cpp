@@ -696,7 +696,8 @@ void MySQL_Connection::connect_start() {
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
-	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
+	//mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
+	mysql->charset = c;
 	unsigned long client_flags = 0;
 	//if (mysql_thread___client_found_rows)
 	//	client_flags += CLIENT_FOUND_ROWS;
