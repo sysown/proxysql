@@ -1,0 +1,9 @@
+@@ -583,7 +583,7 @@ const MARIADB_CHARSET_INFO mariadb_compi
+   {  95, 1, "cp932", "cp932_japanese_ci", "", 932, "CP932", 1, 2, mysql_mbcharlen_cp932, check_mb_cp932},
+   {  97, 1, "eucjpms", "eucjpms_japanese_ci", "", 932, "EUC-JP-MS", 1, 3, mysql_mbcharlen_eucjpms, check_mb_eucjpms},
+   {   2, 1, "latin2", "latin2_czech_cs", "", 852, "LATIN2", 1, 1, NULL, NULL},
+-  {   5, 1, "latin1", "latin1_german_ci", "", 1252, "LATIN1", 1, 1, NULL, NULL},
++  {   5, 1, "latin1", "latin1_german1_ci", "", 1252, "LATIN1", 1, 1, NULL, NULL},
+   {  14, 1, "cp1251", "cp1251_bulgarian_ci", "", 1251, "CP1251", 1, 1, NULL, NULL},
+   {  15, 1, "latin1", "latin1_danish_ci", "", 1252, "LATIN1", 1, 1, NULL, NULL},
+   {  17, 1, "filename", "filename", "", 0, "", 1, 5, NULL, NULL},
