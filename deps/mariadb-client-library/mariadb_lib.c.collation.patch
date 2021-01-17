@@ -31,3 +31,37 @@
  
    if (!mysql->charset)
    {
+@@ -1759,10 +1766,16 @@ my_bool	STDCALL mysql_change_user(MYSQL
+        *s_db= mysql->db;
+   int rc;
+ 
+-  if (mysql->options.charset_name)
+-    mysql->charset= mysql_find_charset_name(mysql->options.charset_name);
+-  else
+-    mysql->charset=mysql_find_charset_name(MARIADB_DEFAULT_CHARSET);
++  // in proxysql we set charset directly,
++  // therefore this code should never be called in proxysql.
++  // we keep the code because compatibility (for example, an app using mysql_change_user)
++  // we also change mysql_optionsv() for MYSQL_SET_CHARSET_NAME 
++  if (!mysql->charset) {
++    if (mysql->options.charset_name)
++      mysql->charset= mysql_find_charset_name(mysql->options.charset_name);
++    else
++      mysql->charset=mysql_find_charset_name(MARIADB_DEFAULT_CHARSET);
++  }
+ 
+   mysql->user= strdup(user ? user : "");
+   mysql->passwd= strdup(passwd ? passwd : "");
+@@ -2767,6 +2780,12 @@ mysql_optionsv(MYSQL *mysql,enum mysql_o
+     OPT_SET_VALUE_STR(&mysql->options, charset_dir, arg1);
+     break;
+   case MYSQL_SET_CHARSET_NAME:
++    {
++      // this is for applications other than proxysql.
++      // This because proxysql doesn't use mysql_options() with MYSQL_SET_CHARSET_NAME ,
++      // but instead set mysql->charset directly
++      mysql->charset = NULL;
++    }
+     OPT_SET_VALUE_STR(&mysql->options, charset_name, arg1);
+     break;
+   case MYSQL_OPT_RECONNECT:
