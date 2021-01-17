@@ -646,6 +646,11 @@ void MySQL_Connection::change_user_start() {
 			auth_password=userinfo->password;
 		}
 	}
+	// we first reset the charset to a default one.
+	// this to solve the problem described here:
+	// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
+	if (mysql->charset->nr >= 255)
+		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, mysql->charset->csname);
 	async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
 }
 
