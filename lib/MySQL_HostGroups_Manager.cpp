@@ -686,6 +686,11 @@ static void * HGCU_thread_run() {
 					}
 				}
 				//async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
+				// we first reset the charset to a default one.
+				// this to solve the problem described here:
+				// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
+				if (myconn->mysql->charset->nr >= 255)
+					mysql_options(myconn->mysql, MYSQL_SET_CHARSET_NAME, myconn->mysql->charset->csname);
 				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->username, auth_password, myconn->userinfo->schemaname);
 				if (myconn->mysql->net.pvio==NULL || myconn->mysql->net.fd==0 || myconn->mysql->net.buff==NULL) {
 					statuses[i]=0; ret[i]=1;
