@@ -1,19 +1,33 @@
 
 UNAME_S := $(shell uname -s)
-
-PROXYDEBUG := $(shell echo $(PROXYDEBUG))
-ifeq ($(PROXYDEBUG),1)
-MYCFLAGS=-O0
-MYJEOPT=--enable-xmalloc --enable-prof --enable-fill --enable-debug
-else
-MYCFLAGS=-O2
-MYJEOPT=--enable-xmalloc --enable-prof
-endif
+UNAME_MS := $(word 2, $(shell uname -ms))
 
 ifneq (,$(wildcard /etc/system-release))
 	CENTOSVER := $(shell rpm --eval %rhel)
 else
 	CENTOSVER := Unknown
+endif
+
+IS_ARM = $(if $(findstring aarch64, $(arch)),true,false)
+IS_CENTOS = $(if $(findstring Unknown, $(CENTOSVER)),false,true)
+
+PROXYDEBUG := $(shell echo $(PROXYDEBUG))
+ifeq ($(PROXYDEBUG),1)
+MYCFLAGS=-O0
+MYJEOPT=--enable-xmalloc --enable-prof --enable-fill --enable-debug
+
+ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
+	MYJEOPT+=--with-lg-page=16
+endif
+
+else
+MYCFLAGS=-O2
+MYJEOPT=--enable-xmalloc --enable-prof
+
+ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
+	MYJEOPT+=--with-lg-page=16
+endif
+
 endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
