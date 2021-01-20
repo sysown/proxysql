@@ -674,6 +674,11 @@ static void * HGCU_thread_run() {
 					}
 				}
 				//async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
+				// we first reset the charset to a default one.
+				// this to solve the problem described here:
+				// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
+				if (myconn->mysql->charset->nr >= 255)
+					mysql_options(myconn->mysql, MYSQL_SET_CHARSET_NAME, myconn->mysql->charset->csname);
 				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->username, auth_password, myconn->userinfo->schemaname);
 				if (myconn->mysql->net.pvio==NULL || myconn->mysql->net.fd==0 || myconn->mysql->net.buff==NULL) {
 					statuses[i]=0; ret[i]=1;
@@ -3156,7 +3161,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["thread_id"] = _my->thread_id;
 					j["server_status"] = _my->server_status;
 					j["charset"] = _my->charset->nr;
-					j["options"]["charset_name"] = _my->options.charset_name;
+					j["charset_name"] = _my->charset->csname;
+
+					j["options"]["charset_name"] = ( _my->options.charset_name ? _my->options.charset_name : "" );
 					j["options"]["use_ssl"] = _my->options.use_ssl;
 					j["client_flag"]["client_found_rows"] = (_my->client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
 					j["client_flag"]["client_multi_statements"] = (_my->client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);

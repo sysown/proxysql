@@ -172,6 +172,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.collation.patch # make sure this path is applied after mariadb_lib.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_async.c < ../mariadb_async.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_password.c < ../ma_password.c.patch
@@ -180,6 +181,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_alloc.c < ../ma_alloc.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_charset.c < ../ma_charset.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_charset.c < ../ma_charset.c.german1.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch

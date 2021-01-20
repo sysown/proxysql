@@ -696,7 +696,8 @@ void MySQL_Connection::connect_start() {
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
-	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
+	//mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
+	mysql->charset = c;
 	unsigned long client_flags = 0;
 	//if (mysql_thread___client_found_rows)
 	//	client_flags += CLIENT_FOUND_ROWS;
@@ -767,6 +768,11 @@ void MySQL_Connection::change_user_start() {
 			auth_password=userinfo->password;
 		}
 	}
+	// we first reset the charset to a default one.
+	// this to solve the problem described here:
+	// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
+	if (mysql->charset->nr >= 255)
+		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, mysql->charset->csname);
 	async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
 }
 

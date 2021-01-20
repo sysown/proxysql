@@ -105,3 +105,6 @@ aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 
 create_connection_annotation: test_connection_annotation-t.cpp
 	g++ -DTEST_AURORA -DDEBUG test_connection_annotation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_connection_annotation-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+test_set_collation-t: test_set_collation-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_set_collation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_set_collation-t -DGITVERSION=\"$(GIT_VERSION)\"
