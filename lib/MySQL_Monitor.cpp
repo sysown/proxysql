@@ -1279,7 +1279,6 @@ void * monitor_group_replication_thread(void *arg) {
 	if (mmsd->interr) { // group replication check failed
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
 		proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
-		GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
