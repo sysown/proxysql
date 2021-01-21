@@ -1443,7 +1443,6 @@ void * monitor_group_replication_thread(void *arg) {
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
-		GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
