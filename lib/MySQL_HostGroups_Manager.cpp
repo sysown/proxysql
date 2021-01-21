@@ -4616,7 +4616,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id, status FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
   mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4651,7 +4651,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				SQLite3_row *r=*it;
 				int hostgroup=atoi(r->fields[0]);
 				if (hostgroup==_writer_hostgroup) {
-					found_writer=true;
+					int status = atoi(r->fields[1]);
+					if (status == 0) {
+						found_writer=true;
+					}
 				}
 				if (read_HG>=0) {
 					if (hostgroup==read_HG) {
