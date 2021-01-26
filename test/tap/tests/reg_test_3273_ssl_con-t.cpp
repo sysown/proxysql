@@ -14,6 +14,10 @@
  *  ```
  *
  *  If the rules can't be set, the test will prompt a message and fail silently.
+ *
+ *  NOTE: This test can't run right now in the CI due to not being able to set `tc` rules,
+ *  this is a known limitation in the images being used. Due to this, the test needs to be
+ *  executed manually in case of need.
  */
 
 #include <cstring>
