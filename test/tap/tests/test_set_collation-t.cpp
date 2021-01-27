@@ -12,6 +12,9 @@
 #include "command_line.h"
 #include "utils.h"
 
+#define NUMBER_NEW_CONNECTIONS 2
+#define N_ITERATION_1  10
+
 /**
  * NOTE: This is a duplicate of 'proxysql_find_charset_collate' in 'MySQL_Variables.h'. Including
  * 'MySQL_Variables' is not a easy task due to its interdependeces with other ProxySQL modules.
@@ -81,9 +84,14 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	int iterations = 10;
 	std::vector<MYSQL*> conns {};
 	std::vector<std::string> collations { "latin1_spanish_ci", "latin1_german2_ci", "latin1_danish_ci", "latin1_general_ci", "latin1_bin", "utf8_general_ci" };
+
+	int ntests = 0;
+	ntests += 1; // create all connections
+	ntests += (N_ITERATION_1 * collations.size() + NUMBER_NEW_CONNECTIONS) * 4;
+	plan(ntests);
+
 	int conns_res = create_proxysql_connections(cl, collations, conns);
 
 	ok(conns_res == 0, "Successfully create all connections with different collations");
@@ -95,7 +103,7 @@ int main(int argc, char** argv) {
 	 * Force ProxySQL to create two new backend connections and simultaneously check that the
 	 * 'character_set%' and 'collation_connection' for them are correct.
 	 */
-	for (int i = 0; i < 2; i++) {
+	for (int i = 0; i < NUMBER_NEW_CONNECTIONS; i++) {
 		MYSQL* mysql = conns[i];
 		std::string collation = collations[i];
 		MYSQL_RES* proxy_res = nullptr;
@@ -119,7 +127,7 @@ int main(int argc, char** argv) {
 		std::string collation = collations[i];
 		MYSQL_RES* proxy_res = nullptr;
 
-		for (int j = 0; j < iterations; j++) {
+		for (int j = 0; j < N_ITERATION_1; j++) {
 			MYSQL_QUERY(
 				mysql,
 				"SELECT lower(variable_name), variable_value FROM performance_schema.session_variables WHERE"
