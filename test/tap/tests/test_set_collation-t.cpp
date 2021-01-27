@@ -59,6 +59,20 @@ int create_proxysql_connections(const CommandLine& cl, const std::vector<std::st
 	return 0;
 }
 
+void check_variables(MYSQL_RES *proxy_res, std::string collation) {
+	std::size_t found = collation.find("_");
+	std::string charset = collation.substr(0,found);
+
+	MYSQL_ROW row = mysql_fetch_row(proxy_res);
+	ok(strcmp(row[1], charset.c_str()) == 0, "'character_set_client' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
+	row = mysql_fetch_row(proxy_res);
+	ok(strcmp(row[1], charset.c_str()) == 0, "'character_set_connection' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
+	row = mysql_fetch_row(proxy_res);
+	ok(strcmp(row[1], charset.c_str()) == 0, "'character_set_results' matches (expected: '%s') == (actual: '%s')", charset.c_str(), row[1]);
+	row = mysql_fetch_row(proxy_res);
+	ok(strcmp(row[1], collation.c_str()) == 0, "'collation_connection' matches (expected: '%s') == (actual: '%s')", collation.c_str(), row[1]);
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -69,7 +83,7 @@ int main(int argc, char** argv) {
 
 	int iterations = 10;
 	std::vector<MYSQL*> conns {};
-	std::vector<std::string> collations { "latin1_spanish_ci", "latin1_german2_ci", "latin1_danish_ci", "latin1_general_ci", "latin1_bin" };
+	std::vector<std::string> collations { "latin1_spanish_ci", "latin1_german2_ci", "latin1_danish_ci", "latin1_general_ci", "latin1_bin", "utf8_general_ci" };
 	int conns_res = create_proxysql_connections(cl, collations, conns);
 
 	ok(conns_res == 0, "Successfully create all connections with different collations");
@@ -89,21 +103,10 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY(
 			mysql,
 			"/*+ ;create_new_connection=1 */ SELECT lower(variable_name), variable_value FROM performance_schema.session_variables WHERE"
-			" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection')"
+			" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection') ORDER BY Variable_name"
 		);
 		proxy_res = mysql_store_result(mysql);
-
-		MYSQL_ROW row = mysql_fetch_row(proxy_res);
-		ok(strcmp(row[1], "latin1") == 0, "'character_set_client' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-		row = mysql_fetch_row(proxy_res);
-		ok(strcmp(row[1], "latin1") == 0, "'character_set_connection' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-		row = mysql_fetch_row(proxy_res);
-		ok(strcmp(row[1], "latin1") == 0, "'character_set_results' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-		row = mysql_fetch_row(proxy_res);
-		ok(strcmp(row[1], collation.c_str()) == 0, "'collation_connection' matches (expected: '%s') != (actual: '%s')", collation.c_str(), row[1]);
+		check_variables(proxy_res, collation);
 	}
 
 	/**
@@ -120,38 +123,17 @@ int main(int argc, char** argv) {
 			"SHOW VARIABLES WHERE Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection')"
 		);
 		proxy_res = mysql_store_result(mysql);
-
-		MYSQL_ROW row = mysql_fetch_row(proxy_res);
-		ok(strcmp(row[1], "latin1") == 0, "'character_set_client' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-		row = mysql_fetch_row(proxy_res);
-		ok(strcmp(row[1], "latin1") == 0, "'character_set_connection' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-		row = mysql_fetch_row(proxy_res);
-		ok(strcmp(row[1], "latin1") == 0, "'character_set_results' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-		row = mysql_fetch_row(proxy_res);
-		ok(strcmp(row[1], collation.c_str()) == 0, "'collation_connection' matches (expected: '%s') != (actual: '%s')", collation.c_str(), row[1]);
+		check_variables(proxy_res, collation);
 
 		for (int j = 0; j < iterations; j++) {
 			MYSQL_QUERY(
 				mysql,
 				"SELECT lower(variable_name), variable_value FROM performance_schema.session_variables WHERE"
-				" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection')"
+				" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection') ORDER BY Variable_name"
 			);
 			proxy_res = mysql_store_result(mysql);
+			check_variables(proxy_res, collation);
 
-			MYSQL_ROW row = mysql_fetch_row(proxy_res);
-			ok(strcmp(row[1], "latin1") == 0, "'character_set_client' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-			row = mysql_fetch_row(proxy_res);
-			ok(strcmp(row[1], "latin1") == 0, "'character_set_connection' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-			row = mysql_fetch_row(proxy_res);
-			ok(strcmp(row[1], "latin1") == 0, "'character_set_results' matches (expected: 'latin1') != (actual: '%s')", row[1]);
-
-			row = mysql_fetch_row(proxy_res);
-			ok(strcmp(row[1], collation.c_str()) == 0, "'collation_connection' matches (expected: '%s') != (actual: '%s')", collation.c_str(), row[1]);
 		}
 	}
 
