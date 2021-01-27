@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
 	}
 
 	std::vector<MYSQL*> conns {};
-	std::vector<std::string> collations { "latin1_spanish_ci", "latin1_german2_ci", "latin1_danish_ci", "latin1_general_ci", "latin1_bin", "utf8_general_ci" };
+	std::vector<std::string> collations { "latin1_spanish_ci", "latin1_german2_ci", "latin1_danish_ci", "latin1_general_ci", "latin1_bin", "utf8_general_ci", "utf8_unicode_ci" };
 
 	int ntests = 0;
 	ntests += 1; // create all connections
