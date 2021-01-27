@@ -107,6 +107,7 @@ int main(int argc, char** argv) {
 		);
 		proxy_res = mysql_store_result(mysql);
 		check_variables(proxy_res, collation);
+		mysql_free_result(proxy_res);
 	}
 
 	/**
@@ -118,13 +119,6 @@ int main(int argc, char** argv) {
 		std::string collation = collations[i];
 		MYSQL_RES* proxy_res = nullptr;
 
-		MYSQL_QUERY(
-			mysql,
-			"SHOW VARIABLES WHERE Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection')"
-		);
-		proxy_res = mysql_store_result(mysql);
-		check_variables(proxy_res, collation);
-
 		for (int j = 0; j < iterations; j++) {
 			MYSQL_QUERY(
 				mysql,
@@ -133,7 +127,7 @@ int main(int argc, char** argv) {
 			);
 			proxy_res = mysql_store_result(mysql);
 			check_variables(proxy_res, collation);
-
+			mysql_free_result(proxy_res);
 		}
 	}
 
