@@ -7,6 +7,7 @@
 #include <cstring>
 #include <stdio.h>
 #include <mysql.h>
+#include <algorithm>
 
 #include "tap.h"
 #include "command_line.h"
@@ -14,6 +15,8 @@
 
 #define NUMBER_NEW_CONNECTIONS 2
 #define N_ITERATION_1  10
+#define N_ITERATION_2  2
+#define N_ITERATION_3  3
 
 /**
  * NOTE: This is a duplicate of 'proxysql_find_charset_collate' in 'MySQL_Variables.h'. Including
@@ -62,6 +65,24 @@ int create_proxysql_connections(const CommandLine& cl, const std::vector<std::st
 	return 0;
 }
 
+int run_change_user_on_all(const CommandLine& cl, const std::vector<std::string>& collations, std::vector<MYSQL*>& conns) {
+	// start a transaction in every connection
+	// and then trigger a change user
+	// we first create a transaction in order to force the reset of the backend using CHANGE_USER
+	for (int i = 0; i < conns.size(); i++) {
+		MYSQL* mysql = conns[i];
+		MYSQL_QUERY(mysql, "START TRANSACTION");
+		const MARIADB_CHARSET_INFO* charset = proxysql_find_charset_collate(collations[i].c_str());
+		mysql->charset = charset;
+		if (mysql_change_user(mysql,cl.username, cl.password, NULL)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+			return -1;
+		}
+		ok(true, "Completed mysql_change_user() for connection %d", i);
+	}
+	return 0;
+}
+
 void check_variables(MYSQL_RES *proxy_res, std::string collation) {
 	std::size_t found = collation.find("_");
 	std::string charset = collation.substr(0,found);
@@ -76,6 +97,25 @@ void check_variables(MYSQL_RES *proxy_res, std::string collation) {
 	ok(strcmp(row[1], collation.c_str()) == 0, "'collation_connection' matches (expected: '%s') == (actual: '%s')", collation.c_str(), row[1]);
 }
 
+
+int query_and_check_session_variables(MYSQL *mysql, std::string collation, int iterations, bool new_connection=false) {
+	MYSQL_RES* proxy_res = nullptr;
+	std::string query = "";
+	if (new_connection)
+		query += "/*+ ;create_new_connection=1 */ ";
+	query += "SELECT lower(variable_name), variable_value FROM performance_schema.session_variables WHERE";
+	query +=" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection') ORDER BY Variable_name";
+
+	for (int j = 0; j < iterations; j++) {
+		MYSQL_QUERY(mysql, query.c_str());
+		proxy_res = mysql_store_result(mysql);
+		check_variables(proxy_res, collation);
+		mysql_free_result(proxy_res);
+	}
+	return 0;
+}
+
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -89,7 +129,11 @@ int main(int argc, char** argv) {
 
 	int ntests = 0;
 	ntests += 1; // create all connections
-	ntests += (N_ITERATION_1 * collations.size() + NUMBER_NEW_CONNECTIONS) * 4;
+	ntests += (NUMBER_NEW_CONNECTIONS) * 4;
+	ntests += (N_ITERATION_1 * collations.size()) * 4;
+	ntests += collations.size() * 2; // number of times we will call mysql_change_user()
+	ntests += (N_ITERATION_2 * collations.size()) * 4;
+	ntests += (N_ITERATION_3 * collations.size()) * 4;
 	plan(ntests);
 
 	int conns_res = create_proxysql_connections(cl, collations, conns);
@@ -106,16 +150,7 @@ int main(int argc, char** argv) {
 	for (int i = 0; i < NUMBER_NEW_CONNECTIONS; i++) {
 		MYSQL* mysql = conns[i];
 		std::string collation = collations[i];
-		MYSQL_RES* proxy_res = nullptr;
-
-		MYSQL_QUERY(
-			mysql,
-			"/*+ ;create_new_connection=1 */ SELECT lower(variable_name), variable_value FROM performance_schema.session_variables WHERE"
-			" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection') ORDER BY Variable_name"
-		);
-		proxy_res = mysql_store_result(mysql);
-		check_variables(proxy_res, collation);
-		mysql_free_result(proxy_res);
+		query_and_check_session_variables(mysql, collation, 1, true);
 	}
 
 	/**
@@ -125,19 +160,32 @@ int main(int argc, char** argv) {
 	for (int i = 0; i < conns.size(); i++) {
 		MYSQL* mysql = conns[i];
 		std::string collation = collations[i];
-		MYSQL_RES* proxy_res = nullptr;
-
-		for (int j = 0; j < N_ITERATION_1; j++) {
-			MYSQL_QUERY(
-				mysql,
-				"SELECT lower(variable_name), variable_value FROM performance_schema.session_variables WHERE"
-				" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection') ORDER BY Variable_name"
-			);
-			proxy_res = mysql_store_result(mysql);
-			check_variables(proxy_res, collation);
-			mysql_free_result(proxy_res);
-		}
+		query_and_check_session_variables(mysql, collation, N_ITERATION_1);
 	}
+
+	// we now want to check what happens after resetting backend connections
+	if (run_change_user_on_all(cl, collations, conns))
+		return exit_status();
+
+	// we iterate and check through all the connections
+	for (int i = 0; i < conns.size(); i++) {
+		MYSQL* mysql = conns[i];
+		std::string collation = collations[i];
+		query_and_check_session_variables(mysql, collation, N_ITERATION_2);
+	}
+
+	// we now want to check what happens after resetting backend connections
+	// we also reverse the order of collations
+	std::reverse(collations.begin(), collations.end());
+	if (run_change_user_on_all(cl, collations, conns))
+		return exit_status();
+	// we iterate and check through all the connections
+	for (int i = 0; i < conns.size(); i++) {
+		MYSQL* mysql = conns[i];
+		std::string collation = collations[i];
+		query_and_check_session_variables(mysql, collation, N_ITERATION_3);
+	}
+
 
 	return exit_status();
 }
