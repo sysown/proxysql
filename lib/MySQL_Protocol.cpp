@@ -1479,6 +1479,54 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		sha1_pass=NULL;
 	}
 	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
+	if (ret) {
+		// we need to process charset if present in CHANGE_USER
+		uint16_t charset=0;
+		int bytes_processed = (db-(char *)pkt);
+		bytes_processed += strlen(db) + 1;
+		int bytes_left = len - bytes_processed;
+		if (bytes_left > 2) {
+			char *p = db;
+			p += strlen(db);
+			p++; // null byte
+			memcpy(&charset, p, sizeof(charset));
+		}
+		// see bug #810
+		if (charset==0) {
+			const MARIADB_CHARSET_INFO *ci = NULL;
+			ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+			if (!ci) {
+				proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
+				assert(0);
+			}
+			charset=ci->nr;
+		}
+		// reject connections from unknown charsets
+		const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(charset);
+		if (!c) {
+			proxy_error("Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port, charset);
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds), (*myds)->sess, user, (*myds)->addr.addr, (*myds)->addr.port, charset);
+			ret = false;
+			return ret;
+		}
+		assert(sess);
+		assert(sess->client_myds);
+		MySQL_Connection *myconn=sess->client_myds->myconn;
+		assert(myconn);
+
+		myconn->set_charset(charset, CONNECT_START);
+
+		std::stringstream ss;
+		ss << charset;
+
+		/* We are processing handshake from client. Client sends us a character set it will use in communication.
+		 * we store this character set in the client's variables to use later in multiplexing with different backends
+		 */
+		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
+		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
+		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
+		mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
+	}
 	return ret;
 }
 
