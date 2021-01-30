@@ -605,6 +605,13 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 
+	// set 'CLIENT_DEPRECATE_EOF' flag if explicitly stated by 'mysql-enable_server_deprecate_eof'.
+	// Capability is disabled by default in 'mariadb_client', so setting this option is not optional
+	// for having 'CLIENT_DEPRECATE_EOF' in the connection to be stablished.
+	if (mysql_thread___enable_server_deprecate_eof) {
+		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+	}
+
 	char *auth_password=NULL;
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1

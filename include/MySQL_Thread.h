@@ -513,6 +513,8 @@ class MySQL_Threads_Handler
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
 		bool client_session_track_gtid;
+		bool enable_client_deprecate_eof;
+		bool enable_server_deprecate_eof;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
