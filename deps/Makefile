@@ -1,19 +1,33 @@
 
 UNAME_S := $(shell uname -s)
-
-PROXYDEBUG := $(shell echo $(PROXYDEBUG))
-ifeq ($(PROXYDEBUG),1)
-MYCFLAGS=-O0
-MYJEOPT=--enable-xmalloc --enable-prof --enable-fill --enable-debug
-else
-MYCFLAGS=-O2
-MYJEOPT=--enable-xmalloc --enable-prof
-endif
+UNAME_MS := $(word 2, $(shell uname -ms))
 
 ifneq (,$(wildcard /etc/system-release))
 	CENTOSVER := $(shell rpm --eval %rhel)
 else
 	CENTOSVER := Unknown
+endif
+
+IS_ARM = $(if $(findstring aarch64, $(arch)),true,false)
+IS_CENTOS = $(if $(findstring Unknown, $(CENTOSVER)),false,true)
+
+PROXYDEBUG := $(shell echo $(PROXYDEBUG))
+ifeq ($(PROXYDEBUG),1)
+MYCFLAGS=-O0
+MYJEOPT=--enable-xmalloc --enable-prof --enable-fill --enable-debug
+
+ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
+	MYJEOPT+=--with-lg-page=16
+endif
+
+else
+MYCFLAGS=-O2
+MYJEOPT=--enable-xmalloc --enable-prof
+
+ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
+	MYJEOPT+=--with-lg-page=16
+endif
+
 endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
@@ -160,6 +174,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.collation.patch # make sure this path is applied after mariadb_lib.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_async.c < ../mariadb_async.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_password.c < ../ma_password.c.patch

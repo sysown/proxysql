@@ -86,6 +86,38 @@ void MySQL_Variables::server_set_hash_and_value(MySQL_Session* session, int idx,
 }
 
 
+/**
+ * @brief Set the supplied value for the session variable specified by the supplied
+ *  index into the supplied client session.
+ *
+ * @details There are two session variables which require special handling:
+ *   - 'SET NAMES'
+ *   - 'SET CHARACTER SET'
+ *
+ * For the second case 'SET CHARACTER SET' we forget about the values for:
+ *   - 'SQL_CHARACTER_SET_CONNECTION'
+ *   - 'SQL_COLLATION_CONNECTION'
+ *
+ * This is done because 'character_set_database' is not known when the set happens and
+ * because we work under the assumption that if a client request 'SET CHARACTER SET'
+ * doesn't require a specific 'collation_connection' and 'character_set_connection".
+ * Furthermore, 'character_set_database' is deprecated since MySQL 5.7 and will only
+ * be usable as an immutable session variable in the future. For reference see:
+ *
+ * - 'https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_character_set_database
+ *
+ * Due to this, *it's expected behavior* to see that a connection that sets 'SET CHARACTER SET'
+ * has a variant 'collation_connection' and 'character_set_connection' depending on the
+ * backend connection that is retrieved from the connection pool. If the 'collation_connection'
+ * and 'character_set_connection' variables are relevant and should never change,
+ * 'SET NAMES' should be used.
+ *
+ * @param session The client session which variable value is going to be modified.
+ * @param idx The index of the session variable to modify.
+ * @param value The session variable value to be set.
+ *
+ * @return 'true' in case of success, 'false' otherwise.
+ */
 bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const std::string& value) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");
