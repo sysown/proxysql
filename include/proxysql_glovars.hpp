@@ -45,6 +45,7 @@ class ProxySQL_GlobalVariables {
 	bool configfile_open;
 	char *__cmd_proxysql_config_file;
 	char *__cmd_proxysql_datadir;
+	char *__cmd_proxysql_uuid;
 	int __cmd_proxysql_nostart;
 	int __cmd_proxysql_foreground;
 	int __cmd_proxysql_gdbg;
@@ -53,6 +54,7 @@ class ProxySQL_GlobalVariables {
 	char *__cmd_proxysql_admin_socket;
 	char *config_file;
 	char *datadir;
+	char *uuid;
 	char *admindb;
 	char *statsdb_disk;
 	char *sqlite3serverdb;

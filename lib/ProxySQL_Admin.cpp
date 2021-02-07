@@ -47,6 +47,8 @@
 #include "platform.h"
 #include "microhttpd.h"
 
+#include <uuid/uuid.h>
+
 //#define MYSQL_THREAD_IMPLEMENTATION
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -353,6 +355,8 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE mysql_query_rules_fast_routing (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, schemaname, flagIN) )"
+
+#define ADMIN_SQLITE_TABLE_GLOBAL_SETTINGS "CREATE TABLE global_settings (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
@@ -5371,6 +5375,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_config,"global_settings", ADMIN_SQLITE_TABLE_GLOBAL_SETTINGS);
 	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_config,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
@@ -5456,6 +5461,8 @@ bool ProxySQL_Admin::init() {
 
 	flush_admin_variables___runtime_to_database(configdb, false, false, false);
 	flush_admin_variables___runtime_to_database(admindb, false, true, false);
+
+	load_or_update_global_settings(configdb);
 
 	__insert_or_replace_maintable_select_disktable();
 
@@ -5751,6 +5758,79 @@ int check_port_availability(int port_num, bool* port_free) {
 	}
 
 	return ecode;
+}
+
+void ProxySQL_Admin::load_or_update_global_settings(SQLite3DB *db) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *q=(char *)"SELECT variable_name, variable_value FROM global_settings ORDER BY variable_name";
+	db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+	} else {
+		// note: we don't lock, this is done only during bootstrap
+		{
+			char *uuid = NULL;
+			bool write_uuid = true;
+			// search for uuid
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				if (strcasecmp(r->fields[0],"uuid")==0) {
+					uuid = strdup(r->fields[1]);
+					uuid_t uu;
+					if (uuid) {
+						if (uuid_parse(uuid,uu)==0) {
+							// we successful read an UUID
+						} else {
+							proxy_error("Ignoring invalid UUID format in global_settings: %s\n", uuid);
+							free(uuid);
+							uuid = NULL;
+						}
+					}
+				}
+			}
+			if (uuid) { // we found an UUID in the DB
+				if (GloVars.uuid) { // an UUID is already defined
+					if (strcmp(uuid, GloVars.uuid)==0) { // the match
+						proxy_info("Using UUID: %s\n", uuid);
+						write_uuid = false;
+					} else {
+						// they do not match. The one on DB will be replaced
+						proxy_info("Using UUID: %s . Replacing UUID from database: %s\n", GloVars.uuid, uuid);
+					}
+				} else {
+					// the UUID already defined, so the one in the DB will be used
+					proxy_info("Using UUID from database: %s\n", uuid);
+					GloVars.uuid=strdup(uuid);
+				}
+			} else {
+				if (GloVars.uuid) {
+					// we will write the UUID in the DB
+					proxy_info("Using UUID: %s . Writing it to database\n", GloVars.uuid);
+				} else {
+					// UUID not defined anywhere, we will create a new one
+					uuid_t uu;
+					uuid_generate(uu);
+					char buf[40];
+					uuid_unparse(uu, buf);
+					GloVars.uuid=strdup(buf);
+					proxy_info("Using UUID: %s , randomly generated. Writing it to database\n", GloVars.uuid);
+				}
+			}
+			if (write_uuid) {
+				std::string s = "INSERT OR REPLACE INTO global_settings VALUES (\"uuid\", \"";
+				s += GloVars.uuid;
+				s += "\")";
+				db->execute(s.c_str());
+			}
+			if (uuid) {
+				free(uuid);
+				uuid=NULL;
+			}
+		}
+	}
 }
 
 void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace) {
