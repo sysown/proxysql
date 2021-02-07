@@ -40,14 +40,6 @@ extern ProxySQL_Cluster * GloProxyCluster;
 
 extern ProxySQL_Admin *GloAdmin;
 
-typedef struct _proxy_node_address_t {
-	pthread_t thrid;
-	uint64_t hash; // unused for now
-	char *hostname;
-	uint16_t port;
-} proxy_node_address_t;
-
-
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
@@ -57,7 +49,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		}
 	}
 
-	proxy_node_address_t * node = (proxy_node_address_t *)args;
+	ProxySQL_Node_Address * node = (ProxySQL_Node_Address *)args;
 	mysql_thread_init();
 	pthread_detach(pthread_self());
 
@@ -264,8 +256,7 @@ __exit_monitor_thread:
 		mysql_close(conn);
 	}
 	proxy_info("Cluster: closing thread for peer %s:%d\n", node->hostname, node->port);
-	free(node->hostname);
-	free(node);
+	delete node;
 	//pthread_exit(0);
 	mysql_thread_end();
 	//GloProxyCluster->thread_ending(node->thrid);
@@ -1658,10 +1649,7 @@ void ProxySQL_Cluster_Nodes::load_servers_list(SQLite3_result *resultset, bool _
 			node = new ProxySQL_Node_Entry(h_, p_, w_ , c_);
 			node->set_active(true);
 			umap_proxy_nodes.insert(std::make_pair(hash_, node));
-			proxy_node_address_t * a = (proxy_node_address_t *)malloc(sizeof(proxy_node_address_t));
-			a->hash = 0; // usused for now
-			a->hostname = strdup(h_);
-			a->port = p_;
+			ProxySQL_Node_Address * a = new ProxySQL_Node_Address(h_, p_);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

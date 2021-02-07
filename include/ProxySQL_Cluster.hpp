@@ -45,6 +45,25 @@ class ProxySQL_Node_Metrics {
 	}
 };
 
+class ProxySQL_Node_Address {
+	public:
+	pthread_t thrid;
+	uint64_t hash; // unused for now
+	char *uuid;
+	char *hostname;
+	uint16_t port;
+	ProxySQL_Node_Address(char *h, uint16_t p) {
+		hostname = strdup(h);
+		port = p;
+		uuid = NULL;
+		hash = 0;
+	}
+	~ProxySQL_Node_Address() {
+		if (hostname) free(hostname);
+		if (uuid) free(uuid);
+	}
+};
+
 class ProxySQL_Node_Entry {
 	private:
 	uint64_t hash;
