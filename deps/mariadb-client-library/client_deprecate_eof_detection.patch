@@ -1,0 +1,366 @@
+diff --git include/mariadb_com.h include/mariadb_com.h
+index 225b2f5..2b1dc91 100644
+--- include/mariadb_com.h
++++ include/mariadb_com.h
+@@ -296,6 +296,8 @@ typedef struct st_net {
+   char last_error[MYSQL_ERRMSG_SIZE];
+   char sqlstate[SQLSTATE_LENGTH+1];
+   struct st_mariadb_net_extension *extension;
++  my_bool first_eof;
++  my_bool ignore_eofs;
+ } NET;
+ 
+ #define packet_error ((unsigned int) -1)
+diff --git libmariadb/ma_net.c libmariadb/ma_net.c
+index a69e637..0e8fb63 100644
+--- libmariadb/ma_net.c
++++ libmariadb/ma_net.c
+@@ -97,6 +97,8 @@ int ma_net_init(NET *net, MARIADB_PVIO* pvio)
+   net->compress=0; net->reading_or_writing=0;
+   net->where_b = net->remain_in_buf=0;
+   net->last_errno=0;
++  net->first_eof=0;
++  net->ignore_eofs=0;
+ 
+   if (pvio != 0)					/* If real connection */
+   {
+diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
+index d7f2dd4..c56f640 100644
+--- libmariadb/mariadb_lib.c
++++ libmariadb/mariadb_lib.c
+@@ -268,12 +268,12 @@ restart:
+         // 0xfe, is a packet of int<lenenc> which is bigger than 0xffffff. This is
+         // the reason why a check 'len <= MAX_PACKET_LENGTH' guarantees that
+         // *by_exclusion* the current packet is an 'ok_packet'.
+-        if (deprecate_eof && (net->read_pos[0] == 254 && len <= MAX_PACKET_LENGTH)) {
+-            *is_data_packet = FALSE;
+-        }
+-        // A '< 9' check guarantees that it's an EOF packet.
+-        else if (!deprecate_eof && (net->read_pos[0] == 254 && len < 9))
+-        {
++        //
++        // Since both of the alternatives for a 'non-data packet' are an OK packet
++        // or a EOF packet, it's enought to check that the packet start with
++        // '0xfe' and that it's total lenght is less of 'MAX_PACKET_LENGTH' to
++        // to determine it's not a data packet (Either OK or EOF).
++        if (net->read_pos[0] == 254 && len <= MAX_PACKET_LENGTH) {
+             *is_data_packet = FALSE;
+         }
+     }
+@@ -1016,8 +1016,24 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
+   NET *net = &mysql->net;
+   my_bool is_data_packet;
+ 
++read_again:
+   if ((pkt_len= ma_net_safe_read(mysql, &is_data_packet)) == packet_error)
+     return(0);
++
++  // ProxySQL #3296: Improve EOF detection. Since we are not reading the final
++  // EOF packet in the 'metadata reading', in case of 'CLIENT_DEPRECATE_EOF' not
++  // being enabled, we are expecting an initial EOF packet here.
++  if (mysql->net.read_pos[0] != 0 && !is_data_packet && mysql->net.first_eof)
++  {
++    if (mysql->net.read_pos[0] == 254 && pkt_len < 7) {
++        mysql->warning_count = uint2korr(mysql->net.read_pos + 1);
++        mysql->server_status = uint2korr(mysql->net.read_pos + 3);
++        mysql->net.first_eof = 0;
++
++        goto read_again;
++    }
++  }
++
+   if (!(result=(MYSQL_DATA*) calloc(1, sizeof(MYSQL_DATA))))
+   {
+     SET_CLIENT_ERROR(mysql, CR_OUT_OF_MEMORY, SQLSTATE_UNKNOWN, 0);
+@@ -1082,9 +1098,10 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
+   /* save status */
+   if (pkt_len > 1)
+   {
+-    // read the final EOF or OK packet
+-    if (mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
+-    {
++    // ProxySQL #3296: Improve EOF detection. We can no longer base EOF or OK
++    // detection based on server_capabilities, the detection of EOF or OK packet
++    // should be done by packet length.
++    if (pkt_len >= 7) {
+         ma_read_ok_packet(mysql, cp + 1, pkt_len);
+     } else {
+         mysql->warning_count = uint2korr(cp + 1);
+@@ -1108,17 +1125,50 @@ int mthd_my_read_one_row(MYSQL *mysql,uint fields,MYSQL_ROW row, ulong *lengths)
+   uchar *pos,*prev_pos, *end_pos;
+   my_bool is_data_packet = FALSE;
+ 
+-  if ((pkt_len=(uint) ma_net_safe_read(mysql, &is_data_packet)) == packet_error)
+-    return -1;
++read_again:
++  pkt_len=(uint) ma_net_safe_read(mysql, &is_data_packet);
++  if (pkt_len == packet_error) {
++      return -1;
++  }
++
++  // ProxySQL #3296: Improve EOF detection. In case of 'ignore_eofs' begin set
++  // this function is being called from 'mthd_my_read_metadata_ex', which means
++  // that any previous non readed EOF packets should be ignored.
++  if (mysql->net.read_pos[0] != 0 && !is_data_packet && mysql->net.ignore_eofs)
++  {
++    if (mysql->net.read_pos[0] == 254 && pkt_len < 7) {
++        mysql->warning_count = uint2korr(mysql->net.read_pos + 1);
++        mysql->server_status = uint2korr(mysql->net.read_pos + 3);
++
++        goto read_again;
++    }
++  }
++
++  // ProxySQL #3296: Improve EOF detection. In case of 'first_eof' being set
++  // this function is being used for reading rows from the resulset. This means
++  // that the first EOF packet in case of existing, should be ignored.
++  if (mysql->net.read_pos[0] != 0 && !is_data_packet && mysql->net.first_eof)
++  {
++    if (mysql->net.read_pos[0] == 254 && pkt_len < 7) {
++        mysql->warning_count = uint2korr(mysql->net.read_pos + 1);
++        mysql->server_status = uint2korr(mysql->net.read_pos + 3);
++        mysql->net.first_eof = 0;
++
++        goto read_again;
++    }
++  }
+ 
+   // we are reading either final 'OK' or 'EOF' packet
+   if (mysql->net.read_pos[0] != 0 && !is_data_packet)
+   {
+-    if (mysql->server_capabilities & CLIENT_DEPRECATE_EOF) {
+-      ma_read_ok_packet(mysql, mysql->net.read_pos + 1, pkt_len);
++    // ProxySQL #3296: Improve EOF detection. We can no longer base EOF or OK
++    // detection based on server_capabilities, the detection of EOF or OK packet
++    // should be done by packet length.
++    if (pkt_len >= 7) {
++        ma_read_ok_packet(mysql, mysql->net.read_pos + 1, pkt_len);
+     } else {
+-      mysql->warning_count= uint2korr(mysql->net.read_pos + 1);
+-      mysql->server_status= uint2korr(mysql->net.read_pos + 3);
++        mysql->warning_count = uint2korr(mysql->net.read_pos + 1);
++        mysql->server_status = uint2korr(mysql->net.read_pos + 3);
+     }
+     return 1;
+   }
+@@ -1191,6 +1241,12 @@ MYSQL_FIELD *mthd_my_read_metadata_ex(MYSQL *mysql, MA_MEM_ROOT *mem_root,
+     m_rows.data = (MYSQL_ROW) ma_alloc_root(mem_root, sizeof(char*)*(m_field_count + 1));
+     memset(m_rows.data, 0, sizeof(char*)*(m_field_count + 1));
+ 
++    // ProxySQL #3296: Improve EOF detection. Since this function can be called either from
++    // text protocol or for prepared statements, we ignore any EOF packets detected in
++    // 'mthd_my_read_one_row' before the actual metadata that we are supposed to encounter.
++    mysql->net.first_eof = 0;
++    mysql->net.ignore_eofs = 1;
++
+     // read the columns info
+     for (uint f_i = 0; f_i < field_count; f_i++)
+     {
+@@ -1199,20 +1255,14 @@ MYSQL_FIELD *mthd_my_read_metadata_ex(MYSQL *mysql, MA_MEM_ROOT *mem_root,
+         if (unpack_field(mysql, mem_root, 0, &m_rows, m_fields++))
+           return NULL;
+     }
+-    // read EOF packet in case of client not supporting 'CLIENT_DEPRECATE_EOF'
+-    if (!(mysql->server_capabilities & CLIENT_DEPRECATE_EOF))
+-    {
+-      // read the EOF packet
+-      if (packet_error == ma_net_safe_read(mysql, NULL))
+-          return 0;
+ 
+-      // verify it's actually an EOF packet
+-      if (*(mysql->net.read_pos) == 254)
+-      {
+-          mysql->warning_count = uint2korr(mysql->net.read_pos + 1);
+-          mysql->server_status = uint2korr(mysql->net.read_pos + 3);
+-      }
+-    }
++    // ProxySQL #3296: Improve EOF detection. At this point we can't know if we are going to be
++    // detecting an EOF packet or not, since it's unknown if the server is going to reply with
++    // either a packet with 'CLIENT_DEPRECATE_EOF' support or not. Because of this, we delay
++    // the reading and detection of EOF packets to the further functions reading either more
++    // metadata or the resulset.
++    mysql->net.first_eof = 1;
++    mysql->net.ignore_eofs = 0;
+ 
+     return result;
+ }
+@@ -2520,10 +2570,26 @@ int mthd_my_read_query_result(MYSQL *mysql)
+   if (mysql->options.extension && mysql->extension->auto_local_infile == ACCEPT_FILE_REQUEST)
+     mysql->extension->auto_local_infile= WAIT_FOR_QUERY;
+ 
++read_again:
+   if ((length = ma_net_safe_read(mysql, NULL)) == packet_error)
+   {
+     return(1);
+   }
++
++  // ProxySQL #3296: Improve EOF detection. In case of 'first_eof' being set
++  // this function is being used for reading rows from the resulset. This means
++  // that the first EOF packet in case of existing, should be ignored.
++  if (mysql->net.read_pos[0] != 0 && mysql->net.first_eof)
++  {
++    if (mysql->net.read_pos[0] == 254 && length < 7) {
++        mysql->warning_count = uint2korr(mysql->net.read_pos + 1);
++        mysql->server_status = uint2korr(mysql->net.read_pos + 3);
++        mysql->net.first_eof = 0;
++
++        goto read_again;
++    }
++  }
++
+   free_old_query(mysql);			/* Free old result */
+ get_info:
+   pos=(uchar*) mysql->net.read_pos;
+diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
+index bccda47..c8c1bad 100644
+--- libmariadb/mariadb_stmt.c
++++ libmariadb/mariadb_stmt.c
+@@ -158,18 +158,38 @@ static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
+   ulong pkt_len;
+   my_bool is_data_packet;
+ 
++read_again:
+   pkt_len= ma_net_safe_read(stmt->mysql, &is_data_packet);
+ 
++  // ProxySQL #3296: Improve EOF detection. Since we are delaying the read of EOF
++  // packets after the metadata, we could be finding here the 'first EOF', not
++  // being previously read. We should ignore it.
++  if (stmt->mysql->net.read_pos[0] != 0 && stmt->mysql->net.first_eof)
++  {
++    if (stmt->mysql->net.read_pos[0] == 254 && pkt_len < 7) {
++        stmt->mysql->warning_count = uint2korr(stmt->mysql->net.read_pos + 1);
++        stmt->mysql->server_status = uint2korr(stmt->mysql->net.read_pos + 3);
++        stmt->mysql->net.first_eof = 0;
++
++        goto read_again;
++    }
++  }
++
+   if (pkt_len == packet_error)
+   {
+     stmt->fetch_row_func= stmt_unbuffered_eof;
+     return(1);
+   }
+ 
+-  if (stmt->mysql->net.read_pos[0] == 0 && !is_data_packet)
++  if (stmt->mysql->net.read_pos[0] != 0 && !is_data_packet)
+   {
+-    if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
++    // ProxySQL #3296: Improve EOF detection. We can no longer base EOF or OK
++    // detection based on server_capabilities, the detection of EOF or OK packet
++    // should be done by packet length.
++    if (stmt->mysql->net.read_pos[0] == 254 && pkt_len >= 7) {
+         ma_read_ok_packet(stmt->mysql, stmt->mysql->net.read_pos + 1, pkt_len);
++    }
++
+     *row = NULL;
+     stmt->fetch_row_func= stmt_unbuffered_eof;
+     return(MYSQL_NO_DATA);
+@@ -207,6 +227,23 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+ 
+   while ((packet_len = ma_net_safe_read(stmt->mysql, &is_data_packet)) != packet_error)
+   {
++    // ProxySQL #3296: Improve EOF detection. Since we are delaying the read of EOF
++    // packets after the metadata, we could be finding here the 'first EOF', not
++    // being previously read. We should ignore it.
++    if (stmt->mysql->net.read_pos[0] != 0 && !is_data_packet && stmt->mysql->net.first_eof)
++    {
++      if (stmt->mysql->net.read_pos[0] == 254 && packet_len < 7) {
++        stmt->mysql->warning_count = uint2korr(stmt->mysql->net.read_pos + 1);
++        stmt->mysql->server_status = uint2korr(stmt->mysql->net.read_pos + 3);
++        stmt->mysql->net.first_eof = 0;
++
++        if ((packet_len = ma_net_safe_read(stmt->mysql, &is_data_packet)) == packet_error)
++        {
++          break;
++        }
++      }
++    }
++
+     p= stmt->mysql->net.read_pos;
+     // The check is by 'ma_net_safe_read'
+     if (p[0] == 0 || is_data_packet)
+@@ -285,7 +322,10 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+       *pprevious= 0;
+       /* sace status info */
+ 
+-      if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF && !is_data_packet) {
++      // ProxySQL #3296: Improve EOF detection. We can no longer base EOF or OK
++      // detection based on server_capabilities, the detection of EOF or OK packet
++      // should be done by packet length.
++      if (*stmt->mysql->net.read_pos == 254 && packet_len >= 7) {
+         ma_read_ok_packet(stmt->mysql, p + 1, packet_len);
+       } else {
+         stmt->upsert_status.warning_count= stmt->mysql->warning_count= uint2korr(p + 1);
+@@ -351,6 +391,9 @@ void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
+   my_bool is_data_packet;
+   int in_resultset= stmt->state > MYSQL_STMT_EXECUTED &&
+                     stmt->state < MYSQL_STMT_FETCH_DONE;
++
++// ProxySQL #3296: Improve EOF detection.
++read_again:
+   while ((packet_len = ma_net_safe_read(stmt->mysql, &is_data_packet)) != packet_error)
+   {
+     uchar *pos= stmt->mysql->net.read_pos;
+@@ -384,6 +427,15 @@ void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
+       }
+       if (packet_len < 8 && *pos == 254) /* EOF */
+       {
++        // ProxySQL #3296: Improve EOF detection. Since we are delaying the read of EOF
++        // packets after the metadata, we could be finding here the 'first EOF', not
++        // being previously read. We should ignore it.
++        if (stmt->mysql->net.first_eof) {
++            stmt->mysql->warning_count = uint2korr(stmt->mysql->net.read_pos + 1);
++            stmt->mysql->server_status = uint2korr(stmt->mysql->net.read_pos + 3);
++            stmt->mysql->net.first_eof = 0;
++            goto read_again;
++        }
+         if (mariadb_connection(stmt->mysql))
+         {
+           stmt->mysql->server_status= uint2korr(pos + 3);
+@@ -1588,11 +1640,25 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
+   ulong packet_length;
+   uchar *p;
+ 
++read_again:
+   if ((packet_length= ma_net_safe_read(stmt->mysql, NULL)) == packet_error)
+     return(1);
+ 
+   p= (uchar *)stmt->mysql->net.read_pos;
+ 
++  // ProxySQL #3296: Improve EOF detection. Since we are delaying the read of EOF
++  // packets after the metadata, we could be finding here the 'first EOF', not
++  // being previously read. We should ignore it.
++  if (stmt->mysql->net.read_pos[0] != 0)
++  {
++    if (stmt->mysql->net.read_pos[0] == 254 && packet_length < 7) {
++        stmt->mysql->warning_count = uint2korr(stmt->mysql->net.read_pos + 1);
++        stmt->mysql->server_status = uint2korr(stmt->mysql->net.read_pos + 3);
++
++        goto read_again;
++    }
++  }
++
+   if (0xFF == p[0])  /* Error occurred */
+   {
+     return(1);
+@@ -1895,6 +1961,9 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+   if (!mysql)
+     return(1);
+ 
++  // ProxySQL #3296: Improve EOF detection. Force ignoring the first
++  // EOF if found, since it's the EOF we delayed reading after metadata.
++  mysql->net.first_eof = 1;
+   ret= test((mysql->methods->db_read_stmt_result &&
+                  mysql->methods->db_read_stmt_result(mysql)));
+   /* if a reconnect occurred, our connection handle is invalid */
+@@ -2000,6 +2069,9 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+          precached on client and server's resources are freed.
+          */
+ 
++      // ProxySQL #3296: Improve EOF detection. Force ignoring the first
++      // EOF if found, since it's the EOF we delayed reading after metadata.
++      mysql->net.first_eof = 1;
+       /* preferred is buffered read */
+       if (mysql_stmt_store_result(stmt))
+         return 1;
