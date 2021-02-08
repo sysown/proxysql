@@ -1015,21 +1015,15 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt, unsigned long rl) {
+uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
 	int col=0;
-	unsigned long rowlen=0;
+	unsigned int rowlen=0;
 	uint8_t pkt_sid=sequence_id;
-	if (rl == 0) {
-		// if rl == 0 , we are using text protocol (legacy) therefore we need to compute the size of the row
-		for (col=0; col<colnums; col++) {
-			rowlen+=( fieldstxt[col] ? fieldslen[col]+mysql_encode_length(fieldslen[col],NULL) : 1 );
-		}
-	} else {
-		// we already know the size of the row
-		rowlen=rl;
+	for (col=0; col<colnums; col++) {
+		rowlen+=( fieldstxt[col] ? fieldslen[col]+mysql_encode_length(fieldslen[col],NULL) : 1 );
 	}
 	PtrSize_t pkt;
 	pkt.size=rowlen+sizeof(mysql_hdr);
@@ -1051,20 +1045,16 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 		}
 	}
 	int l=sizeof(mysql_hdr);
-	if (rl == 0) {
-		for (col=0; col<colnums; col++) {
-			if (fieldstxt[col]) {
-				char length_prefix;
-				uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
-				l+=write_encoded_length_and_string((unsigned char *)pkt.ptr+l,fieldslen[col],length_len, length_prefix, fieldstxt[col]);
-			} else {
-				char *_ptr=(char *)pkt.ptr;
-				_ptr[l]=0xfb;
-				l++;
-			}
+	for (col=0; col<colnums; col++) {
+		if (fieldstxt[col]) {
+			char length_prefix;
+			uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
+			l+=write_encoded_length_and_string((unsigned char *)pkt.ptr+l,fieldslen[col],length_len, length_prefix, fieldstxt[col]);
+		} else {
+			char *_ptr=(char *)pkt.ptr;
+			_ptr[l]=0xfb;
+			l++;
 		}
-	} else {
-		memcpy((unsigned char *)pkt.ptr+l, fieldstxt, rl);
 	}
 	if (pkt.size < (0xFFFFFF+sizeof(mysql_hdr))) {
 		mysql_hdr myhdr;
@@ -2385,7 +2375,6 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	resultset_completed=false;
 	myprot=_myprot;
 	mysql=_my;
-	stmt=_stmt;
 	if (buffer==NULL) {
 	//if (_stmt==NULL) { // we allocate this buffer only for not prepared statements
 	// removing the previous assumption. We allocate this buffer also for prepared statements
@@ -2461,16 +2450,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 		resultset_size += 9;
 	}
 	//}
-	//if (_stmt) { // binary protocol , we also assume we have ALL the resultset
-	///	init_with_stmt(_stmt);
-	//}
-}
-
-
-void MySQL_ResultSet::init_with_stmt() {
-	assert(stmt);
-	MYSQL_STMT *_stmt = stmt;
-	MySQL_Data_Stream * c_myds = *(myprot->myds);
+	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
 		buffer_to_PSarrayOut();
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
@@ -2579,6 +2559,7 @@ void MySQL_ResultSet::init_with_stmt() {
 			}
 		}
 		add_eof();
+	}
 }
 
 MySQL_ResultSet::~MySQL_ResultSet() {
@@ -2597,28 +2578,11 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 	//if (myds) myds->pkt_sid=sid-1;
 }
 
-// this function is used for binary protocol
-// maybe later on can be adapted for text protocol too
-unsigned int MySQL_ResultSet::add_row(MYSQL_ROWS *rows) {
-	unsigned int pkt_length=0;
-	MYSQL_ROW row = rows->data;
-	unsigned long row_length = rows->length;
-	// we call generate_pkt_row3 passing row_length
-	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, 0, NULL, row, row_length);
-	sid++;
-	resultset_size+=pkt_length;
-	num_rows++;
-	return pkt_length;
-}
-
-
-// this function is used for text protocol
 unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 	unsigned long *lengths=mysql_fetch_lengths(result);
 	unsigned int pkt_length=0;
 	if (myprot) {
-		// we call generate_pkt_row3 without passing row_length
-		sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row, 0);
+		sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row);
 	} else {
 		unsigned int col=0;
 		for (col=0; col<num_fields; col++) {

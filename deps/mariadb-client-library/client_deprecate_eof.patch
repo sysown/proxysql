@@ -612,7 +612,7 @@ index 8f5bddc..5bd0ece 100644
    }
  
 -  if (stmt->mysql->net.read_pos[0] == 254)
-+  if (stmt->mysql->net.read_pos[0] != 0 && !is_data_packet)
++  if (stmt->mysql->net.read_pos[0] == 0 && !is_data_packet)
    {
 +    if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
 +        ma_read_ok_packet(stmt->mysql, stmt->mysql->net.read_pos + 1, pkt_len);
