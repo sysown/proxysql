@@ -502,6 +502,7 @@ MySQL_Session::MySQL_Session() {
 
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	ldap_ctx = NULL;
+	proxysql_node_address = NULL;
 }
 
 void MySQL_Session::init() {
@@ -598,6 +599,10 @@ MySQL_Session::~MySQL_Session() {
 	if (ldap_ctx) {
 		GloMyLdapAuth->ldap_ctx_free(ldap_ctx);
 		ldap_ctx = NULL;
+	}
+	if (proxysql_node_address) {
+		delete proxysql_node_address;
+		proxysql_node_address = NULL;
 	}
 }
 

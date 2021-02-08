@@ -108,6 +108,10 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							if (strcmp(row[0], PROXYSQL_VERSION)==0) {
 								proxy_info("Cluster: clustering with peer %s:%d . Remote version: %s . Self version: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION);
 								same_version = true;
+								std::string q = "PROXYSQL CLUSTER_NODE_UUID ";
+								q += GloVars.uuid;
+								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
+								rc_query = mysql_query(conn, q.c_str());
 							} else {
 								proxy_warning("Cluster: different ProxySQL version with peer %s:%d . Remote: %s . Self: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION);
 							}

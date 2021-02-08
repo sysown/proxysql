@@ -444,6 +444,7 @@ class MySQL_ResultSet;
 class Query_Processor_Output;
 class MySrvC;
 class Web_Interface_plugin;
+class ProxySQL_Node_Address;
 #endif /* PROXYSQL_CLASSES */
 //#endif /* __cplusplus */
 

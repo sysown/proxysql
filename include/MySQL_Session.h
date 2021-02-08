@@ -239,6 +239,7 @@ class MySQL_Session
 	Session_Regex **match_regexes;
 
 	void *ldap_ctx;
+	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
 
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum variable_name changing_variable_idx;
