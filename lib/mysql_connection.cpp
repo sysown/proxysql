@@ -12,7 +12,6 @@
 
 #include <atomic>
 
-
 // some of the code that follows is from mariadb client library memory allocator
 typedef int     myf;    // Type of MyFlags in my_funcs
 #define MYF(v)      (myf) (v)
@@ -105,6 +104,8 @@ void ma_free_root(MA_MEM_ROOT *root, myf MyFlags)
     root->free->next=0;
   }
 }
+
+extern char * binary_sha1;
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
@@ -633,6 +634,28 @@ void MySQL_Connection::connect_start() {
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", parent->address);
+	{
+		time_t __timer;
+		char __buffer[25];
+		struct tm *__tm_info;
+		time(&__timer);
+		__tm_info = localtime(&__timer);
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", __tm_info);
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "connection_creation_time", __buffer);
+		unsigned long long t1=monotonic_time();
+		sprintf(__buffer,"%llu",(t1-GloVars.global.start_time)/1000/1000);
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_uptime", __buffer);
+		sprintf(__buffer,"%d", parent->myhgc->hid);
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "hostgroup_id", __buffer);
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "compile_time", __TIMESTAMP__);
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_version", PROXYSQL_VERSION);
+		if (binary_sha1) {
+			mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_sha1", binary_sha1);
+		} else {
+			mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_sha1", "unknown");
+		}
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "ProxySQL is sending a lot of data to MySQL server using CLIENT_CONNECT_ATTRS in order to not hit MySQL bug https://bugs.mysql.com/bug.php?id=102266 . See also https://github.com/sysown/proxysql/issues/3276");
+	}
 	if (parent->use_ssl) {
 		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
 	}
@@ -668,7 +691,8 @@ void MySQL_Connection::connect_start() {
 		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
 		mysql_variables.server_set_value(myds->sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
-	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
+	//mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
+	mysql->charset = c;
 	unsigned long client_flags = 0;
 	//if (mysql_thread___client_found_rows)
 	//	client_flags += CLIENT_FOUND_ROWS;
@@ -751,6 +775,11 @@ void MySQL_Connection::change_user_start() {
 			auth_password=userinfo->password;
 		}
 	}
+	// we first reset the charset to a default one.
+	// this to solve the problem described here:
+	// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
+	if (mysql->charset->nr >= 255)
+		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, mysql->charset->csname);
 	async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
 }
 

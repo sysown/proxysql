@@ -1,4 +1,8 @@
-@@ -1515,9 +1515,16 @@
+diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
+index 8c2a99b..cf6114a 100644
+--- libmariadb/mariadb_lib.c
++++ libmariadb/mariadb_lib.c
+@@ -1643,9 +1643,16 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
  
    mysql->client_flag= client_flag;
  
@@ -15,7 +19,7 @@
  
    if (mysql->client_flag & CLIENT_COMPRESS)
      net->compress= 1;
-@@ -1568,6 +1575,15 @@
+@@ -1696,6 +1703,15 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
    return(mysql);
  
  error:
@@ -31,7 +35,7 @@
    /* Free alloced memory */
    end_server(mysql);
    /* only free the allocated memory, user needs to call mysql_close */
-@@ -1647,7 +1663,7 @@
+@@ -1775,7 +1791,7 @@ my_bool STDCALL mariadb_reconnect(MYSQL *mysql)
    if (!mysql_real_connect(&tmp_mysql,mysql->host,mysql->user,mysql->passwd,
  			  mysql->db, mysql->port, mysql->unix_socket,
  			  mysql->client_flag | CLIENT_REMEMBER_OPTIONS) ||
@@ -40,7 +44,7 @@
    {
      if (ctxt)
        my_context_install_suspend_resume_hook(ctxt, NULL, NULL);
-@@ -1693,6 +1709,7 @@
+@@ -1821,6 +1837,7 @@ void ma_invalidate_stmts(MYSQL *mysql, const char *function_name)
  {
    if (mysql->stmts)
    {
@@ -48,7 +52,7 @@
      LIST *li_stmt= mysql->stmts;
  
      for (; li_stmt; li_stmt= li_stmt->next)
-@@ -1701,6 +1718,7 @@
+@@ -1829,6 +1846,7 @@ void ma_invalidate_stmts(MYSQL *mysql, const char *function_name)
        stmt->mysql= NULL;
        SET_CLIENT_STMT_ERROR(stmt, CR_STMT_CLOSED, SQLSTATE_UNKNOWN, function_name);
      }
@@ -56,7 +60,7 @@
      mysql->stmts= NULL;
    }
  }
-@@ -1970,6 +1988,33 @@
+@@ -2115,6 +2133,44 @@ mysql_close(MYSQL *mysql)
    return;
  }
  
@@ -78,6 +82,17 @@
 +    mysql_close_options(mysql);
 +    mysql->host_info=mysql->user=mysql->passwd=mysql->db=0;
 +
++    // fix for proxysql bug #3204
++    if (mysql->net.extension) {
++       free(mysql->net.extension);
++       mysql->net.extension=NULL;
++    }
++
++    if (mysql->extension) {
++       free(mysql->extension);
++       mysql->extension=NULL;
++    }
++
 +    /* Clear pointers for better safety */
 +    bzero((char*) &mysql->options,sizeof(mysql->options));
 +    mysql->net.pvio= 0;
@@ -90,8 +105,8 @@
  
  /**************************************************************************
  ** Do a query. If query returned rows, free old rows.
-@@ -2036,6 +2081,8 @@
-             old_pos= pos;
+@@ -2189,6 +2245,8 @@ int ma_read_ok_packet(MYSQL *mysql, uchar *pos, ulong length)
+             char *data;
              si_type= (enum enum_session_state_type)net_field_length(&pos);
              switch(si_type) {
 +            case SESSION_TRACK_GTIDS:
@@ -99,7 +114,7 @@
              case SESSION_TRACK_SCHEMA:
              case SESSION_TRACK_STATE_CHANGE:
              case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
-@@ -3474,18 +3521,27 @@
+@@ -3670,18 +3728,27 @@ void STDCALL mysql_get_character_set_info(MYSQL *mysql, MY_CHARSET_INFO *cs)
    mariadb_get_charset_info(mysql, cs);
  }
  
@@ -113,15 +128,14 @@
      goto error;
  
 -  if ((cs= mysql_find_charset_name(csname)))
--  {
--    char buff[64];
 +  if (csname) {
 +    cs = mysql_find_charset_name(csname);
 +  } else {
 +    cs = mysql_find_charset_nr(charsetnr); 
 +  }
 +  if (cs)
-+  {
+   {
+-    char buff[64];
 +    char buff[128];
 +    if (csname) { // default behavior
 +      snprintf(buff, 127, "SET NAMES %s", cs->csname);
@@ -133,7 +147,7 @@
      if (!mysql_real_query(mysql, buff, (unsigned long)strlen(buff)))
      {
        mysql->charset= cs;
-@@ -3494,6 +3550,7 @@
+@@ -3691,6 +3758,7 @@ int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname)
    }
  
  error:

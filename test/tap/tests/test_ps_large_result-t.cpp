@@ -34,6 +34,7 @@ int select_config_file(MYSQL* mysql, std::string& resultset) {
 		fprintf(stderr, "error\n");
 	}
 
+	return 0;
 }
 
 int restore_admin(MYSQL* mysqladmin) {
@@ -41,6 +42,8 @@ int restore_admin(MYSQL* mysqladmin) {
 	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
 	MYSQL_QUERY(mysqladmin, "load mysql servers from disk");
 	MYSQL_QUERY(mysqladmin, "load mysql servers to runtime");
+
+	return 0;
 }
 
 int main(int argc, char** argv) {
@@ -119,8 +122,7 @@ int main(int argc, char** argv) {
 	if (!stmt1)
 	{
 		ok(false, " mysql_stmt_init(), out of memory\n");
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	std::string query = "SELECT id FROM test.sbtest1 LIMIT 100";
@@ -128,16 +130,14 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "Query error %s\n", mysql_error(mysql));
 		mysql_close(mysql);
 		mysql_library_end();
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	if (mysql_stmt_execute(stmt1))
 	{
 		fprintf(stderr, " mysql_stmt_execute(), failed\n");
 		ok(false, " %s\n", mysql_stmt_error(stmt1));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 	ok(true, "100 rows result stored");
 
@@ -159,16 +159,14 @@ int main(int argc, char** argv) {
 	{
 		fprintf(stderr, " mysql_stmt_bind_result() failed\n");
 		ok(false, " %s\n", mysql_stmt_error(stmt1));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	if (mysql_stmt_store_result(stmt1))
 	{
 		fprintf(stderr, " mysql_stmt_store_result() failed\n");
 		ok(false, " %s\n", mysql_stmt_error(stmt1));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	while (!mysql_stmt_fetch(stmt1))
@@ -180,31 +178,27 @@ int main(int argc, char** argv) {
 	{
 		fprintf(stderr, " failed while closing the statement\n");
 		ok(false, " %s\n", mysql_error(mysql));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	MYSQL_STMT *stmt2 = mysql_stmt_init(mysql);
 	if (!stmt2)
 	{
 		ok(false, " mysql_stmt_init(), out of memory\n");
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 	query = "SELECT t1.id id1, t1.k k1, t1.c c1, t1.pad pad1, t2.id id2, t2.k k2, t2.c c2, t2.pad pad2 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 LIMIT 10000000";
 	if (mysql_stmt_prepare(stmt2,query.c_str(), query.size())) {
 		fprintf(stderr, "Query error %s\n", mysql_error(mysql));
 		mysql_close(mysql);
 		mysql_library_end();
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 	if (mysql_stmt_execute(stmt2))
 	{
 		fprintf(stderr, " mysql_stmt_execute(), failed\n");
 		ok(false, " %s\n", mysql_stmt_error(stmt2));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 	ok(true, "4GB resultset stored");
 
@@ -281,16 +275,14 @@ int main(int argc, char** argv) {
 	{
 		fprintf(stderr, " mysql_stmt_bind_result() failed\n");
 		ok(false, " %s\n", mysql_stmt_error(stmt2));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	if (mysql_stmt_store_result(stmt2))
 	{
 		fprintf(stderr, " mysql_stmt_store_result() failed\n");
 		ok(false, " %s\n", mysql_stmt_error(stmt2));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	while (!mysql_stmt_fetch(stmt2))
@@ -305,8 +297,7 @@ int main(int argc, char** argv) {
 	{
 		fprintf(stderr, " failed while closing the statement\n");
 		ok(false, " %s\n", mysql_error(mysql));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 
@@ -315,8 +306,7 @@ int main(int argc, char** argv) {
 	if (!stmt3)
 	{
 		ok(false, " mysql_stmt_init(), out of memory\n");
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	/* Test case #3. */
@@ -326,8 +316,7 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "Query error %s\n", mysql_error(mysql));
 		mysql_close(mysql);
 		mysql_library_end();
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	/* Execute the SELECT query */
@@ -414,14 +403,13 @@ int main(int argc, char** argv) {
 	{
 		fprintf(stderr, " failed while closing the statement\n");
 		ok(false, " %s\n", mysql_error(mysql));
-		restore_admin(mysqladmin);
-		return exit_status();
+		return restore_admin(mysqladmin);
 	}
 
 	if (str_data32)
 		free(str_data32);
 
-	restore_admin(mysqladmin);
+	return restore_admin(mysqladmin);
 
 	mysql_close(mysql);
 	mysql_library_end();

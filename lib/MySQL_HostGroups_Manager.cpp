@@ -686,6 +686,11 @@ static void * HGCU_thread_run() {
 					}
 				}
 				//async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
+				// we first reset the charset to a default one.
+				// this to solve the problem described here:
+				// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
+				if (myconn->mysql->charset->nr >= 255)
+					mysql_options(myconn->mysql, MYSQL_SET_CHARSET_NAME, myconn->mysql->charset->csname);
 				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->username, auth_password, myconn->userinfo->schemaname);
 				if (myconn->mysql->net.pvio==NULL || myconn->mysql->net.fd==0 || myconn->mysql->net.buff==NULL) {
 					statuses[i]=0; ret[i]=1;
@@ -3124,11 +3129,38 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
 			switch (connection_quality_level) {
 				case 0: // not found any good connection, tracked options are not OK
-					// we must create a new connection
-					conn = new MySQL_Connection();
-					conn->parent=mysrvc;
-					__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+					// we must check if connections need to be freed before
+					// creating a new connection
+					{
+						unsigned int conns_free = mysrvc->ConnectionsFree->conns_length();
+						unsigned int conns_used = mysrvc->ConnectionsUsed->conns_length();
+						unsigned int pct_max_connections = (3 * mysrvc->max_connections) / 4;
+						unsigned int connections_to_free = 0;
+
+						if (conns_free >= 1) {
+							// connection cleanup is triggered when connectinos exceed 3/4 of the total
+							// allowed max connections, this cleanup ensures that at least *one connection*
+							// will be freed.
+							if (pct_max_connections <= (conns_free + conns_used)) {
+								connections_to_free = (conns_free + conns_used) - pct_max_connections;
+								if (connections_to_free == 0) connections_to_free = 1;
+							}
+
+							while (conns_free && connections_to_free) {
+								MySQL_Connection* conn = mysrvc->ConnectionsFree->remove(0);
+								delete conn;
+
+								conns_free = mysrvc->ConnectionsFree->conns_length();
+								connections_to_free -= 1;
+							}
+						}
+
+						// we must create a new connection
+						conn = new MySQL_Connection();
+						conn->parent=mysrvc;
+						__sync_fetch_and_add(&MyHGM->status.server_connections_created, 1);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, conn->parent->address, conn->parent->port);
+					}
 					break;
 				case 1: //tracked options are OK , but CHANGE USER is required
 					// we may consider creating a new connection
@@ -3552,7 +3584,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["thread_id"] = _my->thread_id;
 					j["server_status"] = _my->server_status;
 					j["charset"] = _my->charset->nr;
-					j["options"]["charset_name"] = _my->options.charset_name;
+					j["charset_name"] = _my->charset->csname;
+
+					j["options"]["charset_name"] = ( _my->options.charset_name ? _my->options.charset_name : "" );
 					j["options"]["use_ssl"] = _my->options.use_ssl;
 					j["client_flag"]["client_found_rows"] = (_my->client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
 					j["client_flag"]["client_multi_statements"] = (_my->client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
@@ -4582,7 +4616,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id, status FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
   mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4617,7 +4651,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				SQLite3_row *r=*it;
 				int hostgroup=atoi(r->fields[0]);
 				if (hostgroup==_writer_hostgroup) {
-					found_writer=true;
+					int status = atoi(r->fields[1]);
+					if (status == 0) {
+						found_writer=true;
+					}
 				}
 				if (read_HG>=0) {
 					if (hostgroup==read_HG) {
@@ -4665,6 +4702,8 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			//free(query);
 			if (writer_is_also_reader && read_HG>=0) {
 				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+				free(query);
+				query=(char *)malloc(strlen(q)+strlen(_hostname)+256);
 				sprintf(query,q,read_HG,_writer_hostgroup,_hostname,_port);
 				mydb->execute(query);
 			}
@@ -5019,7 +5058,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 			if (soft==false) { // default behavior
-				q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
+				q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET hostgroup_id=%d, status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
 				//query=(char *)malloc(strlen(q)+strlen(_hostname)+128);
 				sprintf(query,q,info->offline_hostgroup,_hostname,_port,_writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
 				mydb->execute(query);
@@ -5035,7 +5074,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				mydb->execute(query);
 				//free(query);
 			} else {
-				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
+				q=(char *)"INSERT OR REPLACE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, weight, 0, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
 				sprintf(query,q,info->offline_hostgroup,_hostname,_port,_writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
 				mydb->execute(query);
 				q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d)";
@@ -5621,12 +5660,17 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 							}
 						}
 					}
+					// just delete the readers which are right now part of the writer hostgroup, preserving
+					// any current reader which is only in the reader hostgroup. This is because if a server
+					// is only part of the reader hostgroup at this point, means that it's there because of a
+					// reason beyond ProxySQL control, e.g. having READ_ONLY=1.
+					q=(char*)"DELETE FROM mysql_servers_incoming where hostgroup_id=%d and (hostname,port) in (SELECT hostname,port FROM mysql_servers_incoming WHERE hostgroup_id=%d)";
+					query=(char*)malloc(strlen(q) + 128);
+					sprintf(query, q, info->reader_hostgroup, info->writer_hostgroup);
+					mydb->execute(query);
+					free(query);
+
 					if (num_backup_writers) { // there are backup writers, only these will be used as readers
-						q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostgroup_id=%d";
-						query=(char *)malloc(strlen(q) + 128);
-						sprintf(query,q, info->reader_hostgroup);
-						mydb->execute(query);
-						free(query);
 						q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d";
 						query=(char *)malloc(strlen(q) + 128);
 						sprintf(query,q, info->reader_hostgroup, info->backup_writer_hostgroup);

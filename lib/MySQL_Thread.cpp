@@ -792,19 +792,19 @@ th_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms,
-			"proxysql_queries_with_max_lag_ms_total",
+			"proxysql_queries_with_max_lag_total",
 			"Received queries that have a 'max_lag' attribute.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms__delayed,
-			"proxysql_queries_with_max_lag_ms__delayed_total",
+			"proxysql_queries_with_max_lag__delayed_total",
 			"Query delayed because no connection was selected due to 'max_lag' annotation.",
 			metric_tags {}
 		),
 		std::make_tuple (
 			p_th_counter::queries_with_max_lag_ms__total_wait_time_us,
-			"proxysql_queries_with_max_lag_ms__total_wait_time_us_total",
+			"proxysql_queries_with_max_lag__total_wait_time_total",
 			"Total waited time due to connection selection because of 'max_lag' annotation.",
 			metric_tags {}
 		),
@@ -815,10 +815,9 @@ th_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
-			// TODO: Add meaningful HELP
 			p_th_counter::hostgroup_locked_set_cmds,
-			"proxysql_hostgroup_locked_set_cmds",
-			"",
+			"proxysql_hostgroup_locked_set_cmds_total",
+			"Total number of connections that have been locked in a hostgroup.",
 			metric_tags {}
 		),
 		std::make_tuple (

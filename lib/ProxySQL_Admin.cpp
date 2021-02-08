@@ -728,7 +728,7 @@ admin_metrics_map = std::make_tuple(
 		// stmt metrics
 		std::make_tuple (
 			p_admin_gauge::stmt_client_active_total,
-			"proxysql_stmt_client_active_total",
+			"proxysql_stmt_client_active",
 			"The total number of prepared statements that are in use by clients.",
 			metric_tags {}
 		),
@@ -740,7 +740,7 @@ admin_metrics_map = std::make_tuple(
 		),
 		std::make_tuple (
 			p_admin_gauge::stmt_server_active_total,
-			"proxysql_stmt_server_active_total",
+			"proxysql_stmt_server_active",
 			"The total number of prepared statements currently available across all backend connections.",
 			metric_tags {}
 		),
@@ -5708,6 +5708,51 @@ std::shared_ptr<httpserver::http_response> make_response(
 	return response;
 }
 
+/**
+ * @brief Checks if the supplied port is available.
+ *
+ * @param port_num The port number to check.
+ * @param free Output parameter. True if the port is free, false otherwise.
+ *
+ * @return Returns:
+ *     - '-1' in case 'SO_REUSEADDR' fails to be set for the check.
+ *     - '-2' in case of invalid arguments supplied.
+ *     - '0' otherwise.
+ */
+int check_port_availability(int port_num, bool* port_free) {
+	int ecode = 0;
+	int sfd = 0;
+	int reuseaddr = 1;
+	struct sockaddr_in tmp_addr;
+
+	if (port_num == 0 || port_free == nullptr) {
+		return -2;
+	}
+
+	// set 'port_free' to false by default
+	*port_free = false;
+
+	sfd = socket(AF_INET, SOCK_STREAM, 0);
+	memset(&tmp_addr, 0, sizeof(tmp_addr));
+	tmp_addr.sin_family = AF_INET;
+	tmp_addr.sin_port = htons(port_num);
+	tmp_addr.sin_addr.s_addr = INADDR_ANY;
+
+	if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuseaddr, sizeof(reuseaddr)) == -1) {
+		close(sfd);
+		ecode = -1;
+	} else {
+		if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+			close(sfd);
+		} else {
+			*port_free = true;
+			close(sfd);
+		}
+	}
+
+	return ecode;
+}
+
 void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
 	char *error=NULL;
@@ -5788,8 +5833,23 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					return http_response;
 				}
 			};
+
+			bool free_restapi_port = false;
+			int e_port_check = check_port_availability(variables.restapi_port, &free_restapi_port);
+
+			if (free_restapi_port == false) {
+				if (e_port_check == -1) {
+					proxy_error("Unable to start 'ProxySQL_RestAPI_Server', failed to set 'SO_REUSEADDR' to check port availability.\n");
+				} else {
+					proxy_error(
+						"Unable to start 'ProxySQL_RestAPI_Server', port '%d' already in use.\n",
+						variables.restapi_port
+					);
+				}
+			}
+
 			if (variables.restapi_enabled != variables.restapi_enabled_old) {
-				if (variables.restapi_enabled) {
+				if (variables.restapi_enabled && free_restapi_port) {
 					AdminRestApiServer = new ProxySQL_RESTAPI_Server(
 						variables.restapi_port, {{"/metrics", prometheus_callback}}
 					);
@@ -5804,7 +5864,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 						delete AdminRestApiServer;
 						AdminRestApiServer = NULL;
 					}
-					if (variables.restapi_enabled) {
+					if (variables.restapi_enabled && free_restapi_port) {
 						AdminRestApiServer = new ProxySQL_RESTAPI_Server(
 							variables.restapi_port, {{"/metrics", prometheus_callback}}
 						);

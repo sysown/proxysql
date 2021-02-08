@@ -372,6 +372,8 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->username);
 	if (qr->schemaname)
 		free(qr->schemaname);
+	if (qr->match_digest)
+		free(qr->match_digest);
 	if (qr->match_pattern)
 		free(qr->match_pattern);
 	if (qr->replace_pattern)

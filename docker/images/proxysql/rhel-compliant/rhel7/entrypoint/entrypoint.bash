@@ -7,6 +7,9 @@ set -eu
 echo "==> Build environment:"
 env
 
+ARCH=$PROXYSQL_BUILD_ARCH
+echo "==> $ARCH architecture detected for package"
+
 echo "==> Dirty patching to ensure OS deps are installed"
 
 if [[ -f "/usr/bin/python" ]]  || [[ -h "/usr/bin/python" ]];
@@ -21,7 +24,7 @@ fi
 
 echo "==> Cleaning"
 # Delete package if exists
-rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.x86_64.rpm || true
+rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm || true
 # Cleanup relic directories from a previously failed build
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} || true
 
@@ -58,6 +61,6 @@ tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
 mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" /root/rpmbuild/SOURCES
 cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec --define "version ${CURVER}"
-mv "/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.x86_64.rpm"
+mv "/root/rpmbuild/RPMS/$ARCH/proxysql-${CURVER}-1.$ARCH.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm"
 # Cleanup current build
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql "/opt/proxysql/proxysql-${CURVER}"
