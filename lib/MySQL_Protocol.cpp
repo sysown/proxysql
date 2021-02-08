@@ -1373,7 +1373,12 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
-	if (deprecate_eof_active) {
+	// we conditionally reply the client specifying in 'server_capabilities' that
+	// 'CLIENT_DEPRECATE_EOF' is available if explicitly enabled by 'mysql-enable_client_deprecate_eof'
+	// variable. This is the first step of ensuring that client connections doesn't
+	// enable 'CLIENT_DEPRECATE_EOF' unless explicitly stated by 'mysql-enable_client_deprecate_eof'.
+	// Second step occurs during client handshake response (process_pkt_handshake_response).
+	if (deprecate_eof_active && mysql_thread___enable_client_deprecate_eof) {
 		memcpy(_ptr+l,"\x8f\x81\x15",3); l+=3;
 	}
 	else {
@@ -1761,6 +1766,18 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	// connections flags.
 	if (capabilities & CLIENT_MULTI_STATEMENTS) {
 		capabilities |= CLIENT_MULTI_RESULTS;
+	}
+	// we enforce disabling 'CLIENT_DEPRECATE_EOF' from the supported capabilities
+	// in case it's explicitly disabled by global variable 'mysql_thread___enable_client_deprecate_eof'.
+	// This is because further checks to actually threat the connection as a connection
+	// supporting 'CLIENT_DEPRECATE_EOF' rely in 'client_flag' field from
+	// 'MySQL_Connection::options'.
+	// This is the second step for ensuring that the connection is being handling
+	// in both ProxySQL and client side as a connection without 'CLIENT_DEPRECATE_EOF' support.
+	// First step is replying to client during initial handshake (in 'generate_pkt_initial_handshake')
+	// specifying no 'CLIENT_DEPRECATE_EOF' support in 'server_capabilities'.
+	if (!mysql_thread___enable_client_deprecate_eof) {
+		capabilities &= ~CLIENT_DEPRECATE_EOF;
 	}
 	(*myds)->myconn->options.client_flag = capabilities;
 	pkt     += sizeof(uint32_t);

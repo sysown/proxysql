@@ -420,6 +420,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_client",
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_max",
+	(char *)"enable_client_deprecate_eof",
+	(char *)"enable_server_deprecate_eof",
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
 	(char *)"eventslog_default_log",
@@ -1156,6 +1158,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.session_debug=true;
 #endif /*debug */
 	variables.query_digests_grouping_limit = 3;
+	variables.enable_client_deprecate_eof=true;
+	variables.enable_server_deprecate_eof=true;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -1461,6 +1465,8 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"eventslog_default_log")) return (int)variables.eventslog_default_log;
 			if (!strcmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
 			if (!strcmp(name,"eventslog_format")) return (int)variables.eventslog_format;
+			if (!strcmp(name,"enable_client_deprecate_eof")) return (int)variables.enable_client_deprecate_eof;
+			if (!strcmp(name,"enable_server_deprecate_eof")) return (int)variables.enable_server_deprecate_eof;
 			break;
 		case 'f':
 			if (!strcmp(name,"forward_autocommit")) return (int)variables.forward_autocommit;
@@ -1890,7 +1896,12 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.automatic_detect_sqli);
 		return strdup(intbuf);
 	}
-
+	if (!strcasecmp(name,"enable_client_deprecate_eof")) {
+		return strdup((variables.enable_client_deprecate_eof ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"enable_server_deprecate_eof")) {
+		return strdup((variables.enable_server_deprecate_eof ? "true" : "false"));
+	}
 	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) {
 		sprintf(intbuf,"%d",variables.throttle_connections_per_sec_to_hostgroup);
 		return strdup(intbuf);
@@ -3035,7 +3046,28 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return false; // we couldn't set it to a valid value. It will be reset to default
 	}
-
+	if (!strcasecmp(name,"enable_client_deprecate_eof")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.enable_client_deprecate_eof=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.enable_client_deprecate_eof=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"enable_server_deprecate_eof")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.enable_server_deprecate_eof=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.enable_server_deprecate_eof=false;
+			return true;
+		}
+		return false;
+	}
 
 	if (!strncmp(name,"default_",8)) {
 		for (int i=0; i<SQL_NAME_LAST; i++) {
@@ -5062,6 +5094,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___show_processlist_extended=GloMTH->get_variable_int((char *)"show_processlist_extended");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
+	mysql_thread___enable_client_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_client_deprecate_eof");
+	mysql_thread___enable_server_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
