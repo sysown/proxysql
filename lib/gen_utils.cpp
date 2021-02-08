@@ -1,4 +1,5 @@
 #include "gen_utils.h"
+#include "lz4.h"
 
 char *escape_string_single_quotes(char *input, bool free_it) {
 	int i,j,l;
@@ -188,10 +189,12 @@ void PtrSizeArray::remove_index_fast(unsigned int i, PtrSize_t *ps) {
 	if (ps) {
 		ps->ptr=pdata[i].ptr;
 	    ps->size=pdata[i].size;
+	    ps->decomp_size=pdata[i].decomp_size;
 	}
     if (i != (len-1)) {
     	pdata[i].ptr=pdata[len-1].ptr;
     	pdata[i].size=pdata[len-1].size;
+    	pdata[i].decomp_size=pdata[len-1].decomp_size;
 	}
     len--;
 }
@@ -201,7 +204,31 @@ void PtrSizeArray::copy_add(PtrSizeArray *psa, unsigned int from, unsigned int c
 	PtrSize_t *psp;
 	for (i=from;i<from+cnt;i++) {
 		psp=psa->index(i);
-		add(psp->ptr,psp->size);
+		add(psp->ptr,psp->size,psp->decomp_size);
+	}
+}
+
+void PtrSizeArray::add_compress(void *p, unsigned int s) {
+	int mcs = LZ4_compressBound(s); // max compress size
+	char *dst = (char *)malloc(mcs);
+	int cs = LZ4_compress_default((char *)p, dst, s, mcs);
+	if (cs == 0) { // it failed!
+		add(p, s, 0); // add original packet
+		free(dst); // we always free the original buffer
+		return;
+	}
+	// compression succeeded
+	int tmp1 = mcs/75;
+	tmp1*=100;
+	if (cs < tmp1) { // compress was efficient
+		free(p); // we immediately free the original packet
+		void * np = malloc(cs);
+		memcpy(np, (const void *)dst, cs);
+		add(np, cs, s);
+		free(dst); // we always free the original buffer. Now after the copy
+	} else { // not good compress ratio, ignore it
+		add(p, s, 0); // add original packet
+		free(dst); // we always free the original buffer
 	}
 }
 

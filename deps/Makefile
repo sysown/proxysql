@@ -20,7 +20,7 @@ PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
 endif
 .PHONY: default
 
@@ -115,11 +115,12 @@ cityhash/cityhash/src/.libs/libcityhash.a:
 	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
-lz4/lz4/liblz4.a:
+lz4/lz4/lib/liblz4.a:
 	cd lz4 && rm -rf lz4-1.7.5 || true
-	cd lz4 && tar -zxf lz4-1.7.5.tar.gz
+	cd lz4 && rm -rf lz4-1.9.3 || true
+	cd lz4 && tar -zxf v1.9.3.tar.gz
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
-lz4: lz4/lz4/liblz4.a
+lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp || true
@@ -253,6 +254,7 @@ cleanall:
 	cd sqlite3/sqlite3 && rm -rf * || true
 	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
 	cd lz4 && rm -rf lz4-1.7.5 || true
+	cd lz4 && rm -rf lz4-1.9.3 || true
 	cd libmicrohttpd && rm -f libmicrohttpd || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true

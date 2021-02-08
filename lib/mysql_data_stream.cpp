@@ -8,6 +8,8 @@
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 
+#include "lz4.h"
+
 /*
 
 in libssl 1.1.0 
@@ -130,6 +132,20 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 #define queue_r_ptr(_q) ((unsigned char *)_q.buffer+_q.tail)
 #define queue_w_ptr(_q) ((unsigned char *)_q.buffer+_q.head)
 
+
+
+// this function uncompress a packet in place
+static void local_decompress_lz4(PtrSize_t *pkt) {
+	if (pkt->decomp_size == 0) // it is already uncompressed
+		return;
+	void * nptr = malloc(pkt->decomp_size);
+	int rc = LZ4_decompress_safe((const char *)pkt->ptr, (char *)nptr, pkt->size, pkt->decomp_size);
+	assert(rc > 0);
+	free(pkt->ptr); // we remove the compressed packet
+	pkt->ptr=nptr; // we replace the packet
+	pkt->size = pkt->decomp_size; // new size = decompressed size
+	pkt->decomp_size = 0; // we mark it uncompressed
+}
 
 
 //enum sslstatus { SSLSTATUS_OK, SSLSTATUS_WANT_IO, SSLSTATUS_FAIL};
@@ -1040,6 +1056,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 	PtrSize_t *p=NULL;
 	while (i<PSarrayOUT->len && total_size<MAX_COMPRESSED_PACKET_SIZE) {
 		p=PSarrayOUT->index(i);
+		local_decompress_lz4(p);
 		total_size+=p->size;
 		i++;
 	}
@@ -1061,6 +1078,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 		while (total_size<sourceLen) {
 			PtrSize_t p2;
 			PSarrayOUT->remove_index(0,&p2);
+			local_decompress_lz4(&p2);
 			memcpy(source+total_size,p2.ptr,p2.size);
 			total_size+=p2.size;
 			l_free(p2.size,p2.ptr);
@@ -1154,6 +1172,9 @@ int MySQL_Data_Stream::array2buffer() {
 				} else {
 		//VALGRIND_DISABLE_ERROR_REPORTING;
 					memcpy(&queueOUT.pkt,PSarrayOUT->index(idx), sizeof(PtrSize_t));
+					if (queueOUT.pkt.decomp_size) {
+						local_decompress_lz4(&queueOUT.pkt);
+					}
 					idx++;
 		//VALGRIND_ENABLE_ERROR_REPORTING;
 					// this is a special case, needed because compression is enabled *after* the first OK

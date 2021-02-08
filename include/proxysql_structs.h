@@ -464,6 +464,7 @@ struct __SQP_query_parser_t {
 struct _PtrSize_t {
   void *ptr;
   unsigned int size;
+  unsigned int decomp_size;
 }; 
 // struct for debugging module
 #ifdef DEBUG

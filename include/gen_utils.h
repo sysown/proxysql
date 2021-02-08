@@ -134,12 +134,16 @@ class PtrSizeArray {
 	PtrSizeArray(unsigned int __size=0);
 	~PtrSizeArray();
 
-	void add(void *p, unsigned int s) {
+
+	void add_compress(void *p, unsigned int s);
+
+	void add(void *p, unsigned int s, unsigned int ds=0) {
 		if (len==size) {
 			expand(1);
 		}
 		pdata[len].ptr=p;
 		pdata[len].size=s;
+		pdata[len].decomp_size=ds;
 		len++;
 //#ifdef DEBUG
 //		mysql_hdr *m=(mysql_hdr *)p;
@@ -151,6 +155,7 @@ class PtrSizeArray {
 		if (ps) {
 			ps->ptr=pdata[i].ptr;
 			ps->size=pdata[i].size;
+			ps->decomp_size=pdata[i].decomp_size;
 		}
 		if (i != (len-1)) {
 			memmove(pdata+i,pdata+i+1,(len-i-1)*sizeof(PtrSize_t));
