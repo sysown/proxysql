@@ -1067,6 +1067,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 					j["backends"][i]["conn"]["mysql"]["thread_id"] = _my->thread_id;
 					j["backends"][i]["conn"]["mysql"]["server_status"] = _my->server_status;
 					j["backends"][i]["conn"]["mysql"]["charset"] = _my->charset->nr;
+					j["backends"][i]["conn"]["mysql"]["charset_name"] = _my->charset->csname;
 					//j["backends"][i]["conn"]["mysql"][""] = _my->;
 					//j["backends"][i]["conn"]["mysql"][""] = _my->;
 					j["backends"][i]["conn"]["mysql"]["options"]["charset_name"] = ( _my->options.charset_name ? _my->options.charset_name : "" );

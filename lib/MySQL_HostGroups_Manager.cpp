@@ -686,6 +686,11 @@ static void * HGCU_thread_run() {
 					}
 				}
 				//async_exit_status = mysql_change_user_start(&ret_bool,mysql,_ui->username, auth_password, _ui->schemaname);
+				// we first reset the charset to a default one.
+				// this to solve the problem described here:
+				// https://github.com/sysown/proxysql/pull/3249#issuecomment-761887970
+				if (myconn->mysql->charset->nr >= 255)
+					mysql_options(myconn->mysql, MYSQL_SET_CHARSET_NAME, myconn->mysql->charset->csname);
 				statuses[i]=mysql_change_user_start(&ret[i], myconn->mysql, myconn->userinfo->username, auth_password, myconn->userinfo->schemaname);
 				if (myconn->mysql->net.pvio==NULL || myconn->mysql->net.fd==0 || myconn->mysql->net.buff==NULL) {
 					statuses[i]=0; ret[i]=1;
@@ -3579,7 +3584,9 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 					j["thread_id"] = _my->thread_id;
 					j["server_status"] = _my->server_status;
 					j["charset"] = _my->charset->nr;
-					j["options"]["charset_name"] = _my->options.charset_name;
+					j["charset_name"] = _my->charset->csname;
+
+					j["options"]["charset_name"] = ( _my->options.charset_name ? _my->options.charset_name : "" );
 					j["options"]["use_ssl"] = _my->options.use_ssl;
 					j["client_flag"]["client_found_rows"] = (_my->client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
 					j["client_flag"]["client_multi_statements"] = (_my->client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
@@ -4609,7 +4616,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	q=(char *)"SELECT hostgroup_id, status FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
   mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4644,7 +4651,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				SQLite3_row *r=*it;
 				int hostgroup=atoi(r->fields[0]);
 				if (hostgroup==_writer_hostgroup) {
-					found_writer=true;
+					int status = atoi(r->fields[1]);
+					if (status == 0) {
+						found_writer=true;
+					}
 				}
 				if (read_HG>=0) {
 					if (hostgroup==read_HG) {
@@ -4692,6 +4702,8 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			//free(query);
 			if (writer_is_also_reader && read_HG>=0) {
 				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+				free(query);
+				query=(char *)malloc(strlen(q)+strlen(_hostname)+256);
 				sprintf(query,q,read_HG,_writer_hostgroup,_hostname,_port);
 				mydb->execute(query);
 			}
