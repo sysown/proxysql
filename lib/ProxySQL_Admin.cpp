@@ -5835,20 +5835,29 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 			};
 
 			bool free_restapi_port = false;
-			int e_port_check = check_port_availability(variables.restapi_port, &free_restapi_port);
 
-			if (free_restapi_port == false) {
-				if (e_port_check == -1) {
-					proxy_error("Unable to start 'ProxySQL_RestAPI_Server', failed to set 'SO_REUSEADDR' to check port availability.\n");
-				} else {
-					proxy_error(
-						"Unable to start 'ProxySQL_RestAPI_Server', port '%d' already in use.\n",
-						variables.restapi_port
-					);
+			// Helper lambda taking a boolean reference as a parameter to check if 'restapi_port' is available.
+			// In case of port not being free or error, logs an error 'ProxySQL_RestAPI_Server' isn't able to be started.
+			const auto check_restapi_port = [&](bool& restapi_port_free) -> void {
+				int e_port_check = check_port_availability(variables.restapi_port, &restapi_port_free);
+
+				if (restapi_port_free == false) {
+					if (e_port_check == -1) {
+						proxy_error("Unable to start 'ProxySQL_RestAPI_Server', failed to set 'SO_REUSEADDR' to check port availability.\n");
+					} else {
+						proxy_error(
+							"Unable to start 'ProxySQL_RestAPI_Server', port '%d' already in use.\n",
+							variables.restapi_port
+						);
+					}
 				}
-			}
+			};
 
 			if (variables.restapi_enabled != variables.restapi_enabled_old) {
+				if (variables.restapi_enabled) {
+					check_restapi_port(free_restapi_port);
+				}
+
 				if (variables.restapi_enabled && free_restapi_port) {
 					AdminRestApiServer = new ProxySQL_RESTAPI_Server(
 						variables.restapi_port, {{"/metrics", prometheus_callback}}
@@ -5864,6 +5873,11 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 						delete AdminRestApiServer;
 						AdminRestApiServer = NULL;
 					}
+
+					if (variables.restapi_enabled) {
+						check_restapi_port(free_restapi_port);
+					}
+
 					if (variables.restapi_enabled && free_restapi_port) {
 						AdminRestApiServer = new ProxySQL_RESTAPI_Server(
 							variables.restapi_port, {{"/metrics", prometheus_callback}}
