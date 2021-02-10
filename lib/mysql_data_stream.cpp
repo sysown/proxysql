@@ -432,6 +432,11 @@ int MySQL_Data_Stream::read_from_net() {
 		//proxy_info("Entering\n");
 	}
 	if ((revents & POLLIN)==0) return 0;
+	if (revents & POLLHUP) {
+		shut_soft();
+		return -1;
+	}
+
 	int r=0;
 	int s=queue_available(queueIN);
 	if (encrypted) {
