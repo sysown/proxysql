@@ -1522,23 +1522,31 @@ __internal_loop:
 		// match on query
 		re2p=(re2_t *)qr->regex_engine2;
 		if (qr->match_pattern) {
-			bool rc;
+			bool rc{false};
+
+			// use user query
+			const char* match_pattern_query = query;
 			if (ret && ret->new_query) {
-				// if we already rewrote the query, process the new query
-				//std::string *s=ret->new_query;
-				if (re2p->re2) {
-					rc=RE2::PartialMatch(ret->new_query->c_str(),*re2p->re2);
+				// use modified query
+				match_pattern_query = ret->new_query->c_str();
+			}
+
+			if (re2p->re2) {
+				if (qr->flagIN != qr->flagOUT) {
+					rc = RE2::PartialMatch(match_pattern_query, *re2p->re2);
 				} else {
-					rc=re2p->re1->PartialMatch(ret->new_query->c_str());
+					// if match_pattern is a number && flagIN == flagOUT then flagIN is the number
+					rc = RE2::PartialMatch(match_pattern_query, *re2p->re2, &flagIN);
 				}
 			} else {
-				// we never rewrote the query
-				if (re2p->re2) {
-					rc=RE2::PartialMatch(query,*re2p->re2);
+				if (qr->flagIN != qr->flagOUT) {
+					rc = re2p->re1->PartialMatch(match_pattern_query);
 				} else {
-					rc=re2p->re1->PartialMatch(query);
+					// if match_pattern is a number && flagIN == flagOUT then flagIN is the number
+					rc = re2p->re1->PartialMatch(match_pattern_query, &flagIN);
 				}
 			}
+
 			if ((rc==true && qr->negate_match_pattern==true) || ( rc==false && qr->negate_match_pattern==false )) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching pattern\n", qr->rule_id);
 				continue;
@@ -1548,7 +1556,8 @@ __internal_loop:
 		// if we arrived here, we have a match
 		qr->hits++; // this is done without atomic function because it updates only the local variables
 		bool set_flagOUT=false;
-		if (qr->flagOUT >= 0) {
+		// When qr->flagIN == qr->flagOUT, the flagIN is updated by match_pattern
+		if ((qr->flagOUT >= 0) && (qr->flagIN != qr->flagOUT)) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
 			flagIN=qr->flagOUT;
 			set_flagOUT=true;
