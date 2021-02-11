@@ -28,8 +28,8 @@ Released packages can be found here: https://github.com/sysown/proxysql/releases
 
 Just download a package and use your systems package manager to install it:
 ```bash
-wget https://github.com/sysown/proxysql/releases/download/v2.1.0/proxysql_2.1.0-ubuntu16_amd64.deb
-dpkg -i proxysql_2.1.0-ubuntu16_amd64.deb
+wget https://github.com/sysown/proxysql/releases/download/v2.1.0/proxysql_2.1.0-ubuntu20_amd64.deb
+dpkg -i proxysql_2.1.0-ubuntu20_amd64.deb
 ```
 
 Alternatively you can also use the available repositories:
