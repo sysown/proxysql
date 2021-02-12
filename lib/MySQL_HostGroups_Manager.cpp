@@ -2730,6 +2730,36 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
+void MyHGC::get_random_MySrvC_inner1(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates) {
+	if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+		if (gtid_trxid) {
+			if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+				sum+=mysrvc->weight;
+				TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+				mysrvcCandidates[num_candidates]=mysrvc;
+				num_candidates++;
+			}
+		} else {
+			if (max_lag_ms >= 0) {
+				if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+					sum+=mysrvc->weight;
+					TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+					mysrvcCandidates[num_candidates]=mysrvc;
+					num_candidates++;
+				} else {
+					sess->thread->status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
+				}
+			} else {
+				sum+=mysrvc->weight;
+				TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+				mysrvcCandidates[num_candidates]=mysrvc;
+				num_candidates++;
+			}
+		}
+	}
+}
+
+
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
@@ -2756,32 +2786,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						if (gtid_trxid) {
-							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-								mysrvcCandidates[num_candidates]=mysrvc;
-								num_candidates++;
-							}
-						} else {
-							if (max_lag_ms >= 0) {
-								if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-									sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-									mysrvcCandidates[num_candidates]=mysrvc;
-									num_candidates++;
-								} else {
-									sess->thread->status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
-								}
-							} else {
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-								mysrvcCandidates[num_candidates]=mysrvc;
-								num_candidates++;
-							}
-						}
-					}
+					get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
 				}
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -2810,30 +2815,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
 								mysrvc->time_last_detected_error=0;
 								// if a server is taken back online, consider it immediately
-								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-									if (gtid_trxid) {
-										if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-											sum+=mysrvc->weight;
-											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-											mysrvcCandidates[num_candidates]=mysrvc;
-											num_candidates++;
-										}
-									} else {
-										if (max_lag_ms >= 0) {
-											if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-												sum+=mysrvc->weight;
-												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-												mysrvcCandidates[num_candidates]=mysrvc;
-												num_candidates++;
-											}
-										} else {
-											sum+=mysrvc->weight;
-											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-											mysrvcCandidates[num_candidates]=mysrvc;
-											num_candidates++;
-										}
-									}
-								}
+								get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
 							}
 						}
 					}
@@ -2890,30 +2872,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 						mysrvc->connect_ERR_at_time_last_detected_error=0;
 						mysrvc->time_last_detected_error=0;
 						// if a server is taken back online, consider it immediately
-						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-							if (gtid_trxid) {
-								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-									sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-									mysrvcCandidates[num_candidates]=mysrvc;
-									num_candidates++;
-								}
-							} else {
-								if (max_lag_ms >= 0) {
-									if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-										sum+=mysrvc->weight;
-										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-										mysrvcCandidates[num_candidates]=mysrvc;
-										num_candidates++;
-									}
-								} else {
-									sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-									mysrvcCandidates[num_candidates]=mysrvc;
-									num_candidates++;
-								}
-							}
-						}
+						get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
 					}
 				}
 			}
