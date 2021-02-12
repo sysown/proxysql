@@ -2782,6 +2782,105 @@ void MyHGC::get_random_MySrvC___remove_overloaded_servers(unsigned int& New_sum,
 	}
 }
 
+void MyHGC::get_random_MySrvC___latency_awereness(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& New_sum) {
+	MySrvC *mysrvc=NULL;
+	unsigned int j=0;
+				unsigned int servers_with_latency = 0;
+				unsigned int total_latency_us = 0;
+				// scan and verify that all servers have some latency
+				for (j=0; j<num_candidates; j++) {
+					mysrvc = mysrvcCandidates[j];
+					if (mysrvc->current_latency_us) {
+						servers_with_latency++;
+						total_latency_us += mysrvc->current_latency_us;
+					}
+				}
+				if (servers_with_latency == num_candidates) {
+					// all servers have some latency.
+					// That is good. If any server have no latency, something is wrong
+					// and we will skip this algorithm
+					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+					unsigned int avg_latency_us = 0;
+					avg_latency_us = total_latency_us/num_candidates;
+					for (j=0; j<num_candidates; j++) {
+						mysrvc = mysrvcCandidates[j];
+						if (mysrvc->current_latency_us > avg_latency_us) {
+							// remove the candidate
+							if (j+1 < num_candidates) {
+								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+							}
+							j--;
+							num_candidates--;
+						}
+					}
+					// we scan again to adjust weight
+					New_sum = 0;
+					for (j=0; j<num_candidates; j++) {
+						mysrvc = mysrvcCandidates[j];
+						New_sum+=mysrvc->weight;
+					}
+				}
+			}
+
+
+void MyHGC::get_random_MySrvC___max_lag_ms(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& sum, unsigned int& TotalUsedConn) {
+	MySrvC *mysrvc=NULL;
+	unsigned int j=0;
+	unsigned int min_num_replicas = sess->thread->variables.aurora_max_lag_ms_only_read_from_replicas;
+	if (min_num_replicas) {
+		if (num_candidates >= min_num_replicas) { // there are at least N replicas
+			// we try to remove the writer
+			unsigned int total_aws_aurora_current_lag_us=0;
+			for (j=0; j<num_candidates; j++) {
+				mysrvc = mysrvcCandidates[j];
+				total_aws_aurora_current_lag_us += mysrvc->aws_aurora_current_lag_us;
+			}
+			if (total_aws_aurora_current_lag_us) { // we are just double checking that we don't have all servers with aws_aurora_current_lag_us==0
+				for (j=0; j<num_candidates; j++) {
+					mysrvc = mysrvcCandidates[j];
+					if (mysrvc->aws_aurora_current_lag_us==0) {
+						sum-=mysrvc->weight;
+						TotalUsedConn-=mysrvc->ConnectionsUsed->conns_length();
+						if (j < num_candidates-1) {
+							mysrvcCandidates[j]=mysrvcCandidates[num_candidates-1];
+						}
+						num_candidates--;
+					}
+				}
+			}
+		}
+	}
+}
+
+void MyHGC::get_random_MySrvC___resume_shunned_nodes(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates, unsigned int l) {
+	MySrvC *mysrvc=NULL;
+	unsigned int j=0;
+	static time_t last_hg_log = 0;
+	time_t t;
+	t=time(NULL);
+	int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
+	if (max_wait_sec < 1) { // min wait time should be at least 1 second
+		max_wait_sec = 1;
+	}
+	if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
+		last_hg_log = time(NULL);
+		proxy_error("Hostgroup %u has no servers available! Checking servers shunned for more than %u second%s\n", hid, max_wait_sec, max_wait_sec == 1 ? "" : "s");
+	}
+	for (j=0; j<l; j++) {
+		mysrvc=mysrvs->idx(j);
+		if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
+			if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
+				mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+				mysrvc->shunned_automatic=false;
+				mysrvc->connect_ERR_at_time_last_detected_error=0;
+				mysrvc->time_last_detected_error=0;
+				// if a server is taken back online, consider it immediately
+				get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
+			}
+		}
+	}
+}
+
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
@@ -2845,59 +2944,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 		}
 		if (max_lag_ms) { // we are using AWS Aurora, as this logic is implemented only here
-			unsigned int min_num_replicas = sess->thread->variables.aurora_max_lag_ms_only_read_from_replicas;
-			if (min_num_replicas) {
-				if (num_candidates >= min_num_replicas) { // there are at least N replicas
-					// we try to remove the writer
-					unsigned int total_aws_aurora_current_lag_us=0;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						total_aws_aurora_current_lag_us += mysrvc->aws_aurora_current_lag_us;
-					}
-					if (total_aws_aurora_current_lag_us) { // we are just double checking that we don't have all servers with aws_aurora_current_lag_us==0
-						for (j=0; j<num_candidates; j++) {
-							mysrvc = mysrvcCandidates[j];
-							if (mysrvc->aws_aurora_current_lag_us==0) {
-								sum-=mysrvc->weight;
-								TotalUsedConn-=mysrvc->ConnectionsUsed->conns_length();
-								if (j < num_candidates-1) {
-									mysrvcCandidates[j]=mysrvcCandidates[num_candidates-1];
-								}
-								num_candidates--;
-							}
-						}
-					}
-				}
-			}
+			get_random_MySrvC___max_lag_ms(num_candidates, mysrvcCandidates, sess, sum, TotalUsedConn);
 		}
+
 		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
-			// we do this lowering the maximum wait time to 10%
-			// most of the follow code is copied from few lines above
-			static time_t last_hg_log = 0;
-			time_t t;
-			t=time(NULL);
-			int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
-			if (max_wait_sec < 1) { // min wait time should be at least 1 second
-				max_wait_sec = 1;
-			}
-			if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
-				last_hg_log = time(NULL);
-				proxy_error("Hostgroup %u has no servers available! Checking servers shunned for more than %u second%s\n", hid, max_wait_sec, max_wait_sec == 1 ? "" : "s");
-			}
-			for (j=0; j<l; j++) {
-				mysrvc=mysrvs->idx(j);
-				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
-					if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
-						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-						mysrvc->shunned_automatic=false;
-						mysrvc->connect_ERR_at_time_last_detected_error=0;
-						mysrvc->time_last_detected_error=0;
-						// if a server is taken back online, consider it immediately
-						get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
-					}
-				}
-			}
+			get_random_MySrvC___resume_shunned_nodes(gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates, l);
 		}
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
@@ -2932,47 +2984,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
+		// latency awareness algorithm
 		if (sess->thread->variables.min_num_servers_lantency_awareness) {
 			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
-				unsigned int servers_with_latency = 0;
-				unsigned int total_latency_us = 0;
-				// scan and verify that all servers have some latency
-				for (j=0; j<num_candidates; j++) {
-					mysrvc = mysrvcCandidates[j];
-					if (mysrvc->current_latency_us) {
-						servers_with_latency++;
-						total_latency_us += mysrvc->current_latency_us;
-					}
-				}
-				if (servers_with_latency == num_candidates) {
-					// all servers have some latency.
-					// That is good. If any server have no latency, something is wrong
-					// and we will skip this algorithm
-					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
-					unsigned int avg_latency_us = 0;
-					avg_latency_us = total_latency_us/num_candidates;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						if (mysrvc->current_latency_us > avg_latency_us) {
-							// remove the candidate
-							if (j+1 < num_candidates) {
-								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-							}
-							j--;
-							num_candidates--;
-						}
-					}
-					// we scan again to adjust weight
-					New_sum = 0;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						New_sum+=mysrvc->weight;
-					}
-				}
+				get_random_MySrvC___latency_awereness(num_candidates, mysrvcCandidates, sess, New_sum);
 			}
 		}
-
 
 		unsigned int k;
 		if (New_sum > 32768) {

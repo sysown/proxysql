@@ -201,6 +201,9 @@ class MyHGC {	// MySQL Host Group Container
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
 	void get_random_MySrvC_inner1(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates);
 	void get_random_MySrvC___remove_overloaded_servers(unsigned int& New_sum, unsigned int& New_TotalUsedConn, unsigned int sum, unsigned int TotalUsedConn, unsigned int& num_candidates, MySrvC **mysrvcCandidates);
+	void get_random_MySrvC___latency_awereness(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& New_sum);
+	void get_random_MySrvC___max_lag_ms(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& sum, unsigned int& TotalUsedConn);
+	void get_random_MySrvC___resume_shunned_nodes(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates, unsigned int l);
 };
 
 class Group_Replication_Info {
