@@ -2760,6 +2760,28 @@ void MyHGC::get_random_MySrvC_inner1(MySrvC *mysrvc, char * gtid_uuid, uint64_t 
 }
 
 
+// Note: this is dead code, left here just for reference
+// this function was supposed to prevent burst of connections, but its use doesn't seem ver beneficial
+void MyHGC::get_random_MySrvC___remove_overloaded_servers(unsigned int& New_sum, unsigned int& New_TotalUsedConn, unsigned int sum, unsigned int TotalUsedConn, unsigned int& num_candidates, MySrvC **mysrvcCandidates) {
+	MySrvC *mysrvc=NULL;
+	// we will now scan again to ignore overloaded servers
+	for (unsigned int j=0; j<num_candidates; j++) {
+		mysrvc = mysrvcCandidates[j];
+		unsigned int len=mysrvc->ConnectionsUsed->conns_length();
+		if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+			New_sum+=mysrvc->weight;
+			New_TotalUsedConn+=len;
+		} else {
+			// remove the candidate
+			if (j+1 < num_candidates) {
+				mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+			}
+			j--;
+			num_candidates--;
+		}
+	}
+}
+
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
@@ -2891,24 +2913,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		unsigned int New_sum=0;
 		unsigned int New_TotalUsedConn=0;
 
-		// we will now scan again to ignore overloaded servers
-		for (j=0; j<num_candidates; j++) {
-			mysrvc = mysrvcCandidates[j];
-			unsigned int len=mysrvc->ConnectionsUsed->conns_length();
-			if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-
-				New_sum+=mysrvc->weight;
-				New_TotalUsedConn+=len;
-			} else {
-				// remove the candidate
-				if (j+1 < num_candidates) {
-					mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-				}
-				j--;
-				num_candidates--;
-			}
+		if (1) {
+			New_sum=sum;
+			New_TotalUsedConn=TotalUsedConn;
+		} else {
+			// we "removed" this code in 2.1 , but left it for reference
+			get_random_MySrvC___remove_overloaded_servers(New_sum, New_TotalUsedConn, sum, TotalUsedConn, num_candidates, mysrvcCandidates);
 		}
-
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");

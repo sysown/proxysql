@@ -200,6 +200,7 @@ class MyHGC {	// MySQL Host Group Container
 	~MyHGC();
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
 	void get_random_MySrvC_inner1(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates);
+	void get_random_MySrvC___remove_overloaded_servers(unsigned int& New_sum, unsigned int& New_TotalUsedConn, unsigned int sum, unsigned int TotalUsedConn, unsigned int& num_candidates, MySrvC **mysrvcCandidates);
 };
 
 class Group_Replication_Info {
