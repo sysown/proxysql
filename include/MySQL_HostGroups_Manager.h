@@ -17,6 +17,7 @@
 #include "wqueue.h"
 
 #include "ev.h"
+#include "SpookyV2.h"
 
 #ifdef DEBUG
 /* */
@@ -525,12 +526,14 @@ class MySQL_HostGroups_Manager {
 	bool server_add(unsigned int hid, char *add, uint16_t p=3306, uint16_t gp=0, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100, unsigned int _max_replication_lag=0, unsigned int _use_ssl=0, unsigned int _max_latency_ms=0, char *comment=NULL);
 	int servers_add(SQLite3_result *resultset); // faster version of server_add
 	bool commit();
+	void commit_checksum_table(SpookyHash& myhash, bool& init, const char *tablename, const char *query);
 
 	void set_incoming_replication_hostgroups(SQLite3_result *);
 	void set_incoming_group_replication_hostgroups(SQLite3_result *);
 	void set_incoming_galera_hostgroups(SQLite3_result *);
 	void set_incoming_aws_aurora_hostgroups(SQLite3_result *);
 	SQLite3_result * execute_query(char *query, char **error);
+	SQLite3_result * dump_table___generic(bool lock, const char *query);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();
 	SQLite3_result *dump_table_mysql_group_replication_hostgroups();

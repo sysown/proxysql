@@ -1,7 +1,6 @@
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
-#include "SpookyV2.h"
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -1799,105 +1798,18 @@ bool MySQL_HostGroups_Manager::commit() {
 		{
 			mydb->execute("DELETE FROM mysql_servers");
 			generate_mysql_servers_table();
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_servers", hash1_);
-				}
-				delete resultset;
-			}
+			commit_checksum_table(myhash, init, (const char *)"mysql_servers",
+					(const char *)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port");
 		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_replication_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_group_replication_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_galera_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_aws_aurora_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
+		commit_checksum_table(myhash, init, (const char *)"mysql_replication_hostgroups",
+				(const char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup");
+		commit_checksum_table(myhash, init, (const char *)"mysql_group_replication_hostgroups",
+				(const char *)"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup");
+		commit_checksum_table(myhash, init, (const char *)"mysql_galera_hostgroups",
+				(const char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup");
+		commit_checksum_table(myhash, init, (const char *)"mysql_aws_aurora_hostgroups",
+				(const char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup");
+
 		if (init == true) {
 			myhash.Final(&hash1, &hash2);
 		}
@@ -1935,6 +1847,28 @@ bool MySQL_HostGroups_Manager::commit() {
 
 	return true;
 }
+
+
+void MySQL_HostGroups_Manager::commit_checksum_table(SpookyHash& myhash, bool& init, const char *tablename, const char *query) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (resultset) {
+		if (resultset->rows_count) {
+			if (init == false) {
+				init = true;
+				myhash.Init(19,3);
+			}
+			uint64_t hash1_ = resultset->raw_checksum();
+			myhash.Update(&hash1_, sizeof(hash1_));
+			proxy_info("Checksum for table %s is %llu\n", tablename, hash1_);
+		}
+		delete resultset;
+	}
+}
+
 
 bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
 	bool ret = false;
@@ -2416,6 +2350,22 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 	pthread_mutex_unlock(&Galera_Info_mutex);
 }
 
+SQLite3_result * MySQL_HostGroups_Manager::dump_table___generic(bool lock, const char *query) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	if (lock) {
+		wrlock();
+	}
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (lock) {
+		wrunlock();
+	}
+	return resultset;
+}
+
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	wrlock();
 
@@ -2425,68 +2375,28 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
-
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT hostgroup_id, hostname, port, gtid_port, weight, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	SQLite3_result * resultset = dump_table___generic(false, (const char *)"SELECT hostgroup_id, hostname, port, gtid_port, weight, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 	wrunlock();
 	return resultset;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_replication_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
+	SQLite3_result * resultset = dump_table___generic(true, (const char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups");
 	return resultset;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_group_replication_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_group_replication_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
+	SQLite3_result * resultset = dump_table___generic(true, (const char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_group_replication_hostgroups");
 	return resultset;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_galera_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
+	SQLite3_result * resultset = dump_table___generic(true, (const char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups");
 	return resultset;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_aws_aurora_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
-					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM mysql_aws_aurora_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
+	SQLite3_result * resultset = dump_table___generic(true, (const char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM mysql_aws_aurora_hostgroups");
 	return resultset;
 }
 
@@ -2632,42 +2542,42 @@ void MyHGC::get_random_MySrvC___remove_overloaded_servers(unsigned int& New_sum,
 void MyHGC::get_random_MySrvC___latency_awereness(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& New_sum) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j=0;
-				unsigned int servers_with_latency = 0;
-				unsigned int total_latency_us = 0;
-				// scan and verify that all servers have some latency
-				for (j=0; j<num_candidates; j++) {
-					mysrvc = mysrvcCandidates[j];
-					if (mysrvc->current_latency_us) {
-						servers_with_latency++;
-						total_latency_us += mysrvc->current_latency_us;
-					}
+	unsigned int servers_with_latency = 0;
+	unsigned int total_latency_us = 0;
+	// scan and verify that all servers have some latency
+	for (j=0; j<num_candidates; j++) {
+		mysrvc = mysrvcCandidates[j];
+		if (mysrvc->current_latency_us) {
+			servers_with_latency++;
+			total_latency_us += mysrvc->current_latency_us;
+		}
+	}
+	if (servers_with_latency == num_candidates) {
+		// all servers have some latency.
+		// That is good. If any server have no latency, something is wrong
+		// and we will skip this algorithm
+		sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+		unsigned int avg_latency_us = 0;
+		avg_latency_us = total_latency_us/num_candidates;
+		for (j=0; j<num_candidates; j++) {
+			mysrvc = mysrvcCandidates[j];
+			if (mysrvc->current_latency_us > avg_latency_us) {
+				// remove the candidate
+				if (j+1 < num_candidates) {
+					mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
 				}
-				if (servers_with_latency == num_candidates) {
-					// all servers have some latency.
-					// That is good. If any server have no latency, something is wrong
-					// and we will skip this algorithm
-					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
-					unsigned int avg_latency_us = 0;
-					avg_latency_us = total_latency_us/num_candidates;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						if (mysrvc->current_latency_us > avg_latency_us) {
-							// remove the candidate
-							if (j+1 < num_candidates) {
-								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-							}
-							j--;
-							num_candidates--;
-						}
-					}
-					// we scan again to adjust weight
-					New_sum = 0;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						New_sum+=mysrvc->weight;
-					}
-				}
+				j--;
+				num_candidates--;
 			}
+		}
+		// we scan again to adjust weight
+		New_sum = 0;
+		for (j=0; j<num_candidates; j++) {
+			mysrvc = mysrvcCandidates[j];
+			New_sum+=mysrvc->weight;
+		}
+	}
+}
 
 
 void MyHGC::get_random_MySrvC___max_lag_ms(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& sum, unsigned int& TotalUsedConn) {
