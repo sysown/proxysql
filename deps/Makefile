@@ -187,6 +187,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../cr_new_stmt_metadata_removal.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
 
