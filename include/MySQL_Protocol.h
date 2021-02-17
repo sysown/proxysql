@@ -12,10 +12,10 @@
  * invalid states in the backend connections.
  */
 enum PROXYSQL_MYSQL_ERR {
-	ER_PROXYSQL_OFFLINE_SRV = 9004,
-	ER_PROXYSQL_LAGGING_SRV,
-	ER_PROXYSQL_PING_TIMEOUT,
-	ER_PROXYSQL_CHANGE_USER_TIMEOUT
+	ER_PROXYSQL_OFFLINE_SRV                      = 9004,
+	ER_PROXYSQL_LAGGING_SRV                      = 9005,
+	ER_PROXYSQL_PING_TIMEOUT                     = 9006,
+	ER_PROXYSQL_CHANGE_USER_TIMEOUT              = 9007,
 };
 
 extern MySQL_Variables mysql_variables;

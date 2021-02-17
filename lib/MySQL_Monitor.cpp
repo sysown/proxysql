@@ -1307,7 +1307,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 					if (resultset->rows_count) {
 						// disable host
 						proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, max_failures);
-						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_ASSUME_SRV_READ_ONLY);
+						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECKS_MISSED);
 						MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // N timeouts reached
 					}
 					delete resultset;
@@ -1984,7 +1984,7 @@ __exit_monitor_galera_thread:
 				// it was a timeout. Check if we are having consecutive timeout
 				if (num_timeouts == mysql_thread___monitor_galera_healthcheck_max_timeout_count) {
 					proxy_error("Server %s:%d missed %d Galera checks. Assuming offline\n", mmsd->hostname, mmsd->port, num_timeouts);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GR_HEALTH_CHECKS_MISSED);
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECKS_MISSED);
 					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 				} else {
 					// not enough timeout
