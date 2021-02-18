@@ -7,17 +7,6 @@
 
 #define RESULTSET_BUFLEN 16300
 
-/**
- * Enum holding the different MySQL connection errors that are used to report
- * invalid states in the backend connections.
- */
-enum PROXYSQL_MYSQL_ERR {
-	ER_PROXYSQL_OFFLINE_SRV                      = 9004,
-	ER_PROXYSQL_LAGGING_SRV                      = 9005,
-	ER_PROXYSQL_PING_TIMEOUT                     = 9006,
-	ER_PROXYSQL_CHANGE_USER_TIMEOUT              = 9007,
-};
-
 extern MySQL_Variables mysql_variables;
 
 /* The default mariadb-connecter 3.1.4 does not yet implement CLIENT_DEPRECATE_EOF

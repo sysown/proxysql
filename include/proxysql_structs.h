@@ -383,6 +383,32 @@ enum handle_unknown_charset {
 	HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE
 };
 
+/**
+ * Enum holding the different MySQL connection errors that are used to report
+ * invalid states in the backend connections.
+ */
+enum PROXYSQL_MYSQL_ERR {
+	ER_PROXYSQL_MAX_CONN_TIMEOUT                      = 9001,
+	ER_PROXYSQL_MAX_CONN_FAILURES                     = 9002,
+	ER_PROXYSQL_COMMAND_NOT_SUPPORTED                 = 9003,
+	ER_PROXYSQL_OFFLINE_SRV                           = 9004,
+	ER_PROXYSQL_LAGGING_SRV                           = 9005,
+	ER_PROXYSQL_PING_TIMEOUT                          = 9006,
+	ER_PROXYSQL_CHANGE_USER_TIMEOUT                   = 9007,
+	ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT               = 9008,
+	ER_PROXYSQL_GR_HEALTH_CHECKS_MISSED               = 9009,
+	ER_PROXYSQL_READ_ONLY_CHECK_CONN_TIMEOUT          = 9010,
+	ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT               = 9011,
+	ER_PROXYSQL_READ_ONLY_CHECKS_MISSED               = 9012,
+	ER_PROXYSQL_GALERA_HEALTH_CHECK_CONN_TIMEOUT      = 9013,
+	ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT           = 9014,
+	ER_PROXYSQL_GALERA_HEALTH_CHECKS_MISSED           = 9015,
+	ER_PROXYSQL_AWS_NO_PINGABLE_SRV                   = 9016,
+	ER_PROXYSQL_AWS_HEALTH_CHECK_CONN_TIMEOUT         = 9017,
+	ER_PROXYSQL_AWS_HEALTH_CHECK_TIMEOUT              = 9018,
+	ER_PROXYSQL_SRV_NULL_REPLICATION_LAG              = 9019,
+};
+
 #endif /* PROXYSQL_ENUMS */
 
 

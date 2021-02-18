@@ -52,25 +52,6 @@ struct cmp_str {
 
 #define N_L_ASE 16
 
-/**
- * Enum holding the different connection errors that could be reached for
- * the backend connections oppened by 'MySQL_Monitor' module.
- */
-enum PROXYSQL_MONITOR_ERR {
-	ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT                    = 10000,
-	ER_PROXYSQL_GR_HEALTH_CHECKS_MISSED                    = 10001,
-	ER_PROXYSQL_READ_ONLY_CHECK_CONN_TIMEOUT               = 10002,
-	ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT                    = 10003,
-	ER_PROXYSQL_READ_ONLY_CHECKS_MISSED                    = 10004,
-	ER_PROXYSQL_GALERA_HEALTH_CHECK_CONN_TIMEOUT           = 10005,
-	ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT                = 10006,
-	ER_PROXYSQL_GALERA_HEALTH_CHECKS_MISSED                = 10007,
-	ER_PROXYSQL_AWS_NO_PINGABLE_SRV                        = 10008,
-	ER_PROXYSQL_AWS_HEALTH_CHECK_CONN_TIMEOUT              = 10009,
-	ER_PROXYSQL_AWS_HEALTH_CHECK_TIMEOUT                   = 10010,
-	ER_PROXYSQL_SRV_NULL_REPLICATION_LAG                   = 10011,
-};
-
 /*
 
 Implementation of monitoring in AWS Aurora will be different than previous modules
