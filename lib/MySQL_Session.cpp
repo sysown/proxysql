@@ -1502,9 +1502,15 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_CHANGE_USER_TIMEOUT);
 			} else { // rc==-1
 				int myerr=mysql_errno(myconn->mysql);
+				MyHGM->p_update_mysql_error_counter(
+					p_mysql_error_type::mysql,
+					myconn->parent->myhgc->hid,
+					myconn->parent->address,
+					myconn->parent->port,
+					( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+				);
 				if (myerr != 0) {
 					proxy_error("Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n",
@@ -1516,7 +1522,6 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
@@ -1922,22 +1927,27 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection while setting INIT CONNECT on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection while setting INIT CONNECT on %s:%d hg %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
 						current_hostgroup,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -1954,7 +1964,6 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 				return ret;
 			} else {
 				proxy_warning("Error while setting INIT CONNECT on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 					// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
@@ -2026,22 +2035,27 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection while setting LDAP USER VARIABLE on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection while setting LDAP USER VARIABLE on %s:%d hg %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
 						current_hostgroup,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
@@ -2056,7 +2070,6 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 				return ret;
 			} else {
 				proxy_warning("Error while setting LDAP USER VARIABLE: %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
@@ -2116,22 +2129,27 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection while setting SQL_LOG_BIN on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection while setting SQL_LOG_BIN on %s:%d hg %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
 						current_hostgroup,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
@@ -2146,7 +2164,6 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 				return ret;
 			} else {
 				proxy_warning("Error while setting SQL_LOG_BIN: %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
@@ -2194,6 +2211,13 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				if (myerr == 2019) {
 					proxy_error("Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %u\n", charset, myconn->parent->address, myconn->parent->port, mysql_tracked_variables[SQL_CHARACTER_SET].default_value);
@@ -2202,7 +2226,6 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection during SET NAMES on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection during SET NAMES on %s , %d : %d, %s\n",
@@ -2211,7 +2234,6 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
@@ -2227,7 +2249,6 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				return false;
 			} else {
 				proxy_warning("Error during SET NAMES: %d, %s\n", myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
@@ -2310,12 +2331,18 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection while setting %s on %s:%d hg %d : %d, %s\n", var_name, myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection while setting %s on %s:%d hg %d : %d, %s\n",
@@ -2326,7 +2353,6 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -2342,7 +2368,6 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 				return ret;
 			} else {
 				proxy_warning("Error while setting %s to \"%s\" on %s:%d hg %d :  %d, %s\n", var_name, var_value, myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				if (myerr == 1193) { // variable is not found
 					int idx = SQL_NAME_LAST;
 					for (int i=0; i<SQL_NAME_LAST; i++) {
@@ -2428,12 +2453,18 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection during setting MYSQL_OPTION_MULTI_STATEMENTS on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection during setting MYSQL_OPTION_MULTI_STATEMENTS on %s , %d : %d, %s\n",
@@ -2442,7 +2473,6 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -2458,7 +2488,6 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 				return ret;
 			} else {
 				proxy_warning("Error during MYSQL_OPTION_MULTI_STATEMENTS : %d, %s\n", myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
@@ -2506,12 +2535,18 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection during INIT_DB on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection during INIT_DB on %s , %d : %d, %s\n",
@@ -2520,7 +2555,6 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 				//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -2536,7 +2570,6 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 				return ret;
 			} else {
 				proxy_warning("Error during INIT_DB: %d, %s\n", myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
@@ -2742,24 +2775,26 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection during change user on %s, %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection during change user on %s, %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
@@ -2774,7 +2809,6 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 				return false;
 			} else {
 				proxy_warning("Error during change user: %d, %s\n", myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 					// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();
@@ -2851,15 +2885,18 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
 				if (myerr != 0) {
 					proxy_error("Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n", myconn->parent->address, myconn->parent->port, myerr, mysql_error(myconn->mysql));
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 				} else {
 					proxy_error(
 						"Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n",
@@ -2868,7 +2905,6 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 				}
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
@@ -2883,7 +2919,6 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 				return false;
 			} else {
 				proxy_warning("Error during SET AUTOCOMMIT: %d, %s\n", myerr, mysql_error(myconn->mysql));
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 					// we won't go back to PROCESSING_QUERY
 				st=previous_status.top();
 				previous_status.pop();

@@ -1315,7 +1315,6 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				}
 			} else {
 				proxy_error("Error on %s : %s\n", buff, error);
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			}
 			free(buff);
 		}
