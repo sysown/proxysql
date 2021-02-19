@@ -434,9 +434,11 @@ MySQL_Logger::MySQL_Logger() {
 	events.logfile=NULL;
 	events.log_file_id=0;
 	events.max_log_file_size=100*1024*1024;
+	events.max_files=0;
 	audit.logfile=NULL;
 	audit.log_file_id=0;
 	audit.max_log_file_size=100*1024*1024;
+	audit.max_files=0;
 };
 
 MySQL_Logger::~MySQL_Logger() {
@@ -532,6 +534,32 @@ void MySQL_Logger::events_open_log_unlocked() {
 		events.logfile=NULL;
 	}
 	free(filen);
+	if ((events.max_files != 0) && (events.max_files < events.log_file_id))
+	{
+		char *filed = NULL;
+		int log_file_id_expired = events.log_file_id - events.max_files;
+
+		if (events.base_filename[0] == '/')
+		{ // absolute path
+			filed = (char *)malloc(strlen(events.base_filename) + 10);
+			sprintf(filed, "%s.%08d", events.base_filename, log_file_id_expired);
+		}
+		else
+		{ // relative path
+			filed = (char *)malloc(strlen(events.datadir) + strlen(events.base_filename) + 10);
+			sprintf(filed, "%s/%s.%08d", events.datadir, events.base_filename, log_file_id_expired);
+		}
+		int err = std::remove(filed);
+		if (err == 0)
+		{
+			proxy_info("Removal of old mysql event log file %s succeed\n", filed);
+		}
+		else
+		{
+			proxy_error("Error removing old mysql event log file %s, errno: %d\n", filed, err);
+		}
+		free(filed);
+	}
 };
 
 void MySQL_Logger::audit_open_log_unlocked() {
@@ -561,12 +589,39 @@ void MySQL_Logger::audit_open_log_unlocked() {
 		audit.logfile=NULL;
 	}
 	free(filen);
+	if ((audit.max_files != 0) && (audit.max_files < audit.log_file_id))
+	{
+		char *filed = NULL;
+		int log_file_id_expired = audit.log_file_id - audit.max_files;
+
+		if (audit.base_filename[0] == '/')
+		{ // absolute path
+			filed = (char *)malloc(strlen(audit.base_filename) + 10);
+			sprintf(filed, "%s.%08d", audit.base_filename, log_file_id_expired);
+		}
+		else
+		{ // relative path
+			filed = (char *)malloc(strlen(audit.datadir) + strlen(audit.base_filename) + 10);
+			sprintf(filed, "%s/%s.%08d", audit.datadir, events.base_filename, log_file_id_expired);
+		}
+		int err = std::remove(filed);
+		if (err == 0)
+		{
+			proxy_info("Removal of old mysql event log file %s succeed\n", filed);
+		}
+		else
+		{
+			proxy_error("Error removing old mysql event log file %s, errno: %d\n", filed, err);
+		}
+		free(filed);
+	}
 };
 
 void MySQL_Logger::events_set_base_filename() {
 	// if filename is the same, return
 	wrlock();
 	events.max_log_file_size=mysql_thread___eventslog_filesize;
+	events.max_files=mysql_thread___eventslog_max_files;
 	if (strcmp(events.base_filename,mysql_thread___eventslog_filename)==0) {
 		wrunlock();
 		return;
@@ -597,6 +652,7 @@ void MySQL_Logger::audit_set_base_filename() {
 	// if filename is the same, return
 	wrlock();
 	audit.max_log_file_size=mysql_thread___auditlog_filesize;
+	audit.max_files=mysql_thread___auditlog_max_files;
 	if (strcmp(audit.base_filename,mysql_thread___auditlog_filename)==0) {
 		wrunlock();
 		return;
