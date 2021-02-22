@@ -504,6 +504,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"default_max_latency_ms",
 	(char *)"default_query_delay",
 	(char *)"default_query_timeout",
+	(char *)"default_loadbalancer_algorithm",
 	(char *)"query_processor_iterations",
 	(char *)"query_processor_regex",
 	(char *)"set_query_lock_on_hostgroup",
@@ -1084,6 +1085,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_max_latency_ms=1*1000; // by default, the maximum allowed latency for a host is 1000ms
 	variables.default_query_delay=0;
 	variables.default_query_timeout=24*3600*1000;
+	variables.default_loadbalancer_algorithm=0;
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
 	variables.set_query_lock_on_hostgroup=1;
@@ -1455,6 +1457,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			}
 			break;
 		case 'd':
+			if (!strcmp(name,"default_loadbalancer_algorithm")) return (int)variables.default_loadbalancer_algorithm;
 			if (!strcmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
 			if (!strcmp(name,"default_query_delay")) return (int)variables.default_query_delay;
 			if (!strcmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
@@ -1980,6 +1983,10 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"default_query_timeout")) {
 		sprintf(intbuf,"%d",variables.default_query_timeout);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name,"default_loadbalancer_algorithm")) {
+		sprintf(intbuf,"%d",variables.default_loadbalancer_algorithm);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"query_processor_iterations")) {
@@ -2704,6 +2711,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		int intv=atoi(value);
 		if (intv >= 1000 && intv <= 20*24*3600*1000) {
 			variables.default_query_timeout=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"default_loadbalancer_algorithm")) {
+		int intv=atoi(value);
+		if (intv >= 1000 && intv <= 1) {
+			variables.default_loadbalancer_algorithm=intv;
 			return true;
 		} else {
 			return false;
@@ -4943,6 +4959,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___mirror_max_queue_length=GloMTH->get_variable_int((char *)"mirror_max_queue_length");
 	mysql_thread___default_query_delay=GloMTH->get_variable_int((char *)"default_query_delay");
 	mysql_thread___default_query_timeout=GloMTH->get_variable_int((char *)"default_query_timeout");
+	mysql_thread___default_loadbalancer_algorithm=GloMTH->get_variable_int((char *)"default_loadbalancer_algorithm");
 	mysql_thread___query_processor_iterations=GloMTH->get_variable_int((char *)"query_processor_iterations");
 	mysql_thread___query_processor_regex=GloMTH->get_variable_int((char *)"query_processor_regex");
 	mysql_thread___set_query_lock_on_hostgroup=GloMTH->get_variable_int((char *)"set_query_lock_on_hostgroup");
@@ -6249,6 +6266,11 @@ void MySQL_Thread::Get_Memory_Stats() {
 
 
 MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+	if (mysql_thread___default_loadbalancer_algorithm) {
+		// if we use a specific loadbalancer algorithm that is not the default (0)
+		// we bypass the local connection cache
+		return NULL;
+	}
 	// some sanity check
 	if (sess == NULL) return NULL;
 	if (sess->client_myds == NULL) return NULL;
@@ -6308,6 +6330,12 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 }
 
 void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
+	if (mysql_thread___default_loadbalancer_algorithm) {
+		// if we use a specific loadbalancer algorithm that is not the default (0)
+		// we bypass the local connection cache
+		MyHGM->push_MyConn_to_pool(c);
+		return;
+	}
 	MySrvC *mysrvc=NULL;
 	mysrvc=(MySrvC *)c->parent;
 	// reset insert_id #1093

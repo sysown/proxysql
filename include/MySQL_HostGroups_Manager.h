@@ -163,6 +163,7 @@ class MySrvC {	// MySQL Server Container
 	~MySrvC();
 	void connect_error(int);
 	void shun_and_killall();
+	bool restore_server_if_shunned();
 	/**
 	 * Update the maximum number of used connections
 	 * @return 
@@ -205,6 +206,7 @@ class MyHGC {	// MySQL Host Group Container
 	void get_random_MySrvC___latency_awereness(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& New_sum);
 	void get_random_MySrvC___max_lag_ms(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& sum, unsigned int& TotalUsedConn);
 	void get_random_MySrvC___resume_shunned_nodes(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates, unsigned int l);
+	void shunned_nodes_scan_and_restore(time_t& t);
 };
 
 class Group_Replication_Info {

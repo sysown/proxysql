@@ -472,6 +472,7 @@ class MySQL_Threads_Handler
 		int default_max_latency_ms;
 		int default_query_delay;
 		int default_query_timeout;
+		int default_loadbalancer_algorithm;
 		int query_processor_iterations;
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;

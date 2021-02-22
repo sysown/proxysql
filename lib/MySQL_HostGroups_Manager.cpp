@@ -2638,12 +2638,55 @@ void MyHGC::get_random_MySrvC___resume_shunned_nodes(char * gtid_uuid, uint64_t 
 	}
 }
 
+// we implemented this function to simplify code in:
+// * MyHGC::get_random_MySrvC()
+// * MyHGC::shunned_nodes_scan_and_restore()
+bool MySrvC::restore_server_if_shunned() {
+	if (
+		(shunned_and_kill_all_connections==false) // it is safe to bring it back online
+		||
+		(shunned_and_kill_all_connections==true && ConnectionsUsed->conns_length()==0 && ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
+	) {
+		status=MYSQL_SERVER_STATUS_ONLINE;
+		shunned_automatic=false;
+		shunned_and_kill_all_connections=false;
+		connect_ERR_at_time_last_detected_error=0;
+		time_last_detected_error=0;
+		return true; // it was brought back online
+	}
+	return false; // it is still shunned
+}
+
+void MyHGC::shunned_nodes_scan_and_restore(time_t& t) {
+	MySrvC *mysrvc=NULL;
+	unsigned int l=mysrvs->cnt();
+	unsigned int j=0;
+	t=time(NULL);
+	int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/1000 - 1 : mysql_thread___shun_recovery_time_sec );
+	if (max_wait_sec < 1) { // min wait time should be at least 1 second
+		max_wait_sec = 1;
+	}
+	for (j=0; j<l; j++) {
+		if (t > mysrvc->time_last_detected_error && (t - mysrvc->time_last_detected_error) > max_wait_sec) {
+				mysrvc->restore_server_if_shunned();
+				// note: here we do not care about the returned value
+				// in get_random_MySrvC() instead we may call get_random_MySrvC_inner1()
+		}
+	}
+}
+
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
+	time_t t=0;
+	// the next few lines of code try to solve issue #530
+	int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/1000 - 1 : mysql_thread___shun_recovery_time_sec );
+	if (max_wait_sec < 1) { // min wait time should be at least 1 second
+		max_wait_sec = 1;
+	}
 #ifdef TEST_AURORA
 	unsigned long long a1 = array_mysrvc_total/10000;
 	array_mysrvc_total += l;
@@ -2659,6 +2702,10 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
 	}
 	if (l) {
+		if (mysql_thread___default_loadbalancer_algorithm) {
+			// if we aren't using the default load balancer algorithm, we scan for scanned nodes beforehand
+			shunned_nodes_scan_and_restore(t); // note: we are passing t , that will be initialized
+		}
 		//int j=0;
 		for (j=0; j<l; j++) {
 			mysrvc=mysrvs->idx(j);
@@ -2667,31 +2714,18 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 					get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
 				}
 			} else {
-				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED
+					&& mysql_thread___default_loadbalancer_algorithm==0 // the following code is only executed if mysql_thread___default_loadbalancer_algorithm is 0
+				) {
 					// try to recover shunned servers
 					if (mysrvc->shunned_automatic && mysql_thread___shun_recovery_time_sec) {
-						time_t t;
-						t=time(NULL);
+						if (t==0) // we ran time() only if t is never initialized
+							t=time(NULL); // we compute it on only one
 						// we do all these changes without locking . We assume the server is not used from long
 						// even if the server is still in used and any of the follow command fails it is not critical
 						// because this is only an attempt to recover a server that is probably dead anyway
-
-						// the next few lines of code try to solve issue #530
-						int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/1000 - 1 : mysql_thread___shun_recovery_time_sec );
-						if (max_wait_sec < 1) { // min wait time should be at least 1 second
-							max_wait_sec = 1;
-						}
 						if (t > mysrvc->time_last_detected_error && (t - mysrvc->time_last_detected_error) > max_wait_sec) {
-							if (
-								(mysrvc->shunned_and_kill_all_connections==false) // it is safe to bring it back online
-								||
-								(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
-							) {
-								mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-								mysrvc->shunned_automatic=false;
-								mysrvc->shunned_and_kill_all_connections=false;
-								mysrvc->connect_ERR_at_time_last_detected_error=0;
-								mysrvc->time_last_detected_error=0;
+							if (mysrvc->restore_server_if_shunned()) {
 								// if a server is taken back online, consider it immediately
 								get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
 							}
@@ -2704,7 +2738,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			get_random_MySrvC___max_lag_ms(num_candidates, mysrvcCandidates, sess, sum, TotalUsedConn);
 		}
 
-		if (sum==0) {
+		if (sum==0
+			&& mysql_thread___default_loadbalancer_algorithm==0 // the following code is only executed if mysql_thread___default_loadbalancer_algorithm is 0
+		) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			get_random_MySrvC___resume_shunned_nodes(gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates, l);
 		}
@@ -2741,10 +2777,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		// latency awareness algorithm
-		if (sess->thread->variables.min_num_servers_lantency_awareness) {
-			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
-				get_random_MySrvC___latency_awereness(num_candidates, mysrvcCandidates, sess, New_sum);
+		if (mysql_thread___default_loadbalancer_algorithm==0) {
+			// for now latency awareness algorithm is available only in the default algorithm
+			// latency awareness algorithm
+			if (sess->thread->variables.min_num_servers_lantency_awareness) {
+				if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
+					get_random_MySrvC___latency_awereness(num_candidates, mysrvcCandidates, sess, New_sum);
+				}
 			}
 		}
 
