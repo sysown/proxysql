@@ -2308,6 +2308,9 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 					q=(char *)"SET %s=%s";
 				if (strncasecmp(var_value,(char *)"REPLACE",7)==0)
 					q=(char *)"SET %s=%s";
+				if (var_value[0] && var_value[0]=='(') {
+					q=(char *)"SET %s=%s";
+				}
 			}
 		} else {
 			// NOTE: for now, only SET SESSION is supported
