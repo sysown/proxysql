@@ -3,6 +3,8 @@
  * @brief This test verifies that after locking on a hostgroup, ProxySQL forwards
  *  several simple special queries in a proper way, forwarding them to the backend
  *  connection.
+ * Note: queries have hostgroup=0 to avoid getting lock on hostgroup 0 and
+ *       attempting to run queries on hostgroup 1
  */
 
 #include <cstring>

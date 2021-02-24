@@ -1174,7 +1174,15 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
-	if ((locked_on_hostgroup == -1) && (pkt->size < 60) && (pkt->size > 38) && (strncasecmp((char *)"SET SESSION character_set_server",(char *)pkt->ptr+5,32)==0) ) { // issue #601
+	if (locked_on_hostgroup >= 0 && (strncasecmp((char *)"SET ",(char *)pkt->ptr+5,33)==4)) {
+		// this is a circuit breaker, we will send everything to the backend
+		//
+		// also note that in the current implementation we stop tracking variables:
+		// this becomes a problem if mysql-set_query_lock_on_hostgroup is
+		// disabled while a session is already locked
+		return false;
+	}
+	if ((pkt->size < 60) && (pkt->size > 38) && (strncasecmp((char *)"SET SESSION character_set_server",(char *)pkt->ptr+5,32)==0) ) { // issue #601
 		char *idx=NULL;
 		char *p=(char *)pkt->ptr+37;
 		idx=(char *)memchr(p,'=',pkt->size-37);
@@ -1194,7 +1202,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 		}
 	}
-	if ((locked_on_hostgroup == -1) && (pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
+	if ((pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
 		char *idx=NULL;
 		char *p=(char *)pkt->ptr+38;
 		idx=(char *)memchr(p,'=',pkt->size-38);
@@ -1215,7 +1223,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		}
 	}
 	if (
-		(locked_on_hostgroup == -1) && (pkt->size < 100) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0)
+		(pkt->size < 100) && (pkt->size > 15) && (strncasecmp((char *)"SET NAMES ",(char *)pkt->ptr+5,10)==0)
 		&&
 		(memchr((const void *)((char *)pkt->ptr+5),',',pkt->size-15)==NULL) // there is no comma
 	) {
@@ -2278,7 +2286,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 					q=(char *)"SET %s=%s";
 				if (strncasecmp(var_value,(char *)"REPLACE",7)==0)
 					q=(char *)"SET %s=%s";
-				if (var_value[0] && var_value[0]=='(') {
+				if (var_value[0] && var_value[0]=='(') { // the value is a subquery
 					q=(char *)"SET %s=%s";
 				}
 			}

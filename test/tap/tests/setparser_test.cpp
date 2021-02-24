@@ -3,6 +3,7 @@
  * @brief Test file for unit testing 'SetParser' type, responsible of parsing
  *   non-trivial 'SET' statements. This test is executed via the wrapper tap test
  *   'setparser_test-t'.
+ *   This file is an extension of ../../set_parser_test/setparsertest.cpp
  */
 
 #include "re2/re2.h"
