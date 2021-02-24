@@ -5292,6 +5292,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nq.c_str());
 				SetParser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse1();
+				// Flag to be set if any variable within the 'SET' statement fails to be tracked,
+				// due to being unknown or because it's an user defined variable.
+				bool failed_to_parse_var = false;
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
 					std::string var = it->first;
 					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
@@ -5610,13 +5613,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 						}
 					} else {
-						std::string value1 = *values;
-						std::size_t found_at = value1.find("@");
-						if (found_at != std::string::npos) {
-							unable_to_parse_set_statement(lock_hostgroup);
-							return false;
-						}
+						// At this point the variable is unknown to us, or it's a user variable
+						// prefixed by '@', in both cases, we should fail to parse. We don't
+						// fail inmediately so we can anyway keep track of the other variables
+						// supplied within the 'SET' statement being parsed.
+						failed_to_parse_var = true;
 					}
+				}
+
+				if (failed_to_parse_var) {
+					unable_to_parse_set_statement(lock_hostgroup);
+					return false;
 				}
 /*
 				if (exit_after_SetParse) {
