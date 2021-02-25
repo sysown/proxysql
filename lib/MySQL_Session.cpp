@@ -1195,7 +1195,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
-	if (locked_on_hostgroup >= 0 && (strncasecmp((char *)"SET ",(char *)pkt->ptr+5,33)==4)) {
+	if (locked_on_hostgroup >= 0 && (strncasecmp((char *)"SET ",(char *)pkt->ptr+5,4)==0)) {
 		// this is a circuit breaker, we will send everything to the backend
 		//
 		// also note that in the current implementation we stop tracking variables:
