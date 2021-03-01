@@ -1253,7 +1253,7 @@ handler_again:
 
 				if (r) {
 					rows_read_inner++;
-					while(rows_read_inner <= query.stmt->result.rows && r->next) {
+					while(rows_read_inner < query.stmt->result.rows) {
 						// it is very important to check rows_read_inner FIRST
 						// because r->next could point to an invalid memory
 						rows_read_inner++;
@@ -1622,8 +1622,9 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 		myds->bytes_info.bytes_recv += br;
 		bytes_info.bytes_recv += br;
 		processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
-		//}
-		ir = ir->next;
+		if (irs < query.stmt->result.rows - 2) {
+			ir = ir->next;
+		}
 	}
 	// at this point, ir points to the last row
 	// next, we create a new MYSQL_ROWS that is a copy of the last row
