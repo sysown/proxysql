@@ -331,7 +331,7 @@ int main(int argc, char** argv) {
 			//rows_read++;
 			rows_read_inner++;
 			MYSQL_ROWS *pr = r;
-			while(rows_read_inner <= stmt2a->result.rows && r->next) {
+			while(rows_read_inner < stmt2a->result.rows) {
 				// it is very important to check rows_read_inner FIRST
 				// because r->next could point to an invalid memory
 				rows_read_inner++;
@@ -356,8 +356,10 @@ int main(int argc, char** argv) {
 					memcpy(&id3, (char *)ir->data+row_offset+sizeof(int)*2, sizeof(int));
 					//diag("Row: %d + %d = %d", id1, id2, id3);
 					assert(id3==id1+id2);
-					ir = ir->next;
 					rows_read++;
+					if (irs < stmt2a->result.rows - 2) {
+						ir = ir->next;
+					}
 				}
 				// at this point, ir points to the last row
 				// next, we create a new MYSQL_ROWS that is a copy of the last row
@@ -374,10 +376,7 @@ int main(int argc, char** argv) {
 				// we will now copy back the last row and make it the only row available
 				MYSQL_ROWS *current = (MYSQL_ROWS *)ma_alloc_root(&stmt2a->result.alloc, sizeof(MYSQL_ROWS) + lcopy->length);
 				current->data= (MYSQL_ROW)(current + 1);
-				MYSQL_ROWS **pprevious = &stmt2a->result.data;
-				//current->next = NULL;
-				*pprevious= current;
-				pprevious= &current->next;
+				stmt2a->result.data = current;
 				memcpy((char *)current->data, (char *)lcopy->data, lcopy->length);
 				// we free the copy
 				free(lcopy);
