@@ -300,6 +300,7 @@ struct p_hg_counter {
 		myhgm_myconnpool_push,
 		myhgm_myconnpool_reset,
 		myhgm_myconnpool_destroy,
+		auto_increment_delay_multiplex,
 		__size
 	};
 };
@@ -458,6 +459,7 @@ class MySQL_HostGroups_Manager {
 		unsigned long long access_denied_max_connections;
 		unsigned long long access_denied_max_user_connections;
 		unsigned long long select_for_update_or_equivalent;
+		unsigned long long auto_increment_delay_multiplex;
 
 		//////////////////////////////////////////////////////
 		///              Prometheus Metrics                ///
