@@ -4837,6 +4837,7 @@ void MySQL_Thread::process_all_sessions() {
 					if (sess->session_fast_forward) {
 						if (sess->HasOfflineBackends()) {
 							sess->killed=true;
+							proxy_warning("Killing client connection %s:%d due to 'session_fast_forward' and offline backends\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
 						}
 					}
 					else {
@@ -4855,6 +4856,7 @@ void MySQL_Thread::process_all_sessions() {
 				if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
 					sess->killed=true;
 					sess->to_process=1;
+					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time/1000);
 				}
 			}
 #endif // IDLE_THREADS
