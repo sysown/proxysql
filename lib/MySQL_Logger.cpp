@@ -602,16 +602,16 @@ void MySQL_Logger::audit_open_log_unlocked() {
 		else
 		{ // relative path
 			filed = (char *)malloc(strlen(audit.datadir) + strlen(audit.base_filename) + 10);
-			sprintf(filed, "%s/%s.%08d", audit.datadir, events.base_filename, log_file_id_expired);
+			sprintf(filed, "%s/%s.%08d", audit.datadir, audit.base_filename, log_file_id_expired);
 		}
 		int err = std::remove(filed);
 		if (err == 0)
 		{
-			proxy_info("Removal of old mysql event log file %s succeed\n", filed);
+			proxy_info("Removal of old mysql audit log file %s succeed\n", filed);
 		}
 		else
 		{
-			proxy_error("Error removing old mysql event log file %s, errno: %d\n", filed, err);
+			proxy_error("Error removing old mysql audit log file %s, errno: %d\n", filed, err);
 		}
 		free(filed);
 	}
