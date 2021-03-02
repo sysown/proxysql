@@ -3947,6 +3947,19 @@ handler_again:
 						case PROCESSING_STMT_EXECUTE:
 							{
 								thread->status_variables.backend_stmt_execute++;
+								// See issue #1574. Metadata needs to be updated in case of need also
+								// during STMT_EXECUTE, so a failure in the prepared statement
+								// metadata cache is only hit once. This way we ensure that the next
+								// 'PREPARE' will be answered with the properly updated metadata.
+								/********************************************************************/
+								// Lock the global statement manager
+								GloMyStmt->wrlock();
+								// Update the global prepared statement metadata
+								MySQL_STMT_Global_info *stmt_info = GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id, false);
+								stmt_info->update_metadata(CurrentQuery.mysql_stmt);
+								// Unlock the global statement manager
+								GloMyStmt->unlock();
+								/********************************************************************/
 								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 								LogQuery(myds);
 								if (CurrentQuery.stmt_meta)

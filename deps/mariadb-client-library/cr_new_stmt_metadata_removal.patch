@@ -1,0 +1,81 @@
+diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
+index ae06290..4c08ade 100644
+--- libmariadb/mariadb_stmt.c
++++ libmariadb/mariadb_stmt.c
+@@ -1969,7 +1969,61 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+     stmt->state= MYSQL_STMT_WAITING_USE_OR_STORE;
+     /* in certain cases parameter types can change: For example see bug
+        4026 (SELECT ?), so we need to update field information */
+-    if (mysql->field_count == stmt->field_count)
++
++    /* ProxySQL #1574: We never set the CR_NEW_STMT_METADATA error because
++       we get the information about the changes on the metadata from the
++       column definitions in the resulset itself. This change allows ProxySQL
++       to avoid a extra query for MEDATADA fetch that otherwise would need
++       to be performed in case of 'CR_NEW_STMT_METADATA' being returned
++       from the library.
++    */
++    /*********************************************************************/
++    if (mysql->field_count != stmt->field_count)
++    {
++      MA_MEM_ROOT *fields_ma_alloc_root=
++                   &((MADB_STMT_EXTENSION *)stmt->extension)->fields_ma_alloc_root;
++      uint i;
++
++      // 'ma_free_root' will free all the allocated memory for 'fields_ma_alloc_root'
++      // for this reason we need to allocate again all the fields and also allocate
++      // the required space for 'MYSQL_BIND'.
++      ma_free_root(fields_ma_alloc_root, MYF(0));
++      if (!(stmt->bind= (MYSQL_BIND *)ma_alloc_root(fields_ma_alloc_root,
++              sizeof(MYSQL_BIND) * mysql->field_count)) ||
++          !(stmt->fields= (MYSQL_FIELD *)ma_alloc_root(fields_ma_alloc_root,
++              sizeof(MYSQL_FIELD) * mysql->field_count)))
++      {
++        SET_CLIENT_STMT_ERROR(stmt, CR_OUT_OF_MEMORY, SQLSTATE_UNKNOWN, 0);
++        return(1);
++      }
++      memset(stmt->bind, 0, sizeof(MYSQL_BIND) * mysql->field_count);
++      stmt->field_count= mysql->field_count;
++
++      // We need to copy again all the data of freed fields in case the number
++      // of fields doesn't match because the number of fields isn't the expected.
++      /*********************************************************************/
++      for (i=0; i < stmt->field_count; i++)
++      {
++        memcpy(&stmt->fields[i], &mysql->fields[i], sizeof(MYSQL_FIELD));
++
++        stmt->fields[i].extension= 0; /* not in use yet */
++        if (mysql->fields[i].db)
++          stmt->fields[i].db= ma_strdup_root(fields_ma_alloc_root, mysql->fields[i].db);
++        if (mysql->fields[i].table)
++          stmt->fields[i].table= ma_strdup_root(fields_ma_alloc_root, mysql->fields[i].table);
++        if (mysql->fields[i].org_table)
++          stmt->fields[i].org_table= ma_strdup_root(fields_ma_alloc_root, mysql->fields[i].org_table);
++        if (mysql->fields[i].name)
++          stmt->fields[i].name= ma_strdup_root(fields_ma_alloc_root, mysql->fields[i].name);
++        if (mysql->fields[i].org_name)
++          stmt->fields[i].org_name= ma_strdup_root(fields_ma_alloc_root, mysql->fields[i].org_name);
++        if (mysql->fields[i].catalog)
++          stmt->fields[i].catalog= ma_strdup_root(fields_ma_alloc_root, mysql->fields[i].catalog);
++        if (mysql->fields[i].def)
++          stmt->fields[i].def= ma_strdup_root(fields_ma_alloc_root, mysql->fields[i].def);
++      }
++      /*********************************************************************/
++    }
+     {
+       uint i;
+       for (i=0; i < stmt->field_count; i++)
+@@ -1981,12 +2035,8 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+         stmt->fields[i].charsetnr= mysql->fields[i].charsetnr;
+         stmt->fields[i].max_length= mysql->fields[i].max_length;
+       }
+-    } else
+-    {
+-      /* table was altered, see test_wl4166_2  */
+-      SET_CLIENT_STMT_ERROR(stmt, CR_NEW_STMT_METADATA, SQLSTATE_UNKNOWN, 0);
+-      return(1);
+     }
++    /*********************************************************************/
+   }
+   return(0);
+ }
