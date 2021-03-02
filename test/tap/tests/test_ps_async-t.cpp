@@ -160,8 +160,8 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 
 
 const int NUM_ROWS=100;
-const int NUM_ROWS_READ=1000;
-const int NLOOPS=1;
+const std::vector<int> NUM_ROWS_READ { 1000, 1, 2 };
+const int NLOOPS = NUM_ROWS_READ.size();
 
 int select_config_file(MYSQL* mysql, std::string& resultset) {
 	if (mysql_query(mysql, "select config file")) {
@@ -201,7 +201,7 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(2*NLOOPS);
+	plan(1 + NLOOPS);
 	diag("Testing PS async store result");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
@@ -287,6 +287,9 @@ int main(int argc, char** argv) {
 	std::string query = "";
 
 	for (int loops=0; loops<NLOOPS; loops++) {
+
+	int IT_NUM_ROWS_READ = NUM_ROWS_READ[loops];
+
 	MYSQL_STMT *stmt2a = mysql_stmt_init(mysql);
 	if (!stmt2a)
 	{
@@ -294,9 +297,9 @@ int main(int argc, char** argv) {
 		return restore_admin(mysqladmin);
 	}
 	// NOTE: the first 2 columns we select are 3 ids, so we can later print and verify
-	query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3, t1.k k1, t1.c c1, t1.pad pad1, t2.k k2, t2.c c2, t2.pad pad2 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 ORDER BY t1.id, t2.id LIMIT " + std::to_string(NUM_ROWS_READ);
-	//query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 LIMIT " + std::to_string(NUM_ROWS_READ);
-	//query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 ORDER BY t1.id, t2.id LIMIT " + std::to_string(NUM_ROWS_READ);
+	query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3, t1.k k1, t1.c c1, t1.pad pad1, t2.k k2, t2.c c2, t2.pad pad2 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 ORDER BY t1.id, t2.id LIMIT " + std::to_string(IT_NUM_ROWS_READ);
+	//query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 LIMIT " + std::to_string(IT_NUM_ROWS_READ);
+	//query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 ORDER BY t1.id, t2.id LIMIT " + std::to_string(IT_NUM_ROWS_READ);
 	if (mysql_stmt_prepare(stmt2a,query.c_str(), query.size())) {
 		fprintf(stderr, "Query error %s\n", mysql_error(mysql));
 		mysql_close(mysql);
@@ -331,7 +334,7 @@ int main(int argc, char** argv) {
 			//rows_read++;
 			rows_read_inner++;
 			MYSQL_ROWS *pr = r;
-			while(rows_read_inner <= stmt2a->result.rows && r->next) {
+			while(rows_read_inner < stmt2a->result.rows) {
 				// it is very important to check rows_read_inner FIRST
 				// because r->next could point to an invalid memory
 				rows_read_inner++;
@@ -356,8 +359,10 @@ int main(int argc, char** argv) {
 					memcpy(&id3, (char *)ir->data+row_offset+sizeof(int)*2, sizeof(int));
 					//diag("Row: %d + %d = %d", id1, id2, id3);
 					assert(id3==id1+id2);
-					ir = ir->next;
 					rows_read++;
+					if (irs < stmt2a->result.rows - 2) {
+						ir = ir->next;
+					}
 				}
 				// at this point, ir points to the last row
 				// next, we create a new MYSQL_ROWS that is a copy of the last row
@@ -374,10 +379,7 @@ int main(int argc, char** argv) {
 				// we will now copy back the last row and make it the only row available
 				MYSQL_ROWS *current = (MYSQL_ROWS *)ma_alloc_root(&stmt2a->result.alloc, sizeof(MYSQL_ROWS) + lcopy->length);
 				current->data= (MYSQL_ROW)(current + 1);
-				MYSQL_ROWS **pprevious = &stmt2a->result.data;
-				//current->next = NULL;
-				*pprevious= current;
-				pprevious= &current->next;
+				stmt2a->result.data = current;
 				memcpy((char *)current->data, (char *)lcopy->data, lcopy->length);
 				// we free the copy
 				free(lcopy);
@@ -406,7 +408,7 @@ int main(int argc, char** argv) {
 				row_count2a++;		
 			}
 		}
-		ok(row_count2a+rows_read==NUM_ROWS_READ, "Fetched %d rows, expected %d. Details: %d rows processed while buffering, %d at the end", row_count2a+rows_read, NUM_ROWS_READ , rows_read, row_count2a);
+		ok(row_count2a+rows_read==IT_NUM_ROWS_READ, "Fetched %d rows, expected %d. Details: %d rows processed while buffering, %d at the end", row_count2a+rows_read, IT_NUM_ROWS_READ , rows_read, row_count2a);
 	}
 
 	if (prepare_meta_result) {
