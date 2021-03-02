@@ -5,6 +5,7 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "SpookyV2.h"
+#include "mysqld_error.h"
 #include "set_parser.h"
 
 #include "MySQL_Data_Stream.h"
@@ -169,7 +170,6 @@ void * kill_query_thread(void *arg) {
 	}
 	if (!ret) {
 		proxy_error("Failed to connect to server %s:%d to run KILL %s %llu: Error: %s\n" , ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id, mysql_error(mysql));
-		// TODO: Ask for this specific case: 'modify killargs to include hostgroup info
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, ka->hid, ka->hostname, ka->port, mysql_errno(mysql));
 		goto __exit_kill_query_thread;
 	}
@@ -1441,16 +1441,17 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 		set_status(session_status___NONE);
 			return -1;
 	} else {
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 		if (rc==-1 || rc==-2) {
 			if (rc==-2) {
 				unsigned long long us = mysql_thread___ping_timeout_server*1000;
 				us += thread->curtime;
 				us -= myds->wait_until;
 				proxy_error("Ping timeout during ping on %s:%d after %lluus (timeout %dms)\n", myconn->parent->address, myconn->parent->port, us, mysql_thread___ping_timeout_server);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_PING_TIMEOUT);
 			} else { // rc==-1
 				int myerr=mysql_errno(myconn->mysql);
 				proxy_error("Detected a broken connection during ping on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
 			}
 			myds->destroy_MySQL_Connection_From_Pool(false);
 			myds->fd=0;
@@ -1495,15 +1496,19 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 		set_status(session_status___NONE);
 		return -1;
 	} else {
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 		if (rc==-1 || rc==-2) {
 			if (rc==-2) {
 				proxy_error("Change user timeout during COM_CHANGE_USER on %s , %d\n", myconn->parent->address, myconn->parent->port);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_CHANGE_USER_TIMEOUT);
 			} else { // rc==-1
 				int myerr=mysql_errno(myconn->mysql);
-				// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-				// wasn't stablished because the server was detected to be down, *prior*
-				// to the connection attempt, and the session should be destroyed.
+				MyHGM->p_update_mysql_error_counter(
+					p_mysql_error_type::mysql,
+					myconn->parent->myhgc->hid,
+					myconn->parent->address,
+					myconn->parent->port,
+					( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+				);
 				if (myerr != 0) {
 					proxy_error("Detected an error during COM_CHANGE_USER on (%d,%s,%d) , FD (Conn:%d , MyDS:%d) : %d, %s\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myds->fd, myds->myconn->fd, myerr, mysql_error(myconn->mysql));
 				} else {
@@ -1514,7 +1519,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 						myconn->parent->port,
 						myds->fd,
 						myds->myconn->fd,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -1922,10 +1927,13 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
@@ -1937,7 +1945,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 						myconn->parent->address,
 						myconn->parent->port,
 						current_hostgroup,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -2027,10 +2035,13 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
@@ -2042,7 +2053,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 						myconn->parent->address,
 						myconn->parent->port,
 						current_hostgroup,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -2118,10 +2129,13 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
@@ -2133,7 +2147,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 						myconn->parent->address,
 						myconn->parent->port,
 						current_hostgroup,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -2197,10 +2211,13 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				if (myerr == 2019) {
 					proxy_error("Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %u\n", charset, myconn->parent->address, myconn->parent->port, mysql_tracked_variables[SQL_CHARACTER_SET].default_value);
@@ -2214,7 +2231,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 						"Detected a broken connection during SET NAMES on %s , %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -2314,10 +2331,13 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
@@ -2330,7 +2350,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 						myconn->parent->address,
 						myconn->parent->port,
 						current_hostgroup,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -2433,9 +2453,13 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
@@ -2446,7 +2470,7 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 						"Detected a broken connection during setting MYSQL_OPTION_MULTI_STATEMENTS on %s , %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -2511,10 +2535,13 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerr);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
@@ -2525,7 +2552,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 						"Detected a broken connection during INIT_DB on %s , %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -2745,13 +2772,16 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
@@ -2762,7 +2792,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 						"Detected a broken connection during change user on %s, %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -2793,6 +2823,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 			if (rc==-2) {
 				bool retry_conn=false;
 				proxy_error("Change user timeout during COM_CHANGE_USER on %s , %d\n", myconn->parent->address, myconn->parent->port);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_CHANGE_USER_TIMEOUT);
 				if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 					retry_conn=true;
 				}
@@ -2851,13 +2882,16 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 		myds->DSS = STATE_MARIADB_GENERIC;
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, mysql_errno(myconn->mysql));
 		if (rc==-1) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
-			// if rc was '-1' but 'mysql_errno' is 0, it means that the connection
-			// wasn't stablished because the server was detected to be down, *prior*
-			// to the connection attempt, and the session should be destroyed.
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::mysql,
+				myconn->parent->myhgc->hid,
+				myconn->parent->address,
+				myconn->parent->port,
+				( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+			);
 			if (myerr >= 2000 || myerr == 0) {
 				bool retry_conn=false;
 				// client error, serious
@@ -2868,7 +2902,7 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 						"Detected a broken connection during SET AUTOCOMMIT on %s , %d : %d, %s\n",
 						myconn->parent->address,
 						myconn->parent->port,
-						myerr,
+						ER_PROXYSQL_OFFLINE_SRV,
 						"Detected offline server prior to statement execution"
 					);
 				}
@@ -3711,9 +3745,11 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 		if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 			thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
 			proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_LAGGING_SRV);
 		} else {
 			thread->status_variables.stvar[st_var_backend_offline_during_query]++;
 			proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 		}
 		if (myds->query_retries_on_failure > 0) {
 			myds->query_retries_on_failure--;
@@ -3825,6 +3861,20 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 // this function used to be inline
 void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds) {
 	thread->status_variables.stvar[st_var_backend_stmt_execute]++;
+	// See issue #1574. Metadata needs to be updated in case of need also
+	// during STMT_EXECUTE, so a failure in the prepared statement
+	// metadata cache is only hit once. This way we ensure that the next
+	// 'PREPARE' will be answered with the properly updated metadata.
+	/********************************************************************/
+	// Lock the global statement manager
+	GloMyStmt->wrlock();
+	// Update the global prepared statement metadata
+	MySQL_STMT_Global_info *stmt_info = GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id, false);
+	stmt_info->update_metadata(CurrentQuery.mysql_stmt);
+	// Unlock the global statement manager
+	GloMyStmt->unlock();
+	/********************************************************************/
+
 	MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 	LogQuery(myds);
 	if (CurrentQuery.stmt_meta) {
@@ -4213,6 +4263,33 @@ handler_again:
 				||
 				(killed==true) // session was killed by admin
 			) {
+				// we only log in case on timing out here. Logging for 'killed' is done in the places that hold that contextual information.
+				if (mybe->server_myds->myconn && (mybe->server_myds->myconn->async_state_machine != ASYNC_IDLE) && mybe->server_myds->wait_until && (thread->curtime >= mybe->server_myds->wait_until)) {
+					std::string query {};
+
+					if (CurrentQuery.stmt_info == NULL) { // text protocol
+						query = std::string { mybe->server_myds->myconn->query.ptr, mybe->server_myds->myconn->query.length };
+					} else { // prepared statement
+						query = std::string { CurrentQuery.stmt_info->query, CurrentQuery.stmt_info->query_length };
+					}
+
+					std::string client_addr { "" };
+					int client_port = 0;
+
+					if (client_myds) {
+						client_addr = client_myds->addr.addr ? client_myds->addr.addr : "";
+						client_port = client_myds->addr.port;
+					}
+
+					proxy_warning(
+						"Killing connection %s:%d because query '%s' from client '%s':%d timed out.\n",
+						mybe->server_myds->myconn->parent->address,
+						mybe->server_myds->myconn->parent->port,
+						query.c_str(),
+						client_addr.c_str(),
+						client_port
+					);
+				}
 				handler_again___new_thread_to_kill_connection();
 			}
 			if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {

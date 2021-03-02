@@ -331,7 +331,8 @@ int main(int argc, char** argv) {
 	MYSQL_BIND bind3[3];
 	int int_data31;
 	int int_data32;
-	char str_data31[LARGE_STRING_SIZE];
+	char* str_data31 = (char*)malloc(LARGE_STRING_SIZE);
+
 	my_bool is_null3[3];
 	long unsigned int length3[3];
 	my_bool error3[3];
@@ -405,6 +406,9 @@ int main(int argc, char** argv) {
 		ok(false, " %s\n", mysql_error(mysql));
 		return restore_admin(mysqladmin);
 	}
+
+	if (str_data31)
+		free(str_data31);
 
 	if (str_data32)
 		free(str_data32);

@@ -49,6 +49,9 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_servers SET max_replication_lag=20");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
+	// Wait for ProxySQL to detect replication issues
+	sleep(10);
+
 	{
 		MYSQL* proxysql_mysql = mysql_init(NULL);
 

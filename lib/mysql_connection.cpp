@@ -1253,7 +1253,7 @@ handler_again:
 
 				if (r) {
 					rows_read_inner++;
-					while(rows_read_inner <= query.stmt->result.rows && r->next) {
+					while(rows_read_inner < query.stmt->result.rows) {
 						// it is very important to check rows_read_inner FIRST
 						// because r->next could point to an invalid memory
 						rows_read_inner++;
@@ -1612,18 +1612,17 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 			total_size+=(ir->length / 0xFFFFFF) * sizeof(mysql_hdr);
 		}
 		total_size+=sizeof(mysql_hdr);
-
-		//rows_read++;
-		//MYSQL_ROW mysql_row = ir->data;
-		//if (mysql_row) {
+		// add the row to the resulset
 		unsigned int br=MyRS->add_row(ir);
+		// increment counters for the bytes processed
 		__sync_fetch_and_add(&parent->bytes_recv,br);
 		myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
 		myds->bytes_info.bytes_recv += br;
 		bytes_info.bytes_recv += br;
 		processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
-		//}
-		ir = ir->next;
+		if (irs < query.stmt->result.rows - 2) {
+			ir = ir->next;
+		}
 	}
 	// at this point, ir points to the last row
 	// next, we create a new MYSQL_ROWS that is a copy of the last row
@@ -1632,17 +1631,20 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 	lcopy->data= (MYSQL_ROW)(lcopy + 1);
 	memcpy((char *)lcopy->data, (char *)ir->data, ir->length);
 	// next we proceed to reset all the buffer
-	query.stmt->result.rows = 0;
+
+	// this invalidates the local variables inside the coroutines
+	// pointing to the previous allocated memory for 'stmt->result'.
+	// For more context see: #3324
 	ma_free_root(&query.stmt->result.alloc, MYF(MY_KEEP_PREALLOC));
 	query.stmt->result.data= NULL;
 	query.stmt->result_cursor= NULL;
+	query.stmt->result.rows = 0;
+
 	// we will now copy back the last row and make it the only row available
 	MYSQL_ROWS *current = (MYSQL_ROWS *)ma_alloc_root(&query.stmt->result.alloc, sizeof(MYSQL_ROWS) + lcopy->length);
 	current->data= (MYSQL_ROW)(current + 1);
-	MYSQL_ROWS **pprevious = &query.stmt->result.data;
-	//current->next = NULL;
-	*pprevious= current;
-	pprevious= &current->next;
+	// update 'stmt->result.data' to the new allocated memory and copy the backed last row
+	query.stmt->result.data = current;
 	memcpy((char *)current->data, (char *)lcopy->data, lcopy->length);
 	// we free the copy
 	free(lcopy);
