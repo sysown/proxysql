@@ -108,9 +108,3 @@ create_connection_annotation: test_connection_annotation-t.cpp
 
 test_set_collation-t: test_set_collation-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_set_collation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_set_collation-t -DGITVERSION=\"$(GIT_VERSION)\"
-
-reg_test_1574-stmt_metadata-t: reg_test_1574-stmt_metadata-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ -DTEST_AURORA -DDEBUG reg_test_1574-stmt_metadata-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o reg_test_1574-stmt_metadata-t -DGITVERSION=\"$(GIT_VERSION)\"
-
-reg_test_1574-mariadb_read_stmt_execute_response-t: reg_test_1574-mariadb_read_stmt_execute_response-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ -DTEST_AURORA -DDEBUG reg_test_1574-mariadb_read_stmt_execute_response-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o reg_test_1574-mariadb_read_stmt_execute_response-t -DGITVERSION=\"$(GIT_VERSION)\"
