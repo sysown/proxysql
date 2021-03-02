@@ -51,6 +51,7 @@ struct cmp_str {
 #define AWS_Aurora_Nentries	50
 
 #define N_L_ASE 16
+
 /*
 
 Implementation of monitoring in AWS Aurora will be different than previous modules

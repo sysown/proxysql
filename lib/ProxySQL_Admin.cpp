@@ -5195,6 +5195,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	rand_del[4] = '-';
 	rand_del[5] = 0;
 
+	// Default initialize prometheus collectable flag
+	registered_prometheus_collectable = false;
+
 	// Initialize prometheus metrics
 	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
 	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
