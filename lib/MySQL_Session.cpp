@@ -4422,11 +4422,6 @@ handler_again:
 
 					handler_rc0_Process_GTID(myconn);
 
-					// check if multiplexing needs to be disabled
-					char *qdt=CurrentQuery.get_digest_text();
-					if (qdt)
-						myconn->ProcessQueryAndSetStatusFlags(qdt);
-
 					if (mirror == false) {
 						// Support for LAST_INSERT_ID()
 						if (myconn->mysql->insert_id) {
@@ -6634,6 +6629,11 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 // this should execute most of the commands executed when a request is finalized
 // this should become the place to hook other functions
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
+	// check if multiplexing needs to be disabled
+	char *qdt=CurrentQuery.get_digest_text();
+	if (qdt && myds && myds->myconn) {
+		myds->myconn->ProcessQueryAndSetStatusFlags(qdt);
+	}
 
 	switch (status) {
 		case PROCESSING_STMT_EXECUTE:
