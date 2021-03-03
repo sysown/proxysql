@@ -4367,9 +4367,11 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		if (__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
 			auto result = pa->serial_exposer({});
 			pta[0] = (char*)result.second.c_str();
+			resultset->add_row(pta);
+		} else {
+			resultset->add_row(pta);
 		}
 
-		resultset->add_row(pta);
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 		run_query = false;
