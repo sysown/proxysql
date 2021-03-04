@@ -1620,7 +1620,9 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 		myds->bytes_info.bytes_recv += br;
 		bytes_info.bytes_recv += br;
 		processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
-		if (irs < query.stmt->result.rows - 2) {
+
+		// we stop when we 'ir->next' will be pointing to the last row
+		if (irs <= query.stmt->result.rows - 2) {
 			ir = ir->next;
 		}
 	}
