@@ -384,7 +384,7 @@ int main(int argc, char** argv) {
 	// configure the connection as not blocking
 	diag("Setting mysql connection non blocking");
 	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, 6033, NULL, 0)) {
+	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n",
 	              __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
@@ -486,7 +486,7 @@ int main(int argc, char** argv) {
 	if (mysql_stmt_close(stmt2a)) {
 		fprintf(stderr, " failed while closing the statement\n");
 		ok(false, " %s\n", mysql_error(mysql));
-		restore_admin(mysql);
+		restore_admin(mysqladmin);
 
 		return -1;
 	}
@@ -528,7 +528,7 @@ int main(int argc, char** argv) {
 	if (mysql_stmt_close(stmt2a)) {
 		fprintf(stderr, " failed while closing the statement\n");
 		ok(false, " %s\n", mysql_error(mysql));
-		restore_admin(mysql);
+		restore_admin(mysqladmin);
 
 		return -1;
 	}
