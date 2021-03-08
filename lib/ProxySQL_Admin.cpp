@@ -1248,6 +1248,10 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	if (query_no_space_length==strlen("PROXYSQL RESTART") && !strncasecmp("PROXYSQL RESTART",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL RESTART command\n");
+		// This function was introduced into 'prometheus::Registry' for being
+		// able to do a complete reset of all the 'prometheus counters'. It
+		// shall only be used during ProxySQL shutdown phases.
+		GloVars.prometheus_registry->ResetCounters();
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=1;
 		return false;
@@ -1267,6 +1271,10 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloMTH->set_variable((char *)"wait_timeout",buf);
 		GloMTH->commit();
 		glovars.reload=2;
+		// This function was introduced into 'prometheus::Registry' for being
+		// able to do a complete reset of all the 'prometheus counters'. It
+		// shall only be used during ProxySQL shutdown phases.
+		GloVars.prometheus_registry->ResetCounters();
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		// After setting the shutdown flag, we should wake all threads and wait for
 		// the shutdown phase to complete.
