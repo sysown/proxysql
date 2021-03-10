@@ -115,6 +115,12 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	// Enable 'RESTAPI'
+	MYSQL_QUERY(proxysql_admin, "SET admin-restapi_enabled='true'");
+	MYSQL_QUERY(proxysql_admin, "SET admin-restapi_port=6070");
+
+	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
 	// Clean current 'restapi_routes' if any
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM restapi_routes");
 
