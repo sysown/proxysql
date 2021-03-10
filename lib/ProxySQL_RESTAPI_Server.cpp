@@ -676,7 +676,12 @@ ProxySQL_RESTAPI_Server::ProxySQL_RESTAPI_Server(
 	int p,
 	vector<pair<std::string, function<shared_ptr<http_response>(const http_request&)>>> endpoints
 ) {
+	// NOTE: Right now ProxySQL is using the simplest mode of 'libhttpserver' for serving 'REST' queries,
+	// in the current mode concurrency on serving requests is low, and throughput is directly related with
+	// the time required to execute the target script, since each of the calls are blocking.
 	ws = std::unique_ptr<httpserver::webserver>(new webserver(create_webserver(p)));
+	// NOTE: Enable for benchmarking purposes. In this mode each request will be served by it's own thread.
+	// ws = std::unique_ptr<httpserver::webserver>(new webserver(create_webserver(p).start_method(http::http_utils::start_method_T::THREAD_PER_CONNECTION)));
 	auto sr = new sync_resource();
 
 	endpoint = std::unique_ptr<httpserver::http_resource>(sr);
