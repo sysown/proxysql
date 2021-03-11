@@ -1620,7 +1620,9 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 		myds->bytes_info.bytes_recv += br;
 		bytes_info.bytes_recv += br;
 		processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
-		if (irs < query.stmt->result.rows - 2) {
+
+		// we stop when we 'ir->next' will be pointing to the last row
+		if (irs <= query.stmt->result.rows - 2) {
 			ir = ir->next;
 		}
 	}
@@ -1646,6 +1648,9 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 	// update 'stmt->result.data' to the new allocated memory and copy the backed last row
 	query.stmt->result.data = current;
 	memcpy((char *)current->data, (char *)lcopy->data, lcopy->length);
+	// update the 'current->length' with the length of the copied row
+	current->length = lcopy->length;
+
 	// we free the copy
 	free(lcopy);
 	// change the rows count to 1
