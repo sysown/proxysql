@@ -4432,6 +4432,7 @@ handler_again:
 								last_HG_affected_rows = current_hostgroup;
 								if (mysql_thread___auto_increment_delay_multiplex && myconn->mysql->insert_id) {
 									myconn->auto_increment_delay_token = mysql_thread___auto_increment_delay_multiplex + 1;
+									__sync_fetch_and_add(&MyHGM->status.auto_increment_delay_multiplex, 1);
 								}
 							}
 						}

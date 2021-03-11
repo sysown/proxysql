@@ -1215,7 +1215,16 @@ hg_metrics_map = std::make_tuple(
 			"proxysql_myhgm_myconnpool_destroy_total",
 			"The number of connections considered unhealthy and therefore closed.",
 			metric_tags {}
-		)
+		),
+
+		// ====================================================================
+
+		std::make_tuple (
+			p_hg_counter::auto_increment_delay_multiplex,
+			"proxysql_myhgm_auto_increment_multiplex_total",
+			"The number of times that 'auto_increment_delay_multiplex' has been triggered.",
+			metric_tags {}
+		),
 	},
 	// prometheus gauges
 	hg_gauge_vector {
@@ -1369,6 +1378,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.access_denied_max_connections=0;
 	status.access_denied_max_user_connections=0;
 	status.select_for_update_or_equivalent=0;
+	status.auto_increment_delay_multiplex=0;
 	pthread_mutex_init(&readonly_mutex, NULL);
 	pthread_mutex_init(&Group_Replication_Info_mutex, NULL);
 	pthread_mutex_init(&Galera_Info_mutex, NULL);
@@ -4294,6 +4304,8 @@ void MySQL_HostGroups_Manager::p_update_metrics() {
 	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_push], status.myconnpoll_push);
 	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_reset], status.myconnpoll_reset);
 	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_destroy], status.myconnpoll_destroy);
+
+	p_update_counter(status.p_counter_array[p_hg_counter::auto_increment_delay_multiplex], status.auto_increment_delay_multiplex);
 
 	// Update the *connection_pool* metrics
 	this->p_update_connection_pool();
