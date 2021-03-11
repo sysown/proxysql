@@ -1106,13 +1106,23 @@ __exit_monitor_replication_lag_thread:
 				time_now=time_now-(mmsd->t2 - start_time);
 				rc=sqlite3_bind_int64(statement, 3, time_now); assert(rc==SQLITE_OK);
 				rc=sqlite3_bind_int64(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2-mmsd->t1)); assert(rc==SQLITE_OK);
-				if (mmsd->result) {
+				if (mmsd->result && mmsd->mysql_error_msg == NULL) {
 					int num_fields=0;
 					int k=0;
 					MYSQL_FIELD * fields=NULL;
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
+
+					// there appears to be an stack invalidation here, and '@@global.read_only'
+					// resulset is reaching here, this check is necessary for handling this
+					// special case.
+					if (fields && num_fields == 1) {
+						// NOTE: left this line for debugging purposes
+						// proxy_info("Unique field name: '%s'\n", fields[0].name);
+					 	repl_lag=-3;
+					}
+
 					for(k = 0; k < num_fields; k++) {
 						if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
 							j=k;
@@ -1137,6 +1147,7 @@ __exit_monitor_replication_lag_thread:
 					mmsd->result=NULL;
 				} else {
 					rc=sqlite3_bind_null(statement, 5); assert(rc==SQLITE_OK);
+					repl_lag=-3;
 				}
 				rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
 				SAFE_SQLITE3_STEP2(statement);
