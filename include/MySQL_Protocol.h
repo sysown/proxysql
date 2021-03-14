@@ -128,5 +128,6 @@ class MySQL_Protocol {
 	bool generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt);
 
 	bool verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user);
+	bool user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */

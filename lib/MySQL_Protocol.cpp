@@ -352,9 +352,7 @@ void debug_spiffe_id(const unsigned char *user, const char *attributes, int __li
 		json j = nlohmann::json::parse(attributes);
 		auto spiffe_id = j.find("spiffe_id");
 		if (spiffe_id != j.end()) {
-			//std::stringstream ss;
 			std::string spiffe_val = j["spiffe_id"].get<std::string>();
-			//std::string spiffe_val = ss.str();
 			proxy_info("%d:%s(): Attributes for user %s: %s . Spiffe_id: %s\n" , __line, __func, user, attributes, spiffe_val.c_str());
 		} else {
 			proxy_info("%d:%s(): Attributes for user %s: %s\n" , __line, __func, user, attributes);
@@ -1613,7 +1611,6 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, NULL);
 	}
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
-	// FIXME: not sure if we should also handle user_attributes . For now we pass NULL (no change)
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
 	if (password==NULL) {
@@ -1698,6 +1695,19 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client %s:%d is trying to use unknown charset %u. Disconnecting\n", (*myds), (*myds)->sess, user, (*myds)->addr.addr, (*myds)->addr.port, charset);
 			ret = false;
 			return ret;
+		}
+		if ((*myds)->sess->user_attributes) {
+			if (user_attributes_has_spiffe(__LINE__, __func__, user)) {
+				// if SPIFFE was used, CHANGE_USER is not allowed.
+				// This because when SPIFFE is used, the password it is not relevant,
+				// as it could be a simple "none" , or "123456", or "password"
+				// The whole idea of using SPIFFE is that this is responsible for
+				// authentication, and not the password.
+				// Therefore CHANGE_USER is not allowed
+				proxy_error("Client %s:%d is trying to run CHANGE_USER , but this is disabled because it previously used SPIFFE ID. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port);
+				ret = false;
+				return ret;
+			}
 		}
 		assert(sess);
 		assert(sess->client_myds);
@@ -2325,6 +2335,21 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 				if (ret == false) {
 					proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
 				}
+			}
+		}
+	}
+	return ret;
+}
+
+bool MySQL_Protocol::user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user) {
+	bool ret = false;
+	if ((*myds)->sess->user_attributes) {
+		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
+		if (strlen(a)) {
+			json j = nlohmann::json::parse(a);
+			auto spiffe_id = j.find("spiffe_id");
+			if (spiffe_id != j.end()) {
+				ret = true;
 			}
 		}
 	}
