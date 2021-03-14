@@ -461,6 +461,7 @@ MySQL_Session::MySQL_Session() {
 	//stats=false;
 	client_authenticated=false;
 	default_schema=NULL;
+	user_attributes=NULL;
 	schema_locked=false;
 	session_fast_forward=false;
 	started_sending_data_to_client=false;
@@ -582,6 +583,9 @@ MySQL_Session::~MySQL_Session() {
 	}
 	if (default_schema) {
 		free(default_schema);
+	}
+	if (user_attributes) {
+		free(user_attributes);
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
@@ -980,6 +984,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	}
 	j["client"]["DSS"] = client_myds->DSS;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
+	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {

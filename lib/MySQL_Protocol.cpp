@@ -346,6 +346,22 @@ int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
 	return PKT_PARSED;
 }
 
+#ifdef DEBUG
+void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
+	if (strlen(attributes)) {
+		json j = nlohmann::json::parse(attributes);
+		auto spiffe_id = j.find("spiffe_id");
+		if (spiffe_id != j.end()) {
+			//std::stringstream ss;
+			std::string spiffe_val = j["spiffe_id"].get<std::string>();
+			//std::string spiffe_val = ss.str();
+			proxy_info("%d:%s(): Attributes for user %s: %s . Spiffe_id: %s\n" , __line, __func, user, attributes, spiffe_val.c_str());
+		} else {
+			proxy_info("%d:%s(): Attributes for user %s: %s\n" , __line, __func, user, attributes);
+		}
+	}
+}
+#endif
 
 
 MySQL_Prepared_Stmt_info::MySQL_Prepared_Stmt_info(unsigned char *pkt, unsigned int length) {
@@ -1530,9 +1546,10 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 		password=GloClickHouseAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+		password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, NULL);
 	}
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
+	// FIXME: not sure if we should also handle user_attributes *here* . For now we pass NULL (no change)
 	if (password==NULL) {
 		ret=false;
 	} else {
@@ -1593,9 +1610,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, NULL);
 	}
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
+	// FIXME: not sure if we should also handle user_attributes . For now we pass NULL (no change)
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
 	if (password==NULL) {
@@ -1726,6 +1744,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	reply[SHA_DIGEST_LENGTH]='\0';
 	int default_hostgroup=-1;
 	char *default_schema=NULL;
+	char *attributes = NULL;
 	bool schema_locked;
 	bool transaction_persistent = true;
 	bool fast_forward = false;
@@ -1980,7 +1999,7 @@ __do_auth:
 		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 	}
 	//assert(default_hostgroup>=0);
 	if (password) {
@@ -1995,6 +2014,10 @@ __do_auth:
 #endif // debug
 		(*myds)->sess->default_hostgroup=default_hostgroup;
 		(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+		(*myds)->sess->user_attributes = attributes; // just the pointer is passed
+#ifdef DEBUG
+		debug_spiffe_id(user,attributes, __LINE__, __func__);
+#endif
 		(*myds)->sess->schema_locked=schema_locked;
 		(*myds)->sess->transaction_persistent=transaction_persistent;
 		(*myds)->sess->session_fast_forward=fast_forward;
@@ -2057,6 +2080,10 @@ __do_auth:
 #endif // debug
 						(*myds)->sess->default_hostgroup=default_hostgroup;
 						(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+						(*myds)->sess->user_attributes = attributes; // just the pointer is passed , but for now not available in LDAP
+#ifdef DEBUG
+						debug_spiffe_id(user,attributes, __LINE__, __func__);
+#endif
 						(*myds)->sess->schema_locked=schema_locked;
 						(*myds)->sess->transaction_persistent=transaction_persistent;
 						(*myds)->sess->session_fast_forward=fast_forward;
@@ -2065,10 +2092,14 @@ __do_auth:
 							if (backend_username) {
 								free(password);
 								password=NULL;
-								password=GloMyAuth->lookup(backend_username, USERNAME_BACKEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+								password=GloMyAuth->lookup(backend_username, USERNAME_BACKEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 								if (password) {
 									(*myds)->sess->default_hostgroup=default_hostgroup;
 									(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+									(*myds)->sess->user_attributes = attributes; // just the pointer is passed
+#ifdef DEBUG
+									proxy_info("Attributes for user %s: %s\n" , user, attributes);
+#endif
 									(*myds)->sess->schema_locked=schema_locked;
 									(*myds)->sess->transaction_persistent=transaction_persistent;
 									(*myds)->sess->session_fast_forward=fast_forward;
@@ -2264,6 +2295,38 @@ __exit_process_pkt_handshake_response:
 	if (db_tmp) {
 		free(db_tmp);
 		db_tmp=NULL;
+	}
+	if (ret == true) {
+		ret = verify_user_attributes(__LINE__, __func__, user);
+	}
+	return ret;
+}
+
+
+bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user) {
+	bool ret = true;
+	if ((*myds)->sess->user_attributes) {
+		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
+		if (strlen(a)) {
+			json j = nlohmann::json::parse(a);
+			auto spiffe_id = j.find("spiffe_id");
+			if (spiffe_id != j.end()) {
+				// at this point, we completely ignore any password specified so far
+				// we assume authentication failure so far
+				ret = false;
+				std::string spiffe_val = j["spiffe_id"].get<std::string>();
+				if ((*myds)->x509_subject_alt_name) {
+					if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
+						if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
+							ret = true;
+						}
+					}
+				}
+				if (ret == false) {
+					proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
+				}
+			}
+		}
 	}
 	return ret;
 }

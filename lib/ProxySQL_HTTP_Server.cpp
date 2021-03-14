@@ -390,7 +390,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		bool _ret_use_ssl = false;
 		int max_connections;
 		void *sha1_pass = NULL;
-		password=GloMyAuth->lookup(username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+		password=GloMyAuth->lookup(username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, NULL);
 		if (default_schema) { // unused
 			free(default_schema);
 		}

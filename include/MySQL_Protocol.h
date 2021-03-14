@@ -126,5 +126,7 @@ class MySQL_Protocol {
 	stmt_execute_metadata_t * get_binds_from_pkt(void *ptr, unsigned int size, MySQL_STMT_Global_info *stmt_info, stmt_execute_metadata_t **stmt_meta);
 
 	bool generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt);
+
+	bool verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user);
 };
 #endif /* __CLASS_MYSQL_PROTOCOL_H */

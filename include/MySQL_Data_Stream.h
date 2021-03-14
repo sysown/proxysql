@@ -103,6 +103,7 @@ class MySQL_Data_Stream
 	MySQL_Connection *myconn;
 	MySQL_Session *sess;  // pointer to the session using this data stream
 	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
+	char *x509_subject_alt_name;
 	SSL *ssl;
 	BIO *rbio_ssl;
 	BIO *wbio_ssl;

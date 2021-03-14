@@ -179,9 +179,12 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 				GENERAL_NAME *sanName;
 				STACK_OF(GENERAL_NAME) *san_names = NULL;
 				san_names = (stack_st_GENERAL_NAME *)X509_get_ext_d2i((X509 *) cert, NID_subject_alt_name, NULL, NULL);
-				sanName = sk_GENERAL_NAME_value(san_names, 0);
-				str = sanName->d.dNSName;
-				proxy_info("%s\n" , str->data);
+				if (san_names) {
+					sanName = sk_GENERAL_NAME_value(san_names, 0);
+					str = sanName->d.dNSName;
+					proxy_info("%s\n" , str->data);
+					x509_subject_alt_name = strdup((const char*)str->data);
+				}
 			} else {
 				proxy_error("X509 error: no required certificate sent by client\n");
 			}
@@ -259,6 +262,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	encrypted=false;
 	switching_auth_stage = 0;
 	switching_auth_type = 0;
+	x509_subject_alt_name=NULL;
 	ssl=NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;
@@ -370,6 +374,10 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		l_free(CompPktOUT.pkt.size,CompPktOUT.pkt.ptr);
 		CompPktOUT.pkt.ptr=NULL;
 		CompPktOUT.pkt.size=0;
+	}
+	if (x509_subject_alt_name) {
+		free(x509_subject_alt_name);
+		x509_subject_alt_name=NULL;
 	}
 }
 
