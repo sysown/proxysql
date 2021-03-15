@@ -166,11 +166,11 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	enum sslstatus status;
 	int n = SSL_do_handshake(ssl);
 	if (n == 1) {
-		proxy_info("SSL handshake completed\n");
+		//proxy_info("SSL handshake completed\n");
 		long rc = SSL_get_verify_result(ssl);
 		if (rc != X509_V_OK && rc != X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN && rc != X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE) {
-			proxy_error("X509 client SSL certificate verify error: (%d:%s)\n" , rc, X509_verify_cert_error_string(rc));
-			//proxy_error("X509 client SSL certificate verify error: (%l)\n" , rc);
+			proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%d:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
+			return SSLSTATUS_FAIL;
 		} else {
 			X509 *cert;
 			cert = SSL_get_peer_certificate(ssl);
@@ -191,7 +191,7 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 		}
 	}
 	status = get_sslstatus(ssl, n);
-	proxy_info("SSL status = %d\n", status);
+	//proxy_info("SSL status = %d\n", status);
 	/* Did SSL request to write bytes? */
 	if (status == SSLSTATUS_WANT_IO) {
 		//proxy_info("SSL status is WANT_IO %d\n", status);
