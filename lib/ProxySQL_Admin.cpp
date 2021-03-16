@@ -4022,6 +4022,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	// trivial implementation for 'connection_id()' to support 'mycli'. See #3247
+	if (!strncasecmp("select connection_id()", query_no_space, strlen("select connection_id()"))) {
+		l_free(query_length,query);
+		// 'connection_id()' is always forced to be '0'
+		query=l_strdup("SELECT 0 AS 'CONNECTION_ID()'");
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
