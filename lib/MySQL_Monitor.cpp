@@ -1120,7 +1120,9 @@ __exit_monitor_replication_lag_thread:
 					if (fields && num_fields == 1) {
 						// NOTE: left this line for debugging purposes
 						// proxy_info("Unique field name: '%s'\n", fields[0].name);
-					 	repl_lag=-3;
+
+						// we set '-4' as an special value disregarding this result
+						repl_lag=-4;
 					}
 
 					for(k = 0; k < num_fields; k++) {
@@ -1150,10 +1152,18 @@ __exit_monitor_replication_lag_thread:
 					repl_lag=-3;
 				}
 				rc=sqlite3_bind_text(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); assert(rc==SQLITE_OK);
-				SAFE_SQLITE3_STEP2(statement);
+				// if value is '-4' the resulset we have is from '@@global.read_only' and
+				// should be discarted
+				if (repl_lag != -4) {
+					SAFE_SQLITE3_STEP2(statement);
+				}
 				rc=sqlite3_clear_bindings(statement); assert(rc==SQLITE_OK);
 				rc=sqlite3_reset(statement); assert(rc==SQLITE_OK);
-				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
+				// if value is '-4' the resulset we have is from '@@global.read_only' and
+				// no action should be taken
+				if (repl_lag != -4) {
+					MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
+				}
 			sqlite3_finalize(statement);
 
 	}
