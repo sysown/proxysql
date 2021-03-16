@@ -2213,6 +2213,7 @@ __exit_monitor_replication_lag_thread:
 			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 			rc = mmsd->mondb->prepare_v2(query, &statement);
 			ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				// 'replication_lag' to be feed to 'replication_lag_action'
 				int repl_lag=-2;
 				rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -2267,6 +2268,8 @@ __exit_monitor_replication_lag_thread:
 					mmsd->result=NULL;
 				} else {
 					rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+					// 'replication_lag_check' timed out, we set 'repl_lag' to '-3' to avoid server to be 're-enabled'.
+					repl_lag=-3;
 				}
 				rc=(*proxy_sqlite3_bind_text)(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				SAFE_SQLITE3_STEP2(statement);
