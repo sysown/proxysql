@@ -3904,8 +3904,15 @@ bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, i
 			if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
 			// transfer to frontend has started, we cannot retry
 			} else {
-				retry_conn=true;
-				proxy_warning("Retrying query.\n");
+				if (myds->myconn->mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
+					// transfer to frontend has started, because this is, at least,
+					// the second resultset coming from the server
+					// we cannot retry
+					proxy_warning("Disabling query retry because SERVER_MORE_RESULTS_EXIST is set\n");
+				} else {
+					retry_conn=true;
+					proxy_warning("Retrying query.\n");
+				}
 			}
 		}
 	}
