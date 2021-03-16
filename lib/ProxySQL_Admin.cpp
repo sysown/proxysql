@@ -4016,34 +4016,10 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	// trivial implementation for 'connection_id()' to support 'mycli'. See #3247
 	if (!strncasecmp("select connection_id()", query_no_space, strlen("select connection_id()"))) {
-		char buf[32];
+		l_free(query_length,query);
 		// 'connection_id()' is always forced to be '0'
-		sprintf(buf, "%lu", static_cast<unsigned long>(0));
-		uint16_t setStatus = 0;
-		MySQL_Data_Stream* myds=sess->client_myds;
-		MySQL_Protocol* myprot=&sess->client_myds->myprot;
-		myds->DSS=STATE_QUERY_SENT_DS;
-		int sid = 1;
-		myprot->generate_pkt_column_count(true,NULL,NULL,sid,1);
-		sid++;
-		myprot->generate_pkt_field(
-			true, NULL, NULL, sid, (char *)"", (char *)"", (char *)"",
-			(char *)"CONNECTION_ID()", (char *)"", 63, 31, MYSQL_TYPE_LONGLONG, 161, 0, false, 0, NULL
-		);
-		sid++;
-		myds->DSS=STATE_COLUMN_DEFINITION;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
-		char **p=(char **)malloc(sizeof(char*)*1);
-		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
-		l[0]=strlen(buf);;
-		p[0]=buf;
-		myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
-		myds->DSS=STATE_ROW;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
-		myds->DSS=STATE_SLEEP;
-		run_query=false;
-		free(l);
-		free(p);
+		query=l_strdup("SELECT 0 AS 'CONNECTION_ID()'");
+		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
