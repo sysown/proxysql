@@ -1374,14 +1374,19 @@ handler_again:
 				} else {
 					compute_unknown_transaction_status();
 				}
+				if (_myerrno < 2000) {
+					// we can continue only if the error is coming from the backend.
+					// (or if zero)
+					// if the error comes from the client library, something terribly
+					// wrong happened and we cannot continue
+					if (mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
+						async_state_machine=ASYNC_NEXT_RESULT_START;
+					}
+				}
 			}
 			if (mysql_result) {
 				mysql_free_result(mysql_result);
 				mysql_result=NULL;
-			}
-			//if (mysql_next_result(mysql)==0) {
-			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
-				async_state_machine=ASYNC_NEXT_RESULT_START;
 			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_START:
