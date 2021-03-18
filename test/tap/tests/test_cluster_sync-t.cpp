@@ -983,7 +983,6 @@ int main(int, char**) {
 			std::make_tuple("mysql-max_transaction_time"                                   , "14400001"                   ),
 			std::make_tuple("mysql-multiplexing"                                           , "true"                       ),
 			std::make_tuple("mysql-log_unhealthy_connections"                              , "true"                       ),
-			std::make_tuple("mysql-forward_autocommit"                                     , "false"                      ),
 			std::make_tuple("mysql-enforce_autocommit_on_reads"                            , "false"                      ),
 			std::make_tuple("mysql-autocommit_false_not_reusable"                          , "false"                      ),
 			std::make_tuple("mysql-autocommit_false_is_transaction"                        , "true"                       ), // false
