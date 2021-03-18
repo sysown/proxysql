@@ -3920,6 +3920,10 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			read_only_set1.insert(s);
 		}
 		proxy_info("Regenerating read_only_set1 with %d servers\n", read_only_set1.size());
+		if (read_only_set1.empty()) {
+			// to avoid regenerating this set always with 0 entries, we generate a fake entry
+			read_only_set1.insert("----:::----");
+		}
 		delete res_set1;
 	}
 	wrunlock();
@@ -3930,9 +3934,6 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	it = read_only_set1.find(ser);
 	if (it != read_only_set1.end()) {
 		num_rows=1;
-	}
-	if (read_only_set1.empty()) {
-		goto __exit_read_only_action;
 	}
 
 	if (admindb==NULL) { // we initialize admindb only if needed
