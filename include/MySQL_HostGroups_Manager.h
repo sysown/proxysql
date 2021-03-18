@@ -363,6 +363,7 @@ class MySQL_HostGroups_Manager {
 	rwlock_t rwlock;
 #endif
 	PtrArray *MyHostGroups;
+	std::unordered_map<unsigned int, MyHGC *>MyHostGroups_map;
 
 	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);

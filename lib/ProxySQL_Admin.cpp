@@ -3730,6 +3730,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							run_query=false;
 						}
 						break;
+					case 51:
+						{
+							char msg[256];
+							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
+							sprintf(msg, "Tested in %llums\n", d);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							run_query=false;
+						}
+						break;
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
 						run_query=false;
@@ -12332,10 +12341,7 @@ void ProxySQL_Admin::enable_grouprep_testing() {
 }
 #endif // TEST_GROUPREP
 
-
-unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action() {
-	// we immediately exit. This is just for developer
-	return 0;
+void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters() {
 	mysql_servers_wrlock();
 	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 10001 AND 20000");
 	admindb->execute("DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup BETWEEN 10001 AND 20000");
@@ -12377,6 +12383,14 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read
 	(*proxy_sqlite3_finalize)(statement2);
 	load_mysql_servers_to_runtime();
 	mysql_servers_wrunlock();
+}
+unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action() {
+	// we immediately exit. This is just for developer
+	return 0;
+	ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();
+	char hostnamebuf1[32];
+	char hostnamebuf2[32];
+	char hostnamebuf3[32];
 	unsigned long long t1 = monotonic_time();
 	//for (int j=0 ; j<500; j++) {
 	for (int j=0 ; j<1000; j++) {
@@ -12387,6 +12401,36 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read
 			MyHGM->read_only_action(hostnamebuf1, 3306, 0);
 			MyHGM->read_only_action(hostnamebuf2, 3306, 1);
 			MyHGM->read_only_action(hostnamebuf3, 3306, 1);
+		}
+	}
+	unsigned long long t2 = monotonic_time();
+	t1 /= 1000;
+	t2 /= 1000;
+	unsigned long long d = t2-t1;
+	return d;
+}
+
+// NEVER USED THIS FUNCTION IN PRODUCTION.
+// THIS IS FOR TESTING PURPOSE ONLY
+// IT ACCESSES MyHGM without lock
+unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup() {
+	// we immediately exit. This is just for developer
+	return 0;
+	ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();
+	unsigned long long t1 = monotonic_time();
+	unsigned int hid = 0;
+	MyHGC * myhgc = NULL;
+	for (int j=0 ; j<100000; j++) {
+		for (unsigned int i=1000; i<2000; i++) {
+			// NEVER USED THIS FUNCTION IN PRODUCTION.
+			// THIS IS FOR TESTING PURPOSE ONLY
+			// IT ACCESSES MyHGM without lock
+			hid = i*10+1; // writer hostgroup
+			myhgc = MyHGM->MyHGC_lookup(hid);
+			assert(myhgc);
+			hid++; // reader hostgroup
+			myhgc = MyHGM->MyHGC_lookup(hid);
+			assert(myhgc);
 		}
 	}
 	unsigned long long t2 = monotonic_time();

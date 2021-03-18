@@ -2658,9 +2658,21 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
 }
 
 MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
-	for (unsigned int i=0; i<MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		if (myhgc->hid==_hid) {
+	if (MyHostGroups->len < 100) {
+		// for few HGs, we use the legacy search
+		for (unsigned int i=0; i<MyHostGroups->len; i++) {
+			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+			if (myhgc->hid==_hid) {
+				return myhgc;
+			}
+		}
+	} else {
+		// for a large number of HGs, we use the unordered_map
+		// this search is slower for a small number of HGs, therefore we use
+		// it only for large number of HGs
+		std::unordered_map<unsigned int, MyHGC *>::const_iterator it = MyHostGroups_map.find(_hid);
+		if (it != MyHostGroups_map.end()) {
+			MyHGC *myhgc = it->second;
 			return myhgc;
 		}
 	}
@@ -2677,6 +2689,7 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	}
 	assert(myhgc);
 	MyHostGroups->add(myhgc);
+	MyHostGroups_map.emplace(_hid,myhgc);
 	return myhgc;
 }
 
