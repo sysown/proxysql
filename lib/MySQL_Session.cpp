@@ -3885,6 +3885,21 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 			free(CurrentQuery.stmt_meta->pkt);
 			CurrentQuery.stmt_meta->pkt=NULL;
 		}
+
+		// free for all the buffer types in which we allocate
+		for (int i = 0; i < CurrentQuery.stmt_meta->num_params; i++) {
+			enum enum_field_types buffer_type =
+				CurrentQuery.stmt_meta->binds[i].buffer_type;
+
+			if (
+				(buffer_type == MYSQL_TYPE_TIME) ||
+				(buffer_type == MYSQL_TYPE_DATE) ||
+				(buffer_type == MYSQL_TYPE_TIMESTAMP) ||
+				(buffer_type == MYSQL_TYPE_DATETIME)
+			) {
+				free(CurrentQuery.stmt_meta->binds[i].buffer);
+			}
+		}
 	}
 	CurrentQuery.mysql_stmt=NULL;
 }
