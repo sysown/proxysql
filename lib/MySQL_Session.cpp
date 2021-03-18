@@ -3973,7 +3973,7 @@ handler_again:
 								/********************************************************************/
 								MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 								LogQuery(myds);
-								if (CurrentQuery.stmt_meta)
+								if (CurrentQuery.stmt_meta) {
 									if (CurrentQuery.stmt_meta->pkt) {
 										uint32_t stmt_global_id=0;
 										memcpy(&stmt_global_id,(char *)(CurrentQuery.stmt_meta->pkt)+5,sizeof(uint32_t));
@@ -3981,6 +3981,22 @@ handler_again:
 										free(CurrentQuery.stmt_meta->pkt);
 										CurrentQuery.stmt_meta->pkt=NULL;
 									}
+
+									// free for all the buffer types in which we allocate
+									for (int i = 0; i < CurrentQuery.stmt_meta->num_params; i++) {
+										enum enum_field_types buffer_type =
+											CurrentQuery.stmt_meta->binds[i].buffer_type;
+
+										if (
+											(buffer_type == MYSQL_TYPE_TIME) ||
+											(buffer_type == MYSQL_TYPE_DATE) ||
+											(buffer_type == MYSQL_TYPE_TIMESTAMP) ||
+											(buffer_type == MYSQL_TYPE_DATETIME)
+										) {
+											free(CurrentQuery.stmt_meta->binds[i].buffer);
+										}
+									}
+								}
 							}
 							CurrentQuery.mysql_stmt=NULL;
 							break;
