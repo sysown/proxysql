@@ -6045,7 +6045,15 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 								sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
 								db->execute(q);
 							} else {
-								proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+								if (strcmp(r->fields[0],(char *)"forward_autocommit")==0) {
+									if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+										proxy_error("Global variable mysql-forward_autocommit is deprecated. See issue #3253\n");
+									}
+									sprintf(q,"DELETE FROM disk.global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
+									db->execute(q);
+								} else {
+									proxy_warning("Impossible to set not existing variable %s with value \"%s\". Deleting. If the variable name is correct, this version doesn't support it\n", r->fields[0],r->fields[1]);
+								}
 							}
 							sprintf(q,"DELETE FROM global_variables WHERE variable_name=\"mysql-%s\"",r->fields[0]);
 							db->execute(q);

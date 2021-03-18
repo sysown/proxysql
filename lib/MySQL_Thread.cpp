@@ -481,7 +481,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"max_transaction_time",
 	(char *)"multiplexing",
 	(char *)"log_unhealthy_connections",
-	(char *)"forward_autocommit",
 	(char *)"enforce_autocommit_on_reads",
 	(char *)"autocommit_false_not_reusable",
 	(char *)"autocommit_false_is_transaction",
@@ -1122,7 +1121,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.commands_stats=true;
 	variables.multiplexing=true;
 	variables.log_unhealthy_connections=true;
-	variables.forward_autocommit=false;
 	variables.enforce_autocommit_on_reads=false;
 	variables.autocommit_false_not_reusable=false;
 	variables.autocommit_false_is_transaction=false;
@@ -1469,7 +1467,6 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"enable_server_deprecate_eof")) return (int)variables.enable_server_deprecate_eof;
 			break;
 		case 'f':
-			if (!strcmp(name,"forward_autocommit")) return (int)variables.forward_autocommit;
 			if (!strcmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
 			if (!strcmp(name,"firewall_whitelist_enabled")) return (int)variables.firewall_whitelist_enabled;
 			break;
@@ -2065,9 +2062,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"log_unhealthy_connections")) {
 		return strdup((variables.log_unhealthy_connections ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"forward_autocommit")) {
-		return strdup((variables.forward_autocommit ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"connection_warming")) {
 		return strdup((variables.connection_warming ? "true" : "false"));
@@ -3347,12 +3341,8 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	}
 	if (!strcasecmp(name,"forward_autocommit")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.forward_autocommit=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.forward_autocommit=false;
-			return true;
+			proxy_error("Variable mysql-forward_autocommit is deprecated. See issue #3253\n");
+			return false;
 		}
 		return false;
 	}
@@ -5068,7 +5058,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
 	mysql_thread___log_unhealthy_connections=(bool)GloMTH->get_variable_int((char *)"log_unhealthy_connections");
 	mysql_thread___connection_warming=(bool)GloMTH->get_variable_int((char*)"connection_warming");
-	mysql_thread___forward_autocommit=(bool)GloMTH->get_variable_int((char *)"forward_autocommit");
 	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
 	mysql_thread___autocommit_false_not_reusable=(bool)GloMTH->get_variable_int((char *)"autocommit_false_not_reusable");
 	mysql_thread___autocommit_false_is_transaction=(bool)GloMTH->get_variable_int((char *)"autocommit_false_is_transaction");

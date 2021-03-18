@@ -2158,7 +2158,8 @@ bool MySQL_Connection::IsActiveTransaction() {
 			ret = true;
 		}
 		if (ret == false) {
-			bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit );
+			//bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit ); // deprecated , see #3253
+			bool r = ( mysql_thread___autocommit_false_is_transaction);
 			if ( r && (IsAutoCommit() == false) ) {
 				ret = true;
 			}
