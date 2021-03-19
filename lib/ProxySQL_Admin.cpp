@@ -548,6 +548,7 @@ static char * admin_variables_names[]= {
 	(char *)"checksum_admin_variables",
 	(char *)"restapi_enabled",
 	(char *)"restapi_port",
+	(char *)"tls_version",
 	(char *)"web_enabled",
 	(char *)"web_port",
 	(char *)"web_verbosity",
@@ -5171,6 +5172,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.web_port_old = variables.web_port;
 	variables.web_verbosity = 0;
 	variables.p_memory_metrics_interval = 61;
+	variables.tls_version=strdup("TLSv1,TLSv1.1,TLSv1.2,TLSv1.3");
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 #endif /* DEBUG */
@@ -7029,6 +7031,7 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf, "%d", variables.p_memory_metrics_interval);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"tls_version")) return s_strdup(variables.tls_version);
 #ifdef DEBUG
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
@@ -7082,6 +7085,46 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 		free(pass);
 	}
 	free_tokenizer( &tok );
+}
+
+/**
+ * @brief List of valid 'TLS' versions supported by ProxySQL for
+ *   client connections.
+ */
+const std::array<const char*, 4> valid_tls_versions {
+	"TLSv1",
+	"TLSv1.1",
+	"TLSv1.2",
+	"TLSv1.3"
+};
+
+/**
+ * @brief Checks that the supplied 'tls_version' variable value is correct.
+ * @param tls_version_val The value of 'tls_version' variable to be verified.
+ * @return 'true' if the value was found to be correct, false otherwise.
+ */
+bool valid_tls_versions_var(const std::string& tls_version_val) {
+	bool res = true;
+
+	std::vector<std::string> input_tls_versions {
+		str_split(tls_version_val, ',')
+	};
+
+	for (const auto& param_tls_ver : input_tls_versions) {
+		bool valid_tls_version =
+			std::find(
+				valid_tls_versions.begin(),
+				valid_tls_versions.end(),
+				param_tls_ver
+			) != std::end(valid_tls_versions);
+
+		if (!valid_tls_version) {
+			res = false;
+			break;
+		}
+	}
+
+	return res;
 }
 
 bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the public function, accessible from admin
@@ -7707,6 +7750,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		const auto fval = atoi(value);
 		if (fval > 0 && fval < 7*24*3600) {
 			variables.p_memory_metrics_interval = fval;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"tls_version")) {
+		if (vallen && valid_tls_versions_var(value)) {
+			if (variables.tls_version) free(variables.tls_version);
+			variables.tls_version = strdup(value);
+
 			return true;
 		} else {
 			return false;

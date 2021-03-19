@@ -239,3 +239,13 @@ int remove_spaces(const char *);
 char *trim_spaces_in_place(char *str);
 char *trim_spaces_and_quotes_in_place(char *str);
 bool mywildcmp(const char *p, const char *str);
+/**
+ * @brief Helper function to split a std::string using a 'char' delimiter.
+ *   If no delimiter is found, returns a vector of just one element containing
+ *   the whole string.
+ * @param s The std::string to be splitted.
+ * @param delimiter The delimiter used to split the std::string.
+ * @return A std::vector containing all the substrings in which the
+ *   supplied string has been splitted.
+ */
+std::vector<std::string> str_split(const std::string& s, char delimiter);

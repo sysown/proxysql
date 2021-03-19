@@ -4731,6 +4731,39 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 	}
 }
 
+/**
+ * @brief Returns the OpenSSL identifier for the supplied 'tls_version',
+ *   or '-1' in case of error.
+ *
+ *   NOTE:
+ *   Since an error shouldn't be possible, because 'tls_version'
+ *   should only hold valid string identifiers for the supported 'TLS'
+ *   versions. In case this happens, an error is logged with the offending
+ *   'TLS' version, requesting a bug report.
+ *
+ * @param tls_version The string representation of the 'TLS' version for
+ *   which the OpenSSL identifier is required.
+ * @return In case of success, the OpenSSL identifier for the supplied
+ *   'TLS' version, '-1' otherwise.
+ */
+int string_to_tls_version(const std::string& tls_version) {
+	if (tls_version == "TLSv1") {
+		return TLS1_VERSION;
+	} else if (tls_version == "TLSv1.1") {
+		return TLS1_1_VERSION;
+	} else if (tls_version == "TLSv1.2") {
+		return TLS1_2_VERSION;
+	} else if (tls_version == "TLSv1.3") {
+		return TLS1_3_VERSION;
+	} else {
+		proxy_error(
+			"Invalid 'TLS' version: '%s' present in 'admin-tls_version'. Please report a bug.\n",
+			tls_version.c_str()
+		);
+		return -1;
+	}
+}
+
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
@@ -4755,6 +4788,17 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->ssl=SSL_new(GloVars.global.ssl_ctx);
+		// get the current 'tls_version' specified in the global variable 'admin-tls_version'
+		std::string tls_version_var = GloAdmin->get_variable(const_cast<char*>("tls_version"));
+		// sort the supported 'tls_versions' allowed
+		std::vector<std::string> tls_versions_allowed { str_split(tls_version_var, ',') };
+		std::sort(tls_versions_allowed.begin(), tls_versions_allowed.end());
+		// get the 'min' and 'max' TLS versions
+		int min_tls_proto_version = string_to_tls_version(tls_versions_allowed.front());
+		int max_tls_proto_version = string_to_tls_version(tls_versions_allowed.back());
+		// set the 'min' and 'max' TLS versions
+		SSL_set_min_proto_version(client_myds->ssl, min_tls_proto_version);
+		SSL_set_max_proto_version(client_myds->ssl, max_tls_proto_version);
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);

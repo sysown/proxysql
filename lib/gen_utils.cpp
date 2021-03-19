@@ -1,4 +1,5 @@
 #include "gen_utils.h"
+#include <sstream>
 
 char *escape_string_single_quotes(char *input, bool free_it) {
 	int i,j,l;
@@ -218,4 +219,16 @@ bool Proxy_file_regular(const char *path) {
 	if (rc==0)
 		if (sb.st_mode & S_IFREG) return true;
 	return false;
+}
+
+std::vector<std::string> str_split(const std::string& s, char delimiter) {
+	std::vector<std::string> tokens {};
+	std::string token {};
+	std::istringstream tokenStream(s);
+
+	while (std::getline(tokenStream, token, delimiter)) {
+		tokens.push_back(token);
+	}
+
+	return tokens;
 }
