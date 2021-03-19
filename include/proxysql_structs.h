@@ -197,6 +197,7 @@ enum session_status {
 	SETTING_VARIABLE,
 	SETTING_MULTIPLE_VARIABLES,
 	SETTING_SET_NAMES,
+	SHOW_WARNINGS,
 	session_status___NONE // special marker
 };
 
@@ -793,6 +794,7 @@ __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 __thread int mysql_thread___query_digests_grouping_limit;
 __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
+__thread bool mysql_thread___log_mysql_warnings_enabled;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -944,6 +946,7 @@ extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 extern __thread int mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
+extern __thread bool mysql_thread___log_mysql_warnings_enabled;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
