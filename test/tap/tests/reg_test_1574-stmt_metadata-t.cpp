@@ -83,11 +83,6 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	// Set a replication lag inferior to default one (60). This is to prevent reads
-	// from a replica in which replication is currently disabled.
-	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_servers SET max_replication_lag=20");
-	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-
 	MYSQL_QUERY(proxysql_mysql, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(proxysql_mysql, "DROP TABLE IF EXISTS test.reg_test_1574");
 	MYSQL_QUERY(proxysql_mysql, "CREATE TABLE IF NOT EXISTS test.reg_test_1574 (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, `c2` varchar(32))");
@@ -98,7 +93,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	std::string query_t = "SELECT /* %s */ * FROM test.reg_test_1574";
+	// Force the 'hostgroup' for the 'SELECT' query to avoid replication issues
+	std::string query_t = "SELECT /*+ ;hostgroup=0,%s */ * FROM test.reg_test_1574";
 	std::string query (static_cast<std::size_t>(query_t.size() + 20), '\0');
 
 	std::string rnd_str(static_cast<std::size_t>(20), '\0');
@@ -115,9 +111,6 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY(proxysql_mysql, "ALTER TABLE test.reg_test_1574 ADD c1 BIGINT AFTER id");
 	MYSQL_QUERY(proxysql_mysql, "INSERT INTO test.reg_test_1574 (c1,c2) VALUES (100, 'abcde')");
-
-	// Wait for ProxySQL to detect replication issues and in case of slow replication itself
-	sleep(10);
 
 	// Check that ProxySQL cached metadata for the query has the old information
 	std::string num_columns_query_t = "SELECT num_columns FROM stats.stats_mysql_prepared_statements_info WHERE query='%s'";
