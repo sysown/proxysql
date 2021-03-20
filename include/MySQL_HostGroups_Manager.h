@@ -356,12 +356,15 @@ class MySQL_HostGroups_Manager {
 	SQLite3DB	*admindb;
 	SQLite3DB	*mydb;
 	pthread_mutex_t readonly_mutex;
+	std::set<std::string> read_only_set1;
+	std::set<std::string> read_only_set2;
 #ifdef MHM_PTHREAD_MUTEX
 	pthread_mutex_t lock;
 #else
 	rwlock_t rwlock;
 #endif
 	PtrArray *MyHostGroups;
+	std::unordered_map<unsigned int, MyHGC *>MyHostGroups_map;
 
 	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);

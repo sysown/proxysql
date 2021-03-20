@@ -1401,6 +1401,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_GALERA_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
+	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
 	MyHostGroups=new PtrArray();
 	incoming_replication_hostgroups=NULL;
 	incoming_group_replication_hostgroups=NULL;
@@ -2083,6 +2084,14 @@ bool MySQL_HostGroups_Manager::commit() {
 	ev_async_send(gtid_ev_loop, gtid_ev_async);
 
 	__sync_fetch_and_add(&status.servers_table_version,1);
+
+	// We completely reset read_only_set1. It will generated (completely) again in read_only_action()
+	// Note: read_only_set1 will be regenerated all at once
+	read_only_set1.erase(read_only_set1.begin(), read_only_set1.end());
+	// We completely reset read_only_set2. It will be again written in read_only_action()
+	// Note: read_only_set2 will be regenerated one server at the time
+	read_only_set2.erase(read_only_set2.begin(), read_only_set2.end());
+
 	this->status.p_counter_array[p_hg_counter::servers_table_version]->Increment();
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
@@ -2659,9 +2668,21 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
 }
 
 MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
-	for (unsigned int i=0; i<MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		if (myhgc->hid==_hid) {
+	if (MyHostGroups->len < 100) {
+		// for few HGs, we use the legacy search
+		for (unsigned int i=0; i<MyHostGroups->len; i++) {
+			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+			if (myhgc->hid==_hid) {
+				return myhgc;
+			}
+		}
+	} else {
+		// for a large number of HGs, we use the unordered_map
+		// this search is slower for a small number of HGs, therefore we use
+		// it only for large number of HGs
+		std::unordered_map<unsigned int, MyHGC *>::const_iterator it = MyHostGroups_map.find(_hid);
+		if (it != MyHostGroups_map.end()) {
+			MyHGC *myhgc = it->second;
 			return myhgc;
 		}
 	}
@@ -2678,6 +2699,7 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	}
 	assert(myhgc);
 	MyHostGroups->add(myhgc);
+	MyHostGroups_map.emplace(_hid,myhgc);
 	return myhgc;
 }
 
@@ -3872,8 +3894,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
 
 void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int read_only) {
 	// define queries
-	const char *Q1=(char *)"SELECT hostgroup_id,status FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d AND status<>3";
-	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=writer_hostgroup OR reader_hostgroup=hostgroup_id) AND hostname='%s' AND port=%d ) LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
+	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=writer_hostgroup) AND hostname='%s' AND port=%d UNION SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=reader_hostgroup) AND hostname='%s' AND port=%d) LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
 	const char *Q2A=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) AND status='OFFLINE_HARD'";
 	const char *Q2B=(char *)"UPDATE OR IGNORE mysql_servers SET hostgroup_id=(SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id) WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT reader_hostgroup FROM mysql_replication_hostgroups WHERE reader_hostgroup=mysql_servers.hostgroup_id)";
 	const char *Q3A=(char *)"INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, gtid_port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT reader_hostgroup, hostname, port, gtid_port, status, weight, max_connections, max_replication_lag, use_ssl, max_latency_ms, mysql_servers.comment FROM mysql_servers JOIN mysql_replication_hostgroups ON mysql_servers.hostgroup_id=mysql_replication_hostgroups.writer_hostgroup WHERE hostname='%s' AND port=%d";
@@ -3888,26 +3909,43 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	pthread_mutex_lock(&readonly_mutex);
 
 	// define a buffer that will be used for all queries
-	char *query=(char *)malloc(strlen(hostname)*2+strlen(Q3A)+64);
-	sprintf(query,Q1,hostname,port);
+	char *query=(char *)malloc(strlen(hostname)*2+strlen(Q3A)+256);
 
 	int cols=0;
 	char *error=NULL;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
+	int num_rows=0; // note: with the new implementation (2.1.1) , this becomes a sort of boolean, not an actual count
 	wrlock();
-	// we run this query holding the mutex
 	// we minimum the time we hold the mutex, as connection pool is being locked
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	int num_rows=0;
-	if (resultset==NULL) {
-		goto __exit_read_only_action;
+	if (read_only_set1.empty()) {
+		SQLite3_result *res_set1=NULL;
+		const char *q1 = (const char *)"SELECT DISTINCT hostname,port FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND status<>3";
+		mydb->execute_statement((char *)q1, &error , &cols , &affected_rows , &res_set1);
+		for (std::vector<SQLite3_row *>::iterator it = res_set1->rows.begin() ; it != res_set1->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			std::string s = r->fields[0];
+			s += ":::";
+			s += r->fields[1];
+			read_only_set1.insert(s);
+		}
+		proxy_info("Regenerating read_only_set1 with %d servers\n", read_only_set1.size());
+		if (read_only_set1.empty()) {
+			// to avoid regenerating this set always with 0 entries, we generate a fake entry
+			read_only_set1.insert("----:::----");
+		}
+		delete res_set1;
 	}
-	num_rows=resultset->rows_count;
+	wrunlock();
+	std::string ser = hostname;
+	ser += ":::";
+	ser += std::to_string(port);
+	std::set<std::string>::iterator it;
+	it = read_only_set1.find(ser);
+	if (it != read_only_set1.end()) {
+		num_rows=1;
+	}
 
-	delete resultset;
-	resultset=NULL;
 	if (admindb==NULL) { // we initialize admindb only if needed
 		admindb=new SQLite3DB();
 		admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);	
@@ -3996,22 +4034,37 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				GloAdmin->mysql_servers_wrunlock();
 			} else {
 				// there is a server in writer hostgroup, let check the status of present and not present hosts
-				// this is the same query as Q1, but with a LEFT JOIN
-				sprintf(query,Q1B,hostname,port,hostname,port);
-				wrlock();
-				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-				wrunlock();
 				bool act=false;
-				for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-					SQLite3_row *r=*it;
-					int status=MYSQL_SERVER_STATUS_OFFLINE_HARD; // default status, even for missing
-					if (r->fields[1]) { // has status
-						status=atoi(r->fields[1]);
+				wrlock();
+				std::set<std::string>::iterator it;
+				// read_only_set2 acts as a cache
+				// if the server was RO=0 on the previous check and no action was needed,
+				// it will be here
+				it = read_only_set2.find(ser);
+				if (it != read_only_set2.end()) {
+					// the server was already detected as RO=0
+					// no action required
+				} else {
+					// it is the first time that we detect RO on this server
+					sprintf(query,Q1B,hostname,port,hostname,port,hostname,port);
+					mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+					for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+						SQLite3_row *r=*it;
+						int status=MYSQL_SERVER_STATUS_OFFLINE_HARD; // default status, even for missing
+						if (r->fields[1]) { // has status
+							status=atoi(r->fields[1]);
+						}
+						if (status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+							act=true;
+						}
 					}
-					if (status==MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-						act=true;
+					if (act == false) {
+						// no action required, therefore we write in read_only_set2
+						proxy_info("read_only_action() detected RO=0 on server %s:%d for the first time after commit(), but no need to reconfigure\n", hostname, port);
+						read_only_set2.insert(ser);
 					}
 				}
+				wrunlock();
 				if (act==true) {	// there are servers either missing, or with stats=OFFLINE_HARD
 					GloAdmin->mysql_servers_wrlock();
 					if (GloMTH->variables.hostgroup_manager_verbose) {
