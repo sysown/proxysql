@@ -7,6 +7,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
+
 #ifdef IDLE_THREADS
 #include <sys/epoll.h>
 #endif // IDLE_THREADS
@@ -424,6 +425,12 @@ class MySQL_Threads_Handler
 		bool sessions_sort;
 		char *default_schema;
 		char *interfaces;
+		/**
+		 * List (",; ") of CIDR blocks for which PROXY protocol headers
+		 * should be parsed for incoming MySQL frontend connections
+		 * (mysql-proxy_protocol_frontend_nets)
+		 */
+		char *proxy_protocol_frontend_nets;
 		char *server_version;
 		char *keep_multiplexing_variables;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
