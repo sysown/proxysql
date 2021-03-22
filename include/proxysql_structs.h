@@ -39,6 +39,11 @@ enum log_event_type {
 	PROXYSQL_COM_STMT_PREPARE
 };
 
+// event logging types
+#define LOG_EVENTS_TO_BINARY_FILES 1
+#define LOG_EVENTS_TO_JSON_FILES 2
+#define LOG_EVENTS_TO_INFO_MESSAGES 3
+
 enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
 
 enum MDB_ASYNC_ST { // MariaDB Async State Machine

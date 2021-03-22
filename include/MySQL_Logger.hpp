@@ -30,6 +30,7 @@ class MySQL_Event {
 	bool have_rows_sent;
 	uint64_t affected_rows;
 	uint64_t rows_sent;
+	char *query_rule_info;
 	public:
 	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
 	uint64_t write(std::fstream *f, MySQL_Session *sess);
@@ -41,6 +42,7 @@ class MySQL_Event {
 	void set_extra_info(char *);
 	void set_affected_rows(uint64_t ar);
 	void set_rows_sent(uint64_t rs);
+	void set_query_rule_info(char *);
 };
 
 class MySQL_Logger {
@@ -83,7 +85,7 @@ class MySQL_Logger {
 	void events_set_base_filename();
 	void audit_set_datadir(char *);
 	void audit_set_base_filename();
-	void log_request(MySQL_Session *, MySQL_Data_Stream *);
+	void log_request(MySQL_Session *, MySQL_Data_Stream *, const char *e = NULL);
 	void log_audit_entry(log_event_type, MySQL_Session *, MySQL_Data_Stream *, char *e = NULL);
 	void flush();
 	void wrlock();

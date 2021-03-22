@@ -139,6 +139,8 @@ class Query_Processor_Output {
 	char *min_gtid;
 	bool create_new_conn;
 	std::string *new_query;
+	std::string query_rule_log;
+	uint64_t query_rule_hits;
 	void * operator new(size_t size) {
 		return l_alloc(size);
 	}

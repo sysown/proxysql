@@ -58,6 +58,7 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	affected_rows=0;
 	have_rows_sent=false;
 	rows_sent=0;
+	query_rule_info = NULL;
 }
 
 void MySQL_Event::set_affected_rows(uint64_t ar) {
@@ -85,16 +86,29 @@ void MySQL_Event::set_server(int _hid, const char *ptr, int len) {
 	hid=_hid;
 }
 
+void MySQL_Event::set_query_rule_info(char *_info) {
+	query_rule_info = _info;
+}
+
 uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 	uint64_t total_bytes=0;
 	switch (et) {
 		case PROXYSQL_COM_QUERY:
 		case PROXYSQL_COM_STMT_EXECUTE:
 		case PROXYSQL_COM_STMT_PREPARE:
-			if (mysql_thread___eventslog_format==1) { // format 1 , binary
-				total_bytes=write_query_format_1(f);
-			} else { // format 2 , json
-				total_bytes=write_query_format_2_json(f);
+			switch (mysql_thread___eventslog_format) {
+				case LOG_EVENTS_TO_BINARY_FILES:
+					total_bytes = write_query_format_1(f);
+					break;
+				case LOG_EVENTS_TO_JSON_FILES:
+					total_bytes = write_query_format_2_json(f);
+					break;
+				case LOG_EVENTS_TO_INFO_MESSAGES:
+					total_bytes = write_query_format_2_json(NULL);
+					break;
+				default:
+					proxy_error("Invalid events log format\n");
+					break;
 			}
 			break;
 		case PROXYSQL_MYSQL_AUTH_OK:
@@ -406,12 +420,15 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
 
-	// for performance reason, we are moving the write lock
-	// right before the write to disk
-	//GloMyLogger->wrlock();
-        //move wrlock() function to log_request() function, avoid to get a null pointer in a multithreaded environment
+	if (query_rule_info) {
+		j["query_rule_info"] = query_rule_info;
+	}
 
-	*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
+	if (f) {
+		*f << j.dump(-1, ' ', false, json::error_handler_t::replace) << std::endl;
+	} else {
+		proxy_info("query_log: %s\n", j.dump(-1, ' ', false, json::error_handler_t::replace).c_str());
+	}
 	return total_bytes; // always 0
 }
 
@@ -623,9 +640,11 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 	flush_log();
 };
 
-void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
-	if (events.enabled==false) return;
-	if (events.logfile==NULL) return;
+void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds, const char *query_rule_info) {
+	if (mysql_thread___eventslog_format != LOG_EVENTS_TO_INFO_MESSAGES) {
+		if (events.enabled==false) return;
+		if (events.logfile==NULL) return;
+	}
 
 	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 
@@ -717,21 +736,24 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		me.set_server(hid,sa,sl);
 	}
 
-	// for performance reason, we are moving the write lock
-	// right before the write to disk
-	//wrlock();
-	
-	//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
-        GloMyLogger->wrlock();
-
-	me.write(events.logfile, sess);
-
-
-	unsigned long curpos=events.logfile->tellp();
-	if (curpos > events.max_log_file_size) {
-		events_flush_log_unlocked();
+	if (query_rule_info) {
+		me.set_query_rule_info(strdup((char *)query_rule_info));
 	}
-	wrunlock();
+
+	if (mysql_thread___eventslog_format == LOG_EVENTS_TO_INFO_MESSAGES) {
+		me.write(NULL, sess);
+	} else {
+		//add a mutex lock in a multithreaded environment, avoid to get a null pointer of events.logfile that leads to the program coredump
+		GloMyLogger->wrlock();
+
+		me.write(events.logfile, sess);
+
+		unsigned long curpos=events.logfile->tellp();
+		if (curpos > events.max_log_file_size) {
+			events_flush_log_unlocked();
+		}
+		wrunlock();
+	}
 
 	if (cl && sess->client_myds->addr.port) {
 		free(ca);

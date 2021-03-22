@@ -1108,7 +1108,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
 	variables.eventslog_default_log=0;
-	variables.eventslog_format=1;
+	variables.eventslog_format=LOG_EVENTS_TO_BINARY_FILES;
 	variables.auditlog_filename=strdup((char *)"");
 	variables.auditlog_filesize=100*1024*1024;
 	//variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
@@ -2920,17 +2920,20 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	}
 	if (!strcasecmp(name,"eventslog_format")) {
 		int intv=atoi(value);
-		if (intv >= 1 && intv <= 2) {
-			if (variables.eventslog_format!=intv) {
+		switch (intv) {
+		case LOG_EVENTS_TO_BINARY_FILES:
+		case LOG_EVENTS_TO_JSON_FILES:
+		case LOG_EVENTS_TO_INFO_MESSAGES:
+			if (variables.eventslog_format != intv) {
 				// if we are switching format, we need to switch file too
 				if (GloMyLogger) {
-					proxy_info("Switching query logging format from %d to %d\n", variables.eventslog_format , intv);
+					proxy_info("Switching query logging format from %d to %d\n", variables.eventslog_format, intv);
 					GloMyLogger->flush_log();
 				}
 				variables.eventslog_format=intv;
 			}
 			return true;
-		} else {
+		default:
 			return false;
 		}
 	}

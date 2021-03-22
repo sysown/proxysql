@@ -6644,11 +6644,11 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 
 	if (qpo) {
 		if (qpo->log==1) {
-			GloMyLogger->log_request(this, myds);	// we send for logging only if logging is enabled for this query
+			GloMyLogger->log_request(this, myds, qpo->query_rule_log.c_str());	// we send for logging only if logging is enabled for this query
 		} else {
 			if (qpo->log==-1) {
 				if (mysql_thread___eventslog_default_log==1) {
-					GloMyLogger->log_request(this, myds);	// we send for logging only if enabled by default
+					GloMyLogger->log_request(this, myds, NULL);	// we send for logging only if enabled by default
 				}
 			}
 		}
