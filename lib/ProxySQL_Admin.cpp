@@ -3444,6 +3444,58 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	return result;
 }
 
+/**
+ * @brief Helper function to format the received hours into a string
+ *   in the format ('HH'|'0H'|'-0H'|'-HH'). Depending on the supplied
+ *   number digit count and sign.
+ * @param num A number to be converted to described format.
+ * @return std::string holding the converted number.
+ */
+const std::string format_timezone_hours(const int num) {
+	std::string result {};
+
+	const std::string base_num = std::to_string(num);
+
+	if (num < 10 && num > 0) {
+		result = "0" + base_num;
+	} else if (num > -10 && num < 0) {
+		result = base_num.substr(0, 1) + "0" + base_num.substr(1);
+	} else if (num <= -10) {
+		result = base_num;
+	}
+
+	return result;
+}
+
+/**
+ * @brief Helper function that converts the current timezone
+ *   expressed in seconds into a string of the format:
+ *     - 'hours' + ':00:00'.
+ *   Following the same pattern as the possible values returned by the SQL query
+ *   'SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())' in a MySQL server.
+ * @return A string holding the specified representation of the
+ *   supplied timezone.
+ */
+std::string timediff_timezone_offset() {
+	// explecitly call 'tzset' to make sure '::timezone' is set
+	tzset();
+
+	// get the global variable
+	long int timezone = ::timezone;
+
+	// first negate the received number
+	timezone = -timezone;
+
+	// transform into hours
+	int timezone_offset_hours = timezone / 3600;
+
+	// create an string with the resulting 'hours' + ':00:00'
+	std::string time_zone_offset {
+		format_timezone_hours(timezone_offset_hours) + ":00:00"
+	};
+
+	return time_zone_offset;
+}
 
 void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
@@ -4047,6 +4099,46 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		// 'connection_id()' is always forced to be '0'
 		query=l_strdup("SELECT 0 AS 'CONNECTION_ID()'");
 		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
+	// implementation for 'SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())' in order to support'csharp' connector. See #2543
+	if (!strncasecmp("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())", query_no_space, strlen("SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())"))) {
+		l_free(query_length,query);
+		char *query1=(char*)"SELECT '%s' as 'TIMEDIFF(NOW(), UTC_TIMESTAMP()'";
+
+		// compute the timezone diff
+		std::string timezone_offset_str = timediff_timezone_offset();
+		char *query2=(char *)malloc(strlen(query1) + strlen(timezone_offset_str.c_str()) + 1);
+
+		// format the query
+		sprintf(query2, query1, timezone_offset_str.c_str());
+
+		// copy the resulting query
+		query=l_strdup(query2);
+		query_length=strlen(query2) + 1;
+
+		// free the buffer used to format
+		free(query2);
+		goto __run_query;
+	}
+
+	// implementation for '"select @@max_allowed_packet, @@character_set_client, @@character_set_connection, @@license, @@sql_mode, @@lower_case_table_names"'
+	// in order to support 'csharp' connector. See #2543
+	if (
+		!strncasecmp(
+			"select @@max_allowed_packet, @@character_set_client, @@character_set_connection, @@license, @@sql_mode, @@lower_case_table_names",
+			query_no_space,
+			strlen("select @@max_allowed_packet, @@character_set_client, @@character_set_connection, @@license, @@sql_mode, @@lower_case_table_names")
+		)
+	) {
+		l_free(query_length,query);
+		char *query1=
+			const_cast<char*>(
+				"select '67108864' as '@@max_allowed_packet', 'utf8' as '@@character_set_client', 'utf8' as '@@character_set_connection', '' as '@@license', '' as '@@sql_mode', '' as '@@lower_case_table_names'"
+			);
+		query=l_strdup(query1);
+		query_length=strlen(query1)+1;
 		goto __run_query;
 	}
 
