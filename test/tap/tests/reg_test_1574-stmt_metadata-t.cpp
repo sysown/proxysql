@@ -93,7 +93,8 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	std::string query_t = "SELECT /* %s */ * FROM test.reg_test_1574";
+	// Force the 'hostgroup' for the 'SELECT' query to avoid replication issues
+	std::string query_t = "SELECT /*+ ;hostgroup=0,%s */ * FROM test.reg_test_1574";
 	std::string query (static_cast<std::size_t>(query_t.size() + 20), '\0');
 
 	std::string rnd_str(static_cast<std::size_t>(20), '\0');
