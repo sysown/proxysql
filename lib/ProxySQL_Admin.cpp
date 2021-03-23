@@ -3456,7 +3456,7 @@ const std::string format_timezone_hours(const int num) {
 
 	const std::string base_num = std::to_string(num);
 
-	if (num < 10 && num > 0) {
+	if (num < 10 && num >= 0) {
 		result = "0" + base_num;
 	} else if (num > -10 && num < 0) {
 		result = base_num.substr(0, 1) + "0" + base_num.substr(1);
