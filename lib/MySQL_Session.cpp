@@ -1124,13 +1124,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return_proxysql_internal(pkt);
 		return true;
 	}
-	if (mysql_thread___forward_autocommit == false) {
-		if (handler_SetAutocommit(pkt) == true) {
-			return true;
-		}
-		if (handler_CommitRollback(pkt) == true) {
-			return true;
-		}
+	if (handler_SetAutocommit(pkt) == true) {
+		return true;
+	}
+	if (handler_CommitRollback(pkt) == true) {
+		return true;
 	}
 
 	if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
@@ -1753,9 +1751,6 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 }
 
 bool MySQL_Session::handler_again___verify_backend_autocommit() {
-	if (mysql_thread___forward_autocommit == true) {
-		return false;
-	}
 	if (sending_set_autocommit) {
 		// if sending_set_autocommit==true, the next query proxysql is going
 		// to run defines autocommit, for example:
