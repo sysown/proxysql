@@ -181,7 +181,6 @@ class ProxySQL_Admin {
 		int web_port;
 		int web_port_old;
 		int p_memory_metrics_interval;
-		char* tls_version;
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */

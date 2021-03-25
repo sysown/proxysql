@@ -793,6 +793,7 @@ __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 __thread int mysql_thread___query_digests_grouping_limit;
 __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
+__thread char* mysql_thread___tls_version;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -944,6 +945,7 @@ extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 extern __thread int mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
+extern __thread char* mysql_thread___tls_version;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

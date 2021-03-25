@@ -18,6 +18,7 @@
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
+#include "proxysql_utils.h"
 
 
 #include "libinjection.h"
@@ -4747,17 +4748,17 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
  *   'TLS' version, '-1' otherwise.
  */
 int string_to_tls_version(const std::string& tls_version) {
-	if (tls_version == "TLSv1") {
+	if (!strcasecmp(tls_version.c_str(), "TLSv1")) {
 		return TLS1_VERSION;
-	} else if (tls_version == "TLSv1.1") {
+	} else if (!strcasecmp(tls_version.c_str(), "TLSv1.1")) {
 		return TLS1_1_VERSION;
-	} else if (tls_version == "TLSv1.2") {
+	} else if (!strcasecmp(tls_version.c_str(), "TLSv1.2")) {
 		return TLS1_2_VERSION;
-	} else if (tls_version == "TLSv1.3") {
+	} else if (!strcasecmp(tls_version.c_str(), "TLSv1.3")) {
 		return TLS1_3_VERSION;
 	} else {
 		proxy_error(
-			"Invalid 'TLS' version: '%s' present in 'admin-tls_version'. Please report a bug.\n",
+			"Invalid 'TLS' version: '%s' present in 'mysql-tls_version'. Please report a bug.\n",
 			tls_version.c_str()
 		);
 		return -1;
@@ -4788,11 +4789,30 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->ssl=SSL_new(GloVars.global.ssl_ctx);
-		// get the current 'tls_version' specified in the global variable 'admin-tls_version'
-		std::string tls_version_var = GloAdmin->get_variable(const_cast<char*>("tls_version"));
+		// get the current 'tls_version' specified in the global variable 'mysql-tls_version'
+		std::string tls_version_var = mysql_thread___tls_version;
 		// sort the supported 'tls_versions' allowed
 		std::vector<std::string> tls_versions_allowed { str_split(tls_version_var, ',') };
-		std::sort(tls_versions_allowed.begin(), tls_versions_allowed.end());
+		// perform a case insensitive sorting of the allowed versions
+		std::sort(
+			tls_versions_allowed.begin(),
+			tls_versions_allowed.end(),
+			[](const std::string& v1, const std::string& v2) {
+				const auto result =
+					mismatch_(v1.cbegin(), v1.cend(), v2.cbegin(), v2.cend(),
+						[](const unsigned char lhs, const unsigned char rhs) {
+							return tolower(lhs) == tolower(rhs);
+						}
+					);
+
+				return
+					result.second != v2.cend() &&
+					(
+						result.first == v1.cend() ||
+						tolower(*result.first) < tolower(*result.second)
+					);
+			}
+		);
 		// get the 'min' and 'max' TLS versions
 		int min_tls_proto_version = string_to_tls_version(tls_versions_allowed.front());
 		int max_tls_proto_version = string_to_tls_version(tls_versions_allowed.back());
