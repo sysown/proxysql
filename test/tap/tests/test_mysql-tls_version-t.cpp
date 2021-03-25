@@ -20,13 +20,16 @@
 #include "utils.h"
 
 /**
- * @brief Copy of the supported 'tls_versions' by ProxySQL.
+ * @brief Copy of the supported 'tls_versions' by ProxySQL. But
+ *   writed in mixed-case, to force all the generated subsets
+ *   for these tests to also use mixed case. To make sure that
+ *   the support properly handles case-insensitive 'tls versions'.
  */
 const std::array<const char*, 4> valid_tls_versions {
-	"TLSv1",
-	"TLSv1.1",
-	"TLSv1.2",
-	"TLSv1.3"
+	"tlSv1",
+	"TlSv1.1",
+	"tLsv1.2",
+	"tlSv1.3"
 };
 
 extern __thread unsigned int g_seed;
@@ -89,7 +92,7 @@ int main(int argc, char** argv) {
 
 	plan(281 + invalid_ssl_versions().size());
 
-	// Check that the variables 'admin-tls_version' is properly being set and doesn't accept invalid values.
+	// Check that the variables 'mysql-tls_version' is properly being set and doesn't accept invalid values.
 
 	// Initialize Admin connection
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -107,12 +110,12 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "SET mysql-have_ssl='true'");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	// Check that the 'admin-tls_version' variable is supported
-	MYSQL_QUERY(proxysql_admin, "SELECT * FROM global_variables WHERE variable_name='admin-tls_version'");
+	// Check that the 'mysql-tls_version' variable is supported
+	MYSQL_QUERY(proxysql_admin, "SELECT * FROM global_variables WHERE variable_name='mysql-tls_version'");
 	MYSQL_RES* tls_ver_res = mysql_store_result(proxysql_admin);
 	int num_rows = mysql_num_rows(tls_ver_res);
 
-	ok(num_rows == 1, "'admin-tls_version' variable should be present.");
+	ok(num_rows == 1, "'mysql-tls_version' variable should be present.");
 
 	mysql_free_result(tls_ver_res);
 
@@ -130,12 +133,12 @@ int main(int argc, char** argv) {
 					valid_tls_combination.end(),
 					std::string {},
 					[](const std::string& a, const std::string& b) -> std::string {
-					    return a + (a.length() > 0 ? "," : "") + b;
+						return a + (a.length() > 0 ? "," : "") + b;
 					}
 				);
 
 			// construct the query
-			std::string t_query { "SET admin-tls_version='%s'" };
+			std::string t_query { "SET mysql-tls_version='%s'" };
 			std::string query {};
 			string_format(t_query, query, valid_tls_versions.c_str());
 
@@ -145,9 +148,9 @@ int main(int argc, char** argv) {
 			mysql_free_result(tls_ver_res);
 
 			// load to runtime
-			MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+			MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 			// check that the variable has been set properly
-			MYSQL_QUERY(proxysql_admin, "SELECT * FROM global_variables WHERE variable_name='admin-tls_version'");
+			MYSQL_QUERY(proxysql_admin, "SELECT * FROM global_variables WHERE variable_name='mysql-tls_version'");
 			tls_ver_res = mysql_store_result(proxysql_admin);
 			int num_rows = mysql_num_rows(tls_ver_res);
 			int num_fields = mysql_num_fields(tls_ver_res);
@@ -165,8 +168,8 @@ int main(int argc, char** argv) {
 			mysql_free_result(tls_ver_res);
 
 			ok(
-				valid_tls_versions == tls_ver_cur_val,
-				"Setting 'admin-tls_version' variable to value '%s' should succeed: (exp_val:'%s' == cur_val:'%s')",
+				strcasecmp(valid_tls_versions.c_str(), tls_ver_cur_val.c_str()) == 0,
+				"Setting 'mysql-tls_version' variable to value '%s' should succeed: (exp_val:'%s' == cur_val:'%s')",
 				valid_tls_versions.c_str(),
 				valid_tls_versions.c_str(),
 				tls_ver_cur_val.c_str()
@@ -192,30 +195,72 @@ int main(int argc, char** argv) {
 				valid_tls_combination.begin(),
 				valid_tls_combination.end()
 			);
-			std::sort(all_present_versions.begin(), all_present_versions.end());
+			// sort all the present versions in a case-insensitive way
+			std::sort(
+				all_present_versions.begin(),
+				all_present_versions.end(),
+				[](const std::string& v1, const std::string& v2) {
+					const auto result =
+						mismatch_(v1.cbegin(), v1.cend(), v2.cbegin(), v2.cend(),
+							[](const unsigned char lhs, const unsigned char rhs) {
+								return tolower(lhs) == tolower(rhs);
+							}
+						);
+
+					return
+						result.second != v2.cend() &&
+						(
+							result.first == v1.cend() ||
+							tolower(*result.first) < tolower(*result.second)
+						);
+				}
+			);
 			std::string biggest_present_version { all_present_versions.back() };
 
 
 			for (const auto& version : non_present_versions) {
-				if (version.compare(biggest_present_version) > 0) {
+				if (strcasecmp(version.c_str(), biggest_present_version.c_str()) > 0) {
 					bigger_non_present_versions.push_back(version);
 				}
 			}
 
 			// Try to connect with all the valid 'tls versions'
 			for (const auto& valid_tls_version : valid_tls_combination) {
+				std::vector<std::string> non_formatted_tls_versions =
+					str_split(valid_tls_version, ',');
+				std::vector<std::string> formatted_tls_version {};
+
+				for (const std::string& c_tls_version : non_formatted_tls_versions) {
+					std::string tls_version  = c_tls_version;
+					tls_version.replace(0, 4, "TLSv");
+					formatted_tls_version.push_back(tls_version);
+				}
+
+				std::string final_tls_version =
+					std::accumulate(
+						formatted_tls_version.begin(),
+						formatted_tls_version.end(),
+						std::string {},
+						[](const std::string& a, const std::string& b) -> std::string {
+						    return a + (a.length() > 0 ? "," : "") + b;
+						}
+					);
 
 				MYSQL* proxysql = mysql_init(NULL);
-				mysql_options(proxysql, MYSQL_OPT_TLS_VERSION, valid_tls_version.c_str());
+				mysql_options(proxysql, MYSQL_OPT_TLS_VERSION, final_tls_version.c_str());
 				mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
 
 				proxysql =
 					mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL);
 
+				if (proxysql == NULL) {
+					fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Connection failure");
+				}
+
 				ok(
 					proxysql != NULL,
 					"Connection should be succesfull for the valid 'tls_version:%s' with error_code:'%d'",
-					valid_tls_version.c_str(),
+					final_tls_version.c_str(),
 					mysql_errno(proxysql)
 				);
 
@@ -224,9 +269,12 @@ int main(int argc, char** argv) {
 
 			// Try to connect with all the invalid 'tls versions'
 			for (const auto& invalid_tls_version : bigger_non_present_versions) {
+				// Replace the case-insensitive version with a case-sensitive one for 'mariadbclient'
+				std::string formatted_tls_version = invalid_tls_version;
+				formatted_tls_version.replace(0, 4, "TLSv");
 
 				MYSQL* proxysql = mysql_init(NULL);
-				mysql_options(proxysql, MYSQL_OPT_TLS_VERSION, invalid_tls_version.c_str());
+				mysql_options(proxysql, MYSQL_OPT_TLS_VERSION, formatted_tls_version.c_str());
 				mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
 
 				MYSQL* failure =
@@ -235,7 +283,7 @@ int main(int argc, char** argv) {
 				ok(
 					(failure == NULL) && (mysql_errno(proxysql) == CR_SSL_CONNECTION_ERROR),
 					"Connection should fail for the invalid 'tls_version:%s' with error_code:'%d'",
-					invalid_tls_version.c_str(),
+					formatted_tls_version.c_str(),
 					CR_SSL_CONNECTION_ERROR
 				);
 
@@ -247,7 +295,7 @@ int main(int argc, char** argv) {
 
 	// try setting invalid 'tls_versions'
 	for (const auto& invalid_tls_version : invalid_ssl_versions()){
-		std::string t_query { "SET admin-tls_version='%s'" };
+		std::string t_query { "SET mysql-tls_version='%s'" };
 		std::string query {};
 		string_format(t_query, query, invalid_tls_version.c_str());
 
@@ -257,9 +305,9 @@ int main(int argc, char** argv) {
 		mysql_free_result(tls_ver_res);
 
 		// load to runtime
-		MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 		// check that the variable has been set properly
-		MYSQL_QUERY(proxysql_admin, "SELECT * FROM global_variables WHERE variable_name='admin-tls_version'");
+		MYSQL_QUERY(proxysql_admin, "SELECT * FROM global_variables WHERE variable_name='mysql-tls_version'");
 		tls_ver_res = mysql_store_result(proxysql_admin);
 		int num_rows = mysql_num_rows(tls_ver_res);
 		int num_fields = mysql_num_fields(tls_ver_res);
@@ -278,7 +326,7 @@ int main(int argc, char** argv) {
 
 		ok(
 			invalid_tls_version != tls_ver_cur_val,
-			"Setting 'admin-tls_version' variable to value '%s' should fail: (exp_val:'%s' != cur_val:'%s')",
+			"Setting 'mysql-tls_version' variable to value '%s' should fail: (exp_val:'%s' != cur_val:'%s')",
 			invalid_tls_version.c_str(),
 			invalid_tls_version.c_str(),
 			tls_ver_cur_val.c_str()
