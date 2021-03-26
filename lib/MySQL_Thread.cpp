@@ -439,6 +439,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
+	(char *)"log_mysql_warnings_enabled",
 	(char *)"monitor_enabled",
 	(char *)"monitor_history",
 	(char *)"monitor_connect_interval",
@@ -1161,6 +1162,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_grouping_limit = 3;
 	variables.enable_client_deprecate_eof=true;
 	variables.enable_server_deprecate_eof=true;
+	variables.log_mysql_warnings_enabled=false;
 	variables.tls_version=strdup("TLSv1,TLSv1.1,TLSv1.2,TLSv1.3");
 	// status variables
 	status_variables.mirror_sessions_current=0;
@@ -1487,6 +1489,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		case 'l':
 			if (!strcmp(name,"long_query_time")) return (int)variables.long_query_time;
 			if (!strcmp(name,"log_unhealthy_connections")) return (int)variables.log_unhealthy_connections;
+			if (!strcmp(name,"log_mysql_warnings_enabled")) return (int)variables.log_mysql_warnings_enabled;
 			break;
 		case 'm':
 			if (name[3]=='_') {
@@ -1904,6 +1907,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"enable_server_deprecate_eof")) {
 		return strdup((variables.enable_server_deprecate_eof ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"log_mysql_warnings_enabled")) {
+		return strdup((variables.log_mysql_warnings_enabled? "true" : "false"));
 	}
 	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) {
 		sprintf(intbuf,"%d",variables.throttle_connections_per_sec_to_hostgroup);
@@ -3643,6 +3649,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"log_mysql_warnings_enabled")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.log_mysql_warnings_enabled=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.log_mysql_warnings_enabled=false;
+			return true;
+		}
+		return false;
+	}
 	if (!strcasecmp(name,"tls_version")) {
 		if (vallen && valid_tls_versions_var(value)) {
 			if (variables.tls_version) free(variables.tls_version);
@@ -5155,6 +5172,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 	mysql_thread___enable_client_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_client_deprecate_eof");
 	mysql_thread___enable_server_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
+	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */

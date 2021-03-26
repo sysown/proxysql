@@ -1420,6 +1420,9 @@ handler_again:
 			} else {
 				async_fetch_row_start=false;
 				if (mysql_row) {
+					if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS) {
+						proxy_warning("MySQL Warning. Level: [%s], Code: [%s], Message: [%s]\n", mysql_row[0], mysql_row[1], mysql_row[2]);
+					}
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
@@ -1459,14 +1462,19 @@ handler_again:
 				} else {
 					compute_unknown_transaction_status();
 				}
+				if (_myerrno < 2000) {
+					// we can continue only if the error is coming from the backend.
+					// (or if zero)
+					// if the error comes from the client library, something terribly
+					// wrong happened and we cannot continue
+					if (mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
+						async_state_machine=ASYNC_NEXT_RESULT_START;
+					}
+				}
 			}
 			if (mysql_result) {
 				mysql_free_result(mysql_result);
 				mysql_result=NULL;
-			}
-			//if (mysql_next_result(mysql)==0) {
-			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
-				async_state_machine=ASYNC_NEXT_RESULT_START;
 			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_START:
@@ -1620,7 +1628,9 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 		myds->bytes_info.bytes_recv += br;
 		bytes_info.bytes_recv += br;
 		processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
-		if (irs < query.stmt->result.rows - 2) {
+
+		// we stop when we 'ir->next' will be pointing to the last row
+		if (irs <= query.stmt->result.rows - 2) {
 			ir = ir->next;
 		}
 	}
@@ -1646,6 +1656,9 @@ void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsi
 	// update 'stmt->result.data' to the new allocated memory and copy the backed last row
 	query.stmt->result.data = current;
 	memcpy((char *)current->data, (char *)lcopy->data, lcopy->length);
+	// update the 'current->length' with the length of the copied row
+	current->length = lcopy->length;
+
 	// we free the copy
 	free(lcopy);
 	// change the rows count to 1

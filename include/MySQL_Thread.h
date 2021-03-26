@@ -515,6 +515,7 @@ class MySQL_Threads_Handler
 		bool client_session_track_gtid;
 		bool enable_client_deprecate_eof;
 		bool enable_server_deprecate_eof;
+		bool log_mysql_warnings_enabled;
 		char* tls_version;
 	} variables;
 	struct {

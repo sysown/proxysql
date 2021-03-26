@@ -8,6 +8,8 @@
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
 
+#include <openssl/x509v3.h>
+
 /*
 
 in libssl 1.1.0 
@@ -163,6 +165,31 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	char buf[MY_SSL_BUFFER];
 	enum sslstatus status;
 	int n = SSL_do_handshake(ssl);
+	if (n == 1) {
+		//proxy_info("SSL handshake completed\n");
+		long rc = SSL_get_verify_result(ssl);
+		if (rc != X509_V_OK && rc != X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN && rc != X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE) {
+			proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%d:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
+			return SSLSTATUS_FAIL;
+		} else {
+			X509 *cert;
+			cert = SSL_get_peer_certificate(ssl);
+			if (cert) {
+				ASN1_STRING *str;
+				GENERAL_NAME *sanName;
+				STACK_OF(GENERAL_NAME) *san_names = NULL;
+				san_names = (stack_st_GENERAL_NAME *)X509_get_ext_d2i((X509 *) cert, NID_subject_alt_name, NULL, NULL);
+				if (san_names) {
+					sanName = sk_GENERAL_NAME_value(san_names, 0);
+					str = sanName->d.dNSName;
+					proxy_info("%s\n" , str->data);
+					x509_subject_alt_name = strdup((const char*)str->data);
+				}
+			} else {
+				proxy_error("X509 error: no required certificate sent by client\n");
+			}
+		}
+	}
 	status = get_sslstatus(ssl, n);
 	//proxy_info("SSL status = %d\n", status);
 	/* Did SSL request to write bytes? */
@@ -235,6 +262,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	encrypted=false;
 	switching_auth_stage = 0;
 	switching_auth_type = 0;
+	x509_subject_alt_name=NULL;
 	ssl=NULL;
 	rbio_ssl = NULL;
 	wbio_ssl = NULL;
@@ -346,6 +374,10 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		l_free(CompPktOUT.pkt.size,CompPktOUT.pkt.ptr);
 		CompPktOUT.pkt.ptr=NULL;
 		CompPktOUT.pkt.size=0;
+	}
+	if (x509_subject_alt_name) {
+		free(x509_subject_alt_name);
+		x509_subject_alt_name=NULL;
 	}
 }
 

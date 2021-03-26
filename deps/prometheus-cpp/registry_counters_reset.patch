@@ -1,0 +1,103 @@
+diff --git core/include/prometheus/counter.h core/include/prometheus/counter.h
+index 6ec01dd..6223106 100644
+--- core/include/prometheus/counter.h
++++ core/include/prometheus/counter.h
+@@ -46,6 +46,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Counter {
+   /// Collect is called by the Registry when collecting metrics.
+   ClientMetric Collect() const;
+ 
++  /// \brief Reset this counter metric to a value of 'zero'.
++  ///
++  /// This function shall only be used in case of 'PROXYSQL STOP' operation
++  /// which invalidates all ProxySQL internal counters for a fresh start.
++  void Reset();
++
+  private:
+   Gauge gauge_{0.0};
+ };
+diff --git core/include/prometheus/family.h core/include/prometheus/family.h
+index aa94683..925445a 100644
+--- core/include/prometheus/family.h
++++ core/include/prometheus/family.h
+@@ -135,6 +135,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Family : public Collectable {
+   /// \return Zero or more samples for each dimensional data.
+   std::vector<MetricFamily> Collect() const override;
+ 
++  /// \brief Reset all the metrics hold within this specific family.
++  ///
++  /// This function shall only be used in case of 'PROXYSQL STOP' operation
++  /// which invalidates all ProxySQL internal counters for a fresh start.
++  void ResetMetrics();
++
+  private:
+   std::unordered_map<std::size_t, std::unique_ptr<T>> metrics_;
+   std::unordered_map<std::size_t, std::map<std::string, std::string>> labels_;
+diff --git core/include/prometheus/registry.h core/include/prometheus/registry.h
+index c8fdeb2..e8a58c5 100644
+--- core/include/prometheus/registry.h
++++ core/include/prometheus/registry.h
+@@ -73,6 +73,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Registry : public Collectable {
+   /// \return Zero or more metrics and their samples.
+   std::vector<MetricFamily> Collect() const override;
+ 
++  /// \brief Reset all the counters hold within the registry to a value of zero.
++  ///
++  /// This function shall only be used in case of 'PROXYSQL STOP' operation
++  /// which invalidates all ProxySQL internal counters for a fresh start.
++  void ResetCounters();
++
+  private:
+   template <typename T>
+   friend class detail::Builder;
+diff --git core/src/counter.cc core/src/counter.cc
+index fc5b6f3..82fb8ae 100644
+--- core/src/counter.cc
++++ core/src/counter.cc
+@@ -8,6 +8,8 @@ void Counter::Increment(const double val) { gauge_.Increment(val); }
+ 
+ double Counter::Value() const { return gauge_.Value(); }
+ 
++void Counter::Reset() { gauge_.Set(0.0); }
++
+ ClientMetric Counter::Collect() const {
+   ClientMetric metric;
+   metric.counter.value = Value();
+diff --git core/src/family.cc core/src/family.cc
+index 83631ab..aa25edb 100644
+--- core/src/family.cc
++++ core/src/family.cc
+@@ -97,6 +97,17 @@ ClientMetric Family<T>::CollectMetric(std::size_t hash, T* metric) const {
+   return collected;
+ }
+ 
++
++template <>
++void Family<Counter>::ResetMetrics() {
++  auto reset_metric =
++      [](std::pair<const std::size_t, std::unique_ptr<Counter>>& metric) {
++          metric.second->Reset();
++      };
++
++  std::for_each(metrics_.begin(), metrics_.end(), reset_metric);
++}
++
+ template class PROMETHEUS_CPP_CORE_EXPORT Family<Counter>;
+ template class PROMETHEUS_CPP_CORE_EXPORT Family<Gauge>;
+ template class PROMETHEUS_CPP_CORE_EXPORT Family<Histogram>;
+diff --git core/src/registry.cc core/src/registry.cc
+index 1a30a23..d3a660d 100644
+--- core/src/registry.cc
++++ core/src/registry.cc
+@@ -50,6 +50,12 @@ std::vector<MetricFamily> Registry::Collect() const {
+   return results;
+ }
+ 
++void Registry::ResetCounters(){
++	for (auto& family : this->counters_) {
++		family->ResetMetrics();
++	}
++}
++
+ template <>
+ std::vector<std::unique_ptr<Family<Counter>>>& Registry::GetFamilies() {
+   return counters_;

@@ -462,6 +462,7 @@ MySQL_Session::MySQL_Session() {
 	//stats=false;
 	client_authenticated=false;
 	default_schema=NULL;
+	user_attributes=NULL;
 	schema_locked=false;
 	session_fast_forward=false;
 	started_sending_data_to_client=false;
@@ -583,6 +584,9 @@ MySQL_Session::~MySQL_Session() {
 	}
 	if (default_schema) {
 		free(default_schema);
+	}
+	if (user_attributes) {
+		free(user_attributes);
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
@@ -981,6 +985,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	}
 	j["client"]["DSS"] = client_myds->DSS;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
+	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
 	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
@@ -3886,6 +3891,21 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 			free(CurrentQuery.stmt_meta->pkt);
 			CurrentQuery.stmt_meta->pkt=NULL;
 		}
+
+		// free for all the buffer types in which we allocate
+		for (int i = 0; i < CurrentQuery.stmt_meta->num_params; i++) {
+			enum enum_field_types buffer_type =
+				CurrentQuery.stmt_meta->binds[i].buffer_type;
+
+			if (
+				(buffer_type == MYSQL_TYPE_TIME) ||
+				(buffer_type == MYSQL_TYPE_DATE) ||
+				(buffer_type == MYSQL_TYPE_TIMESTAMP) ||
+				(buffer_type == MYSQL_TYPE_DATETIME)
+			) {
+				free(CurrentQuery.stmt_meta->binds[i].buffer);
+			}
+		}
 	}
 	CurrentQuery.mysql_stmt=NULL;
 }
@@ -3905,8 +3925,15 @@ bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, i
 			if (myds->myconn->MyRS && myds->myconn->MyRS->transfer_started) {
 			// transfer to frontend has started, we cannot retry
 			} else {
-				retry_conn=true;
-				proxy_warning("Retrying query.\n");
+				if (myds->myconn->mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
+					// transfer to frontend has started, because this is, at least,
+					// the second resultset coming from the server
+					// we cannot retry
+					proxy_warning("Disabling query retry because SERVER_MORE_RESULTS_EXIST is set\n");
+				} else {
+					retry_conn=true;
+					proxy_warning("Retrying query.\n");
+				}
 			}
 		}
 	}
@@ -4433,6 +4460,7 @@ handler_again:
 								last_HG_affected_rows = current_hostgroup;
 								if (mysql_thread___auto_increment_delay_multiplex && myconn->mysql->insert_id) {
 									myconn->auto_increment_delay_token = mysql_thread___auto_increment_delay_multiplex + 1;
+									__sync_fetch_and_add(&MyHGM->status.auto_increment_delay_multiplex, 1);
 								}
 							}
 						}
@@ -4440,7 +4468,7 @@ handler_again:
 
 					switch (status) {
 						case PROCESSING_QUERY:
-							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
+							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->myds);
 							break;
 						case PROCESSING_STMT_PREPARE:
 							{
@@ -4457,6 +4485,16 @@ handler_again:
 							assert(0);
 							break;
 					}
+
+					if (mysql_thread___log_mysql_warnings_enabled) {
+						auto warn_no = mysql_warning_count(myconn->mysql);
+						if (warn_no > 0) {
+							myconn->async_state_machine=ASYNC_IDLE;
+							myds->DSS=STATE_MARIADB_GENERIC;
+							NEXT_IMMEDIATE(SHOW_WARNINGS);
+						}
+					}
+
 					RequestEnd(myds);
 					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 				} else {
@@ -4509,7 +4547,7 @@ handler_again:
 								break;
 							// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
 							case 2:
-								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS);
+								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->myds);
 								  if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
 										if (myconn->MyRS_reuse) {
 											delete myconn->MyRS_reuse;
@@ -4551,6 +4589,33 @@ handler_again:
 				if (rc == -1) {
 					handler_ret = -1;
 					return handler_ret;
+				}
+			}
+			break;
+
+		case SHOW_WARNINGS:
+			{
+				MySQL_Data_Stream *myds=mybe->server_myds;
+				MySQL_Connection *myconn=myds->myconn;
+				int pre_rc = myconn->async_query(mybe->server_myds->revents,(char *)"show warnings", strlen((char *)"show warnings"));
+				if (pre_rc==0) {
+					int myerr=mysql_errno(myconn->mysql);
+
+					RequestEnd(myds);
+					writeout();
+
+					handler_ret = 0;
+					return handler_ret;
+					if ( myerr > 0 ) {
+						char sqlstate[10];
+						sprintf(sqlstate,"%s",mysql_sqlstate(mybe->server_myds->myconn->mysql));
+						RequestEnd(mybe->server_myds);
+						break;
+					}
+					mybe->server_myds->myconn->async_free_result();
+					NEXT_IMMEDIATE(PROCESSING_QUERY);
+				} else {
+					goto handler_again;
 				}
 			}
 			break;
@@ -6490,7 +6555,11 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			//client_myds->pkt_sid++;
 		} else {
 			// error
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, myerrno);
+			if (_myds) {
+				if (_myds->myconn) {
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, myerrno);
+				}
+			}
 			char sqlstate[10];
 			sprintf(sqlstate,"%s",mysql_sqlstate(mysql));
 			if (_myds && _myds->killed_at) { // see case #750

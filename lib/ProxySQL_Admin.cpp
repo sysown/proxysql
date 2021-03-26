@@ -1248,6 +1248,10 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 	if (query_no_space_length==strlen("PROXYSQL RESTART") && !strncasecmp("PROXYSQL RESTART",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL RESTART command\n");
+		// This function was introduced into 'prometheus::Registry' for being
+		// able to do a complete reset of all the 'prometheus counters'. It
+		// shall only be used during ProxySQL shutdown phases.
+		GloVars.prometheus_registry->ResetCounters();
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		glovars.reload=1;
 		return false;
@@ -1267,6 +1271,10 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		GloMTH->set_variable((char *)"wait_timeout",buf);
 		GloMTH->commit();
 		glovars.reload=2;
+		// This function was introduced into 'prometheus::Registry' for being
+		// able to do a complete reset of all the 'prometheus counters'. It
+		// shall only be used during ProxySQL shutdown phases.
+		GloVars.prometheus_registry->ResetCounters();
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		// After setting the shutdown flag, we should wake all threads and wait for
 		// the shutdown phase to complete.
@@ -3543,6 +3551,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			int test_arg1 = 0;
 			int test_arg2 = 0;
 			int r1 = 0;
+			proxy_warning("Received PROXYSQLTEST command: %s\n", query_no_space);
 			char *msg = NULL;
 			sscanf(query_no_space+strlen("PROXYSQLTEST "),"%d %d %d", &test_n, &test_arg1, &test_arg2);
 			if (test_n) {
@@ -3717,6 +3726,24 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 									free(msg);
 								}
 							}
+							run_query=false;
+						}
+						break;
+					case 41:
+						{
+							char msg[256];
+							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
+							sprintf(msg, "Tested in %llums\n", d);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							run_query=false;
+						}
+						break;
+					case 51:
+						{
+							char msg[256];
+							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
+							sprintf(msg, "Tested in %llums\n", d);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
 							run_query=false;
 						}
 						break;
@@ -4011,6 +4038,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		query_length = strlen(q) + strlen(PROXYSQL_VERSION) + 1;
 		query = static_cast<char*>(l_alloc(query_length));
 		sprintf(query, q, PROXYSQL_VERSION);
+		goto __run_query;
+	}
+
+	// trivial implementation for 'connection_id()' to support 'mycli'. See #3247
+	if (!strncasecmp("select connection_id()", query_no_space, strlen("select connection_id()"))) {
+		l_free(query_length,query);
+		// 'connection_id()' is always forced to be '0'
+		query=l_strdup("SELECT 0 AS 'CONNECTION_ID()'");
+		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
@@ -4367,9 +4403,11 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		if (__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
 			auto result = pa->serial_exposer({});
 			pta[0] = (char*)result.second.c_str();
+			resultset->add_row(pta);
+		} else {
+			resultset->add_row(pta);
 		}
 
-		resultset->add_row(pta);
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 		delete resultset;
 		run_query = false;
@@ -12321,3 +12359,102 @@ void ProxySQL_Admin::enable_grouprep_testing() {
 	load_mysql_query_rules_to_runtime();
 }
 #endif // TEST_GROUPREP
+
+void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters() {
+	mysql_servers_wrlock();
+	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 10001 AND 20000");
+	admindb->execute("DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup BETWEEN 10001 AND 20000");
+	char *q1 = (char *)"INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES (?1, ?2, ?3), (?4, ?5, ?6), (?7, ?8, ?9)";
+	char *q2 = (char *)"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup) VALUES (?1, ?2)";
+	int rc;
+	sqlite3_stmt *statement1=NULL;
+	sqlite3_stmt *statement2=NULL;
+	rc=admindb->prepare_v2(q1, &statement1);
+	ASSERT_SQLITE_OK(rc, admindb);
+	rc=admindb->prepare_v2(q2, &statement2);
+	ASSERT_SQLITE_OK(rc, admindb);
+	char hostnamebuf1[32];
+	char hostnamebuf2[32];
+	char hostnamebuf3[32];
+	for (int i=1000; i<2000; i++) {
+		sprintf(hostnamebuf1,"hostname%d", i*10+1);
+		sprintf(hostnamebuf2,"hostname%d", i*10+2);
+		sprintf(hostnamebuf3,"hostname%d", i*10+3);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, i*10+1); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 2, hostnamebuf1, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, 3306); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 4, i*10+2); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 5, hostnamebuf2, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 6, 3306); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 7, i*10+2); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 8, hostnamebuf3, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 9, 3306); ASSERT_SQLITE_OK(rc, admindb);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc=(*proxy_sqlite3_bind_int64)(statement2, 1, i*10+1); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_int64)(statement2, 2, i*10+2); ASSERT_SQLITE_OK(rc, admindb);
+		SAFE_SQLITE3_STEP2(statement2);
+		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_clear_bindings)(statement2); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_reset)(statement2); ASSERT_SQLITE_OK(rc, admindb);
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	(*proxy_sqlite3_finalize)(statement2);
+	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
+}
+unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action() {
+	// we immediately exit. This is just for developer
+	return 0;
+	ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();
+	char hostnamebuf1[32];
+	char hostnamebuf2[32];
+	char hostnamebuf3[32];
+	unsigned long long t1 = monotonic_time();
+	//for (int j=0 ; j<500; j++) {
+	for (int j=0 ; j<1000; j++) {
+		for (int i=1000; i<2000; i++) {
+			sprintf(hostnamebuf1,"hostname%d", i*10+1);
+			sprintf(hostnamebuf2,"hostname%d", i*10+2);
+			sprintf(hostnamebuf3,"hostname%d", i*10+3);
+			MyHGM->read_only_action(hostnamebuf1, 3306, 0);
+			MyHGM->read_only_action(hostnamebuf2, 3306, 1);
+			MyHGM->read_only_action(hostnamebuf3, 3306, 1);
+		}
+	}
+	unsigned long long t2 = monotonic_time();
+	t1 /= 1000;
+	t2 /= 1000;
+	unsigned long long d = t2-t1;
+	return d;
+}
+
+// NEVER USED THIS FUNCTION IN PRODUCTION.
+// THIS IS FOR TESTING PURPOSE ONLY
+// IT ACCESSES MyHGM without lock
+unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup() {
+	// we immediately exit. This is just for developer
+	return 0;
+	ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();
+	unsigned long long t1 = monotonic_time();
+	unsigned int hid = 0;
+	MyHGC * myhgc = NULL;
+	for (int j=0 ; j<100000; j++) {
+		for (unsigned int i=1000; i<2000; i++) {
+			// NEVER USED THIS FUNCTION IN PRODUCTION.
+			// THIS IS FOR TESTING PURPOSE ONLY
+			// IT ACCESSES MyHGM without lock
+			hid = i*10+1; // writer hostgroup
+			myhgc = MyHGM->MyHGC_lookup(hid);
+			assert(myhgc);
+			hid++; // reader hostgroup
+			myhgc = MyHGM->MyHGC_lookup(hid);
+			assert(myhgc);
+		}
+	}
+	unsigned long long t2 = monotonic_time();
+	t1 /= 1000;
+	t2 /= 1000;
+	unsigned long long d = t2-t1;
+	return d;
+}

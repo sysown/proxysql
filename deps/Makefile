@@ -54,7 +54,8 @@ libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.0h || true
 	cd libssl && rm -rf openssl-1.1.1g || true
-	cd libssl && tar -zxf openssl-1.1.1g.tar.gz
+	cd libssl && rm -rf openssl-1.1.1j || true
+	cd libssl && tar -zxf openssl-1.1.1j.tar.gz
 	cd libssl/openssl  && ./config no-ssl3
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
@@ -217,6 +218,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && tar -zxf v0.9.0.tar.gz
 	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-v1.11.tar.gz -C prometheus-cpp/3rdparty/civetweb
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
+	cd prometheus-cpp/prometheus-cpp && patch -p0 < ../registry_counters_reset.patch
 	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -279,6 +281,7 @@ cleanall:
 	cd libssl && rm -rf openssl-1.1.1b || true
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.1g || true
+	cd libssl && rm -rf openssl-1.1.1j || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-0.9.0 || true
 .PHONY: cleanall
