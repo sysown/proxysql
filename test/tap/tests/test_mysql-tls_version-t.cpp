@@ -1,6 +1,9 @@
 /**
- * @file test_simple_ssl_con-t.cpp
- * @brief  *   Simple test for testing SSL connections to ProxySQL.
+ * @file test_mysql-tls_version-t.cpp
+ * @brief Test for checking 'mysql-tls_version'.
+ * @details The test tries to set all the possible valid combinations for 'mysql-tls_version'
+ *   using mixed case, for later try to open connections using the valid specified versions
+ *   and the invalid not specified ones. It also tries to set several invalid values.
  */
 
 #include <cstring>
