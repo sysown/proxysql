@@ -415,7 +415,7 @@ index 8c2a99b..e849b76 100644
 +MYSQL_FIELD *mthd_my_read_metadata_ex(MYSQL *mysql, MA_MEM_ROOT *mem_root,
 +        ulong field_count, uint m_field_count)
 +{
-+    ulong* m_len;
++    ulong* m_len; unsigned long f_i;
 +    MYSQL_FIELD* m_fields;
 +    MYSQL_FIELD* result;
 +    MYSQL_ROWS m_rows;
@@ -436,7 +436,7 @@ index 8c2a99b..e849b76 100644
 +    memset(m_rows.data, 0, sizeof(char*)*(m_field_count + 1));
 +
 +    // read the columns info
-+    for (uint f_i = 0; f_i < field_count; f_i++)
++    for (f_i = 0; f_i < field_count; f_i++)
 +    {
 +        if (mthd_my_read_one_row(mysql, m_field_count, m_rows.data, m_len) == -1)
 +          return NULL;
