@@ -5921,6 +5921,18 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						return true;
 					}
 				}
+			} else if (match_regexes && match_regexes[4]->match(dig)) {
+				if (command_type == _MYSQL_COM_QUERY) {
+					client_myds->DSS=STATE_QUERY_SENT_NET;
+					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+					if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+					client_myds->DSS=STATE_SLEEP;
+					status=WAITING_CLIENT_DATA;
+					RequestEnd(NULL);
+					l_free(pkt->size,pkt->ptr);
+					return true;
+				}
 			} else {
 				unable_to_parse_set_statement(lock_hostgroup);
 				return false;
