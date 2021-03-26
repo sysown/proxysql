@@ -1,4 +1,4 @@
-@@ -207,8 +207,6 @@
+@@ -210,8 +210,6 @@
                                   CLIENT_LONG_FLAG |\
                                   CLIENT_TRANSACTIONS |\
                                   CLIENT_SECURE_CONNECTION |\
