@@ -3341,7 +3341,48 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	myhgc->mysrvs->add(mysrvc);
 }
 
-void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
+void MySQL_HostGroups_Manager::set_slave_status_when_slave_abnormal(int _hid, char *address, unsigned int port, int current_replication_lag, MySrvC *mysrvc) {
+     if (
+//		  (current_replication_lag==-1 )
+//		  ||
+		  (current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
+		) {
+		    // always increase the counter
+		    mysrvc->cur_replication_lag_count += 1;
+		    if (mysrvc->cur_replication_lag_count >= mysql_thread___monitor_replication_lag_count) {
+		        proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, _hid, current_replication_lag, mysrvc->cur_replication_lag_count);
+			    mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+		    } else {
+                proxy_info(
+                  "Not shunning server "
+                  "%s:%d from HG %u with "
+                  "replication lag of %d "
+                  "second, count number: "
+                  "'%d' < "
+                  "replication_lag_count: "
+                  "'%d'\n",
+                  address, port, _hid,
+                  current_replication_lag,
+                  mysrvc->cur_replication_lag_count,
+                  mysql_thread___monitor_replication_lag_count);
+            }
+          } else {
+				mysrvc->cur_replication_lag_count = 0;
+		}
+}
+
+void MySQL_HostGroups_Manager::set_slave_status_when_slave_normal(int _hid, char *address, unsigned int port, int current_replication_lag, MySrvC *mysrvc) {
+   if(
+        (current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag))
+		||(current_replication_lag==-2) // see issue 959
+	) {
+		  mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+		  proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, _hid, current_replication_lag);
+		  mysrvc->cur_replication_lag_count = 0;
+	}
+}
+
+void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag, bool slave_sbm_isnot_null) {
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 	int i,j;
@@ -3352,43 +3393,27 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
-					if (
-//						(current_replication_lag==-1 )
-//						||
-						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
-					) {
-						// always increase the counter
-						mysrvc->cur_replication_lag_count += 1;
-						if (mysrvc->cur_replication_lag_count >= mysql_thread___monitor_replication_lag_count) {
-							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
-							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
-						} else {
-							proxy_info(
-								"Not shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d' < replication_lag_count: '%d'\n",
-								address,
-								port,
-								myhgc->hid,
-								current_replication_lag,
-								mysrvc->cur_replication_lag_count,
-								mysql_thread___monitor_replication_lag_count
-							);
-						}
-					} else {
-						mysrvc->cur_replication_lag_count = 0;
+					if(mysql_thread___monitor_sbm_when_null_algorithm){  //new algorithm
+					   if(slave_sbm_isnot_null) {
+                                               this->set_slave_status_when_slave_abnormal(_hid, address, port, current_replication_lag, mysrvc);
+					   }else {
+                                               proxy_warning("Shunning server %s:%d from HG %u with seconds_behind_master of this slave is null!\n", address, port, myhgc->hid);
+			                       mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+					   }  
+					} else {  //backward compatible
+						this->set_slave_status_when_slave_abnormal(_hid, address, port, current_replication_lag, mysrvc);
 					}
 				} else {
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
-						if (
-							(current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag))
-							||
-							(current_replication_lag==-2) // see issue 959
-						) {
-							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
-							mysrvc->cur_replication_lag_count = 0;
-						}
+				            if(mysql_thread___monitor_sbm_when_null_algorithm){  //new algorithm
+					       if(slave_sbm_isnot_null) {
+                                                  this->set_slave_status_when_slave_normal(_hid, address, port, current_replication_lag, mysrvc);
+						 }
+					      } else { //backward compatible
+                                                   this->set_slave_status_when_slave_normal(_hid, address, port, current_replication_lag, mysrvc);
+					    }
 					}
-				}
+				 }
 				goto __exit_replication_lag_action;
 			}
 		}
