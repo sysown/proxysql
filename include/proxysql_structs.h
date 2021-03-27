@@ -979,6 +979,7 @@ extern __thread int mysql_thread___monitor_read_only_timeout;
 extern __thread int mysql_thread___monitor_read_only_max_timeout_count;
 extern __thread bool mysql_thread___monitor_wait_timeout;
 extern __thread bool mysql_thread___monitor_writer_is_also_reader;
+extern __thread bool mysql_thread___monitor_sbm_when_null_algorithm;
 extern __thread int mysql_thread___monitor_replication_lag_interval;
 extern __thread int mysql_thread___monitor_replication_lag_timeout;
 extern __thread int mysql_thread___monitor_replication_lag_count;
