@@ -2206,6 +2206,8 @@ __exit_monitor_replication_lag_thread:
 	{
 		sqlite3_stmt *statement=NULL;
 		//sqlite3 *mondb=mmsd->mondb->get_db();
+		//true: seconds_behind_master is not null,false: seconds_behind_master is null
+		bool slave_sbm_isnot_null=true; 
 		int rc;
 		char *query=NULL;
 
@@ -2250,8 +2252,13 @@ __exit_monitor_replication_lag_thread:
 								if (row[j]) { // if Seconds_Behind_Master is not NULL
 									repl_lag=atoi(row[j]);
 								} else {
-									proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
-									MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
+									if(mysql_thread___monitor_sbm_when_null_algorithm){  //new algorithm
+									     slave_sbm_isnot_null=false; //sbm is null
+									     proxy_warning("Seconds_behind_master(sbm) of the slave server %s:%d is NULL, please check it.\n", mmsd->hostname, mmsd->port);
+									} else {  //backward compatible
+									     proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
+									     MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
+									}
 								}
 							}
 						}
@@ -2275,7 +2282,7 @@ __exit_monitor_replication_lag_thread:
 				SAFE_SQLITE3_STEP2(statement);
 				rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
+				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag, slave_sbm_isnot_null);
 			(*proxy_sqlite3_finalize)(statement);
 			if (mmsd->mysql_error_msg == NULL) {
 				replication_lag_success = true;
