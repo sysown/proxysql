@@ -30,7 +30,8 @@ class MySQL_Variables {
 
 public:
 	std::string variables_regexp;
-
+	// ignore_vars is a list of all variables that proxysql will parse but ignore its value
+	std::vector<std::string> ignore_vars;
 public:
 	MySQL_Variables();
 

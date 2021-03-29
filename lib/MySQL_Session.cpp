@@ -5386,6 +5386,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		unsigned int nTrx=NumActiveTransactions();
 		if ((locked_on_hostgroup == -1) && (strncasecmp(dig,(char *)"SET ",4)==0)) {
 			// this code is executed only if locked_on_hostgroup is not set yet
+			// if locked_on_hostgroup is set, we do not try to parse the SET statement
 #ifdef DEBUG
 			{
 				string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
@@ -5738,11 +5739,20 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 						}
-					} else {
+					} else if (std::find(mysql_variables.ignore_vars.begin(), mysql_variables.ignore_vars.end(), var) != mysql_variables.ignore_vars.end()) {
+						// this is a variable we parse but ignore
+						// see MySQL_Variables::MySQL_Variables() for a list of ignored variables
+#ifdef DEBUG
 						std::string value1 = *values;
-						std::size_t found_at = value1.find("@");
-						if (found_at != std::string::npos) {
-							unable_to_parse_set_statement(lock_hostgroup);
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
+#endif // DEBUG
+					} else {
+						// if we reach here, proxysql didn't recognize every variable in a set statement
+						// unable_to_parse_set_statement() will consider the value of qpo->multiplex,
+						// therefore unable_to_parse_set_statement() may set or not set lock_hostgroup.
+						// if lock_hostgroup is set, we return immediately
+						unable_to_parse_set_statement(lock_hostgroup);
+						if (lock_hostgroup) {
 							return false;
 						}
 					}

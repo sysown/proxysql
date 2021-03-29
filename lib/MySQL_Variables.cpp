@@ -20,6 +20,10 @@ update_var MySQL_Variables::updaters[SQL_NAME_LAST];
 
 
 MySQL_Variables::MySQL_Variables() {
+	// add here all the variables we want proxysql to recognize, but ignore
+	ignore_vars.push_back("interactive_timeout");
+	ignore_vars.push_back("wait_timeout");
+	ignore_vars.push_back("net_read_timeout");
 	variables_regexp = "";
 	for (auto i = 0; i < SQL_NAME_LAST; i++) {
 		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_ACTION || i == SQL_SET_NAMES) {
@@ -37,6 +41,10 @@ MySQL_Variables::MySQL_Variables() {
 			variables_regexp += mysql_tracked_variables[i].set_variable_name;
 			variables_regexp += "|";
 		}
+	}
+	for (std::vector<std::string>::iterator it=ignore_vars.begin(); it != ignore_vars.end(); it++) {
+		variables_regexp += *it;
+		variables_regexp += "|";
 	}
 }
 
