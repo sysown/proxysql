@@ -21,7 +21,7 @@ update_var MySQL_Variables::updaters[SQL_NAME_LAST];
 
 MySQL_Variables::MySQL_Variables() {
 	// add here all the variables we want proxysql to recognize, but ignore
-	ignore_vars.push_back("interactve_timeout");
+	ignore_vars.push_back("interactive_timeout");
 	ignore_vars.push_back("wait_timeout");
 	ignore_vars.push_back("net_read_timeout");
 	variables_regexp = "";
