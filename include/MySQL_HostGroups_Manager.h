@@ -546,8 +546,10 @@ class MySQL_HostGroups_Manager {
 	void push_MyConn_to_pool(MySQL_Connection *, bool _lock=true);
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
-
-	void replication_lag_action(int, char*, unsigned int, int);
+        
+	void set_slave_status_when_slave_abnormal(int, char*, unsigned int, int, MySrvC*);
+        void set_slave_status_when_slave_normal(int, char*, unsigned int, int, MySrvC*);
+        void replication_lag_action(int, char*, unsigned int, int, bool);
 	void read_only_action(char *hostname, int port, int read_only);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
