@@ -5750,7 +5750,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						// if we reach here, proxysql didn't recognize every variable in a set statement
 						// unable_to_parse_set_statement() will consider the value of qpo->multiplex,
 						// therefore unable_to_parse_set_statement() may set or not set lock_hostgroup.
-						// if host_hostgroup is set, we return immediately
+						// if lock_hostgroup is set, we return immediately
 						unable_to_parse_set_statement(lock_hostgroup);
 						if (lock_hostgroup) {
 							return false;
