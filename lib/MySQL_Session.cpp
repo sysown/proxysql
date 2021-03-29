@@ -5738,6 +5738,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 						}
+					} else if (std::find(mysql_variables.ignore_vars.begin(), mysql_variables.ignore_vars.end(), var) != mysql_variables.ignore_vars.end()) {
+						std::string value1 = *values;
+						proxy_info("%s = %s\n", var.c_str(), value1.c_str());
 					} else {
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");
