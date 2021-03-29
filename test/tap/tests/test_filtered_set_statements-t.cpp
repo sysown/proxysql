@@ -43,7 +43,9 @@ std::vector<std::pair<std::string, std::string>> filtered_set_queries {
 	{ "wsrep_sync_wait", "12" },
 	{ "group_concat_max_len", "4294967295" },
 	{ "sql_safe_updates", "true" },
-	{ "session_track_gtids", "OWN_GTID" }
+	{ "session_track_gtids", "OWN_GTID" },
+	{ "interactive_timeout", "param" },
+	{ "net_read_timeout", "param" },
 };
 
 std::vector<std::string> get_valid_set_query_set(const std::string& set_query, const std::string param) {
