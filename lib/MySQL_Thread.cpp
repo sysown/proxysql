@@ -4840,6 +4840,12 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
+
+		// we now enforce sending the 'initial handshake packet' as soon as it's generated. This
+		// is done to prevent situations in which a client sends a packet *before* receiving
+		// this 'initial handshake', leading to invalid state in dataflow, since it will be
+		// data in both ends of the datastream. For more details see #3342.
+		sess->writeout();
 	} else {
 		free(addr);
 		// if we arrive here, accept() failed
