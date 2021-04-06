@@ -4416,11 +4416,15 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 				q=(char *)"INSERT OR REPLACE INTO mysql_servers_incoming SELECT %d, hostname, port, gtid_port, weight, 0, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d, %d)";
 				sprintf(query,q,info->offline_hostgroup,_hostname,_port,_writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup);
 				mydb->execute(query);
-				q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d)";
-				sprintf(query,q,_hostname,_port, info->backup_writer_hostgroup, info->reader_hostgroup);
+				// we just delete the servers from the 'backup_writer_hostgroup', to keep servers from reader hostgroup,
+				// so they can be 'SHUNNED'. See #3182
+				q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
+				sprintf(query,q,_hostname,_port, info->backup_writer_hostgroup);
 				mydb->execute(query);
-				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d AND hostgroup_id = %d";
-				sprintf(query,q,_hostname,_port,_writer_hostgroup);
+				// we update the servers from 'mysql_servers_incoming' to be SHUNNED in both, 'writer_hostgroup' and 'reader_hostgroup'
+				// this way we prevent it's removal from the hostgroup, and the closing of its current connections. See #3182
+				q=(char *)"UPDATE mysql_servers_incoming SET status=1 WHERE hostname='%s' AND port=%d AND hostgroup_id in (%d, %d)";
+				sprintf(query,q,_hostname,_port,_writer_hostgroup,info->reader_hostgroup);
 				mydb->execute(query);
 			}
 			converge_galera_config(_writer_hostgroup);
@@ -4999,7 +5003,11 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 					// any current reader which is only in the reader hostgroup. This is because if a server
 					// is only part of the reader hostgroup at this point, means that it's there because of a
 					// reason beyond ProxySQL control, e.g. having READ_ONLY=1.
-					q=(char*)"DELETE FROM mysql_servers_incoming where hostgroup_id=%d and (hostname,port) in (SELECT hostname,port FROM mysql_servers_incoming WHERE hostgroup_id=%d)";
+					// Update for #3182:
+					// We just want to remove 'readers' which are 'ONLINE' right now, otherwise,
+					// we could be removing the introduced 'SHUNNED' readers, placed there by an 'offline soft'
+					// operation.
+					q=(char*)"DELETE FROM mysql_servers_incoming where hostgroup_id=%d and (hostname,port) in (SELECT hostname,port FROM mysql_servers_incoming WHERE hostgroup_id=%d AND status=0)";
 					query=(char*)malloc(strlen(q) + 128);
 					sprintf(query, q, info->reader_hostgroup, info->writer_hostgroup);
 					mydb->execute(query);
