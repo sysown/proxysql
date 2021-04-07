@@ -775,7 +775,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 	result->add_column_definition(SQLITE_TEXT,"hits");
 	for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
 		qr1=*it;
-		if (qr1->active) {
+		if (qr1->active || qr1->log) {
 			QP_rule_text_hitsonly *qt=new QP_rule_text_hitsonly(qr1);
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping Query Rule id: %d\n", qr1->rule_id);
 			result->add_row(qt->pta);
@@ -1301,8 +1301,28 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	return result;
 }
 
+void apply_query_replacement(QP_rule_t *query_rule, std::string *query) {
+	re2_t *re2p=(re2_t *)query_rule->regex_engine2;
+
+	if (re2p->re2) {
+		if ((query_rule->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+			re2p->re2->GlobalReplace(query,query_rule->match_pattern,query_rule->replace_pattern);
+		} else {
+			re2p->re2->Replace(query,query_rule->match_pattern,query_rule->replace_pattern);
+		}
+	} else {
+		if ((query_rule->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
+			re2p->re1->GlobalReplace(query_rule->replace_pattern,query);
+		} else {
+			re2p->re1->Replace(query_rule->replace_pattern,query);
+		}
+	}
+}
 
 Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
+	json rule_log_json;
+	std::string	dry_run_rewritten_query = "";
+
 	// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
 	// to avoid unnecssary deallocation/allocation, we initialize qpo witout new allocation
 	Query_Processor_Output *ret=sess->qpo;
@@ -1350,7 +1370,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 		QP_rule_t *qr2;
 		for (std::vector<QP_rule_t *>::iterator it=rules.begin(); it!=rules.end(); ++it) {
 			qr1=*it;
-			if (qr1->active) {
+			if (qr1->active || qr1->log) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Copying Query Rule id: %d\n", qr1->rule_id);
 				char buf[20];
 				if (qr1->digest) { // not 0
@@ -1380,11 +1400,11 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					qr1->comment);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: \n", qr2->rule_id, qr2->match_digest);
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: %s\n", qr2->rule_id, qr2->match_digest);
 					qr2->regex_engine1=(void *)compile_query_rule(qr2,1);
 				}
 				if (qr2->match_pattern) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: \n", qr2->rule_id, qr2->match_pattern);
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: %s\n", qr2->rule_id, qr2->match_pattern);
 					qr2->regex_engine2=(void *)compile_query_rule(qr2,2);
 				}
 				_thr_SQP_rules->push_back(qr2);
@@ -1549,129 +1569,173 @@ __internal_loop:
 
 		// if we arrived here, we have a match
 		qr->hits++; // this is done without atomic function because it updates only the local variables
-		bool set_flagOUT=false;
-		if (qr->flagOUT >= 0) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
-			flagIN=qr->flagOUT;
-			set_flagOUT=true;
-			//sess->query_info.flagOUT=flagIN;
-	    }
-		if (qr->reconnect >= 0) {
-			// Note: negative reconnect means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set reconnect: %d. Query will%s be rexecuted if connection is lost\n", qr->rule_id, qr->reconnect, (qr->reconnect == 0 ? " NOT" : "" ));
-			ret->reconnect=qr->reconnect;
-		}
-		if (qr->timeout >= 0) {
-			// Note: negative timeout means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
-			ret->timeout=qr->timeout;
-		}
-	    if (qr->retries >= 0) {
-			// Note: negative retries means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will%s be re-executed %d times in case of failure\n", qr->rule_id, qr->retries);
-			ret->retries=qr->retries;
-		}
-		if (qr->delay >= 0) {
-			// Note: negative delay means this rule doesn't change
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set delay: %d. Session will%s be paused for %dms\n", qr->rule_id, qr->delay, (qr->delay == 0 ? " NOT" : "" ) , qr->delay);
-			ret->delay=qr->delay;
-		}
-		if (qr->next_query_flagIN >= 0) {
-			// Note: Negative next_query_flagIN means this rule doesn't change the next query flagIN
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set next query flagIN: %d\n", qr->rule_id, qr->next_query_flagIN);
-			ret->next_query_flagIN=qr->next_query_flagIN;
-		}
-		if (qr->mirror_flagOUT >= 0) {
-			// Note: negative mirror_flagOUT means this rule doesn't change the mirror flagOUT
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror flagOUT: %d\n", qr->rule_id, qr->mirror_flagOUT);
-	ret->mirror_flagOUT=qr->mirror_flagOUT;
-		}
-		if (qr->mirror_hostgroup >= 0) {
-			// Note: negative mirror_hostgroup means this rule doesn't change the mirror
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror hostgroup: %d. A new session will be created\n", qr->rule_id, qr->mirror_hostgroup);
-			ret->mirror_hostgroup=qr->mirror_hostgroup;
-		}
-		if (qr->error_msg) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->error_msg);
-			//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
-			ret->error_msg=strdup(qr->error_msg);
-		}
-		if (qr->OK_msg) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->OK_msg);
-			//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
-			ret->OK_msg=strdup(qr->OK_msg);
-		}
-		if (qr->cache_ttl >= 0) {
-			// Note: negative TTL means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
-			ret->cache_ttl=qr->cache_ttl;
-		}
-		if (qr->cache_empty_result >= 0) {
-			// Note: negative value means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_empty_result: %d. Query with empty result will%s hit the cache\n", qr->rule_id, qr->cache_empty_result, (qr->cache_empty_result == 0 ? " NOT" : "" ));
-			ret->cache_empty_result=qr->cache_empty_result;
-		}
-		if (qr->cache_timeout >= 0) {
-			// Note: negative value means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_timeout: %dms. Query will wait up resulset to be avaiable in query cache before running on backend\n", qr->rule_id, qr->cache_timeout);
-			ret->cache_timeout=qr->cache_timeout;
-		}
-		if (qr->sticky_conn >= 0) {
-			// Note: negative sticky_conn means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set sticky_conn: %d. Connection will%s stick\n", qr->rule_id, qr->sticky_conn, (qr->sticky_conn == 0 ? " NOT" : "" ));
-			ret->sticky_conn=qr->sticky_conn;
-		}
-		if (qr->multiplex >= 0) {
-			// Note: negative multiplex means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set multiplex: %d. Connection will%s multiplex\n", qr->rule_id, qr->multiplex, (qr->multiplex == 0 ? " NOT" : "" ));
-			ret->multiplex=qr->multiplex;
-		}
-		if (qr->gtid_from_hostgroup >= 0) {
-			// Note: negative gtid_from_hostgroup means this rule doesn't change the gtid_from_hostgroup
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set gtid from hostgroup: %d. A new session will be created\n", qr->rule_id, qr->gtid_from_hostgroup);
-			ret->gtid_from_hostgroup = qr->gtid_from_hostgroup;
-		}
 		if (qr->log >= 0) {
 			// Note: negative log means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set log: %d. Query will%s logged\n", qr->rule_id, qr->log, (qr->log == 0 ? " NOT" : "" ));
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set log: %d. Query will%s be logged\n", qr->rule_id, qr->log, (qr->log == 0 ? " NOT" : "" ));
 			ret->log=qr->log;
 		}
+
+		if (qr->log) {
+			ret->query_rule_hits = qr->hits + qr->parent->hits; // current thread's updated hits plus the global hits
+			if (fmod(log2(ret->query_rule_hits), 1.0)) {		  // logging by query rules is limited by powers-of-two backoff
+				ret->log = 0;
+			} else {
+				__sync_fetch_and_add(&qr->parent->hits, qr->hits); // advance the global stats immediately so that no other thread does logging right now
+				qr->hits = 0;
+			}
+		}
+
 		if (qr->destination_hostgroup >= 0) {
 			// Note: negative hostgroup means this rule doesn't change
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set destination hostgroup: %d\n", qr->rule_id, qr->destination_hostgroup);
-			ret->destination_hostgroup=qr->destination_hostgroup;
+			if (qr->active) {
+				ret->destination_hostgroup=qr->destination_hostgroup;
+			}
+		}
+		if (qr->error_msg) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->error_msg);
+			if (qr->active) {
+				ret->error_msg=strdup(qr->error_msg);
+			}
 		}
 		if (ptr) { // we aren't processing a STMT_EXECUTE
 			if (qr->replace_pattern) {
+				bool dry_run_and_new_are_the_same = false;
+
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d on match_pattern \"%s\" has a replace_pattern \"%s\" to apply\n", qr->rule_id, qr->match_pattern, qr->replace_pattern);
-				if (ret->new_query==NULL) ret->new_query=new std::string(query);
-				re2_t *re2p=(re2_t *)qr->regex_engine2;
-				if (re2p->re2) {
-					//RE2::Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
-					if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
-						re2p->re2->GlobalReplace(ret->new_query,qr->match_pattern,qr->replace_pattern);
-					} else {
-						re2p->re2->Replace(ret->new_query,qr->match_pattern,qr->replace_pattern);
-					}
-				} else {
-					//re2p->re1->Replace(ret->new_query,qr->replace_pattern);
-					if ((qr->re_modifiers & QP_RE_MOD_GLOBAL) == QP_RE_MOD_GLOBAL) {
-						re2p->re1->GlobalReplace(qr->replace_pattern,ret->new_query);
-					} else {
-						re2p->re1->Replace(qr->replace_pattern,ret->new_query);
-					}
+
+				if (dry_run_rewritten_query == "") {
+					dry_run_rewritten_query = query;
 				}
-			}	
+				if (qr->active) {
+					if (!ret->new_query) {
+						ret->new_query = new std::string(query);
+					}
+					dry_run_and_new_are_the_same = (*ret->new_query == dry_run_rewritten_query);
+				}
+
+				apply_query_replacement (qr, &dry_run_rewritten_query);
+				if (qr->active) {
+					// if we're processing the same string, let's only do the heavy lifting once
+					if (dry_run_and_new_are_the_same) {
+						*ret->new_query = dry_run_rewritten_query;
+					} else {
+						apply_query_replacement (qr, ret->new_query);
+					}
+				}	
+			}
 		}
 
-		if (qr->apply==true) {
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d is the last one to apply: exit!\n", qr->rule_id);
-			goto __exit_process_mysql_query;
+		if (qr->log) {
+			// pass back all query rule logging information in a single json blob
+			rule_log_json["query_rule_id"] = qr->rule_id;
+			rule_log_json["query_rule_active"] = qr->active;
+			rule_log_json["query_rule_hits"] = ret->query_rule_hits;
+			if (qr->active) {
+				if (ret->new_query) {
+					rule_log_json["original_query"] = query;
+					rule_log_json["rewritten_query"] = *ret->new_query;
+				}
+			} else {	// dry run mode
+				if (dry_run_rewritten_query != "") {
+					rule_log_json["dry_run_original_query"] = query;
+					rule_log_json["dry_run_rewritten_query"] = dry_run_rewritten_query;
+				}
+				rule_log_json["dry_run_hostgroup"] = qr->destination_hostgroup;
+				if (qr->error_msg) {
+					rule_log_json["dry_run_rejection_message"] = qr->error_msg;
+				}
+			}
+			ret->query_rule_log = rule_log_json.dump(-1, ' ', false, json::error_handler_t::replace);
 		}
-		if (set_flagOUT==true) {
-			if (reiterate) {
-				reiterate--;
-				goto __internal_loop;
+
+		if (qr->active) {
+			bool set_flagOUT=false;
+			if (qr->flagOUT >= 0) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has changed flagOUT\n", qr->rule_id);
+				flagIN=qr->flagOUT;
+				set_flagOUT=true;
+				//sess->query_info.flagOUT=flagIN;
+				}
+			if (qr->reconnect >= 0) {
+				// Note: negative reconnect means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set reconnect: %d. Query will%s be rexecuted if connection is lost\n", qr->rule_id, qr->reconnect, (qr->reconnect == 0 ? " NOT" : "" ));
+				ret->reconnect=qr->reconnect;
+			}
+			if (qr->timeout >= 0) {
+				// Note: negative timeout means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set timeout: %d. Query will%s be interrupted if exceeding %dms\n", qr->rule_id, qr->timeout, (qr->timeout == 0 ? " NOT" : "" ) , qr->timeout);
+				ret->timeout=qr->timeout;
+			}
+				if (qr->retries >= 0) {
+				// Note: negative retries means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will%s be re-executed %d times in case of failure\n", qr->rule_id, qr->retries);
+				ret->retries=qr->retries;
+			}
+			if (qr->delay >= 0) {
+				// Note: negative delay means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set delay: %d. Session will%s be paused for %dms\n", qr->rule_id, qr->delay, (qr->delay == 0 ? " NOT" : "" ) , qr->delay);
+				ret->delay=qr->delay;
+			}
+			if (qr->next_query_flagIN >= 0) {
+				// Note: Negative next_query_flagIN means this rule doesn't change the next query flagIN
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set next query flagIN: %d\n", qr->rule_id, qr->next_query_flagIN);
+				ret->next_query_flagIN=qr->next_query_flagIN;
+			}
+			if (qr->mirror_flagOUT >= 0) {
+				// Note: negative mirror_flagOUT means this rule doesn't change the mirror flagOUT
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror flagOUT: %d\n", qr->rule_id, qr->mirror_flagOUT);
+				ret->mirror_flagOUT=qr->mirror_flagOUT;
+			}
+			if (qr->mirror_hostgroup >= 0) {
+				// Note: negative mirror_hostgroup means this rule doesn't change the mirror
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set mirror hostgroup: %d. A new session will be created\n", qr->rule_id, qr->mirror_hostgroup);
+				ret->mirror_hostgroup=qr->mirror_hostgroup;
+			}
+			if (qr->OK_msg) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set error_msg: %s\n", qr->rule_id, qr->OK_msg);
+				//proxy_warning("User \"%s\" has issued query that has been filtered: %s \n " , sess->client_myds->myconn->userinfo->username, query);
+				ret->OK_msg=strdup(qr->OK_msg);
+			}
+			if (qr->cache_ttl >= 0) {
+				// Note: negative TTL means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_ttl: %d. Query will%s hit the cache\n", qr->rule_id, qr->cache_ttl, (qr->cache_ttl == 0 ? " NOT" : "" ));
+				ret->cache_ttl=qr->cache_ttl;
+			}
+			if (qr->cache_empty_result >= 0) {
+				// Note: negative value means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_empty_result: %d. Query with empty result will%s hit the cache\n", qr->rule_id, qr->cache_empty_result, (qr->cache_empty_result == 0 ? " NOT" : "" ));
+				ret->cache_empty_result=qr->cache_empty_result;
+			}
+			if (qr->cache_timeout >= 0) {
+				// Note: negative value means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set cache_timeout: %dms. Query will wait up resulset to be avaiable in query cache before running on backend\n", qr->rule_id, qr->cache_timeout);
+				ret->cache_timeout=qr->cache_timeout;
+			}
+			if (qr->sticky_conn >= 0) {
+				// Note: negative sticky_conn means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set sticky_conn: %d. Connection will%s stick\n", qr->rule_id, qr->sticky_conn, (qr->sticky_conn == 0 ? " NOT" : "" ));
+				ret->sticky_conn=qr->sticky_conn;
+			}
+			if (qr->multiplex >= 0) {
+				// Note: negative multiplex means this rule doesn't change
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set multiplex: %d. Connection will%s multiplex\n", qr->rule_id, qr->multiplex, (qr->multiplex == 0 ? " NOT" : "" ));
+				ret->multiplex=qr->multiplex;
+			}
+			if (qr->gtid_from_hostgroup >= 0) {
+				// Note: negative gtid_from_hostgroup means this rule doesn't change the gtid_from_hostgroup
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set gtid from hostgroup: %d. A new session will be created\n", qr->rule_id, qr->gtid_from_hostgroup);
+				ret->gtid_from_hostgroup = qr->gtid_from_hostgroup;
+			}
+			if (qr->apply==true) {
+				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d is the last one to apply: exit!\n", qr->rule_id);
+				goto __exit_process_mysql_query;
+			}
+			if (set_flagOUT==true) {
+				if (reiterate) {
+					reiterate--;
+					goto __internal_loop;
+				}
 			}
 		}
 	}
@@ -1846,7 +1910,7 @@ void Query_Processor::update_query_processor_stats() {
 		QP_rule_t *qr;
 		for (std::vector<QP_rule_t *>::iterator it=_thr_SQP_rules->begin(); it!=_thr_SQP_rules->end(); ++it) {
 			qr=*it;
-			if (qr->active && qr->hits) {
+			if (qr->hits && (qr->active || qr->log)) {
 				__sync_fetch_and_add(&qr->parent->hits,qr->hits);
 				qr->hits=0;
 			}

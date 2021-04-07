@@ -11226,7 +11226,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	int affected_rows=0;
 	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM main.mysql_query_rules WHERE active=1 ORDER BY rule_id";
+	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment, active FROM main.mysql_query_rules ORDER BY rule_id";
 	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	char *error2 = NULL;
 	int cols2 = 0;
@@ -11280,7 +11280,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 			}
 			nqpr=GloQPro->new_query_rule(
 				atoi(r->fields[0]), // rule_id
-				true,
+				atoi(r->fields[34]), // active
 				r->fields[1],	// username
 				r->fields[2],	// schemaname
 				atoi(r->fields[3]),	// flagIN
