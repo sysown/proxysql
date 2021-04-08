@@ -379,6 +379,8 @@ class MySQL_Threads_Handler
 		bool monitor_enabled;
 		//! ProxySQL session wait timeout. Unit: 'ms'.
 		bool monitor_wait_timeout;
+		//true: when seconds_behind_master(sbm) is null,use new algorithm, false: use monitor_slave_lag_when_null
+		bool monitor_sbm_when_null_algorithm; 
 		bool monitor_writer_is_also_reader;
 		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;

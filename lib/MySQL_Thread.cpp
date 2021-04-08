@@ -471,6 +471,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_threads_queue_maxsize",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
+	(char *)"monitor_sbm_when_null_algorithm",
 	(char *)"max_allowed_packet",
 	(char *)"tcp_keepalive_time",
 	(char *)"use_tcp_keepalive",
@@ -1057,6 +1058,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
+	variables.monitor_sbm_when_null_algorithm=true;
 	variables.max_allowed_packet=64*1024*1024;
 	variables.automatic_detect_sqli=false;
 	variables.firewall_whitelist_enabled=false;
@@ -1420,6 +1422,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		}
 		if (a == 's') {
 			if (!strcmp(name,"monitor_slave_lag_when_null")) return (int)variables.monitor_slave_lag_when_null;
+			if (!strcmp(name,"monitor_sbm_when_null_algorithm")) return (int)variables.monitor_sbm_when_null_algorithm;
 		}
 	}
 	char a = name[0];
@@ -1794,6 +1797,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		}
 		if (!strcasecmp(name,"monitor_writer_is_also_reader")) {
 			return strdup((variables.monitor_writer_is_also_reader ? "true" : "false"));
+		}
+		if (!strcasecmp(name,"monitor_sbm_when_null_algorithm")) {
+			return strdup((variables.monitor_sbm_when_null_algorithm ? "true" : "false"));
 		}
 		if (!strcasecmp(name,"monitor_wait_timeout")) {
 			return strdup((variables.monitor_wait_timeout ? "true" : "false"));
@@ -2450,6 +2456,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			}
 			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 				variables.monitor_writer_is_also_reader=false;
+				return true;
+			}
+			return false;
+		}
+		if (!strcasecmp(name,"monitor_sbm_when_null_algorithm")) {
+			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+				variables.monitor_sbm_when_null_algorithm=true;
+				return true;
+			}
+			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+				variables.monitor_sbm_when_null_algorithm=false;
 				return true;
 			}
 			return false;
@@ -4997,6 +5014,7 @@ void MySQL_Thread::refresh_variables() {
 
 	mysql_thread___monitor_wait_timeout=(bool)GloMTH->get_variable_int((char *)"monitor_wait_timeout");
 	mysql_thread___monitor_writer_is_also_reader=(bool)GloMTH->get_variable_int((char *)"monitor_writer_is_also_reader");
+	mysql_thread___monitor_sbm_when_null_algorithm=(bool)GloMTH->get_variable_int((char *)"monitor_sbm_when_null_algorithm");
 	mysql_thread___monitor_enabled=(bool)GloMTH->get_variable_int((char *)"monitor_enabled");
 	mysql_thread___monitor_history=GloMTH->get_variable_int((char *)"monitor_history");
 	mysql_thread___monitor_connect_interval=GloMTH->get_variable_int((char *)"monitor_connect_interval");
