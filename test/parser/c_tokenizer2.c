@@ -16,110 +16,7 @@ extern __thread bool mysql_thread___query_digests_replace_null;
 extern __thread bool mysql_thread___query_digests_no_digits;
 extern __thread bool mysql_thread___query_digests_grouping_limit;
 
-static char table_normalchar[256] = {
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 1, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 0, 0, 0, 0, 0, 0,
-	0, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 0, 0, 0, 0, 1,
-	0, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 1, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-};
-
-static char table_whitespace[256] = {
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 1, 1, 0, 0, 1, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	1, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-};
-
-static char table_digitchar[256] = {
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	1, 1, 1, 1, 1, 1, 1, 1,
-	1, 1, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-};
+extern __thread unsigned long long cnt;
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
@@ -198,12 +95,56 @@ void c_split_2(const char *in, const char *del, char **out1, char **out2) {
 }
 #define SIZECHAR	sizeof(char)
 
-
+static char table_normalchar[256] = {
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 1, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 0, 0, 0, 0, 0, 0,
+	0, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 0, 0, 0, 0, 1,
+	0, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 1, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+};
 
 // check char if it could be table name
 static inline char is_normal_char(char c)
 {
 	return table_normalchar[(unsigned char)c];
+/*
+	if(c >= 'a' && c <= 'z')
+		return 1;
+	if(c >= 'A' && c <= 'Z')
+		return 1;
+	if(c >= '0' && c <= '9')
+		return 1;
+	if(c == '$' || c == '_')
+		return 1;
+	return 0;
+*/
 }
 
 // token char - not table name string
@@ -213,17 +154,97 @@ static inline char is_token_char(char c)
 }
 
 // space - it's much easy to remove duplicated space chars
+
+static char table_whitespace[256] = {
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 1, 1, 0, 0, 1, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	1, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+};
+
 static inline char is_space_char(char c)
 {
+	cnt++;
 	return table_whitespace[(unsigned char)c];
+/*
+	if(c == ' ' || c == '\t' || c == '\n' || c == '\r')
+		return 1;
+	return 0;
+*/
 }
 
+static char table_digitchar[256] = {
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	1, 1, 1, 1, 1, 1, 1, 1,
+	1, 1, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0,
+};
 // check digit
 static inline char is_digit_char(char c)
 {
 	return table_digitchar[(unsigned char)c];
+/*
+	if(c >= '0' && c <= '9')
+		return 1;
+	return 0;
+*/
 }
-
 
 // check if it can be HEX char
 static inline char is_hex_char(char c)
@@ -321,6 +342,8 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 
 	char fns=0;
 
+	bool prev_char_space = false;
+	bool cur_char_space = false;
 	bool lowercase=0;
 	bool replace_null=0;
 	bool replace_number=0;
@@ -336,6 +359,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 
 	while(i < len)
 	{
+		cur_char_space = is_space_char(*s);
 		// =================================================
 		// START - read token char and set flag what's going on.
 		// =================================================
@@ -360,7 +384,8 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			}
 
 			// comment type 3 - start with '--'
-			else if(i != (len-1) && prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
+			//else if(i != (len-1) && prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
+			else if(i != (len-1) && prev_char == '-' && *s == '-' && (is_space_char(*(s+1))))
 			{
 				flag = 3;
 			}
@@ -402,14 +427,15 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			else
 			{
 				flag = 0;
-				if (fns==0 && is_space_char(*s)) {
+				if (fns==0 && cur_char_space) {
 					s++;
 					i++;
 					continue;
 				}
 				if (fns==0) fns=1;
-				if(is_space_char(prev_char) && is_space_char(*s)){
+				if(prev_char_space && cur_char_space){
 					prev_char = ' ';
+					//prev_char_space = true; // no need for this
 					*p_r = ' ';
 					s++;
 					i++;
@@ -422,14 +448,18 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							s++;
 							i++;
 						}
+						// we potentially modified s
+						// so we recompute cur_char_space
+						cur_char_space = is_space_char(*s);
 					}
 				}
 				{
 					char* p = p_r - 2;
 					// supress spaces before aritmetic operators
-					if (p >= r && is_space_char(prev_char) && is_arithmetic_op(*s)) {
+					if (p >= r && prev_char_space && is_arithmetic_op(*s)) {
 						if (*p == '?') {
 							prev_char = *s;
+							prev_char_space = false; // prev_char is an operator
 							--p_r;
 							*p_r++ = *s;
 							s++;
@@ -438,20 +468,22 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						}
 					}
 					// supress spaces before and after commas
-					if (p >= r && is_space_char(prev_char) && ((*s == ',') || (*p == ','))) {
+					if (p >= r && prev_char_space && ((*s == ',') || (*p == ','))) {
 						--p_r;
 						// only copy the comma if we are not grouping a query
 						if (!grouping_limit_exceeded) {
 							*p_r++ = *s;
 						}
 						prev_char = ',';
+						prev_char_space = false; // prev_char = ',';
 						s++;
 						i++;
 						continue;
 					}
 					// supress spaces before closing brakets
-					if (p >= r && *p == '.' && is_space_char(prev_char) && (*s == ')')) {
+					if (p >= r && *p == '.' && prev_char_space && (*s == ')')) {
 						prev_char = *s;
+						prev_char_space = false ; // prev_char == ')'
 						--p_r;
 						*p_r++ = *s;
 						s++;
@@ -515,7 +547,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							*first_comment=(char *)malloc(FIRST_COMMENT_MAX_LENGTH);
 						}
 						char *c=*first_comment+fc_len;
-						*c = !is_space_char(*s) ? *s : ' ';
+						*c = !cur_char_space ? *s : ' ';
 						fc_len++;
 					}
 					if (prev_char == '*' && *s == '/') {
@@ -581,6 +613,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					cmd=0;
 				}
 				prev_char = ' ';
+				prev_char_space = true; // prev_char = ' ';
 				flag = 0;
 				s++;
 				i++;
@@ -621,6 +654,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					)
 					{
 						prev_char = 'X';
+						prev_char_space = false; // prev_char = 'X';
 						s++;
 						i++;
 						continue;
@@ -681,6 +715,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 				// is float
 				if (*s == '.' || *s == 'e' || ((*s == '+' || *s == '-') && prev_char == 'e')) {
 					prev_char = *s;
+					prev_char_space = false; // see 2 lines above
 					i++;
 					s++;
 					continue;
@@ -745,22 +780,25 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 		// COPY CHAR
 		// =================================================
 		// convert every space char to ' '
-		if (*s != ',' && !is_digit_char(*s) && !is_space_char(*s)) {
-			grouping_digest = 0;
-			grouping_count = 0;
-			grouping_limit_exceeded = 0;
+		if (grouping_digest || grouping_count || grouping_limit_exceeded) {
+			if (*s != ',' && !cur_char_space && !is_digit_char(*s)) {
+				grouping_digest = 0;
+				grouping_count = 0;
+				grouping_limit_exceeded = 0;
+			}
 		}
 
 		if (lowercase==0) {
 			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
-				*p_r++ = !is_space_char(*s) ? *s : ' ';
+				*p_r++ = !cur_char_space ? *s : ' ';
 			}
 		} else {
 			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
-				*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+				*p_r++ = !cur_char_space ? (tolower(*s)) : ' ';
 			}
 		}
 		prev_char = *s++;
+		prev_char_space = cur_char_space;
 
 		i++;
 	}
