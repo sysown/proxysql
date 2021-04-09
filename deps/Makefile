@@ -45,6 +45,7 @@ libinjection/libinjection/src/libinjection.a:
 	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/make_parens.py
 	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse_map.py
 	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse2c.py
+	cd libinjection/libinjection && patch -p1 < ../cc-ar-ld-from-env.patch
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 libinjection: libinjection/libinjection/src/libinjection.a
 
