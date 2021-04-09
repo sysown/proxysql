@@ -1,0 +1,24 @@
+Upstream: Yes
+From 242cab8cbcd91af882233730a83627d3b12ced83 Mon Sep 17 00:00:00 2001
+From: Vladislav Vaintroub <wlad@mariadb.com>
+Date: Fri, 12 Mar 2021 00:01:11 +0100
+Subject: [PATCH] Fix syntax error in cmake 3.20
+
+---
+ cmake/ConnectorName.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/cmake/ConnectorName.cmake b/cmake/ConnectorName.cmake
+index b7bbbad8..357b8ac0 100644
+--- a/cmake/ConnectorName.cmake
++++ b/cmake/ConnectorName.cmake
+@@ -22,7 +22,7 @@ IF(CMAKE_SYSTEM_NAME MATCHES "Windows")
+     SET(MACHINE_NAME "x64")
+   ELSE()
+     SET(MACHINE_NAME "32")
+-  END()
++  ENDIF()
+ ENDIF()
+ 
+ SET(product_name "mysql-connector-c-${CPACK_PACKAGE_VERSION}-${PLATFORM_NAME}${CONCAT_SIGN}${MACHINE_NAME}")
+
