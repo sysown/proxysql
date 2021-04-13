@@ -51,6 +51,7 @@ class MySQL_Logger {
 		char *datadir;
 		unsigned int log_file_id;
 		unsigned int max_log_file_size;
+		unsigned int max_files;
 		std::fstream *logfile;
 	} events;
 	struct {
@@ -59,6 +60,7 @@ class MySQL_Logger {
 		char *datadir;
 		unsigned int log_file_id;
 		unsigned int max_log_file_size;
+		unsigned int max_files;
 		std::fstream *logfile;
 	} audit;
 #ifdef PROXYSQL_LOGGER_PTHREAD_MUTEX

@@ -379,9 +379,11 @@ class MySQL_Threads_Handler
 		char *eventslog_filename;
 		int eventslog_filesize;
 		int eventslog_default_log;
+		int eventslog_max_files;
 		int eventslog_format;
 		char *auditlog_filename;
 		int auditlog_filesize;
+		int auditlog_max_files;
 		// SSL related, proxy to server
 		char * ssl_p2s_ca;
 		char * ssl_p2s_cert;
