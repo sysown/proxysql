@@ -876,6 +876,17 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				}
 			}
 		}
+		// if cluster_sync_interfaces is true, interfaces variables are synced too
+		if (root.exists("cluster_sync_interfaces")==true) {
+			bool value_bool;
+			bool rc;
+			rc=root.lookupValue("cluster_sync_interfaces", value_bool);
+			if (rc==true) {
+				GloVars.cluster_sync_interfaces=value_bool;
+			} else {
+				proxy_error("The config file is configured with an invalid cluster_sync_interfaces\n");
+			}
+		}
 		if (root.exists("sqlite3_plugin")==true) {
 			string sqlite3_plugin;
 			bool rc;

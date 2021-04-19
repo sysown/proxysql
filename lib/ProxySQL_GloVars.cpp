@@ -84,6 +84,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 
 	__cmd_proxysql_initial=false;
 	__cmd_proxysql_reload=false;
+	cluster_sync_interfaces=false;
 
 	statuses.stack_memory_mysql_threads = 0;
 	statuses.stack_memory_admin_threads = 0;

@@ -1411,12 +1411,27 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const std::string& var_ty
 			if (rc_conn) {
 				std::string s_query = "";
 				string_format("SELECT * FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", s_query, var_type.c_str());
+				if (GloVars.cluster_sync_interfaces == false) {
+					if (var_type == "admin") {
+						s_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
+					} else if (var_type == "mysql") {
+						s_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+					}
+				}
 				mysql_query(conn, s_query.c_str());
 
 				if (rc_query == 0) {
 					MYSQL_RES *result = mysql_store_result(conn);
 					std::string d_query = "";
-					string_format("DELETE FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", d_query, var_type.c_str());
+					// remember that we read from runtime_global_variables but write into global_variables
+					string_format("DELETE FROM global_variables WHERE variable_name LIKE '%s-%%'", d_query, var_type.c_str());
+					if (GloVars.cluster_sync_interfaces == false) {
+						if (var_type == "admin") {
+							d_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
+						} else if (var_type == "mysql") {
+							d_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+						}
+					}
 					GloAdmin->admindb->execute(d_query.c_str());
 
 					MYSQL_ROW row;

@@ -6079,8 +6079,13 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 			int cols=0;
 			int affected_rows=0;
 			SQLite3_result *resultset=NULL;
-			char *q=(char *)"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name";
-			admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+			std::string q;
+			if (GloVars.cluster_sync_interfaces) {
+				q="SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name";
+			} else {
+				q="SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'admin-\%' AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN) + " ORDER BY variable_name";
+			}
+			admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
 			uint64_t hash1 = resultset->raw_checksum();
 			uint32_t d32[2];
 			char buf[20];
@@ -6434,8 +6439,13 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			int cols=0;
 			int affected_rows=0;
 			SQLite3_result *resultset=NULL;
-			char *q=(char *)"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
-			admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+			std::string q;
+			if (GloVars.cluster_sync_interfaces) {
+				q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' ORDER BY variable_name";
+			} else {
+				q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL) + " ORDER BY variable_name";
+			}
+			admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
 			uint64_t hash1 = resultset->raw_checksum();
 			uint32_t d32[2];
 			char buf[20];
