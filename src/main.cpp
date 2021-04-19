@@ -122,6 +122,12 @@ hSypLEcUVIvzc6rtfWlYKT35wQ+AGKNADwIBBQ==
 
 */
 
+int callback_ssl_verify_peer(int ok, X509_STORE_CTX* ctx) {
+	// for now only return 1
+	return 1;
+}
+
+
 
 #ifndef HEADER_DH_H
 #include <openssl/dh.h>
@@ -651,6 +657,7 @@ void ProxySQL_Main_init_SSL_module() {
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
 
+	SSL_CTX_set_verify(GloVars.global.ssl_ctx, SSL_VERIFY_PEER|SSL_VERIFY_CLIENT_ONCE, callback_ssl_verify_peer);
 	X509_free(x509);
 	EVP_PKEY_free(pkey);
 

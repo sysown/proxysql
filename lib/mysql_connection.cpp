@@ -12,6 +12,99 @@
 
 #include <atomic>
 
+// some of the code that follows is from mariadb client library memory allocator
+typedef int     myf;    // Type of MyFlags in my_funcs
+#define MYF(v)      (myf) (v)
+#define MY_KEEP_PREALLOC    1
+#define MY_ALIGN(A,L)    (((A) + (L) - 1) & ~((L) - 1))
+#define ALIGN_SIZE(A)    MY_ALIGN((A),sizeof(double))
+void ma_free_root(MA_MEM_ROOT *root, myf MyFLAGS);
+void *ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size);
+#define MAX(a,b) (((a) > (b)) ? (a) : (b))
+
+void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
+{
+  size_t get_size;
+  void * point;
+  MA_USED_MEM *next= 0;
+  MA_USED_MEM **prev;
+
+  Size= ALIGN_SIZE(Size);
+
+  if ((*(prev= &mem_root->free)))
+  {
+    if ((*prev)->left < Size &&
+        mem_root->first_block_usage++ >= 16 &&
+        (*prev)->left < 4096)
+    {
+      next= *prev;
+      *prev= next->next;
+      next->next= mem_root->used;
+      mem_root->used= next;
+      mem_root->first_block_usage= 0;
+    }
+    for (next= *prev; next && next->left < Size; next= next->next)
+      prev= &next->next;
+  }
+  if (! next)
+  {                     /* Time to alloc new block */
+    get_size= MAX(Size+ALIGN_SIZE(sizeof(MA_USED_MEM)),
+              (mem_root->block_size & ~1) * ( (mem_root->block_num >> 2) < 4 ? 4 : (mem_root->block_num >> 2) ) );
+
+    if (!(next = (MA_USED_MEM*) malloc(get_size)))
+    {
+      if (mem_root->error_handler)
+    (*mem_root->error_handler)();
+      return((void *) 0);               /* purecov: inspected */
+    }
+    mem_root->block_num++;
+    next->next= *prev;
+    next->size= get_size;
+    next->left= get_size-ALIGN_SIZE(sizeof(MA_USED_MEM));
+    *prev=next;
+  }
+  point= (void *) ((char*) next+ (next->size-next->left));
+  if ((next->left-= Size) < mem_root->min_malloc)
+  {                     /* Full block */
+    *prev=next->next;               /* Remove block from list */
+    next->next=mem_root->used;
+    mem_root->used=next;
+    mem_root->first_block_usage= 0;
+  }
+  return(point);
+}
+
+
+void ma_free_root(MA_MEM_ROOT *root, myf MyFlags)
+{ 
+  MA_USED_MEM *next,*old;
+
+  if (!root)
+    return; /* purecov: inspected */
+  if (!(MyFlags & MY_KEEP_PREALLOC))
+    root->pre_alloc=0;
+
+  for ( next=root->used; next ;)
+  {
+    old=next; next= next->next ;
+    if (old != root->pre_alloc)
+      free(old);
+  }
+  for (next= root->free ; next ; )
+  {
+    old=next; next= next->next ;
+    if (old != root->pre_alloc)
+      free(old);
+  }
+  root->used=root->free=0;
+  if (root->pre_alloc)
+  {
+    root->free=root->pre_alloc;
+    root->free->left=root->pre_alloc->size-ALIGN_SIZE(sizeof(MA_USED_MEM));
+    root->free->next=0;
+  }
+}
+
 extern char * binary_sha1;
 
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
@@ -630,6 +723,13 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 
+	// set 'CLIENT_DEPRECATE_EOF' flag if explicitly stated by 'mysql-enable_server_deprecate_eof'.
+	// Capability is disabled by default in 'mariadb_client', so setting this option is not optional
+	// for having 'CLIENT_DEPRECATE_EOF' in the connection to be stablished.
+	if (mysql_thread___enable_server_deprecate_eof) {
+		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+	}
+
 	char *auth_password=NULL;
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
@@ -644,6 +744,18 @@ void MySQL_Connection::connect_start() {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
+//	{
+//		// FIXME: THIS IS FOR TESTING PURPOSE ONLY
+//		// DO NOT ENABLE THIS CODE FOR PRODUCTION USE
+//		// we drastically reduce the receive buffer to make sure that
+//		// mysql_stmt_store_result_[start|continue] doesn't complete
+//		// in a single call
+//		int rcvbuf = 10240;
+//		if(setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0) {
+//			proxy_error("Failed to call setsockopt\n");
+//			exit(EXIT_FAILURE);
+//		}
+//	}
 }
 
 void MySQL_Connection::connect_cont(short event) {
@@ -1085,6 +1197,30 @@ handler_again:
 				query.stmt_result=mysql_stmt_result_metadata(query.stmt);
 				if (query.stmt_result==NULL) {
 					NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
+				} else {
+					if (myds->sess->mirror==false) {
+						if (MyRS_reuse == NULL) {
+							MyRS = new MySQL_ResultSet();
+							MyRS->init(&myds->sess->client_myds->myprot, query.stmt_result, mysql, query.stmt);
+						} else {
+							MyRS = MyRS_reuse;
+							MyRS_reuse = NULL;
+							MyRS->init(&myds->sess->client_myds->myprot, query.stmt_result, mysql, query.stmt);
+						}
+					} else {
+/*
+						// we do not support mirroring with prepared statements
+						if (MyRS_reuse == NULL) {
+							MyRS = new MySQL_ResultSet();
+							MyRS->init(NULL, mysql_result, mysql);
+						} else {
+							MyRS = MyRS_reuse;
+							MyRS_reuse = NULL;
+							MyRS->init(NULL, mysql_result, mysql);
+						}
+*/
+					}
+					//async_fetch_row_start=false;
 				}
 			}
 			stmt_execute_store_result_start();
@@ -1095,8 +1231,47 @@ handler_again:
 			}
 			break;
 		case ASYNC_STMT_EXECUTE_STORE_RESULT_CONT:
+			{ // this copied mostly from ASYNC_USE_RESULT_CONT
+				if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
+					unsigned int buffered_data=0;
+					buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
+					buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
+					if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*8) {
+						next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we temporarily pause . See #1232
+						break;
+					}
+				}
+			}
 			stmt_execute_store_result_cont(event);
+			//if (async_fetch_row_start==false) {
+			//	async_fetch_row_start=true;
+			//}
 			if (async_exit_status) {
+				// this copied mostly from ASYNC_USE_RESULT_CONT
+				MYSQL_ROWS *r=query.stmt->result.data;
+				long long unsigned int rows_read_inner = 0;
+
+				if (r) {
+					rows_read_inner++;
+					while(rows_read_inner < query.stmt->result.rows) {
+						// it is very important to check rows_read_inner FIRST
+						// because r->next could point to an invalid memory
+						rows_read_inner++;
+						r = r->next;
+					}
+					if (rows_read_inner > 1) {
+						process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(processed_bytes);
+						if (
+							(processed_bytes > (unsigned int)mysql_thread___threshold_resultset_size*8)
+								||
+							( mysql_thread___throttle_ratio_server_to_client && mysql_thread___throttle_max_bytes_per_second_to_client && (processed_bytes > (unsigned long long)mysql_thread___throttle_max_bytes_per_second_to_client/10*(unsigned long long)mysql_thread___throttle_ratio_server_to_client) )
+						) {
+							next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we temporarily pause
+						} else {
+							NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we continue looping
+						}
+					}
+				}
 				next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT);
 			} else {
 				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
@@ -1245,6 +1420,9 @@ handler_again:
 			} else {
 				async_fetch_row_start=false;
 				if (mysql_row) {
+					if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS) {
+						proxy_warning("MySQL Warning. Level: [%s], Code: [%s], Message: [%s]\n", mysql_row[0], mysql_row[1], mysql_row[2]);
+					}
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
@@ -1284,14 +1462,19 @@ handler_again:
 				} else {
 					compute_unknown_transaction_status();
 				}
+				if (_myerrno < 2000) {
+					// we can continue only if the error is coming from the backend.
+					// (or if zero)
+					// if the error comes from the client library, something terribly
+					// wrong happened and we cannot continue
+					if (mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
+						async_state_machine=ASYNC_NEXT_RESULT_START;
+					}
+				}
 			}
 			if (mysql_result) {
 				mysql_free_result(mysql_result);
 				mysql_result=NULL;
-			}
-			//if (mysql_next_result(mysql)==0) {
-			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST) {
-				async_state_machine=ASYNC_NEXT_RESULT_START;
 			}
 			break;
 		case ASYNC_SET_AUTOCOMMIT_START:
@@ -1425,6 +1608,70 @@ handler_again:
 	return async_state_machine;
 }
 
+void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes) {
+	// there is more than 1 row
+	unsigned long long total_size=0;
+	long long unsigned int irs = 0;
+	MYSQL_ROWS *ir = query.stmt->result.data;
+	for (irs = 0; irs < query.stmt->result.rows -1 ; irs++) {
+		// while iterating the rows we also count the bytes
+		total_size+=ir->length;
+		if (ir->length > 0xFFFFFF) {
+			total_size+=(ir->length / 0xFFFFFF) * sizeof(mysql_hdr);
+		}
+		total_size+=sizeof(mysql_hdr);
+		// add the row to the resulset
+		unsigned int br=MyRS->add_row(ir);
+		// increment counters for the bytes processed
+		__sync_fetch_and_add(&parent->bytes_recv,br);
+		myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
+		myds->bytes_info.bytes_recv += br;
+		bytes_info.bytes_recv += br;
+		processed_bytes+=br;	// issue #527 : this variable will store the amount of bytes processed during this event
+
+		// we stop when we 'ir->next' will be pointing to the last row
+		if (irs <= query.stmt->result.rows - 2) {
+			ir = ir->next;
+		}
+	}
+	// at this point, ir points to the last row
+	// next, we create a new MYSQL_ROWS that is a copy of the last row
+	MYSQL_ROWS *lcopy = (MYSQL_ROWS *)malloc(sizeof(MYSQL_ROWS) + ir->length);
+	lcopy->length = ir->length;
+	lcopy->data= (MYSQL_ROW)(lcopy + 1);
+	memcpy((char *)lcopy->data, (char *)ir->data, ir->length);
+	// next we proceed to reset all the buffer
+
+	// this invalidates the local variables inside the coroutines
+	// pointing to the previous allocated memory for 'stmt->result'.
+	// For more context see: #3324
+	ma_free_root(&query.stmt->result.alloc, MYF(MY_KEEP_PREALLOC));
+	query.stmt->result.data= NULL;
+	query.stmt->result_cursor= NULL;
+	query.stmt->result.rows = 0;
+
+	// we will now copy back the last row and make it the only row available
+	MYSQL_ROWS *current = (MYSQL_ROWS *)ma_alloc_root(&query.stmt->result.alloc, sizeof(MYSQL_ROWS) + lcopy->length);
+	current->data= (MYSQL_ROW)(current + 1);
+	// update 'stmt->result.data' to the new allocated memory and copy the backed last row
+	query.stmt->result.data = current;
+	memcpy((char *)current->data, (char *)lcopy->data, lcopy->length);
+	// update the 'current->length' with the length of the copied row
+	current->length = lcopy->length;
+
+	// we free the copy
+	free(lcopy);
+	// change the rows count to 1
+	query.stmt->result.rows = 1;
+	// we should also configure the cursor, but because we scan it using our own
+	// algorithm, this is not needed
+
+	// now we update bytes counter
+	__sync_fetch_and_add(&parent->bytes_recv,total_size);
+	myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=total_size;
+	myds->bytes_info.bytes_recv += total_size;
+	bytes_info.bytes_recv += total_size;
+}
 
 void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
 #ifdef DEBUG
@@ -1924,7 +2171,8 @@ bool MySQL_Connection::IsActiveTransaction() {
 			ret = true;
 		}
 		if (ret == false) {
-			bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit );
+			//bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit ); // deprecated , see #3253
+			bool r = ( mysql_thread___autocommit_false_is_transaction);
 			if ( r && (IsAutoCommit() == false) ) {
 				ret = true;
 			}

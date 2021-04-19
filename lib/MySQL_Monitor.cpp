@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <prometheus/counter.h>
+#include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
 #include "proxysql.h"
@@ -877,6 +878,7 @@ void * monitor_connect_thread(void *arg) {
 		{
 			proxy_error("Server %s:%d is returning \"Your password has expired.\" for monitoring user\n", mmsd->hostname, mmsd->port);
 		}
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 	} else {
 		connect_success = true;
 	}
@@ -992,6 +994,7 @@ __fast_exit_monitor_ping_thread:
 #else
 			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
 		} else {
@@ -1006,12 +1009,14 @@ __fast_exit_monitor_ping_thread:
 #else
 					proxy_error("Error on server %s:%d : %s\n", mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
@@ -1138,6 +1143,7 @@ void * monitor_read_only_thread(void *arg) {
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
 			proxy_error("Timeout on read_only check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_CONN_TIMEOUT);
 			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 			//goto __fast_exit_monitor_read_only_thread;
@@ -1163,6 +1169,7 @@ void * monitor_read_only_thread(void *arg) {
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT);
 			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 		}
@@ -1192,6 +1199,7 @@ void * monitor_read_only_thread(void *arg) {
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT);
 			timeout_reached = true;
 			goto __exit_monitor_read_only_thread;
 		}
@@ -1297,6 +1305,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 					if (resultset->rows_count) {
 						// disable host
 						proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, max_failures);
+						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECKS_MISSED);
 						MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // N timeouts reached
 					}
 					delete resultset;
@@ -1311,6 +1320,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	if (mmsd->interr || mmsd->mysql_error_msg) { // check failed
 		if (mmsd->mysql) {
 			proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
 			mmsd->mysql=NULL;
@@ -1328,6 +1338,7 @@ __fast_exit_monitor_read_only_thread:
 		// if we reached here we didn't put the connection back
 		if (mmsd->mysql_error_msg) {
 			proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
@@ -1338,12 +1349,14 @@ __fast_exit_monitor_read_only_thread:
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 				} else {
 					proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
@@ -1401,6 +1414,7 @@ void * monitor_group_replication_thread(void *arg) {
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=nO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT);
 			goto __exit_monitor_group_replication_thread;
 		}
 		if (mmsd->interr) {
@@ -1430,6 +1444,7 @@ void * monitor_group_replication_thread(void *arg) {
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=nO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT);
 			goto __exit_monitor_group_replication_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1443,7 +1458,6 @@ void * monitor_group_replication_thread(void *arg) {
 		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 		proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
-		GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
@@ -1545,6 +1559,7 @@ __exit_monitor_group_replication_thread:
 				if (num_timeouts == mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count) {
 					proxy_error("Server %s:%d missed %d group replication checks. Number retries %d, Assuming offline\n",
 					mmsd->hostname, mmsd->port, num_timeouts, num_timeouts);
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GR_HEALTH_CHECKS_MISSED);
 					MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 				} else {
 					// not enough timeout
@@ -1635,6 +1650,7 @@ __end_process_group_replication_result2:
 	if (mmsd->interr || mmsd->mysql_error_msg) { // check failed
 		if (mmsd->mysql) {
 			proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
 			mmsd->mysql=NULL;
@@ -1652,6 +1668,7 @@ __fast_exit_monitor_group_replication_thread:
 		// if we reached here we didn't put the connection back
 		if (mmsd->mysql_error_msg) {
 			proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
@@ -1662,12 +1679,14 @@ __fast_exit_monitor_group_replication_thread:
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 				} else {
 					proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
@@ -1711,6 +1730,7 @@ void * monitor_galera_thread(void *arg) {
 			free(mmsd->mysql_error_msg);
 			mmsd->mysql_error_msg = new_error;
 			proxy_error("Error on Galera check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECK_CONN_TIMEOUT);
 			goto __exit_monitor_galera_thread;
 		}
 	}
@@ -1753,6 +1773,7 @@ void * monitor_galera_thread(void *arg) {
 		 if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT);
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1769,6 +1790,7 @@ void * monitor_galera_thread(void *arg) {
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT);
 			goto __exit_monitor_galera_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -1959,6 +1981,7 @@ __exit_monitor_galera_thread:
 				// it was a timeout. Check if we are having consecutive timeout
 				if (num_timeouts == mysql_thread___monitor_galera_healthcheck_max_timeout_count) {
 					proxy_error("Server %s:%d missed %d Galera checks. Assuming offline\n", mmsd->hostname, mmsd->port, num_timeouts);
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECKS_MISSED);
 					MyHGM->update_galera_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, mmsd->mysql_error_msg);
 				} else {
 					// not enough timeout
@@ -2019,6 +2042,7 @@ __end_process_galera_result2:
 	if (mmsd->interr || mmsd->mysql_error_msg) { // check failed
 		if (mmsd->mysql) {
 			proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
 			mmsd->mysql=NULL;
@@ -2036,6 +2060,7 @@ __fast_exit_monitor_galera_thread:
 		// if we reached here we didn't put the connection back
 		if (mmsd->mysql_error_msg) {
 			proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
@@ -2046,12 +2071,14 @@ __fast_exit_monitor_galera_thread:
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 				} else {
 					proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
@@ -2186,6 +2213,7 @@ __exit_monitor_replication_lag_thread:
 			//rc=(*proxy_sqlite3_prepare_v2)(mondb, query, -1, &statement, 0);
 			rc = mmsd->mondb->prepare_v2(query, &statement);
 			ASSERT_SQLITE_OK(rc, mmsd->mondb);
+				// 'replication_lag' to be feed to 'replication_lag_action'
 				int repl_lag=-2;
 				rc=(*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				rc=(*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
@@ -2223,6 +2251,7 @@ __exit_monitor_replication_lag_thread:
 									repl_lag=atoi(row[j]);
 								} else {
 									proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
+									MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
 								}
 							}
 						}
@@ -2239,6 +2268,8 @@ __exit_monitor_replication_lag_thread:
 					mmsd->result=NULL;
 				} else {
 					rc=(*proxy_sqlite3_bind_null)(statement, 5); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+					// 'replication_lag_check' timed out, we set 'repl_lag' to '-3' to avoid server to be 're-enabled'.
+					repl_lag=-3;
 				}
 				rc=(*proxy_sqlite3_bind_text)(statement, 6, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				SAFE_SQLITE3_STEP2(statement);
@@ -2259,6 +2290,7 @@ __exit_monitor_replication_lag_thread:
 #else
 			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			mysql_close(mmsd->mysql);
 			mmsd->mysql=NULL;
 		}
@@ -2280,6 +2312,7 @@ __fast_exit_monitor_replication_lag_thread:
 #else
 			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
 		} else {
@@ -2295,6 +2328,7 @@ __fast_exit_monitor_replication_lag_thread:
 #else
 					proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
@@ -2305,6 +2339,7 @@ __fast_exit_monitor_replication_lag_thread:
 #else
 				proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;
 			}
@@ -4216,6 +4251,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 		if (found_pingable_host == false) {
 			proxy_error("No node is pingable for AWS Aurora cluster with writer HG %u\n", wHG);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV);
 			next_loop_at = t1 + check_interval_ms * 1000;
 			continue;
 		}
@@ -4254,6 +4290,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 				free(mmsd->mysql_error_msg);
 				mmsd->mysql_error_msg = new_error;
 				proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. %sError: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, (access_denied ? "" : "If the server is overload, increase mysql-monitor_connect_timeout. " ) , new_error);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_HEALTH_CHECK_CONN_TIMEOUT);
 				goto __exit_monitor_aws_aurora_HG_thread;
 			}
 		}
@@ -4271,6 +4308,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_HEALTH_CHECK_TIMEOUT);
 			goto __exit_monitor_aws_aurora_HG_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -4287,6 +4325,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_HEALTH_CHECK_TIMEOUT);
 			goto __exit_monitor_aws_aurora_HG_thread;
 		}
 		if (GloMyMon->shutdown==true) {
@@ -4402,6 +4441,7 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 		if (mmsd->mysql_error_msg) {
 #ifdef DEBUG
 			proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 #else
 			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
@@ -4415,12 +4455,14 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 				} else {
 					proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 				proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql=NULL;

@@ -118,7 +118,19 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		}
 		if (strcasecmp(ad->attributes, attributes)) {
 			free(ad->attributes);
-			ad->attributes=strdup(attributes);
+			if (strlen(attributes)) {
+				// NOTE: add() is only place where we do input validation
+				try {
+					nlohmann::json valid=nlohmann::json::parse(attributes);
+					ad->attributes=strdup(attributes);
+				}
+				catch(nlohmann::json::exception& e) {
+					ad->attributes=strdup("");
+					proxy_error("Invalid attributes for user %s: %s\n", username, attributes);
+				}
+			} else {
+				ad->attributes=strdup(attributes); // default, empty string
+			}
 		}
   } else {
 		ad=(account_details_t *)malloc(sizeof(account_details_t));
@@ -126,7 +138,19 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 		ad->default_schema=strdup(default_schema);
 		ad->comment=strdup(comment);
 		ad->password=strdup(password);
-		ad->attributes=strdup(attributes);
+		if (strlen(attributes)) {
+			// NOTE: add() is only place where we do input validation
+			try {
+				nlohmann::json valid=nlohmann::json::parse(attributes);
+				ad->attributes=strdup(attributes);
+			}
+			catch(nlohmann::json::exception& e) {
+				ad->attributes=strdup("");
+				proxy_error("Invalid attributes for user %s: %s\n", username, attributes);
+			}
+		} else {
+			ad->attributes=strdup(attributes); // default, empty string
+		}
 		new_ad=true;
 		ad->sha1_pass=NULL;
 		ad->num_connections_used=0;
@@ -439,7 +463,7 @@ bool MySQL_Authentication::exists(char * username) {
 	return ret;
 }
 
-char * MySQL_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass) {
+char * MySQL_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass, char **attributes) {
 	char *ret=NULL;
 	uint64_t hash1, hash2;
 	SpookyHash myhash;
@@ -472,6 +496,7 @@ char * MySQL_Authentication::lookup(char * username, enum cred_username_type use
 				memcpy(*sha1_pass,ad->sha1_pass,SHA_DIGEST_LENGTH);
 			}
 		}
+		if (attributes) *attributes=l_strdup(ad->attributes);
 	}
 #ifdef PROXYSQL_AUTH_PTHREAD_MUTEX
 	pthread_rwlock_unlock(&cg.lock);

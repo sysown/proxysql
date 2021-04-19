@@ -1,5 +1,5 @@
 ifndef GIT_VERSION
-GIT_VERSION := $(shell git describe --long)
+GIT_VERSION := $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
 $(error GIT_VERSION is not set)
 endif
@@ -18,7 +18,7 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.1.0
+export CURVER?=2.1.1
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 else

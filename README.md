@@ -11,12 +11,14 @@ Its development is driven by the lack of open source proxies that provide high p
 Useful links	
 ===============	
 
-- [Official website](http://www.proxysql.com/)	
-- [Documentation](https://github.com/sysown/proxysql/wiki)
+- [Official website](https://www.proxysql.com/)	
+- [Documentation](https://www.proxysql.com/Documentation)
 - [DockerHub Repository](https://hub.docker.com/r/proxysql/proxysql)
 - [Benchmarks and blog posts](http://www.proxysql.blogspot.com/)	
-- [Forum](https://groups.google.com/forum/#!forum/proxysql/)	
-- [Linkedin group](https://www.linkedin.com/groups/13581070/)	
+- [Forum](https://groups.google.com/forum/#!forum/proxysql/)
+- [Facebook](https://www.facebook.com/proxysql)	
+- [Linkedin](https://www.linkedin.com/groups/13581070/)	
+- [Twitter](https://twitter.com/proxysql)	
 
 Getting started
 ===============
@@ -26,8 +28,8 @@ Released packages can be found here: https://github.com/sysown/proxysql/releases
 
 Just download a package and use your systems package manager to install it:
 ```bash
-wget https://github.com/sysown/proxysql/releases/download/v2.0.1/proxysql_2.0.1-ubuntu16_amd64.deb
-dpkg -i proxysql_2.0.1-ubuntu16_amd64.deb
+wget https://github.com/sysown/proxysql/releases/download/v2.1.0/proxysql_2.1.0-ubuntu20_amd64.deb
+dpkg -i proxysql_2.1.0-ubuntu20_amd64.deb
 ```
 
 Alternatively you can also use the available repositories:
@@ -38,10 +40,9 @@ Adding repository:
 ```bash
 apt-get install -y lsb-release apt-transport-https
 wget -O - 'https://repo.proxysql.com/ProxySQL/repo_pub_key' | apt-key add -
-echo deb https://repo.proxysql.com/ProxySQL/proxysql-2.0.x/$(lsb_release -sc)/ ./ \
+echo deb https://repo.proxysql.com/ProxySQL/proxysql-2.1.x/$(lsb_release -sc)/ ./ \
 | tee /etc/apt/sources.list.d/proxysql.list
 ```
-Note: For 1.4.x series releases use `https://repo.proxysql.com/ProxySQL/proxysql-1.4.x/$(lsb_release -sc)/ ./` instead.
 
 Installing:
 ```bash
@@ -56,12 +57,11 @@ Adding repository:
 cat <<EOF | tee /etc/yum.repos.d/proxysql.repo
 [proxysql_repo]
 name= ProxySQL YUM repository
-baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.0.x/centos/\$releasever
+baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.1.x/centos/\$releasever
 gpgcheck=1
 gpgkey=https://repo.proxysql.com/ProxySQL/repo_pub_key
 EOF
 ```
-Note: For 1.4.x series releases use `https://repo.proxysql.com/ProxySQL/proxysql-1.4.x/centos/$releasever` instead
 
 Installing:
 ```bash
@@ -75,11 +75,10 @@ Adding repository:
 vi /etc/yum.repos.d/proxysql.repo
 [proxysql_repo]
 name= ProxySQL YUM repository
-baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.0.x/centos/latest
+baseurl=https://repo.proxysql.com/ProxySQL/proxysql-2.1.x/centos/latest
 gpgcheck=1
 gpgkey=https://repo.proxysql.com/ProxySQL/repo_pub_key
 ```
-Note: For 1.4.x series releases use `https://repo.proxysql.com/ProxySQL/proxysql-1.4.x/centos/latest` instead
 
 Installing:
 ```bash
@@ -157,8 +156,8 @@ service proxysql-initial start
 ### Upgrades
 Just install the new package and restart ProxySQL:
 ```bash
-wget https://github.com/sysown/proxysql/releases/download/v2.0.2/proxysql_2.0.2-ubuntu16_amd64.deb
-dpkg -i proxysql_2.0.2-ubuntu16_amd64.deb
+wget https://github.com/sysown/proxysql/releases/download/v2.1.0/proxysql_2.1.0-ubuntu16_amd64.deb
+dpkg -i proxysql_2.1.0-ubuntu16_amd64.deb
 service proxysql restart
 ```
 
@@ -167,7 +166,7 @@ service proxysql restart
 $ proxysql --version
 ```
 ```bash
-ProxySQL version v1.4.9-1.1, codename Truls
+ProxySQL version 2.1.0-544-g17a4b4a7, codename Truls
 ```
 A debug version has `_DEBUG` in its version string.
 It is slower than non-debug version, but easier to debug in case of failures.
@@ -176,7 +175,7 @@ $ proxysql --version
 ```
 ```bash
 Main init phase0 completed in 0.000146 secs.
-ProxySQL version v1.4.9-1.1_DEBUG, codename Truls
+ProxySQL version 2.1.0-544-g17a4b4a7_DEBUG, codename Truls
 ```
 
 ### Configuring ProxySQL via the `admin interface`

@@ -934,7 +934,9 @@ class PS_global_stats {
 	unsigned long long ref_count_client;
 	unsigned long long ref_count_server;
 	char *query;
-	PS_global_stats(uint64_t stmt_id, char *s, char *u, uint64_t d, char *q, unsigned long long ref_c, unsigned long long ref_s) {
+	uint64_t num_columns;
+	uint64_t num_params;
+	PS_global_stats(uint64_t stmt_id, char *s, char *u, uint64_t d, char *q, unsigned long long ref_c, unsigned long long ref_s, uint64_t columns, uint64_t params) {
 		statement_id = stmt_id;
 		digest=d;
 		query=strndup(q, mysql_thread___query_digests_max_digest_length);
@@ -942,6 +944,8 @@ class PS_global_stats {
 		schemaname=strdup(s);
 		ref_count_client = ref_c;
 		ref_count_server = ref_s;
+		num_columns = columns;
+		num_params = params;
 	}
 	~PS_global_stats() {
 		if (query) {
@@ -959,7 +963,7 @@ class PS_global_stats {
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*7);
+		char **pta=(char **)malloc(sizeof(char *)*9);
 		sprintf(buf,"%lu",statement_id);
 		pta[0]=strdup(buf);
 		assert(schemaname);
@@ -976,6 +980,10 @@ class PS_global_stats {
 		pta[5]=strdup(buf);
 		sprintf(buf,"%llu",ref_count_server);
 		pta[6]=strdup(buf);
+		sprintf(buf,"%lu",num_columns);
+		pta[7]=strdup(buf);
+		sprintf(buf,"%lu",num_params);
+		pta[8]=strdup(buf);
 
 		return pta;
 	}
@@ -992,7 +1000,7 @@ class PS_global_stats {
 
 SQLite3_result * MySQL_STMT_Manager_v14::get_prepared_statements_global_infos() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current prepared statements global info\n");
-	SQLite3_result *result=new SQLite3_result(7);
+	SQLite3_result *result=new SQLite3_result(9);
 	rdlock();
 	result->add_column_definition(SQLITE_TEXT,"stmt_id");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
@@ -1001,13 +1009,15 @@ SQLite3_result * MySQL_STMT_Manager_v14::get_prepared_statements_global_infos() 
 	result->add_column_definition(SQLITE_TEXT,"query");
 	result->add_column_definition(SQLITE_TEXT,"ref_count_client");
 	result->add_column_definition(SQLITE_TEXT,"ref_count_server");
+	result->add_column_definition(SQLITE_TEXT,"num_columns");
+	result->add_column_definition(SQLITE_TEXT,"num_params");
 	for (std::map<uint64_t, MySQL_STMT_Global_info *>::iterator it = map_stmt_id_to_info.begin();
 			it != map_stmt_id_to_info.end(); ++it) {
 		MySQL_STMT_Global_info *a = it->second;
 		PS_global_stats * pgs = new PS_global_stats(a->statement_id,
 			a->schemaname, a->username,
 			a->hash, a->query,
-			a->ref_count_client, a->ref_count_server);
+			a->ref_count_client, a->ref_count_server, a->num_columns, a->num_params);
 			char **pta = pgs->get_row();
 			result->add_row(pta);
 			pgs->free_row(pta);

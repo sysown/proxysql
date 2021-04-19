@@ -444,7 +444,6 @@ class MySQL_Threads_Handler
 		bool multiplexing;
 //		bool stmt_multiplexing;
 		bool log_unhealthy_connections;
-		bool forward_autocommit;
 		bool enforce_autocommit_on_reads;
 		bool autocommit_false_not_reusable;
 		bool autocommit_false_is_transaction;
@@ -513,6 +512,9 @@ class MySQL_Threads_Handler
 		bool query_cache_stores_empty_result;
 		bool kill_backend_connection_when_disconnect;
 		bool client_session_track_gtid;
+		bool enable_client_deprecate_eof;
+		bool enable_server_deprecate_eof;
+		bool log_mysql_warnings_enabled;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

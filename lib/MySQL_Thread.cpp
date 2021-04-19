@@ -420,6 +420,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_client",
 	(char *)"connect_timeout_server",
 	(char *)"connect_timeout_server_max",
+	(char *)"enable_client_deprecate_eof",
+	(char *)"enable_server_deprecate_eof",
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
 	(char *)"eventslog_default_log",
@@ -437,6 +439,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"have_compress",
 	(char *)"client_found_rows",
 	(char *)"interfaces",
+	(char *)"log_mysql_warnings_enabled",
 	(char *)"monitor_enabled",
 	(char *)"monitor_history",
 	(char *)"monitor_connect_interval",
@@ -479,7 +482,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"max_transaction_time",
 	(char *)"multiplexing",
 	(char *)"log_unhealthy_connections",
-	(char *)"forward_autocommit",
 	(char *)"enforce_autocommit_on_reads",
 	(char *)"autocommit_false_not_reusable",
 	(char *)"autocommit_false_is_transaction",
@@ -1120,7 +1122,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.commands_stats=true;
 	variables.multiplexing=true;
 	variables.log_unhealthy_connections=true;
-	variables.forward_autocommit=false;
 	variables.enforce_autocommit_on_reads=false;
 	variables.autocommit_false_not_reusable=false;
 	variables.autocommit_false_is_transaction=false;
@@ -1156,6 +1157,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.session_debug=true;
 #endif /*debug */
 	variables.query_digests_grouping_limit = 3;
+	variables.enable_client_deprecate_eof=true;
+	variables.enable_server_deprecate_eof=true;
+	variables.log_mysql_warnings_enabled=false;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -1461,9 +1465,10 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 			if (!strcmp(name,"eventslog_default_log")) return (int)variables.eventslog_default_log;
 			if (!strcmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
 			if (!strcmp(name,"eventslog_format")) return (int)variables.eventslog_format;
+			if (!strcmp(name,"enable_client_deprecate_eof")) return (int)variables.enable_client_deprecate_eof;
+			if (!strcmp(name,"enable_server_deprecate_eof")) return (int)variables.enable_server_deprecate_eof;
 			break;
 		case 'f':
-			if (!strcmp(name,"forward_autocommit")) return (int)variables.forward_autocommit;
 			if (!strcmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
 			if (!strcmp(name,"firewall_whitelist_enabled")) return (int)variables.firewall_whitelist_enabled;
 			break;
@@ -1478,6 +1483,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		case 'l':
 			if (!strcmp(name,"long_query_time")) return (int)variables.long_query_time;
 			if (!strcmp(name,"log_unhealthy_connections")) return (int)variables.log_unhealthy_connections;
+			if (!strcmp(name,"log_mysql_warnings_enabled")) return (int)variables.log_mysql_warnings_enabled;
 			break;
 		case 'm':
 			if (name[3]=='_') {
@@ -1890,7 +1896,15 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.automatic_detect_sqli);
 		return strdup(intbuf);
 	}
-
+	if (!strcasecmp(name,"enable_client_deprecate_eof")) {
+		return strdup((variables.enable_client_deprecate_eof ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"enable_server_deprecate_eof")) {
+		return strdup((variables.enable_server_deprecate_eof ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"log_mysql_warnings_enabled")) {
+		return strdup((variables.log_mysql_warnings_enabled? "true" : "false"));
+	}
 	if (!strcasecmp(name,"throttle_connections_per_sec_to_hostgroup")) {
 		sprintf(intbuf,"%d",variables.throttle_connections_per_sec_to_hostgroup);
 		return strdup(intbuf);
@@ -2054,9 +2068,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"log_unhealthy_connections")) {
 		return strdup((variables.log_unhealthy_connections ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"forward_autocommit")) {
-		return strdup((variables.forward_autocommit ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"connection_warming")) {
 		return strdup((variables.connection_warming ? "true" : "false"));
@@ -3035,7 +3046,28 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return false; // we couldn't set it to a valid value. It will be reset to default
 	}
-
+	if (!strcasecmp(name,"enable_client_deprecate_eof")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.enable_client_deprecate_eof=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.enable_client_deprecate_eof=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"enable_server_deprecate_eof")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.enable_server_deprecate_eof=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.enable_server_deprecate_eof=false;
+			return true;
+		}
+		return false;
+	}
 
 	if (!strncmp(name,"default_",8)) {
 		for (int i=0; i<SQL_NAME_LAST; i++) {
@@ -3315,12 +3347,8 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	}
 	if (!strcasecmp(name,"forward_autocommit")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.forward_autocommit=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.forward_autocommit=false;
-			return true;
+			proxy_error("Variable mysql-forward_autocommit is deprecated. See issue #3253\n");
+			return false;
 		}
 		return false;
 	}
@@ -3563,6 +3591,17 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			variables.default_reconnect=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"log_mysql_warnings_enabled")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.log_mysql_warnings_enabled=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.log_mysql_warnings_enabled=false;
 			return true;
 		}
 		return false;
@@ -4805,6 +4844,7 @@ void MySQL_Thread::process_all_sessions() {
 					if (sess->session_fast_forward) {
 						if (sess->HasOfflineBackends()) {
 							sess->killed=true;
+							proxy_warning("Killing client connection %s:%d due to 'session_fast_forward' and offline backends\n", sess->client_myds->addr.addr, sess->client_myds->addr.port);
 						}
 					}
 					else {
@@ -4823,6 +4863,7 @@ void MySQL_Thread::process_all_sessions() {
 				if ( (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
 					sess->killed=true;
 					sess->to_process=1;
+					proxy_warning("Killing client connection %s:%d because inactive for %llums\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, sess_time/1000);
 				}
 			}
 #endif // IDLE_THREADS
@@ -5034,7 +5075,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
 	mysql_thread___log_unhealthy_connections=(bool)GloMTH->get_variable_int((char *)"log_unhealthy_connections");
 	mysql_thread___connection_warming=(bool)GloMTH->get_variable_int((char*)"connection_warming");
-	mysql_thread___forward_autocommit=(bool)GloMTH->get_variable_int((char *)"forward_autocommit");
 	mysql_thread___enforce_autocommit_on_reads=(bool)GloMTH->get_variable_int((char *)"enforce_autocommit_on_reads");
 	mysql_thread___autocommit_false_not_reusable=(bool)GloMTH->get_variable_int((char *)"autocommit_false_not_reusable");
 	mysql_thread___autocommit_false_is_transaction=(bool)GloMTH->get_variable_int((char *)"autocommit_false_is_transaction");
@@ -5062,6 +5102,9 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___show_processlist_extended=GloMTH->get_variable_int((char *)"show_processlist_extended");
 	mysql_thread___servers_stats=(bool)GloMTH->get_variable_int((char *)"servers_stats");
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
+	mysql_thread___enable_client_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_client_deprecate_eof");
+	mysql_thread___enable_server_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
+	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
@@ -5202,6 +5245,12 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 		ioctl_FIONBIO(sess->client_myds->fd, 1);
 		mypolls.add(POLLIN|POLLOUT, sess->client_myds->fd, sess->client_myds, curtime);
 		proxy_debug(PROXY_DEBUG_NET,1,"Session=%p -- Adding client FD %d\n", sess, sess->client_myds->fd);
+
+		// we now enforce sending the 'initial handshake packet' as soon as it's generated. This
+		// is done to prevent situations in which a client sends a packet *before* receiving
+		// this 'initial handshake', leading to invalid state in dataflow, since it will be
+		// data in both ends of the datastream. For more details see #3342.
+		sess->writeout();
 	} else {
 		free(addr);
 		// if we arrive here, accept() failed

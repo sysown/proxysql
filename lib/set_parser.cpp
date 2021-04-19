@@ -34,7 +34,7 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1() {
 	std::map<std::string,std::vector<std::string>> result;
 
 #define SESSION_P1 "(?:|SESSION +|@@|@@session.)"
-#define VAR_P1 "(\\w+)"
+#define VAR_P1 "(@\\w+|\\w+)"
 //#define VAR_VALUE "((?:[\\w/\\d:\\+\\-]|,)+)"
 //#define VAR_VALUE "((?:CONCAT\\((?:(REPLACE|CONCAT)\\()+@@sql_mode,(?:(?:'|\\w|,| |\"|\\))+(?:\\)))|(?:[@\\w/\\d:\\+\\-]|,)+|(?:)))"
 #define VAR_VALUE_P1 "(((?:CONCAT\\()*(?:((?: )*REPLACE|IFNULL|CONCAT)\\()+(?: )*(?:NULL|@OLD_SQL_MODE|@@sql_mode),(?:(?:'|\\w|,| |\"|\\))+(?:\\))*)|(?:[@\\w/\\d:\\+\\-]|,)+|(?:)))"

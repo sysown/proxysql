@@ -12,7 +12,7 @@ index 62cf71c..c05e9a3 100644
    COM_MULTI_OFF= 0,
    COM_MULTI_CANCEL,
 diff --git include/mariadb_com.h include/mariadb_com.h
-index 7e722a0..3d89fdf 100644
+index 7e722a0..dc121c7 100644
 --- include/mariadb_com.h
 +++ include/mariadb_com.h
 @@ -160,6 +160,7 @@ enum enum_server_command
@@ -23,22 +23,21 @@ index 7e722a0..3d89fdf 100644
  #define CLIENT_PROGRESS          (1UL << 29) /* client supports progress indicator */
  #define CLIENT_PROGRESS_OBSOLETE  CLIENT_PROGRESS 
  #define CLIENT_SSL_VERIFY_SERVER_CERT (1UL << 30)
-@@ -204,6 +205,7 @@ enum enum_server_command
+@@ -204,8 +205,14 @@ enum enum_server_command
                                   CLIENT_REMEMBER_OPTIONS |\
                                   CLIENT_PLUGIN_AUTH |\
                                   CLIENT_SESSION_TRACKING |\
 +                                 CLIENT_DEPRECATE_EOF |\
                                   CLIENT_CONNECT_ATTRS)
  
++/* Client capabilities *does no* longer holds 'CLIENT_DEPRECATE_EOF' flag
++ * by default. This is part of ProxySQL feature for conditionally disabling
++ * 'deprecate_eof' support in both client and backend connections. For more
++ * context see #3280.
++ */
  #define CLIENT_CAPABILITIES	(CLIENT_MYSQL | \
-@@ -215,6 +217,7 @@ enum enum_server_command
-                                  CLIENT_PROTOCOL_41 |\
-                                  CLIENT_PLUGIN_AUTH |\
-                                  CLIENT_SESSION_TRACKING |\
-+                                 CLIENT_DEPRECATE_EOF |\
-                                  CLIENT_CONNECT_ATTRS)
- 
- #define CLIENT_DEFAULT_FLAGS ((CLIENT_SUPPORTED_FLAGS & ~CLIENT_COMPRESS)\
+                                  CLIENT_LONG_FLAG |\
+                                  CLIENT_TRANSACTIONS |\
 diff --git include/mariadb_stmt.h include/mariadb_stmt.h
 index d07540e..4930573 100644
 --- include/mariadb_stmt.h
@@ -66,7 +65,7 @@ index 15be4fc..a69e637 100644
     See bug conc-57
   */
 diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
-index 8c2a99b..249e981 100644
+index 8c2a99b..e849b76 100644
 --- libmariadb/mariadb_lib.c
 +++ libmariadb/mariadb_lib.c
 @@ -144,6 +144,7 @@ struct st_mariadb_methods MARIADB_DEFAULT_METHODS;
@@ -416,7 +415,7 @@ index 8c2a99b..249e981 100644
 +MYSQL_FIELD *mthd_my_read_metadata_ex(MYSQL *mysql, MA_MEM_ROOT *mem_root,
 +        ulong field_count, uint m_field_count)
 +{
-+    ulong* m_len;
++    ulong* m_len; unsigned long f_i;
 +    MYSQL_FIELD* m_fields;
 +    MYSQL_FIELD* result;
 +    MYSQL_ROWS m_rows;
@@ -437,7 +436,7 @@ index 8c2a99b..249e981 100644
 +    memset(m_rows.data, 0, sizeof(char*)*(m_field_count + 1));
 +
 +    // read the columns info
-+    for (uint f_i = 0; f_i < field_count; f_i++)
++    for (f_i = 0; f_i < field_count; f_i++)
 +    {
 +        if (mthd_my_read_one_row(mysql, m_field_count, m_rows.data, m_len) == -1)
 +          return NULL;
@@ -490,7 +489,24 @@ index 8c2a99b..249e981 100644
    {
      if (mysql->net.last_errno == CR_SERVER_LOST)
        my_set_error(mysql, CR_SERVER_LOST, SQLSTATE_UNKNOWN,
-@@ -2290,14 +2446,13 @@ int mthd_my_read_query_result(MYSQL *mysql)
+@@ -1593,6 +1749,16 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
+     }
+   }
+ 
++  /* If client flags doesn't have 'deprecate_eof' we forcely disable the server capability,
++   * This, in combination with the capability flag 'CLIENT_DEPRECATE_EOF' being disabled by default,
++   * completely disables the library support for CLIENT_DEPRECATE_EOF. This two changes were introduced
++   * as part of ProxySQL capability for controlling 'deprecate_eof' support in both client and
++   * backend connections. For more context see: #3280.
++   */
++  if ((mysql->options.client_flag & CLIENT_DEPRECATE_EOF) == 0) {
++    mysql->server_capabilities &= ~CLIENT_DEPRECATE_EOF;
++  }
++
+   /* pad 2 */
+   end+= 18;
+ 
+@@ -2290,14 +2456,13 @@ int mthd_my_read_query_result(MYSQL *mysql)
  {
    uchar *pos;
    ulong field_count;
@@ -506,7 +522,7 @@ index 8c2a99b..249e981 100644
    {
      return(1);
    }
-@@ -2310,7 +2465,7 @@ get_info:
+@@ -2310,7 +2475,7 @@ get_info:
    {
      int error=mysql_handle_local_infile(mysql, (char *)pos, can_local_infile);
  
@@ -515,7 +531,7 @@ index 8c2a99b..249e981 100644
        return(-1);
      goto get_info;				/* Get info packet */
    }
-@@ -2318,12 +2473,13 @@ get_info:
+@@ -2318,12 +2483,13 @@ get_info:
      mysql->server_status|= SERVER_STATUS_IN_TRANS;
  
    mysql->extra_info= net_field_length_ll(&pos); /* Maybe number of rec */
@@ -535,7 +551,7 @@ index 8c2a99b..249e981 100644
    mysql->status=MYSQL_STATUS_GET_RESULT;
    mysql->field_count=field_count;
    return(0);
-@@ -2704,21 +2860,17 @@ mysql_list_fields(MYSQL *mysql, const char *table, const char *wild)
+@@ -2704,21 +2870,17 @@ mysql_list_fields(MYSQL *mysql, const char *table, const char *wild)
  MYSQL_RES * STDCALL
  mysql_list_processes(MYSQL *mysql)
  {
@@ -560,7 +576,7 @@ index 8c2a99b..249e981 100644
    mysql->status=MYSQL_STATUS_GET_RESULT;
    mysql->field_count=field_count;
    return(mysql_store_result(mysql));
-@@ -4164,7 +4316,7 @@ mysql_debug(const char *debug __attribute__((unused)))
+@@ -4164,7 +4326,7 @@ mysql_debug(const char *debug __attribute__((unused)))
  *********************************************************************/
  ulong STDCALL mysql_net_read_packet(MYSQL *mysql)
  {
@@ -612,7 +628,7 @@ index 8f5bddc..5bd0ece 100644
    }
  
 -  if (stmt->mysql->net.read_pos[0] == 254)
-+  if (stmt->mysql->net.read_pos[0] == 0 && !is_data_packet)
++  if (stmt->mysql->net.read_pos[0] != 0 && !is_data_packet)
    {
 +    if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
 +        ma_read_ok_packet(stmt->mysql, stmt->mysql->net.read_pos + 1, pkt_len);
