@@ -110,6 +110,10 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								same_version = true;
 								std::string q = "PROXYSQL CLUSTER_NODE_UUID ";
 								q += GloVars.uuid;
+								q += " ";
+								pthread_mutex_lock(&GloProxyCluster->admin_mysql_ifaces_mutex);
+								q += GloProxyCluster->admin_mysql_ifaces;
+								pthread_mutex_unlock(&GloProxyCluster->admin_mysql_ifaces_mutex);
 								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
 								rc_query = mysql_query(conn, q.c_str());
 							} else {
@@ -2586,6 +2590,9 @@ ProxySQL_Cluster::ProxySQL_Cluster() {
 	pthread_mutex_init(&update_mysql_servers_mutex,NULL);
 	pthread_mutex_init(&update_mysql_users_mutex,NULL);
 	pthread_mutex_init(&update_proxysql_servers_mutex,NULL);
+	pthread_mutex_init(&update_mysql_variables_mutex,NULL);
+	pthread_mutex_init(&admin_mysql_ifaces_mutex,NULL);
+	admin_mysql_ifaces = strdup((char *)""); // always initialized
 	cluster_username = strdup((char *)"");
 	cluster_password = strdup((char *)"");
 	cluster_check_interval_ms = 1000;
@@ -2611,6 +2618,10 @@ ProxySQL_Cluster::~ProxySQL_Cluster() {
 		free(cluster_password);
 		cluster_password = NULL;
 	}
+	if (admin_mysql_ifaces) {
+		free(admin_mysql_ifaces);
+		admin_mysql_ifaces = NULL;
+	}
 }
 
 // this function returns credentials to the caller, used by monitoring threads
@@ -2633,6 +2644,13 @@ void ProxySQL_Cluster::set_password(char *_password) {
 	free(cluster_password);
 	cluster_password=strdup(_password);
 	pthread_mutex_unlock(&mutex);
+}
+
+void ProxySQL_Cluster::set_admin_mysql_ifaces(char *value) {
+	pthread_mutex_lock(&admin_mysql_ifaces_mutex);
+	free(admin_mysql_ifaces);
+	admin_mysql_ifaces=strdup(value);
+	pthread_mutex_unlock(&admin_mysql_ifaces_mutex);
 }
 
 void ProxySQL_Cluster::print_version() {

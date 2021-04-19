@@ -493,7 +493,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_PROXYSQL_SERVERS "CREATE TABLE runtime_proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
 
-#define STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS "CREATE TABLE stats_proxysql_servers_clients_status (uuid VARCHAR NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , last_seen_at INT NOT NULL , PRIMARY KEY (uuid, hostname, port) )"
+#define STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS "CREATE TABLE stats_proxysql_servers_clients_status (uuid VARCHAR NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , admin_mysql_ifaces VARCHAR NOT NULL , last_seen_at INT NOT NULL , PRIMARY KEY (uuid, hostname, port) )"
 
 #define STATS_SQLITE_TABLE_PROXYSQL_SERVERS_STATUS "CREATE TABLE stats_proxysql_servers_status (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , master VARCHAR NOT NULL , global_version INT NOT NULL , check_age_us INT NOT NULL , ping_time_us INT NOT NULL, checks_OK INT NOT NULL , checks_ERR INT NOT NULL , PRIMARY KEY (hostname, port) )"
 
@@ -1221,28 +1221,43 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			sess->client_myds->shut_soft();
 			return false;
 		}
-		if (query_no_space_length==l+36) {
+		if (query_no_space_length >= l+36+2) {
 			uuid_t uu;
-			if (uuid_parse(query_no_space+l, uu)==0) {
+			char *A_uuid = NULL;
+			char *B_interface = NULL;
+			c_split_2(query_no_space+l, " ", &A_uuid, &B_interface); // we split the value
+			if (uuid_parse(A_uuid, uu)==0 && B_interface && strlen(B_interface)) {
 				proxy_info("Received PROXYSQL CLUSTER_NODE_UUID from %s:%d : %s\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, query_no_space+l);
 				if (sess->proxysql_node_address==NULL) {
 					sess->proxysql_node_address = new ProxySQL_Node_Address(sess->client_myds->addr.addr, sess->client_myds->addr.port);
-					sess->proxysql_node_address->uuid = strdup(query_no_space+l);
-					proxy_info("Created new link with Cluster node %s:%d : %s\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, query_no_space+l);
+					sess->proxysql_node_address->uuid = strdup(A_uuid);
+					if (sess->proxysql_node_address->admin_mysql_ifaces) {
+						free(sess->proxysql_node_address->admin_mysql_ifaces);
+					}
+					sess->proxysql_node_address->admin_mysql_ifaces = strdup(B_interface);
+					proxy_info("Created new link with Cluster node %s:%d : %s at interface %s\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, A_uuid, B_interface);
 					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					free(A_uuid);
+					free(B_interface);
 					return false;
 				} else {
-					if (strcmp(query_no_space+l, sess->proxysql_node_address->uuid)) {
-						proxy_error("Cluster node %s:%d is sending a new UUID : %s . Former UUID : %s . Exiting client\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, query_no_space+l, sess->proxysql_node_address->uuid);
+					if (strcmp(A_uuid, sess->proxysql_node_address->uuid)) {
+						proxy_error("Cluster node %s:%d is sending a new UUID : %s . Former UUID : %s . Exiting client\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, A_uuid, sess->proxysql_node_address->uuid);
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Received PROXYSQL CLUSTER_NODE_UUID with a new UUID not matching the previous one");
 						sess->client_myds->shut_soft();
+						free(A_uuid);
+						free(B_interface);
 						return false;
 					} else {
-						proxy_info("Cluster node %s:%d is sending again its UUID : %s\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, query_no_space+l);
+						proxy_info("Cluster node %s:%d is sending again its UUID : %s\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, A_uuid);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+						free(A_uuid);
+						free(B_interface);
 						return false;
 					}
 				}
+				free(A_uuid);
+				free(B_interface);
 				return false;
 			} else {
 				proxy_warning("Received PROXYSQL CLUSTER_NODE_UUID from %s:%d with invalid format: %s . Exiting client\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, query_no_space+l);
@@ -4802,13 +4817,15 @@ __run_query:
 	if (sess->proxysql_node_address) {
 		if (sess->client_myds->active) {
 			time_t now = time(NULL);
-			string q = "INSERT OR REPLACE INTO stats_proxysql_servers_clients_status (uuid, hostname, port, last_seen_at) VALUES (\"";
+			string q = "INSERT OR REPLACE INTO stats_proxysql_servers_clients_status (uuid, hostname, port, admin_mysql_ifaces, last_seen_at) VALUES (\"";
 			q += sess->proxysql_node_address->uuid;
 			q += "\",\"";
 			q += sess->proxysql_node_address->hostname;
 			q += "\",";
 			q += std::to_string(sess->proxysql_node_address->port);
-			q += ",";
+			q += ",\"";
+			q += sess->proxysql_node_address->admin_mysql_ifaces;
+			q += "\",";
 			q += std::to_string(now) + ")";
 			SPA->statsdb->execute(q.c_str());
 		}
@@ -7615,6 +7632,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			if (update_creds && variables.mysql_ifaces) {
 				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
 			}
+			GloProxyCluster->set_admin_mysql_ifaces(value);
 			return true;
 		} else {
 			return false;

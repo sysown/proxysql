@@ -51,9 +51,11 @@ class ProxySQL_Node_Address {
 	uint64_t hash; // unused for now
 	char *uuid;
 	char *hostname;
+	char *admin_mysql_ifaces;
 	uint16_t port;
 	ProxySQL_Node_Address(char *h, uint16_t p) {
 		hostname = strdup(h);
+		admin_mysql_ifaces = NULL;
 		port = p;
 		uuid = NULL;
 		hash = 0;
@@ -61,6 +63,7 @@ class ProxySQL_Node_Address {
 	~ProxySQL_Node_Address() {
 		if (hostname) free(hostname);
 		if (uuid) free(uuid);
+		if (admin_mysql_ifaces) free(admin_mysql_ifaces);
 	}
 };
 
@@ -237,6 +240,9 @@ class ProxySQL_Cluster {
 	pthread_mutex_t update_mysql_users_mutex;
 	pthread_mutex_t update_mysql_variables_mutex;
 	pthread_mutex_t update_proxysql_servers_mutex;
+	// this records the interface that Admin is listening to
+	pthread_mutex_t admin_mysql_ifaces_mutex;
+	char *admin_mysql_ifaces;
 	int cluster_check_interval_ms;
 	int cluster_check_status_frequency;
 	int cluster_mysql_query_rules_diffs_before_sync;
@@ -261,6 +267,7 @@ class ProxySQL_Cluster {
 	void get_credentials(char **, char **);
 	void set_username(char *);
 	void set_password(char *);
+	void set_admin_mysql_ifaces(char *);
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time) {
 		return nodes.Update_Node_Metrics(_h, _p, _r, _response_time);
 	}
