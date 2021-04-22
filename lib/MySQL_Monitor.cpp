@@ -1501,13 +1501,15 @@ __exit_monitor_group_replication_thread:
 				goto __end_process_group_replication_result2;
 			}
 			MYSQL_ROW row=mysql_fetch_row(mmsd->result);
-			if (!strcasecmp(row[0],"YES")) {
+			if (row[0] && !strcasecmp(row[0],"YES")) {
 				viable_candidate=true;
 			}
-			if (!strcasecmp(row[1],"NO")) {
+			if (row[1] && !strcasecmp(row[1],"NO")) {
 				read_only=false;
 			}
-			transactions_behind=atol(row[2]);
+			if (row[2]) {
+				transactions_behind=atol(row[2]);
+			}
 			mysql_free_result(mmsd->result);
 			mmsd->result=NULL;
 		}
