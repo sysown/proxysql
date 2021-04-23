@@ -368,9 +368,11 @@ X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, i
 	X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, cn, -1, -1, 0);
 
 	if (ca_x509) {
+		X509_EXTENSION* extension = X509V3_EXT_conf_nid(NULL, NULL, NID_basic_constraints, "critical, CA:FALSE");
+		X509_add_ext(x, extension, -1);
 		rc = X509_set_issuer_name(x, X509_get_subject_name(ca_x509));
 	} else {
-		X509_EXTENSION* extension = X509V3_EXT_conf_nid(NULL, NULL, NID_basic_constraints, "critical, CA:FALSE");
+		X509_EXTENSION* extension = X509V3_EXT_conf_nid(NULL, NULL, NID_basic_constraints, "critical, CA:TRUE");
 		X509_add_ext(x, extension, -1);
 		rc = X509_set_issuer_name(x, name);
 	}
