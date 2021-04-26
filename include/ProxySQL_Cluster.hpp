@@ -154,6 +154,9 @@ struct p_cluster_counter {
 		pulled_ldap_variables_success,
 		pulled_ldap_variables_failure,
 
+		pulled_mysql_ldap_mapping_success,
+		pulled_mysql_ldap_mapping_failure,
+
 		sync_conflict_mysql_query_rules_share_epoch,
 		sync_conflict_mysql_servers_share_epoch,
 		sync_conflict_proxysql_servers_share_epoch,

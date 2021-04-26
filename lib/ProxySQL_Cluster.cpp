@@ -1012,9 +1012,57 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
 				}
+
+				if (GloMyLdapAuth) {
+					rc_query = mysql_query(
+						conn,
+						"SELECT priority, frontend_entity, backend_entity, comment FROM mysql_ldap_mapping"
+					);
+
+					if (rc_query == 0) {
+						MYSQL_RES *result = mysql_store_result(conn);
+						GloAdmin->admindb->execute("DELETE FROM mysql_ldap_mapping");
+						MYSQL_ROW row;
+						char* q = const_cast<char*>(
+								"INSERT INTO mysql_ldap_mapping (priority, frontend_entity, backend_entity, comment)"
+								" VALUES (?1 , ?2 , ?3 , ?4)"
+							);
+						sqlite3_stmt *statement1 = NULL;
+						rc = GloAdmin->admindb->prepare_v2(q, &statement1);
+						ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+						while ((row = mysql_fetch_row(result))) {
+							rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atoll(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // priority
+							rc=(*proxy_sqlite3_bind_text)(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend_entity
+							rc=(*proxy_sqlite3_bind_text)(statement1, 3, row[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend_entity
+							rc=(*proxy_sqlite3_bind_text)(statement1, 4, row[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+
+							SAFE_SQLITE3_STEP2(statement1);
+							rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+						}
+
+						mysql_free_result(result);
+						proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d completed\n", hostname, port);
+						proxy_info("Cluster: Loading to runtime LDAP Mappings from peer %s:%d\n", hostname, port);
+						GloAdmin->init_users();
+
+						if (GloProxyCluster->cluster_mysql_users_save_to_disk == true) {
+							proxy_info("Cluster: Saving to disk LDAP Mappings from peer %s:%d\n", hostname, port);
+							GloAdmin->flush_mysql_users__from_memory_to_disk();
+						} else {
+							proxy_info("Cluster: Saving to disk LDAP Mappings Rules from peer %s:%d\n", hostname, port);
+						}
+
+						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_success]->Increment();
+					} else {
+						proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
+					}
+				}
 			} else {
 				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
-				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
 			}
 		}
 __exit_pull_mysql_users_from_peer:
@@ -2588,6 +2636,26 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' have been pulled from a peer.",
 			metric_tags {
 				{ "module_name", "ldap_variables" },
+				{ "status", "failure" }
+			}
+		),
+
+		// mysql_ldap_mappings_*
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_ldap_mapping_success,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_ldap_mapping" },
+				{ "status", "success" }
+			}
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_ldap_mapping_failure,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_ldap_mapping" },
 				{ "status", "failure" }
 			}
 		),
