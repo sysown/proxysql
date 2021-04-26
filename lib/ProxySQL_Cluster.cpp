@@ -5,6 +5,7 @@
 #include "prometheus_helpers.h"
 
 #include "ProxySQL_Cluster.hpp"
+#include "MySQL_LDAP_Authentication.hpp"
 
 #ifdef DEBUG
 #define DEB "_DEBUG"
@@ -37,8 +38,8 @@
 static char *NODE_COMPUTE_DELIMITER=(char *)"-gtyw23a-"; // a random string used for hashing
 
 extern ProxySQL_Cluster * GloProxyCluster;
-
 extern ProxySQL_Admin *GloAdmin;
+extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
 typedef struct _proxy_node_address_t {
 	pthread_t thrid;
@@ -495,6 +496,26 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 			continue;
 		}
+		if (GloMyLdapAuth && strcmp(row[0],"ldap_variables")==0) {
+			checksums_values.ldap_variables.version = atoll(row[1]);
+			checksums_values.ldap_variables.epoch = atoll(row[2]);
+			checksums_values.ldap_variables.last_updated = now;
+			if (strcmp(checksums_values.ldap_variables.checksum, row[3])) {
+				strcpy(checksums_values.ldap_variables.checksum, row[3]);
+				checksums_values.ldap_variables.last_changed = now;
+				checksums_values.ldap_variables.diff_check = 1;
+				proxy_info("Cluster: detected a new checksum for ldap_variables from peer %s:%d, version %llu, epoch %llu, checksum %s . Not syncing yet ...\n", hostname, port, checksums_values.ldap_variables.version, checksums_values.ldap_variables.epoch, checksums_values.ldap_variables.checksum);
+				if (strcmp(checksums_values.ldap_variables.checksum, GloVars.checksums_values.ldap_variables.checksum) == 0) {
+					proxy_info("Cluster: checksum for ldap_variables from peer %s:%d matches with local checksum %s , we won't sync.\n", hostname, port, GloVars.checksums_values.ldap_variables.checksum);
+				}
+			} else {
+				checksums_values.ldap_variables.diff_check++;
+			}
+			if (strcmp(checksums_values.ldap_variables.checksum, GloVars.checksums_values.ldap_variables.checksum) == 0) {
+				checksums_values.ldap_variables.diff_check = 0;
+			}
+			continue;
+		}
 	}
 	if (_r == NULL) {
 		ProxySQL_Checksum_Value_2 *v = NULL;
@@ -540,6 +561,13 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 		}
 		if (v->diff_check)
 			v->diff_check++;
+		v = &checksums_values.ldap_variables;
+		v->last_updated = now;
+		if (strcmp(v->checksum, GloVars.checksums_values.ldap_variables.checksum) == 0) {
+			v->diff_check = 0;
+		}
+		if (v->diff_check)
+			v->diff_check++;
 	}
 	pthread_mutex_unlock(&GloVars.checksum_mutex);
 	// we now do a series of checks, and we take action
@@ -550,6 +578,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_users_diffs_before_sync,0);
 	unsigned int diff_ps = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync,0);
 	unsigned int diff_mv = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync,0);
+	unsigned int diff_lv = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync,0);
 	unsigned int diff_av = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_admin_variables_diffs_before_sync,0);
 	ProxySQL_Checksum_Value_2 *v = NULL;
 	if (diff_mqr) {
@@ -713,6 +742,34 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			if (v->diff_check && (v->diff_check % (diff_av*10)) == 0) {
 				proxy_warning("Cluster: detected a peer %s:%d with admin_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD ADMIN VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_av*10));
 				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_admin_variables_version_one]->Increment();
+			}
+		}
+	}
+	if (GloMyLdapAuth && diff_lv) {
+		v = &checksums_values.ldap_variables;
+		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.ldap_variables.version, 0);
+		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.ldap_variables.epoch, 0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.ldap_variables.checksum, 0);
+
+		if (v->version > 1) {
+			if (
+				(own_version == 1) // we just booted
+				||
+				(v->epoch > own_epoch) // epoch is newer
+			) {
+				if (v->diff_check >= diff_lv) {
+					proxy_info("Cluster: detected a peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					GloProxyCluster->pull_global_variables_from_peer("ldap");
+				}
+			}
+			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_lv*10)) == 0)) {
+				proxy_error("Cluster: detected a peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_lv*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_ldap_variables_share_epoch]->Increment();
+			}
+		} else {
+			if (v->diff_check && (v->diff_check % (diff_lv*10)) == 0) {
+				proxy_warning("Cluster: detected a peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD MYSQL VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_lv*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_ldap_variables_version_one]->Increment();
 			}
 		}
 	}
@@ -1377,16 +1434,25 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const std::string& var_ty
 		vars_type_str = const_cast<char*>("Admin");
 		success_metric = p_cluster_counter::pulled_admin_variables_success;
 		failure_metric = p_cluster_counter::pulled_admin_variables_failure;
+	} else if (var_type == "ldap") {
+		vars_type_str = const_cast<char*>("LDAP");
+		success_metric = p_cluster_counter::pulled_ldap_variables_success;
+		failure_metric = p_cluster_counter::pulled_ldap_variables_failure;
 	} else {
-		proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s", var_type.c_str());
+		proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s\n", var_type.c_str());
 		assert(0);
 	}
 
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_variables_mutex);
 	if (var_type == "mysql") {
 		nodes.get_peer_to_sync_mysql_variables(&hostname, &port);
-	} else {
+	} else if (var_type == "admin") {
 		nodes.get_peer_to_sync_admin_variables(&hostname, &port);
+	} else if (var_type == "ldap"){
+		nodes.get_peer_to_sync_ldap_variables(&hostname, &port);
+	} else {
+		proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s\n", var_type.c_str());
+		assert(0);
 	}
 
 	if (hostname) {
@@ -1450,13 +1516,23 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const std::string& var_ty
 							proxy_info("Cluster: Saving to disk MySQL Variables from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_mysql_variables__from_memory_to_disk();
 						}
-					} else {
+					} else if (var_type == "admin") {
 						GloAdmin->load_admin_variables_to_runtime();
 
 						if (GloProxyCluster->cluster_admin_variables_save_to_disk == true) {
 							proxy_info("Cluster: Saving to disk Admin Variables from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_admin_variables__from_memory_to_disk();
 						}
+					} else if (var_type == "ldap") {
+						GloAdmin->load_ldap_variables_to_runtime();
+
+						if (GloProxyCluster->cluster_ldap_variables_save_to_disk == true) {
+							proxy_info("Cluster: Saving to disk LDAP Variables from peer %s:%d\n", hostname, port);
+							GloAdmin->flush_ldap_variables__from_memory_to_disk();
+						}
+					} else {
+						proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s\n", var_type.c_str());
+						assert(0);
 					}
 					metrics.p_counter_array[success_metric]->Increment();
 				} else {
@@ -1973,6 +2049,48 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint1
 	}
 }
 
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16_t *port) {
+	unsigned long long version = 0;
+	unsigned long long epoch = 0;
+	unsigned long long max_epoch = 0;
+	char *hostname = NULL;
+	uint16_t p = 0;
+	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync,0);
+	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
+		ProxySQL_Node_Entry * node = it->second;
+		ProxySQL_Checksum_Value_2 * v = &node->checksums_values.ldap_variables;
+		if (v->version > 1) {
+			if ( v->epoch > epoch ) {
+				max_epoch = v->epoch;
+				if (v->diff_check > diff_mu) {
+					epoch = v->epoch;
+					version = v->version;
+					if (hostname) {
+						free(hostname);
+					}
+					hostname=strdup(node->get_hostname());
+					p = node->get_port();
+				}
+			}
+		}
+		it++;
+	}
+	if (epoch) {
+		if (max_epoch > epoch) {
+			proxy_warning("Cluster: detected a peer with ldap_variables epoch %llu, but not enough diff_check. We won't sync from epoch %llu: temporarily skipping sync\n", max_epoch, epoch);
+			if (hostname) {
+				free(hostname);
+				hostname = NULL;
+			}
+		}
+	}
+	if (hostname) {
+		*host = hostname;
+		*port = p;
+		proxy_info("Cluster: detected peer %s:%d with ldap_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
+	}
+}
+
 void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
@@ -2454,6 +2572,26 @@ cluster_metrics_map = std::make_tuple(
 			}
 		),
 
+		// ldap_variables_*
+		std::make_tuple (
+			p_cluster_counter::pulled_ldap_variables_success,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "ldap_variables" },
+				{ "status", "success" }
+			}
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_ldap_variables_failure,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "ldap_variables" },
+				{ "status", "failure" }
+			}
+		),
+
 		// sync_conflict same epoch
 		// ====================================================================
 		std::make_tuple (
@@ -2507,6 +2645,15 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' has not been able to be synced.",
 			metric_tags {
 				{ "module_name", "admin_variables" },
+				{ "reason", "servers_share_epoch" }
+			}
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_conflict_ldap_variables_share_epoch,
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "ldap_variables" },
 				{ "reason", "servers_share_epoch" }
 			}
 		),
@@ -2567,7 +2714,16 @@ cluster_metrics_map = std::make_tuple(
 				{ "module_name", "admin_variables" },
 				{ "reason", "version_one" }
 			}
-		)
+		),
+		std::make_tuple (
+			p_cluster_counter::sync_delayed_ldap_variables_version_one,
+			"proxysql_cluster_syn_conflict_total",
+			"Number of times a 'module' has not been able to be synced.",
+			metric_tags {
+				{ "module_name", "ldap_variables" },
+				{ "reason", "version_one" }
+			}
+		),
 		// ====================================================================
 	},
 	cluster_gauge_vector {}
