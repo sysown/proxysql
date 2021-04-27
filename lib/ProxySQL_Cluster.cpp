@@ -1001,7 +1001,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d completed\n", hostname, port);
 					proxy_info("Cluster: Loading to runtime MySQL Users from peer %s:%d\n", hostname, port);
 					GloAdmin->init_users();
-					if (GloProxyCluster->cluster_mysql_query_rules_save_to_disk == true) {
+					if (GloProxyCluster->cluster_mysql_users_save_to_disk == true) {
 						proxy_info("Cluster: Saving to disk MySQL Users from peer %s:%d\n", hostname, port);
 						GloAdmin->flush_mysql_users__from_memory_to_disk();
 					} else {
