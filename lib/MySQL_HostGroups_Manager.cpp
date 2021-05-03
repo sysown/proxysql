@@ -1805,6 +1805,9 @@ bool MySQL_HostGroups_Manager::commit() {
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 						mysrvc->shunned_automatic=false;
 					}
+					if (mysrvc->status==MYSQL_SERVER_STATUS_OFFLINE_SOFT) { //when mysrvc->status MYSQL_SERVER_STATUS_OFFLINE_SOFT, init mysrvc->mgr_replication_lag_status parameter value
+						mysrvc->mgr_replication_lag_status=false;
+					}
 				}
 				if (atoi(r->fields[6])!=atoi(r->fields[16])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
