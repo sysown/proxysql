@@ -843,6 +843,7 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	status=_status;
 	compression=_compression;
 	max_connections=_max_connections;
+	mgr_replication_lag_status = false;
 	max_replication_lag=_max_replication_lag;
 	use_ssl=_use_ssl;
 	cur_replication_lag_count=0;
