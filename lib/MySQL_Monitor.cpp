@@ -62,7 +62,7 @@ class ConsumerThread : public Thread {
 		thrn=_n;
 	}
 	void* run() {
-		// Remove 1 item at a time and process it. Blocks if no items are 
+		// Remove 1 item at a time and process it. Blocks if no items are
 		// available to process.
 		for (int i = 0; ( thrn ? i < thrn : 1) ; i++) {
 //VALGRIND_DISABLE_ERROR_REPORTING;
@@ -1525,7 +1525,7 @@ __exit_monitor_group_replication_thread:
 		unsigned long long time_now=realtime_time();
 		time_now=time_now-(mmsd->t2 - start_time);
 		pthread_mutex_lock(&GloMyMon->group_replication_mutex);
-		//auto it = 
+		//auto it =
 		// TODO : complete this
 		std::map<std::string, MyGR_monitor_node *>::iterator it2;
 		it2 = GloMyMon->Group_Replication_Hosts_Map.find(s);
@@ -1541,7 +1541,7 @@ __exit_monitor_group_replication_thread:
 		if (mmsd->mysql_error_msg) {
 			if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
 				num_timeouts=node->get_timeout_count();
-				proxy_warning("%s:%d : group replication health check timeout count %d. Max threshold %d.\n", 
+				proxy_warning("%s:%d : group replication health check timeout count %d. Max threshold %d.\n",
 					mmsd->hostname, mmsd->port, num_timeouts, mmsd->max_transactions_behind_count);
 			}
 		}
@@ -1915,7 +1915,7 @@ __exit_monitor_galera_thread:
 		unsigned long long time_now=realtime_time();
 		time_now=time_now-(mmsd->t2 - start_time);
 		pthread_mutex_lock(&GloMyMon->galera_mutex);
-		//auto it = 
+		//auto it =
 		// TODO : complete this
 		std::map<std::string, Galera_monitor_node *>::iterator it2;
 		it2 = GloMyMon->Galera_Hosts_Map.find(s);
@@ -2407,7 +2407,7 @@ void * MySQL_Monitor::monitor_connect() {
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_connect_interval/2/resultset->rows_count;
 				us*=40;
-				if (us > 1000000) {
+				if (us > 1000000 || us <= 0) {
 					us = 10000;
 				}
 				us = us + rand()%us;
@@ -4177,7 +4177,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		}
 		unsigned int glover;
 		t1=monotonic_time();
-		
+
 		//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
 		if (!GloMTH) {
@@ -4243,7 +4243,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 				}
 			}
 		}
-			
+
 #ifdef TEST_AURORA
 		if (rand() % 200 == 0) {
 			// we randomly fail 0.5% of the requests
@@ -4407,7 +4407,7 @@ __exit_monitor_aws_aurora_HG_thread:
 			if (mmsd->mysql_error_msg) {
 			}
 			pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-			//auto it = 
+			//auto it =
 			// TODO : complete this
 			std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
 			it2 = GloMyMon->AWS_Aurora_Hosts_Map.find(s);
@@ -4482,7 +4482,7 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 					usleep(us);
 */
 //				}
-		
+
 /*
 		for
 		for (std::vector<SQLite3_row *>::iterator it = Galera_Hosts_resultset->rows.begin() ; it != Galera_Hosts_resultset->rows.end(); ++it) {
@@ -4497,7 +4497,7 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 					mmsd->writer_is_also_reader=atoi(r->fields[4]);
 					mmsd->max_transactions_behind=atoi(r->fields[5]);
 					mmsd->mondb=monitordb;
-		
+
 */
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
@@ -4525,7 +4525,7 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 	}
 	proxy_info("Stopping Monitor thread for AWS Aurora writer HG %u\n", wHG);
 	return NULL;
-} 
+}
 
 
 void * MySQL_Monitor::monitor_aws_aurora() {
@@ -4623,7 +4623,7 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 
 		if (next_loop_at == 0) {
 			// free the queue
-			
+
 		}
 
 		next_loop_at=t1+1000*mysql_thread___monitor_galera_healthcheck_interval;
@@ -4797,7 +4797,7 @@ __exit_monitor_aws_aurora_thread:
 		unsigned long long time_now=realtime_time();
 		time_now=time_now-(mmsd->t2 - start_time);
 		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-		//auto it = 
+		//auto it =
 		// TODO : complete this
 		std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
 		it2 = GloMyMon->AWS_Aurora_Hosts_Map.find(s);
