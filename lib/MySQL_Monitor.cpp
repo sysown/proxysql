@@ -4171,10 +4171,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
 
-		if (mmsd) {
-			delete mmsd;
-			mmsd = NULL;
-		}
+		
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -4262,7 +4259,11 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG , hpa[cur_host_idx].host, hpa[cur_host_idx].port);
 		}
 #endif // TEST_AURORA
-		mmsd = NULL;
+		if (mmsd) {
+			delete mmsd;
+			mmsd = NULL;
+		}
+		//mmsd = NULL;
 		mmsd = new MySQL_Monitor_State_Data(hpa[cur_host_idx].host, hpa[cur_host_idx].port, NULL, hpa[cur_host_idx].use_ssl);
 		mmsd->writer_hostgroup = wHG;
 		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms;
