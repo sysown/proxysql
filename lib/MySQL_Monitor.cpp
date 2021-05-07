@@ -4248,7 +4248,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		}
 #endif // TEST_AURORA
 
-		if (found_pingable_host == false) {
+		if (found_pingable_host == false&&mmsd) {
 			proxy_error("No node is pingable for AWS Aurora cluster with writer HG %u\n", wHG);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV);
 			next_loop_at = t1 + check_interval_ms * 1000;
