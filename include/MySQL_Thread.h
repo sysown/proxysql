@@ -361,6 +361,14 @@ class MySQL_Threads_Handler
 	pthread_rwlock_t rwlock;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;
+	// VariablesPointers_int stores:
+	// key: variable name
+	// tuple:
+	//   variable address
+	//   min value
+	//   max value
+	//   special variable : if true, min and max values are ignored, and further input validation is required
+	std::unordered_map<std::string, std::tuple<int *, int, int, bool>> VariablesPointers_int;
 	public:
 	struct {
 		int monitor_history;
