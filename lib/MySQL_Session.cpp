@@ -2628,6 +2628,14 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 				previous_status.pop();
 			}
 			if (mybe->server_myds->myconn) {
+				// Created connection never reached 'connect_cont' phase, due to that
+				// internal structures of 'mysql->net' are not fully initialized.
+				// This induces a leak of the 'fd' associated with the socket
+				// opened by the library. To prevent this, we need to call
+				// `mysql_real_connect_cont` through `connect_cont`. This way
+				// we ensure a proper cleanup of all the resources when 'mysql_close'
+				// is later called. For more context see issue #3404.
+				mybe->server_myds->myconn->connect_cont(MYSQL_WAIT_TIMEOUT);
 				mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 				if (mirror) {
 					PROXY_TRACE();
