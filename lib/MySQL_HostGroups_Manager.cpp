@@ -5951,17 +5951,10 @@ class MySQL_Errors_stats {
 		sprintf(buf,"%llu",count_star);
 		pta[7]=strdup(buf);
 
-		time_t __now;
-		time(&__now);
-		unsigned long long curtime=monotonic_time();
-		time_t seen_time;
-
-		seen_time= __now - curtime/1000000 + first_seen/1000000;
-		sprintf(buf,"%ld", seen_time);
+		sprintf(buf,"%ld", first_seen);
 		pta[8]=strdup(buf);
 
-		seen_time= __now - curtime/1000000 + last_seen/1000000;
-		sprintf(buf,"%ld", seen_time);
+		sprintf(buf,"%ld", last_seen);
 		pta[9]=strdup(buf);
 
 		assert(last_error);
