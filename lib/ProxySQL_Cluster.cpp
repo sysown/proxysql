@@ -1016,7 +1016,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 				if (GloMyLdapAuth) {
 					rc_query = mysql_query(
 						conn,
-						"SELECT priority, frontend_entity, backend_entity, comment FROM mysql_ldap_mapping"
+						"SELECT priority, frontend_entity, backend_entity, comment FROM runtime_mysql_ldap_mapping"
 					);
 
 					if (rc_query == 0) {
