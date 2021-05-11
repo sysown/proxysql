@@ -441,7 +441,7 @@ class MySQL_Threads_Handler
 		char *server_version;
 		char *keep_multiplexing_variables;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
-		unsigned int handle_unknown_charset;
+		int handle_unknown_charset;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
@@ -559,7 +559,6 @@ class MySQL_Threads_Handler
 	~MySQL_Threads_Handler();
 	
 	char *get_variable_string(char *name);
-	unsigned int get_variable_uint(char *name);
 	uint16_t get_variable_uint16(char *name);
 	int get_variable_int(const char *name);
 	void print_version();

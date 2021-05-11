@@ -1358,17 +1358,7 @@ uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 	return 0;
 }
 
-unsigned int MySQL_Threads_Handler::get_variable_uint(char *name) {
-	if (!strcasecmp(name,"handle_unknown_charset")) return variables.handle_unknown_charset;
-	proxy_error("Not existing variable: %s\n", name); assert(0);
-	return 0;
-}
-
 int MySQL_Threads_Handler::get_variable_int(const char *name) {
-
-	if (!strcasecmp(name,"max_transaction_idle_time")) {
-		PROXY_TRACE();
-	}
 	// convert name to string, and lowercase
 	std::string nameS = string(name);
 	std::transform(nameS.begin(), nameS.end(), nameS.begin(), [](unsigned char c){ return std::tolower(c); });
@@ -1392,58 +1382,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 
 
 //VALGRIND_DISABLE_ERROR_REPORTING;
-	char a = name[0];
-	switch (a) {
-		case 'a':
-			if (!strcmp(name,"aurora_max_lag_ms_only_read_from_replicas")) return variables.aurora_max_lag_ms_only_read_from_replicas;
-			break;
-		case 'b':
-			if (!strcmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
-			break;
-		case 'c':
-			if (name[1]=='o') {
-				if (!strcmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
-			}
-			break;
-		case 'e':
-			if (!strcmp(name,"eventslog_format")) return (int)variables.eventslog_format;
-			break;
-		case 'h':
-			if (!strcmp(name,"have_compress")) return (int)variables.have_compress;
-			if (!strcmp(name,"have_ssl")) return (int)variables.have_ssl;
-			break;
-		case 'm':
-			if (name[3]=='_') {
-				if (!strcmp(name,"min_num_servers_lantency_awareness")) return (int)variables.min_num_servers_lantency_awareness;
-			}
-			break;
-		case 'p':
-			if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
-			if (!strcmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
-			break;
-		case 's':
-			if (name[1]=='e') {
-#ifdef DEBUG
-				if (!strcmp(name,"session_debug")) return (int)variables.session_debug;
-#endif /* DEBUG */
-#ifdef IDLE_THREADS
-				if (!strcmp(name,"session_idle_ms")) return (int)variables.session_idle_ms;
-				if (!strcmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
-#endif // IDLE_THREADS
-			}
-			if (name[1]=='h') {
-				if (!strcmp(name,"show_processlist_extended")) return (int)variables.show_processlist_extended;
-			}
-			if (name[1]=='t') {
-				if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
-			}
-			break;
-		case 'w':
-			if (!strcmp(name,"wait_timeout")) return (int)variables.wait_timeout;
-			break;
-		default:
-			break;
-	}
+	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
 //VALGRIND_ENABLE_ERROR_REPORTING;
@@ -1580,48 +1519,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
 		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
 	}
-	if (!strcasecmp(name, "handle_unknown_charset")) {
-		sprintf(intbuf, "%d",variables.handle_unknown_charset);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"connpoll_reset_queue_length")) {
-		sprintf(intbuf,"%d",variables.connpoll_reset_queue_length);
-		return strdup(intbuf);
-	}
-#ifdef IDLE_THREADS
-	if (!strcasecmp(name,"session_idle_ms")) {
-		sprintf(intbuf,"%d",variables.session_idle_ms);
-		return strdup(intbuf);
-	}
-#endif // IDLE_THREADS
-	if (!strcasecmp(name,"eventslog_format")) {
-		sprintf(intbuf,"%d",variables.eventslog_format);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) {
-		sprintf(intbuf,"%d",variables.binlog_reader_connect_retry_msec);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"wait_timeout")) {
-		sprintf(intbuf,"%d",variables.wait_timeout);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"poll_timeout")) {
-		sprintf(intbuf,"%d",variables.poll_timeout);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"poll_timeout_on_failure")) {
-		sprintf(intbuf,"%d",variables.poll_timeout_on_failure);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"min_num_servers_lantency_awareness")) {
-		sprintf(intbuf,"%d",variables.min_num_servers_lantency_awareness);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"aurora_max_lag_ms_only_read_from_replicas")) {
-		sprintf(intbuf,"%d",variables.aurora_max_lag_ms_only_read_from_replicas);
-		return strdup(intbuf);
-	}
 	if (!strcasecmp(name,"threads")) {
 		sprintf(intbuf,"%d", (num_threads ? num_threads : DEFAULT_NUM_THREADS));
 		return strdup(intbuf);
@@ -1630,26 +1527,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
 		return strdup(intbuf);
 	}
-#ifdef DEBUG
-	if (!strcasecmp(name,"session_debug")) {
-		return strdup((variables.session_debug ? "true" : "false"));
-	}
-#endif /* DEBUG */
-	if (!strcasecmp(name,"have_compress")) {
-		return strdup((variables.have_compress ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"have_ssl")) {
-		return strdup((variables.have_ssl ? "true" : "false"));
-	}
-#ifdef IDLE_THREADS
-	if (!strcasecmp(name,"session_idle_show_processlist")) {
-		return strdup((variables.session_idle_show_processlist ? "true" : "false"));
-	}
-#endif // IDLE_THREADS
-	if (!strcasecmp(name,"show_processlist_extended")) {
-		sprintf(intbuf,"%d",variables.show_processlist_extended);
-		return strdup(intbuf);
-	}
+
 	return NULL;
 //VALGRIND_ENABLE_ERROR_REPORTING;
 }
@@ -1774,17 +1652,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
-#ifdef IDLE_THREADS
-	if (!strcasecmp(name,"session_idle_ms")) {
-		int intv=atoi(value);
-		if (intv >= 1 && intv <= 3600*1000) {
-			variables.session_idle_ms=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-#endif // IDLE_THREADS
 	if (!strcasecmp(name,"eventslog_format")) {
 		int intv=atoi(value);
 		if (intv >= 1 && intv <= 2) {
@@ -2025,66 +1892,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		int intv=atoi(value);
 		if (intv > 10 && intv <= 65535) {
 			variables.server_capabilities=intv;
-//			if (variables.server_capabilities & CLIENT_SSL) {
-				// for now disable CLIENT_SSL
-//				variables.server_capabilities &= ~CLIENT_SSL;
-//			}
-//			variables.server_capabilities |= CLIENT_SSL;
-			
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"poll_timeout")) {
-		int intv=atoi(value);
-		if (intv >= 10 && intv <= 20000) {
-			variables.poll_timeout=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"poll_timeout_on_failure")) {
-		int intv=atoi(value);
-		if (intv >= 10 && intv <= 20000) {
-			variables.poll_timeout_on_failure=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"connpoll_reset_queue_length")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1000) {
-			variables.connpoll_reset_queue_length=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"min_num_servers_lantency_awareness")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 10000) {
-			variables.min_num_servers_lantency_awareness=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"aurora_max_lag_ms_only_read_from_replicas")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 100) {
-			variables.aurora_max_lag_ms_only_read_from_replicas=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"handle_unknown_charset")) {
-		uint8_t intv=atoi(value);
-		if (intv >= 0 && intv < HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE) {
-			variables.handle_unknown_charset=intv;
 			return true;
 		} else {
 			return false;
@@ -2109,19 +1916,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
-#ifdef DEBUG
-	if (!strcasecmp(name,"session_debug")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.session_debug=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.session_debug=false;
-			return true;
-		}
-		return false;
-	}
-#endif /* DEBUG */
 	if (!strcasecmp(name,"have_compress")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.have_compress=true;
@@ -2151,29 +1945,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	if (!strcasecmp(name,"forward_autocommit")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			proxy_error("Variable mysql-forward_autocommit is deprecated. See issue #3253\n");
-			return false;
-		}
-		return false;
-	}
-#ifdef IDLE_THREADS
-	if (!strcasecmp(name,"session_idle_show_processlist")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.session_idle_show_processlist=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.session_idle_show_processlist=false;
-			return true;
-		}
-		return false;
-	}
-#endif // IDLE_THREADS
-	if (!strcasecmp(name,"show_processlist_extended")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 2) {
-			variables.show_processlist_extended=intv;
-			return true;
-		} else {
 			return false;
 		}
 		return false;
@@ -2222,8 +1993,16 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["stats_time_query_processor"]      = make_tuple(&variables.stats_time_query_processor,      false);
 		VariablesPointers_bool["use_tcp_keepalive"]               = make_tuple(&variables.use_tcp_keepalive,               false);
 		VariablesPointers_bool["verbose_query_error"]             = make_tuple(&variables.verbose_query_error,             false);
-		
-
+#ifdef IDLE_THREADS
+		VariablesPointers_bool["session_idle_show_processlist"] = make_tuple(&variables.session_idle_show_processlist, false);
+#endif // IDLE_THREADS
+#ifdef DEBUG
+		VariablesPointers_bool["session_debug"] = make_tuple(&variables.session_debug, false);
+#endif /* DEBUG */
+		// variables with special variable == true
+		// the input validation for these variables MUST be EXPLICIT
+		VariablesPointers_bool["have_compress"]      = make_tuple(&variables.have_compress,      true);
+		VariablesPointers_bool["have_ssl"]           = make_tuple(&variables.have_ssl,           true);
 	}
 
 
@@ -2286,13 +2065,18 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["throttle_max_bytes_per_second_to_client"]   = make_tuple(&variables.throttle_max_bytes_per_second_to_client,   0,    2147483647, false);
 		VariablesPointers_int["throttle_ratio_server_to_client"]           = make_tuple(&variables.throttle_ratio_server_to_client,           0,           100, false);
 		// backend management
-		VariablesPointers_int["default_max_latency_ms"]     = make_tuple(&variables.default_max_latency_ms,     0, 20*24*3600*1000, false);
-		VariablesPointers_int["free_connections_pct"]       = make_tuple(&variables.free_connections_pct,       0,             100, false);
-		VariablesPointers_int["reset_connection_algorithm"] = make_tuple(&variables.reset_connection_algorithm, 1,               2, false);
-		VariablesPointers_int["shun_on_failures"]           = make_tuple(&variables.shun_on_failures,           0,        10000000, false);
-		VariablesPointers_int["shun_recovery_time_sec"]     = make_tuple(&variables.shun_recovery_time_sec,     0,     3600*24*365, false);
-		VariablesPointers_int["hostgroup_manager_verbose"]  = make_tuple(&variables.hostgroup_manager_verbose,  1,               2, false);
-		VariablesPointers_int["tcp_keepalive_time"]         = make_tuple(&variables.tcp_keepalive_time,         0,            7200, false);
+		VariablesPointers_int["connpoll_reset_queue_length"] = make_tuple(&variables.connpoll_reset_queue_length, 0,           10000, false);
+		VariablesPointers_int["default_max_latency_ms"]      = make_tuple(&variables.default_max_latency_ms,      0, 20*24*3600*1000, false);
+		VariablesPointers_int["free_connections_pct"]        = make_tuple(&variables.free_connections_pct,        0,             100, false);
+		VariablesPointers_int["poll_timeout"]                = make_tuple(&variables.poll_timeout,               10,           20000, false);
+		VariablesPointers_int["poll_timeout_on_failure"]     = make_tuple(&variables.poll_timeout_on_failure,    10,           20000, false);
+		VariablesPointers_int["reset_connection_algorithm"]  = make_tuple(&variables.reset_connection_algorithm,  1,               2, false);
+		VariablesPointers_int["shun_on_failures"]            = make_tuple(&variables.shun_on_failures,            0,        10000000, false);
+		VariablesPointers_int["shun_recovery_time_sec"]      = make_tuple(&variables.shun_recovery_time_sec,      0,     3600*24*365, false);
+		VariablesPointers_int["hostgroup_manager_verbose"]   = make_tuple(&variables.hostgroup_manager_verbose,   1,               2, false);
+		VariablesPointers_int["tcp_keepalive_time"]          = make_tuple(&variables.tcp_keepalive_time,          0,            7200, false);
+		VariablesPointers_int["min_num_servers_lantency_awareness"]        = make_tuple(&variables.min_num_servers_lantency_awareness,        0, 10000, false);
+		VariablesPointers_int["aurora_max_lag_ms_only_read_from_replicas"] = make_tuple(&variables.aurora_max_lag_ms_only_read_from_replicas, 0,   100, false);
 		// connection management
 		VariablesPointers_int["connect_retries_on_failure"]    = make_tuple(&variables.connect_retries_on_failure,    0,           1000, false);
 		VariablesPointers_int["connect_retries_delay"]         = make_tuple(&variables.connect_retries_delay,         0,          10000, false);
@@ -2301,6 +2085,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["connect_timeout_server_max"]    = make_tuple(&variables.connect_timeout_server_max,   10,      3600*1000, false);
 		VariablesPointers_int["connection_delay_multiplex_ms"] = make_tuple(&variables.connection_delay_multiplex_ms, 0,       300*1000, false);
 		VariablesPointers_int["connection_max_age_ms"]         = make_tuple(&variables.connection_max_age_ms,         0,   3600*24*1000, false);
+		VariablesPointers_int["handle_unknown_charset"]        = make_tuple(&variables.handle_unknown_charset,        0, HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE, false);
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
 		// logs
@@ -2316,9 +2101,22 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["max_transaction_idle_time"] = make_tuple(&variables.max_transaction_idle_time, 1000,  20*24*3600*1000, false);
 		VariablesPointers_int["max_transaction_time"]      = make_tuple(&variables.max_transaction_time,      1000,  20*24*3600*1000, false);
 		VariablesPointers_int["query_cache_size_MB"]       = make_tuple(&variables.query_cache_size_MB,          0,       1024*10240, false);
+#ifdef IDLE_THREADS
+		VariablesPointers_int["session_idle_ms"]           = make_tuple(&variables.session_idle_ms,              1,        3600*1000, false);
+#endif // IDLE_THREADS
+		VariablesPointers_int["show_processlist_extended"] = make_tuple(&variables.show_processlist_extended,    0,                2, false);
 		VariablesPointers_int["threshold_query_length"]    = make_tuple(&variables.threshold_query_length,    1024, 1*1024*1024*1024, false);
 		VariablesPointers_int["threshold_resultset_size"]  = make_tuple(&variables.threshold_resultset_size,  1024, 1*1024*1024*1024, false);
+
+		// variables with special variable == true
+		// the input validation for these variables MUST be EXPLICIT
+		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
+		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
+		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
+
+
 	}
+
 
 	const size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 	unsigned int i;
@@ -3774,7 +3572,7 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
 	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
-	mysql_thread___handle_unknown_charset=GloMTH->get_variable_uint((char *)"handle_unknown_charset");
+	mysql_thread___handle_unknown_charset=GloMTH->get_variable_int((char *)"handle_unknown_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
