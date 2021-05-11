@@ -369,6 +369,12 @@ class MySQL_Threads_Handler
 	//   max value
 	//   special variable : if true, min and max values are ignored, and further input validation is required
 	std::unordered_map<std::string, std::tuple<int *, int, int, bool>> VariablesPointers_int;
+	// VariablesPointers_bool stores:
+	// key: variable name
+	// tuple:
+	//   variable address
+	//   special variable : if true, further input validation is required
+	std::unordered_map<std::string, std::tuple<bool *, bool>> VariablesPointers_bool;
 	public:
 	struct {
 		int monitor_history;

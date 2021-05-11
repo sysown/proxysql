@@ -1373,145 +1373,53 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 	std::string nameS = string(name);
 	std::transform(nameS.begin(), nameS.end(), nameS.begin(), [](unsigned char c){ return std::tolower(c); });
 	{
+		// integer variable
 		std::unordered_map<std::string, std::tuple<int *, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
 			int * v = std::get<0>(it->second);
 			return *v;
 		}
 	}
+	{
+		// bool variable
+		std::unordered_map<std::string, std::tuple<bool *, bool>>::const_iterator it = VariablesPointers_bool.find(nameS);
+		if (it != VariablesPointers_bool.end()) {
+			bool * v = std::get<0>(it->second);
+			int a = (int)*v;
+			return a;
+		}
+	}
 
 
 //VALGRIND_DISABLE_ERROR_REPORTING;
-	if (name[0]=='m' && (strncmp(name,"monitor_",8)==0)) {
-		char a = name[8];
-		if (a == 'g') {
-			char b = name[9];
-			if (b == 'a') {
-				if (!strcmp(name,"monitor_galera_healthcheck_interval")) return (int)variables.monitor_galera_healthcheck_interval;
-				if (!strcmp(name,"monitor_galera_healthcheck_timeout")) return (int)variables.monitor_galera_healthcheck_timeout;
-				if (!strcmp(name,"monitor_galera_healthcheck_max_timeout_count")) return (int)variables.monitor_galera_healthcheck_max_timeout_count;
-			}
-		}
-		if (a == 't') {
-			if (!strcmp(name,"monitor_threads_min")) return (int)variables.monitor_threads_min;
-			if (!strcmp(name,"monitor_threads_max")) return (int)variables.monitor_threads_max;
-			if (!strcmp(name,"monitor_threads_queue_maxsize")) return (int)variables.monitor_threads_queue_maxsize;
-		}
-		if (a == 'q') {
-			if (!strcmp(name,"monitor_query_interval")) return (int)variables.monitor_query_interval;
-			if (!strcmp(name,"monitor_query_timeout")) return (int)variables.monitor_query_timeout;
-		}
-		if (a == 'w') {
-			if (!strcmp(name,"monitor_wait_timeout")) return (int)variables.monitor_wait_timeout;
-			if (!strcmp(name,"monitor_writer_is_also_reader")) return (int)variables.monitor_writer_is_also_reader;
-		}
-		if (a == 'e') {
-			if (!strcmp(name,"monitor_enabled")) return (int)variables.monitor_enabled;
-		}
-		if (a == 's') {
-			if (!strcmp(name,"monitor_slave_lag_when_null")) return (int)variables.monitor_slave_lag_when_null;
-		}
-	}
 	char a = name[0];
 	switch (a) {
 		case 'a':
-			if (!strcmp(name,"auditlog_filesize")) return (int)variables.auditlog_filesize;
 			if (!strcmp(name,"aurora_max_lag_ms_only_read_from_replicas")) return variables.aurora_max_lag_ms_only_read_from_replicas;
-			if (!strcmp(name,"auto_increment_delay_multiplex")) return (int)variables.auto_increment_delay_multiplex;
-			if (!strcmp(name,"autocommit_false_is_transaction")) return (int)variables.autocommit_false_is_transaction;
-			if (!strcmp(name,"autocommit_false_not_reusable")) return (int)variables.autocommit_false_not_reusable;
-			if (!strcmp(name,"automatic_detect_sqli")) return (int)variables.automatic_detect_sqli;
 			break;
 		case 'b':
 			if (!strcmp(name,"binlog_reader_connect_retry_msec")) return (int)variables.binlog_reader_connect_retry_msec;
 			break;
 		case 'c':
-			if (name[1]=='l') {
-				if (!strcmp(name,"client_found_rows")) return (int)variables.client_found_rows;
-				if (!strcmp(name,"client_multi_statements")) return (int)variables.client_multi_statements;
-				if (!strcmp(name,"client_session_track_gtid")) return (int)variables.client_session_track_gtid;
-			}
 			if (name[1]=='o') {
-				if (!strcmp(name,"commands_stats")) return (int)variables.commands_stats;
-				if (!strcmp(name,"connect_retries_delay")) return (int)variables.connect_retries_delay;
-				if (!strcmp(name,"connect_retries_on_failure")) return (int)variables.connect_retries_on_failure;
-				if (!strcmp(name,"connect_timeout_client")) return (int)variables.connect_timeout_client;
-				if (!strcmp(name,"connect_timeout_server")) return (int)variables.connect_timeout_server;
-				if (!strcmp(name,"connect_timeout_server_max")) return (int)variables.connect_timeout_server_max;
-				if (!strcmp(name,"connection_delay_multiplex_ms")) return (int)variables.connection_delay_multiplex_ms;
-				if (!strcmp(name,"connection_max_age_ms")) return (int)variables.connection_max_age_ms;
-				if (!strcmp(name,"connection_warming")) return (int)variables.connection_warming;
 				if (!strcmp(name,"connpoll_reset_queue_length")) return (int)variables.connpoll_reset_queue_length;
 			}
 			break;
-		case 'd':
-			if (!strcmp(name,"default_max_latency_ms")) return (int)variables.default_max_latency_ms;
-			if (!strcmp(name,"default_query_delay")) return (int)variables.default_query_delay;
-			if (!strcmp(name,"default_query_timeout")) return (int)variables.default_query_timeout;
-			if (!strcmp(name,"default_reconnect")) return (int)variables.default_reconnect;
-			break;
 		case 'e':
-			if (!strcmp(name,"enforce_autocommit_on_reads")) return (int)variables.enforce_autocommit_on_reads;
-			if (!strcmp(name,"eventslog_default_log")) return (int)variables.eventslog_default_log;
-			if (!strcmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
 			if (!strcmp(name,"eventslog_format")) return (int)variables.eventslog_format;
-			if (!strcmp(name,"enable_client_deprecate_eof")) return (int)variables.enable_client_deprecate_eof;
-			if (!strcmp(name,"enable_server_deprecate_eof")) return (int)variables.enable_server_deprecate_eof;
-			break;
-		case 'f':
-			if (!strcmp(name,"free_connections_pct")) return (int)variables.free_connections_pct;
-			if (!strcmp(name,"firewall_whitelist_enabled")) return (int)variables.firewall_whitelist_enabled;
 			break;
 		case 'h':
 			if (!strcmp(name,"have_compress")) return (int)variables.have_compress;
 			if (!strcmp(name,"have_ssl")) return (int)variables.have_ssl;
 			break;
-		case 'k':
-			if (!strcmp(name,"kill_backend_connection_when_disconnect")) return (int)variables.kill_backend_connection_when_disconnect;
-			break;	
-		case 'l':
-			if (!strcmp(name,"long_query_time")) return (int)variables.long_query_time;
-			if (!strcmp(name,"log_unhealthy_connections")) return (int)variables.log_unhealthy_connections;
-			if (!strcmp(name,"log_mysql_warnings_enabled")) return (int)variables.log_mysql_warnings_enabled;
-			break;
 		case 'm':
 			if (name[3]=='_') {
-				if (!strcmp(name,"max_connections")) return (int)variables.max_connections;
-				if (!strcmp(name,"max_stmts_cache")) return (int)variables.max_stmts_cache;
-				if (!strcmp(name,"max_stmts_per_connection")) return (int)variables.max_stmts_per_connection;
 				if (!strcmp(name,"min_num_servers_lantency_awareness")) return (int)variables.min_num_servers_lantency_awareness;
 			}
-			if (!strcmp(name,"mirror_max_concurrency")) return (int)variables.mirror_max_concurrency;
-			if (!strcmp(name,"mirror_max_queue_length")) return (int)variables.mirror_max_queue_length;
-			if (!strcmp(name,"multiplexing")) return (int)variables.multiplexing;
 			break;
 		case 'p':
-			if (!strcmp(name,"ping_interval_server_msec")) return (int)variables.ping_interval_server_msec;
-			if (!strcmp(name,"ping_timeout_server")) return (int)variables.ping_timeout_server;
 			if (!strcmp(name,"poll_timeout")) return variables.poll_timeout;
 			if (!strcmp(name,"poll_timeout_on_failure")) return variables.poll_timeout_on_failure;
-			break;
-		case 'q':
-			if (name[6]=='c') {
-				if (!strcmp(name,"query_cache_size_MB")) return (int)variables.query_cache_size_MB;
-				if (!strcmp(name,"query_cache_stores_empty_result")) return (int)variables.query_cache_stores_empty_result;
-			}
-			if (name[6]=='d') {
-				if (!strcmp(name,"query_digests")) return (int)variables.query_digests;
-				if (!strcmp(name,"query_digests_lowercase")) return (int)variables.query_digests_lowercase;
-				if (!strcmp(name,"query_digests_no_digits")) return (int)variables.query_digests_no_digits;
-				if (!strcmp(name,"query_digests_normalize_digest_text")) return (int)variables.query_digests_normalize_digest_text;
-				if (!strcmp(name,"query_digests_replace_null")) return (int)variables.query_digests_replace_null;
-				if (!strcmp(name,"query_digests_track_hostname")) return (int)variables.query_digests_track_hostname;
-			}
-			if (name[6]=='p') {
-				if (!strcmp(name,"query_processor_iterations")) return (int)variables.query_processor_iterations;
-				if (!strcmp(name,"query_processor_regex")) return (int)variables.query_processor_regex;
-			}
-			if (!strcmp(name,"query_retries_on_failure")) return (int)variables.query_retries_on_failure;
-			break;
-		case 'r':
-			if (!strcmp(name,"reset_connection_algorithm")) return (int)variables.reset_connection_algorithm;
 			break;
 		case 's':
 			if (name[1]=='e') {
@@ -1522,33 +1430,13 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 				if (!strcmp(name,"session_idle_ms")) return (int)variables.session_idle_ms;
 				if (!strcmp(name,"session_idle_show_processlist")) return (int)variables.session_idle_show_processlist;
 #endif // IDLE_THREADS
-				if (!strcmp(name,"sessions_sort")) return (int)variables.sessions_sort;
-				if (!strcmp(name,"servers_stats")) return (int)variables.servers_stats;
-				if (!strcmp(name,"set_query_lock_on_hostgroup")) return (int)variables.set_query_lock_on_hostgroup;
 			}
 			if (name[1]=='h') {
 				if (!strcmp(name,"show_processlist_extended")) return (int)variables.show_processlist_extended;
-				if (!strcmp(name,"shun_on_failures")) return (int)variables.shun_on_failures;
-				if (!strcmp(name,"shun_recovery_time_sec")) return (int)variables.shun_recovery_time_sec;
 			}
 			if (name[1]=='t') {
 				if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
-				if (!strcmp(name,"stats_time_backend_query")) return (int)variables.stats_time_backend_query;
-				if (!strcmp(name,"stats_time_query_processor")) return (int)variables.stats_time_query_processor;
 			}
-			break;
-		case 't':
-			if (name[8] == '_') {
-				if (!strcmp(name,"throttle_max_bytes_per_second_to_client")) return (int)variables.throttle_max_bytes_per_second_to_client;
-				if (!strcmp(name,"throttle_ratio_server_to_client")) return (int)variables.throttle_ratio_server_to_client;
-			}
-			if (!strcmp(name,"tcp_keepalive_time")) return (int)variables.tcp_keepalive_time;
-			break;
-		case 'u':
-			if (!strcmp(name,"use_tcp_keepalive")) return (int)variables.use_tcp_keepalive;
-			break;
-		case 'v':
-			if (!strcmp(name,"verbose_query_error")) return (int)variables.verbose_query_error;
 			break;
 		case 'w':
 			if (!strcmp(name,"wait_timeout")) return (int)variables.wait_timeout;
@@ -1569,12 +1457,22 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	// convert name to string, and lowercase
 	std::string nameS = string(name);
 	std::transform(nameS.begin(), nameS.end(), nameS.begin(), [](unsigned char c){ return std::tolower(c); });
+
 	{
+		// integer variable
 		std::unordered_map<std::string, std::tuple<int *, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
 			int * v = std::get<0>(it->second);
 			sprintf(intbuf,"%d", *v);
 			return strdup(intbuf);
+		}
+	}
+	{
+		// bool variable
+		std::unordered_map<std::string, std::tuple<bool *, bool>>::const_iterator it = VariablesPointers_bool.find(nameS);
+		if (it != VariablesPointers_bool.end()) {
+			bool * v = std::get<0>(it->second);
+			return strdup((*v ? "true" : "false"));
 		}
 	}
 
@@ -1681,101 +1579,13 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		if (!strcasecmp(name,"monitor_username")) return strdup(variables.monitor_username);
 		if (!strcasecmp(name,"monitor_password")) return strdup(variables.monitor_password);
 		if (!strcasecmp(name,"monitor_replication_lag_use_percona_heartbeat")) return strdup(variables.monitor_replication_lag_use_percona_heartbeat);
-		if (!strcasecmp(name,"monitor_enabled")) {
-			return strdup((variables.monitor_enabled ? "true" : "false"));
-		}
-		if (!strcasecmp(name,"monitor_galera_healthcheck_interval")) {
-			sprintf(intbuf,"%d",variables.monitor_galera_healthcheck_interval);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_galera_healthcheck_timeout")) {
-			sprintf(intbuf,"%d",variables.monitor_galera_healthcheck_timeout);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_galera_healthcheck_max_timeout_count")) {
-			sprintf(intbuf,"%d",variables.monitor_galera_healthcheck_max_timeout_count);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_query_interval")) {
-			sprintf(intbuf,"%d",variables.monitor_query_interval);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_query_timeout")) {
-			sprintf(intbuf,"%d",variables.monitor_query_timeout);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_slave_lag_when_null")) {
-			sprintf(intbuf,"%d",variables.monitor_slave_lag_when_null);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_threads_min")) {
-			sprintf(intbuf,"%d",variables.monitor_threads_min);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_threads_max")) {
-			sprintf(intbuf,"%d",variables.monitor_threads_max);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_threads_queue_maxsize")) {
-			sprintf(intbuf,"%d",variables.monitor_threads_queue_maxsize);
-			return strdup(intbuf);
-		}
-		if (!strcasecmp(name,"monitor_writer_is_also_reader")) {
-			return strdup((variables.monitor_writer_is_also_reader ? "true" : "false"));
-		}
-		if (!strcasecmp(name,"monitor_wait_timeout")) {
-			return strdup((variables.monitor_wait_timeout ? "true" : "false"));
-		}
 	}
 	if (!strcasecmp(name, "handle_unknown_charset")) {
 		sprintf(intbuf, "%d",variables.handle_unknown_charset);
 		return strdup(intbuf);
 	}
-	if (!strcasecmp(name,"shun_on_failures")) {
-		sprintf(intbuf,"%d",variables.shun_on_failures);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"client_multi_statements")) {
-		return strdup((variables.client_multi_statements ? "true" : "false"));
-	}
 	if (!strcasecmp(name,"connpoll_reset_queue_length")) {
 		sprintf(intbuf,"%d",variables.connpoll_reset_queue_length);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"shun_recovery_time_sec")) {
-		sprintf(intbuf,"%d",variables.shun_recovery_time_sec);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"query_retries_on_failure")) {
-		sprintf(intbuf,"%d",variables.query_retries_on_failure);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"connect_retries_on_failure")) {
-		sprintf(intbuf,"%d",variables.connect_retries_on_failure);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"connection_delay_multiplex_ms")) {
-		sprintf(intbuf,"%d",variables.connection_delay_multiplex_ms);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"connection_max_age_ms")) {
-		sprintf(intbuf,"%d",variables.connection_max_age_ms);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"connect_timeout_client")) {
-		sprintf(intbuf,"%d",variables.connect_timeout_client);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"connect_timeout_server")) {
-		sprintf(intbuf,"%d",variables.connect_timeout_server);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"connect_timeout_server_max")) {
-		sprintf(intbuf,"%d",variables.connect_timeout_server_max);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"free_connections_pct")) {
-		sprintf(intbuf,"%d",variables.free_connections_pct);
 		return strdup(intbuf);
 	}
 #ifdef IDLE_THREADS
@@ -1784,50 +1594,9 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		return strdup(intbuf);
 	}
 #endif // IDLE_THREADS
-	if (!strcasecmp(name,"connect_retries_delay")) {
-		sprintf(intbuf,"%d",variables.connect_retries_delay);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"eventslog_filesize")) {
-		sprintf(intbuf,"%d",variables.eventslog_filesize);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"eventslog_default_log")) {
-		sprintf(intbuf,"%d",variables.eventslog_default_log);
-		return strdup(intbuf);
-	}
 	if (!strcasecmp(name,"eventslog_format")) {
 		sprintf(intbuf,"%d",variables.eventslog_format);
 		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"auditlog_filesize")) {
-		sprintf(intbuf,"%d",variables.auditlog_filesize);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"tcp_keepalive_time")) {
-		sprintf(intbuf,"%d",variables.tcp_keepalive_time);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"use_tcp_keepalive")) {
-		sprintf(intbuf,"%d",variables.use_tcp_keepalive);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"firewall_whitelist_enabled")) {
-		sprintf(intbuf,"%d",variables.firewall_whitelist_enabled);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"automatic_detect_sqli")) {
-		sprintf(intbuf,"%d",variables.automatic_detect_sqli);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"enable_client_deprecate_eof")) {
-		return strdup((variables.enable_client_deprecate_eof ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"enable_server_deprecate_eof")) {
-		return strdup((variables.enable_server_deprecate_eof ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"log_mysql_warnings_enabled")) {
-		return strdup((variables.log_mysql_warnings_enabled? "true" : "false"));
 	}
 	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) {
 		sprintf(intbuf,"%d",variables.binlog_reader_connect_retry_msec);
@@ -1835,82 +1604,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (!strcasecmp(name,"wait_timeout")) {
 		sprintf(intbuf,"%d",variables.wait_timeout);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) {
-		sprintf(intbuf,"%d",variables.throttle_max_bytes_per_second_to_client);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"throttle_ratio_server_to_client")) {
-		sprintf(intbuf,"%d",variables.throttle_ratio_server_to_client);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"max_connections")) {
-		sprintf(intbuf,"%d",variables.max_connections);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"max_stmts_per_connection")) {
-		sprintf(intbuf,"%d",variables.max_stmts_per_connection);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"max_stmts_cache")) {
-		sprintf(intbuf,"%d",variables.max_stmts_cache);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"mirror_max_concurrency")) {
-		sprintf(intbuf,"%d",variables.mirror_max_concurrency);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"mirror_max_queue_length")) {
-		sprintf(intbuf,"%d",variables.mirror_max_queue_length);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"default_query_delay")) {
-		sprintf(intbuf,"%d",variables.default_query_delay);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"default_query_timeout")) {
-		sprintf(intbuf,"%d",variables.default_query_timeout);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"query_processor_iterations")) {
-		sprintf(intbuf,"%d",variables.query_processor_iterations);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"query_processor_regex")) {
-		sprintf(intbuf,"%d",variables.query_processor_regex);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"set_query_lock_on_hostgroup")) {
-		sprintf(intbuf,"%d",variables.set_query_lock_on_hostgroup);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"reset_connection_algorithm")) {
-		sprintf(intbuf,"%d",variables.reset_connection_algorithm);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"auto_increment_delay_multiplex")) {
-		sprintf(intbuf,"%d",variables.auto_increment_delay_multiplex);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"default_max_latency_ms")) {
-		sprintf(intbuf,"%d",variables.default_max_latency_ms);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"long_query_time")) {
-		sprintf(intbuf,"%d",variables.long_query_time);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"query_cache_size_MB")) {
-		sprintf(intbuf,"%d",variables.query_cache_size_MB);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"ping_interval_server_msec")) {
-		sprintf(intbuf,"%d",variables.ping_interval_server_msec);
-		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"ping_timeout_server")) {
-		sprintf(intbuf,"%d",variables.ping_timeout_server);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"poll_timeout")) {
@@ -1948,69 +1641,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"have_ssl")) {
 		return strdup((variables.have_ssl ? "true" : "false"));
 	}
-	if (!strcasecmp(name,"client_found_rows")) {
-		return strdup((variables.client_found_rows ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"multiplexing")) {
-		return strdup((variables.multiplexing ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"log_unhealthy_connections")) {
-		return strdup((variables.log_unhealthy_connections ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"connection_warming")) {
-		return strdup((variables.connection_warming ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"enforce_autocommit_on_reads")) {
-		return strdup((variables.enforce_autocommit_on_reads ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"autocommit_false_not_reusable")) {
-		return strdup((variables.autocommit_false_not_reusable ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"autocommit_false_is_transaction")) {
-		return strdup((variables.autocommit_false_is_transaction ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"verbose_query_error")) {
-		return strdup((variables.verbose_query_error ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"commands_stats")) {
-		return strdup((variables.commands_stats ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"query_digests")) {
-		return strdup((variables.query_digests ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"query_digests_lowercase")) {
-		return strdup((variables.query_digests_lowercase ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"query_digests_replace_null")) {
-		return strdup((variables.query_digests_replace_null ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"query_digests_no_digits")) {
-		return strdup((variables.query_digests_no_digits ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"query_digests_normalize_digest_text")) {
-		return strdup((variables.query_digests_normalize_digest_text ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"query_digests_track_hostname")) {
-		return strdup((variables.query_digests_track_hostname ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"stats_time_backend_query")) {
-		return strdup((variables.stats_time_backend_query ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"stats_time_query_processor")) {
-		return strdup((variables.stats_time_query_processor ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"query_cache_stores_empty_result")) {
-		return strdup((variables.query_cache_stores_empty_result ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"kill_backend_connection_when_disconnect")) {
-		return strdup((variables.kill_backend_connection_when_disconnect ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"client_session_track_gtid")) {
-		return strdup((variables.client_session_track_gtid ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"sessions_sort")) {
-		return strdup((variables.sessions_sort ? "true" : "false"));
-	}
 #ifdef IDLE_THREADS
 	if (!strcasecmp(name,"session_idle_show_processlist")) {
 		return strdup((variables.session_idle_show_processlist ? "true" : "false"));
@@ -2019,12 +1649,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"show_processlist_extended")) {
 		sprintf(intbuf,"%d",variables.show_processlist_extended);
 		return strdup(intbuf);
-	}
-	if (!strcasecmp(name,"servers_stats")) {
-		return strdup((variables.servers_stats ? "true" : "false"));
-	}
-	if (!strcasecmp(name,"default_reconnect")) {
-		return strdup((variables.default_reconnect ? "true" : "false"));
 	}
 	return NULL;
 //VALGRIND_ENABLE_ERROR_REPORTING;
@@ -2049,6 +1673,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	std::string nameS = string(name);
 	std::transform(nameS.begin(), nameS.end(), nameS.begin(), [](unsigned char c){ return std::tolower(c); });
 	{
+		// integer variable ?
 		std::unordered_map<std::string, std::tuple<int *, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
 			bool special_variable = std::get<3>(it->second); // if special_variable is true, min and max values are ignored, and more input validation is needed
@@ -2057,6 +1682,27 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
 					int * v = std::get<0>(it->second);
 					*v = intv;
+					return true;
+				}
+				return false;
+			} else {
+				// we need to perform input validation
+			}
+		}
+	}
+	{
+		// boolean variable ?
+		std::unordered_map<std::string, std::tuple<bool *, bool>>::const_iterator it = VariablesPointers_bool.find(nameS);
+		if (it != VariablesPointers_bool.end()) {
+			bool special_variable = std::get<1>(it->second); // if special_variable is true, more input validation is needed
+			if (special_variable == false) {
+				bool * v = std::get<0>(it->second);
+				if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+					*v = true;
+					return true;
+				}
+				if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+					*v = false;
 					return true;
 				}
 				return false;
@@ -2106,120 +1752,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			}
 			return false;
 		}
-		if (!strcasecmp(name,"monitor_enabled")) {
-			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-				variables.monitor_enabled=true;
-				return true;
-			}
-			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-				variables.monitor_enabled=false;
-				return true;
-			}
-			return false;
-		}
-		if (!strcasecmp(name,"monitor_galera_healthcheck_interval")) {
-			int intv=atoi(value);
-			if (intv >= 50 && intv <= 7*24*3600*1000) {
-				variables.monitor_galera_healthcheck_interval=intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_galera_healthcheck_timeout")) {
-			int intv=atoi(value);
-			if (intv >= 50 && intv <= 600*1000) {
-				variables.monitor_galera_healthcheck_timeout=intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_galera_healthcheck_max_timeout_count")) {
-			int intv=atoi(value);
-			if (intv >= 1 && intv <= 10) {
-				variables.monitor_galera_healthcheck_max_timeout_count=intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_query_interval")) {
-			int intv=atoi(value);
-			if (intv >= 100 && intv <= 7*24*3600*1000) {
-				variables.monitor_query_interval=intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_query_timeout")) {
-			int intv=atoi(value);
-			if (intv >= 100 && intv <= 600*1000) {
-				variables.monitor_query_timeout=intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_slave_lag_when_null")) {
-			int intv=atoi(value);
-			if (intv >= 0 && intv <= 604800) {
-				variables.monitor_slave_lag_when_null=intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_threads_min")) {
-			int intv=atoi(value);
-			if (intv >= 2 && intv <= 16) {
-				variables.monitor_threads_min = intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_threads_max")) {
-			int intv=atoi(value);
-			if (intv >= 4 && intv <= 256) {
-				variables.monitor_threads_max = intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_threads_queue_maxsize")) {
-			int intv=atoi(value);
-			if (intv >= 16 && intv <= 1024) {
-				variables.monitor_threads_queue_maxsize = intv;
-				return true;
-			} else {
-				return false;
-			}
-		}
-		if (!strcasecmp(name,"monitor_wait_timeout")) {
-			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-				variables.monitor_wait_timeout=true;
-				return true;
-			}
-			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-				variables.monitor_wait_timeout=false;
-				return true;
-			}
-			return false;
-		}
-		if (!strcasecmp(name,"monitor_writer_is_also_reader")) {
-			if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-				variables.monitor_writer_is_also_reader=true;
-				return true;
-			}
-			if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-				variables.monitor_writer_is_also_reader=false;
-				return true;
-			}
-			return false;
-		}
 	}
 	if (!strcasecmp(name,"binlog_reader_connect_retry_msec")) {
 		int intv=atoi(value);
@@ -2242,15 +1774,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
-	if (!strcasecmp(name,"free_connections_pct")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 100) {
-			variables.free_connections_pct=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
 #ifdef IDLE_THREADS
 	if (!strcasecmp(name,"session_idle_ms")) {
 		int intv=atoi(value);
@@ -2262,338 +1785,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 	}
 #endif // IDLE_THREADS
-	if (!strcasecmp(name,"throttle_max_bytes_per_second_to_client")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 2147483647) {
-			variables.throttle_max_bytes_per_second_to_client=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"throttle_ratio_server_to_client")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 100) {
-			variables.throttle_ratio_server_to_client=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"max_connections")) {
-		int intv=atoi(value);
-		if (intv >= 1 && intv <= 1000*1000) {
-			variables.max_connections=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"tcp_keepalive_time")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 7200) {
-			variables.tcp_keepalive_time=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"use_tcp_keepalive")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.use_tcp_keepalive=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.use_tcp_keepalive=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"firewall_whitelist_enabled")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.firewall_whitelist_enabled=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.firewall_whitelist_enabled=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"automatic_detect_sqli")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.automatic_detect_sqli=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.automatic_detect_sqli=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"max_stmts_per_connection")) {
-		int intv=atoi(value);
-		if (intv >= 1 && intv <= 1024) {
-			variables.max_stmts_per_connection=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"max_stmts_cache")) {
-		int intv=atoi(value);
-		if (intv >= 1024 && intv <= 1024*1024) {
-			variables.max_stmts_cache=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"mirror_max_concurrency")) {
-		int intv=atoi(value);
-		if (intv >= 1 && intv <= 8*1024) {
-			variables.mirror_max_concurrency=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"mirror_max_queue_length")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1024*1024) {
-			variables.mirror_max_queue_length=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"default_query_delay")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 3600*1000) {
-			variables.default_query_delay=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"default_query_timeout")) {
-		int intv=atoi(value);
-		if (intv >= 1000 && intv <= 20*24*3600*1000) {
-			variables.default_query_timeout=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"query_processor_iterations")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1000*1000) {
-			variables.query_processor_iterations=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"query_processor_regex")) {
-		int intv=atoi(value);
-		if (intv >= 1 && intv <= 2) {
-			variables.query_processor_regex=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"set_query_lock_on_hostgroup")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1) {
-			variables.set_query_lock_on_hostgroup=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"reset_connection_algorithm")) {
-		int intv=atoi(value);
-		if (intv >= 1 && intv <= 2) {
-			variables.reset_connection_algorithm=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"auto_increment_delay_multiplex")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1000000) {
-			variables.auto_increment_delay_multiplex=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"default_max_latency_ms")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 20*24*3600*1000) {
-			variables.default_max_latency_ms=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"long_query_time")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 20*24*3600*1000) {
-			variables.long_query_time=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"query_cache_size_MB")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1024*10240) {
-			variables.query_cache_size_MB=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"ping_interval_server_msec")) {
-		int intv=atoi(value);
-		if (intv >= 1000 && intv <= 7*24*3600*1000) {
-			variables.ping_interval_server_msec=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"ping_timeout_server")) {
-		int intv=atoi(value);
-		if (intv >= 10 && intv <= 600*1000) {
-			variables.ping_timeout_server=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"shun_on_failures")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 10000000) {
-			variables.shun_on_failures=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"shun_recovery_time_sec")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 3600*24*365) {
-			variables.shun_recovery_time_sec=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"query_retries_on_failure")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1000) {
-			variables.query_retries_on_failure=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"client_multi_statements")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.client_multi_statements=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.client_multi_statements=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"connect_retries_on_failure")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1000) {
-			variables.connect_retries_on_failure=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"connection_delay_multiplex_ms")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 300*1000) {
-			variables.connection_delay_multiplex_ms=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"connection_max_age_ms")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 3600*24*1000) {
-			variables.connection_max_age_ms=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"connect_timeout_client")) {
-		int intv=atoi(value);
-		if (intv >= 500 && intv <= 3600*1000) {
-			variables.connect_timeout_client=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"connect_timeout_server")) {
-		int intv=atoi(value);
-		if (intv >= 10 && intv <= 120*1000) {
-			variables.connect_timeout_server=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"connect_timeout_server_max")) {
-		int intv=atoi(value);
-		if (intv >= 10 && intv <= 3600*1000) {
-			variables.connect_timeout_server_max=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"connect_retries_delay")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 10000) {
-			variables.connect_retries_delay=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"eventslog_filesize")) {
-		int intv=atoi(value);
-		if (intv >= 1024*1024 && intv <= 1*1024*1024*1024) {
-			variables.eventslog_filesize=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"eventslog_default_log")) {
-		int intv=atoi(value);
-		if (intv >= 0 && intv <= 1) {
-			variables.eventslog_default_log=intv;
-			return true;
-		} else {
-			return false;
-		}
-	}
 	if (!strcasecmp(name,"eventslog_format")) {
 		int intv=atoi(value);
 		if (intv >= 1 && intv <= 2) {
@@ -2605,15 +1796,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				}
 				variables.eventslog_format=intv;
 			}
-			return true;
-		} else {
-			return false;
-		}
-	}
-	if (!strcasecmp(name,"auditlog_filesize")) {
-		int intv=atoi(value);
-		if (intv >= 1024*1024 && intv <= 1*1024*1024*1024) {
-			variables.auditlog_filesize=intv;
 			return true;
 		} else {
 			return false;
@@ -2721,28 +1903,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			}
 		}
 		return false; // we couldn't set it to a valid value. It will be reset to default
-	}
-	if (!strcasecmp(name,"enable_client_deprecate_eof")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.enable_client_deprecate_eof=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.enable_client_deprecate_eof=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"enable_server_deprecate_eof")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.enable_server_deprecate_eof=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.enable_server_deprecate_eof=false;
-			return true;
-		}
-		return false;
 	}
 
 	if (!strncmp(name,"default_",8)) {
@@ -2988,208 +2148,10 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return false;
 	}
-	if (!strcasecmp(name,"client_found_rows")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.client_found_rows=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.client_found_rows=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"multiplexing")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.multiplexing=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.multiplexing=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"log_unhealthy_connections")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.log_unhealthy_connections=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.log_unhealthy_connections=false;
-			return true;
-		}
-		return false;
-	}
 	if (!strcasecmp(name,"forward_autocommit")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			proxy_error("Variable mysql-forward_autocommit is deprecated. See issue #3253\n");
 			return false;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"enforce_autocommit_on_reads")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.enforce_autocommit_on_reads=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.enforce_autocommit_on_reads=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"autocommit_false_not_reusable")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.autocommit_false_not_reusable=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.autocommit_false_not_reusable=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"autocommit_false_is_transaction")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.autocommit_false_is_transaction=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.autocommit_false_is_transaction=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"verbose_query_error")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.verbose_query_error=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.verbose_query_error=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"commands_stats")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.commands_stats=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.commands_stats=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"query_digests")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.query_digests=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.query_digests=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"query_digests_lowercase")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.query_digests_lowercase=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.query_digests_lowercase=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"query_digests_replace_null")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.query_digests_replace_null=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.query_digests_replace_null=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"query_digests_no_digits")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.query_digests_no_digits=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.query_digests_no_digits=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"query_digests_normalize_digest_text")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.query_digests_normalize_digest_text=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.query_digests_normalize_digest_text=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"query_digests_track_hostname")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.query_digests_track_hostname=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.query_digests_track_hostname=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"stats_time_backend_query")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.stats_time_backend_query=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.stats_time_backend_query=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"stats_time_query_processor")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.stats_time_query_processor=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.stats_time_query_processor=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"query_cache_stores_empty_result")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.query_cache_stores_empty_result=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.query_cache_stores_empty_result=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"connection_warming")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.connection_warming=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.connection_warming=false;
-			return true;
 		}
 		return false;
 	}
@@ -3216,72 +2178,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return false;
 	}
-	if (!strcasecmp(name,"sessions_sort")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.sessions_sort=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.sessions_sort=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"kill_backend_connection_when_disconnect")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.kill_backend_connection_when_disconnect=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.kill_backend_connection_when_disconnect=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"client_session_track_gtid")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.client_session_track_gtid=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.client_session_track_gtid=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"servers_stats")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.servers_stats=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.servers_stats=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"default_reconnect")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.default_reconnect=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.default_reconnect=false;
-			return true;
-		}
-		return false;
-	}
-	if (!strcasecmp(name,"log_mysql_warnings_enabled")) {
-		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			variables.log_mysql_warnings_enabled=true;
-			return true;
-		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			variables.log_mysql_warnings_enabled=false;
-			return true;
-		}
-		return false;
-	}
 	return false;
 }
 
@@ -3290,40 +2186,139 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 char ** MySQL_Threads_Handler::get_variables_list() {
 
 
+	// initialize VariablesPointers_bool
+	// it is safe to do it here because get_variables_list() is the first function called during start time
+	if (VariablesPointers_bool.size() == 0) {
+		VariablesPointers_bool["autocommit_false_is_transaction"] = make_tuple(&variables.autocommit_false_is_transaction, false);
+		VariablesPointers_bool["autocommit_false_not_reusable"]   = make_tuple(&variables.autocommit_false_not_reusable,   false);
+		VariablesPointers_bool["automatic_detect_sqli"]           = make_tuple(&variables.automatic_detect_sqli,           false);
+		VariablesPointers_bool["client_found_rows"]               = make_tuple(&variables.client_found_rows,               false);
+		VariablesPointers_bool["client_multi_statements"]         = make_tuple(&variables.client_multi_statements,         false);
+		VariablesPointers_bool["client_session_track_gtid"]       = make_tuple(&variables.client_session_track_gtid,       false);
+		VariablesPointers_bool["commands_stats"]                  = make_tuple(&variables.commands_stats,                  false);
+		VariablesPointers_bool["connection_warming"]              = make_tuple(&variables.connection_warming,              false);
+		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
+		VariablesPointers_bool["enable_client_deprecate_eof"]     = make_tuple(&variables.enable_client_deprecate_eof,     false);
+		VariablesPointers_bool["enable_server_deprecate_eof"]     = make_tuple(&variables.enable_server_deprecate_eof,     false);
+		VariablesPointers_bool["enforce_autocommit_on_reads"]     = make_tuple(&variables.enforce_autocommit_on_reads,     false);
+		VariablesPointers_bool["firewall_whitelist_enabled"]      = make_tuple(&variables.firewall_whitelist_enabled,      false);
+		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
+		VariablesPointers_bool["log_mysql_warnings_enabled"]      = make_tuple(&variables.log_mysql_warnings_enabled,      false);
+		VariablesPointers_bool["log_unhealthy_connections"]       = make_tuple(&variables.log_unhealthy_connections,       false);
+		VariablesPointers_bool["monitor_enabled"]                 = make_tuple(&variables.monitor_enabled,                 false);
+		VariablesPointers_bool["monitor_wait_timeout"]            = make_tuple(&variables.monitor_wait_timeout,            false);
+		VariablesPointers_bool["monitor_writer_is_also_reader"]   = make_tuple(&variables.monitor_writer_is_also_reader,   false);
+		VariablesPointers_bool["multiplexing"]                    = make_tuple(&variables.multiplexing,                    false);
+		VariablesPointers_bool["query_cache_stores_empty_result"] = make_tuple(&variables.query_cache_stores_empty_result, false);
+		VariablesPointers_bool["query_digests"]                   = make_tuple(&variables.query_digests,                   false);
+		VariablesPointers_bool["query_digests_lowercase"]         = make_tuple(&variables.query_digests_lowercase,         false);
+		VariablesPointers_bool["query_digests_replace_null"]      = make_tuple(&variables.query_digests_replace_null,      false);
+		VariablesPointers_bool["query_digests_no_digits"]         = make_tuple(&variables.query_digests_no_digits,         false);
+		VariablesPointers_bool["query_digests_normalize_digest_text"] = make_tuple(&variables.query_digests_normalize_digest_text, false);
+		VariablesPointers_bool["query_digests_track_hostname"]    = make_tuple(&variables.query_digests_track_hostname,    false);
+		VariablesPointers_bool["servers_stats"]                   = make_tuple(&variables.servers_stats,                   false);
+		VariablesPointers_bool["sessions_sort"]                   = make_tuple(&variables.sessions_sort,                   false);
+		VariablesPointers_bool["stats_time_backend_query"]        = make_tuple(&variables.stats_time_backend_query,        false);
+		VariablesPointers_bool["stats_time_query_processor"]      = make_tuple(&variables.stats_time_query_processor,      false);
+		VariablesPointers_bool["use_tcp_keepalive"]               = make_tuple(&variables.use_tcp_keepalive,               false);
+		VariablesPointers_bool["verbose_query_error"]             = make_tuple(&variables.verbose_query_error,             false);
+		
+
+	}
+
+
 	// initialize VariablesPointers_int
 	// it is safe to do it here because get_variables_list() is the first function called during start time
 	if (VariablesPointers_int.size() == 0) {
-		VariablesPointers_int["max_allowed_packet"] =                        make_tuple(&variables.max_allowed_packet,                        8192,   1024*1024*1024, false);
-		VariablesPointers_int["max_transaction_idle_time"] =                 make_tuple(&variables.max_transaction_idle_time,                 1000,  20*24*3600*1000, false);
-		VariablesPointers_int["max_transaction_time"] =                      make_tuple(&variables.max_transaction_time,                      1000,  20*24*3600*1000, false);
-		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup,    1,    100*1000*1000, false);
-		VariablesPointers_int["hostgroup_manager_verbose"]                 = make_tuple(&variables.hostgroup_manager_verbose,                    1,                2, false);
-		VariablesPointers_int["threshold_query_length"]                    = make_tuple(&variables.threshold_query_length,                    1024, 1*1024*1024*1024, false);
-		VariablesPointers_int["threshold_resultset_size"]                  = make_tuple(&variables.threshold_resultset_size,                  1024, 1*1024*1024*1024, false);
-		VariablesPointers_int["query_digests_max_digest_length"]           = make_tuple(&variables.query_digests_max_digest_length,             16,      1*1024*1024, false);
-		VariablesPointers_int["query_digests_max_query_length"]            = make_tuple(&variables.query_digests_max_query_length,              16,      1*1024*1024, false);
-		VariablesPointers_int["query_digests_grouping_limit"]              = make_tuple(&variables.query_digests_grouping_limit,                 1,             2089, false);
+		// Monitor variables
+		VariablesPointers_int["monitor_history"]                     = make_tuple(&variables.monitor_history,                  1000, 7*24*3600*1000, false);
 
+		VariablesPointers_int["monitor_connect_interval"]  = make_tuple(&variables.monitor_connect_interval,  100, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_connect_timeout"]   = make_tuple(&variables.monitor_connect_timeout,   100,       600*1000, false);
 
-		VariablesPointers_int["monitor_history"]                           = make_tuple(&variables.monitor_history,                           1000,   7*24*3600*1000, false);
-		VariablesPointers_int["monitor_connect_interval"]                  = make_tuple(&variables.monitor_connect_interval,                   100,   7*24*3600*1000, false);
-		VariablesPointers_int["monitor_connect_timeout"]                   = make_tuple(&variables.monitor_connect_timeout,                    100,         600*1000, false);
-		VariablesPointers_int["monitor_ping_interval"]                     = make_tuple(&variables.monitor_ping_interval,                      100,   7*24*3600*1000, false);
-		VariablesPointers_int["monitor_ping_timeout"]                      = make_tuple(&variables.monitor_ping_timeout,                       100,         600*1000, false);
-		VariablesPointers_int["monitor_ping_max_failures"]                 = make_tuple(&variables.monitor_ping_max_failures,                    1,        1000*1000, false);
-		VariablesPointers_int["monitor_read_only_interval"]                = make_tuple(&variables.monitor_read_only_interval,                 100,   7*24*3600*1000, false);
-		VariablesPointers_int["monitor_read_only_timeout"]                 = make_tuple(&variables.monitor_read_only_timeout,                  100,         600*1000, false);
-		VariablesPointers_int["monitor_read_only_max_timeout_count"]       = make_tuple(&variables.monitor_read_only_max_timeout_count,          1,        1000*1000, false);
-		VariablesPointers_int["monitor_replication_lag_interval"]          = make_tuple(&variables.monitor_replication_lag_interval,           100,   7*24*3600*1000, false);
-		VariablesPointers_int["monitor_replication_lag_timeout"]           = make_tuple(&variables.monitor_replication_lag_timeout,            100,         600*1000, false);
-		VariablesPointers_int["monitor_replication_lag_count"]             = make_tuple(&variables.monitor_replication_lag_count      ,          1,               10, false);
+		VariablesPointers_int["monitor_ping_interval"]     = make_tuple(&variables.monitor_ping_interval,     100, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_ping_timeout"]      = make_tuple(&variables.monitor_ping_timeout,      100,       600*1000, false);
+		VariablesPointers_int["monitor_ping_max_failures"] = make_tuple(&variables.monitor_ping_max_failures,   1,      1000*1000, false);
+
+		VariablesPointers_int["monitor_read_only_interval"]          = make_tuple(&variables.monitor_read_only_interval,        100, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_read_only_timeout"]           = make_tuple(&variables.monitor_read_only_timeout,         100,       600*1000, false);
+		VariablesPointers_int["monitor_read_only_max_timeout_count"] = make_tuple(&variables.monitor_read_only_max_timeout_count, 1,      1000*1000, false);
+
+		VariablesPointers_int["monitor_replication_lag_interval"]    = make_tuple(&variables.monitor_replication_lag_interval,  100, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_replication_lag_timeout"]     = make_tuple(&variables.monitor_replication_lag_timeout,   100,       600*1000, false);
+		VariablesPointers_int["monitor_replication_lag_count"]       = make_tuple(&variables.monitor_replication_lag_count,       1,             10, false);
 
 		VariablesPointers_int["monitor_groupreplication_healthcheck_interval"]          = make_tuple(&variables.monitor_groupreplication_healthcheck_interval,          100, 7*24*3600*1000, false);
 		VariablesPointers_int["monitor_groupreplication_healthcheck_timeout"]           = make_tuple(&variables.monitor_groupreplication_healthcheck_timeout,           100,       600*1000, false);
 		VariablesPointers_int["monitor_groupreplication_healthcheck_max_timeout_count"] = make_tuple(&variables.monitor_groupreplication_healthcheck_max_timeout_count,   1,             10, false);
 		VariablesPointers_int["monitor_groupreplication_max_transactions_behind_count"] = make_tuple(&variables.monitor_groupreplication_max_transactions_behind_count,   1,             10, false);
-	}
 
+		VariablesPointers_int["monitor_galera_healthcheck_interval"]          = make_tuple(&variables.monitor_galera_healthcheck_interval,          50, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_galera_healthcheck_timeout"]           = make_tuple(&variables.monitor_galera_healthcheck_timeout,           50,       600*1000, false);
+		VariablesPointers_int["monitor_galera_healthcheck_max_timeout_count"] = make_tuple(&variables.monitor_galera_healthcheck_max_timeout_count,  1,             10, false);
+
+		VariablesPointers_int["monitor_query_interval"] = make_tuple(&variables.monitor_query_interval,  100, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_query_timeout"]  = make_tuple(&variables.monitor_query_timeout,   100,       600*1000, false);
+
+		VariablesPointers_int["monitor_threads_min"]    = make_tuple(&variables.monitor_threads_min, 2,  16, false);
+		VariablesPointers_int["monitor_threads_max"]    = make_tuple(&variables.monitor_threads_max, 4, 256, false);
+
+		VariablesPointers_int["monitor_slave_lag_when_null"]   = make_tuple(&variables.monitor_slave_lag_when_null,    0, 604800, false);
+		VariablesPointers_int["monitor_threads_queue_maxsize"] = make_tuple(&variables.monitor_threads_queue_maxsize, 16,   1024, false);
+
+		// mirroring
+		VariablesPointers_int["mirror_max_concurrency"]  = make_tuple(&variables.mirror_max_concurrency, 1,     8*1024, false);
+		VariablesPointers_int["mirror_max_queue_length"] = make_tuple(&variables.mirror_max_queue_length, 0, 1024*1024, false);
+		// query processor and query digest
+		VariablesPointers_int["auto_increment_delay_multiplex"]  = make_tuple(&variables.auto_increment_delay_multiplex,   0,     1000000, false);
+		VariablesPointers_int["default_query_delay"]             = make_tuple(&variables.default_query_delay,              0,   3600*1000, false);
+		VariablesPointers_int["default_query_timeout"]           = make_tuple(&variables.default_query_timeout,            0,   1000*1000, false);
+		VariablesPointers_int["query_digests_grouping_limit"]    = make_tuple(&variables.query_digests_grouping_limit,     1,        2089, false);
+		VariablesPointers_int["query_digests_max_digest_length"] = make_tuple(&variables.query_digests_max_digest_length, 16, 1*1024*1024, false);
+		VariablesPointers_int["query_digests_max_query_length"]  = make_tuple(&variables.query_digests_max_query_length,  16, 1*1024*1024, false);
+		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
+		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
+		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
+		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
+
+		// throttle
+		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
+		VariablesPointers_int["throttle_max_bytes_per_second_to_client"]   = make_tuple(&variables.throttle_max_bytes_per_second_to_client,   0,    2147483647, false);
+		VariablesPointers_int["throttle_ratio_server_to_client"]           = make_tuple(&variables.throttle_ratio_server_to_client,           0,           100, false);
+		// backend management
+		VariablesPointers_int["default_max_latency_ms"]     = make_tuple(&variables.default_max_latency_ms,     0, 20*24*3600*1000, false);
+		VariablesPointers_int["free_connections_pct"]       = make_tuple(&variables.free_connections_pct,       0,             100, false);
+		VariablesPointers_int["reset_connection_algorithm"] = make_tuple(&variables.reset_connection_algorithm, 1,               2, false);
+		VariablesPointers_int["shun_on_failures"]           = make_tuple(&variables.shun_on_failures,           0,        10000000, false);
+		VariablesPointers_int["shun_recovery_time_sec"]     = make_tuple(&variables.shun_recovery_time_sec,     0,     3600*24*365, false);
+		VariablesPointers_int["hostgroup_manager_verbose"]  = make_tuple(&variables.hostgroup_manager_verbose,  1,               2, false);
+		VariablesPointers_int["tcp_keepalive_time"]         = make_tuple(&variables.tcp_keepalive_time,         0,            7200, false);
+		// connection management
+		VariablesPointers_int["connect_retries_on_failure"]    = make_tuple(&variables.connect_retries_on_failure,    0,           1000, false);
+		VariablesPointers_int["connect_retries_delay"]         = make_tuple(&variables.connect_retries_delay,         0,          10000, false);
+		VariablesPointers_int["connect_timeout_client"]        = make_tuple(&variables.connect_timeout_client,      500,      3600*1000, false);
+		VariablesPointers_int["connect_timeout_server"]        = make_tuple(&variables.connect_timeout_server,       10,       120*1000, false);
+		VariablesPointers_int["connect_timeout_server_max"]    = make_tuple(&variables.connect_timeout_server_max,   10,      3600*1000, false);
+		VariablesPointers_int["connection_delay_multiplex_ms"] = make_tuple(&variables.connection_delay_multiplex_ms, 0,       300*1000, false);
+		VariablesPointers_int["connection_max_age_ms"]         = make_tuple(&variables.connection_max_age_ms,         0,   3600*24*1000, false);
+		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
+		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
+		// logs
+		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
+		VariablesPointers_int["eventslog_filesize"]    = make_tuple(&variables.eventslog_filesize,   1024*1024, 1*1024*1024*1024, false);
+		VariablesPointers_int["eventslog_default_log"] = make_tuple(&variables.eventslog_default_log,        0,                1, false);
+		// various
+		VariablesPointers_int["long_query_time"]           = make_tuple(&variables.long_query_time,              0,  20*24*3600*1000, false);
+		VariablesPointers_int["max_allowed_packet"]        = make_tuple(&variables.max_allowed_packet,        8192,   1024*1024*1024, false);
+		VariablesPointers_int["max_connections"]           = make_tuple(&variables.max_connections,              1,        1000*1000, false);
+		VariablesPointers_int["max_stmts_per_connection"]  = make_tuple(&variables.max_stmts_per_connection,     1,             1024, false);
+		VariablesPointers_int["max_stmts_cache"]           = make_tuple(&variables.max_stmts_cache,           1024,        1024*1024, false);
+		VariablesPointers_int["max_transaction_idle_time"] = make_tuple(&variables.max_transaction_idle_time, 1000,  20*24*3600*1000, false);
+		VariablesPointers_int["max_transaction_time"]      = make_tuple(&variables.max_transaction_time,      1000,  20*24*3600*1000, false);
+		VariablesPointers_int["query_cache_size_MB"]       = make_tuple(&variables.query_cache_size_MB,          0,       1024*10240, false);
+		VariablesPointers_int["threshold_query_length"]    = make_tuple(&variables.threshold_query_length,    1024, 1*1024*1024*1024, false);
+		VariablesPointers_int["threshold_resultset_size"]  = make_tuple(&variables.threshold_resultset_size,  1024, 1*1024*1024*1024, false);
+	}
 
 	const size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 	unsigned int i;
