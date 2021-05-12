@@ -10,12 +10,13 @@
 #include "re2/regexp.h"
 #include "util/test.h"
 #include "set_parser.h"
+#include <string>
 #include <vector>
 #include <map>
 #include <algorithm>
 #include <iostream>
 
-bool iequals(const string& a, const string& b)
+bool iequals(const std::string& a, const std::string& b)
 {
     unsigned int sz = a.size();
     if (b.size() != sz)
@@ -88,7 +89,7 @@ static Test sql_mode[] = {
   { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", {} }
 };
 
-void TestParse(const Test* tests, int ntests, const string& title) {
+void TestParse(const Test* tests, int ntests, const std::string& title) {
   for (int i = 0; i < ntests; i++) {
     std::map<std::string, std::vector<std::string>> data;
     for(auto it = std::begin(tests[i].results); it != std::end(tests[i].results); ++it) {
