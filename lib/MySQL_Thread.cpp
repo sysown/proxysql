@@ -4093,7 +4093,6 @@ void MySQL_Thread::unregister_session(int idx) {
 
 // this function was inline in MySQL_Thread::run()
 void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
-	int rc;
 	int i;
 	num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server_msec*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 	for (i=0; i<num_idles; i++) {
@@ -4127,8 +4126,7 @@ void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 
 // this function was inline in MySQL_Thread::run()
 void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
-	unsigned int n;
-	for (n = 0; n < mypolls.len; n++) {
+	for (unsigned int n = 0; n < mypolls.len; n++) {
 		MySQL_Data_Stream *myds=NULL;
 		myds=mypolls.myds[n];
 		mypolls.fds[n].revents=0;
@@ -4166,7 +4164,6 @@ void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
 
 // this function was inline in MySQL_Thread::run()
 void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
-	int rc;
 	for (unsigned int n = 0; n < mypolls.len; n++) {
 		proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
 
