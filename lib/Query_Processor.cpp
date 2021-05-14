@@ -1687,7 +1687,9 @@ __exit_process_mysql_query:
 	if (len < stackbuffer_size) {
 		// query is in the stack
 	} else {
-		l_free(len+1,query);
+		if (ptr) {
+			l_free(len+1,query);
+		}
 	}
 	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
 		if (qp && qp->first_comment) {
