@@ -1152,6 +1152,7 @@ void * monitor_read_only_thread(void *arg) {
 
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
+#ifndef TEST_READONLY
 	if (mmsd->task_id == MON_INNODB_READ_ONLY) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.innodb_read_only read_only");
 	} else if (mmsd->task_id == MON_SUPER_READ_ONLY) {
@@ -1163,6 +1164,13 @@ void * monitor_read_only_thread(void *arg) {
 	} else { // default
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only read_only");
 	}
+#else // TEST_READONLY
+	{
+		std::string s = "SELECT @@global.read_only read_only";
+		s += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,s.c_str());
+	}
+#endif // TEST_READONLY
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 		unsigned long long now=monotonic_time();

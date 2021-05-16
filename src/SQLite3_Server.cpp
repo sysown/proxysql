@@ -251,7 +251,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	memcpy(query,(char *)pkt->ptr+sizeof(mysql_hdr)+1,query_length-1);
 	query[query_length-1]=0;
 
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY)
 	if (sess->client_myds->proxy_addr.addr == NULL) {
 		struct sockaddr addr;
 		socklen_t addr_len=sizeof(struct sockaddr);
@@ -281,7 +281,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 			sess->client_myds->proxy_addr.addr = strdup("unknown");
 		}
 	}
-#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY
 
 	char *query_no_space=(char *)l_alloc(query_length);
 	memcpy(query_no_space,query,query_length);
@@ -356,13 +356,13 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY)
 			char *a = (char *)"SELECT '(ProxySQL Automated Test Server) - %s'";
 			query = (char *)malloc(strlen(a)+strlen(sess->client_myds->proxy_addr.addr));
 			sprintf(query,a,sess->client_myds->proxy_addr.addr);
 #else
 			query=l_strdup("SELECT '(ProxySQL SQLite3 Server)'");
-#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
@@ -538,7 +538,7 @@ __end_show_commands:
 
 __run_query:
 	if (run_query) {
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
 #ifdef TEST_AURORA
 			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
@@ -559,6 +559,24 @@ __run_query:
 				if (testLag > 0) testLag--;
 			}
 #endif // TEST_GROUPREP
+#ifdef TEST_READONLY
+			if (strncasecmp("SELECT @@global.read_only read_only ",query_no_space, strlen("SELECT @@global.read_only read_only "))==0) {
+				if (strlen(query_no_space) > strlen("SELECT @@global.read_only read_only ")+5) {
+					pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
+					// the current test doesn't try to simulate failures, therefore it will return immediately
+					if (GloSQLite3Server->readonly_map_size() == 0) {
+						// probably never initialized
+						GloSQLite3Server->load_readonly_table(sess);
+					}
+					int rc = GloSQLite3Server->readonly_test_value(query_no_space+strlen("SELECT @@global.read_only read_only "));
+					free(query);
+					char *a = (char *)"SELECT %d as read_only";
+					query = (char *)malloc(strlen(a)+2);
+					sprintf(query,a,rc);
+					pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
+				}
+			}
+#endif // TEST_READONLY
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
 				free(query);
 				char *a = (char *)"SELECT %d as Seconds_Behind_Master";
@@ -566,7 +584,7 @@ __run_query:
 				sprintf(query,a,rand()%30+10);
 			}
 		}
-#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
@@ -626,6 +644,16 @@ __run_query:
 		}
 		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, in_trans);
 		delete resultset;
+#ifdef TEST_READONLY
+		if (strncasecmp("SELECT",query_no_space,6)) {
+			if (strstr(query_no_space,(char *)"READONLY_STATUS")) {
+				// the table is writable
+				pthread_mutex_lock(&GloSQLite3Server->test_readonly_mutex);
+				GloSQLite3Server->load_readonly_table(sess);
+				pthread_mutex_unlock(&GloSQLite3Server->test_readonly_mutex);
+			}
+		}
+#endif // TEST_READONLY
 	}
 	l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 	l_free(query_length,query);
@@ -930,7 +958,7 @@ SQLite3_Server::SQLite3_Server() {
 
 	variables.read_only=false;
 
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY)
 	string s = "";
 
 #ifdef TEST_AURORA
@@ -944,12 +972,17 @@ SQLite3_Server::SQLite3_Server() {
 #ifdef TEST_GROUPREP
 	init_grouprep_ifaces_string(s);
 #endif // TEST_GROUPREP
-
+#ifdef TEST_READONLY
+	// for readonly test we listen on all IPs because we simulate a lot of clusters
+	if (!s.empty())
+		s += ";";
+	s += "0.0.0.0:3306";
+#endif //TEST_READONLY
 	variables.mysql_ifaces=strdup(s.c_str());
 
 #else
 	variables.mysql_ifaces=strdup("127.0.0.1:6030");
-#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
+#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY
 };
 
 
@@ -1102,7 +1135,7 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind
 #endif // TEST_GALERA
 
 
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY)
 void SQLite3_Server::insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def) {
 	table_def_t *td = new table_def_t;
 	td->table_name=strdup(table_name);
@@ -1132,7 +1165,7 @@ void SQLite3_Server::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
 		delete td;
 	}
 };
-#endif // TEST_AURORA || TEST_GALERA || defined(TEST_GROUPREP)
+#endif // TEST_AURORA || TEST_GALERA || defined(TEST_GROUPREP) || defined(TEST_READONLY)
 
 void SQLite3_Server::wrlock() {
 	pthread_rwlock_wrlock(&rwlock);
@@ -1174,6 +1207,14 @@ bool SQLite3_Server::init() {
 	check_and_build_standard_tables(sessdb, tables_defs_grouprep);
 	GloAdmin->enable_grouprep_testing();
 #endif // TEST_GALERA
+#ifdef TEST_READONLY
+	tables_defs_readonly = new std::vector<table_def_t *>;
+	insert_into_tables_defs(tables_defs_readonly,
+		(const char *)"READONLY_STATUS",
+		(const char*)"CREATE TABLE READONLY_STATUS (hostname VARCHAR NOT NULL , port INT NOT NULL , read_only INT NOT NULL CHECK (read_only IN (0, 1)) DEFAULT 1 , PRIMARY KEY (hostname, port))");
+	check_and_build_standard_tables(sessdb, tables_defs_readonly);
+	GloAdmin->enable_readonly_testing();
+#endif // TEST_READONLY
 
 	child_func[0]=child_mysql;
 	main_shutdown=0;
@@ -1282,3 +1323,44 @@ void SQLite3_Server::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",msg);
 	myds->DSS=STATE_SLEEP;
 }
+
+#ifdef TEST_READONLY
+void SQLite3_Server::load_readonly_table(MySQL_Session *sess) {
+	// this function needs to be called with lock on mutex readonly_mutex already acquired
+	readonly_map.clear();
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+    SQLite3_result *resultset=NULL;
+	sessdb->execute_statement((char *)"SELECT * FROM READONLY_STATUS", &error , &cols , &affected_rows , &resultset);
+	if (resultset) {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			std::string s = std::string(r->fields[0])+":"+std::string(r->fields[1]);
+			int ro = atoi(r->fields[2]);
+			bool b = ( ro ? true : false );
+			readonly_map[s]=b;
+		}
+	}
+	delete resultset;
+	if (readonly_map.size()==0) {
+		GloAdmin->admindb->execute_statement((char *)"SELECT DISTINCT hostname, port FROM mysql_servers WHERE hostgroup_id BETWEEN 4202 AND 4700", &error , &cols , &affected_rows , &resultset);
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			std::string s = "INSERT INTO READONLY_STATUS VALUES ('" + std::string(r->fields[0]) + "'," + std::string(r->fields[1]) + ",1)";
+			sessdb->execute(s.c_str());
+		}
+		delete resultset;
+	}
+}
+
+int SQLite3_Server::readonly_test_value(char *p) {
+	int rc = 1; // default read_only
+	std::string s = std::string(p);
+	std::unordered_map<std::string, bool>::iterator it = readonly_map.find(s);
+	if (it != readonly_map.end()) {
+		rc = it->second;
+	}
+	return rc;
+}
+#endif // TEST_READONLY
