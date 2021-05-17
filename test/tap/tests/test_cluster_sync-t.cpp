@@ -975,7 +975,7 @@ int main(int, char**) {
 			std::make_tuple("mysql-monitor_writer_is_also_reader"                          , "true"                       ),
 			std::make_tuple("mysql-max_allowed_packet"                                     , "67108864"                   ),
 			std::make_tuple("mysql-tcp_keepalive_time"                                     , "0"                          ),
-			std::make_tuple("mysql-use_tcp_keepalive"                                      , "0"                          ),
+			std::make_tuple("mysql-use_tcp_keepalive"                                      , "false"                      ),
 			std::make_tuple("mysql-automatic_detect_sqli"                                  , "0"                          ),
 			std::make_tuple("mysql-firewall_whitelist_enabled"                             , "0"                          ),
 			std::make_tuple("mysql-firewall_whitelist_errormsg"                            , "Firewall blocked this query"),
