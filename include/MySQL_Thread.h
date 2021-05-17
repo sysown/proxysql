@@ -368,6 +368,20 @@ class MySQL_Threads_Handler
 	pthread_rwlock_t rwlock;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;
+	// VariablesPointers_int stores:
+	// key: variable name
+	// tuple:
+	//   variable address
+	//   min value
+	//   max value
+	//   special variable : if true, min and max values are ignored, and further input validation is required
+	std::unordered_map<std::string, std::tuple<int *, int, int, bool>> VariablesPointers_int;
+	// VariablesPointers_bool stores:
+	// key: variable name
+	// tuple:
+	//   variable address
+	//   special variable : if true, further input validation is required
+	std::unordered_map<std::string, std::tuple<bool *, bool>> VariablesPointers_bool;
 	public:
 	struct {
 		int monitor_history;
@@ -434,7 +448,7 @@ class MySQL_Threads_Handler
 		char *server_version;
 		char *keep_multiplexing_variables;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
-		unsigned int handle_unknown_charset;
+		int handle_unknown_charset;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
@@ -552,7 +566,6 @@ class MySQL_Threads_Handler
 	~MySQL_Threads_Handler();
 	
 	char *get_variable_string(char *name);
-	unsigned int get_variable_uint(char *name);
 	uint16_t get_variable_uint16(char *name);
 	int get_variable_int(const char *name);
 	void print_version();
