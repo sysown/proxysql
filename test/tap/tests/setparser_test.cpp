@@ -16,6 +16,24 @@
 #include <algorithm>
 #include <iostream>
 
+// *******************************************************************************************
+/**
+ * TODO: This should be fixed once we have improved include hierarchy. All the following
+ * includes are required to avoid the following linker error related to 'GloMyLdapAuth':
+ *
+ * ```
+ * /usr/bin/ld: ../../../lib/libproxysql.a(ProxySQL_GloVars.oo): in function `ProxySQL_GlobalVariables::generate_global_checksum()':
+ * /home/javjarfer/Projects/proxysql_v2.2.0/lib/ProxySQL_GloVars.cpp:374: undefined reference to `GloMyLdapAuth'
+ * ```
+ *
+ * For now we just declare it locally to avoid the linking error.
+ */
+#include "openssl/ssl.h"
+#include "proxysql_structs.h"
+#include "MySQL_LDAP_Authentication.hpp"
+MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
+// ******************************************************************************************
+
 bool iequals(const std::string& a, const std::string& b)
 {
     unsigned int sz = a.size();
