@@ -46,6 +46,8 @@ std::vector<std::pair<std::string, std::string>> filtered_set_queries {
 	{ "session_track_gtids", "OWN_GTID" },
 	{ "interactive_timeout", "28801" },
 	{ "net_read_timeout", "28801" },
+	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
+	{ "session_track_schema", "1" },
 };
 
 std::vector<std::string> get_valid_set_query_set(const std::string& set_query, const std::string param) {

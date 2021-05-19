@@ -535,17 +535,20 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_proxysql_servers_diffs_before_sync",
 	(char *)"cluster_mysql_variables_diffs_before_sync",
 	(char *)"cluster_admin_variables_diffs_before_sync",
+	(char *)"cluster_ldap_variables_diffs_before_sync",
 	(char *)"cluster_mysql_query_rules_save_to_disk",
 	(char *)"cluster_mysql_servers_save_to_disk",
 	(char *)"cluster_mysql_users_save_to_disk",
 	(char *)"cluster_proxysql_servers_save_to_disk",
 	(char *)"cluster_mysql_variables_save_to_disk",
 	(char *)"cluster_admin_variables_save_to_disk",
+	(char *)"cluster_ldap_variables_save_to_disk",
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
 	(char *)"checksum_mysql_users",
 	(char *)"checksum_mysql_variables",
 	(char *)"checksum_admin_variables",
+	(char *)"checksum_ldap_variables",
 	(char *)"restapi_enabled",
 	(char *)"restapi_port",
 	(char *)"web_enabled",
@@ -5265,17 +5268,20 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_proxysql_servers_diffs_before_sync = 3;
 	variables.cluster_mysql_variables_diffs_before_sync = 3;
 	variables.cluster_admin_variables_diffs_before_sync = 3;
+	variables.cluster_ldap_variables_diffs_before_sync = 3;
 	checksum_variables.checksum_mysql_query_rules = true;
 	checksum_variables.checksum_mysql_servers = true;
 	checksum_variables.checksum_mysql_users = true;
 	checksum_variables.checksum_mysql_variables = true;
 	checksum_variables.checksum_admin_variables = true;
+	checksum_variables.checksum_ldap_variables = true;
 	variables.cluster_mysql_query_rules_save_to_disk = true;
 	variables.cluster_mysql_servers_save_to_disk = true;
 	variables.cluster_mysql_users_save_to_disk = true;
 	variables.cluster_proxysql_servers_save_to_disk = true;
 	variables.cluster_mysql_variables_save_to_disk = true;
 	variables.cluster_admin_variables_save_to_disk = true;
+	variables.cluster_ldap_variables_save_to_disk = true;
 	variables.stats_mysql_connection_pool = 60;
 	variables.stats_mysql_connections = 60;
 	variables.stats_mysql_query_cache = 60;
@@ -6935,6 +6941,33 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 			}
 		}
 		GloMyLdapAuth->wrunlock();
+
+		// update variables checksum
+		if (checksum_variables.checksum_ldap_variables) {
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			// generate checksum for cluster
+			flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
+			char *error=NULL;
+			int cols=0;
+			int affected_rows=0;
+			SQLite3_result *resultset=NULL;
+			char *q=(char *)"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'ldap-\%' ORDER BY variable_name";
+			admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+			uint64_t hash1 = resultset->raw_checksum();
+			uint32_t d32[2];
+			char buf[20];
+			memcpy(&d32, &hash1, sizeof(hash1));
+			sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+			GloVars.checksums_values.ldap_variables.set_checksum(buf);
+			GloVars.checksums_values.ldap_variables.version++;
+			time_t t = time(NULL);
+			GloVars.checksums_values.ldap_variables.epoch = t;
+			GloVars.epoch_version = t;
+			GloVars.generate_global_checksum();
+			GloVars.checksums_values.updates_cnt++;
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+			delete resultset;
+		}
 	}
 	if (resultset) delete resultset;
 }
@@ -7099,6 +7132,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.cluster_admin_variables_diffs_before_sync);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"cluster_ldap_variables_diffs_before_sync")) {
+		sprintf(intbuf,"%d",variables.cluster_ldap_variables_diffs_before_sync);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"cluster_mysql_query_rules_save_to_disk")) {
 		return strdup((variables.cluster_mysql_query_rules_save_to_disk ? "true" : "false"));
 	}
@@ -7116,6 +7153,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	}
 	if (!strcasecmp(name,"cluster_admin_variables_save_to_disk")) {
 		return strdup((variables.cluster_admin_variables_save_to_disk ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"cluster_ldap_variables_save_to_disk")) {
+		return strdup((variables.cluster_ldap_variables_save_to_disk ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"refresh_interval")) {
 		sprintf(intbuf,"%d",variables.refresh_interval);
@@ -7144,6 +7184,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	}
 	if (!strcasecmp(name,"checksum_admin_variables")) {
 		return strdup((checksum_variables.checksum_admin_variables ? "true" : "false"));
+	}
+	if (!strcasecmp(name,"checksum_ldap_variables")) {
+		return strdup((checksum_variables.checksum_ldap_variables ? "true" : "false"));
 	}
 	if (!strcasecmp(name,"restapi_enabled")) {
 		return strdup((variables.restapi_enabled ? "true" : "false"));
@@ -7609,6 +7652,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"cluster_ldap_variables_diffs_before_sync")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 1000) {
+			variables.cluster_ldap_variables_diffs_before_sync=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name,"version")) {
 		if (strcasecmp(value,(char *)PROXYSQL_VERSION)==0) {
 			return true;
@@ -7775,6 +7828,20 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		return rt;
 	}
+	if (!strcasecmp(name,"cluster_ldap_variables_save_to_disk")) {
+		bool rt = false;
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			variables.cluster_ldap_variables_save_to_disk=true;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_save_to_disk, true);
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			variables.cluster_ldap_variables_save_to_disk=false;
+			rt = __sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_save_to_disk, false);
+			return true;
+		}
+		return rt;
+	}
 	if (!strcasecmp(name,"checksum_mysql_query_rules")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			checksum_variables.checksum_mysql_query_rules=true;
@@ -7826,6 +7893,17 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_admin_variables=false;
+			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"checksum_ldap_variables")) {
+		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
+			checksum_variables.checksum_ldap_variables=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			checksum_variables.checksum_ldap_variables=false;
 			return true;
 		}
 		return false;
@@ -9774,6 +9852,14 @@ void ProxySQL_Admin::flush_admin_variables__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+void ProxySQL_Admin::flush_ldap_variables__from_memory_to_disk() {
+	admindb->wrlock();
+	admindb->execute("PRAGMA foreign_keys = OFF");
+	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'ldap-%'");
+	admindb->execute("PRAGMA foreign_keys = ON");
+	admindb->wrunlock();
+}
+
 void ProxySQL_Admin::__attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias) {
 	const char *a="ATTACH DATABASE '%s' AS %s";
 	int l=strlen(a)+strlen(db2->get_url())+strlen(alias)+5;
@@ -10270,6 +10356,16 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 	SAFE_SQLITE3_STEP2(statement1);
 	rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+
+	if (GloMyLdapAuth) {
+		rc=(*proxy_sqlite3_bind_text)(statement1, 1, "ldap_variables", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, GloVars.checksums_values.ldap_variables.version); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, GloVars.checksums_values.ldap_variables.epoch); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_bind_text)(statement1, 4, GloVars.checksums_values.ldap_variables.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+		SAFE_SQLITE3_STEP2(statement1);
+		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	}
 
 	admindb->execute((char *)"COMMIT");
 	pthread_mutex_unlock(&GloVars.checksum_mutex);

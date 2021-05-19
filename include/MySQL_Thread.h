@@ -216,14 +216,21 @@ class MySQL_Thread
   ~MySQL_Thread();
   MySQL_Session * create_new_session_and_client_data_stream(int _fd);
   bool init();
-  void run();
+	void run___get_multiple_idle_connections(int& num_idles);
+	void run___cleanup_mirror_queue();
+  	void ProcessAllMyDS_BeforePoll();
+  	void ProcessAllMyDS_AfterPoll();
+	void run();
   void poll_listener_add(int sock);
   void poll_listener_del(int sock);
   void register_session(MySQL_Session*, bool up_start=true);
   void unregister_session(int);
   struct pollfd * get_pollfd(unsigned int i);
   bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
-  void process_all_sessions();
+	void ProcessAllSessions_SortingSessions();
+	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess);
+	void ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
+	void process_all_sessions();
   void refresh_variables();
   void register_session_connection_handler(MySQL_Session *_sess, bool _new=false);
   void unregister_session_connection_handler(int idx, bool _new=false);
@@ -361,6 +368,20 @@ class MySQL_Threads_Handler
 	pthread_rwlock_t rwlock;
 	PtrArray *bind_fds;
 	MySQL_Listeners_Manager *MLM;
+	// VariablesPointers_int stores:
+	// key: variable name
+	// tuple:
+	//   variable address
+	//   min value
+	//   max value
+	//   special variable : if true, min and max values are ignored, and further input validation is required
+	std::unordered_map<std::string, std::tuple<int *, int, int, bool>> VariablesPointers_int;
+	// VariablesPointers_bool stores:
+	// key: variable name
+	// tuple:
+	//   variable address
+	//   special variable : if true, further input validation is required
+	std::unordered_map<std::string, std::tuple<bool *, bool>> VariablesPointers_bool;
 	public:
 	struct {
 		int monitor_history;
@@ -427,7 +448,7 @@ class MySQL_Threads_Handler
 		char *server_version;
 		char *keep_multiplexing_variables;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
-		unsigned int handle_unknown_charset;
+		int handle_unknown_charset;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
@@ -545,7 +566,6 @@ class MySQL_Threads_Handler
 	~MySQL_Threads_Handler();
 	
 	char *get_variable_string(char *name);
-	unsigned int get_variable_uint(char *name);
 	uint16_t get_variable_uint16(char *name);
 	int get_variable_int(const char *name);
 	void print_version();
