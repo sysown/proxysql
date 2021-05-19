@@ -43,7 +43,8 @@
   typedef  uint8_t   uint8;
 #endif
 
-
+#ifndef SpookyHash_CLASS_H
+#define SpookyHash_CLASS_H
 class SpookyHash
 {
 public:
@@ -295,5 +296,5 @@ private:
     uint8  m_remainder;          // length of unhashed data stashed in m_data
 };
 
-
+#endif // SpookyHash_CLASS_H
 

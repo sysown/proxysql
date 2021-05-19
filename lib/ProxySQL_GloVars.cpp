@@ -4,7 +4,6 @@
 #include <string>
 #include <sys/utsname.h>
 #include <prometheus/registry.h>
-#include "SpookyV2.h"
 #include <cxxabi.h>
 
 static void term_handler(int sig) {

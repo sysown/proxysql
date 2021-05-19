@@ -1,7 +1,6 @@
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
-#include "SpookyV2.h"
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -62,113 +61,7 @@ class MySrvC;
 class MySrvList;
 class MyHGC;
 
-/*
-class HGM_query_errors_stats {
-	public:
-	int hid;
-	char *hostname;
-	int port;
-	char *username;
-	char *schemaname;
-	int error_no;
-	unsigned int count_star;
-	time_t first_seen;
-	time_t last_seen;
-	char *last_error;
-	HGM_query_errors_stats(int _h, char *_hn, int _p, char *u, char *s, int e, char *le) {
-		hid=_h;
-		hostname=strdup(_hn);
-		port=_p;
-		username=strdup(u);
-		schemaname=strdup(s);
-		error_no=e;
-		last_error=strdup(le);
-		count_star=0;
-		first_seen=0;
-		last_seen=0;
-	}
-	void add_time(unsigned long long n, char *le) {
-		count_star++;
-		if (first_seen==0) {
-			first_seen=n;
-		}
-		last_seen=n;
-		if (strcmp(last_error,le)){
-			free(last_error);
-			last_error=strdup(le);
-		}
-	}
-	~HGM_query_errors_stats() {
-		if (hostname) {
-			free(hostname);
-			hostname=NULL;
-		}
-		if (username) {
-			free(username);
-			username=NULL;
-		}
-		if (schemaname) {
-			free(schemaname);
-			schemaname=NULL;
-		}
-		if (last_error) {
-			free(last_error);
-			last_error=NULL;
-		}
-	}
-	char **get_row() {
-		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*10);
-		sprintf(buf,"%d",hid);
-		pta[0]=strdup(buf);
-		assert(hostname);
-		pta[1]=strdup(hostname);
-		sprintf(buf,"%d",port);
-		pta[2]=strdup(buf);
-		assert(username);
-		pta[3]=strdup(username);
-		assert(schemaname);
-		pta[4]=strdup(schemaname);
-		sprintf(buf,"%d",error_no);
-		pta[5]=strdup(buf);
-
-		sprintf(buf,"%u",count_star);
-		pta[6]=strdup(buf);
-
-		time_t __now;
-		time(&__now);
-		unsigned long long curtime=monotonic_time();
-		time_t seen_time;
-
-		seen_time= __now - curtime/1000000 + first_seen/1000000;
-		sprintf(buf,"%ld", seen_time);
-		pta[7]=strdup(buf);
-
-		seen_time= __now - curtime/1000000 + last_seen/1000000;
-		sprintf(buf,"%ld", seen_time);
-		pta[8]=strdup(buf);
-
-		assert(last_error);
-		pta[9]=strdup(last_error);
-		return pta;
-	}
-	void free_row(char **pta) {
-		int i;
-		for (i=0;i<10;i++) {
-			assert(pta[i]);
-			free(pta[i]);
-		}
-		free(pta);
-	}
-};
-
-*/
-
-//static struct ev_async * gtid_ev_async;
-
 static pthread_mutex_t ev_loop_mutex;
-
-//static std::unordered_map <string, Gtid_Server_Info *> gtid_map;
 
 static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int revents) {
 	if (glovars.shutdown) {
@@ -1913,155 +1806,21 @@ bool MySQL_HostGroups_Manager::commit() {
 		SpookyHash myhash;
 		char buf[80];
 		bool init = false;
-/* removing all this code, because we need them ordered
-		MySrvC *mysrvc=NULL;
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-			for (unsigned int j=0; j<myhgc->mysrvs->servers->len; j++) {
-				if (init == false) {
-					init = true;
-					myhash.Init(19,3);
-				}
-				mysrvc=myhgc->mysrvs->idx(j);
-				// hostgroup
-				sprintf(buf,"%u",mysrvc->myhgc->hid);
-				myhash.Update(buf,strlen(buf));
-				// hoatname
-				if (mysrvc->address) {
-					myhash.Update(mysrvc->address,strlen(mysrvc->address));
-				} else { myhash.Update("",0); }
-				// port
-				sprintf(buf,"%u",mysrvc->port);
-				myhash.Update(buf,strlen(buf));
-				// status
-				sprintf(buf,"%u",mysrvc->status);
-				myhash.Update(buf,strlen(buf));
-				// weight
-				sprintf(buf,"%u",mysrvc->weight);
-				myhash.Update(buf,strlen(buf));
-				// compression
-				sprintf(buf,"%u",mysrvc->compression);
-				myhash.Update(buf,strlen(buf));
-				// max_connections
-				sprintf(buf,"%u",mysrvc->max_connections);
-				myhash.Update(buf,strlen(buf));
-				// max_replication_lag
-				sprintf(buf,"%u",mysrvc->max_replication_lag);
-				myhash.Update(buf,strlen(buf));
-				// use_ssl
-				sprintf(buf,"%u",mysrvc->use_ssl);
-				myhash.Update(buf,strlen(buf));
-				// max_latency_ms
-				sprintf(buf,"%u",mysrvc->max_latency_us);
-				myhash.Update(buf,strlen(buf));
-				if (mysrvc->comment) {
-					myhash.Update(mysrvc->comment,strlen(mysrvc->comment));
-				} else { myhash.Update("",0); }
-			}
-		}
-*/
 		{
 			mydb->execute("DELETE FROM mysql_servers");
 			generate_mysql_servers_table();
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_servers", hash1_);
-				}
-				delete resultset;
-			}
+			commit_checksum_table(myhash, init, (const char *)"mysql_servers",
+					(const char *)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port");
 		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_replication_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_group_replication_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_galera_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_aws_aurora_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
+		commit_checksum_table(myhash, init, (const char *)"mysql_replication_hostgroups",
+				(const char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup");
+		commit_checksum_table(myhash, init, (const char *)"mysql_group_replication_hostgroups",
+				(const char *)"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup");
+		commit_checksum_table(myhash, init, (const char *)"mysql_galera_hostgroups",
+				(const char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup");
+		commit_checksum_table(myhash, init, (const char *)"mysql_aws_aurora_hostgroups",
+				(const char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup");
+
 		if (init == true) {
 			myhash.Final(&hash1, &hash2);
 		}
@@ -2107,6 +1866,28 @@ bool MySQL_HostGroups_Manager::commit() {
 
 	return true;
 }
+
+
+void MySQL_HostGroups_Manager::commit_checksum_table(SpookyHash& myhash, bool& init, const char *tablename, const char *query) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (resultset) {
+		if (resultset->rows_count) {
+			if (init == false) {
+				init = true;
+				myhash.Init(19,3);
+			}
+			uint64_t hash1_ = resultset->raw_checksum();
+			myhash.Update(&hash1_, sizeof(hash1_));
+			proxy_info("Checksum for table %s is %llu\n", tablename, hash1_);
+		}
+		delete resultset;
+	}
+}
+
 
 bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
 	bool ret = false;
@@ -2588,6 +2369,22 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 	pthread_mutex_unlock(&Galera_Info_mutex);
 }
 
+SQLite3_result * MySQL_HostGroups_Manager::dump_table___generic(bool lock, const char *query) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	if (lock) {
+		wrlock();
+	}
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (lock) {
+		wrunlock();
+	}
+	return resultset;
+}
+
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	wrlock();
 
@@ -2597,68 +2394,28 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
-
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT hostgroup_id, hostname, port, gtid_port, weight, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	SQLite3_result * resultset = dump_table___generic(false, (const char *)"SELECT hostgroup_id, hostname, port, gtid_port, weight, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
 	wrunlock();
 	return resultset;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_replication_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
+	SQLite3_result * resultset = dump_table___generic(true, (const char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups");
 	return resultset;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_group_replication_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_group_replication_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
+	SQLite3_result * resultset = dump_table___generic(true, (const char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_group_replication_hostgroups");
 	return resultset;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_galera_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
+	SQLite3_result * resultset = dump_table___generic(true, (const char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups");
 	return resultset;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_aws_aurora_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
-					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM mysql_aws_aurora_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
+	SQLite3_result * resultset = dump_table___generic(true, (const char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM mysql_aws_aurora_hostgroups");
 	return resultset;
 }
 
@@ -2762,6 +2519,157 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
+void MyHGC::get_random_MySrvC_inner1(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates) {
+	if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
+		if (gtid_trxid) {
+			if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
+				sum+=mysrvc->weight;
+				TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+				mysrvcCandidates[num_candidates]=mysrvc;
+				num_candidates++;
+			}
+		} else {
+			if (max_lag_ms >= 0) {
+				if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
+					sum+=mysrvc->weight;
+					TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+					mysrvcCandidates[num_candidates]=mysrvc;
+					num_candidates++;
+				} else {
+					sess->thread->status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
+				}
+			} else {
+				sum+=mysrvc->weight;
+				TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
+				mysrvcCandidates[num_candidates]=mysrvc;
+				num_candidates++;
+			}
+		}
+	}
+}
+
+
+// Note: this is dead code, left here just for reference
+// this function was supposed to prevent burst of connections, but its use doesn't seem ver beneficial
+void MyHGC::get_random_MySrvC___remove_overloaded_servers(unsigned int& New_sum, unsigned int& New_TotalUsedConn, unsigned int sum, unsigned int TotalUsedConn, unsigned int& num_candidates, MySrvC **mysrvcCandidates) {
+	MySrvC *mysrvc=NULL;
+	// we will now scan again to ignore overloaded servers
+	for (unsigned int j=0; j<num_candidates; j++) {
+		mysrvc = mysrvcCandidates[j];
+		unsigned int len=mysrvc->ConnectionsUsed->conns_length();
+		if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
+			New_sum+=mysrvc->weight;
+			New_TotalUsedConn+=len;
+		} else {
+			// remove the candidate
+			if (j+1 < num_candidates) {
+				mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+			}
+			j--;
+			num_candidates--;
+		}
+	}
+}
+
+void MyHGC::get_random_MySrvC___latency_awereness(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& New_sum) {
+	MySrvC *mysrvc=NULL;
+	unsigned int j=0;
+	unsigned int servers_with_latency = 0;
+	unsigned int total_latency_us = 0;
+	// scan and verify that all servers have some latency
+	for (j=0; j<num_candidates; j++) {
+		mysrvc = mysrvcCandidates[j];
+		if (mysrvc->current_latency_us) {
+			servers_with_latency++;
+			total_latency_us += mysrvc->current_latency_us;
+		}
+	}
+	if (servers_with_latency == num_candidates) {
+		// all servers have some latency.
+		// That is good. If any server have no latency, something is wrong
+		// and we will skip this algorithm
+		sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
+		unsigned int avg_latency_us = 0;
+		avg_latency_us = total_latency_us/num_candidates;
+		for (j=0; j<num_candidates; j++) {
+			mysrvc = mysrvcCandidates[j];
+			if (mysrvc->current_latency_us > avg_latency_us) {
+				// remove the candidate
+				if (j+1 < num_candidates) {
+					mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
+				}
+				j--;
+				num_candidates--;
+			}
+		}
+		// we scan again to adjust weight
+		New_sum = 0;
+		for (j=0; j<num_candidates; j++) {
+			mysrvc = mysrvcCandidates[j];
+			New_sum+=mysrvc->weight;
+		}
+	}
+}
+
+
+void MyHGC::get_random_MySrvC___max_lag_ms(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& sum, unsigned int& TotalUsedConn) {
+	MySrvC *mysrvc=NULL;
+	unsigned int j=0;
+	unsigned int min_num_replicas = sess->thread->variables.aurora_max_lag_ms_only_read_from_replicas;
+	if (min_num_replicas) {
+		if (num_candidates >= min_num_replicas) { // there are at least N replicas
+			// we try to remove the writer
+			unsigned int total_aws_aurora_current_lag_us=0;
+			for (j=0; j<num_candidates; j++) {
+				mysrvc = mysrvcCandidates[j];
+				total_aws_aurora_current_lag_us += mysrvc->aws_aurora_current_lag_us;
+			}
+			if (total_aws_aurora_current_lag_us) { // we are just double checking that we don't have all servers with aws_aurora_current_lag_us==0
+				for (j=0; j<num_candidates; j++) {
+					mysrvc = mysrvcCandidates[j];
+					if (mysrvc->aws_aurora_current_lag_us==0) {
+						sum-=mysrvc->weight;
+						TotalUsedConn-=mysrvc->ConnectionsUsed->conns_length();
+						if (j < num_candidates-1) {
+							mysrvcCandidates[j]=mysrvcCandidates[num_candidates-1];
+						}
+						num_candidates--;
+					}
+				}
+			}
+		}
+	}
+}
+
+void MyHGC::get_random_MySrvC___resume_shunned_nodes(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates, unsigned int l) {
+	MySrvC *mysrvc=NULL;
+	unsigned int j=0;
+	static time_t last_hg_log = 0;
+	time_t t;
+	t=time(NULL);
+	int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
+	if (max_wait_sec < 1) { // min wait time should be at least 1 second
+		max_wait_sec = 1;
+	}
+	if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
+		last_hg_log = time(NULL);
+		proxy_error("Hostgroup %u has no servers available! Checking servers shunned for more than %u second%s\n", hid, max_wait_sec, max_wait_sec == 1 ? "" : "s");
+	}
+	for (j=0; j<l; j++) {
+		mysrvc=mysrvs->idx(j);
+		if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
+			if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
+				mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+				mysrvc->shunned_automatic=false;
+				mysrvc->connect_ERR_at_time_last_detected_error=0;
+				mysrvc->time_last_detected_error=0;
+				// if a server is taken back online, consider it immediately
+				get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
+			}
+		}
+	}
+}
+
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
@@ -2788,32 +2696,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			mysrvc=mysrvs->idx(j);
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) { // consider this server only if ONLINE
 				if (mysrvc->ConnectionsUsed->conns_length() < mysrvc->max_connections) { // consider this server only if didn't reach max_connections
-					if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-						if (gtid_trxid) {
-							if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-								mysrvcCandidates[num_candidates]=mysrvc;
-								num_candidates++;
-							}
-						} else {
-							if (max_lag_ms >= 0) {
-								if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-									sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-									mysrvcCandidates[num_candidates]=mysrvc;
-									num_candidates++;
-								} else {
-									sess->thread->status_variables.stvar[st_var_aws_aurora_replicas_skipped_during_query]++;
-								}
-							} else {
-								sum+=mysrvc->weight;
-								TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-								mysrvcCandidates[num_candidates]=mysrvc;
-								num_candidates++;
-							}
-						}
-					}
+					get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
 				}
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -2842,30 +2725,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
 								mysrvc->time_last_detected_error=0;
 								// if a server is taken back online, consider it immediately
-								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-									if (gtid_trxid) {
-										if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-											sum+=mysrvc->weight;
-											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-											mysrvcCandidates[num_candidates]=mysrvc;
-											num_candidates++;
-										}
-									} else {
-										if (max_lag_ms >= 0) {
-											if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-												sum+=mysrvc->weight;
-												TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-												mysrvcCandidates[num_candidates]=mysrvc;
-												num_candidates++;
-											}
-										} else {
-											sum+=mysrvc->weight;
-											TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-											mysrvcCandidates[num_candidates]=mysrvc;
-											num_candidates++;
-										}
-									}
-								}
+								get_random_MySrvC_inner1(mysrvc, gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates);
 							}
 						}
 					}
@@ -2873,82 +2733,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 		}
 		if (max_lag_ms) { // we are using AWS Aurora, as this logic is implemented only here
-			unsigned int min_num_replicas = sess->thread->variables.aurora_max_lag_ms_only_read_from_replicas;
-			if (min_num_replicas) {
-				if (num_candidates >= min_num_replicas) { // there are at least N replicas
-					// we try to remove the writer
-					unsigned int total_aws_aurora_current_lag_us=0;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						total_aws_aurora_current_lag_us += mysrvc->aws_aurora_current_lag_us;
-					}
-					if (total_aws_aurora_current_lag_us) { // we are just double checking that we don't have all servers with aws_aurora_current_lag_us==0
-						for (j=0; j<num_candidates; j++) {
-							mysrvc = mysrvcCandidates[j];
-							if (mysrvc->aws_aurora_current_lag_us==0) {
-								sum-=mysrvc->weight;
-								TotalUsedConn-=mysrvc->ConnectionsUsed->conns_length();
-								if (j < num_candidates-1) {
-									mysrvcCandidates[j]=mysrvcCandidates[num_candidates-1];
-								}
-								num_candidates--;
-							}
-						}
-					}
-				}
-			}
+			get_random_MySrvC___max_lag_ms(num_candidates, mysrvcCandidates, sess, sum, TotalUsedConn);
 		}
+
 		if (sum==0) {
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
-			// we do this lowering the maximum wait time to 10%
-			// most of the follow code is copied from few lines above
-			static time_t last_hg_log = 0;
-			time_t t;
-			t=time(NULL);
-			int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
-			if (max_wait_sec < 1) { // min wait time should be at least 1 second
-				max_wait_sec = 1;
-			}
-			if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
-				last_hg_log = time(NULL);
-				proxy_error("Hostgroup %u has no servers available! Checking servers shunned for more than %u second%s\n", hid, max_wait_sec, max_wait_sec == 1 ? "" : "s");
-			}
-			for (j=0; j<l; j++) {
-				mysrvc=mysrvs->idx(j);
-				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED && mysrvc->shunned_automatic==true) {
-					if ((t - mysrvc->time_last_detected_error) > max_wait_sec) {
-						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-						mysrvc->shunned_automatic=false;
-						mysrvc->connect_ERR_at_time_last_detected_error=0;
-						mysrvc->time_last_detected_error=0;
-						// if a server is taken back online, consider it immediately
-						if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
-							if (gtid_trxid) {
-								if (MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid)) {
-									sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-									mysrvcCandidates[num_candidates]=mysrvc;
-									num_candidates++;
-								}
-							} else {
-								if (max_lag_ms >= 0) {
-									if ((unsigned int)max_lag_ms >= mysrvc->aws_aurora_current_lag_us/1000) {
-										sum+=mysrvc->weight;
-										TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-										mysrvcCandidates[num_candidates]=mysrvc;
-										num_candidates++;
-									}
-								} else {
-									sum+=mysrvc->weight;
-									TotalUsedConn+=mysrvc->ConnectionsUsed->conns_length();
-									mysrvcCandidates[num_candidates]=mysrvc;
-									num_candidates++;
-								}
-							}
-						}
-					}
-				}
-			}
+			get_random_MySrvC___resume_shunned_nodes(gtid_uuid, gtid_trxid, max_lag_ms, sess, num_candidates, TotalUsedConn, sum, mysrvcCandidates, l);
 		}
 		if (sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
@@ -2964,24 +2754,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		unsigned int New_sum=0;
 		unsigned int New_TotalUsedConn=0;
 
-		// we will now scan again to ignore overloaded servers
-		for (j=0; j<num_candidates; j++) {
-			mysrvc = mysrvcCandidates[j];
-			unsigned int len=mysrvc->ConnectionsUsed->conns_length();
-			if ((len * sum) <= (TotalUsedConn * mysrvc->weight * 1.5 + 1)) {
-
-				New_sum+=mysrvc->weight;
-				New_TotalUsedConn+=len;
-			} else {
-				// remove the candidate
-				if (j+1 < num_candidates) {
-					mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-				}
-				j--;
-				num_candidates--;
-			}
+		if (1) {
+			New_sum=sum;
+			New_TotalUsedConn=TotalUsedConn;
+		} else {
+			// we "removed" this code in 2.1 , but left it for reference
+			get_random_MySrvC___remove_overloaded_servers(New_sum, New_TotalUsedConn, sum, TotalUsedConn, num_candidates, mysrvcCandidates);
 		}
-
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
@@ -2994,47 +2773,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
-		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
+		// latency awareness algorithm
 		if (sess->thread->variables.min_num_servers_lantency_awareness) {
 			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
-				unsigned int servers_with_latency = 0;
-				unsigned int total_latency_us = 0;
-				// scan and verify that all servers have some latency
-				for (j=0; j<num_candidates; j++) {
-					mysrvc = mysrvcCandidates[j];
-					if (mysrvc->current_latency_us) {
-						servers_with_latency++;
-						total_latency_us += mysrvc->current_latency_us;
-					}
-				}
-				if (servers_with_latency == num_candidates) {
-					// all servers have some latency.
-					// That is good. If any server have no latency, something is wrong
-					// and we will skip this algorithm
-					sess->thread->status_variables.stvar[st_var_ConnPool_get_conn_latency_awareness]++;
-					unsigned int avg_latency_us = 0;
-					avg_latency_us = total_latency_us/num_candidates;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						if (mysrvc->current_latency_us > avg_latency_us) {
-							// remove the candidate
-							if (j+1 < num_candidates) {
-								mysrvcCandidates[j] = mysrvcCandidates[num_candidates-1];
-							}
-							j--;
-							num_candidates--;
-						}
-					}
-					// we scan again to adjust weight
-					New_sum = 0;
-					for (j=0; j<num_candidates; j++) {
-						mysrvc = mysrvcCandidates[j];
-						New_sum+=mysrvc->weight;
-					}
-				}
+				get_random_MySrvC___latency_awereness(num_candidates, mysrvcCandidates, sess, New_sum);
 			}
 		}
-
 
 		unsigned int k;
 		if (New_sum > 32768) {

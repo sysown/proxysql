@@ -17,6 +17,7 @@
 #include "wqueue.h"
 
 #include "ev.h"
+#include "SpookyV2.h"
 
 #ifdef DEBUG
 /* */
@@ -199,6 +200,11 @@ class MyHGC {	// MySQL Host Group Container
 	MyHGC(int);
 	~MyHGC();
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
+	void get_random_MySrvC_inner1(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates);
+	void get_random_MySrvC___remove_overloaded_servers(unsigned int& New_sum, unsigned int& New_TotalUsedConn, unsigned int sum, unsigned int TotalUsedConn, unsigned int& num_candidates, MySrvC **mysrvcCandidates);
+	void get_random_MySrvC___latency_awereness(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& New_sum);
+	void get_random_MySrvC___max_lag_ms(unsigned int& num_candidates, MySrvC **mysrvcCandidates, MySQL_Session *sess, unsigned int& sum, unsigned int& TotalUsedConn);
+	void get_random_MySrvC___resume_shunned_nodes(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess, unsigned int& num_candidates, unsigned int& TotalUsedConn, unsigned int& sum, MySrvC **mysrvcCandidates, unsigned int l);
 };
 
 class Group_Replication_Info {
@@ -521,12 +527,14 @@ class MySQL_HostGroups_Manager {
 	bool server_add(unsigned int hid, char *add, uint16_t p=3306, uint16_t gp=0, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100, unsigned int _max_replication_lag=0, unsigned int _use_ssl=0, unsigned int _max_latency_ms=0, char *comment=NULL);
 	int servers_add(SQLite3_result *resultset); // faster version of server_add
 	bool commit();
+	void commit_checksum_table(SpookyHash& myhash, bool& init, const char *tablename, const char *query);
 
 	void set_incoming_replication_hostgroups(SQLite3_result *);
 	void set_incoming_group_replication_hostgroups(SQLite3_result *);
 	void set_incoming_galera_hostgroups(SQLite3_result *);
 	void set_incoming_aws_aurora_hostgroups(SQLite3_result *);
 	SQLite3_result * execute_query(char *query, char **error);
+	SQLite3_result * dump_table___generic(bool lock, const char *query);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();
 	SQLite3_result *dump_table_mysql_group_replication_hostgroups();
