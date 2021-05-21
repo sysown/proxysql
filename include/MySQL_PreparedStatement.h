@@ -59,6 +59,7 @@ class MySQL_STMT_Global_info {
 	uint16_t num_params;
 	uint16_t warning_count;
 	MYSQL_FIELD **fields;
+	char* first_comment;
 //	struct {
 //		int cache_ttl;
 //		int timeout;
@@ -66,7 +67,7 @@ class MySQL_STMT_Global_info {
 //	} properties;
 	bool is_select_NOT_for_update;
 	MYSQL_BIND **params; // seems unused (?)
-	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
+	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, uint64_t _h);
 	void update_metadata(MYSQL_STMT *stmt);
 	~MySQL_STMT_Global_info();
 };
@@ -217,7 +218,7 @@ class MySQL_STMTs_local_v14 {
 		return is_client_;
 	}
 	void backend_insert(uint64_t global_statement_id, MYSQL_STMT *stmt);
-	uint64_t compute_hash(char *user, char *schema, char *query, unsigned int query_length);
+	uint64_t compute_hash(char *user, char *schema, char *query, unsigned int query_length, char *first_comment);
 	unsigned int get_num_backend_stmts() { return backend_stmt_to_global_ids.size(); }
 	uint32_t generate_new_client_stmt_id(uint64_t global_statement_id);
 	uint64_t find_global_stmt_id_from_client(uint32_t client_stmt_id);
@@ -259,7 +260,7 @@ class MySQL_STMT_Manager_v14 {
 	void unlock() { pthread_rwlock_unlock(&rwlock_); }
 	void ref_count_client(uint64_t _stmt, int _v, bool lock=true);
 	void ref_count_server(uint64_t _stmt, int _v, bool lock=true);
-	MySQL_STMT_Global_info * add_prepared_statement(char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock=true);
+	MySQL_STMT_Global_info * add_prepared_statement(char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, bool lock=true);
 	void get_metrics(uint64_t *c_unique, uint64_t *c_total, uint64_t *stmt_max_stmt_id, uint64_t *cached, uint64_t *s_unique, uint64_t *s_total);
 	SQLite3_result * get_prepared_statements_global_infos();
 };

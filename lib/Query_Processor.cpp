@@ -1319,7 +1319,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			qp=&stmt_exec_qp;
 			qp->digest = qi->stmt_info->digest;
 			qp->digest_text = qi->stmt_info->digest_text;
-			qp->first_comment = NULL;
+			qp->first_comment = qi->stmt_info->first_comment;
 		}
 	}
 #define stackbuffer_size 128
