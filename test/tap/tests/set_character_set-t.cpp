@@ -1,3 +1,32 @@
+/**
+ * @file set_character_set-t.cpp
+ * @brief This test checks the proper behavior for 'SET CHARACTER SET'.
+ * @details The test performs several 'SET' operations in sequence for testing the correct behavior
+ *   for 'SET CHARACTER SET', this are:
+ *
+ *   1. SET NAMES 'utf8'.
+ *   2. SET CHARACTER SET 'latin1'.
+ *   3. SET NAMES 'latin1'.
+ *
+ *   After each of the operations several checks are performed for the following variables:
+ *
+ *   * character_set_client
+ *   * character_set_connection
+ *   * character_set_results
+ *   * character_set_database
+ *
+ *   This checks are performed by means of the query:
+ *
+ *   ```
+ *   SELECT variable_value FROM global_variables WHERE variable_name='%s'
+ *   ```
+ *
+ *   For checking that this variables has changed or keep their values properly.
+ *
+ *   NOTE: For making sure that all the operations are being performed in the same backend
+ *   connection, test starts a transaction. For more context see #.
+ */
+
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -22,7 +51,7 @@ int main(int argc, char** argv) {
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
 		return exit_status();
-	
+
 	if (mysql_options(mysql, MYSQL_SET_CHARSET_NAME, "utf8")) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n",
 				__FILE__, __LINE__, mysql_error(mysql));
@@ -48,6 +77,16 @@ int main(int argc, char** argv) {
 	}
 
 	if (mysql_query(mysql, "use t1")) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
+		return exit_status();
+	}
+
+	/**
+	 * NOTE: A transaction is started to ensure that all the following operations are
+	 * performed over the same backend connection. See #3640 for more context.
+	 */
+	if (mysql_query(mysql, "BEGIN")) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n",
 				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
