@@ -24,7 +24,7 @@
  *   For checking that this variables has changed or keep their values properly.
  *
  *   NOTE: For making sure that all the operations are being performed in the same backend
- *   connection, test starts a transaction. For more context see #.
+ *   connection, test starts a transaction. For more context see #3460.
  */
 
 #include <cstdlib>
