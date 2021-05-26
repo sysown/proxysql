@@ -68,8 +68,13 @@ int main(int argc, char** argv) {
 	}
 
 	bool param = false;
-	if (argc == 2 && std::string(argv[1]) == "param") {
-		param = true;
+	{
+		// we parse argv[0] to see if filename includes "param"
+		std::string str = std::string(argv[0]);
+		std::size_t found = str.find("param");
+		if (found!=std::string::npos) {
+			param = true;
+		}
 	}
 
 	MYSQL_STMT* stmt = nullptr;
