@@ -212,6 +212,8 @@ Query_Info::Query_Info() {
 	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
+	start_time=0;
+	end_time=0;
 }
 
 Query_Info::~Query_Info() {
