@@ -4443,7 +4443,9 @@ handler_again:
 								// NOTE: Update 'first_comment' with the the from the retrieved
 								// 'stmt_info' from the found prepared statement. 'CurrentQuery' requires its
 								// own copy of 'first_comment' because it will later be free by 'QueryInfo::end'.
-								CurrentQuery.QueryParserArgs.first_comment=strdup(stmt_info->first_comment);
+								if (stmt_info->first_comment) {
+									CurrentQuery.QueryParserArgs.first_comment=strdup(stmt_info->first_comment);
+								}
 								previous_status.push(PROCESSING_STMT_EXECUTE);
 								NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
 								if (CurrentQuery.stmt_global_id!=stmt_info->statement_id) {
