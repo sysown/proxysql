@@ -3041,8 +3041,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			(char *)client_myds->myconn->userinfo->username,
 			(char *)client_myds->myconn->userinfo->schemaname,
 			(char *)CurrentQuery.QueryPointer,
-			CurrentQuery.QueryLength,
-			(char *)CurrentQuery.QueryParserArgs.first_comment
+			CurrentQuery.QueryLength
 		);
 		MySQL_STMT_Global_info *stmt_info=NULL;
 		// we first lock GloStmt

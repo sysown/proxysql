@@ -218,7 +218,7 @@ class MySQL_STMTs_local_v14 {
 		return is_client_;
 	}
 	void backend_insert(uint64_t global_statement_id, MYSQL_STMT *stmt);
-	uint64_t compute_hash(char *user, char *schema, char *query, unsigned int query_length, char *first_comment);
+	uint64_t compute_hash(char *user, char *schema, char *query, unsigned int query_length);
 	unsigned int get_num_backend_stmts() { return backend_stmt_to_global_ids.size(); }
 	uint32_t generate_new_client_stmt_id(uint64_t global_statement_id);
 	uint64_t find_global_stmt_id_from_client(uint32_t client_stmt_id);

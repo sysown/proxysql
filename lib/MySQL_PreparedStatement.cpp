@@ -14,8 +14,7 @@ extern MySQL_STMT_Manager_v14 *GloMyStmt;
 
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
-                                  unsigned int query_length,
-                                  char* first_comment) {
+                                  unsigned int query_length) {
 	int l = 0;
 	l += strlen(user);
 	l += strlen(schema);
@@ -25,9 +24,6 @@ static uint64_t stmt_compute_hash(char *user,
 	l += strlen(_COMPUTE_HASH_DEL1_);
 	l += strlen(_COMPUTE_HASH_DEL2_);
 	l += query_length;
-	if (first_comment) {
-		l += strlen(first_comment);
-	}
 	char *buf = (char *)malloc(l);
 	l = 0;
 
@@ -47,12 +43,6 @@ static uint64_t stmt_compute_hash(char *user,
 	strcpy(buf + l, _COMPUTE_HASH_DEL2_);
 	l += strlen(_COMPUTE_HASH_DEL2_);
 
-	// write first comment
-	if (first_comment) {
-		strcpy(buf + l, first_comment);
-		l += strlen(first_comment);
-	}
-
 	// write query
 	memcpy(buf + l, query, query_length);
 	l += query_length;
@@ -64,7 +54,7 @@ static uint64_t stmt_compute_hash(char *user,
 
 void MySQL_STMT_Global_info::compute_hash() {
 	hash = stmt_compute_hash(username, schemaname, query,
-	                         query_length, first_comment);
+	                         query_length);
 }
 
 StmtLongDataHandler::StmtLongDataHandler() { long_datas = new PtrArray(); }
@@ -561,10 +551,9 @@ void MySQL_STMTs_local_v14::backend_insert(uint64_t global_statement_id, MYSQL_S
 
 uint64_t MySQL_STMTs_local_v14::compute_hash(char *user,
                                          char *schema, char *query,
-                                         unsigned int query_length,
-                                         char *first_comment) {
+                                         unsigned int query_length) {
 	uint64_t hash;
-	hash = stmt_compute_hash(user, schema, query, query_length, first_comment);
+	hash = stmt_compute_hash(user, schema, query, query_length);
 	return hash;
 }
 
@@ -835,7 +824,7 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
     char *fc, MYSQL_STMT *stmt, bool lock) {
 	MySQL_STMT_Global_info *ret = NULL;
 	uint64_t hash = stmt_compute_hash(
-		u, s, q, ql, fc);  // this identifies the prepared statement
+		u, s, q, ql);  // this identifies the prepared statement
 	if (lock) {
 		pthread_rwlock_wrlock(&rwlock_);
 	}
