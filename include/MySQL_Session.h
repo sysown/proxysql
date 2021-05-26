@@ -239,7 +239,7 @@ class MySQL_Session
 
 	Session_Regex **match_regexes;
 
-	void *ldap_ctx;
+	bool use_ldap_auth;
 
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum variable_name changing_variable_idx;

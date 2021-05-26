@@ -504,7 +504,7 @@ MySQL_Session::MySQL_Session() {
 	last_insert_id=0; // #1093
 
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
-	ldap_ctx = NULL;
+	use_ldap_auth = false;
 }
 
 void MySQL_Session::init() {
@@ -588,6 +588,7 @@ MySQL_Session::~MySQL_Session() {
 	}
 	if (user_attributes) {
 		free(user_attributes);
+		user_attributes = NULL;
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
@@ -600,10 +601,6 @@ MySQL_Session::~MySQL_Session() {
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
-	}
-	if (ldap_ctx) {
-		GloMyLdapAuth->ldap_ctx_free(ldap_ctx);
-		ldap_ctx = NULL;
 	}
 }
 
@@ -2016,7 +2013,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 	enum session_status st=status;
 
 	if (
-		(GloMyLdapAuth==NULL) || (ldap_ctx==NULL)
+		(GloMyLdapAuth==NULL) || (use_ldap_auth==false)
 		||
 		(client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
 	) { // nothing to do
@@ -4391,7 +4388,7 @@ handler_again:
 							if (handler_again___verify_init_connect()) {
 								goto handler_again;
 							}
-							if (ldap_ctx) {
+							if (use_ldap_auth) {
 								if (handler_again___verify_ldap_user_variable()) {
 									goto handler_again;
 								}
@@ -4929,7 +4926,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 //#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
-						if (ldap_ctx==NULL) {
+						if (use_ldap_auth == false) {
 							free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 						} else {
 							free_users=GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
@@ -6205,7 +6202,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		reset();
 		init();
 		if (client_authenticated) {
-			if (ldap_ctx==NULL) {
+			if (use_ldap_auth == false) {
 				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
 			} else {
 				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
@@ -6948,7 +6945,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (GloMyLdapAuth==NULL)
 		return;
-	if (ldap_ctx==NULL)
+	if (use_ldap_auth == false)
 		return;
 	if (client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
 		return;
