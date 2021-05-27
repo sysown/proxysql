@@ -3052,7 +3052,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (client_myds->myconn->local_stmts==NULL) {
 			client_myds->myconn->local_stmts=new MySQL_STMTs_local_v14(true);
 		}
-		uint64_t hash=client_myds->myconn->local_stmts->compute_hash((char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+		uint64_t hash=client_myds->myconn->local_stmts->compute_hash(
+			(char *)client_myds->myconn->userinfo->username,
+			(char *)client_myds->myconn->userinfo->schemaname,
+			(char *)CurrentQuery.QueryPointer,
+			CurrentQuery.QueryLength
+		);
 		MySQL_STMT_Global_info *stmt_info=NULL;
 		// we first lock GloStmt
 		GloMyStmt->wrlock();
@@ -3137,7 +3142,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
-		qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+		qpo=GloQPro->process_mysql_query(this,NULL,0,&CurrentQuery);
 		if (qpo->max_lag_ms >= 0) {
 			thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 		}
@@ -3858,6 +3863,7 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 		(char *)client_myds->myconn->userinfo->schemaname,
 		(char *)CurrentQuery.QueryPointer,
 		CurrentQuery.QueryLength,
+		CurrentQuery.QueryParserArgs.first_comment,
 		CurrentQuery.mysql_stmt,
 		false);
 	if (CurrentQuery.QueryParserArgs.digest_text) {
@@ -4449,6 +4455,12 @@ handler_again:
 								stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
 								CurrentQuery.QueryLength=stmt_info->query_length;
 								CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
+								// NOTE: Update 'first_comment' with the the from the retrieved
+								// 'stmt_info' from the found prepared statement. 'CurrentQuery' requires its
+								// own copy of 'first_comment' because it will later be free by 'QueryInfo::end'.
+								if (stmt_info->first_comment) {
+									CurrentQuery.QueryParserArgs.first_comment=strdup(stmt_info->first_comment);
+								}
 								previous_status.push(PROCESSING_STMT_EXECUTE);
 								NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
 								if (CurrentQuery.stmt_global_id!=stmt_info->statement_id) {

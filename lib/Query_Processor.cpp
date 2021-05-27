@@ -1319,7 +1319,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			qp=&stmt_exec_qp;
 			qp->digest = qi->stmt_info->digest;
 			qp->digest_text = qi->stmt_info->digest_text;
-			qp->first_comment = NULL;
+			qp->first_comment = qi->stmt_info->first_comment;
 		}
 	}
 #define stackbuffer_size 128
@@ -1710,7 +1710,9 @@ __exit_process_mysql_query:
 	if (len < stackbuffer_size) {
 		// query is in the stack
 	} else {
-		l_free(len+1,query);
+		if (ptr) {
+			l_free(len+1,query);
+		}
 	}
 	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
 		if (qp && qp->first_comment) {

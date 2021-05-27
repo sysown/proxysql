@@ -59,6 +59,7 @@ class MySQL_STMT_Global_info {
 	uint16_t num_params;
 	uint16_t warning_count;
 	MYSQL_FIELD **fields;
+	char* first_comment;
 //	struct {
 //		int cache_ttl;
 //		int timeout;
@@ -66,7 +67,7 @@ class MySQL_STMT_Global_info {
 //	} properties;
 	bool is_select_NOT_for_update;
 	MYSQL_BIND **params; // seems unused (?)
-	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, uint64_t _h);
+	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, uint64_t _h);
 	void update_metadata(MYSQL_STMT *stmt);
 	~MySQL_STMT_Global_info();
 };
@@ -259,7 +260,7 @@ class MySQL_STMT_Manager_v14 {
 	void unlock() { pthread_rwlock_unlock(&rwlock_); }
 	void ref_count_client(uint64_t _stmt, int _v, bool lock=true);
 	void ref_count_server(uint64_t _stmt, int _v, bool lock=true);
-	MySQL_STMT_Global_info * add_prepared_statement(char *u, char *s, char *q, unsigned int ql, MYSQL_STMT *stmt, bool lock=true);
+	MySQL_STMT_Global_info * add_prepared_statement(char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, bool lock=true);
 	void get_metrics(uint64_t *c_unique, uint64_t *c_total, uint64_t *stmt_max_stmt_id, uint64_t *cached, uint64_t *s_unique, uint64_t *s_total);
 	SQLite3_result * get_prepared_statements_global_infos();
 };
