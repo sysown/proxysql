@@ -276,6 +276,7 @@ class MySQL_Session
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
 	bool has_any_backend();
+	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 };
 
 #define KILL_QUERY       1
