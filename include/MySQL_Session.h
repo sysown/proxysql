@@ -277,6 +277,7 @@ class MySQL_Session
 	void unable_to_parse_set_statement(bool *);
 	bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
+	void generate_status_one_hostgroup(int hid, std::string& s);
 };
 
 #define KILL_QUERY       1

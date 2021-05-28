@@ -2564,6 +2564,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			}
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf, true);
 			RequestEnd(mybe->server_myds);
+			std::string errmsg;
+			generate_status_one_hostgroup(current_hostgroup, errmsg);
+			proxy_error("%s . HG status: %s\n", buf, errmsg.c_str());
 			//enum session_status st;
 			while (previous_status.size()) {
 				previous_status.top();
@@ -7094,4 +7097,24 @@ void MySQL_Session::detected_broken_connection(const char *file, unsigned int li
 	} else {
 		proxy_error_inline(file, line, func, "Detected a broken connection while %s on (%d,%s,%d,%lu) , user %s , last_used %llums ago : %d, %s\n", action, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), myconn->userinfo->username, last_used, myerr, msg);
 	}
+}
+
+void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
+	SQLite3_result *resultset = MyHGM->SQL3_Connection_Pool(false, &hid);
+	json j_res;
+	if (resultset->rows_count) {
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			json j; // one json for each row
+			for (int i=0; i<resultset->columns; i++) {
+				// using the format j["name"] == "value"
+				j[resultset->column_definition[i]->name] = ( r->fields[i] ? r->fields[i] : "(null)" );
+			}
+			j_res.push_back(j); // the row json is added to the final json
+		}
+	} else {
+		j_res=json::array();
+	}
+	s = j_res.dump();
+	delete resultset;
 }
