@@ -25,7 +25,7 @@ index a69e637..0e8fb63 100644
    if (pvio != 0)					/* If real connection */
    {
 diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
-index d7f2dd4..c56f640 100644
+index 1a04b2f..7c5a7e3 100644
 --- libmariadb/mariadb_lib.c
 +++ libmariadb/mariadb_lib.c
 @@ -268,12 +268,12 @@ restart:
@@ -154,7 +154,7 @@ index d7f2dd4..c56f640 100644
 +    mysql->net.ignore_eofs = 1;
 +
      // read the columns info
-     for (uint f_i = 0; f_i < field_count; f_i++)
+     for (f_i = 0; f_i < field_count; f_i++)
      {
 @@ -1199,20 +1255,14 @@ MYSQL_FIELD *mthd_my_read_metadata_ex(MYSQL *mysql, MA_MEM_ROOT *mem_root,
          if (unpack_field(mysql, mem_root, 0, &m_rows, m_fields++))
@@ -184,7 +184,7 @@ index d7f2dd4..c56f640 100644
  
      return result;
  }
-@@ -2520,10 +2570,26 @@ int mthd_my_read_query_result(MYSQL *mysql)
+@@ -2533,10 +2583,26 @@ int mthd_my_read_query_result(MYSQL *mysql)
    if (mysql->options.extension && mysql->extension->auto_local_infile == ACCEPT_FILE_REQUEST)
      mysql->extension->auto_local_infile= WAIT_FOR_QUERY;
  
@@ -212,10 +212,10 @@ index d7f2dd4..c56f640 100644
  get_info:
    pos=(uchar*) mysql->net.read_pos;
 diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
-index bccda47..c8c1bad 100644
+index ba1617b..1abc6c4 100644
 --- libmariadb/mariadb_stmt.c
 +++ libmariadb/mariadb_stmt.c
-@@ -158,18 +158,38 @@ static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
+@@ -158,8 +158,23 @@ static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
    ulong pkt_len;
    my_bool is_data_packet;
  
@@ -239,11 +239,9 @@ index bccda47..c8c1bad 100644
    if (pkt_len == packet_error)
    {
      stmt->fetch_row_func= stmt_unbuffered_eof;
-     return(1);
-   }
+@@ -168,8 +183,13 @@ static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
  
--  if (stmt->mysql->net.read_pos[0] == 0 && !is_data_packet)
-+  if (stmt->mysql->net.read_pos[0] != 0 && !is_data_packet)
+   if (stmt->mysql->net.read_pos[0] != 0 && !is_data_packet)
    {
 -    if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
 +    // ProxySQL #3296: Improve EOF detection. We can no longer base EOF or OK
@@ -256,10 +254,10 @@ index bccda47..c8c1bad 100644
      *row = NULL;
      stmt->fetch_row_func= stmt_unbuffered_eof;
      return(MYSQL_NO_DATA);
-@@ -207,6 +227,23 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+@@ -225,6 +245,23 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+     }
+     // ********************************************************************************
  
-   while ((packet_len = ma_net_safe_read(stmt->mysql, &is_data_packet)) != packet_error)
-   {
 +    // ProxySQL #3296: Improve EOF detection. Since we are delaying the read of EOF
 +    // packets after the metadata, we could be finding here the 'first EOF', not
 +    // being previously read. We should ignore it.
@@ -280,7 +278,7 @@ index bccda47..c8c1bad 100644
      p= stmt->mysql->net.read_pos;
      // The check is by 'ma_net_safe_read'
      if (p[0] == 0 || is_data_packet)
-@@ -285,7 +322,10 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+@@ -303,7 +340,10 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
        *pprevious= 0;
        /* sace status info */
  
@@ -292,7 +290,7 @@ index bccda47..c8c1bad 100644
          ma_read_ok_packet(stmt->mysql, p + 1, packet_len);
        } else {
          stmt->upsert_status.warning_count= stmt->mysql->warning_count= uint2korr(p + 1);
-@@ -351,6 +391,9 @@ void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
+@@ -369,6 +409,9 @@ void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
    my_bool is_data_packet;
    int in_resultset= stmt->state > MYSQL_STMT_EXECUTED &&
                      stmt->state < MYSQL_STMT_FETCH_DONE;
@@ -302,7 +300,7 @@ index bccda47..c8c1bad 100644
    while ((packet_len = ma_net_safe_read(stmt->mysql, &is_data_packet)) != packet_error)
    {
      uchar *pos= stmt->mysql->net.read_pos;
-@@ -384,6 +427,15 @@ void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
+@@ -402,6 +445,15 @@ void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
        }
        if (packet_len < 8 && *pos == 254) /* EOF */
        {
@@ -318,7 +316,7 @@ index bccda47..c8c1bad 100644
          if (mariadb_connection(stmt->mysql))
          {
            stmt->mysql->server_status= uint2korr(pos + 3);
-@@ -1588,11 +1640,25 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
+@@ -1606,11 +1658,25 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
    ulong packet_length;
    uchar *p;
  
@@ -344,7 +342,7 @@ index bccda47..c8c1bad 100644
    if (0xFF == p[0])  /* Error occurred */
    {
      return(1);
-@@ -1895,6 +1961,9 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+@@ -1927,6 +1993,9 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
    if (!mysql)
      return(1);
  
@@ -354,7 +352,7 @@ index bccda47..c8c1bad 100644
    ret= test((mysql->methods->db_read_stmt_result &&
                   mysql->methods->db_read_stmt_result(mysql)));
    /* if a reconnect occurred, our connection handle is invalid */
-@@ -2000,6 +2069,9 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+@@ -2032,6 +2101,9 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
           precached on client and server's resources are freed.
           */
  
