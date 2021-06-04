@@ -346,6 +346,20 @@ int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
 	return PKT_PARSED;
 }
 
+#ifdef DEBUG
+void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
+	if (strlen(attributes)) {
+		json j = nlohmann::json::parse(attributes);
+		auto spiffe_id = j.find("spiffe_id");
+		if (spiffe_id != j.end()) {
+			std::string spiffe_val = j["spiffe_id"].get<std::string>();
+			proxy_info("%d:%s(): Attributes for user %s: %s . Spiffe_id: %s\n" , __line, __func, user, attributes, spiffe_val.c_str());
+		} else {
+			proxy_info("%d:%s(): Attributes for user %s: %s\n" , __line, __func, user, attributes);
+		}
+	}
+}
+#endif
 
 
 MySQL_Prepared_Stmt_info::MySQL_Prepared_Stmt_info(unsigned char *pkt, unsigned int length) {
@@ -1139,15 +1153,21 @@ bool MySQL_Protocol::generate_pkt_row(bool send, void **ptr, unsigned int *len, 
 	return true;
 }
 
-uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt) {
+uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt, unsigned long rl) {
 	if ((*myds)->sess->mirror==true) {
 		return true;
 	}
 	int col=0;
-	unsigned int rowlen=0;
+	unsigned long rowlen=0;
 	uint8_t pkt_sid=sequence_id;
-	for (col=0; col<colnums; col++) {
-		rowlen+=( fieldstxt[col] ? fieldslen[col]+mysql_encode_length(fieldslen[col],NULL) : 1 );
+	if (rl == 0) {
+		// if rl == 0 , we are using text protocol (legacy) therefore we need to compute the size of the row
+		for (col=0; col<colnums; col++) {
+			rowlen+=( fieldstxt[col] ? fieldslen[col]+mysql_encode_length(fieldslen[col],NULL) : 1 );
+		}
+	} else {
+		// we already know the size of the row
+		rowlen=rl;
 	}
 	PtrSize_t pkt;
 	pkt.size=rowlen+sizeof(mysql_hdr);
@@ -1169,16 +1189,20 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 		}
 	}
 	int l=sizeof(mysql_hdr);
-	for (col=0; col<colnums; col++) {
-		if (fieldstxt[col]) {
-			char length_prefix;
-			uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
-			l+=write_encoded_length_and_string((unsigned char *)pkt.ptr+l,fieldslen[col],length_len, length_prefix, fieldstxt[col]);
-		} else {
-			char *_ptr=(char *)pkt.ptr;
-			_ptr[l]=0xfb;
-			l++;
+	if (rl == 0) {
+		for (col=0; col<colnums; col++) {
+			if (fieldstxt[col]) {
+				char length_prefix;
+				uint8_t length_len=mysql_encode_length(fieldslen[col], &length_prefix);
+				l+=write_encoded_length_and_string((unsigned char *)pkt.ptr+l,fieldslen[col],length_len, length_prefix, fieldstxt[col]);
+			} else {
+				char *_ptr=(char *)pkt.ptr;
+				_ptr[l]=0xfb;
+				l++;
+			}
 		}
+	} else {
+		memcpy((unsigned char *)pkt.ptr+l, fieldstxt, rl);
 	}
 	if (pkt.size < (0xFFFFFF+sizeof(mysql_hdr))) {
 		mysql_hdr myhdr;
@@ -1520,9 +1544,10 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 		password=GloClickHouseAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+		password=GloMyAuth->lookup((char *)userinfo->username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, NULL);
 	}
 	// FIXME: add support for default schema and fast forward , issues #255 and #256
+	// FIXME: not sure if we should also handle user_attributes *here* . For now we pass NULL (no change)
 	if (password==NULL) {
 		ret=false;
 	} else {
@@ -1583,7 +1608,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
+		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, NULL);
 	}
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
@@ -1671,6 +1696,19 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			ret = false;
 			return ret;
 		}
+		if ((*myds)->sess->user_attributes) {
+			if (user_attributes_has_spiffe(__LINE__, __func__, user)) {
+				// if SPIFFE was used, CHANGE_USER is not allowed.
+				// This because when SPIFFE is used, the password it is not relevant,
+				// as it could be a simple "none" , or "123456", or "password"
+				// The whole idea of using SPIFFE is that this is responsible for
+				// authentication, and not the password.
+				// Therefore CHANGE_USER is not allowed
+				proxy_error("Client %s:%d is trying to run CHANGE_USER , but this is disabled because it previously used SPIFFE ID. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port);
+				ret = false;
+				return ret;
+			}
+		}
 		assert(sess);
 		assert(sess->client_myds);
 		MySQL_Connection *myconn=sess->client_myds->myconn;
@@ -1716,6 +1754,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	reply[SHA_DIGEST_LENGTH]='\0';
 	int default_hostgroup=-1;
 	char *default_schema=NULL;
+	char *attributes = NULL;
 	bool schema_locked;
 	bool transaction_persistent = true;
 	bool fast_forward = false;
@@ -1970,7 +2009,7 @@ __do_auth:
 		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 	}
 	//assert(default_hostgroup>=0);
 	if (password) {
@@ -1985,6 +2024,10 @@ __do_auth:
 #endif // debug
 		(*myds)->sess->default_hostgroup=default_hostgroup;
 		(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+		(*myds)->sess->user_attributes = attributes; // just the pointer is passed
+#ifdef DEBUG
+		debug_spiffe_id(user,attributes, __LINE__, __func__);
+#endif
 		(*myds)->sess->schema_locked=schema_locked;
 		(*myds)->sess->transaction_persistent=transaction_persistent;
 		(*myds)->sess->session_fast_forward=fast_forward;
@@ -2047,6 +2090,10 @@ __do_auth:
 #endif // debug
 						(*myds)->sess->default_hostgroup=default_hostgroup;
 						(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+						(*myds)->sess->user_attributes = attributes; // just the pointer is passed , but for now not available in LDAP
+#ifdef DEBUG
+						debug_spiffe_id(user,attributes, __LINE__, __func__);
+#endif
 						(*myds)->sess->schema_locked=schema_locked;
 						(*myds)->sess->transaction_persistent=transaction_persistent;
 						(*myds)->sess->session_fast_forward=fast_forward;
@@ -2055,10 +2102,14 @@ __do_auth:
 							if (backend_username) {
 								free(password);
 								password=NULL;
-								password=GloMyAuth->lookup(backend_username, USERNAME_BACKEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+								password=GloMyAuth->lookup(backend_username, USERNAME_BACKEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 								if (password) {
 									(*myds)->sess->default_hostgroup=default_hostgroup;
 									(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+									(*myds)->sess->user_attributes = attributes; // just the pointer is passed
+#ifdef DEBUG
+									proxy_info("Attributes for user %s: %s\n" , user, attributes);
+#endif
 									(*myds)->sess->schema_locked=schema_locked;
 									(*myds)->sess->transaction_persistent=transaction_persistent;
 									(*myds)->sess->session_fast_forward=fast_forward;
@@ -2254,6 +2305,53 @@ __exit_process_pkt_handshake_response:
 	if (db_tmp) {
 		free(db_tmp);
 		db_tmp=NULL;
+	}
+	if (ret == true) {
+		ret = verify_user_attributes(__LINE__, __func__, user);
+	}
+	return ret;
+}
+
+
+bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *calling_func, const unsigned char *user) {
+	bool ret = true;
+	if ((*myds)->sess->user_attributes) {
+		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
+		if (strlen(a)) {
+			json j = nlohmann::json::parse(a);
+			auto spiffe_id = j.find("spiffe_id");
+			if (spiffe_id != j.end()) {
+				// at this point, we completely ignore any password specified so far
+				// we assume authentication failure so far
+				ret = false;
+				std::string spiffe_val = j["spiffe_id"].get<std::string>();
+				if ((*myds)->x509_subject_alt_name) {
+					if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
+						if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
+							ret = true;
+						}
+					}
+				}
+				if (ret == false) {
+					proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
+				}
+			}
+		}
+	}
+	return ret;
+}
+
+bool MySQL_Protocol::user_attributes_has_spiffe(int calling_line, const char *calling_func, const unsigned char *user) {
+	bool ret = false;
+	if ((*myds)->sess->user_attributes) {
+		char *a = (*myds)->sess->user_attributes; // no copy, just pointer
+		if (strlen(a)) {
+			json j = nlohmann::json::parse(a);
+			auto spiffe_id = j.find("spiffe_id");
+			if (spiffe_id != j.end()) {
+				ret = true;
+			}
+		}
 	}
 	return ret;
 }
@@ -2564,6 +2662,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	resultset_completed=false;
 	myprot=_myprot;
 	mysql=_my;
+	stmt=_stmt;
 	if (buffer==NULL) {
 	//if (_stmt==NULL) { // we allocate this buffer only for not prepared statements
 	// removing the previous assumption. We allocate this buffer also for prepared statements
@@ -2641,7 +2740,16 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 		resultset_size += 9;
 	}
 	//}
-	if (_stmt) { // binary protocol , we also assume we have ALL the resultset
+	//if (_stmt) { // binary protocol , we also assume we have ALL the resultset
+	///	init_with_stmt(_stmt);
+	//}
+}
+
+
+void MySQL_ResultSet::init_with_stmt() {
+	assert(stmt);
+	MYSQL_STMT *_stmt = stmt;
+	MySQL_Data_Stream * c_myds = *(myprot->myds);
 		buffer_to_PSarrayOut();
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
@@ -2750,7 +2858,6 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 			}
 		}
 		add_eof();
-	}
 }
 
 MySQL_ResultSet::~MySQL_ResultSet() {
@@ -2769,11 +2876,28 @@ MySQL_ResultSet::~MySQL_ResultSet() {
 	//if (myds) myds->pkt_sid=sid-1;
 }
 
+// this function is used for binary protocol
+// maybe later on can be adapted for text protocol too
+unsigned int MySQL_ResultSet::add_row(MYSQL_ROWS *rows) {
+	unsigned int pkt_length=0;
+	MYSQL_ROW row = rows->data;
+	unsigned long row_length = rows->length;
+	// we call generate_pkt_row3 passing row_length
+	sid=myprot->generate_pkt_row3(this, &pkt_length, sid, 0, NULL, row, row_length);
+	sid++;
+	resultset_size+=pkt_length;
+	num_rows++;
+	return pkt_length;
+}
+
+
+// this function is used for text protocol
 unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
 	unsigned long *lengths=mysql_fetch_lengths(result);
 	unsigned int pkt_length=0;
 	if (myprot) {
-		sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row);
+		// we call generate_pkt_row3 without passing row_length
+		sid=myprot->generate_pkt_row3(this, &pkt_length, sid, num_fields, lengths, row, 0);
 	} else {
 		unsigned int col=0;
 		for (col=0; col<num_fields; col++) {

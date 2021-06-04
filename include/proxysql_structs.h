@@ -197,6 +197,7 @@ enum session_status {
 	SETTING_VARIABLE,
 	SETTING_MULTIPLE_VARIABLES,
 	SETTING_SET_NAMES,
+	SHOW_WARNINGS,
 	session_status___NONE // special marker
 };
 
@@ -381,6 +382,32 @@ enum handle_unknown_charset {
 	HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE,
 	HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT,
 	HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE
+};
+
+/**
+ * Enum holding the different MySQL connection errors that are used to report
+ * invalid states in the backend connections.
+ */
+enum PROXYSQL_MYSQL_ERR {
+	ER_PROXYSQL_MAX_CONN_TIMEOUT                      = 9001,
+	ER_PROXYSQL_MAX_CONN_FAILURES                     = 9002,
+	ER_PROXYSQL_COMMAND_NOT_SUPPORTED                 = 9003,
+	ER_PROXYSQL_OFFLINE_SRV                           = 9004,
+	ER_PROXYSQL_LAGGING_SRV                           = 9005,
+	ER_PROXYSQL_PING_TIMEOUT                          = 9006,
+	ER_PROXYSQL_CHANGE_USER_TIMEOUT                   = 9007,
+	ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT               = 9008,
+	ER_PROXYSQL_GR_HEALTH_CHECKS_MISSED               = 9009,
+	ER_PROXYSQL_READ_ONLY_CHECK_CONN_TIMEOUT          = 9010,
+	ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT               = 9011,
+	ER_PROXYSQL_READ_ONLY_CHECKS_MISSED               = 9012,
+	ER_PROXYSQL_GALERA_HEALTH_CHECK_CONN_TIMEOUT      = 9013,
+	ER_PROXYSQL_GALERA_HEALTH_CHECK_TIMEOUT           = 9014,
+	ER_PROXYSQL_GALERA_HEALTH_CHECKS_MISSED           = 9015,
+	ER_PROXYSQL_AWS_NO_PINGABLE_SRV                   = 9016,
+	ER_PROXYSQL_AWS_HEALTH_CHECK_CONN_TIMEOUT         = 9017,
+	ER_PROXYSQL_AWS_HEALTH_CHECK_TIMEOUT              = 9018,
+	ER_PROXYSQL_SRV_NULL_REPLICATION_LAG              = 9019,
 };
 
 #endif /* PROXYSQL_ENUMS */
@@ -731,7 +758,7 @@ __thread int mysql_thread___set_query_lock_on_hostgroup;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
-__thread unsigned int mysql_thread___handle_unknown_charset;
+__thread int mysql_thread___handle_unknown_charset;
 __thread int mysql_thread___poll_timeout;
 __thread int mysql_thread___poll_timeout_on_failure;
 __thread bool mysql_thread___connection_warming;
@@ -740,7 +767,6 @@ __thread bool mysql_thread___have_ssl;
 __thread bool mysql_thread___client_found_rows;
 __thread bool mysql_thread___multiplexing;
 __thread bool mysql_thread___log_unhealthy_connections;
-__thread bool mysql_thread___forward_autocommit;
 __thread bool mysql_thread___enforce_autocommit_on_reads;
 __thread bool mysql_thread___autocommit_false_not_reusable;
 __thread bool mysql_thread___autocommit_false_is_transaction;
@@ -767,6 +793,7 @@ __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 __thread int mysql_thread___query_digests_grouping_limit;
 __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
+__thread bool mysql_thread___log_mysql_warnings_enabled;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -882,7 +909,7 @@ extern __thread int mysql_thread___set_query_lock_on_hostgroup;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
-extern __thread unsigned int mysql_thread___handle_unknown_charset;
+extern __thread int mysql_thread___handle_unknown_charset;
 extern __thread int mysql_thread___poll_timeout;
 extern __thread int mysql_thread___poll_timeout_on_failure;
 extern __thread bool mysql_thread___connection_warming;
@@ -891,7 +918,6 @@ extern __thread bool mysql_thread___have_ssl;
 extern __thread bool mysql_thread___client_found_rows;
 extern __thread bool mysql_thread___multiplexing;
 extern __thread bool mysql_thread___log_unhealthy_connections;
-extern __thread bool mysql_thread___forward_autocommit;
 extern __thread bool mysql_thread___enforce_autocommit_on_reads;
 extern __thread bool mysql_thread___autocommit_false_not_reusable;
 extern __thread bool mysql_thread___autocommit_false_is_transaction;
@@ -918,6 +944,7 @@ extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 extern __thread int mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
+extern __thread bool mysql_thread___log_mysql_warnings_enabled;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

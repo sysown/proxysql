@@ -120,6 +120,12 @@ hSypLEcUVIvzc6rtfWlYKT35wQ+AGKNADwIBBQ==
 
 */
 
+int callback_ssl_verify_peer(int ok, X509_STORE_CTX* ctx) {
+	// for now only return 1
+	return 1;
+}
+
+
 
 #ifndef HEADER_DH_H
 #include <openssl/dh.h>
@@ -344,6 +350,8 @@ X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, i
 	int rc;
 	X509 * x = NULL;
 	X509_NAME * name= NULL;
+	X509_EXTENSION* ext = NULL;
+	X509V3_CTX v3_ctx;
 	if ((x = X509_new()) == NULL) {
 		proxy_error("Unable to run X509_new()\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
@@ -364,12 +372,23 @@ X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, i
 	if (ca_x509) {
 		rc = X509_set_issuer_name(x, X509_get_subject_name(ca_x509));
 	} else {
-		X509_EXTENSION* extension = X509V3_EXT_conf_nid(NULL, NULL, NID_basic_constraints, "critical, CA:FALSE");
-		X509_add_ext(x, extension, -1);
 		rc = X509_set_issuer_name(x, name);
 	}
 	if (rc==0) {
 		proxy_error("Unable to set issuer: %s\n", ERR_error_string(ERR_get_error(),NULL));
+		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	}
+
+	// set the context
+	X509V3_set_ctx(&v3_ctx, ca_x509 ? ca_x509 : x, x, NULL, NULL, 0);
+
+	ext = X509V3_EXT_conf_nid(
+		NULL, &v3_ctx, NID_basic_constraints, ca_x509 ? "critical, CA:FALSE" : "critical, CA:TRUE");
+	if (ext) {
+		X509_add_ext(x, ext, -1);
+		X509_EXTENSION_free(ext);
+	} else {
+		proxy_error("Unable to set certificate extensions: %s\n", ERR_error_string(ERR_get_error(),NULL));
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
 
@@ -649,6 +668,7 @@ void ProxySQL_Main_init_SSL_module() {
 		exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 	}
 
+	SSL_CTX_set_verify(GloVars.global.ssl_ctx, SSL_VERIFY_PEER|SSL_VERIFY_CLIENT_ONCE, callback_ssl_verify_peer);
 	X509_free(x509);
 	EVP_PKEY_free(pkey);
 

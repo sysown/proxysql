@@ -152,12 +152,14 @@ class ProxySQL_Admin {
 		int cluster_proxysql_servers_diffs_before_sync;
 		int cluster_mysql_variables_diffs_before_sync;
 		int cluster_admin_variables_diffs_before_sync;
+		int cluster_ldap_variables_diffs_before_sync;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
 		bool cluster_mysql_users_save_to_disk;
 		bool cluster_proxysql_servers_save_to_disk;
 		bool cluster_mysql_variables_save_to_disk;
 		bool cluster_admin_variables_save_to_disk;
+		bool cluster_ldap_variables_save_to_disk;
 		int stats_mysql_connection_pool;
 		int stats_mysql_connections;
 		int stats_mysql_query_cache;
@@ -262,6 +264,7 @@ class ProxySQL_Admin {
 		bool checksum_mysql_users;
 		bool checksum_mysql_variables;
 		bool checksum_admin_variables;
+		bool checksum_ldap_variables;
 	} checksum_variables;
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
 		__add_active_users(usertype, user);
@@ -311,6 +314,7 @@ class ProxySQL_Admin {
 	void flush_mysql_variables__from_memory_to_disk();
 	void flush_admin_variables__from_disk_to_memory();
 	void flush_admin_variables__from_memory_to_disk();
+	void flush_ldap_variables__from_memory_to_disk();
 
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
@@ -426,6 +430,9 @@ class ProxySQL_Admin {
 
 	unsigned int ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int, bool);
 	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual);
+	void ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();
+	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
+	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 
 	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };

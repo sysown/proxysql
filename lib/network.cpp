@@ -51,6 +51,13 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
                 if (bind(sd, next->ai_addr, next->ai_addrlen) == -1) {
                         //if (errno != EADDRINUSE) {
                                 proxy_error("bind(): %s\n", strerror(errno));
+                                // in case of 'EADDRNOTAVAIL' suggest a solution to user. See #1614.
+                                if (errno == EADDRNOTAVAIL) {
+                                    proxy_info(
+                                       "Trying to 'bind()' failed due to 'EADDRNOTAVAIL'. If trying to bind to a "
+                                       "non-local IP address, make sure 'net.ipv4.ip_nonlocal_bind' is set to '1'\n"
+                                    );
+                                }
                                 close(sd);
                                 freeaddrinfo(ai);
                                 return -1;

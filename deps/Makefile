@@ -54,7 +54,8 @@ libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.0h || true
 	cd libssl && rm -rf openssl-1.1.1g || true
-	cd libssl && tar -zxf openssl-1.1.1g.tar.gz
+	cd libssl && rm -rf openssl-1.1.1j || true
+	cd libssl && tar -zxf openssl-1.1.1j.tar.gz
 	cd libssl/openssl  && ./config no-ssl3
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
@@ -88,7 +89,7 @@ ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
-	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
 
@@ -168,9 +169,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
-	 cd mariadb-client-library/mariadb_client && patch ./CMakeLists.txt < ../CMakeLists.txt.patch
-#	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
-	cd mariadb-client-library/mariadb_client && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
+	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
@@ -187,6 +186,8 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../cr_new_stmt_metadata_removal.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ps_buffer_stmt_read_all_rows.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof_detection.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
@@ -216,6 +217,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && tar -zxf v0.9.0.tar.gz
 	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-v1.11.tar.gz -C prometheus-cpp/3rdparty/civetweb
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
+	cd prometheus-cpp/prometheus-cpp && patch -p0 < ../registry_counters_reset.patch
 	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -229,6 +231,7 @@ re2/re2/obj/libre2.a:
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2 && patch re2/util/mutex.h < mutex.h.patch
 	cd re2/re2 && sed -i -e 's/-O3 /-O3 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
+	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
 
 re2: re2/re2/obj/libre2.a
@@ -278,6 +281,7 @@ cleanall:
 	cd libssl && rm -rf openssl-1.1.1b || true
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.1g || true
+	cd libssl && rm -rf openssl-1.1.1j || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-0.9.0 || true
 .PHONY: cleanall

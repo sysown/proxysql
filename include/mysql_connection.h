@@ -188,6 +188,15 @@ class MySQL_Connection {
 	void stmt_execute_store_result_start();
 	void stmt_execute_store_result_cont(short event);
 
+	/**
+	 * @brief Process the rows returned by 'async_stmt_execute_store_result'. Extracts all the received
+	 *   rows from 'query.stmt->result.data' but the last one, adds them to 'MyRS', frees the buffer
+	 *   used by 'query.stmt' and allocates a new one with the last row, leaving it ready for being filled
+	 *   with the new rows to be received.
+	 * @param processed_bytes Reference to the already processed bytes to be updated with the rows
+	 *   that are being read and added to 'MyRS'.
+	 */
+	void process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes);
 
 	void async_free_result();
 	bool IsActiveTransaction(); /* {
