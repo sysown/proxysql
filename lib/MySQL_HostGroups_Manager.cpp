@@ -4522,6 +4522,80 @@ bool Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _
 	return ret;
 }
 
+bool MySQL_HostGroups_Manager::mysql_group_replication_lag_action(int _write_hostgroup, char *address, unsigned int port, 
+unsigned int mgr_current_replication_lag, unsigned int mgr_max_transactions_behind) {
+	GloAdmin->mysql_servers_wrlock();
+	wrlock();
+
+	int i, j;
+	bool mgr_rep_lag_flag = false;  // not lag default
+
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result *resultset = NULL;
+	char *query = NULL;
+	char *q = NULL;
+	char *error = NULL;
+	q=(char *)"SELECT hostgroup_id,hostname,PORT FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
+	query = (char *)malloc(strlen(q) + strlen(address) + 32);
+	sprintf(query, q, address, port);
+	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		free(error);
+		error = NULL;
+	}
+	free(query);
+	if (resultset) {
+		int _hid = 0;
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it)
+		{
+			SQLite3_row *r = *it;
+			_hid = atoi(r->fields[0]);
+
+			for (i = 0; i < (int)MyHostGroups->len; i++) {
+				MyHGC *myhgc = (MyHGC *)MyHostGroups->index(i);
+				if (_hid >= 0 && _hid != (int)myhgc->hid) continue;
+				for (j = 0; j < (int)myhgc->mysrvs->cnt(); j++) {
+				MySrvC *mysrvc = (MySrvC *)myhgc->mysrvs->servers->index(j);
+				if (strcmp(mysrvc->address, address) == 0 && mysrvc->port == port) {
+					if (mysrvc->status == MYSQL_SERVER_STATUS_ONLINE) {
+					if ((mgr_current_replication_lag >= 0 && (mgr_current_replication_lag > mgr_max_transactions_behind))) {
+						proxy_warning("Offline soft server %s:%d from HG %u with replication lag of %d tranactions\n",
+							address, port, myhgc->hid, mgr_current_replication_lag);
+						mysrvc->status = MYSQL_SERVER_STATUS_OFFLINE_SOFT;
+						mysrvc->mgr_replication_lag_status = true;
+						mgr_rep_lag_flag = true;
+						}  
+					} else {
+					if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_SOFT && mysrvc->mgr_replication_lag_status) {
+						if ((mgr_current_replication_lag >= 0 && (mgr_current_replication_lag <= mgr_max_transactions_behind))) {
+						mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+						mysrvc->mgr_replication_lag_status = false;
+						proxy_warning("Re-enabling offline soft server %s:%d from HG %u with replication lag of %d tranactions\n",
+							address, port, myhgc->hid, mgr_current_replication_lag);
+						}
+					} else {
+						mgr_rep_lag_flag = true;
+					}
+					}
+					goto __exit_replication_lag_action;
+				}
+				}
+			}
+		}
+		}
+			
+	__exit_replication_lag_action:
+	if (resultset) {
+			delete resultset;
+			resultset=NULL;
+		}
+	wrunlock();
+	GloAdmin->mysql_servers_wrunlock();
+
+	return mgr_rep_lag_flag;
+}
+
 void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
 	int cols=0;
 	int affected_rows=0;
