@@ -555,6 +555,7 @@ class MySQL_HostGroups_Manager {
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
 
+	bool mysql_group_replication_lag_action(int, char*, unsigned int, unsigned int, unsigned int); //set mysql group replication lag offline soft
 	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
