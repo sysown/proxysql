@@ -345,6 +345,7 @@ struct p_th_gauge {
 		mysql_monitor_read_only_interval,
 		mysql_monitor_read_only_timeout,
 		mysql_monitor_writer_is_also_reader,
+		mysql_monitor_offline_soft_or_shunned,
 		mysql_monitor_replication_lag_interval,
 		mysql_monitor_replication_lag_timeout,
 		mysql_monitor_history,
