@@ -137,6 +137,7 @@ class MySrvC {	// MySQL Server Container
 	enum MySerStatus status;
 	unsigned int compression;
 	unsigned int max_connections;
+	bool mgr_replication_lag_status; //MGR replication lag flag, true lag, false not lag
 	unsigned int aws_aurora_current_lag_us;
 	unsigned int max_replication_lag;
 	unsigned int max_connections_used; // The maximum number of connections that has been opened
