@@ -3,12 +3,6 @@
 
 class MySQL_LDAP_Authentication {
 public:
-	// MySQL_LDAP_Authentication() {};
-	// virtual ~MySQL_LDAP_Authentication() {};
-	//virtual bool add(char *username, char *backend_username, char *password, enum cred_username_type usertype, bool use_ssl, int default_hostgroup, char *default_schema, bool schema_locked, bool transaction_persistent, bool fast_forward, int max_connections) {return false;};
-	// virtual bool del(char *username, enum cred_username_type usertype, bool set_lock=true) {return false;};
-	// virtual bool reset() {return false;};
-
 	virtual char * lookup(char *username, char *pass, 
 			enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, 
 			char **default_schema, bool *schema_locked, bool *transaction_persistent, 
@@ -17,11 +11,6 @@ public:
 
 	virtual int increase_frontend_user_connections(char *username, int *mc=NULL) {return 0;};
 	virtual void decrease_frontend_user_connections(char *username) {};
-
-	// virtual void set_all_inactive(enum cred_username_type usertype) {};
-	// virtual void remove_inactives(enum cred_username_type usertype) {};
-	// virtual bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass) {return false;};
-	// virtual int password_matches(char *u, char *pass) {return 0;}; // 0 = not match , 1 = matches , 2 = not present
 
 	virtual void wrlock() {};
 	virtual void wrunlock() {};
