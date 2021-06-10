@@ -53,6 +53,7 @@ clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a: 
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
+	cd libdaemon && cp config.guess libdaemon
 	cd libdaemon/libdaemon && ./configure --disable-examples
 	cd libdaemon/libdaemon && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -101,6 +102,7 @@ sqlite3: sqlite3/sqlite3/sqlite3.o
 libconfig/libconfig/lib/.libs/libconfig++.a:
 	cd libconfig && rm -rf libconfig-1.4.9
 	cd libconfig && tar -zxf libconfig-1.4.9.tar.gz
+	cd libconfig && cp config.guess libconfig/aux-build
 	cd libconfig/libconfig && ./configure --disable-examples
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 

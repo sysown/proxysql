@@ -10,8 +10,8 @@ DEBUG=${ALL_DEBUG}
 #export DEBUG
 #export OPTZ
 #export EXTRALINK
-CURVER?=1.4.13.2
-MAKEOPT=-j 4
+CURVER?=1.4.13
+MAKEOPT=-j${NPROC}
 DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD=1
@@ -130,6 +130,9 @@ debian8: binaries/proxysql_${CURVER}-debian8_amd64.deb
 
 debian9: binaries/proxysql_${CURVER}-debian9_amd64.deb
 .PHONY: debian9
+
+debian9-arm64: binaries/proxysql_${CURVER}-debian9_aarch64.deb
+.PHONY: debian9-arm64
 
 ubuntu14-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb
 .PHONY: ubuntu14-dbg
@@ -539,6 +542,22 @@ binaries/proxysql_${CURVER}-debian9_amd64.deb:
 	docker stop debian9_build
 	docker rm debian9_build
 
+binaries/proxysql_${CURVER}-debian9_aarch64.deb:
+	docker stop debian9_build || true
+	docker rm debian9_build || true
+	docker create -v $(shell pwd):/opt/proxysql --name debian9_build proxysql/packaging-arm64:build-debian9 bash -c "while : ; do sleep 10 ; done"
+	docker start debian9_build
+	sleep 2
+	docker exec debian9_build bash -c "cd /opt/proxysql; ${MAKE} clean && ${MAKE} ${MAKEOPT} build_deps && ${MAKE} ${MAKEOPT}"
+	sleep 2
+	docker cp docker/images/proxysql/debian-9-arm-build/proxysql.ctl debian9_build:/opt/proxysql/
+	sleep 2
+	docker exec debian9_build bash -c "cd /opt/proxysql; cp src/proxysql . ; equivs-build proxysql.ctl"
+	sleep 2
+	docker cp debian9_build:/opt/proxysql/proxysql_${CURVER}_arm64.deb ./binaries/proxysql_${CURVER}-debian9_arm64.deb
+	docker stop debian9_build
+	docker rm debian9_build
+
 binaries/proxysql_${CURVER}-clickhouse-debian9_amd64.deb:
 	docker stop debian9_build || true
 	docker rm debian9_build || true
@@ -666,6 +685,12 @@ cleanall:
 	cd src && ${MAKE} clean
 	rm binaries/*deb || true
 	rm binaries/*rpm || true
+
+.PHONY: cleanbuild
+cleanbuild:
+	cd deps && ${MAKE} cleanall
+	cd lib && ${MAKE} clean
+	cd src && ${MAKE} clean
 
 install: src/proxysql
 	install -m 0755 src/proxysql /usr/bin
