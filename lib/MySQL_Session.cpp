@@ -212,6 +212,8 @@ Query_Info::Query_Info() {
 	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
+	start_time=0;
+	end_time=0;
 }
 
 Query_Info::~Query_Info() {
@@ -1124,11 +1126,13 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return_proxysql_internal(pkt);
 		return true;
 	}
-	if (handler_SetAutocommit(pkt) == true) {
-		return true;
-	}
-	if (handler_CommitRollback(pkt) == true) {
-		return true;
+	if (locked_on_hostgroup == -1) {
+		if (handler_SetAutocommit(pkt) == true) {
+			return true;
+		}
+		if (handler_CommitRollback(pkt) == true) {
+			return true;
+		}
 	}
 
 	if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
@@ -1177,7 +1181,15 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
-	if ( (pkt->size < 60) && (pkt->size > 38) && (strncasecmp((char *)"SET SESSION character_set_server",(char *)pkt->ptr+5,32)==0) ) { // issue #601
+	if (locked_on_hostgroup >= 0 && (strncasecmp((char *)"SET ",(char *)pkt->ptr+5,4)==0)) {
+		// this is a circuit breaker, we will send everything to the backend
+		//
+		// also note that in the current implementation we stop tracking variables:
+		// this becomes a problem if mysql-set_query_lock_on_hostgroup is
+		// disabled while a session is already locked
+		return false;
+	}
+	if ((pkt->size < 60) && (pkt->size > 38) && (strncasecmp((char *)"SET SESSION character_set_server",(char *)pkt->ptr+5,32)==0) ) { // issue #601
 		char *idx=NULL;
 		char *p=(char *)pkt->ptr+37;
 		idx=(char *)memchr(p,'=',pkt->size-37);
@@ -1197,7 +1209,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 		}
 	}
-	if ( (pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
+	if ((pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
 		char *idx=NULL;
 		char *p=(char *)pkt->ptr+38;
 		idx=(char *)memchr(p,'=',pkt->size-38);
@@ -2308,6 +2320,9 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 					q=(char *)"SET %s=%s";
 				if (strncasecmp(var_value,(char *)"REPLACE",7)==0)
 					q=(char *)"SET %s=%s";
+				if (var_value[0] && var_value[0]=='(') { // the value is a subquery
+					q=(char *)"SET %s=%s";
+				}
 			}
 		} else {
 			// NOTE: for now, only SET SESSION is supported
@@ -3037,7 +3052,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (client_myds->myconn->local_stmts==NULL) {
 			client_myds->myconn->local_stmts=new MySQL_STMTs_local_v14(true);
 		}
-		uint64_t hash=client_myds->myconn->local_stmts->compute_hash((char *)client_myds->myconn->userinfo->username,(char *)client_myds->myconn->userinfo->schemaname,(char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+		uint64_t hash=client_myds->myconn->local_stmts->compute_hash(
+			(char *)client_myds->myconn->userinfo->username,
+			(char *)client_myds->myconn->userinfo->schemaname,
+			(char *)CurrentQuery.QueryPointer,
+			CurrentQuery.QueryLength
+		);
 		MySQL_STMT_Global_info *stmt_info=NULL;
 		// we first lock GloStmt
 		GloMyStmt->wrlock();
@@ -3122,7 +3142,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
-		qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+		qpo=GloQPro->process_mysql_query(this,NULL,0,&CurrentQuery);
 		if (qpo->max_lag_ms >= 0) {
 			thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 		}
@@ -3843,6 +3863,7 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 		(char *)client_myds->myconn->userinfo->schemaname,
 		(char *)CurrentQuery.QueryPointer,
 		CurrentQuery.QueryLength,
+		CurrentQuery.QueryParserArgs.first_comment,
 		CurrentQuery.mysql_stmt,
 		false);
 	if (CurrentQuery.QueryParserArgs.digest_text) {
@@ -4434,6 +4455,12 @@ handler_again:
 								stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
 								CurrentQuery.QueryLength=stmt_info->query_length;
 								CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
+								// NOTE: Update 'first_comment' with the the from the retrieved
+								// 'stmt_info' from the found prepared statement. 'CurrentQuery' requires its
+								// own copy of 'first_comment' because it will later be free by 'QueryInfo::end'.
+								if (stmt_info->first_comment) {
+									CurrentQuery.QueryParserArgs.first_comment=strdup(stmt_info->first_comment);
+								}
 								previous_status.push(PROCESSING_STMT_EXECUTE);
 								NEXT_IMMEDIATE(PROCESSING_STMT_PREPARE);
 								if (CurrentQuery.stmt_global_id!=stmt_info->statement_id) {
@@ -5443,6 +5470,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nq.c_str());
 				SetParser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse1();
+				// Flag to be set if any variable within the 'SET' statement fails to be tracked,
+				// due to being unknown or because it's an user defined variable.
+				bool failed_to_parse_var = false;
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
 					std::string var = it->first;
 					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
@@ -5768,15 +5798,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
 #endif // DEBUG
 					} else {
-						// if we reach here, proxysql didn't recognize every variable in a set statement
-						// unable_to_parse_set_statement() will consider the value of qpo->multiplex,
-						// therefore unable_to_parse_set_statement() may set or not set lock_hostgroup.
-						// if lock_hostgroup is set, we return immediately
-						unable_to_parse_set_statement(lock_hostgroup);
-						if (lock_hostgroup) {
-							return false;
-						}
+						// At this point the variable is unknown to us, or it's a user variable
+						// prefixed by '@', in both cases, we should fail to parse. We don't
+						// fail inmediately so we can anyway keep track of the other variables
+						// supplied within the 'SET' statement being parsed.
+						failed_to_parse_var = true;
 					}
+				}
+
+				if (failed_to_parse_var) {
+					unable_to_parse_set_statement(lock_hostgroup);
+					return false;
 				}
 /*
 				if (exit_after_SetParse) {

@@ -24,6 +24,8 @@ MySQL_Variables::MySQL_Variables() {
 	ignore_vars.push_back("interactive_timeout");
 	ignore_vars.push_back("wait_timeout");
 	ignore_vars.push_back("net_read_timeout");
+	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
+	ignore_vars.push_back("session_track_schema");
 	variables_regexp = "";
 	for (auto i = 0; i < SQL_NAME_LAST; i++) {
 		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_ACTION || i == SQL_SET_NAMES) {
