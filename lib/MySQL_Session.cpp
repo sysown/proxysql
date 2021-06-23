@@ -1114,12 +1114,6 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		}
 	}
 
-	if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
-		if (pkt->size>(5+4) && strncasecmp((char *)"USE ",(char *)pkt->ptr+5,4)==0) {
-			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(pkt);
-			return true;
-		}
-	}
 /*
 	if (
 		(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
@@ -2976,6 +2970,23 @@ __get_pkts_from_client:
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									// This block was moved from 'handler_special_queries' to support
+									// handling of 'USE' statements which are preceded by a comment.
+									// For more context check issue: #NNNN.
+									// ===================================================
+									if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
+										if (strncasecmp((char *)"USE ",CurrentQuery.get_digest_text(),4)==0) {
+											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt, CurrentQuery.get_digest_text());
+
+											if (mirror == false) {
+												break;
+											} else {
+												handler_ret = -1;
+												return handler_ret;
+											}
+										}
+									}
+									// ===================================================
 									if (qpo->max_lag_ms >= 0) {
 										thread->status_variables.queries_with_max_lag_ms++;
 									}
@@ -4824,12 +4835,12 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 // this function was introduced due to isseu #718
 // some application (like the one written in Perl) do not use COM_INIT_DB , but COM_QUERY with USE dbname
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt, const char* query_digest) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
-		char *schemaname=strndup((char *)pkt->ptr+sizeof(mysql_hdr)+5,pkt->size-sizeof(mysql_hdr)-5);
+		char *schemaname=strndup(query_digest+4,strlen(query_digest)-4);
 		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
 /*
 		//remove leading spaces
