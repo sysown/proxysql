@@ -14,6 +14,7 @@ extern __thread int mysql_thread___query_digests_max_query_length;
 extern __thread bool mysql_thread___query_digests_lowercase;
 extern __thread bool mysql_thread___query_digests_replace_null;
 extern __thread bool mysql_thread___query_digests_no_digits;
+extern __thread bool mysql_thread___query_digests_grouping_limit;
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
@@ -180,6 +181,21 @@ static char is_digit_string(char *f, char *t)
 	return 1;
 }
 
+static inline char is_arithmetic_op(char op) {
+	if (op == '+') {
+		return 1;
+	} else if (op == '-') {
+		return 1;
+	} else if (op == '*') {
+		return 1;
+	} else if (op == '/') {
+		return 1;
+	} else if (op == '%') {
+		return 1;
+	} else {
+		return 0;
+	}
+}
 
 char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comment, char *buf){
 	int i = 0;
@@ -212,6 +228,12 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 	bool lowercase=0;
 	bool replace_null=0;
 	bool replace_number=0;
+
+	char grouping_digest=0;
+	char grouping_limit_exceeded=0;
+	int grouping_count=0;
+	int grouping_lim = mysql_thread___query_digests_grouping_limit;
+
 	lowercase=mysql_thread___query_digests_lowercase;
 	replace_null = mysql_thread___query_digests_replace_null;
 	replace_number = mysql_thread___query_digests_no_digits;
@@ -231,7 +253,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			{
 				ccl=0;
 				flag = 1;
-				if (*(s+1)=='!')
+				if (i != (len-1) && *(s+1)=='!')
 					cmd=1;
 			}
 
@@ -242,16 +264,16 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			}
 
 			// comment type 3 - start with '--'
-			else if(prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
+			else if(i != (len-1) && prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
 			{
 				flag = 3;
 			}
 
-			else if (*s == '-') {
-				if (prev_char != '-' && i!=(len-1) && ((*(s+1)=='-'))) {
+			else if (i != (len-1) && *s == '-' && (*(s+1)=='-')) {
+				if (prev_char != '-') {
 					flag = 3;
 				}
-				else if (i==0 && ((*(s+1)=='-'))) {
+				else if (i==0) {
 					flag = 3;
 				}
 			}
@@ -304,6 +326,41 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							s++;
 							i++;
 						}
+					}
+				}
+				{
+					char* p = p_r - 2;
+					// supress spaces before aritmetic operators
+					if (p >= r && is_space_char(prev_char) && is_arithmetic_op(*s)) {
+						if (*p == '?') {
+							prev_char = *s;
+							--p_r;
+							*p_r++ = *s;
+							s++;
+							i++;
+							continue;
+						}
+					}
+					// supress spaces before and after commas
+					if (p >= r && is_space_char(prev_char) && ((*s == ',') || (*p == ','))) {
+						--p_r;
+						// only copy the comma if we are not grouping a query
+						if (!grouping_limit_exceeded) {
+							*p_r++ = *s;
+						}
+						prev_char = ',';
+						s++;
+						i++;
+						continue;
+					}
+					// supress spaces before closing brakets
+					if (p >= r && (*s == ')')) {
+						prev_char = *s;
+						--p_r;
+						*p_r++ = *s;
+						s++;
+						i++;
+						continue;
 					}
 				}
 				if (replace_null) {
@@ -515,8 +572,21 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r--;
 						}
 					}
+					if ( _p >= r && is_space_char(*(_p + 2))) {
+						if ( _p >= r && ( *(_p+1) == '-' || *(_p+1) == '+' || *(_p+1) == '*' || *(_p+1) == '/' || *(_p+1) == '%' || *(_p+1) == ',')) {
+							p_r--;
+						}
+					}
 					*p_r++ = '?';
 					i++;
+					continue;
+				}
+
+				// is float
+				if (*s == '.' || *s == 'e' || ((*s == '+' || *s == '-') && prev_char == 'e')) {
+					prev_char = *s;
+					i++;
+					s++;
 					continue;
 				}
 
@@ -528,6 +598,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						char *_p = p_r_t;
 						_p-=3;
 						p_r = p_r_t;
+						// remove symbol and keep parenthesis or comma
 						if ( _p >= r && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 							if  (
 								( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
@@ -536,7 +607,31 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 								p_r--;
 							}
 						}
-						*p_r++ = '?';
+						// check if we are in a grouping candidate query_digest
+						if (*(_p + 2) == '(' || *_p == '(') {
+							grouping_digest = 1;
+						}
+						// Remove spaces before number
+						if ( _p >= r && is_space_char(*(_p + 2))) {
+							// A point can be found prior to a number in case of query grouping
+							if ( _p >= r && ( *(_p+1) == '-' || *(_p+1) == '+' || *(_p+1) == '*' || *(_p+1) == '/' || *(_p+1) == '%' || *(_p+1) == ',' || *(_p+1) == '.')) {
+								p_r--;
+							}
+						}
+						if (grouping_count < grouping_lim) {
+							*p_r++ = '?';
+							if (grouping_digest) {
+								grouping_count++;
+							}
+						} else {
+							if (!grouping_limit_exceeded) {
+								*p_r++ = '.';
+								*p_r++ = '.';
+								*p_r++ = '.';
+
+								grouping_limit_exceeded=1;
+							}
+						}
 						if(len == i+1)
 						{
 							if(is_token_char(*s))
@@ -544,8 +639,6 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							i++;
 							continue;
 						}
-
-
 					}
 					flag = 0;
 				}
@@ -556,10 +649,20 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 		// COPY CHAR
 		// =================================================
 		// convert every space char to ' '
+		if (*s != ',' && !is_digit_char(*s) && !is_space_char(*s)) {
+			grouping_digest = 0;
+			grouping_count = 0;
+			grouping_limit_exceeded = 0;
+		}
+
 		if (lowercase==0) {
-			*p_r++ = !is_space_char(*s) ? *s : ' ';
+			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
+				*p_r++ = !is_space_char(*s) ? *s : ' ';
+			}
 		} else {
-			*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
+				*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
+			}
 		}
 		prev_char = *s++;
 
