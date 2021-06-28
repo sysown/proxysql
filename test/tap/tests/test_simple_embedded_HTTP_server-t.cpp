@@ -74,8 +74,8 @@ void run_request(const char *url) {
 			diag("%s%s", errbuf, ((errbuf[len - 1] != '\n') ? "\n" : ""));
 		else
 			diag("%s", curl_easy_strerror(res1));
+		ok(0,"Failure for %s", url);
 	}
-	ok(0,"Failure for %s", url);
 	curl_easy_cleanup(curl_handle);
 }
 
