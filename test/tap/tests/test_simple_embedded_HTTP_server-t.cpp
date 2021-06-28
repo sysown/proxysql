@@ -102,7 +102,7 @@ int main() {
 	}
 
 	MYSQL_QUERY(proxysql_admin, "SET admin-web_enabled='true'");
-	MYSQL_QUERY(proxysql_admin, "SET admin-restapi_port=6080");
+	MYSQL_QUERY(proxysql_admin, "SET admin-web_port=6080");
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	run_request("https://127.0.0.1:6080");
