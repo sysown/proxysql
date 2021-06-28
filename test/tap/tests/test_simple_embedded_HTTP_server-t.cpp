@@ -61,20 +61,50 @@ void run_request(const char *url) {
 	curl_easy_setopt(curl_handle, CURLOPT_HTTPAUTH, (long)CURLAUTH_DIGEST);
 	curl_easy_setopt(curl_handle, CURLOPT_ERRORBUFFER, errbuf);
 
-
-
 	CURLcode res1;
 	res1 = curl_easy_perform(curl_handle);
 	if(res1 == CURLE_OK) {
 		long response_code;
 		curl_easy_getinfo(curl_handle, CURLINFO_RESPONSE_CODE, &response_code);
 		ok(response_code==200,"Response code: %ld for %s", response_code, url);
+	} else {
+		size_t len = strlen(errbuf);
+		diag("libcurl: (%d) ", res1);
+		if(len)
+			diag("%s%s", errbuf, ((errbuf[len - 1] != '\n') ? "\n" : ""));
+		else
+			diag("%s", curl_easy_strerror(res1));
 	}
+	ok(0,"Failure for %s", url);
 	curl_easy_cleanup(curl_handle);
 }
 
 int main() {
+	CommandLine cl;
+
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return -1;
+	}
+
 	plan(4);
+
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	// Initialize connections
+	if (!proxysql_admin) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return -1;
+	}
+
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return -1;
+	}
+
+	MYSQL_QUERY(proxysql_admin, "SET admin-web_enabled='true'");
+	MYSQL_QUERY(proxysql_admin, "SET admin-restapi_port=6080");
+	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
 	run_request("https://127.0.0.1:6080");
 	run_request("https://127.0.0.1:6080/stats?metric=system");
 	run_request("https://127.0.0.1:6080/stats?metric=mysql");
