@@ -2336,6 +2336,11 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 					proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
 				}
 			}
+			auto default_transaction_isolation = j.find("default-transaction_isolation");
+			if (default_transaction_isolation != j.end()) {
+				std::string default_transaction_isolation_value = j["default-transaction_isolation"].get<std::string>();
+				mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
+			}
 		}
 	}
 	return ret;
