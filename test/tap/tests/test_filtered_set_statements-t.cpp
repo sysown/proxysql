@@ -48,6 +48,12 @@ std::vector<std::pair<std::string, std::string>> filtered_set_queries {
 	{ "net_read_timeout", "28801" },
 	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
 	{ "session_track_schema", "1" },
+	// Added several variables to be set using `grave accents`. See issue #3479.
+	{ "`wait_timeout`", "28801" },
+	{ "`character_set_results`", "latin1" },
+	{ "`character_set_results`", "latin1" },
+	{ "`autocommit`", "1" },
+	{ "`max_join_size`", "18446744073709551615" },
 };
 
 std::vector<std::string> get_valid_set_query_set(const std::string& set_query, const std::string param) {
