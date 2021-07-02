@@ -9,7 +9,7 @@ public:
 			bool *fast_forward, int *max_connections, void **sha1_pass, char **attributes,
 			char **backend_username) {return NULL;};
 
-	virtual int increase_frontend_user_connections(char *username, int *mc=NULL) {return 0;};
+	virtual int increase_frontend_user_connections(char *username, int *max_connections = NULL) { return 0; };
 	virtual void decrease_frontend_user_connections(char *username) {};
 
 	virtual void wrlock() {};

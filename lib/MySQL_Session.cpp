@@ -4927,7 +4927,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
 						if (use_ldap_auth == true) {
-							free_users = GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+							free_users = GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->fe_username, &used_users);
 						} else {
 							free_users = GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 						}
@@ -6203,7 +6203,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		init();
 		if (client_authenticated) {
 			if (use_ldap_auth == true) {
-				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 			} else {
 				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
 			}
