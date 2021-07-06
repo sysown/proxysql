@@ -4171,10 +4171,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
 
-		if (mmsd) {
-			delete mmsd;
-			mmsd = NULL;
-		}
+		
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -4251,7 +4248,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		}
 #endif // TEST_AURORA
 
-		if (found_pingable_host == false) {
+		if (found_pingable_host == false&&mmsd) {
 			proxy_error("No node is pingable for AWS Aurora cluster with writer HG %u\n", wHG);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV);
 			next_loop_at = t1 + check_interval_ms * 1000;
@@ -4262,7 +4259,11 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG , hpa[cur_host_idx].host, hpa[cur_host_idx].port);
 		}
 #endif // TEST_AURORA
-		mmsd = NULL;
+		if (mmsd) {
+			delete mmsd;
+			mmsd = NULL;
+		}
+		//mmsd = NULL;
 		mmsd = new MySQL_Monitor_State_Data(hpa[cur_host_idx].host, hpa[cur_host_idx].port, NULL, hpa[cur_host_idx].use_ssl);
 		mmsd->writer_hostgroup = wHG;
 		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms;
