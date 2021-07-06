@@ -3344,13 +3344,24 @@ SQLite3_result * ProxySQL_Admin::generate_show_fields_from(const char *tablename
 	char *pta[6];
 	pta[1]=(char *)"varchar(255)";
 	pta[2]=(char *)"NO";
-	pta[3]=(char *)"";
 	pta[4]=(char *)"";
 	pta[5]=(char *)"";
 	free(q2);
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		pta[0]=r->fields[0];
+		pta[0]=r->fields[1];
+		pta[2]=(char *)"YES";
+		if (r->fields[3]) {
+			if (strcmp(r->fields[3],"1")==0) {
+				pta[2]=(char *)"NO";
+			}
+		}
+		pta[3]=(char *)"";
+		if (r->fields[5]) {
+			if (strcmp(r->fields[5],"0")) {
+				pta[3]=(char *)"PRI";
+			}
+		}
 		result->add_row(pta);
 	}
 	delete resultset;
@@ -4011,9 +4022,16 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			run_query=false;
 			goto __run_query;
 		}
-		if (!strncmp("show fields from `", query_no_space, strlen("show fields from `"))) {
-			char *strA=query_no_space+18;
+		if (!strncasecmp("show fields from ", query_no_space, strlen("show fields from "))) {
+			char *strA=query_no_space+17;
 			int strAl=strlen(strA);
+			if (strAl==0) { // error
+				goto __run_query;
+			}
+			if (strA[0]=='`') {
+				strA++;
+				strAl--;
+			}
 			if (strAl<2) { // error
 				goto __run_query;
 			}
