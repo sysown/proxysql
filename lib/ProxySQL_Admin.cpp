@@ -3386,7 +3386,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	tn[j]=0;
 	SQLite3_result *resultset=NULL;
 	char *q1=(char *)"PRAGMA table_info(%s)";
-	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
+	char *q2=(char *)malloc(strlen(q1)+strlen(tn)+32);
 	sprintf(q2,q1,tn);
 	int affected_rows;
 	int cols;
@@ -3415,7 +3415,6 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 		*err=strdup((char *)"Table does not exist");
 		return NULL;
 	}
-	free(q2);
 	SQLite3_result *result=new SQLite3_result(18);
 	result->add_column_definition(SQLITE_TEXT,"Name");
 	result->add_column_definition(SQLITE_TEXT,"Engine");
@@ -3439,7 +3438,14 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	pta[1]=(char *)"SQLite";
 	pta[2]=(char *)"10";
 	pta[3]=(char *)"Dynamic";
-	pta[4]=(char *)"10";
+	delete resultset;
+	sprintf(q2,"SELECT COUNT(*) FROM %s",tn);
+	admindb->execute_statement(q2, &error , &cols , &affected_rows , &resultset);
+	char buf[20];
+	sprintf(buf,"%d",resultset->rows_count);
+	pta[4]=buf;
+	delete resultset;
+	free(q2);
 	pta[5]=(char *)"0";
 	pta[6]=(char *)"0";
 	pta[7]=(char *)"0";
@@ -4008,7 +4014,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("show table status like '", query_no_space, strlen("show table status like '"))) {
+		if (!strncasecmp("show table status like '", query_no_space, strlen("show table status like '"))) {
 			char *strA=query_no_space+24;
 			int strAl=strlen(strA);
 			if (strAl<2) { // error
