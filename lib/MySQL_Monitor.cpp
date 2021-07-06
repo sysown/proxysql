@@ -431,6 +431,7 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_
 		use_ssl=_use_ssl;
 		ST=0;
 		hostgroup_id=g;
+		interr=0;
 	};
 
 MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
