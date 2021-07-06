@@ -1,6 +1,9 @@
 #ifndef __CLASS_PROXYSQL_GLOVARS_H
 #define __CLASS_PROXYSQL_GLOVARS_H
 
+#define CLUSTER_SYNC_INTERFACES_ADMIN "('admin-mysql_ifaces','admin-restapi_port','admin-telnet_admin_ifaces','admin-telnet_stats_ifaces','admin-web_port')"
+#define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
+
 #include <memory>
 #include <prometheus/registry.h>
 
@@ -45,14 +48,17 @@ class ProxySQL_GlobalVariables {
 	bool configfile_open;
 	char *__cmd_proxysql_config_file;
 	char *__cmd_proxysql_datadir;
+	char *__cmd_proxysql_uuid;
 	int __cmd_proxysql_nostart;
 	int __cmd_proxysql_foreground;
 	int __cmd_proxysql_gdbg;
 	bool __cmd_proxysql_initial;
 	bool __cmd_proxysql_reload;
+	bool cluster_sync_interfaces; // If true, also mysql-interfaces and admin-mysql_ifaces are synced. false by default
 	char *__cmd_proxysql_admin_socket;
 	char *config_file;
 	char *datadir;
+	char *uuid;
 	char *admindb;
 	char *statsdb_disk;
 	char *sqlite3serverdb;

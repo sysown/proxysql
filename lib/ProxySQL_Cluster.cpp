@@ -41,14 +41,6 @@ extern ProxySQL_Cluster * GloProxyCluster;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
-typedef struct _proxy_node_address_t {
-	pthread_t thrid;
-	uint64_t hash; // unused for now
-	char *hostname;
-	uint16_t port;
-} proxy_node_address_t;
-
-
 void * ProxySQL_Cluster_Monitor_thread(void *args) {
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
@@ -58,7 +50,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		}
 	}
 
-	proxy_node_address_t * node = (proxy_node_address_t *)args;
+	ProxySQL_Node_Address * node = (ProxySQL_Node_Address *)args;
 	mysql_thread_init();
 	pthread_detach(pthread_self());
 
@@ -117,6 +109,14 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							if (strcmp(row[0], PROXYSQL_VERSION)==0) {
 								proxy_info("Cluster: clustering with peer %s:%d . Remote version: %s . Self version: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION);
 								same_version = true;
+								std::string q = "PROXYSQL CLUSTER_NODE_UUID ";
+								q += GloVars.uuid;
+								q += " ";
+								pthread_mutex_lock(&GloProxyCluster->admin_mysql_ifaces_mutex);
+								q += GloProxyCluster->admin_mysql_ifaces;
+								pthread_mutex_unlock(&GloProxyCluster->admin_mysql_ifaces_mutex);
+								proxy_info("Cluster: sending CLUSTER_NODE_UUID %s to peer %s:%d\n", GloVars.uuid, node->hostname, node->port);
+								rc_query = mysql_query(conn, q.c_str());
 							} else {
 								proxy_warning("Cluster: different ProxySQL version with peer %s:%d . Remote: %s . Self: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION);
 							}
@@ -265,8 +265,7 @@ __exit_monitor_thread:
 		mysql_close(conn);
 	}
 	proxy_info("Cluster: closing thread for peer %s:%d\n", node->hostname, node->port);
-	free(node->hostname);
-	free(node);
+	delete node;
 	//pthread_exit(0);
 	mysql_thread_end();
 	//GloProxyCluster->thread_ending(node->thrid);
@@ -1530,12 +1529,27 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const std::string& var_ty
 			if (rc_conn) {
 				std::string s_query = "";
 				string_format("SELECT * FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", s_query, var_type.c_str());
+				if (GloVars.cluster_sync_interfaces == false) {
+					if (var_type == "admin") {
+						s_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
+					} else if (var_type == "mysql") {
+						s_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+					}
+				}
 				mysql_query(conn, s_query.c_str());
 
 				if (rc_query == 0) {
 					MYSQL_RES *result = mysql_store_result(conn);
 					std::string d_query = "";
-					string_format("DELETE FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", d_query, var_type.c_str());
+					// remember that we read from runtime_global_variables but write into global_variables
+					string_format("DELETE FROM global_variables WHERE variable_name LIKE '%s-%%'", d_query, var_type.c_str());
+					if (GloVars.cluster_sync_interfaces == false) {
+						if (var_type == "admin") {
+							d_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN);
+						} else if (var_type == "mysql") {
+							d_query += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+						}
+					}
 					GloAdmin->admindb->execute(d_query.c_str());
 
 					MYSQL_ROW row;
@@ -1782,10 +1796,7 @@ void ProxySQL_Cluster_Nodes::load_servers_list(SQLite3_result *resultset, bool _
 			node = new ProxySQL_Node_Entry(h_, p_, w_ , c_);
 			node->set_active(true);
 			umap_proxy_nodes.insert(std::make_pair(hash_, node));
-			proxy_node_address_t * a = (proxy_node_address_t *)malloc(sizeof(proxy_node_address_t));
-			a->hash = 0; // usused for now
-			a->hostname = strdup(h_);
-			a->port = p_;
+			ProxySQL_Node_Address * a = new ProxySQL_Node_Address(h_, p_);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -2803,6 +2814,9 @@ ProxySQL_Cluster::ProxySQL_Cluster() {
 	pthread_mutex_init(&update_mysql_servers_mutex,NULL);
 	pthread_mutex_init(&update_mysql_users_mutex,NULL);
 	pthread_mutex_init(&update_proxysql_servers_mutex,NULL);
+	pthread_mutex_init(&update_mysql_variables_mutex,NULL);
+	pthread_mutex_init(&admin_mysql_ifaces_mutex,NULL);
+	admin_mysql_ifaces = strdup((char *)""); // always initialized
 	cluster_username = strdup((char *)"");
 	cluster_password = strdup((char *)"");
 	cluster_check_interval_ms = 1000;
@@ -2828,6 +2842,10 @@ ProxySQL_Cluster::~ProxySQL_Cluster() {
 		free(cluster_password);
 		cluster_password = NULL;
 	}
+	if (admin_mysql_ifaces) {
+		free(admin_mysql_ifaces);
+		admin_mysql_ifaces = NULL;
+	}
 }
 
 // this function returns credentials to the caller, used by monitoring threads
@@ -2850,6 +2868,13 @@ void ProxySQL_Cluster::set_password(char *_password) {
 	free(cluster_password);
 	cluster_password=strdup(_password);
 	pthread_mutex_unlock(&mutex);
+}
+
+void ProxySQL_Cluster::set_admin_mysql_ifaces(char *value) {
+	pthread_mutex_lock(&admin_mysql_ifaces_mutex);
+	free(admin_mysql_ifaces);
+	admin_mysql_ifaces=strdup(value);
+	pthread_mutex_unlock(&admin_mysql_ifaces_mutex);
 }
 
 void ProxySQL_Cluster::print_version() {

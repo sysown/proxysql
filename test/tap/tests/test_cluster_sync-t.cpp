@@ -1161,17 +1161,17 @@ int main(int, char**) {
 		//	std::make_tuple("admin-cluster_password"                           , ""                          ), Known issue, can't clear
 		//	std::make_tuple("admin-debug"                                      , "false"                     ), Should not be synced
 			std::make_tuple("admin-hash_passwords"                             , "true"                      ),
-			std::make_tuple("admin-mysql_ifaces"                               , "0.0.0.0:6032"              ),
+		//	std::make_tuple("admin-mysql_ifaces"                               , "0.0.0.0:6032"              ), // disabled because of cluster_sync_interfaces=false
 			std::make_tuple("admin-prometheus_memory_metrics_interval"         , "61"                        ),
 			std::make_tuple("admin-read_only"                                  , "false"                     ),
 			std::make_tuple("admin-refresh_interval"                           , "2001"                      ),
 			std::make_tuple("admin-restapi_enabled"                            , "false"                     ),
-			std::make_tuple("admin-restapi_port"                               , "6071"                      ),
+		//	std::make_tuple("admin-restapi_port"                               , "6071"                      ),
 			std::make_tuple("admin-stats_credentials"                          , "stats:stats"               ),
 			std::make_tuple("admin-vacuum_stats"                               , "true"                      ),
 		//	std::make_tuple("admin-version"                                    , "2.1.0-231-gbc0963e3_DEBUG" ), This changes at runtime, but it's not stored
-			std::make_tuple("admin-web_enabled"                                , "false"                     ),
-			std::make_tuple("admin-web_port"                                   , "6080"                      )
+			std::make_tuple("admin-web_enabled"                                , "false"                     )
+		//	std::make_tuple("admin-web_port"                                   , "6080"                      ) // disabled because of cluster_sync_interfaces=false
 		};
 		std::vector<std::string> update_admin_variables_queries {};
 
