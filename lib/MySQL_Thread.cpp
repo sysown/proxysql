@@ -36,7 +36,6 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
-
 typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
 	p_th_counter::metric m_idx;
@@ -2850,7 +2849,7 @@ __run_skip_1a:
 			(curtime >= (pre_poll_time + ttw))) {
 				poll_timeout_bool=true;
 			}
-		unsigned int maintenance_interval = 1000000; // hardcoded value for now
+		unsigned long long maintenance_interval = 1000000; // hardcoded value for now
 #ifdef IDLE_THREADS
 		if (idle_maintenance_thread) {
 			maintenance_interval=maintenance_interval*2;
@@ -2918,15 +2917,18 @@ __run_skip_1a:
 					if (events[i].events == EPOLLIN && events[i].data.u32==0) {
 						unsigned char c;
 						int fd=pipefd[0];
-						if (read(fd, &c, 1)==-1) {
+						if (read(fd, &c, 1)<=0) {
+						} else {
+							//i=rc;
+							maintenance_loop=true;
 						}
-						i=rc;
-						maintenance_loop=true;
 					}
 				}
 			}
 			if (mysql_sessions->len && maintenance_loop) {
-				idle_thread_to_kill_idle_sessions();
+				if (curtime == last_maintenance_time) {
+					idle_thread_to_kill_idle_sessions();
+				}
 			}
 			goto __run_skip_2;
 		}
@@ -3046,14 +3048,20 @@ void MySQL_Thread::idle_thread_check_if_worker_thread_has_unprocess_resumed_sess
 }
 
 void MySQL_Thread::idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr) {
+	bool send_signal = false;
+	// send_signal variable will control if we need to signal or not
+	// the worker thread
 	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 	if (shutdown==0 && thr->shutdown==0)
-	while (resume_mysql_sessions->len) {
-		MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
-		thr->myexchange.resume_mysql_sessions->add(mysess);
+	if (resume_mysql_sessions->len) {
+		while (resume_mysql_sessions->len) {
+			MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
+			thr->myexchange.resume_mysql_sessions->add(mysess);
+		}
+		send_signal=true; // signal only if there are sessions to resume
 	}
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
-	{
+	if (send_signal) { // signal only if there are sessions to resume
 		unsigned char c=0;
 		//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 		// we signal the thread to inform there are sessions
