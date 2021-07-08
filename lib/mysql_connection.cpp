@@ -204,8 +204,6 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 	}
 }
 
-#define PROXYSQL_USE_RESULT
-
 static int
 mysql_status(short event, short cont) {
 	int status= 0;
@@ -922,6 +920,7 @@ void MySQL_Connection::stmt_execute_store_result_cont(short event) {
 	async_exit_status = mysql_stmt_store_result_cont(&interr , query.stmt , mysql_status(event, true));
 }
 
+#ifndef PROXYSQL_USE_RESULT
 void MySQL_Connection::store_result_start() {
 	PROXY_TRACE();
 	async_exit_status = mysql_store_result_start(&mysql_result, mysql);
@@ -931,6 +930,7 @@ void MySQL_Connection::store_result_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_store_result_cont(&mysql_result , mysql , mysql_status(event, true));
 }
+#endif // PROXYSQL_USE_RESULT
 
 void MySQL_Connection::set_is_client() {
 	local_stmts->set_is_client(myds->sess);
@@ -1346,7 +1346,7 @@ handler_again:
 
 		case ASYNC_NEXT_RESULT_END:
 			break;
-
+#ifndef PROXYSQL_USE_RESULT
 		case ASYNC_STORE_RESULT_START:
 			if (mysql_errno(mysql)) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
@@ -1366,6 +1366,7 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			}
 			break;
+#endif // PROXYSQL_USE_RESULT
 		case ASYNC_USE_RESULT_START:
 			if (mysql_errno(mysql)) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);

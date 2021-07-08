@@ -518,8 +518,7 @@ class MySQL_HostGroups_Manager {
 	void init();
 	void wrlock();
 	void wrunlock();
-	bool server_add(unsigned int hid, char *add, uint16_t p=3306, uint16_t gp=0, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100, unsigned int _max_replication_lag=0, unsigned int _use_ssl=0, unsigned int _max_latency_ms=0, char *comment=NULL);
-	int servers_add(SQLite3_result *resultset); // faster version of server_add
+	int servers_add(SQLite3_result *resultset);
 	bool commit();
 
 	void set_incoming_replication_hostgroups(SQLite3_result *);

@@ -87,6 +87,15 @@ void proxy_create_random_string(char *_to, uint length, struct rand_struct *rand
 	int rc = 0;
 	uint i;
 	rc = RAND_bytes((unsigned char *)to,length);
+#ifdef DEBUG
+	if (rc==1) {
+		// For code coverage (to test the following code and other function)
+		// in DEBUG mode we pretend that RAND_bytes() fails 1% of the time
+		if(rand()%100==0) {
+			rc=0;
+		}
+	}
+#endif // DEBUG
 	if (rc!=1) {
 		for (i=0; i<length ; i++) {
 			*to= (proxy_my_rnd(rand_st) * 94 + 33);
@@ -385,92 +394,6 @@ void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo 
 	sess=__sess;
 	current_PreStmt=NULL;
 }
-
-int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__myds) {
-	unsigned char *pkt=(unsigned char *)PS_entry->ptr;	
-	enum mysql_data_stream_status *DSS=&(*myds)->DSS;
-
-	mysql_hdr hdr;
-	unsigned char cmd;
-	unsigned char *payload;
-	int from=(*myds)->myds_type;	// if the packet is from client or server
-	enum MySQL_response_type c;
-
-	payload=pkt+sizeof(mysql_hdr);
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"MySQL Packet length=%d, senquence_id=%d, addr=%p\n", hdr.pkt_length, hdr.pkt_id, payload);
-
-	switch (*DSS) {
-
-		// client is not connected yet
-		case STATE_NOT_CONNECTED:
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			break;
-
-		// client has sent the handshake
-		case STATE_CLIENT_HANDSHAKE:
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length, this)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			break;
-
-		// connection is idle. Client should be send a command
-		case STATE_SLEEP:
-//			if (!from_client) {
-//				return PKT_ERROR;
-//			}
-			cmd=*payload;
-			switch (cmd) {
-				case COM_QUERY:
-					if (pkt_com_query(payload, hdr.pkt_length)==PKT_PARSED) {
-						//*states=STATE_CLIENT_COM_QUERY;
-						return PKT_PARSED;
-					}
-					break;
-			}
-			//break;
-
-		default:
-		// TO BE REMOVED: begin
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length, this)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				case EOF_Packet:
-					pkt_end(payload, hdr.pkt_length, this);
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			
-		// TO BE REMOVED: end
-			break;
-	}
-	
-	return PKT_ERROR;
-}
-
-
 
 static unsigned char protocol_version=10;
 static uint16_t server_status=SERVER_STATUS_AUTOCOMMIT;
@@ -1439,81 +1362,6 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 #endif
 	return true;
 }
-
-bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
-
-  if (len < 11) return false;
-
-  mysql_hdr hdr;
-  memcpy(&hdr,pkt,sizeof(mysql_hdr));
-  pkt     += sizeof(mysql_hdr);
-
-	if (*pkt) return false;
-	if (len!=hdr.pkt_length+sizeof(mysql_hdr)) return false;
-
-	uint64_t affected_rows;
-	uint64_t  insert_id;
-#ifdef DEBUG
-	uint16_t  warns;
-#endif /* DEBUG */
-	unsigned char msg[len];
-
-	unsigned int p=0;
-	int rc;
-
-	pkt++; p++;
-	rc=mysql_decode_length(pkt,&affected_rows);
-	pkt += rc; p+=rc;
-	rc=mysql_decode_length(pkt,&insert_id);
-	pkt += rc; p+=rc;
-	prot_status=CPY2(pkt);
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-#ifdef DEBUG
-	warns=CPY2(pkt);
-#endif /* DEBUG */
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-	pkt++;
-	p++;
-	if (len>p) {
-		memcpy(msg,pkt,len-p);
-		msg[len-p]=0;
-	} else {
-		msg[0]=0;
-	}
-
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)prot_status, (uint16_t)warns, msg);
-	
-	return true;
-}
-
-bool MySQL_Protocol::process_pkt_EOF(unsigned char *pkt, unsigned int len) {
-	int ret;
-	mysql_hdr hdr;
-	unsigned char *payload;
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	payload=pkt+sizeof(mysql_hdr);
-	ret=pkt_end(payload, hdr.pkt_length, this);
-	return ( ret==PKT_PARSED ? true : false );
-}
-
-bool MySQL_Protocol::process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len) {
-	bool ret=false;
-
-	unsigned int _len=len-sizeof(mysql_hdr)-1;
-	unsigned char *query=(unsigned char *)l_alloc(_len+1);
-	memcpy(query,pkt+1+sizeof(mysql_hdr),_len);
-	query[_len]=0x00;
-
-	//printf("%s\n",query);
-
-	l_free(_len+1,query);
-
-	ret=true;
-	return ret;
-}
-
 
 bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;

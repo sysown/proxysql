@@ -168,7 +168,6 @@ class MySQL_Data_Stream
 	void set_pollout();	
 	void mysql_free();
 
-	void clean_net_failure();
 	void set_net_failure();
 	void setDSS_STATE_QUERY_SENT_NET();
 
@@ -180,8 +179,6 @@ class MySQL_Data_Stream
 	int write_pkts();
 
 	void unplug_backend();
-
-	int myds_connect(char *, int, int *); // the data stream MUST be initialized
 
 	void check_data_flow();
 	int assign_fd_from_mysql_conn();
