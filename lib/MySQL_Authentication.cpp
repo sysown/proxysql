@@ -122,7 +122,45 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 				// NOTE: add() is only place where we do input validation
 				try {
 					nlohmann::json valid=nlohmann::json::parse(attributes);
-					ad->attributes=strdup(attributes);
+					// we do further input validation here, and possibly transforming the JSON itself
+					bool json_rewritten = false;
+					auto default_transaction_isolation = valid.find("default-transaction_isolation");
+					if (default_transaction_isolation != valid.end()) {
+						std::string dti = valid["default-transaction_isolation"].get<std::string>();
+						for (unsigned int i = 0; i < dti.length(); ++i) {
+							if (dti[i] == '-') {
+								dti[i] = ' ';
+								json_rewritten = true; // the json needs to be rewritten
+							}
+						}
+						// input validation
+						if (
+							   (strcasecmp(dti.c_str(), "READ UNCOMMITTED")==0 )
+							|| (strcasecmp(dti.c_str(), "READ COMMITTED")==0 )
+							|| (strcasecmp(dti.c_str(), "REPEATABLE READ")==0 )
+							|| (strcasecmp(dti.c_str(), "SERIALIZABLE")==0 )
+						) {
+							if (json_rewritten) {
+								valid["default-transaction_isolation"]=dti;
+							}
+						} else {
+							std::string dti_orig = valid["default-transaction_isolation"].get<std::string>();
+							proxy_error("Invalid default-transaction_isolation for user %s : %s . Removing it from runtime\n", username, dti_orig.c_str());
+							valid.erase("default-transaction_isolation");
+							json_rewritten = true; // the json was rewritten
+						}
+					}
+					if (json_rewritten) {
+						std::string d = valid.dump();
+						if (d.length()==2) { // empty json
+							ad->attributes=strdup(""); // empty string
+						} else {
+							ad->attributes=strdup(d.c_str());
+						}
+					} else {
+						// the JSON wasn't rewritten for the purpose of input validation, therefore we copy the original value
+						ad->attributes=strdup(attributes);
+					}
 				}
 				catch(nlohmann::json::exception& e) {
 					ad->attributes=strdup("");

@@ -654,7 +654,7 @@ void MySQL_Connection::connect_start() {
 		} else {
 			mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_sha1", "unknown");
 		}
-		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "ProxySQL is sending a lot of data to MySQL server using CLIENT_CONNECT_ATTRS in order to not hit MySQL bug https://bugs.mysql.com/bug.php?id=102266 . See also https://github.com/sysown/proxysql/issues/3276");
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
 	if (parent->use_ssl) {
 		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
