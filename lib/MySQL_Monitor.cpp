@@ -4311,7 +4311,27 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	//   "REPLICA_LAG_IN_MILLISECONDS > 0"
 	// with:
 	//   "REPLICA_LAG_IN_MILLISECONDS >= 0"
-	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
+	// mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
+	{
+		const char * query =
+			"SELECT SERVER_ID,"
+			"IF("
+				"SESSION_ID = 'MASTER_SESSION_ID' AND "
+				"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP ASC LIMIT 1), "
+				"'probably_former_MASTER_SESSION_ID', SESSION_ID"
+			") SESSION_ID, " // it seems that during a failover, the old writer can keep MASTER_SESSION_ID because not updated
+			"LAST_UPDATE_TIMESTAMP, "
+			"IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, "
+			"CPU "
+			"FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE"
+			" ( "
+			"(REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000)" // lag between 0 and 10 minutes
+			" OR SESSION_ID = 'MASTER_SESSION_ID'" // or server with MASTER_SESSION_ID
+			" ) "
+			"AND LAST_UPDATE_TIMESTAMP > NOW() - INTERVAL 180 SECOND" // ignore decommissioned or renamed nodes, see https://github.com/sysown/proxysql/issues/3484
+			" ORDER BY SERVER_ID";
+		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, query);
+	}
 #endif // TEST_AURORA
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
