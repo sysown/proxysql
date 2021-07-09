@@ -977,6 +977,7 @@ SQLite3_Server::SQLite3_Server() {
 	if (!s.empty())
 		s += ";";
 	s += "0.0.0.0:3306";
+	pthread_mutex_init(&test_readonly_mutex, NULL);
 #endif //TEST_READONLY
 	variables.mysql_ifaces=strdup(s.c_str());
 
