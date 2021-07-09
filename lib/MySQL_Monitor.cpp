@@ -2809,7 +2809,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_read_only_interval/2/resultset->rows_count;
 				us*=40;
-				if (us > 1000000) {
+				if (us > 1000000 || us <= 0) {
 					us = 10000;
 				}
 				us = us + rand()%us;
