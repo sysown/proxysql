@@ -1259,6 +1259,11 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 		myhdr.pkt_id++;
 	}
 
+	// Check if a 'COM_CHANGE_USER' Auth Switch is being performed in session
+	if ((*myds)->sess->change_user_auth_switch) {
+		myhdr.pkt_id=1;
+	}
+
 	switch((*myds)->switching_auth_type) {
 		case 1:
 			myhdr.pkt_length=1 // fe
@@ -1601,6 +1606,23 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	reply[SHA_DIGEST_LENGTH]='\0';
 	cur+=pass_len;
 	db=(char *)pkt+cur;
+	// Move to field after 'database'
+	cur += strlen(db) + 1;
+	// Skipt field 'character-set' (size 2)
+	cur += 2;
+	// Check and get 'Client Auth Plugin' if capability is supported
+	char* client_auth_plugin = nullptr;
+	if (pkt + len > pkt + cur) {
+		int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
+		if (capabilities & CLIENT_PLUGIN_AUTH) {
+			client_auth_plugin = reinterpret_cast<char*>(pkt + cur);
+		}
+	}
+	// Default to 'mysql_native_password' in case 'auth_plugin' is not found.
+	if (client_auth_plugin == nullptr) {
+		client_auth_plugin = const_cast<char*>("mysql_native_password");
+	}
+
 	void *sha1_pass=NULL;
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
@@ -1619,10 +1641,31 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
+			// If pass not sent within 'COM_CHANGE_USER' packet, an 'Auth Switch Request'
+			// is required. We default to 'mysql_native_password'. See #3504 for more context.
+			if (pass_len == 0) {
+				// mysql_native_password
+				(*myds)->switching_auth_type = 1;
+				// started 'Auth Switch Request' for 'CHANGE_USER' in MySQL_Session.
+				(*myds)->sess->change_user_auth_switch = true;
+
+				generate_pkt_auth_switch_request(true, NULL, NULL);
+				(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
+				ret = false;
+			}
+
+			// If pass is sent with 'COM_CHANGE_USER', we proceed trying to use
+			// it to authenticate the user. See #3504 for more context.
 			if (password[0]!='*') { // clear text password
-				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-					ret=true;
+				if (strcmp(client_auth_plugin, "mysql_native_password") == 0) { // mysql_native_password
+					proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+					if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+						ret=true;
+					}
+				} else { // mysql_clear_password
+					if (strncmp(password,(char *)pass,strlen(password))==0) {
+						ret=true;
+					}
 				}
 			} else {
 				if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
