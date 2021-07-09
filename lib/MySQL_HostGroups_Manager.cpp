@@ -1880,11 +1880,12 @@ bool MySQL_HostGroups_Manager::commit() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
 	mydb->execute("DELETE FROM mysql_servers_incoming");
 
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_replication_hostgroups\n");
-	mydb->execute("DELETE FROM mysql_replication_hostgroups");
-
-	generate_mysql_replication_hostgroups_table();
-
+	// replication
+	if (incoming_replication_hostgroups) { // this IF is extremely important, otherwise replication hostgroups may disappear
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_replication_hostgroups\n");
+		mydb->execute("DELETE FROM mysql_replication_hostgroups");
+		generate_mysql_replication_hostgroups_table();
+	}
 
 	// group replication
 	if (incoming_group_replication_hostgroups) {
@@ -3966,6 +3967,9 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 		case 0:
 			if (num_rows==0) {
 				// the server has read_only=0 , but we can't find any writer, so we perform a swap
+				// NOTE: In order to avoid race conditions while 'reading' from 'mysql_servers'
+				// when 'read_only_action' is performed, we block 'ProxySQL_Admin' global SQL mutex.
+				pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
 				GloAdmin->mysql_servers_wrlock();
 				if (GloMTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
@@ -4043,6 +4047,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				}
 				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
 				GloAdmin->mysql_servers_wrunlock();
+				pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 			} else {
 				// there is a server in writer hostgroup, let check the status of present and not present hosts
 				bool act=false;
@@ -4077,6 +4082,9 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				}
 				wrunlock();
 				if (act==true) {	// there are servers either missing, or with stats=OFFLINE_HARD
+					// NOTE: In order to avoid race conditions while 'reading' from 'mysql_servers'
+					// when 'read_only_action' is performed, we block 'ProxySQL_Admin' global SQL mutex.
+					pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
 					GloAdmin->mysql_servers_wrlock();
 					if (GloMTH->variables.hostgroup_manager_verbose) {
 						char *error2=NULL;
@@ -4154,12 +4162,16 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					}
 					GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
 					GloAdmin->mysql_servers_wrunlock();
+					pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 				}
 			}
 			break;
 		case 1:
 			if (num_rows) {
 				// the server has read_only=1 , but we find it as writer, so we perform a swap
+				// NOTE: In order to avoid race conditions while 'reading' from 'mysql_servers'
+				// when 'read_only_action' is performed, we block 'ProxySQL_Admin' global SQL mutex.
+				pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
 				GloAdmin->mysql_servers_wrlock();
 				if (GloMTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
@@ -4231,6 +4243,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				}
 				GloAdmin->load_mysql_servers_to_runtime(); // LOAD MYSQL SERVERS TO RUNTIME
 				GloAdmin->mysql_servers_wrunlock();
+				pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 			}
 			break;
 		default:
