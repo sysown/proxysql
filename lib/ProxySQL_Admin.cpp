@@ -12563,41 +12563,26 @@ void ProxySQL_Admin::enable_readonly_testing() {
 	string q;
 	q = "DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 4201 AND 4800";
 	admindb->execute(q.c_str());
-	//for (int i=1; i < 2; i++) {
-	for (int i=1; i < 4; i++) {
-		for (int j=2; j<100; j+=2) {
-			for (int k=1; k<5; k++) {
-				q = "INSERT INTO mysql_servers (hostgroup_id, hostname, use_ssl, comment) VALUES (" + std::to_string(4000+i*200+j) + ", '127.5."+ std::to_string(i) +"." + std::to_string(j*2+k) + "', 0, '')";
-				admindb->execute(q.c_str());
-			}
-			q = "INSERT INTO mysql_replication_hostgroups(writer_hostgroup, reader_hostgroup) VALUES (" + std::to_string(4000+i*200+j-1) + "," + std::to_string(4000+i*200+j) + ")";
-			admindb->execute(q.c_str());
-		}
-	}
+
 /*
-	admindb->execute("INSERT INTO mysql_servers (hostgroup_id, hostname, use_ssl, comment) VALUES (3272, '127.2.1.1', 0, '')");
-	admindb->execute("INSERT INTO mysql_servers (hostgroup_id, hostname, use_ssl, comment) VALUES (3273, '127.2.1.2', 0, '')");
-	admindb->execute("INSERT INTO mysql_servers (hostgroup_id, hostname, use_ssl, comment) VALUES (3273, '127.2.1.3', 0, '')");
-	admindb->execute("DELETE FROM mysql_group_replication_hostgroups");
-	admindb->execute("INSERT INTO mysql_group_replication_hostgroups "
-					 "(writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,"
-					 "writer_is_also_reader,max_transactions_behind) VALUES (3272,3274,3273,3271,1,1,1,0);");
-*/
+ *  NOTE: This section can be uncomment for manual testing. It populates the `mysql_servers`
+ *  and `mysql_replication_hostgroups`.
+ */
+// **************************************************************************************
+//	for (int i=1; i < 4; i++) {
+//		for (int j=2; j<100; j+=2) {
+//			for (int k=1; k<5; k++) {
+//				q = "INSERT INTO mysql_servers (hostgroup_id, hostname, use_ssl, comment) VALUES (" + std::to_string(4000+i*200+j) + ", '127.5."+ std::to_string(i) +"." + std::to_string(j*2+k) + "', 0, '')";
+//				admindb->execute(q.c_str());
+//			}
+//			q = "INSERT INTO mysql_replication_hostgroups(writer_hostgroup, reader_hostgroup) VALUES (" + std::to_string(4000+i*200+j-1) + "," + std::to_string(4000+i*200+j) + ")";
+//			admindb->execute(q.c_str());
+//		}
+//	}
+// **************************************************************************************
+
 	load_mysql_servers_to_runtime();
 	mysql_servers_wrunlock();
-/*
-	admindb->execute("UPDATE global_variables SET variable_value=5000 WHERE variable_name='mysql-monitor_groupreplication_healthcheck_interval'");
-	admindb->execute("UPDATE global_variables SET variable_value=800 WHERE variable_name='mysql-monitor_groupreplication_healthcheck_timeout'");
-	admindb->execute("UPDATE global_variables SET variable_value=3 WHERE variable_name='mysql-monitor_groupreplication_healthcheck_max_timeout_count'");
-	admindb->execute("UPDATE global_variables SET variable_value=3 WHERE variable_name='mysql-monitor_groupreplication_max_transactions_behind_count'");
-	load_mysql_variables_to_runtime();
-
-	admindb->execute("DELETE FROM mysql_users WHERE username='grouprep1'");
-	admindb->execute("INSERT INTO mysql_users (username,password,default_hostgroup) VALUES ('grouprep1','pass1',3272)");
-	init_users();
-
-	load_mysql_query_rules_to_runtime();
-*/
 }
 #endif // TEST_READONLY
 
