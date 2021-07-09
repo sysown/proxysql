@@ -49,8 +49,8 @@
 
 
 #ifdef WITHGCOV
-extern void __gcov_dump();
-extern void __gcov_reset();
+extern "C" void __gcov_dump();
+extern "C" void __gcov_reset();
 #endif
 //#define MYSQL_THREAD_IMPLEMENTATION
 
