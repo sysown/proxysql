@@ -1328,6 +1328,7 @@ void SQLite3_Server::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 #ifdef TEST_READONLY
 void SQLite3_Server::load_readonly_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex readonly_mutex already acquired
+	GloAdmin->mysql_servers_wrlock();
 	readonly_map.clear();
 	char *error=NULL;
 	int cols=0;
@@ -1353,6 +1354,7 @@ void SQLite3_Server::load_readonly_table(MySQL_Session *sess) {
 		}
 		delete resultset;
 	}
+	GloAdmin->mysql_servers_wrunlock();
 }
 
 int SQLite3_Server::readonly_test_value(char *p) {
