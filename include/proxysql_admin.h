@@ -253,6 +253,11 @@ class ProxySQL_Admin {
 	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace);
 
 	public:
+	/**
+	 * @brief Mutex taken by 'ProxySQL_Admin::admin_session_handler'. It's used prevent multiple
+	 *   ProxySQL_Admin 'sessions' from running in parallel, or for preventing collisions between
+	 *   modules performing operations over the internal SQLite database and 'ProxySQL_Admin' sessions.
+	 */
 	pthread_mutex_t sql_query_global_mutex;
 	struct {
 		void *opt;
@@ -289,7 +294,31 @@ class ProxySQL_Admin {
 	void init_mysql_firewall();
 	void init_proxysql_servers();
 	void save_mysql_users_runtime_to_database(bool _runtime);
-	void save_mysql_servers_runtime_to_database(bool);
+	/**
+	 * @brief Save the current MySQL servers reported by 'MySQL_HostGroups_Manager', scanning the
+	 *   current MySQL servers structures for all hostgroups, into either the
+	 *   'main.runtime_mysql_servers' or 'main.mysql_servers' table.
+	 * @param _runtime If true the servers reported by 'MySQL_HostGroups_Manager' are stored into
+	 *   'main.runtime_mysql_servers', otherwise into 'main.runtime_mysql_servers'.
+	 * @details This functions requires the caller to have locked `mysql_servers_wrlock()`, but it
+	 *   doesn't start a transaction as other function that perform several operations over the
+	 *   database. This is because, it's not required doing so, and also because if a transaction
+	 *   was started in the following fashion:
+	 *
+	 *   ```
+	 *   admindb->execute("BEGIN IMMEDIATE");
+	 *   ```
+	 *
+	 *   ProxySQL would lock in 'MySQL_HostGroups_Manager::dump_table_mysql_servers()', or in any
+	 *   other operation from 'MySQL_HostGroups_Manager' that would try to modify the database.
+	 *   Reason being is that trying to modify an attached database during a transaction. Database
+	 *   is only attached for `DEBUG` builds as part of `MySQL_Admin::init()`. Line:
+	 *
+	 *   ```
+	 *   admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
+	 *   ```
+	 */
+	void save_mysql_servers_runtime_to_database(bool _runtime);
 	void admin_shutdown();
 	bool is_command(std::string);
 	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
