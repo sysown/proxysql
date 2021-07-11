@@ -1543,7 +1543,7 @@ __exit_monitor_group_replication_thread:
 			if (strncasecmp(mmsd->mysql_error_msg, (char *)"timeout", 7) == 0) {
 				num_timeouts=node->get_timeout_count();
 				proxy_warning("%s:%d : group replication health check timeout count %d. Max threshold %d.\n",
-					mmsd->hostname, mmsd->port, num_timeouts, mmsd->max_transactions_behind_count);
+					mmsd->hostname, mmsd->port, num_timeouts, mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count);
 			}
 		}
 		int lag_counts = 0;
@@ -2950,7 +2950,7 @@ void * MySQL_Monitor::monitor_group_replication() {
 					mmsd->writer_hostgroup=atoi(r->fields[0]);
 					mmsd->writer_is_also_reader=atoi(r->fields[4]);
 					mmsd->max_transactions_behind=atoi(r->fields[5]);
-					mmsd->max_transactions_behind_count=mysql_thread___monitor_groupreplication_max_transactions_behind_count;
+					//mmsd->max_transactions_behind_count=mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 					mmsd->mondb=monitordb;
 					WorkItem* item;
 					item=new WorkItem(mmsd,monitor_group_replication_thread);
