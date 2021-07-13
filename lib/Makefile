@@ -76,6 +76,13 @@ else
 NOJEM=
 endif
 
+WITHGCOVVAR := $(shell echo $(WITHGCOV))
+ifeq ($(WITHGCOVVAR),1)
+WGCOV=-DWITHGCOV --coverage -lgcov
+else
+WGCOV=
+endif
+
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
 NOJEM=-DNOJEM
@@ -93,7 +100,7 @@ ifeq ($(UNAME_S),Darwin)
 endif
 
 
-MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
+MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV)
 MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH)
 
 default: libproxysql.a
@@ -124,7 +131,7 @@ $(ODIR):
 
 
 clean:
-	rm -f *.pid $(ODIR)/*.oo $(ODIR)/*.o *.ko *.so *~ core libproxysql.a
+	rm -f *.pid $(ODIR)/*.oo $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *.ko *.so *~ core libproxysql.a
 
 
 ## self note

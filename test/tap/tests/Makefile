@@ -83,8 +83,15 @@ all: tests
 clean:
 	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora || true
 
-OPT=-O2 -Wl,--no-as-needed
-debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed
+WITHGCOVVAR := $(shell echo $(WITHGCOV))
+ifeq ($(WITHGCOVVAR),1)
+WGCOV=-DWITHGCOV --coverage
+else
+WGCOV=
+endif
+
+OPT=-O2 $(WGCOV) -Wl,--no-as-needed
+debug: OPT=-O0 -DDEBUG $(WGCOV) -ggdb -Wl,--no-as-needed
 debug: tests
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test
