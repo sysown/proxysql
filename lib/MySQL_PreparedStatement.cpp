@@ -133,6 +133,7 @@ void *StmtLongDataHandler::get(uint32_t _stmt_id, uint16_t _param_id,
 MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id,
                                                char *u, char *s, char *q,
                                                unsigned int ql,
+                                               char *fc,
                                                MYSQL_STMT *stmt, uint64_t _h) {
 	pthread_rwlock_init(&rwlock_, NULL);
 	statement_id = id;
@@ -145,6 +146,11 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id,
 	memcpy(query, q, ql);
 	query[ql] = '\0';  // add NULL byte
 	query_length = ql;
+	if (fc) {
+		first_comment = strdup(fc);
+	} else {
+		first_comment = NULL;
+	}
 	MyComQueryCmd = MYSQL_COM_QUERY__UNINITIALIZED;
 	num_params = stmt->param_count;
 	num_columns = stmt->field_count;
@@ -476,6 +482,9 @@ MySQL_STMT_Global_info::~MySQL_STMT_Global_info() {
 	free(username);
 	free(schemaname);
 	free(query);
+	if (first_comment) {
+		free(first_comment);
+	}
 	if (num_columns) {
 		uint16_t i;
 		for (i = 0; i < num_columns; i++) {
@@ -812,10 +821,10 @@ bool MySQL_STMTs_local_v14::client_close(uint32_t client_statement_id) {
 
 MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
     char *u, char *s, char *q, unsigned int ql,
-    MYSQL_STMT *stmt, bool lock) {
+    char *fc, MYSQL_STMT *stmt, bool lock) {
 	MySQL_STMT_Global_info *ret = NULL;
 	uint64_t hash = stmt_compute_hash(
-	    u, s, q, ql);  // this identifies the prepared statement
+		u, s, q, ql);  // this identifies the prepared statement
 	if (lock) {
 		pthread_rwlock_wrlock(&rwlock_);
 	}
@@ -847,7 +856,7 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 
 		//next_statement_id++;
 		MySQL_STMT_Global_info *a =
-		    new MySQL_STMT_Global_info(next_id, u, s, q, ql, stmt, hash);
+		    new MySQL_STMT_Global_info(next_id, u, s, q, ql, fc, stmt, hash);
 		// insert it in both maps
 		map_stmt_id_to_info.insert(std::make_pair(a->statement_id, a));
 		map_stmt_hash_to_info.insert(std::make_pair(a->hash, a));

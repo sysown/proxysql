@@ -86,6 +86,7 @@ class ProxySQL_Node_Entry {
 	struct {
 		ProxySQL_Checksum_Value_2 admin_variables;
 		ProxySQL_Checksum_Value_2 mysql_variables;
+		ProxySQL_Checksum_Value_2 ldap_variables;
 		ProxySQL_Checksum_Value_2 mysql_query_rules;
 		ProxySQL_Checksum_Value_2 mysql_servers;
 		ProxySQL_Checksum_Value_2 mysql_users;
@@ -116,6 +117,7 @@ class ProxySQL_Cluster_Nodes {
 	void get_peer_to_sync_mysql_users(char **host, uint16_t *port);
 	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port);
 	void get_peer_to_sync_admin_variables(char **host, uint16_t* port);
+	void get_peer_to_sync_ldap_variables(char **host, uint16_t *port);
 	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port);
 };
 
@@ -149,12 +151,19 @@ struct p_cluster_counter {
 		pulled_admin_variables_success,
 		pulled_admin_variables_failure,
 
+		pulled_ldap_variables_success,
+		pulled_ldap_variables_failure,
+
+		pulled_mysql_ldap_mapping_success,
+		pulled_mysql_ldap_mapping_failure,
+
 		sync_conflict_mysql_query_rules_share_epoch,
 		sync_conflict_mysql_servers_share_epoch,
 		sync_conflict_proxysql_servers_share_epoch,
 		sync_conflict_mysql_users_share_epoch,
 		sync_conflict_mysql_variables_share_epoch,
 		sync_conflict_admin_variables_share_epoch,
+		sync_conflict_ldap_variables_share_epoch,
 
 		sync_delayed_mysql_query_rules_version_one,
 		sync_delayed_mysql_servers_version_one,
@@ -162,6 +171,7 @@ struct p_cluster_counter {
 		sync_delayed_proxysql_servers_version_one,
 		sync_delayed_mysql_variables_version_one,
 		sync_delayed_admin_variables_version_one,
+		sync_delayed_ldap_variables_version_one,
 
 		__size
 	};
@@ -225,12 +235,14 @@ class ProxySQL_Cluster {
 	int cluster_mysql_users_diffs_before_sync;
 	int cluster_proxysql_servers_diffs_before_sync;
 	int cluster_mysql_variables_diffs_before_sync;
+	int cluster_ldap_variables_diffs_before_sync;
 	int cluster_admin_variables_diffs_before_sync;
 	bool cluster_mysql_query_rules_save_to_disk;
 	bool cluster_mysql_servers_save_to_disk;
 	bool cluster_mysql_users_save_to_disk;
 	bool cluster_proxysql_servers_save_to_disk;
 	bool cluster_mysql_variables_save_to_disk;
+	bool cluster_ldap_variables_save_to_disk;
 	bool cluster_admin_variables_save_to_disk;
 	ProxySQL_Cluster();
 	~ProxySQL_Cluster();

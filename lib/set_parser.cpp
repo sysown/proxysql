@@ -34,10 +34,10 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1() {
 	std::map<std::string,std::vector<std::string>> result;
 
 #define SESSION_P1 "(?:|SESSION +|@@|@@session.)"
-#define VAR_P1 "(\\w+)"
+#define VAR_P1 "`?(@\\w+|\\w+)`?"
 //#define VAR_VALUE "((?:[\\w/\\d:\\+\\-]|,)+)"
 //#define VAR_VALUE "((?:CONCAT\\((?:(REPLACE|CONCAT)\\()+@@sql_mode,(?:(?:'|\\w|,| |\"|\\))+(?:\\)))|(?:[@\\w/\\d:\\+\\-]|,)+|(?:)))"
-#define VAR_VALUE_P1 "(((?:CONCAT\\()*(?:((?: )*REPLACE|IFNULL|CONCAT)\\()+(?: )*(?:NULL|@OLD_SQL_MODE|@@sql_mode),(?:(?:'|\\w|,| |\"|\\))+(?:\\))*)|(?:[@\\w/\\d:\\+\\-]|,)+|(?:)))"
+#define VAR_VALUE_P1 "((?:\\()*(?:SELECT)*(?: )*(?:CONCAT\\()*(?:(?:(?: )*REPLACE|IFNULL|CONCAT)\\()+(?: )*(?:NULL|@OLD_SQL_MODE|@@SQL_MODE),(?:(?:'|\\w|,| |\"|\\))+(?:\\))*)(?:\\))|(?:NULL)|(?:[@\\w/\\d:\\+\\-]|,)+|(?:(?:'{1}|\"{1})(?:)(?:'{1}|\"{1})))"
 
 	const std::string pattern="(?:" NAMES SPACES QUOTES NAME_VALUE QUOTES "(?: +COLLATE +" QUOTES NAME_VALUE QUOTES "|)" "|" SESSION_P1 VAR_P1 SPACES "(?:|:)=" SPACES QUOTES VAR_VALUE_P1 QUOTES ") *,? *";
 VALGRIND_DISABLE_ERROR_REPORTING;
@@ -63,7 +63,11 @@ VALGRIND_ENABLE_ERROR_REPORTING;
       // VARIABLE
 		value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
       key = value4;
-      op.push_back(value5);
+      if (value5 == "''" || value5 == "\"\"") {
+        op.push_back("");
+      } else {
+        op.push_back(value5);
+      }
     }
 
     std::transform(key.begin(), key.end(), key.begin(), ::tolower);

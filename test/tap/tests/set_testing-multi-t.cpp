@@ -12,7 +12,10 @@
 #include <iostream>
 #include <fstream>
 #include <mutex>
+
 #include "json.hpp"
+#include "re2/re2.h"
+#include "re2/regexp.h"
 
 #include "tap.h"
 #include "utils.h"
@@ -571,9 +574,48 @@ void * my_conn_thread(void *arg) {
 				fprintf(stderr, "Variable %s->%s in proxysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 
+			bool verified_special_sqlmode = false;
+			bool special_sqlmode = false;
+
+			if (el.key() == "sql_mode") {
+				if (!el.value().is_string()) {
+					diag("Invalid value for 'sql_mode' found. Provided value should be of 'string' type");
+					exit(EXIT_FAILURE);
+				}
+
+				std::string str_val { el.value() };
+
+				re2::RE2::Options options(RE2::Quiet);
+				options.set_case_sensitive(false);
+				options.set_longest_match(false);
+				re2::RE2 concat_re("^CONCAT\\((|@@|@@session\\.)SQL_MODE,\"(.*)\"\\)", options);
+				re2::StringPiece sp_input(str_val);
+
+				std::string f_match {};
+				std::string s_match {};
+
+				re2::RE2::Consume(&sp_input, concat_re, &f_match, &s_match);
+
+				if (!s_match.empty()) {
+					special_sqlmode = true;
+
+					// remove the initial 'comma' if exists
+					if (s_match[0] == ',') {
+						s_match = s_match.substr(1, std::string::npos);
+					}
+
+					std::string k_str_val { k.value() };
+					verified_special_sqlmode =
+						strcasestr(k_str_val.c_str(), s_match.c_str()) != NULL;
+				}
+			}
+
 			if (
-				(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
-				(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
+				(special_sqlmode == true && verified_special_sqlmode == false) ||
+				(special_sqlmode == false &&
+					(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
+					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
+				)
 			) {
 				__sync_fetch_and_add(&g_failed, 1);
 				testPassed = false;

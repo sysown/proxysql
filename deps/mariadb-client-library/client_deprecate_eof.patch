@@ -12,7 +12,7 @@ index 62cf71c..c05e9a3 100644
    COM_MULTI_OFF= 0,
    COM_MULTI_CANCEL,
 diff --git include/mariadb_com.h include/mariadb_com.h
-index 7e722a0..dc121c7 100644
+index 948d96e..225b2f5 100644
 --- include/mariadb_com.h
 +++ include/mariadb_com.h
 @@ -160,6 +160,7 @@ enum enum_server_command
@@ -65,7 +65,7 @@ index 15be4fc..a69e637 100644
     See bug conc-57
   */
 diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
-index 8c2a99b..e849b76 100644
+index e475e25..1a04b2f 100644
 --- libmariadb/mariadb_lib.c
 +++ libmariadb/mariadb_lib.c
 @@ -144,6 +144,7 @@ struct st_mariadb_methods MARIADB_DEFAULT_METHODS;
@@ -415,7 +415,7 @@ index 8c2a99b..e849b76 100644
 +MYSQL_FIELD *mthd_my_read_metadata_ex(MYSQL *mysql, MA_MEM_ROOT *mem_root,
 +        ulong field_count, uint m_field_count)
 +{
-+    ulong* m_len;
++    ulong* m_len; unsigned long f_i;
 +    MYSQL_FIELD* m_fields;
 +    MYSQL_FIELD* result;
 +    MYSQL_ROWS m_rows;
@@ -436,7 +436,7 @@ index 8c2a99b..e849b76 100644
 +    memset(m_rows.data, 0, sizeof(char*)*(m_field_count + 1));
 +
 +    // read the columns info
-+    for (uint f_i = 0; f_i < field_count; f_i++)
++    for (f_i = 0; f_i < field_count; f_i++)
 +    {
 +        if (mthd_my_read_one_row(mysql, m_field_count, m_rows.data, m_len) == -1)
 +          return NULL;
@@ -480,7 +480,7 @@ index 8c2a99b..e849b76 100644
  /****************************************************************************
  ** Init MySQL structure or allocate one
  ****************************************************************************/
-@@ -1491,7 +1647,7 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
+@@ -1494,7 +1650,7 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
      goto error;
    }
   */
@@ -489,7 +489,7 @@ index 8c2a99b..e849b76 100644
    {
      if (mysql->net.last_errno == CR_SERVER_LOST)
        my_set_error(mysql, CR_SERVER_LOST, SQLSTATE_UNKNOWN,
-@@ -1593,6 +1749,16 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
+@@ -1596,6 +1752,16 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
      }
    }
  
@@ -506,7 +506,7 @@ index 8c2a99b..e849b76 100644
    /* pad 2 */
    end+= 18;
  
-@@ -2290,14 +2456,13 @@ int mthd_my_read_query_result(MYSQL *mysql)
+@@ -2361,14 +2527,13 @@ int mthd_my_read_query_result(MYSQL *mysql)
  {
    uchar *pos;
    ulong field_count;
@@ -522,7 +522,7 @@ index 8c2a99b..e849b76 100644
    {
      return(1);
    }
-@@ -2310,7 +2475,7 @@ get_info:
+@@ -2381,7 +2546,7 @@ get_info:
    {
      int error=mysql_handle_local_infile(mysql, (char *)pos, can_local_infile);
  
@@ -531,7 +531,7 @@ index 8c2a99b..e849b76 100644
        return(-1);
      goto get_info;				/* Get info packet */
    }
-@@ -2318,12 +2483,13 @@ get_info:
+@@ -2389,12 +2554,13 @@ get_info:
      mysql->server_status|= SERVER_STATUS_IN_TRANS;
  
    mysql->extra_info= net_field_length_ll(&pos); /* Maybe number of rec */
@@ -551,7 +551,7 @@ index 8c2a99b..e849b76 100644
    mysql->status=MYSQL_STATUS_GET_RESULT;
    mysql->field_count=field_count;
    return(0);
-@@ -2704,21 +2870,17 @@ mysql_list_fields(MYSQL *mysql, const char *table, const char *wild)
+@@ -2775,21 +2941,17 @@ mysql_list_fields(MYSQL *mysql, const char *table, const char *wild)
  MYSQL_RES * STDCALL
  mysql_list_processes(MYSQL *mysql)
  {
@@ -576,7 +576,7 @@ index 8c2a99b..e849b76 100644
    mysql->status=MYSQL_STATUS_GET_RESULT;
    mysql->field_count=field_count;
    return(mysql_store_result(mysql));
-@@ -4164,7 +4326,7 @@ mysql_debug(const char *debug __attribute__((unused)))
+@@ -4251,7 +4413,7 @@ mysql_debug(const char *debug __attribute__((unused)))
  *********************************************************************/
  ulong STDCALL mysql_net_read_packet(MYSQL *mysql)
  {
@@ -599,7 +599,7 @@ index 6a7e0cf..492727d 100644
      if (pkt_len == packet_error)
      {
 diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
-index 8f5bddc..5bd0ece 100644
+index 0aaaf1a..229023b 100644
 --- libmariadb/mariadb_stmt.c
 +++ libmariadb/mariadb_stmt.c
 @@ -78,6 +78,9 @@ typedef struct
@@ -612,7 +612,7 @@ index 8f5bddc..5bd0ece 100644
  
  static my_bool is_not_null= 0;
  static my_bool is_null= 1;
-@@ -152,8 +155,9 @@ static int stmt_unbuffered_eof(MYSQL_STMT *stmt __attribute__((unused)),
+@@ -153,8 +156,9 @@ static int stmt_unbuffered_eof(MYSQL_STMT *stmt __attribute__((unused)),
  static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
  {
    ulong pkt_len;
@@ -623,7 +623,7 @@ index 8f5bddc..5bd0ece 100644
  
    if (pkt_len == packet_error)
    {
-@@ -161,8 +165,10 @@ static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
+@@ -162,8 +166,10 @@ static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
      return(1);
    }
  
@@ -635,7 +635,7 @@ index 8f5bddc..5bd0ece 100644
      *row = NULL;
      stmt->fetch_row_func= stmt_unbuffered_eof;
      return(MYSQL_NO_DATA);
-@@ -194,13 +200,15 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+@@ -195,13 +201,15 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
    MYSQL_ROWS *current, **pprevious;
    ulong packet_len;
    unsigned char *p;
@@ -653,7 +653,7 @@ index 8f5bddc..5bd0ece 100644
      {
        /* allocate space for rows */
        if (!(current= (MYSQL_ROWS *)ma_alloc_root(&result->alloc, sizeof(MYSQL_ROWS) + packet_len)))
-@@ -275,10 +283,14 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+@@ -276,10 +284,14 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
      {
        *pprevious= 0;
        /* sace status info */
@@ -672,7 +672,7 @@ index 8f5bddc..5bd0ece 100644
        stmt->result_cursor= result->data;
        return(0);
      }
-@@ -335,30 +347,52 @@ static int stmt_cursor_fetch(MYSQL_STMT *stmt, uchar **row)
+@@ -336,30 +348,52 @@ static int stmt_cursor_fetch(MYSQL_STMT *stmt, uchar **row)
  void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
  {
    ulong packet_len;
@@ -712,9 +712,7 @@ index 8f5bddc..5bd0ece 100644
      {
 -      if (mariadb_connection(stmt->mysql))
 +      if (!in_resultset && *pos == 0) /* OK */
-       {
--        stmt->mysql->server_status= uint2korr(pos + 3);
--        if (in_resultset)
++      {
 +        pos++;
 +        net_field_length(&pos);
 +        net_field_length(&pos);
@@ -722,7 +720,9 @@ index 8f5bddc..5bd0ece 100644
 +        goto end;
 +      }
 +      if (packet_len < 8 && *pos == 254) /* EOF */
-+      {
+       {
+-        stmt->mysql->server_status= uint2korr(pos + 3);
+-        if (in_resultset)
 +        if (mariadb_connection(stmt->mysql))
 +        {
 +          stmt->mysql->server_status= uint2korr(pos + 3);
@@ -739,7 +739,7 @@ index 8f5bddc..5bd0ece 100644
      }
    }
  end:
-@@ -1552,7 +1586,7 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
+@@ -1554,7 +1588,7 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
    ulong packet_length;
    uchar *p;
  
@@ -748,20 +748,37 @@ index 8f5bddc..5bd0ece 100644
      return(1);
  
    p= (uchar *)stmt->mysql->net.read_pos;
-@@ -1579,26 +1613,22 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
+@@ -1579,28 +1613,38 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
+   return(0);
+ }
  
- my_bool mthd_stmt_get_param_metadata(MYSQL_STMT *stmt)
- {
+-my_bool mthd_stmt_get_param_metadata(MYSQL_STMT *stmt)
+-{
 -  MYSQL_DATA *result;
--
++my_bool mthd_stmt_get_param_metadata(MYSQL_STMT *stmt) {
++  /* We use locally allocated memory pool that we directly supply to
++     to `mthd_my_read_metadata_ex` instead of the previous
++     approach in which we simply called `mthd_my_read_metadata`
++     and the shared structure `mysql->field_alloc` was used
++     for this purpose. Using `mysql->field_alloc` was proven
++     to have dangerous side effects, as reported in issue #XXXX.
++     Alternatives solutions to this one were also provided in
++     the same issue, including `libmysql` approach. The local
++     memory allocation approach was selected as it's the most
++     defensive alternative for this.
++   */
++  MA_MEM_ROOT mt_alloc;
++  ma_init_alloc_root(&mt_alloc, 8192, 0); /* Assume rowlength < 8192 */
+ 
 -  if (!(result= stmt->mysql->methods->db_read_rows(stmt->mysql, (MYSQL_FIELD *)0,
 -                                                   7 + ma_extended_type_info_rows(stmt->mysql))))
-+  if (!(mthd_my_read_metadata(stmt->mysql, stmt->param_count,
++  if (!(mthd_my_read_metadata_ex(stmt->mysql, &mt_alloc, stmt->param_count,
 +        7 + ma_extended_type_info_rows(stmt->mysql))))
      return(1);
  
 -  free_rows(result);
-+  ma_free_root(&stmt->mysql->field_alloc, MYF(0));
++  ma_free_root(&mt_alloc, MYF(0));
++
    return(0);
  }
  
@@ -782,7 +799,7 @@ index 8f5bddc..5bd0ece 100644
      return(1);
    return(0);
  }
-@@ -1869,6 +1899,12 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+@@ -1871,6 +1915,12 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
    if (!stmt->mysql)
      return(1);
  

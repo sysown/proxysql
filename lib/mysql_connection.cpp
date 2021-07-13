@@ -204,8 +204,6 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 	}
 }
 
-#define PROXYSQL_USE_RESULT
-
 static int
 mysql_status(short event, short cont) {
 	int status= 0;
@@ -654,7 +652,7 @@ void MySQL_Connection::connect_start() {
 		} else {
 			mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "proxysql_sha1", "unknown");
 		}
-		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "ProxySQL is sending a lot of data to MySQL server using CLIENT_CONNECT_ATTRS in order to not hit MySQL bug https://bugs.mysql.com/bug.php?id=102266 . See also https://github.com/sysown/proxysql/issues/3276");
+		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
 	if (parent->use_ssl) {
 		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
@@ -922,6 +920,7 @@ void MySQL_Connection::stmt_execute_store_result_cont(short event) {
 	async_exit_status = mysql_stmt_store_result_cont(&interr , query.stmt , mysql_status(event, true));
 }
 
+#ifndef PROXYSQL_USE_RESULT
 void MySQL_Connection::store_result_start() {
 	PROXY_TRACE();
 	async_exit_status = mysql_store_result_start(&mysql_result, mysql);
@@ -931,6 +930,7 @@ void MySQL_Connection::store_result_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_store_result_cont(&mysql_result , mysql , mysql_status(event, true));
 }
+#endif // PROXYSQL_USE_RESULT
 
 void MySQL_Connection::set_is_client() {
 	local_stmts->set_is_client(myds->sess);
@@ -1346,7 +1346,7 @@ handler_again:
 
 		case ASYNC_NEXT_RESULT_END:
 			break;
-
+#ifndef PROXYSQL_USE_RESULT
 		case ASYNC_STORE_RESULT_START:
 			if (mysql_errno(mysql)) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
@@ -1366,6 +1366,7 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			}
 			break;
+#endif // PROXYSQL_USE_RESULT
 		case ASYNC_USE_RESULT_START:
 			if (mysql_errno(mysql)) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
@@ -2171,7 +2172,8 @@ bool MySQL_Connection::IsActiveTransaction() {
 			ret = true;
 		}
 		if (ret == false) {
-			bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit );
+			//bool r = ( mysql_thread___autocommit_false_is_transaction || mysql_thread___forward_autocommit ); // deprecated , see #3253
+			bool r = ( mysql_thread___autocommit_false_is_transaction);
 			if ( r && (IsAutoCommit() == false) ) {
 				ret = true;
 			}

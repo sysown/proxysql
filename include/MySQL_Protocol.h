@@ -80,7 +80,6 @@ class MySQL_Protocol {
 		prot_status=0;
 	}
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
-	int parse_mysql_pkt(PtrSize_t *, MySQL_Data_Stream *);
 
 	// members get as arguments:
 	// - a data stream (optionally NULL for some)
@@ -112,10 +111,7 @@ class MySQL_Protocol {
 	// - a data stream (optionally NULL for some)
 	// - pointer to the packet
 	// - size of the packet 
-	bool process_pkt_OK(unsigned char *pkt, unsigned int len);
-	bool process_pkt_EOF(unsigned char *pkt, unsigned int len);
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
-	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);
 

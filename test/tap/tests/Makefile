@@ -62,6 +62,8 @@ IDIR=../../../include
 LDIR=../../../lib
 TAP_LIBDIR=../tap
 
+LIBPROXYSQLAR=$(LDIR)/libproxysql.a
+
 ODIR=../../../obj
 
 EXECUTABLE=proxysql
@@ -81,11 +83,18 @@ all: tests
 clean:
 	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora || true
 
-OPT=-O2 -Wl,--no-as-needed
-debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed
+WITHGCOVVAR := $(shell echo $(WITHGCOV))
+ifeq ($(WITHGCOVVAR),1)
+WGCOV=-DWITHGCOV --coverage
+else
+WGCOV=
+endif
+
+OPT=-O2 $(WGCOV) -Wl,--no-as-needed
+debug: OPT=-O0 -DDEBUG $(WGCOV) -ggdb -Wl,--no-as-needed
 debug: tests
 
-tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -115,3 +124,6 @@ create_connection_annotation: test_connection_annotation-t.cpp
 
 test_set_collation-t: test_set_collation-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_set_collation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_set_collation-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR)
+	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc ../../../src/obj/proxysql_global.o $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11  $(MYLIBS) -ltap -ldl -lpthread -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"

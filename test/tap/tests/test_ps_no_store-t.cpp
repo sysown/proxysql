@@ -34,6 +34,7 @@ int select_config_file(MYSQL* mysql, std::string& resultset) {
 		fprintf(stderr, "error\n");
 	}
 
+	return 0;
 }
 
 int restore_admin(MYSQL* mysqladmin) {
@@ -41,6 +42,8 @@ int restore_admin(MYSQL* mysqladmin) {
 	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
 	MYSQL_QUERY(mysqladmin, "load mysql servers from disk");
 	MYSQL_QUERY(mysqladmin, "load mysql servers to runtime");
+
+	return 0;
 }
 
 int main(int argc, char** argv) {
