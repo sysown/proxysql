@@ -48,7 +48,7 @@ struct cmp_str {
 
 #define MyGR_Nentries	100
 #define Galera_Nentries	100
-#define AWS_Aurora_Nentries	50
+#define AWS_Aurora_Nentries	150
 
 #define N_L_ASE 16
 
