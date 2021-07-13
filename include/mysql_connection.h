@@ -161,8 +161,10 @@ class MySQL_Connection {
 	void set_names_cont(short event);
 	void real_query_start();
 	void real_query_cont(short event);
+#ifndef PROXYSQL_USE_RESULT
 	void store_result_start();
 	void store_result_cont(short event);
+#endif // PROXYSQL_USE_RESULT
 	void initdb_start();
 	void initdb_cont(short event);
 	void set_option_start();
