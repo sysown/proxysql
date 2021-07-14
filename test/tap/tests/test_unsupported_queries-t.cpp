@@ -291,6 +291,82 @@ void test_load_data_local_infile(
 	}
 }
 
+/**
+ * @brief Analogous function to 'test_load_data_local_infile' but it
+ *   deliberately provides a non-existing file as an argument to make the query
+ *   fail.
+ *
+ * @details This way we make sure that ProxySQL is exhibiting proper behavior
+ *   for this unsupported query that can be misused.
+ * @param cl CommandLine parameters required for the test.
+ * @param proxysql An already oppened connection to ProxySQL.
+ * @param exp_err The expected error code in case we are testing for failure,
+ *   '0' by default.
+ * @param test_for_success Select the operation mode of the test, 'true' for
+ *   testing for success, 'false' for failure. It's 'true' by default.
+ */
+void test_failing_load_data_local_infile(
+	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
+) {
+	// Supply an invalid file
+	std::string datafile {
+		std::string { cl.workdir } + "load_data_local_datadir/non_existing_file.txt"
+	};
+
+	bool table_prep_success = true;
+
+	for (const auto& query : prepare_table_queries) {
+		int query_res = mysql_query(proxysql, query.c_str());
+		if (query_res) {
+			diag(
+				"Query '%s' for table preparation failed at line '%d', with error: '%s'",
+				query.c_str(), __LINE__, mysql_error(proxysql)
+			);
+			table_prep_success = false;
+			break;
+		}
+	}
+
+	if (table_prep_success) {
+		std::string t_load_data_command {
+			"LOAD DATA LOCAL INFILE \"%s\" INTO TABLE test.load_data_local"
+		};
+		std::string load_data_command {};
+		string_format(t_load_data_command, load_data_command, datafile.c_str());
+
+		int load_data_res =
+			mysql_query(proxysql, load_data_command.c_str());
+
+		if (test_for_success) {
+			if (load_data_res) {
+				diag(
+					load_data_command.c_str(), __LINE__, mysql_error(proxysql)
+				);
+			}
+
+			int my_errno = mysql_errno(proxysql);
+			ok(
+				(load_data_res != EXIT_SUCCESS) && my_errno == 2,
+				"Query '%s' should fail. ErrCode: '%d', and error: '%s'",
+				load_data_command.c_str(), mysql_errno(proxysql), mysql_error(proxysql)
+			);
+		} else {
+			if (load_data_res) {
+				diag(
+					load_data_command.c_str(), __LINE__, mysql_error(proxysql)
+				);
+			}
+
+			int my_errno = mysql_errno(proxysql);
+			ok(
+				my_errno == exp_err,
+				"Query '%s' should fail. ErrCode: '%d', and error: '%s'",
+				load_data_command.c_str(), my_errno, mysql_error(proxysql)
+			);
+		}
+	}
+}
+
 // ****************************************************************** //
 
 
@@ -318,7 +394,25 @@ std::vector<query_test_info> queries_tests_info {
 		// Function performing an internal 'ok' test checking that the
 		// enabled / disabled query responds as expected
 		test_load_data_local_infile
-	)
+	),
+	std::make_tuple<
+		std::string, std::string, std::string, std::string, int,
+		std::function<void(const CommandLine&, MYSQL*, int, bool)>
+	>(
+		// Query to be tested
+		"LOAD DATA LOCAL INFILE",
+		// Variable name enabling / disabling the query
+		"mysql-enable_load_data_local_infile",
+		// Value for enabling the query
+		"'true'",
+		// Value for diabling the query
+		"'false'",
+		// Expected error code in case of failure
+		1047,
+		// Function performing an internal 'ok' test checking that the
+		// enabled / disabled query responds as expected
+		test_failing_load_data_local_infile
+	),
 };
 
 // ****************************************************************** //
