@@ -987,7 +987,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
           //removing delete statement
 					//GloAdmin->admindb->execute("DELETE FROM mysql_users");
 					MYSQL_ROW row;
-					char *q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment,created_at) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
+					char *q = (char *)"INSERT OR IGNORE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment,created_at) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
 					sqlite3_stmt *statement1 = NULL;
 					//sqlite3 *mydb3 = GloAdmin->admindb->get_db();
 					//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q, -1, &statement1, 0);
