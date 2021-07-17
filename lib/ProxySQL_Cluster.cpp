@@ -963,15 +963,31 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
-			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started\n", hostname, port);
+			proxy_info("Cluster: Fetching MySQL Users Incrementally from peer %s:%d  started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+      // Get max_created_at
+      long int epoch_created_at = 0;
+      char *error = NULL;
+      int cols = 0;
+      int affected_rows = 0;
+      SQLite3_result *resultset = NULL;
+      GloAdmin->admindb->execute_statement((char *)"SELECT MAX(created_at) FROM mysql_users", &error , &cols , &affected_rows , &resultset);
+      for (auto r : resultset->rows) {
+          epoch_created_at = atol(r->fields[0]);
+            }
+      delete resultset;
+      // Got max_created_at
 			if (rc_conn) {
-				rc_query = mysql_query(conn, "SELECT username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_mysql_users");
+        // Fetching the Rec which is > created_at
+        std::string new_query = "";
+        string_format("SELECT username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_mysql_users WHERE created_at > %d",new_query,epoch_created_at );
+        rc_query = mysql_query(conn, new_query.c_str());
 				if ( rc_query == 0 ) {
 					MYSQL_RES *result = mysql_store_result(conn);
-					GloAdmin->admindb->execute("DELETE FROM mysql_users");
+          //removing delete statement
+					//GloAdmin->admindb->execute("DELETE FROM mysql_users");
 					MYSQL_ROW row;
-					char *q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+					char *q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment,created_at) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
 					sqlite3_stmt *statement1 = NULL;
 					//sqlite3 *mydb3 = GloAdmin->admindb->get_db();
 					//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q, -1, &statement1, 0);
@@ -992,13 +1008,14 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 						rc=(*proxy_sqlite3_bind_int64)(statement1, 12, atoll(row[11])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_connection
 						rc=(*proxy_sqlite3_bind_text)(statement1, 13, row[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // attributes
 						rc=(*proxy_sqlite3_bind_text)(statement1, 14, row[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+            rc=(*proxy_sqlite3_bind_int64)(statement1, 15, atoll(row[14])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // created_at
 
 						SAFE_SQLITE3_STEP2(statement1);
 						rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 					}
 					mysql_free_result(result);
-					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d completed\n", hostname, port);
+					proxy_info("Cluster: Fetching MySQL Users Incrementally from peer %s:%d completed\n", hostname, port);
 					proxy_info("Cluster: Loading to runtime MySQL Users from peer %s:%d\n", hostname, port);
 					GloAdmin->init_users();
 					if (GloProxyCluster->cluster_mysql_users_save_to_disk == true) {
