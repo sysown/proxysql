@@ -4665,32 +4665,6 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	return ret;
 }
 
-void MySQL_Session::handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *pkt) {
-	unsigned char c;
-	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
-
-	//fprintf(stderr,"%d %d\n", mybe->server_myds->myprot.current_PreStmt->pending_num_params, mybe->server_myds->myprot.current_PreStmt->pending_num_columns);
-	if (c==0xfe && pkt->size < 13) {
-		if (mybe->server_myds->myprot.current_PreStmt->pending_num_params+mybe->server_myds->myprot.current_PreStmt->pending_num_columns) {
-			mybe->server_myds->DSS=STATE_EOF1;
-		} else {
-			mybe->server_myds->DSS=STATE_READY;
-			status=WAITING_CLIENT_DATA;
-			client_myds->DSS=STATE_SLEEP;
-		}
-	} else {
-		if (mybe->server_myds->myprot.current_PreStmt->pending_num_params) {
-			--mybe->server_myds->myprot.current_PreStmt->pending_num_params;
-		} else {
-			if (mybe->server_myds->myprot.current_PreStmt->pending_num_columns) {
-				--mybe->server_myds->myprot.current_PreStmt->pending_num_columns;
-			}
-		}
-	}
-	client_myds->PSarrayOUT->add(pkt->ptr, pkt->size);
-}
-
-
 void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	// FIXME: no support for SSL yet
 	if (

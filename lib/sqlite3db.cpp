@@ -519,6 +519,7 @@ void SQLite3_result::dump_to_stderr() {
 }
 
 SQLite3_result::SQLite3_result(SQLite3_result *src) {
+	enabled_mutex = false; // default
 	rows_count=0;
 	columns=src->columns;
 	if (src->enabled_mutex) {
@@ -620,6 +621,7 @@ int SQLite3_result::add_row(SQLite3_row *old_row) {
 }
 
 SQLite3_result::SQLite3_result(sqlite3_stmt *stmt) {
+	enabled_mutex = false; // default
 	rows_count=0;
 	columns=(*proxy_sqlite3_column_count)(stmt);
 	for (int i=0; i<columns; i++) {
@@ -629,6 +631,7 @@ SQLite3_result::SQLite3_result(sqlite3_stmt *stmt) {
 }
 
 SQLite3_result::SQLite3_result(sqlite3_stmt *stmt, int * found_rows, unsigned int offset, unsigned int limit) {
+	enabled_mutex = false; // default
 	rows_count=0;
 	int fr = 0;
 	columns=(*proxy_sqlite3_column_count)(stmt);
@@ -683,6 +686,7 @@ SQLite3_result::~SQLite3_result() {
 }
 
 SQLite3_result::SQLite3_result() {
+	enabled_mutex = false; // default
 	columns=0;
 }
 

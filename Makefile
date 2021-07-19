@@ -5,6 +5,10 @@ $(error GIT_VERSION is not set)
 endif
 endif
 
+### NOTES:
+### to compile without jemalloc, set environment variable NOJEMALLOC=1
+### to compile with gcov code coverage, set environment variable WITHGCOV=1
+
 O0=-O0
 O2=-O2
 O1=-O1
