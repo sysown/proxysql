@@ -219,10 +219,7 @@ const std::vector<std::string> prepare_table_queries {
 };
 
 /**
- * @brief Test that the query 'LOAD DATA LOCAL INFILE' performs correctly when
- *   enabled, and returns the proper error code when disabled. Performs one
- *   'ok()' call in case everything went as expected, and several 'diag()' call
- *   in case of errors.
+ * @brief Helper function that performs the actual check for 'test_load_data_local_infile'.
  *
  * @param cl CommandLine parameters required for the test.
  * @param proxysql An already oppened connection to ProxySQL.
@@ -231,7 +228,7 @@ const std::vector<std::string> prepare_table_queries {
  * @param test_for_success Select the operation mode of the test, 'true' for
  *   testing for success, 'false' for failure. It's 'true' by default.
  */
-void test_load_data_local_infile(
+void helper_test_load_data_local_infile(
 	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
 ) {
 	std::string datafile {
@@ -255,6 +252,7 @@ void test_load_data_local_infile(
 	if (table_prep_success) {
 		std::string t_load_data_command {
 			"LOAD DATA LOCAL INFILE \"%s\" INTO TABLE test.load_data_local"
+				" FIELDS TERMINATED BY ',' ENCLOSED BY '\"' LINES TERMINATED BY '\\n'"
 		};
 		std::string load_data_command {};
 		string_format(t_load_data_command, load_data_command, datafile.c_str());
@@ -289,6 +287,73 @@ void test_load_data_local_infile(
 			);
 		}
 	}
+}
+
+/**
+ * @brief Perform the same test as 'test_load_data_local_infile', but with
+ *   'mysql-verbose_query_error' set to 'true'. This test only purpose is
+ *   to exercise the code performing the additional extra logging.
+ */
+void test_verbose_error_load_data_local_infile(
+	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
+) {
+	MYSQL* proxysql_admin = mysql_init(NULL);
+
+	if (
+		!mysql_real_connect(
+			proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0
+		)
+	) {
+		diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return;
+	}
+
+	std::vector<std::string> verbose_query_error_true {
+		"SET mysql-verbose_query_error='true'",
+		"LOAD MYSQL VARIABLES TO RUNTIME"
+	};
+	for (const auto& query : verbose_query_error_true) {
+		int query_err = mysql_query(proxysql_admin, query.c_str());
+		if (query_err) {
+			diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+			return;
+		}
+	}
+
+	helper_test_load_data_local_infile(cl, proxysql, exp_err, test_for_success);
+
+	std::vector<std::string> verbose_query_error_false {
+		"SET mysql-verbose_query_error='false'",
+		"LOAD MYSQL VARIABLES TO RUNTIME"
+	};
+	for (const auto& query : verbose_query_error_false) {
+		int query_err = mysql_query(proxysql_admin, query.c_str());
+		if (query_err) {
+			diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+			return;
+		}
+	}
+
+	mysql_close(proxysql_admin);
+}
+
+/**
+ * @brief Test that the query 'LOAD DATA LOCAL INFILE' performs correctly when
+ *   enabled, and returns the proper error code when disabled. Performs one
+ *   'ok()' call in case everything went as expected, and several 'diag()' call
+ *   in case of errors.
+ *
+ * @param cl CommandLine parameters required for the test.
+ * @param proxysql An already oppened connection to ProxySQL.
+ * @param exp_err The expected error code in case we are testing for failure,
+ *   '0' by default.
+ * @param test_for_success Select the operation mode of the test, 'true' for
+ *   testing for success, 'false' for failure. It's 'true' by default.
+ */
+void test_load_data_local_infile(
+	const CommandLine& cl, MYSQL* proxysql, int exp_err=0, bool test_for_success=true
+) {
+	helper_test_load_data_local_infile(cl, proxysql, exp_err, test_for_success);
 }
 
 /**
@@ -412,6 +477,24 @@ std::vector<query_test_info> queries_tests_info {
 		// Function performing an internal 'ok' test checking that the
 		// enabled / disabled query responds as expected
 		test_failing_load_data_local_infile
+	),
+	std::make_tuple<
+		std::string, std::string, std::string, std::string, int,
+		std::function<void(const CommandLine&, MYSQL*, int, bool)>
+	>(
+		// Query to be tested
+		"LOAD DATA LOCAL INFILE",
+		// Variable name enabling / disabling the query
+		"mysql-enable_load_data_local_infile",
+		// Value for enabling the query
+		"'true'",
+		// Value for diabling the query
+		"'false'",
+		// Expected error code in case of failure
+		1047,
+		// Function performing an internal 'ok' test checking that the
+		// enabled / disabled query responds as expected
+		test_verbose_error_load_data_local_infile
 	),
 };
 
