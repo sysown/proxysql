@@ -3372,12 +3372,46 @@ __exit_replication_lag_action:
 	GloAdmin->mysql_servers_wrunlock();
 }
 
+/**
+ * @brief Finds the supplied server in the provided 'MyHGC' and sets the status
+ *   either to 'MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG' if 'enable' is
+ *   'false' or 'MYSQL_SERVER_STATUS_ONLINE' if 'true'.
+ *
+ * @param myhgc The MySQL Hostgroup Container in which to perform the server
+ *   search.
+ * @param address The server address.
+ * @param port The server port.
+ * @param lag_count The lag count, computed by 'get_lag_behind_count'.
+ * @param enable Boolean specifying if the server should be enabled or not.
+ */
+void lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable) {
+	for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && enable == false) {
+				proxy_warning(
+					"Shunning server %s:%d from HG %u with replication lag, count number: '%d'\n",
+					address, port, myhgc->hid, lag_count
+				);
+				mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+			} else {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && enable == true) {
+					mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+					proxy_warning(
+						"Re-enabling server %s:%d from HG %u with replication lag\n",
+						address, port, myhgc->hid, lag_count
+					);
+				}
+			}
+		}
+	}
+}
+
 void MySQL_HostGroups_Manager::group_replication_lag_action(
-	int _hid, char *address, unsigned int port, bool read_only, bool enable
+	int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable
 ) {
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
-	int i,j;
 
 	int reader_hostgroup = 0;
 	bool writer_is_also_reader = false;
@@ -3408,49 +3442,27 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 	reader_hostgroup = atoi(rhid_row->fields[0]);
 	writer_is_also_reader = atoi(rhid_row->fields[1]);
 
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	{
+		MyHGC* myhgc = nullptr;
 
-		if (read_only) {
-			if (_hid >= 0 && reader_hostgroup != (int)myhgc->hid) {
-				continue;
-			}
-		} else {
-			// In case of 'writer_is_also_reader' the server can be present
-			// in both, the 'reader_hostgroup' and the 'writer_hostgroup'.
-			if (writer_is_also_reader) {
-				if (_hid >= 0 && _hid != (int)myhgc->hid && reader_hostgroup != (int)myhgc->hid) {
-					continue;
-				}
+		if (
+			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 0 ||
+			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 2 ||
+			enable
+		) {
+			if (read_only == false) {
+				myhgc = MyHGM->MyHGC_find(_hid);
+				lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 			}
 		}
 
-		int servers_found = 0;
-
-		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
-			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
-			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
-				// First server found
-				servers_found += 1;
-
-				if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && enable == false) {
-					proxy_warning("Shunning server %s:%d from HG %u with replication lag, count number: '%d'\n", address, port, myhgc->hid, mysrvc->cur_replication_lag_count);
-					mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
-				} else {
-					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && enable == true) {
-						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-						proxy_warning("Re-enabling server %s:%d from HG %u with replication lag\n", address, port, myhgc->hid);
-					}
-				}
-
-				if (!writer_is_also_reader) {
-					goto __exit_replication_lag_action;
-				} else {
-					if (servers_found == 2) {
-						goto __exit_replication_lag_action;
-					}
-				}
-			}
+		if (
+			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 1 ||
+			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 2 ||
+			enable
+		) {
+			myhgc = MyHGM->MyHGC_find(reader_hostgroup);
+			lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 		}
 	}
 
@@ -4749,7 +4761,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	char *query=NULL;
 	char *q=NULL;
 	char *error=NULL;
-	q=(char *)"SELECT hostgroup_id, status FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3 AND status <>2";
+	q=(char *)"SELECT hostgroup_id, status FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup OR hostgroup_id=backup_writer_hostgroup OR hostgroup_id=offline_hostgroup WHERE hostname='%s' AND port=%d AND status<>3";
 	query=(char *)malloc(strlen(q)+strlen(_hostname)+32);
 	sprintf(query,q,_hostname,_port);
   mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -4786,7 +4798,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				int hostgroup=atoi(r->fields[0]);
 				if (hostgroup==_writer_hostgroup) {
 					status = atoi(r->fields[1]);
-					if (status == 0) {
+					if (status == 0 || status == 2) {
 						found_writer=true;
 					}
 				}
@@ -4828,10 +4840,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
 			sprintf(query,q,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
-			// NOTE: The status should be preserved in case of being SHUNNED
 			q=(char *)"UPDATE mysql_servers_incoming SET status=%d WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,status,_hostname,_port,_writer_hostgroup);
+			// NOTE: In case of the server being 'OFFLINE_SOFT' we preserve this status. Otherwise
+			// we set the server as 'ONLINE'.
+			sprintf(query, q, (status == 2 ? 2 : 0 ), _hostname, _port, _writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			if (writer_is_also_reader && read_HG>=0) {

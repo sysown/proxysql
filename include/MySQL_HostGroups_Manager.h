@@ -563,19 +563,25 @@ class MySQL_HostGroups_Manager {
 	 *   to 'SHUNNED' those servers which replication lag is bigger than:
 	 *     - `mysql_thread___monitor_groupreplication_max_transactions_behind_count`
 	 *
-	 * @details The function automatically handles if the supplies server is a
-	 *   writer, and the 'writer_is_also_reader' flag is present in that
-	 *   hostgroup. In that case, it also sets as 'SHUNNED' the corresponding
-	 *   server that is present in the 'reader_hostgroup'.
+	 * @details The function automatically handles the appropriate operation to
+	 *   perform on the supplied server, based on the supplied 'enable' flag and
+	 *   in 'monitor_groupreplication_max_transaction_behind_for_read_only'
+	 *   variable. In case the value of the variable is:
+	 *
+	 *     * '0' or '2': It's required to search the writer hostgroup for
+	 *       finding the supplied server.
+	 *     * '1' or '2': It's required to search the reader hostgroup for
+	 *       finding the supplied server.
 	 *
 	 * @param _hid The writer hostgroup.
 	 * @param address The server address.
 	 * @param port The server port.
+	 * @param lag_counts The computed lag for the sever.
 	 * @param read_only Boolean specifying the read_only flag value of the server.
 	 * @param enable Boolean specifying if the server needs to be disabled / enabled,
 	 *   'true' for enabling the server if it's 'SHUNNED', 'false' for disabling it.
 	 */
-	void group_replication_lag_action(int _hid, char *address, unsigned int port, bool read_only, bool enable);
+	void group_replication_lag_action(int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable);
 
 	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
 	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);

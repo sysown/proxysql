@@ -1592,7 +1592,9 @@ __exit_monitor_group_replication_thread:
 				if (lag_counts >= mysql_thread___monitor_groupreplication_max_transactions_behind_count) {
 					enable = false;
 				}
-				MyHGM->group_replication_lag_action(mmsd->writer_hostgroup, mmsd->hostname, mmsd->port, read_only, enable);
+				MyHGM->group_replication_lag_action(
+					mmsd->writer_hostgroup, mmsd->hostname, mmsd->port, lag_counts, read_only, enable
+				);
 			}
 		}
 
