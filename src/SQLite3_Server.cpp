@@ -233,7 +233,26 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
+/**
+ * @brief TODO: This function is a duplicate of the one found in 'ProxySQL_RESTAPI_Server.cpp'.
+ *   Function should be extracted from the another file and placed in a common
+ *   resource file for utilities.
+ */
+std::string replace_str_(const std::string& str, const std::string& match, const std::string& repl) {
+	if(match.empty()) {
+		return str;
+	}
 
+	std::string result = str;
+	size_t start_pos = 0;
+
+	while((start_pos = result.find(match, start_pos)) != std::string::npos) {
+		result.replace(start_pos, match.length(), repl);
+		start_pos += repl.length();
+	}
+
+	return result;
+}
 
 void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
@@ -555,8 +574,22 @@ __run_query:
 #ifdef TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS")) {
 				pthread_mutex_lock(&GloSQLite3Server->grouprep_mutex);
-				GloSQLite3Server->populate_grouprep_table(sess, testLag);
-				if (testLag > 0) testLag--;
+				GloSQLite3Server->populate_grouprep_table(sess, 0);
+
+				// Rewrite SELECT queries for matching the table which values
+				// should be used for the extracted 'server_id'. This allows
+				// simple manual configuration of the servers for testing
+				// purposes.
+				string myip = string(sess->client_myds->proxy_addr.addr);
+				string server_id = myip.substr(8,1);
+				string new_query = replace_str_1(
+					query, "GR_MEMBER_ROUTING_CANDIDATE_STATUS",
+					"GR_MEMBER_ROUTING_CANDIDATE_STATUS" + server_id
+				);
+
+				free(query);
+				query = static_cast<char*>(malloc(new_query.length() + 1));
+				strcpy(query, new_query.c_str());
 			}
 #endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
@@ -595,20 +628,26 @@ __run_query:
 #ifdef TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS")) {
 				pthread_mutex_unlock(&GloSQLite3Server->grouprep_mutex);
-				if (resultset->rows_count == 0) {
-					PROXY_TRACE();
-				}
 
-				if (strncmp("127.2.1.2", sess->client_myds->proxy_addr.addr,9) == 0) {
-					if (testTimeoutSequence[testIndex--])
-						sleep(2);
-					if (testIndex < 0)
-						testIndex = 7;
-				}
-				else {
-					if (rand() % 20 == 0)
-						sleep(2);
-				}
+				// NOTE: Old IMPL can be enabled for manual testing
+				// ****************************************************************
+
+				// 	if (resultset->rows_count == 0) {
+				// 		PROXY_TRACE();
+				// 	}
+
+				// 	if (strncmp("127.2.1.2", sess->client_myds->proxy_addr.addr,9) == 0) {
+				// 		if (testTimeoutSequence[testIndex--])
+				// 			sleep(2);
+				// 		if (testIndex < 0)
+				// 			testIndex = 7;
+				// 	}
+				// 	else {
+				// 		if (rand() % 20 == 0)
+				// 			sleep(2);
+				// 	}
+
+				// ****************************************************************
 			}
 #endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
@@ -1085,18 +1124,41 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 #endif // TEST_AURORA
 
 #ifdef TEST_GROUPREP
+/**
+ * @brief Populates the 'grouprep' table if it's found empty with the default
+ *   values for the three testing servers.
+ *
+ *   NOTE: This function needs to be called with lock on mutex galera_mutex already acquired
+ *
+ * @param sess The current session performing a query.
+ * @param txs_behind Unused parameter.
+ */
 void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind) {
-	// this function needs to be called with lock on mutex galera_mutex already acquired
-	//
-	sessdb->execute("DELETE FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS");
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+
 	string myip = string(sess->client_myds->proxy_addr.addr);
 	string server_id = myip.substr(8,1);
-	if (server_id == "1")
-		sessdb->execute("INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'NO', 0)");
-	else {
-		std::stringstream ss;
-		ss << "INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'YES', " << txs_behind << ")";
-		sessdb->execute(ss.str().c_str());
+	string query { "SELECT * FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS" + server_id + " LIMIT 1" };
+	sessdb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
+
+	if (resultset->rows_count==0) {
+		if (server_id == "1") {
+			std::string insert_query {
+				"INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS" + server_id +
+					" (viable_candidate, read_only, transactions_behind) VALUES ('YES', 'NO', 0)"
+			};
+			sessdb->execute(insert_query.c_str());
+		} else {
+			std::string insert_query {
+				"INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS" + server_id +
+					" (viable_candidate, read_only, transactions_behind) VALUES"
+					" ('YES', 'YES', 0)"
+			};
+			sessdb->execute(insert_query.c_str());
+		}
 	}
 }
 #endif // TEST_GALERA
@@ -1169,8 +1231,15 @@ bool SQLite3_Server::init() {
 #ifdef TEST_GROUPREP
 	tables_defs_grouprep = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_grouprep,
-		(const char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS",
-		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null)");
+		(const char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS1",
+		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS1 (viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null)");
+	insert_into_tables_defs(tables_defs_grouprep,
+		(const char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS2",
+		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS2 (viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null)");
+	insert_into_tables_defs(tables_defs_grouprep,
+		(const char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS3",
+		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS3 (viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null)");
+
 	check_and_build_standard_tables(sessdb, tables_defs_grouprep);
 	GloAdmin->enable_grouprep_testing();
 #endif // TEST_GALERA
