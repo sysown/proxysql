@@ -16,6 +16,7 @@
 #include <prometheus/gauge.h>
 
 #include "prometheus_helpers.h"
+#include "proxysql_utils.h"
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
@@ -3371,6 +3372,93 @@ __exit_replication_lag_action:
 	GloAdmin->mysql_servers_wrunlock();
 }
 
+void MySQL_HostGroups_Manager::group_replication_lag_action(
+	int _hid, char *address, unsigned int port, bool read_only, bool enable
+) {
+	GloAdmin->mysql_servers_wrlock();
+	wrlock();
+	int i,j;
+
+	int reader_hostgroup = 0;
+	bool writer_is_also_reader = false;
+
+	// Get the reader_hostgroup for the supplied writter hostgroup
+	std::string t_reader_hostgroup_query {
+		"SELECT reader_hostgroup,writer_is_also_reader FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+	};
+	std::string reader_hostgroup_query {};
+	string_format(t_reader_hostgroup_query, reader_hostgroup_query, _hid);
+
+	int cols=0;
+	char *error=NULL;
+	int affected_rows=0;
+	SQLite3_result* rhid_res=NULL;
+	SQLite3_row* rhid_row=nullptr;
+
+	mydb->execute_statement(
+		reader_hostgroup_query.c_str(), &error , &cols , &affected_rows , &rhid_res
+	);
+
+	// If the is now reader hostgroup configured for 'mysql_group_replication_hostgroups'
+	// an invalid configuration was somehow inserted.
+	if (rhid_res->rows.empty() || rhid_res->rows[0]->get_size() == 0) {
+		goto __exit_replication_lag_action;
+	}
+
+	rhid_row = rhid_res->rows[0];
+	reader_hostgroup = atoi(rhid_row->fields[0]);
+	writer_is_also_reader = atoi(rhid_row->fields[1]);
+
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+
+		if (read_only) {
+			if (_hid >= 0 && reader_hostgroup != (int)myhgc->hid) {
+				continue;
+			}
+		} else {
+			if (writer_is_also_reader) {
+				if (_hid >= 0 && _hid != (int)myhgc->hid && reader_hostgroup != (int)myhgc->hid) {
+					continue;
+				}
+			}
+		}
+
+		int servers_found = 0;
+
+		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+				// First server found
+				servers_found += 1;
+
+				if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && enable == false) {
+					proxy_warning("Shunning server %s:%d from HG %u with replication lag, count number: '%d'\n", address, port, myhgc->hid, mysrvc->cur_replication_lag_count);
+					mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+				} else {
+					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && enable == true) {
+						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+						proxy_warning("Re-enabling server %s:%d from HG %u with replication lag\n", address, port, myhgc->hid);
+					}
+				}
+
+				if (!writer_is_also_reader) {
+					goto __exit_replication_lag_action;
+				} else {
+					if (servers_found == 2) {
+						goto __exit_replication_lag_action;
+					}
+				}
+			}
+		}
+	}
+
+__exit_replication_lag_action:
+
+	wrunlock();
+	GloAdmin->mysql_servers_wrunlock();
+}
+
 void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 	// NOTE: the caller should hold wrlock
 	int i, j;
@@ -4675,6 +4763,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	bool found_reader=false;
 	int read_HG=-1;
 	bool need_converge=false;
+	int status=0;
 	if (resultset) {
 		// let's get info about this cluster
 		pthread_mutex_lock(&Group_Replication_Info_mutex);
@@ -4695,7 +4784,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				SQLite3_row *r=*it;
 				int hostgroup=atoi(r->fields[0]);
 				if (hostgroup==_writer_hostgroup) {
-					int status = atoi(r->fields[1]);
+					status = atoi(r->fields[1]);
 					if (status == 0) {
 						found_writer=true;
 					}
@@ -4738,10 +4827,10 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
 			sprintf(query,q,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
-			//free(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
+			// NOTE: The status should be preserved in case of being SHUNNED
+			q=(char *)"UPDATE mysql_servers_incoming SET status=%d WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
 			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,status,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			if (writer_is_also_reader && read_HG>=0) {
