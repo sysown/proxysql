@@ -582,7 +582,7 @@ __run_query:
 				// purposes.
 				string myip = string(sess->client_myds->proxy_addr.addr);
 				string server_id = myip.substr(8,1);
-				string new_query = replace_str_1(
+				string new_query = replace_str_(
 					query, "GR_MEMBER_ROUTING_CANDIDATE_STATUS",
 					"GR_MEMBER_ROUTING_CANDIDATE_STATUS" + server_id
 				);
