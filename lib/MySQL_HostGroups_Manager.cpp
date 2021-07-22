@@ -3399,8 +3399,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 		reader_hostgroup_query.c_str(), &error , &cols , &affected_rows , &rhid_res
 	);
 
-	// If the is now reader hostgroup configured for 'mysql_group_replication_hostgroups'
-	// an invalid configuration was somehow inserted.
+	// If the server isn't present in the supplied hostgroup, there is nothing to do.
 	if (rhid_res->rows.empty() || rhid_res->rows[0]->get_size() == 0) {
 		goto __exit_replication_lag_action;
 	}
@@ -3417,6 +3416,8 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 				continue;
 			}
 		} else {
+			// In case of 'writer_is_also_reader' the server can be present
+			// in both, the 'reader_hostgroup' and the 'writer_hostgroup'.
 			if (writer_is_also_reader) {
 				if (_hid >= 0 && _hid != (int)myhgc->hid && reader_hostgroup != (int)myhgc->hid) {
 					continue;

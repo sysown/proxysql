@@ -558,6 +558,23 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
 	void converge_group_replication_config(int _writer_hostgroup);
+	/**
+	 * @brief Set the supplied server as SHUNNED, this function shall be called
+	 *   to 'SHUNNED' those servers which replication lag is bigger than:
+	 *     - `mysql_thread___monitor_groupreplication_max_transactions_behind_count`
+	 *
+	 * @details The function automatically handles if the supplies server is a
+	 *   writer, and the 'writer_is_also_reader' flag is present in that
+	 *   hostgroup. In that case, it also sets as 'SHUNNED' the corresponding
+	 *   server that is present in the 'reader_hostgroup'.
+	 *
+	 * @param _hid The writer hostgroup.
+	 * @param address The server address.
+	 * @param port The server port.
+	 * @param read_only Boolean specifying the read_only flag value of the server.
+	 * @param enable Boolean specifying if the server needs to be disabled / enabled,
+	 *   'true' for enabling the server if it's 'SHUNNED', 'false' for disabling it.
+	 */
 	void group_replication_lag_action(int _hid, char *address, unsigned int port, bool read_only, bool enable);
 
 	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
