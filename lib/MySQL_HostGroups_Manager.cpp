@@ -3398,7 +3398,7 @@ void lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && enable == true) {
 					mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 					proxy_warning(
-						"Re-enabling server %s:%d from HG %u with replication lag\n",
+						"Re-enabling server %s:%d from HG %u with replication lag, count number: '%d'\n",
 						address, port, myhgc->hid, lag_count
 					);
 				}
