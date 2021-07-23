@@ -1,9 +1,11 @@
 /**
- * @file reg_test_3504-change_user_libmariadb_helper.cpp
+ * @file reg_test_3504-change_user_helper.cpp
  * @brief This is a helper file to connect and execute a 'COM_CHANGE_USER' using
- *   'libmariadb' client library. It receives the inputs parameters for making the
- *   connection as a JSON from the calling test and also returns it's output as a
- *   JSON.
+ *   'libmariadb'/'libmysql' client library. The library election should be
+ *   performed by means of the macro 'LIBMYSQL_HELPER', when specified, the file
+ *   should be compiled against 'libmysql' library, when not, against 'libmariadb'.
+ *   It receives the inputs parameters for making the connection as a JSON from 
+ *   the calling test and also returns it's output as a JSON.
  *
  *   Success JSON format:
  *    {
@@ -112,6 +114,28 @@ int main(int argc, char** argv) {
 		mysql_options(&mysql, MYSQL_SET_CHARSET_NAME, "utf8mb4");
 	}
 
+#ifdef LIBMYSQL_HELPER
+	if (SSL == false) {
+		enum mysql_ssl_mode ssl_mode = SSL_MODE_DISABLED;
+		mysql_options(&mysql, MYSQL_OPT_SSL_MODE, &ssl_mode);
+	}
+
+	if (
+		!mysql_real_connect(
+			&mysql, "127.0.0.1", user.c_str(), pass.c_str(), "information_schema",
+			port, NULL, 0
+		)
+	) {
+		string_format(
+			"Failed to connect to database: Error: %s\n", err_msg,
+			mysql_error(&mysql)
+		);
+		output["err_msg"] = err_msg;
+		res = EXIT_FAILURE;
+
+		goto exit;
+	}
+#else
 	if (SSL == true) {
 		mysql_ssl_set(&mysql, NULL, NULL, NULL, NULL, NULL);
 		conn_res = mysql_real_connect(
@@ -135,6 +159,7 @@ int main(int argc, char** argv) {
 
 		goto exit;
 	}
+#endif
 
 	mysql_get_option(&mysql, MYSQL_DEFAULT_AUTH, &default_auth);
 	output["def_auth_plugin"] = std::string { default_auth };

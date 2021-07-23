@@ -121,8 +121,8 @@ test_set_collation-t: test_set_collation-t.cpp $(TAP_LIBDIR)/libtap.a
 setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR)
 	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc ../../../src/obj/proxysql_global.o $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11  $(MYLIBS) -ltap -ldl -lpthread -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
 
-reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_libmariadb_helper.cpp
-	$(CXX) -DDEBUG reg_test_3504-change_user_libmariadb_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"
+reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp
+	$(CXX) -DDEBUG reg_test_3504-change_user_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"
 
-reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_libmysql_helper.cpp
-	$(CXX) -DDEBUG reg_test_3504-change_user_libmysql_helper.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"
+reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
+	$(CXX) -DLIBMYSQL_HELPER -DDEBUG reg_test_3504-change_user_helper.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"
