@@ -15,9 +15,10 @@
 #include <mysql.h>
 #include <mysql/mysqld_error.h>
 
-#include "tap.h"
 #include "command_line.h"
+#include "json.hpp"
 #include "proxysql_utils.h"
+#include "tap.h"
 #include "utils.h"
 
 /**
@@ -218,6 +219,8 @@ const std::vector<std::string> prepare_table_queries {
 		" c1 INT NOT NULL AUTO_INCREMENT PRIMARY KEY, c2 VARCHAR(100), c3 VARCHAR(100))",
 };
 
+using mysql_res_row = std::vector<std::string>;
+
 /**
  * @brief Helper function that performs the actual check for 'test_load_data_local_infile'.
  *
@@ -267,11 +270,60 @@ void helper_test_load_data_local_infile(
 				);
 			}
 
-			ok(
-				load_data_res == EXIT_SUCCESS,
-				"Query '%s' should succeed. Error was: '%s'",
-				load_data_command.c_str(), mysql_error(proxysql)
-			);
+			if (load_data_res == EXIT_SUCCESS) {
+				diag(
+					"Supplied query '%s' succeeded, performing check on data...",
+					load_data_command.c_str()
+				);
+			} else {
+				diag(
+					"Supplied query '%s' failed, check not going to be performed. Error was: '%s'.",
+					load_data_command.c_str(), mysql_error(proxysql)
+				);
+			}
+
+			// Check that the data has actually been loaded to the database
+			int myerr = mysql_query(proxysql, "SELECT * FROM test.load_data_local");
+			if (myerr) {
+				diag(
+					"Query 'SELECT * FROM test.load_data_local' for table preparation failed"
+					" at line '%d', with error: '%s'", __LINE__, mysql_error(proxysql)
+				);
+			} else {
+				MYSQL_RES* result = mysql_store_result(proxysql);
+				std::vector<mysql_res_row> rows_res { extract_mysql_rows(result) };
+				std::vector<mysql_res_row> exp_rows {
+					{ "1","a string","100.20" },
+					{ "2","a string containing a , comma","102.20" },
+					{ "3","a string containing a \" quote","102.20" },
+					{ "4","a string containing a \", quote and comma","102.20" }
+				};
+
+				std::string exp_rows_str { "{\n" };
+				for (const auto& exp_row : exp_rows) {
+					std::string exp_row_str { nlohmann::json(exp_row).dump() };
+					exp_rows_str += "    " + exp_row_str + ",\n";
+				}
+				exp_rows_str += "}\n";
+
+				diag("Expected values for rows were: \n%s", exp_rows_str.c_str());
+
+				std::string act_rows_str { "{\n" };
+				for (const auto& act_row : rows_res) {
+					std::string act_row_str { nlohmann::json(act_row).dump() };
+					act_rows_str += "    " + act_row_str + ",\n";
+				}
+				act_rows_str += "}\n";
+
+				diag("Actual values for found rows were: \n%s", act_rows_str.c_str());
+
+				bool equal = false;
+				if (!rows_res.empty()) {
+					equal = std::equal(exp_rows.begin(), exp_rows.end(), rows_res.begin());
+				}
+
+				ok(equal, "The selected ROWS were equal to the expected ones");
+			}
 		} else {
 			if (load_data_res) {
 				diag(
