@@ -1405,7 +1405,11 @@ void * monitor_group_replication_thread(void *arg) {
 	//mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	mmsd->interr=0; // reset the value
 #ifdef TEST_GROUPREP
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS");
+	{
+		std::string s { "SELECT viable_candidate,read_only,transactions_behind FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS" };
+		s += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,s.c_str());
+	}
 #else
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status");
 #endif
