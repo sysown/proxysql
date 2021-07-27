@@ -66,4 +66,15 @@ int execvp(const std::string& file, const std::vector<const char*>& argv, std::s
  */
 int exec(const std::string& cmd, std::string& result);
 
+using mysql_res_row = std::vector<std::string>;
+
+/**
+ * @brief Function that extracts the provided 'MYSQL_RES' into a vector of vector of
+ *   strings.
+ * @param my_res The 'MYSQL_RES' for which to extract the values. In case of
+ *   being NULL an empty vector is returned.
+ * @return The extracted values of all the rows present in the resultset.
+ */
+std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res);
+
 #endif // #define UTILS_H

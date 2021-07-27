@@ -424,3 +424,25 @@ int exec(const std::string& cmd, std::string& result) {
 	}
 	return err;
 }
+
+std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res) {
+	if (my_res == nullptr) { return {}; }
+
+	std::vector<mysql_res_row> result {};
+	MYSQL_ROW row = nullptr;
+	uint32_t num_fields = mysql_num_fields(my_res);
+
+	while ((row = mysql_fetch_row(my_res))) {
+		mysql_res_row row_values {};
+		uint64_t *lengths = mysql_fetch_lengths(my_res);
+
+		for (uint32_t i = 0; i < num_fields; i++) {
+			std::string field_val(row[i], lengths[i]);
+			row_values.push_back(field_val);
+		}
+
+		result.push_back(row_values);
+	}
+
+	return result;
+};
