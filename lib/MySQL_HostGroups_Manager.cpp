@@ -3375,7 +3375,9 @@ __exit_replication_lag_action:
 /**
  * @brief Finds the supplied server in the provided 'MyHGC' and sets the status
  *   either to 'MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG' if 'enable' is
- *   'false' or 'MYSQL_SERVER_STATUS_ONLINE' if 'true'.
+ *   'false' or 'MYSQL_SERVER_STATUS_ONLINE' if 'true'. If either of the
+ *   'myhgc' or 'address' params are 'NULL' the function performs no action,
+ *   and returns immediately.
  *
  * @param myhgc The MySQL Hostgroup Container in which to perform the server
  *   search.
@@ -3385,6 +3387,8 @@ __exit_replication_lag_action:
  * @param enable Boolean specifying if the server should be enabled or not.
  */
 void lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable) {
+	if (myhgc == NULL || address == NULL) return;
+
 	for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
