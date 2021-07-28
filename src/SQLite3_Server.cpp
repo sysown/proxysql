@@ -1256,7 +1256,7 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind
 		for (const SQLite3_row* r : resultset->rows) {
 			std::string hostname { r->fields[0] };
 			int port = atoi(r->fields[1]);
-			int hostgroup_id = atoi(r->fields[1]);
+			int hostgroup_id = atoi(r->fields[2]);
 			const std::string t_insert_query {
 				"INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS"
 					" (hostname, port, viable_candidate, read_only, transactions_behind) VALUES"
