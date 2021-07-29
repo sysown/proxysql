@@ -421,6 +421,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server_max",
 	(char *)"enable_client_deprecate_eof",
 	(char *)"enable_server_deprecate_eof",
+	(char *)"enable_load_data_local_infile",
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
 	(char *)"eventslog_default_log",
@@ -1158,6 +1159,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_grouping_limit = 3;
 	variables.enable_client_deprecate_eof=true;
 	variables.enable_server_deprecate_eof=true;
+	variables.enable_load_data_local_infile=false;
 	variables.log_mysql_warnings_enabled=false;
 	// status variables
 	status_variables.mirror_sessions_current=0;
@@ -1970,6 +1972,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
 		VariablesPointers_bool["enable_client_deprecate_eof"]     = make_tuple(&variables.enable_client_deprecate_eof,     false);
 		VariablesPointers_bool["enable_server_deprecate_eof"]     = make_tuple(&variables.enable_server_deprecate_eof,     false);
+		VariablesPointers_bool["enable_load_data_local_infile"]   = make_tuple(&variables.enable_load_data_local_infile,   false);
 		VariablesPointers_bool["enforce_autocommit_on_reads"]     = make_tuple(&variables.enforce_autocommit_on_reads,     false);
 		VariablesPointers_bool["firewall_whitelist_enabled"]      = make_tuple(&variables.firewall_whitelist_enabled,      false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
@@ -3655,6 +3658,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 	mysql_thread___enable_client_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_client_deprecate_eof");
 	mysql_thread___enable_server_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
+	mysql_thread___enable_load_data_local_infile=(bool)GloMTH->get_variable_int((char *)"enable_load_data_local_infile");
 	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
