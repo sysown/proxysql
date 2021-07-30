@@ -2024,7 +2024,7 @@ void MySQL_Connection::async_free_result() {
 			// initialized, it must be freed. For more context see #3525.
 			if (this->async_state_machine == ASYNC_STMT_PREPARE_FAILED) {
 				if (query.stmt != NULL) {
-					mysql_stmt_close(query.stmt);
+					proxy_mysql_stmt_close(query.stmt);
 				}
 			}
 			query.stmt=NULL;
