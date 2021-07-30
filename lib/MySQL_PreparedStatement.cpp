@@ -691,12 +691,7 @@ MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
 			it != global_stmt_to_backend_stmt.end(); ++it) {
 			uint64_t global_stmt_id = it->first;
 			MYSQL_STMT *stmt = it->second;
-			if (stmt->mysql) {
-				stmt->mysql->stmts =
-				    list_delete(stmt->mysql->stmts, &stmt->list);
-			}
-			stmt->mysql = NULL;
-			mysql_stmt_close(stmt);
+			proxy_mysql_stmt_close(stmt);
 			GloMyStmt->ref_count_server(global_stmt_id, -1);
 		}
 	}
