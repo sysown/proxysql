@@ -219,3 +219,15 @@ bool Proxy_file_regular(const char *path) {
 		if (sb.st_mode & S_IFREG) return true;
 	return false;
 }
+
+my_bool proxy_mysql_stmt_close(MYSQL_STMT* stmt) {
+	// Clean internal structures for 'stmt->mysql->stmts'.
+	if (stmt->mysql) {
+		stmt->mysql->stmts =
+			list_delete(stmt->mysql->stmts, &stmt->list);
+	}
+	// Nullify 'mysql' field to avoid sending a blocking command to the server.
+	stmt->mysql = NULL;
+	// Perform the regular close operation.
+	return mysql_stmt_close(stmt);
+}
