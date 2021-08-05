@@ -100,6 +100,24 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
 
+	/**
+	 * @brief Function that handles setting 'autocommit' as part of a 'SET' statement supplied to
+	 *   'handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo'.
+	 *
+	 *   NOTE: This function used to be inline.
+	 *
+	 * @param values The values that correspond to the 'autocommit' entry in the
+	 *   map resulting from the statement parsing.
+	 * @param exit_after_SetParse Reference to boolean that reports if after the
+	 *   handling of the autocommit the query should not be forwarded, but
+	 *   simply reply to the client.
+	 * @param lock_hostgroup Pointer to boolean that will be set to 'true' if the hostgroup
+	 *   should be locked because the query hasn't been able to be properly parsed.
+	 *
+	 * @return Returns 'true' if the execution should continue normally, 'false' if the query
+	 *   failed to parse and 'false' should be returned from caller function.
+	 */
+	bool MYSQL_COM_QUERY_qpo_set_autocommit(std::vector<std::string>::iterator values, bool& exit_after_SetParse, bool* lock_hostgroup);
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
 	void return_proxysql_internal(PtrSize_t *);

@@ -1126,13 +1126,18 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		return_proxysql_internal(pkt);
 		return true;
 	}
-	if (locked_on_hostgroup == -1) {
-		if (handler_SetAutocommit(pkt) == true) {
-			return true;
-		}
-		if (handler_CommitRollback(pkt) == true) {
-			return true;
-		}
+	// It's required to handle autocommit no matter if 'locked_on_hostgroup' is
+	// set or not. Not doing so, could lead to ProxySQL losing track of the
+	// currently set autocommit, and wronly reporting it to the client. Also,
+	// optimizations wether forward or not 'autocommit' are performed by
+	// 'handler_SetAutocommit'. For more context check #NNNN.
+	if (handler_SetAutocommit(pkt) == true) {
+		return true;
+	}
+	// Optimizations wether forward or not 'COMMIT' are performed by
+	// 'handler_CommitRollback'.
+	if (handler_CommitRollback(pkt) == true) {
+		return true;
 	}
 
 	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
@@ -5310,6 +5315,71 @@ int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool
 	return 0;
 }
 
+bool MySQL_Session::MYSQL_COM_QUERY_qpo_set_autocommit(
+	std::vector<std::string>::iterator values, bool& exit_after_SetParse, bool* lock_hostgroup
+) {
+	std::string value1 = *values;
+	std::size_t found_at = value1.find("@");
+	if (found_at != std::string::npos) {
+		unable_to_parse_set_statement(lock_hostgroup);
+		return false;
+	}
+
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET autocommit value %s\n", value1.c_str());
+	int __tmp_autocommit = -1;
+	if (
+		(strcasecmp(value1.c_str(),(char *)"0")==0) ||
+		(strcasecmp(value1.c_str(),(char *)"false")==0) ||
+		(strcasecmp(value1.c_str(),(char *)"off")==0)
+	) {
+		__tmp_autocommit = 0;
+	} else {
+		if (
+			(strcasecmp(value1.c_str(),(char *)"1")==0) ||
+			(strcasecmp(value1.c_str(),(char *)"true")==0) ||
+			(strcasecmp(value1.c_str(),(char *)"on")==0)
+		) {
+			__tmp_autocommit = 1;
+		}
+	}
+	if (__tmp_autocommit >= 0 && autocommit_handled==false) {
+		int fd = __tmp_autocommit;
+		__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
+		// we immediately process the number of transactions
+		unsigned int nTrx=NumActiveTransactions();
+		if (fd==1 && autocommit==true) {
+			// nothing to do, return OK
+		}
+		if (fd==1 && autocommit==false) {
+			if (nTrx) {
+				// there is an active transaction, we need to forward it
+				// because this can potentially close the transaction
+				autocommit=true;
+				client_myds->myconn->set_autocommit(autocommit);
+				autocommit_on_hostgroup=FindOneActiveTransaction();
+				exit_after_SetParse = false;
+				sending_set_autocommit=true;
+			} else {
+				// as there is no active transaction, we do no need to forward it
+				// just change internal state
+				autocommit=true;
+				client_myds->myconn->set_autocommit(autocommit);
+			}
+		}
+
+		if (fd==0) {
+			autocommit=false;	// we set it, no matter if already set or not
+			client_myds->myconn->set_autocommit(autocommit);
+		}
+	} else {
+		if (autocommit_handled==true) {
+			exit_after_SetParse = false;
+		}
+	}
+
+	return true;
+}
+
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, bool prepared) {
 /*
 	lock_hostgroup:
@@ -5350,6 +5420,36 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		char *dig=CurrentQuery.QueryParserArgs.digest_text;
 		unsigned int nTrx=NumActiveTransactions();
+		// Because we need to keep track of autocommit we are forced to
+		// perform a parsing of the query. Otherwise ProxySQL could lose
+		// track of the current value set for 'autocommit'. For more context see #NNNN.
+		if ((locked_on_hostgroup != -1) && strcasestr(dig,(char *)"autocommit")) {
+			// Because we are only going to handle partially the query, just getting
+			// the autocommit value for keeping track of it, we deliverately ignore
+			// the output of the 'exit_after_SetParse' parameter when calling
+			// 'MYSQL_COM_QUERY_qpo_set_autocommit'.
+			bool ignore_exit_after_SetParse = true;
+			// Perform the query preparation
+			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+			RE2::GlobalReplace(&nq,(char *)"^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/",(char *)"SET\\1");
+			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
+			// Log the operation
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing SET command %s\n", nq.c_str());
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nq.c_str());
+			// Perform the parsing
+			SetParser parser(nq);
+			std::map<std::string, std::vector<std::string>> set = parser.parse1();
+			// Search only for 'autocommit' value
+			auto autocommit_it = set.find("autocommit");
+			if (autocommit_it != set.end()) {
+				auto values = std::begin(autocommit_it->second);
+				bool set_autocommit_res =
+					MYSQL_COM_QUERY_qpo_set_autocommit(values, ignore_exit_after_SetParse, lock_hostgroup);
+				if (set_autocommit_res == false) {
+					return false;
+				}
+			}
+		}
 		if ((locked_on_hostgroup == -1) && (strncasecmp(dig,(char *)"SET ",4)==0)) {
 			// this code is executed only if locked_on_hostgroup is not set yet
 			// if locked_on_hostgroup is set, we do not try to parse the SET statement
@@ -5484,62 +5584,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 					} else if (var == "autocommit") {
-						std::string value1 = *values;
-						std::size_t found_at = value1.find("@");
-						if (found_at != std::string::npos) {
-							unable_to_parse_set_statement(lock_hostgroup);
+						bool set_autocommit_res =
+							MYSQL_COM_QUERY_qpo_set_autocommit(values, exit_after_SetParse, lock_hostgroup);
+						if (set_autocommit_res == false) {
 							return false;
-						}
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET autocommit value %s\n", value1.c_str());
-						int __tmp_autocommit = -1;
-						if (
-							(strcasecmp(value1.c_str(),(char *)"0")==0) ||
-							(strcasecmp(value1.c_str(),(char *)"false")==0) ||
-							(strcasecmp(value1.c_str(),(char *)"off")==0)
-						) {
-							__tmp_autocommit = 0;
-						} else {
-							if (
-								(strcasecmp(value1.c_str(),(char *)"1")==0) ||
-								(strcasecmp(value1.c_str(),(char *)"true")==0) ||
-								(strcasecmp(value1.c_str(),(char *)"on")==0)
-							) {
-								__tmp_autocommit = 1;
-							}
-						}
-						if (__tmp_autocommit >= 0 && autocommit_handled==false) {
-							int fd = __tmp_autocommit;
-							__sync_fetch_and_add(&MyHGM->status.autocommit_cnt, 1);
-							// we immediately process the number of transactions
-							unsigned int nTrx=NumActiveTransactions();
-							if (fd==1 && autocommit==true) {
-								// nothing to do, return OK
-							}
-							if (fd==1 && autocommit==false) {
-								if (nTrx) {
-									// there is an active transaction, we need to forward it
-									// because this can potentially close the transaction
-									autocommit=true;
-									client_myds->myconn->set_autocommit(autocommit);
-									autocommit_on_hostgroup=FindOneActiveTransaction();
-									exit_after_SetParse = false;
-									sending_set_autocommit=true;
-								} else {
-									// as there is no active transaction, we do no need to forward it
-									// just change internal state
-									autocommit=true;
-									client_myds->myconn->set_autocommit(autocommit);
-								}
-							}
-
-							if (fd==0) {
-								autocommit=false;	// we set it, no matter if already set or not
-								client_myds->myconn->set_autocommit(autocommit);
-							}
-						} else {
-							if (autocommit_handled==true) {
-								exit_after_SetParse = false;
-							}
 						}
 					} else if (var == "time_zone") {
 						std::string value1 = *values;
