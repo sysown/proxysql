@@ -72,8 +72,47 @@ void check_set_names(MYSQL* proxysql_mysql) {
 	);
 }
 
+int set_new_autocommit_value(MYSQL* proxysql_mysql, int exp_autocommit_val) {
+	std::string t_autocommit_query { "SET autocommit=%d" };
+	std::string autocommit_query(static_cast<std::size_t>(t_autocommit_query.size() + 12), '\0');
+	snprintf(&autocommit_query[0], autocommit_query.size(), t_autocommit_query.c_str(), static_cast<int>(exp_autocommit_val));
+
+	// Change the current value for autocommit
+	int query_res = mysql_query(proxysql_mysql, autocommit_query.c_str());
+	if (query_res) {
+		diag(
+			"Query failed to be executed: (query: '%s', error: '%s', line: '%d')",
+			autocommit_query.c_str(), mysql_error(proxysql_mysql), __LINE__
+		);
+		return mysql_errno(proxysql_mysql);
+	}
+
+	return EXIT_SUCCESS;
+}
+
+int get_cur_autocommit_value(MYSQL* proxysql_mysql, int& cur_autocommit_val) {
+	std::string select_autocommit_query { "SELECT /*+ ;hostgroup=0 */ @@autocommit" };
+	int query_res = mysql_query(proxysql_mysql, select_autocommit_query.c_str());
+	if (query_res) {
+		diag(
+			"Query failed to be executed: (query: '%s', error: '%s', line: '%d')",
+			select_autocommit_query.c_str(), mysql_error(proxysql_mysql), __LINE__
+		);
+		return mysql_errno(proxysql_mysql);
+	}
+
+	MYSQL_RES* select_res = mysql_store_result(proxysql_mysql);
+	MYSQL_ROW row = mysql_fetch_row(select_res);
+	cur_autocommit_val = atoi(row[0]);
+	mysql_free_result(select_res);
+
+	return EXIT_SUCCESS;
+}
+
 /**
  * @brief Checks that 'SET autocommit' is being executed properly in the backend connection.
+ * @details Expected autocommit value after chaning current one. Note that the
+ *   forwarding logic for autocommit, is different depending on the target value of the same.
  * @param proxysql_mysql A MYSQL handle to an already stablished MySQL connection.
  */
 void check_autocommit(MYSQL* proxysql_mysql) {
@@ -89,37 +128,115 @@ void check_autocommit(MYSQL* proxysql_mysql) {
 	bool autocommit_val = atoi(row[0]);
 	mysql_free_result(select_res);
 
-	// Expected autocommit value after chaning current one
 	bool exp_autocommit_val = !autocommit_val;
+	bool success_1_autocommit_check = false;
+	bool success_2_autocommit_check = false;
+	bool success_3_autocommit_check = false;
+	bool success_4_autocommit_check = false;
 
-	std::string t_autocommit_query { "SET autocommit=%d" };
-	std::string autocommit_query(static_cast<std::size_t>(t_autocommit_query.size() + 12), '\0');
-	snprintf(&autocommit_query[0], autocommit_query.size(), t_autocommit_query.c_str(), static_cast<int>(!autocommit_val));
+	// 1. Force the backend autocommit to be set to '1', ProxySQL should forward
+	// the autocommit to the backend connection, so no matter the current
+	// status, we should achieve a '1' as a result.
+	{
+		exp_autocommit_val = 1;
+		int set_myerr = set_new_autocommit_value(proxysql_mysql, exp_autocommit_val);
+		if (set_myerr) { return; }
+		int cur_autocommit_val = -1;
+		int get_myerr = get_cur_autocommit_value(proxysql_mysql, cur_autocommit_val);
+		if (get_myerr) { return; }
 
-	// Change the current value for autocommit
-	mysql_query(proxysql_mysql, autocommit_query.c_str());
-	if (query_res) {
-		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
-		return;
+		if (cur_autocommit_val == 1) {
+			success_1_autocommit_check = true;
+		} else {
+			diag(
+				"Autocommit check failed: (exp_val: '%d', act_val: '%d', line: '%d')",
+				exp_autocommit_val, cur_autocommit_val, __LINE__
+			);
+		}
 	}
 
-	// Check new status on @@autocommit
-	query_res = mysql_query(proxysql_mysql, "SELECT /*+ ;hostgroup=0 */ @@autocommit");
-	if (query_res) {
-		diag("Query failed with error: %s", mysql_error(proxysql_mysql));
-		return;
+	// 2. Check that if the target autocommit is '0' the backend connection
+	// still has '1', since ProxySQL doesn't simply forward 'autocommit=0'.
+	{
+		exp_autocommit_val = 0;
+		int set_myerr = set_new_autocommit_value(proxysql_mysql, exp_autocommit_val);
+		if (set_myerr) { return; }
+		int cur_autocommit_val = -1;
+		int get_myerr = get_cur_autocommit_value(proxysql_mysql, cur_autocommit_val);
+
+		if (get_myerr) { return; }
+
+		if (cur_autocommit_val == 1) {
+			success_2_autocommit_check = true;
+		} else {
+			diag(
+				"Autocommit check failed: (exp_val: '%d', act_val: '%d', line: '%d')",
+				exp_autocommit_val, cur_autocommit_val, __LINE__
+			);
+		}
 	}
 
-	select_res = mysql_store_result(proxysql_mysql);
-	row = mysql_fetch_row(select_res);
-	autocommit_val = atoi(row[0]);
-	mysql_free_result(select_res);
+	// 3. Force forwarding the 'autocommit=0' by setting it and starting a
+	// transaction.
+	{
+		exp_autocommit_val = 0;
+		int set_myerr = set_new_autocommit_value(proxysql_mysql, exp_autocommit_val);
+		if (set_myerr) { return; }
+
+		// Start transaction
+		int query_res = mysql_query(proxysql_mysql, "BEGIN");
+		if (query_res) {
+			diag(
+				"Query failed to be executed: (query: '%s', error: '%s', line: '%d')",
+				"BEGIN", mysql_error(proxysql_mysql), __LINE__
+			);
+			return;
+		}
+		int cur_autocommit_val = -1;
+		int get_myerr = get_cur_autocommit_value(proxysql_mysql, cur_autocommit_val);
+		if (get_myerr) { return; }
+		query_res = mysql_query(proxysql_mysql, "COMMIT");
+		if (query_res) {
+			diag(
+				"Query failed to be executed: (query: '%s', error: '%s', line: '%d')",
+				"BEGIN", mysql_error(proxysql_mysql), __LINE__
+			);
+			return;
+		}
+
+		if (cur_autocommit_val == 0) {
+			success_3_autocommit_check = true;
+		} else {
+			diag(
+				"Autocommit check failed: (exp_val: '%d', act_val: '%d', line: '%d')",
+				exp_autocommit_val, cur_autocommit_val, __LINE__
+			);
+		}
+	}
+
+	// 4. Force the backend autocommit to be set to '1' again.
+	{
+		exp_autocommit_val = 1;
+		int set_myerr = set_new_autocommit_value(proxysql_mysql, exp_autocommit_val);
+		if (set_myerr) { return; }
+		int cur_autocommit_val = -1;
+		int get_myerr = get_cur_autocommit_value(proxysql_mysql, cur_autocommit_val);
+		if (get_myerr) { return; }
+
+		if (cur_autocommit_val == 1) {
+			success_4_autocommit_check = true;
+		} else {
+			diag(
+				"Autocommit check failed: (exp_val: '%d', act_val: '%d', line: '%d')",
+				exp_autocommit_val, cur_autocommit_val, __LINE__
+			);
+		}
+	}
 
 	ok(
-		autocommit_val == exp_autocommit_val,
-		"'Autocommit' value should match the expected one - (actual: '%d') == (exp: '%d')",
-		autocommit_val,
-		exp_autocommit_val
+		success_1_autocommit_check && success_2_autocommit_check &&
+		success_3_autocommit_check && success_4_autocommit_check,
+		"'Autocommit' value should match the expected ones for checks '1'-'4'"
 	);
 }
 
