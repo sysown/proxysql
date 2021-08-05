@@ -3,7 +3,6 @@
 #include <stdio.h>
 #include <cstring>
 #include <unistd.h>
-
 #include <mysql.h>
 
 #include "tap.h"
@@ -39,6 +38,10 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
+	if (create_table_test_sbtest1(1000,mysql)) {
+		fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);
+		return exit_status();
+	}
 
 	MYSQL_STMT* stmt[3];
 	for (int i=0; i<3; i++) {
