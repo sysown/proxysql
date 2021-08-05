@@ -1352,9 +1352,16 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
-		( (intv) && (mc->last_time_used > mc->creation_time + intv) )
+		(( (intv) && (mc->last_time_used > mc->creation_time + intv) )
 		||
-		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection )
+		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection ))
+		&&
+		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
+		// no need to reset the session. The destruction and creation of a new
+		// session in case this session has exceeded the time specified by
+		// 'connection_max_age_ms' will be deferred to the next time the session
+		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
+		sess->status != PINGING_SERVER
 	) {
 		if (mysql_thread___reset_connection_algorithm == 2) {
 			sess->create_new_session_and_reset_connection(this);
