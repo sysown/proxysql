@@ -4,6 +4,9 @@
 #include <mysql.h>
 #include <string>
 #include <vector>
+#include <random>
+#include <fstream>
+#include <sstream>
 
 #define MYSQL_QUERY(mysql, query) \
 	do { \
@@ -65,6 +68,11 @@ int execvp(const std::string& file, const std::vector<const char*>& argv, std::s
  * @return int The error code returned by popen.
  */
 int exec(const std::string& cmd, std::string& result);
+
+
+
+// create table test.sbtest1 with num_rows rows
+int create_table_test_sbtest1(int num_rows, MYSQL *mysql);
 
 using mysql_res_row = std::vector<std::string>;
 
