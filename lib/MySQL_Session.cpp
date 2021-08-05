@@ -3824,20 +3824,22 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 // this function used to be inline
 void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds) {
 	thread->status_variables.stvar[st_var_backend_stmt_execute]++;
-	// See issue #1574. Metadata needs to be updated in case of need also
-	// during STMT_EXECUTE, so a failure in the prepared statement
-	// metadata cache is only hit once. This way we ensure that the next
-	// 'PREPARE' will be answered with the properly updated metadata.
-	/********************************************************************/
-	// Lock the global statement manager
-	GloMyStmt->wrlock();
-	// Update the global prepared statement metadata
-	MySQL_STMT_Global_info *stmt_info = GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id, false);
-	stmt_info->update_metadata(CurrentQuery.mysql_stmt);
-	// Unlock the global statement manager
-	GloMyStmt->unlock();
-	/********************************************************************/
-
+	PROXY_TRACE2();
+	if (CurrentQuery.mysql_stmt) {
+		// See issue #1574. Metadata needs to be updated in case of need also
+		// during STMT_EXECUTE, so a failure in the prepared statement
+		// metadata cache is only hit once. This way we ensure that the next
+		// 'PREPARE' will be answered with the properly updated metadata.
+		/********************************************************************/
+		// Lock the global statement manager
+		GloMyStmt->wrlock();
+		// Update the global prepared statement metadata
+		MySQL_STMT_Global_info *stmt_info = GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id, false);
+		stmt_info->update_metadata(CurrentQuery.mysql_stmt);
+		// Unlock the global statement manager
+		GloMyStmt->unlock();
+		/********************************************************************/
+	}
 	MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 	LogQuery(myds);
 	if (CurrentQuery.stmt_meta) {
@@ -4052,8 +4054,13 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 			{
 				char sqlstate[10];
 				if (myconn && myconn->mysql) {
-					sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
-					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+					if (myconn->MyRS) {
+						PROXY_TRACE2();
+						myds->sess->handler_rc0_PROCESSING_STMT_EXECUTE(myds);
+					} else {
+						sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
+					}
 				} else {
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
 				}
@@ -4090,6 +4097,7 @@ void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *my
 
 // this function was inline
 int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
+	PROXY_TRACE2();
 	int rc = 0;
 	switch (status) {
 		case PROCESSING_QUERY:
@@ -4099,6 +4107,7 @@ int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 			rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt);
 			break;
 		case PROCESSING_STMT_EXECUTE:
+			PROXY_TRACE2();
 			rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt, CurrentQuery.stmt_meta);
 			break;
 		default:
@@ -6357,7 +6366,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	if (MyRS) {
 		assert(MyRS->result);
 		bool transfer_started=MyRS->transfer_started;
-		MyRS->init_with_stmt();
+		MyRS->init_with_stmt(myconn);
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = MyRS->num_rows;
 		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
