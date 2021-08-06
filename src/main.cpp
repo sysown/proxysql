@@ -432,20 +432,17 @@ void write_rsa_key(const char *filen, RSA *rsa) {
 
 EVP_PKEY * rsa_key_read(const char *filen) {
 	EVP_PKEY * pkey = NULL;
-	RSA * rsa = NULL;
 
 	BIO * pIn = BIO_new_file(filen,"r");
 	if (!pIn) {
 		proxy_error("Error on BIO_new_file\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
-	rsa= PEM_read_bio_RSAPrivateKey( pIn , NULL, NULL,  NULL);
-	if (rsa==NULL) {
-		proxy_error("Error on PEM_read_bio_RSAPrivateKey for %s\n", filen);
+	pkey = PEM_read_bio_PrivateKey( pIn , NULL, NULL,  NULL);
+	if (pkey == NULL) {
+		proxy_error("Error on PEM_read_bio_PrivateKey for %s\n", filen);
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
-	pkey = EVP_PKEY_new();
-	EVP_PKEY_assign_RSA(pkey, rsa);
 	BIO_free(pIn);
 	return pkey;
 }
