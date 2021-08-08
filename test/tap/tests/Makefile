@@ -83,8 +83,15 @@ all: tests
 clean:
 	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora || true
 
+WITHASANVAR := $(shell echo $(WITHASAN))
+ifeq ($(WITHASANVAR),1)
+WASAN=-fsanitize=address
+else
+WASAN=
+endif
+
 OPT=-O2 -Wl,--no-as-needed
-debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed
+debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WASAN)
 debug: tests
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test

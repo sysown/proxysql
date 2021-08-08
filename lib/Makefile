@@ -67,6 +67,15 @@ ODIR= obj
 #CXX=g++
 #CC=clang
 
+WITHASANVAR := $(shell echo $(WITHASAN))
+ifeq ($(WITHASANVAR),1)
+WASAN=-fsanitize=address
+# Force the disable of JEMALLOC, since ASAN isn't compatible.
+export NOJEMALLOC = 1
+else
+WASAN=
+endif
+
 #CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
 #CXXFLAGS=-std=c++11 $(CFLAGS) $(LDIRS) $(LIBS)
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
@@ -92,8 +101,7 @@ ifeq ($(UNAME_S),Darwin)
 	IDIRS+= -I/usr/local/opt/openssl/include
 endif
 
-
-MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM)
+MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WASAN)
 MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH)
 
 default: libproxysql.a
