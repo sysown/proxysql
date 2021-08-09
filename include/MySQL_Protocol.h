@@ -64,6 +64,22 @@ class MySQL_Prepared_Stmt_info {
 
 uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
 
+/**
+ * @brief ProxySQL replacement function for 'mysql_stmt_close'. Closes a
+ *   MYSQL_STMT avoiding any blocking commands that are sent by default
+ *   'mysql_stmt_close'.
+ *
+ *   NOTE: This function is not safe, caller must check that the supplied
+ *   argument is not NULL.
+ *
+ * @param mysql_stmt An already initialized 'MYSQL_STMT'. Caller must ensure
+ *   that the supplied argument is not NULL.
+ *
+ * @return The result of calling 'mysql_stmt_close' function over the internally
+ *   modified 'MYSQL_STMT'.
+ */
+my_bool proxy_mysql_stmt_close(MYSQL_STMT* mysql_stmt);
+
 class MySQL_Protocol {
 	private:
 	MySQL_Connection_userinfo *userinfo;
