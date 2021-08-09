@@ -62,7 +62,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   centos7_dbg_build:
-    image: proxysql/packaging:build-centos7
+    image: proxysql/packaging:build-centos7-gcc-8
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
@@ -74,6 +74,8 @@ services:
       - PKG_RELEASE=dbg-centos7
       - PROXYSQL_BUILD_TYPE=debug
       - PROXYSQL_BUILD_ARCH=x86_64
+      - WITHASAN=1
+      - NOJEMALLOC=1
     command:
       - /opt/entrypoint/entrypoint.bash
   centos8_build:
@@ -373,6 +375,8 @@ services:
       - PKG_RELEASE=dbg-debian10
       - PROXYSQL_BUILD_TYPE=debug
       - PROXYSQL_BUILD_ARCH=amd64
+      - WITHASAN=1
+      - NOJEMALLOC=1
     command:
       - /opt/entrypoint/entrypoint.bash
   ubuntu14_build:
