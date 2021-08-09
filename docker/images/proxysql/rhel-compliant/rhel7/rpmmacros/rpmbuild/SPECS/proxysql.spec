@@ -10,7 +10,7 @@ License: GPL+
 Group: Development/Tools
 SOURCE0 : %{name}-%{version}.tar.gz
 URL: https://proxysql.com/
-Requires: gnutls
+Requires: gnutls devtoolset-8-libasan-devel
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 
 %description

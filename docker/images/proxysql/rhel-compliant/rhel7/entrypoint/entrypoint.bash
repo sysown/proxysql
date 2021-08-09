@@ -28,6 +28,13 @@ rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm || tr
 # Cleanup relic directories from a previously failed build
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} || true
 
+# Source the new gcc
+set +u
+echo "==> Updating GCC to use"
+source /opt/rh/devtoolset-8/enable
+g++ --version
+set -u
+
 # Clean and build dependancies and source
 echo "==> Building"
 cd /opt/proxysql
