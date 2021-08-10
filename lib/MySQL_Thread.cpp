@@ -1002,8 +1002,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #else
 	if (glovars.has_debug==true) {
 #endif /* DEBUG */
+		// LCOV_EXCL_START
 		perror("Incompatible debugging version");
 		exit(EXIT_FAILURE);
+		// LCOV_EXCL_STOP
 	}
 	num_threads=0;
 	mysql_threads=NULL;
@@ -2895,9 +2897,11 @@ __run_skip_1a:
 				// poll() timeout, try again
 				continue;
 			if (rc == -1) {
+			// LCOV_EXCL_START
 				// error , exit
 				perror("poll()");
 				exit(EXIT_FAILURE);
+			// LCOV_EXCL_STOP
 			}
 
 		if (__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0) > __thread_MySQL_Thread_Variables_version) {
