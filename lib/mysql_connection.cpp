@@ -220,6 +220,7 @@ mysql_status(short event, short cont) {
 	return status;
 }
 
+/* deprecating session_vars[] because we are introducing a better algorithm
 // Defining list of session variables for comparison with query digest to disable multiplexing for "SET <variable_name>" commands
 static char * session_vars[]= {
 	// For issue #555 , multiplexing is disabled if --safe-updates is used
@@ -235,6 +236,7 @@ static char * session_vars[]= {
 	(char *)"TIMESTAMP",
 	(char *)"GROUP_CONCAT_MAX_LEN"
 };
+*/
 
 MySQL_Connection_userinfo::MySQL_Connection_userinfo() {
 	username=NULL;
@@ -2386,6 +2388,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 							if (!IsKeepMultiplexEnabledVariables(query_digest_text)) {
 								set_status(true, STATUS_MYSQL_CONNECTION_USER_VARIABLE);
 							}
+/* deprecating session_vars[] because we are introducing a better algorithm
 						} else {
 							for (unsigned int i = 0; i < sizeof(session_vars)/sizeof(char *); i++) {
 								if (strcasestr(query_digest_text,session_vars[i])!=NULL)  {
@@ -2393,6 +2396,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 									break;
 								}
 							}
+*/
 						}
 					}
 					break;
