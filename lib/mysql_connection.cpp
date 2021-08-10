@@ -577,7 +577,7 @@ bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn)
 			}
 		}
 	}
-	if (client_conn->dynamic_variables_idx.size() > dynamic_variables_idx.size()) {
+	if (client_conn->dynamic_variables_idx.size() < dynamic_variables_idx.size()) {
 		// the server connection has more variables set than the client
 		return true;
 	}
@@ -606,6 +606,8 @@ unsigned int MySQL_Connection::reorder_dynamic_variables_idx() {
 			dynamic_variables_idx.push_back(i);
 		}
 	}
+	unsigned int r = dynamic_variables_idx.size();
+	return r;
 }
 
 unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching) {
@@ -2585,6 +2587,7 @@ void MySQL_Connection::reset() {
 			var_hash[i] = 0;
 		}
 	}
+	dynamic_variables_idx.clear();
 
 	if (options.init_connect) {
 		free(options.init_connect);

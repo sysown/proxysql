@@ -692,6 +692,7 @@ int main(int argc, char *argv[]) {
 		if (!first_dash || !strstr(first_dash+1, "-")) {
 			is_cluster = false;
 		} else {
+			// FIXME: we need a better version detection
 			is_cluster = true;
 		}
 	}
