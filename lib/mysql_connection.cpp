@@ -2156,6 +2156,15 @@ void MySQL_Connection::async_free_result() {
 					mysql_stmt_free_result(query.stmt);
 				}
 			}
+			// If we reached here from 'ASYNC_STMT_PREPARE_FAILED', the
+			// prepared statement was never added to 'local_stmts', thus
+			// it will never be freed when 'local_stmts' are purged. If
+			// initialized, it must be freed. For more context see #3525.
+			if (this->async_state_machine == ASYNC_STMT_PREPARE_FAILED) {
+				if (query.stmt != NULL) {
+					proxy_mysql_stmt_close(query.stmt);
+				}
+			}
 			query.stmt=NULL;
 		}
 		if (mysql_result) {
