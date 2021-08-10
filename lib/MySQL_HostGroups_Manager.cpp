@@ -3188,8 +3188,10 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					conn=(MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
 					break;
 				default: // this should never happen
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 		} else {
 			conn=(MySQL_Connection *)conns->remove_index_fast(i);
@@ -3284,8 +3286,10 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 						pthread_attr_setstacksize (&attr, 256*1024);
 						pthread_t pt;
 						if (pthread_create(&pt, &attr, &kill_query_thread, ka) != 0) {
+							// LCOV_EXCL_START
 							proxy_error("Thread creation\n");
 							assert(0);
+							// LCOV_EXCL_STOP
 						}
 					}
 						break;
@@ -3815,8 +3819,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 					pta[3]=strdup("SHUNNED_REPLICATION_LAG");
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			sprintf(buf,"%u", mysrvc->ConnectionsUsed->conns_length());
 			pta[4]=strdup(buf);
@@ -4202,8 +4208,10 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			}
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 
 __exit_read_only_action:

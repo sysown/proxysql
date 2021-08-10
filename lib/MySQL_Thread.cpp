@@ -1349,14 +1349,18 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
+	// LCOV_EXCL_STOP
 }
 
 uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 	if (!strcasecmp(name,"server_capabilities")) return variables.server_capabilities;
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+	// LCOV_EXCL_STOP
 }
 
 int MySQL_Threads_Handler::get_variable_int(const char *name) {
@@ -1384,8 +1388,10 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 
 //VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+	// LCOV_EXCL_STOP
 //VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
@@ -2204,15 +2210,19 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *), bool idles) {
 	if (idles==false) {
 		if (pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]) != 0 ) {
+			// LCOV_EXCL_START
 			proxy_error("Thread creation\n");
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 #ifdef IDLE_THREADS
 	} else {
 		if (GloVars.global.idle_threads) {
 			if (pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]) != 0) {
+				// LCOV_EXCL_START
 				proxy_error("Thread creation\n");
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 #endif // IDLE_THREADS

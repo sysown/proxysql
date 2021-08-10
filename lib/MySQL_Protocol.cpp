@@ -427,7 +427,9 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 					break;
 				}
 			default:
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 		}
 	}
 	if (len) { *len=size; }
@@ -566,10 +568,14 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 				if (eof_identifier)
 					(*myds)->DSS=STATE_EOF2;
 				else
+					// LCOV_EXCL_START
 					assert(0);
+					// LCOV_EXCL_STOP
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 		}
 	}
 	if (len) { *len=size; }
@@ -1100,7 +1106,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 				+ 1; // 00
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 			break;
 	}
 
@@ -1125,7 +1133,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 			_ptr[l]=0x00; l++;
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 			break;
 	}
   _ptr[l]=0x00; //l+=1; //0x00
@@ -1218,9 +1228,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   const MARIADB_CHARSET_INFO *ci = NULL;
   ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
   if (!ci) {
+		// LCOV_EXCL_START
 	  proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable.\n",
 			  mysql_thread___default_variables[SQL_CHARACTER_SET], mysql_tracked_variables[SQL_CHARACTER_SET].internal_variable_name);
 	  assert(0);
+		// LCOV_EXCL_STOP
   }
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
@@ -1436,8 +1448,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			const MARIADB_CHARSET_INFO *ci = NULL;
 			ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 			if (!ci) {
+				// LCOV_EXCL_START
 				proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 			charset=ci->nr;
 		}
@@ -1591,8 +1605,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 		if (!ci) {
+			// LCOV_EXCL_START
 			proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 		charset=ci->nr;
 	}
@@ -2341,11 +2357,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					}
 					break;
 				default:
+					// LCOV_EXCL_START
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
 							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 		}
 	}

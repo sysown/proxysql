@@ -1600,8 +1600,10 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 			pthread_attr_setstacksize (&attr, 256*1024);
 			pthread_t pt;
 			if (pthread_create(&pt, &attr, &kill_query_thread, ka) != 0) {
+				// LCOV_EXCL_START
 				proxy_error("Thread creation\n");
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 	}
@@ -1634,8 +1636,10 @@ bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 				previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		NEXT_IMMEDIATE_NEW(SETTING_MULTI_STMT);
 	}
@@ -1660,8 +1664,10 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
@@ -1723,8 +1729,10 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 				previous_status.push(status);
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_GTIDS);
 	}
@@ -1774,8 +1782,10 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			NEXT_IMMEDIATE_NEW(SETTING_LDAP_USER_VARIABLE);
 		}
@@ -1817,8 +1827,10 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 						previous_status.push(PROCESSING_STMT_EXECUTE);
 						break;
 					default:
+						// LCOV_EXCL_START
 						assert(0);
 						break;
+						// LCOV_EXCL_STOP
 				}
 				NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 			}
@@ -1836,8 +1848,10 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 		}
@@ -1891,8 +1905,10 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
 			NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
@@ -1910,8 +1926,10 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			NEXT_IMMEDIATE_NEW(CHANGING_SCHEMA);
 		}
@@ -1929,8 +1947,10 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 				previous_status.push(status);
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
 		NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
@@ -2627,7 +2647,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			st=previous_status.top();
 			previous_status.pop();
 			NEXT_IMMEDIATE_NEW(st);
-			assert(0);
 		}
 		assert(st==status);
 		unsigned long long curtime=monotonic_time();
@@ -3037,7 +3056,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
 		if (stmt_global_id == 0) {
 			// FIXME: add error handling
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 		CurrentQuery.stmt_global_id=stmt_global_id;
 		// now we get the statement information
@@ -3185,7 +3206,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			break;
 #endif /* PROXYSQLCLICKHOUSE */
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 	}
 }
 
@@ -3417,8 +3440,10 @@ __get_pkts_from_client:
 						case STATE_SLEEP_MULTI_PACKET:
 							break;
 						default:
+							// LCOV_EXCL_START
 							assert(0);
 							break;
+							// LCOV_EXCL_STOP
 					}
 				}
 				switch (client_myds->DSS) {
@@ -3754,8 +3779,10 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			return 1;
 		}
@@ -3926,8 +3953,10 @@ bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, i
 				previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		if (*errmsg) {
 			free(*errmsg);
@@ -4011,8 +4040,10 @@ bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int
 					previous_status.push(PROCESSING_STMT_PREPARE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 				}
 				if (*errmsg) {
 					free(*errmsg);
@@ -4082,8 +4113,10 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 			}
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 }
 
@@ -4125,8 +4158,10 @@ int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 			rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt, CurrentQuery.stmt_meta);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	return rc;
 }
@@ -4313,8 +4348,10 @@ handler_again:
 						previous_status.push(PROCESSING_STMT_EXECUTE);
 						break;
 					default:
+						// LCOV_EXCL_START
 						assert(0);
 						break;
+						// LCOV_EXCL_STOP
 				}
 				NEXT_IMMEDIATE(CONNECTING_SERVER);
 			} else {
@@ -4468,8 +4505,10 @@ handler_again:
 							handler_rc0_PROCESSING_STMT_EXECUTE(myds);
 							break;
 						default:
+							// LCOV_EXCL_START
 							assert(0);
 							break;
+							// LCOV_EXCL_STOP
 					}
 
 					if (mysql_thread___log_mysql_warnings_enabled) {
@@ -4859,8 +4898,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						break;
 #endif /* PROXYSQLCLICKHOUSE */
 					default:
+						// LCOV_EXCL_START
 						assert(0);
 						break;
+						// LCOV_EXCL_STOP
 				}
 			} else {
 				free_users=1;
@@ -5630,8 +5671,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 												return false;
 											}
 										} else {
+											// LCOV_EXCL_START
 											proxy_error("Cannot find charset/collation [%s]\n", value1.c_str());
 											assert(0);
+											// LCOV_EXCL_STOP
 										}
 									}
 								} else {

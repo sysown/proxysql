@@ -1003,7 +1003,9 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 				if (it2 != uqdt.end()) {
 					rc=(*proxy_sqlite3_bind_text)(statement32, (idx*15)+7, it2->second, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
 				} else {
+					// LCOV_EXCL_START
 					assert(0);
+					// LCOV_EXCL_STOP
 				}
 			}
 			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+8, qds->count_star); ASSERT_SQLITE_OK(rc, sdb);
@@ -1046,7 +1048,9 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 				if (it2 != uqdt.end()) {
 					rc=(*proxy_sqlite3_bind_text)(statement1, 7, it2->second, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
 				} else {
+					// LCOV_EXCL_START
 					assert(0);
+					// LCOV_EXCL_STOP
 				}
 			}
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 8, qds->count_star); ASSERT_SQLITE_OK(rc, sdb);
@@ -5013,9 +5017,11 @@ static void * admin_main_loop(void *arg)
 				//*client= client_t;
 				//if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 ) {
 				if ( pthread_create(&child, &attr, child_func[callback_func[i]], passarg) != 0 ) {
+					// LCOV_EXCL_START
 					perror("pthread_create");
 					proxy_error("Thread creation\n");
 					assert(0);
+					// LCOV_EXCL_STOP
 				}
 			}
 			fds[i].revents=0;
@@ -9336,8 +9342,10 @@ void ProxySQL_Admin::flush_debug_filters_database_to_runtime(SQLite3DB *db) {
 	std::string query = "SELECT filename, line, funct FROM debug_filters";
 	admindb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
 	if (error) {
+		// LCOV_EXCL_START
 		proxy_error("Error on %s : %s\n", query.c_str(), error);
 		assert(0);
+		// LCOV_EXCL_STOP
 	} else {
 		std::set<std::string> filters;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
