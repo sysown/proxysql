@@ -4760,6 +4760,7 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
+	bool handshake_err = true;
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , handshake_response=%d , switching_auth_stage=%d , is_encrypted=%d , client_encrypted=%d\n", this, client_myds, handshake_response_return, client_myds->switching_auth_stage, is_encrypted, client_myds->encrypted);
 	if (
@@ -4943,6 +4944,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					) {
 						// we are good!
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL);
+						handshake_err = false;
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_OK, this, NULL);
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
@@ -4979,6 +4981,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_OK, this, NULL);
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL);
+						handshake_err = false;
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
 					}
@@ -5044,6 +5047,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 		client_myds->DSS=STATE_SLEEP;
+	}
+
+	if (mysql_thread___client_host_cache_size) {
+		GloMTH->update_client_host_cache(client_myds->client_addr, handshake_err);
 	}
 }
 
