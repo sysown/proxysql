@@ -17,6 +17,14 @@
 		} \
 	} while(0)
 
+#define MYSQL_QUERY_err(mysql, query) \
+	do { \
+		if (mysql_query(mysql, query)) { \
+			fprintf(stderr, "File %s, line %d, Error: %s\n", \
+					__FILE__, __LINE__, mysql_error(mysql)); \
+		} \
+	} while(0)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
