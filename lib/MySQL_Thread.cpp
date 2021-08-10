@@ -3306,7 +3306,7 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 		if (sess->active_transactions == 0) {
 			sess->transaction_started_at = 0;
 		} else {
-			if (sess_active_transactions == 0) {
+			if (sess->transaction_started_at == 0) {
 				sess->transaction_started_at = curtime;
 			}
 		}
