@@ -81,6 +81,7 @@ int exec(const std::string& cmd, std::string& result);
 
 // create table test.sbtest1 with num_rows rows
 int create_table_test_sbtest1(int num_rows, MYSQL *mysql);
+int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql);
 
 using mysql_res_row = std::vector<std::string>;
 

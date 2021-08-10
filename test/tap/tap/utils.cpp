@@ -157,11 +157,7 @@ int read_pipe(int pipe_fd, std::string& sbuffer) {
 	return res;
 }
 
-int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
-	MYSQL_QUERY(mysql, "CREATE DATABASE IF NOT EXISTS test");
-	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS test.sbtest1");
-	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
-
+int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
 	std::random_device rd;
 	std::mt19937 mt(rd());
 	std::uniform_int_distribution<int> dist(0.0, 9.0);
@@ -201,6 +197,13 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 	}
 	diag("Done!");
 	return 0;
+}
+int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
+	MYSQL_QUERY(mysql, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS test.sbtest1");
+	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
+
+	return add_more_rows_test_sbtest1(num_rows, mysql);
 }
 
 int wexecvp(const std::string& file, const std::vector<const char*>& argv, const to_opts* opts, std::string& s_stdout, std::string& s_stderr) {
