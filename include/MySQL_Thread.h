@@ -505,7 +505,7 @@ class MySQL_Threads_Handler
 		char *add_ldap_user_comment;
 		char *default_tx_isolation;
 		char *default_session_track_gtids;
-		char *default_variables[SQL_NAME_LAST];
+		char *default_variables[SQL_NAME_LAST_LOW_WM];
 		char *firewall_whitelist_errormsg;
 #ifdef DEBUG
 		bool session_debug;

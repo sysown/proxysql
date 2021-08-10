@@ -1094,7 +1094,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.init_connect=NULL;
 	variables.ldap_user_variable=NULL;
 	variables.add_ldap_user_comment=NULL;
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
 	}
 	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
@@ -1318,7 +1318,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 		}
 	}
 	if (!strncmp(name,"default_",8)) {
-		for (int i=0; i<SQL_NAME_LAST; i++) {
+		for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 			if (mysql_tracked_variables[i].is_global_variable==false)
 				continue;
 			char buf[128];
@@ -1459,7 +1459,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
-			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
+			for (unsigned int i = 0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 				if (mysql_tracked_variables[i].is_global_variable) {
 					size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
 					if (strlen(name) == (var_len+8)) {
@@ -1774,7 +1774,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	}
 
 	if (!strncmp(name,"default_",8)) {
-		for (int i=0; i<SQL_NAME_LAST; i++) {
+		for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 			if (mysql_tracked_variables[i].is_global_variable==false)
 				continue;
 			char buf[128];
@@ -2123,13 +2123,13 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	const size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 	unsigned int i;
 	size_t ltv = 0;
-	for (i=0; i < SQL_NAME_LAST ; i++) {
+	for (i=0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 		if (mysql_tracked_variables[i].is_global_variable)
 			ltv++;
 	}
 	char **ret=(char **)malloc(sizeof(char *)*(l+ltv)); // not adding + 1 because mysql_thread_variables_names is already NULL terminated
 	size_t fv = 0;
-	for (i=0; i < SQL_NAME_LAST ; i++) {
+	for (i=0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 		if (mysql_tracked_variables[i].is_global_variable) {
 			char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
 			sprintf(m,"default_%s", mysql_tracked_variables[i].internal_variable_name);
@@ -2151,7 +2151,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 bool MySQL_Threads_Handler::has_variable(const char *name) {
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
-			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
+			for (unsigned int i = 0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 				if (mysql_tracked_variables[i].is_global_variable) {
 					size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
 					if (strlen(name) == (var_len+8)) {
@@ -2308,7 +2308,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.ssl_p2s_cert) free(variables.ssl_p2s_cert);
 	if (variables.ssl_p2s_key) free(variables.ssl_p2s_key);
 	if (variables.ssl_p2s_cipher) free(variables.ssl_p2s_cipher);
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (variables.default_variables[i]) {
 			free(variables.default_variables[i]);
 			variables.default_variables[i]=NULL;
@@ -2430,7 +2430,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation=NULL; }
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids=NULL; }
 
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_thread___default_variables[i]) {
 			free(mysql_thread___default_variables[i]);
 			mysql_thread___default_variables[i] = NULL;
@@ -3591,7 +3591,7 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
 	mysql_thread___default_session_track_gtids=GloMTH->get_variable_string((char *)"default_session_track_gtids");
 
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_thread___default_variables[i]) {
 			free(mysql_thread___default_variables[i]);
 			mysql_thread___default_variables[i] = NULL;
@@ -3719,7 +3719,7 @@ MySQL_Thread::MySQL_Thread() {
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
 
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		mysql_thread___default_variables[i] = NULL;
 	}
 }
@@ -4393,7 +4393,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					case SETTING_VARIABLE:
 						{
 							int idx = sess->changing_variable_idx;
-							if (idx < SQL_NAME_LAST) {
+							if (idx < SQL_NAME_LAST_HIGH_WM) {
 								char buf[128];
 								sprintf(buf, "Setting variable %s", mysql_tracked_variables[idx].set_variable_name);
 								pta[11]=strdup(buf);

@@ -149,29 +149,40 @@ enum MySQL_DS_type {
 	MYDS_FRONTEND,
 };
 
-
+/* NOTE:
+	make special ATTENTION that the order in variable_name
+	and mysql_tracked_variables[] is THE SAME
+*/
 enum variable_name {
 	SQL_CHARACTER_SET,
 	SQL_CHARACTER_ACTION,
 	SQL_SET_NAMES,
-	SQL_SAFE_UPDATES,
-	SQL_SELECT_LIMIT,
-	SQL_SQL_MODE,
-	SQL_TIME_ZONE,
 	SQL_CHARACTER_SET_RESULTS,
 	SQL_CHARACTER_SET_CONNECTION,
 	SQL_CHARACTER_SET_CLIENT,
 	SQL_CHARACTER_SET_DATABASE,
 	SQL_ISOLATION_LEVEL,
 	SQL_TRANSACTION_READ,
-	SQL_SQL_AUTO_IS_NULL,
 	SQL_COLLATION_CONNECTION,
 	SQL_NET_WRITE_TIMEOUT,
-	SQL_MAX_JOIN_SIZE,
 	SQL_LOG_BIN,
 	SQL_WSREP_SYNC_WAIT,
+	SQL_NAME_LAST_LOW_WM,
+	SQL_SAFE_UPDATES,
+	SQL_SELECT_LIMIT,
+	SQL_SQL_MODE,
+	SQL_TIME_ZONE,
+	SQL_SQL_AUTO_IS_NULL,
+	SQL_MAX_JOIN_SIZE,
 	SQL_GROUP_CONCAT_MAX_LEN,
-	SQL_NAME_LAST
+	SQL_DEFAULT_STORAGE_ENGINE,
+	SQL_DEFAULT_TMP_STORAGE_ENGINE,
+	SQL_FOREIGN_KEY_CHECKS,
+	SQL_UNIQUE_CHECKS,
+	SQL_AUTO_INCREMENT_INCREMENT,
+	SQL_AUTO_INCREMENT_OFFSET,
+	SQL_TIMESTAMP,
+	SQL_NAME_LAST_HIGH_WM,
 };
 
 enum session_status {
@@ -211,7 +222,6 @@ typedef struct {
 	enum session_status status; // what status should be changed after setting this variables
 	bool quote;                 // if the variable needs to be quoted
 	bool set_transaction;       // if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
-	bool special_handling;      // if true, some special handling is required
 	bool is_number;				// if true, the variable is a number. Special cases should be checked
 	bool is_bool;				// if true, the variable is a boolean. Special cases should be checked
 	char * set_variable_name;   // what variable name (or string) will be used when setting it to backend
@@ -793,7 +803,7 @@ __thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
-__thread char * mysql_thread___default_variables[SQL_NAME_LAST];
+__thread char * mysql_thread___default_variables[SQL_NAME_LAST_LOW_WM];
 __thread int mysql_thread___query_digests_grouping_limit;
 __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
@@ -945,7 +955,7 @@ extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
-extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
+extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST_LOW_WM];
 extern __thread int mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
@@ -1015,23 +1025,12 @@ extern __thread unsigned int g_seed;
 #ifndef MYSQL_TRACKED_VARIABLES
 #define MYSQL_TRACKED_VARIABLES
 #ifdef PROXYSQL_EXTERN
-// field_1: index number
-// field_2: what status should be changed after setting this variables
-// field_3: if the variable needs to be quoted
-// field_4: if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
-// field_5: if true, some special handling is required
-// field_6: if true, the variable is a number. Special cases should be checked
-// field_7: if true, the variable is a boolean. Special cases should be checked
-// field_8: what variable name (or string) will be used when setting it to backend
-// field_9: variable name as displayed in admin , WITHOUT "default_"
-// field_10: default value
 /*
 typedef struct {
 	enum variable_name idx;     // index number
 	enum session_status status; // what status should be changed after setting this variables
 	bool quote;                 // if the variable needs to be quoted
 	bool set_transaction;       // if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
-	bool special_handling;      // if true, some special handling is required
 	bool is_number;				// if true, the variable is a number. Special cases should be checked
 	bool is_bool;				// if true, the variable is a boolean. Special cases should be checked
 	char * set_variable_name;   // what variable name (or string) will be used when setting it to backend
@@ -1040,27 +1039,40 @@ typedef struct {
 	bool is_global_variable;	// is it a global variable?
 } mysql_variable_st;
 */
+/* NOTE:
+	make special ATTENTION that the order in variable_name
+	and mysql_tracked_variables[] is THE SAME
+*/
 mysql_variable_st mysql_tracked_variables[] {
-    { SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true, false,  false, false, (char *)"charset", (char *)"charset", (char *)"utf8" , true} , // should be before SQL_CHARACTER_SET_RESULTS
-    { SQL_CHARACTER_ACTION,    session_status___NONE,false, false, false, false, false, (char *)"action", (char *)"action", (char *)"1" , false} ,
-    { SQL_SET_NAMES,             SETTING_SET_NAMES,  false, false, false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" , false} ,
-	{ SQL_SAFE_UPDATES,          SETTING_VARIABLE,   true,  false, true,  false, true,  (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" , false} ,
-    { SQL_SELECT_LIMIT,          SETTING_VARIABLE,   false, false, true,  true, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" , false} ,
-	{ SQL_SQL_MODE,              SETTING_VARIABLE,   true,  false, true,  false, false, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" , false} ,
-    { SQL_TIME_ZONE,             SETTING_VARIABLE,   true,  false, true,  false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" , false} ,
-	{ SQL_CHARACTER_SET_RESULTS, SETTING_VARIABLE,   false, false, true,  false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"utf8" , false} ,
-	{ SQL_CHARACTER_SET_CONNECTION, SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_connection", (char *)"character_set_connection", (char *)"utf8", false } ,
-	{ SQL_CHARACTER_SET_CLIENT,     SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_client", (char *)"character_set_client", (char *)"utf8" , false} ,
-	{ SQL_CHARACTER_SET_DATABASE,   SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_database", (char *)"character_set_database", (char *)"utf8" , false} ,
-	{ SQL_ISOLATION_LEVEL,  SETTING_ISOLATION_LEVEL,  false, true,  true, false, false, (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" , false} ,
-	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ, false, true,  true, false, false, (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" , false} ,
-    { SQL_SQL_AUTO_IS_NULL,     SETTING_VARIABLE,     true,  false, true, false, true,  (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" , false} ,
-    { SQL_COLLATION_CONNECTION, SETTING_VARIABLE,     true,  false, true, false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"utf8_general_ci" , true} ,
-    { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" , false} ,
-    { SQL_MAX_JOIN_SIZE,        SETTING_VARIABLE,     false, false, true, true,  false, (char *)"max_join_size", (char *)"max_join_size", (char *)"18446744073709551615" , false} ,
-    { SQL_LOG_BIN,              SETTING_VARIABLE,     false, false, true, false, false, (char *)"sql_log_bin", (char *)"sql_log_bin", (char *)"1" , false} ,
-    { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" , false} ,
-    { SQL_GROUP_CONCAT_MAX_LEN, SETTING_VARIABLE,     false, false, true, true,  false, (char *)"group_concat_max_len", (char *)"group_concat_max_len", (char *)"1024" , false} ,
+    { SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true,  false, false, (char *)"charset", (char *)"charset", (char *)"utf8" , true} , // should be before SQL_CHARACTER_SET_RESULTS
+    { SQL_CHARACTER_ACTION,    session_status___NONE,false, false, false, false, (char *)"action", (char *)"action", (char *)"1" , false} ,
+    { SQL_SET_NAMES,             SETTING_SET_NAMES,  false, false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" , false} ,
+	{ SQL_CHARACTER_SET_RESULTS, SETTING_VARIABLE,   false, false, false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"utf8" , false} ,
+	{ SQL_CHARACTER_SET_CONNECTION, SETTING_VARIABLE, false, false, false, false, (char *)"character_set_connection", (char *)"character_set_connection", (char *)"utf8", false } ,
+	{ SQL_CHARACTER_SET_CLIENT,     SETTING_VARIABLE, false, false, false, false, (char *)"character_set_client", (char *)"character_set_client", (char *)"utf8" , false} ,
+	{ SQL_CHARACTER_SET_DATABASE,   SETTING_VARIABLE, false, false, false, false, (char *)"character_set_database", (char *)"character_set_database", (char *)"utf8" , false} ,
+	{ SQL_ISOLATION_LEVEL,  SETTING_ISOLATION_LEVEL,  false, true,  false, false, (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" , false} ,
+	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ, false, true,  false, false, (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" , false} ,
+    { SQL_COLLATION_CONNECTION, SETTING_VARIABLE,     true,  false, false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"utf8_general_ci" , true} ,
+    { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" , false} ,
+    { SQL_LOG_BIN,              SETTING_VARIABLE,     false, false, false, false, (char *)"sql_log_bin", (char *)"sql_log_bin", (char *)"1" , false} ,
+    { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" , false} ,
+    { SQL_NAME_LAST_LOW_WM,     SETTING_VARIABLE,     false, false, true,  false, (char *)"placeholder", (char *)"placeholder", (char *)"0" , false} , // this is just a placeholder to separate the previous index from the next block
+	{ SQL_SAFE_UPDATES,               SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" , false} ,
+    { SQL_SELECT_LIMIT,               SETTING_VARIABLE, false, false, true,  false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" , false} ,
+	{ SQL_SQL_MODE,                   SETTING_VARIABLE, true,  false, false, false, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" , false} ,
+    { SQL_TIME_ZONE,                  SETTING_VARIABLE, true,  false, false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" , false} ,
+    { SQL_SQL_AUTO_IS_NULL,           SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" , false} ,
+    { SQL_MAX_JOIN_SIZE,              SETTING_VARIABLE, false, false, true,  false, (char *)"max_join_size", (char *)"max_join_size", (char *)"18446744073709551615" , false} ,
+    { SQL_GROUP_CONCAT_MAX_LEN,       SETTING_VARIABLE, false, false, true,  false, (char *)"group_concat_max_len", (char *)"group_concat_max_len", (char *)"1024" , false} ,
+    { SQL_DEFAULT_STORAGE_ENGINE,     SETTING_VARIABLE, true,  false, false, false, (char *)"default_storage_engine",     NULL, (char *)"" , false} ,
+    { SQL_DEFAULT_TMP_STORAGE_ENGINE, SETTING_VARIABLE, true,  false, false, false, (char *)"default_tmp_storage_engine", NULL, (char *)"" , false} ,
+    { SQL_FOREIGN_KEY_CHECKS,         SETTING_VARIABLE, true,  false, false, true,  (char *)"foreign_key_checks",         NULL, (char *)"" , false} ,
+    { SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
+    { SQL_AUTO_INCREMENT_INCREMENT,   SETTING_VARIABLE, true,  false, true,  false, (char *)"auto_increment_increment",   NULL, (char *)"" , false} ,
+    { SQL_AUTO_INCREMENT_OFFSET,      SETTING_VARIABLE, true,  false, true,  false, (char *)"auto_increment_offset",      NULL, (char *)"" , false} ,
+    { SQL_TIMESTAMP,                  SETTING_VARIABLE, true,  false, true,  false, (char *)"timestamp",                  NULL, (char *)"" , false} ,
+    //{ SQL_,          SETTING_VARIABLE, true,  false, false, false, (char *)"",     NULL, (char *)"" , false} ,
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];

@@ -178,24 +178,24 @@ void dumpResult(MYSQL_RES *result) {
 	}
 }
 
-void queryVariables(MYSQL *mysql, json& j) {
+void queryVariables(MYSQL *mysql, json& j, std::string& paddress) {
 	std::stringstream query;
 	if (is_mariadb) {
-		query << "SELECT /* mysql " << mysql << " */ lower(variable_name), variable_value FROM information_schema.session_variables WHERE variable_name IN "
+		query << "SELECT /* mysql " << mysql << " " << paddress << " */ lower(variable_name), variable_value FROM information_schema.session_variables WHERE variable_name IN "
 			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'tx_isolation', 'tx_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'group_concat_max_len');";
 	}
 	if (is_cluster) {
-		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
+		query << "SELECT /* mysql " << mysql << " " << paddress << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
 			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
 			" 'sql_auto_is_null', 'collation_connection', 'character_set_connection', 'character_set_client', 'character_set_database', 'wsrep_sync_wait', 'group_concat_max_len');";
 	}
 	if (!is_mariadb && !is_cluster) {
-		query << "SELECT /* mysql " << mysql << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
+		query << "SELECT /* mysql " << mysql << " " << paddress << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
 			" ('hostname', 'sql_log_bin', 'sql_mode', 'init_connect', 'time_zone', 'sql_auto_is_null', "
 			" 'sql_safe_updates', 'session_track_gtids', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
 			" 'sql_select_limit', 'character_set_results', 'transaction_isolation', 'transaction_read_only', "
@@ -215,7 +215,7 @@ void queryVariables(MYSQL *mysql, json& j) {
 	}
 }
 
-void queryInternalStatus(MYSQL *mysql, json& j) {
+void queryInternalStatus(MYSQL *mysql, json& j, std::string& paddress) {
 	char *query = (char*)"PROXYSQL INTERNAL SESSION";
 
 	//fprintf(stderr, "TRACE : QUERY 4 : variables %s\n", query);
@@ -234,6 +234,11 @@ void queryInternalStatus(MYSQL *mysql, json& j) {
 	// value types in mysql and in proxysql are different
 	// we should convert proxysql values to mysql format to compare
 	for (auto& el : j.items()) {
+		if (paddress.length() == 0) {
+			if (el.key() == "address") {
+				paddress = el.value();
+			}
+		}
 		if (el.key() == "conn") {
 			std::string sql_log_bin_value;
 
@@ -455,6 +460,7 @@ void * my_conn_thread(void *arg) {
 	}
 	MYSQL *mysql=NULL;
 	json vars;
+	std::string paddress = "";
 	for (j=0; j<queries; j++) {
 		int fr = fastrand();
 		int r1=fr%count;
@@ -467,12 +473,12 @@ void * my_conn_thread(void *arg) {
 		if (strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
 				std::lock_guard<std::mutex> lock(mtx_);
-				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
+				skip(1, "connections mysql[%p] proxysql[%s], command [%s]", mysql, paddress.c_str(), testCases[r2].command.c_str());
 				continue;
 			}
 			if (strstr(testCases[r2].command.c_str(),"sql_log_bin")) {
 				std::lock_guard<std::mutex> lock(mtx_);
-				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
+				skip(1, "connections: mysql[%p] proxysql[%s], command [%s]", mysql, paddress.c_str(), testCases[r2].command.c_str());
 				continue;
 			}
 		}
@@ -525,7 +531,7 @@ void * my_conn_thread(void *arg) {
 		usleep(sleepDelay * 1000);
 
 		char query[128];
-		sprintf(query, "SELECT /* %p */ %d;", mysql, sleepDelay);
+		sprintf(query, "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
 		if (mysql_query(mysql,query)) {
 			select_ERR++;
 			__sync_fetch_and_add(&g_select_ERR,1);
@@ -537,10 +543,10 @@ void * my_conn_thread(void *arg) {
 		}
 
 		json mysql_vars;
-		queryVariables(mysql, mysql_vars);
+		queryVariables(mysql, mysql_vars, paddress);
 
 		json proxysql_vars;
-		queryInternalStatus(mysql, proxysql_vars);
+		queryInternalStatus(mysql, proxysql_vars, paddress);
 
 		if (!testCases[r2].reset_vars.empty()) {
 			for (const auto& var : testCases[r2].reset_vars) {
@@ -615,7 +621,7 @@ void * my_conn_thread(void *arg) {
 				testPassed = false;
 				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
-				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
+				ok(testPassed, "connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
 				// In case of failing test, exit completely.
 				exit(EXIT_FAILURE);
 			} else {
@@ -624,7 +630,7 @@ void * my_conn_thread(void *arg) {
 		}
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
-			ok(testPassed, "mysql connection [%p], thread_id [%lu], variables_tested [%d], command [%s]", mysql, mysql->thread_id, variables_tested, testCases[r2].command.c_str());
+			ok(testPassed, "connections mysql[%p] proxysql[%s], thread_id [%lu], variables_tested [%d], command [%s]", mysql, paddress.c_str(), mysql->thread_id, variables_tested, testCases[r2].command.c_str());
 		}
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);

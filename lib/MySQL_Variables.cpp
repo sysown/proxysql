@@ -15,8 +15,8 @@ static inline char is_digit(char c) {
 }
 
 
-verify_var MySQL_Variables::verifiers[SQL_NAME_LAST];
-update_var MySQL_Variables::updaters[SQL_NAME_LAST];
+verify_var MySQL_Variables::verifiers[SQL_NAME_LAST_HIGH_WM];
+update_var MySQL_Variables::updaters[SQL_NAME_LAST_HIGH_WM];
 
 
 MySQL_Variables::MySQL_Variables() {
@@ -27,7 +27,7 @@ MySQL_Variables::MySQL_Variables() {
 	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
 	ignore_vars.push_back("session_track_schema");
 	variables_regexp = "";
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_ACTION || i == SQL_SET_NAMES) {
 			MySQL_Variables::updaters[i] = NULL;
 			MySQL_Variables::verifiers[i] = NULL;
@@ -175,7 +175,8 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 		free(session->client_myds->myconn->variables[idx].value);
 	}
 	session->client_myds->myconn->variables[idx].value = strdup(value.c_str());
-
+	// we now regererate dynamic_variables_idx
+	session->client_myds->myconn->reorder_dynamic_variables_idx();
 	return true;
 }
 
@@ -205,6 +206,8 @@ void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const ch
 		free(session->mybe->server_myds->myconn->variables[idx].value);
 	}
 	session->mybe->server_myds->myconn->variables[idx].value = strdup(value);
+	// we now regererate dynamic_variables_idx
+	session->mybe->server_myds->myconn->reorder_dynamic_variables_idx();
 }
 
 const char* MySQL_Variables::server_get_value(MySQL_Session* session, int idx) const {
@@ -224,19 +227,19 @@ uint32_t MySQL_Variables::server_get_hash(MySQL_Session* session, int idx) const
 }
 
 bool MySQL_Variables::update_variable(MySQL_Session* session, session_status status, int &_rc) {
-	int idx = SQL_NAME_LAST;
+	int idx = SQL_NAME_LAST_HIGH_WM;
 	if (session->status == SETTING_VARIABLE) {
 		// if status is SETTING_VARIABLE , what variable needs to be changed is defined in changing_variable_idx
 		idx = session->changing_variable_idx;
 	} else {
-		for (int i=0; i<SQL_NAME_LAST; i++) {
+		for (int i=0; i<SQL_NAME_LAST_HIGH_WM; i++) {
 			if (mysql_tracked_variables[i].status == status) {
 				idx = i;
 				break;
 			}
 		}
 	}
-	assert(idx != SQL_NAME_LAST);
+	assert(idx != SQL_NAME_LAST_HIGH_WM);
 	return updaters[idx](session, idx, _rc);
 }
 

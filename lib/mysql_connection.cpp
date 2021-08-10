@@ -394,7 +394,7 @@ MySQL_Connection::MySQL_Connection() {
 	status_flags=0;
 	last_time_used=0;
 
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		variables[i].value = NULL;
 		var_hash[i] = 0;
 	}
@@ -487,7 +487,7 @@ MySQL_Connection::~MySQL_Connection() {
 		options.session_track_gtids=NULL;
 	}
 
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		if (variables[i].value) {
 			free(variables[i].value);
 			variables[i].value = NULL;
@@ -495,20 +495,6 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
-/*
-	if (options.collation_connection) {
-		free(options.collation_connection);
-		options.collation_connection=NULL;
-	}
-	if (options.net_write_timeout) {
-		free(options.net_write_timeout);
-		options.net_write_timeout=NULL;
-	}
-	if (options.max_join_size) {
-		free(options.max_join_size);
-		options.max_join_size=NULL;
-	}
-*/
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
@@ -580,7 +566,7 @@ bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn)
 		// The connection need to be reset with CHANGE_USER
 		return true;
 	}
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (client_conn->var_hash[i] == 0) {
 			if (var_hash[i]) {
 				// this connection has a variable set that the
@@ -591,17 +577,65 @@ bool MySQL_Connection::requires_CHANGE_USER(const MySQL_Connection *client_conn)
 			}
 		}
 	}
+	if (client_conn->dynamic_variables_idx.size() > dynamic_variables_idx.size()) {
+		// the server connection has more variables set than the client
+		return true;
+	}
+	std::vector<uint32_t>::const_iterator it_c = client_conn->dynamic_variables_idx.begin(); // client connection iterator
+	std::vector<uint32_t>::const_iterator it_s = dynamic_variables_idx.begin();              // server connection iterator
+	for ( ; it_s != dynamic_variables_idx.end() ; it_s++) {
+		while ( it_c != client_conn->dynamic_variables_idx.end() && ( *it_c < *it_s ) ) {
+			it_c++;
+		}
+		if ( it_c != client_conn->dynamic_variables_idx.end() && *it_c == *it_s) {
+			// the backend variable idx matches the frontend variable idx
+		} else {
+			// we are processing a backend variable but there are
+			// no more frontend variables
+			return true;
+		}
+	}
 	return false;
+}
+
+unsigned int MySQL_Connection::reorder_dynamic_variables_idx() {
+	dynamic_variables_idx.clear();
+	// note that we are inserting the index already ordered
+	for (auto i = SQL_NAME_LAST_LOW_WM + 1 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
+		if (var_hash[i] != 0) {
+			dynamic_variables_idx.push_back(i);
+		}
+	}
 }
 
 unsigned int MySQL_Connection::number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching) {
 	unsigned int ret=0;
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+	for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 		if (client_conn->var_hash[i] && i != SQL_CHARACTER_ACTION) { // client has a variable set
 			if (var_hash[i] == client_conn->var_hash[i]) { // server conection has the variable set to the same value
 				ret++;
 			} else {
 				not_matching++;
+			}
+		}
+	}
+	// increse not_matching y the sum of client and server variables
+	// when a match is found the counter will be reduced by 2
+	not_matching += client_conn->dynamic_variables_idx.size();
+	not_matching += dynamic_variables_idx.size();
+	std::vector<uint32_t>::const_iterator it_c = client_conn->dynamic_variables_idx.begin(); // client connection iterator
+	std::vector<uint32_t>::const_iterator it_s = dynamic_variables_idx.begin();              // server connection iterator
+	for ( ; it_c != client_conn->dynamic_variables_idx.end() && it_s != dynamic_variables_idx.end() ; it_c++) {
+		while (it_s != dynamic_variables_idx.end() && *it_s < *it_c) {
+			it_s++;
+		}
+		if (it_s != dynamic_variables_idx.end()) {
+			if (*it_s == *it_c) {
+				if (var_hash[*it_s] == client_conn->var_hash[*it_c]) { // server conection has the variable set to the same value
+					// when a match is found the counter is reduced by 2
+					not_matching-=2;
+					ret++;
+				}
 			}
 		}
 	}
@@ -2543,7 +2577,7 @@ void MySQL_Connection::reset() {
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();
 
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		var_hash[i] = 0;
 		if (variables[i].value) {
 			free(variables[i].value);
