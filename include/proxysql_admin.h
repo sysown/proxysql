@@ -205,7 +205,7 @@ class ProxySQL_Admin {
 
 	void __insert_or_ignore_maintable_select_disktable();
 	void __insert_or_replace_maintable_select_disktable();
-	void __delete_disktable();
+//	void __delete_disktable(); // commented in 2.3 , unused
 	void __insert_or_replace_disktable_select_maintable();
 	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
@@ -310,12 +310,12 @@ class ProxySQL_Admin {
 	void flush_mysql_query_rules__from_disk_to_memory();
 	void flush_mysql_firewall__from_memory_to_disk();
 	void flush_mysql_firewall__from_disk_to_memory();
-	void flush_mysql_variables__from_disk_to_memory();
+
+//	void flush_mysql_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_mysql_variables__from_memory_to_disk();
-	void flush_admin_variables__from_disk_to_memory();
+//	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
-
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();

@@ -49,7 +49,7 @@ int main() {
 	std::vector<std::string> tables;
 	std::vector<std::string> schemas = { "main", "stats", "disk", "monitor" };
 	for (std::vector<std::string>::iterator s = schemas.begin(); s != schemas.end(); s++) {
-		std::string q = "SHOW TABLES FROM " + *s;
+		std::string q = "SHOW TABLES IN " + *s;
 		MYSQL_QUERY(proxysql_admin, q.c_str());
 
 		MYSQL_RES* proxy_res = mysql_store_result(proxysql_admin);

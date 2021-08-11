@@ -16,7 +16,7 @@ This test verifies that client connections are dropped because of:
 - mysql-max_transaction_time
 */
 
-const int NUM_CONNS = 5;
+const int NUM_CONNS = 35;
 
 int run_q(MYSQL *mysql, const char *q) {
 	MYSQL_QUERY(mysql,q);
@@ -156,7 +156,7 @@ int main(int argc, char** argv) {
 		int rc = run_q(mysql, "DO 1");
 		ok(rc != 0, (rc == 0 ? "Connection still alive" : "Connection killed"));
 	}
-
+	sleep(1); // to trigger --idle-threads code
 	MYSQL_QUERY(proxysql_admin, "SET mysql-show_processlist_extended=2");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 

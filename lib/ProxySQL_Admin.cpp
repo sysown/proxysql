@@ -4327,7 +4327,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY GROUP MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
@@ -4337,7 +4337,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY GROUP MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
@@ -4346,7 +4346,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			tablename=(char *)"MYSQL GALERA HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY GROUP MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
@@ -9460,6 +9460,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 #endif
 }
 
+/* commented in 2.3 , unused
 void ProxySQL_Admin::__delete_disktable() {
 	admindb->execute("DELETE FROM disk.mysql_servers");
 	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
@@ -9475,16 +9476,17 @@ void ProxySQL_Admin::__delete_disktable() {
 #ifdef DEBUG
 	admindb->execute("DELETE FROM disk.debug_levels");
 	admindb->execute("DELETE FROM disk.debug_filters");
-#endif /* DEBUG */
+#endif // DEBUG
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
 		admindb->execute("DELETE FROM disk.clickhouse_users");
 	}
-#endif /* PROXYSQLCLICKHOUSE */
+#endif // PROXYSQLCLICKHOUSE
 	if (GloMyLdapAuth) {
 		admindb->execute("DELETE FROM disk.mysql_ldap_mapping");
 	}
 }
+*/
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
@@ -9658,6 +9660,7 @@ void ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+/* commented in 2.3 because unused
 void ProxySQL_Admin::flush_mysql_variables__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -9665,7 +9668,7 @@ void ProxySQL_Admin::flush_mysql_variables__from_disk_to_memory() {
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
-
+*/
 void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -9674,6 +9677,7 @@ void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+/* commented in 2.3 because unused
 void ProxySQL_Admin::flush_admin_variables__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -9681,7 +9685,7 @@ void ProxySQL_Admin::flush_admin_variables__from_disk_to_memory() {
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
-
+*/
 void ProxySQL_Admin::flush_admin_variables__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");

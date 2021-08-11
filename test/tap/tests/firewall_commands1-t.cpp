@@ -37,9 +37,13 @@ std::vector<std::string> queries = {
 	"LOAD MYSQL FIREWALL TO RUNTIME",
 	"SAVE MYSQL FIREWALL FROM RUNTIME",
 	"PROXYSQLTEST 31 1",
+	"PROXYSQLTEST 31 1 1",
+	"PROXYSQLTEST 31 1 5",
 //	"PROXYSQLTEST 31 2", //FIXME: investigate why it doesn't work
 //	"PROXYSQLTEST 31 3", //FIXME: investigate why it doesn't work
 	"PROXYSQLTEST 31 4",
+	"PROXYSQLTEST 31 4 1",
+	"PROXYSQLTEST 31 4 5",
 	"DELETE FROM history_mysql_query_digest",
 	"DELETE FROM mysql_firewall_whitelist_users",
 	"DELETE FROM mysql_firewall_whitelist_rules",

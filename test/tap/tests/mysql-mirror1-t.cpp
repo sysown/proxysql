@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 
 	int np = 0;
-	np += 5;
+	np += 6;
 	np += NUM_CONNS; // new admin connections
 
 	plan(np);
@@ -101,8 +101,13 @@ int main(int argc, char** argv) {
 	}
 
 
-	rc = run_q(proxysql_admin, "SELECT * FROM stats_mysql_processlist");
-	ok(rc == 0 , "SELECT FROM stats_mysql_processlist");
+	rc = run_q(proxysql_admin, "SHOW FULL PROCESSLIST");
+	ok(rc == 0 , "SHOW FULL PROCESSLIST");
+	proxy_res = mysql_store_result(proxysql_admin);
+	mysql_free_result(proxy_res);
+
+	rc = run_q(proxysql_admin, "SHOW PROCESSLIST");
+	ok(rc == 0 , "SHOW FULL PROCESSLIST");
 	proxy_res = mysql_store_result(proxysql_admin);
 	mysql_free_result(proxy_res);
 
@@ -200,10 +205,9 @@ int main(int argc, char** argv) {
 	ok(rows_read > (float)(RPI*NUM_CONNS*11*1.8) && rows_read <= RPI*NUM_CONNS*11*2, "Rows received: %u , expected between %u and %u" , rows_read , (int)((float)(RPI*NUM_CONNS*11*1.5)), RPI*NUM_CONNS*11*2);
 
 	// stress the system
-	// note that this can be very network intensive, as there is no throttling
-	//
-	// this application is single threaded, yet app/proxysql/mysql can easily saturate 10Gbps
 	diag("Creating load");
+	diag("note that this can be very network intensive, as there is no throttling");
+	diag("this application is single threaded, yet app/proxysql/mysql can easily saturate 10Gbps");
 	for (int j = 0 ; j<200 ; j++) {
 		for (int i = 0; i < NUM_CONNS ; i++) {
 			MYSQL * mysql = conns[i];
