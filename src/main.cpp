@@ -1045,6 +1045,9 @@ void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
 		load_ += GloMTH->num_threads;
+	} else {
+		proxy_warning("proxysql instance running without --idle-threads : most workloads benefit from this option\n");
+		proxy_warning("proxysql instance running without --idle-threads : enabling it can potentially improve performance\n");
 	}
 #endif // IDLE_THREADS
 	for (i=0; i<GloMTH->num_threads; i++) {
