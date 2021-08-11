@@ -1656,6 +1656,7 @@ int main(int argc, const char * argv[]) {
 	{
 		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
 		if (rc == 0) {
+			proxy_info("Current RLIMIT_NOFILE: %d\n", nlimit.rlim_cur);
 			if (nlimit.rlim_cur <= 1024) {
 				proxy_error("Current RLIMIT_NOFILE is very low: %d .  Tune RLIMIT_NOFILE correctly before running ProxySQL\n", nlimit.rlim_cur);
 				if (nlimit.rlim_max > nlimit.rlim_cur) {
