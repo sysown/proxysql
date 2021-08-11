@@ -15,6 +15,10 @@ This app tests mirroring
 
 This is a first application, as more complex test can be introduced,
 for example monitoring mirroring variables and checking stats_mysql_query_rules
+
+This test also triggers:
+- logging events in eventslog_format 1 and 2
+- logging in audit log
 */
 
 const int NUM_CONNS = 15;
@@ -49,9 +53,10 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 
 	int np = 0;
-	np += 2; // to read from table
+	np += 5;
+	np += NUM_CONNS; // new admin connections
 
-	plan(5);
+	plan(np);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -75,7 +80,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "SET mysql-have_compress='true'");
 	MYSQL_QUERY(proxysql_admin, "SET mysql-show_processlist_extended=1");
 	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_format=2");
-	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_filename=\"proxy-events\"");
+	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_filename=\"proxy-events-2f\"");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_query_rules");
 	
@@ -129,6 +134,44 @@ int main(int argc, char** argv) {
 	mysql_free_result(proxy_res);
 	ok(rows_read == RPI*NUM_CONNS*2, "Rows expected: %u , received: %u" , RPI*NUM_CONNS*2 , rows_read);
 
+	// switching logging format
+	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_format=1");
+	MYSQL_QUERY(proxysql_admin, "SET mysql-eventslog_filename=\"proxy-event-1f\"");
+	MYSQL_QUERY(proxysql_admin, "SET mysql-auditlog_filename=\"proxy-audit\"");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	// re-establish all connections
+	for (int i = 0; i < NUM_CONNS ; i++) {
+		MYSQL * mysql = conns[i];
+		mysql_close(mysql);
+	}
+	rc = create_connections(cl);
+	if (rc != 0) {
+		return exit_status();
+	}
+
+
+
+	for (int i = 0 ; i < NUM_CONNS ; i++) {
+		MYSQL* proxysql_admin = mysql_init(NULL); // local scope
+		// Initialize connections
+		if (!proxysql_admin) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+			return -1;
+		}
+		if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+			return -1;
+		}
+		rc = run_q(proxysql_admin, "SELECT * FROM stats_mysql_processlist");
+		ok(rc == 0 , "SELECT FROM stats_mysql_processlist");
+		proxy_res = mysql_store_result(proxysql_admin);
+		mysql_free_result(proxy_res);
+		mysql_close(proxysql_admin);
+	}
+
+
+
 	// create some load sending a lot of writes
 	// this should add 20x15x10 = 3000 rows , but mirrored they will become 6000
 	for (int j = 0 ; j<10 ; j++) {
@@ -141,9 +184,11 @@ int main(int argc, char** argv) {
 		}	
 	}
 
+	sleep(1); // some INSERT may still be running
+
 	// at this point the table sbtest should have 6600 rows:
 	// 3300 rows from normal insert, and 3300 rows from mirror
-	// note that because mirror can lose packet, we allow some margin of error (50%)
+	// note that because mirror can lose packet, we allow some margin of error (20%)
 	rows_read = 0;
 	rc = run_q(conns[0], "SELECT * FROM test.sbtest1");
 	ok(rc == 0 , "SELECT FROM test.sbtest1");
@@ -152,7 +197,7 @@ int main(int argc, char** argv) {
 		rows_read++;
 	}
 	mysql_free_result(proxy_res);
-	ok(rows_read > (float)(RPI*NUM_CONNS*11*1.5) && rows_read <= RPI*NUM_CONNS*11*2, "Rows received: %u , expected between %u and %u" , rows_read , (int)((float)(RPI*NUM_CONNS*11*1.5)), RPI*NUM_CONNS*11*2);
+	ok(rows_read > (float)(RPI*NUM_CONNS*11*1.8) && rows_read <= RPI*NUM_CONNS*11*2, "Rows received: %u , expected between %u and %u" , rows_read , (int)((float)(RPI*NUM_CONNS*11*1.5)), RPI*NUM_CONNS*11*2);
 
 	// stress the system
 	// note that this can be very network intensive, as there is no throttling
@@ -172,5 +217,6 @@ int main(int argc, char** argv) {
 	fprintf(stderr,"\n");
 	diag("Test completed");
 
+	mysql_close(proxysql_admin);
 	return exit_status();
 }
