@@ -1144,7 +1144,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.client_session_track_gtid=true;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
-	variables.session_idle_ms=1000;
+	variables.session_idle_ms=1;
 	variables.session_idle_show_processlist=true;
 #endif // IDLE_THREADS
 	variables.show_processlist_extended = 0;

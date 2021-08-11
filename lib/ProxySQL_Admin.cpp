@@ -9438,6 +9438,30 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
+	{
+		// online upgrade of mysql-session_idle_ms
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		std::string q = "SELECT variable_value FROM disk.global_variables WHERE variable_name=\"mysql-session_idle_ms\"";
+		admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", q.c_str(), error);
+		} else {
+			if (resultset->rows_count == 1) {
+      			SQLite3_row *r = resultset->rows[0];
+				if (strcmp(r->fields[0], "1000") == 0) {
+					proxy_warning("Detected mysql-session_idle_ms=1000 : automatically setting it to 1 assuming this is an upgrade from an older version.\n");
+					proxy_warning("Benchmarks and users show that the old default (1000) of mysql-session_idle_ms is not optimal.\n");
+					proxy_warning("This release prevents the value of mysql-session_idle_ms to be 1000.\n");
+					proxy_warning("If you really want to set mysql-session_idle_ms close to 1000 , it is recommended to set it to a closer value like 999 or 1001\n");
+					admindb->execute("UPDATE disk.global_variables SET variable_value=\"1\" WHERE variable_name=\"mysql-session_idle_ms\"");
+				}
+			}
+		}
+		if (resultset) delete resultset;
+	}
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
 	admindb->execute("INSERT OR REPLACE INTO main.scheduler SELECT * FROM disk.scheduler");
 	admindb->execute("INSERT OR REPLACE INTO main.restapi_routes SELECT * FROM disk.restapi_routes");
