@@ -1831,6 +1831,9 @@ __start_label:
 		std::cerr << "Main init phase3 completed in ";
 #endif
 	}
+#ifdef DEBUG
+		std::cerr << "WARNING: this is a DEBUG release and can be slow or perform poorly. Do not use it in production" << std::endl;
+#endif
 
 	{
 		unsigned int missed_heartbeats = 0;
