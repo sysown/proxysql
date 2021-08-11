@@ -203,7 +203,7 @@ class ProxySQL_Admin {
 	void flush_debug_filters_database_to_runtime(SQLite3DB *db);
 #endif /* DEBUG */
 
-	void __insert_or_ignore_maintable_select_disktable();
+//	void __insert_or_ignore_maintable_select_disktable(); // commented in 2.3
 	void __insert_or_replace_maintable_select_disktable();
 //	void __delete_disktable(); // commented in 2.3 , unused
 	void __insert_or_replace_disktable_select_maintable();
