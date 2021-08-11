@@ -4695,8 +4695,7 @@ unsigned long long MySQL_Threads_Handler::get_mysql_backend_buffers_bytes() {
 				q+=__sync_fetch_and_add(&thr->status_variables.stvar[st_var_mysql_backend_buffers_bytes],0);
 		}
 	}
-	const auto& cur_val = this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Value();
-	this->status_variables.p_counter_array[p_th_gauge::mysql_backend_buffers_bytes]->Increment(q - cur_val);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_backend_buffers_bytes]->Set(q);
 
 	return q;
 }
@@ -4722,7 +4721,7 @@ unsigned long long MySQL_Threads_Handler::get_mysql_frontend_buffers_bytes() {
 		}
 	}
 #endif // IDLE_THREADS
-	this->status_variables.p_counter_array[p_th_gauge::mysql_frontend_buffers_bytes]->Increment(q);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_frontend_buffers_bytes]->Set(q);
 
 	return q;
 }
@@ -4757,9 +4756,16 @@ void MySQL_Threads_Handler::p_update_metrics() {
 #ifdef IDLE_THREADS
 	get_non_idle_client_connections();
 #endif // IDLE_THREADS
-	get_mysql_backend_buffers_bytes();
-	get_mysql_frontend_buffers_bytes();
-	get_mysql_session_internal_bytes();
+	// NOTE: This is a blocking operation that requires taking the `thread_mutex`,
+	// maybe it should be conditional, configurable or having it's own updating
+	// interval.
+	{
+		// Collect the memory stats to be reported
+		Get_Memory_Stats();
+		get_mysql_backend_buffers_bytes();
+		get_mysql_frontend_buffers_bytes();
+		get_mysql_session_internal_bytes();
+	}
 	for (unsigned int i=0; i<sizeof(MySQL_Thread_status_variables_counter_array)/sizeof(mythr_st_vars_t) ; i++) {
 		if (MySQL_Thread_status_variables_counter_array[i].name) {
 			get_status_variable(
