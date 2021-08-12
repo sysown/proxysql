@@ -4436,6 +4436,14 @@ handler_again:
 
 					handler_rc0_Process_GTID(myconn);
 
+					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
+					// see bug #3549
+					if (locked_on_hostgroup >= 0) {
+						assert(myconn != NULL);
+						assert(myconn->mysql != NULL);
+						autocommit = myconn->mysql->server_status & SERVER_STATUS_AUTOCOMMIT;
+					}
+
 					if (mirror == false) {
 						// Support for LAST_INSERT_ID()
 						if (myconn->mysql->insert_id) {
