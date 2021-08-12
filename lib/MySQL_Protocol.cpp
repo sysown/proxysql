@@ -260,101 +260,6 @@ static uint8_t mysql_encode_length(uint64_t len, char *hd) {
 	return 9;	
 }
 
-
-enum MySQL_response_type mysql_response(unsigned char *pkt, unsigned int length) {
-	unsigned char c=*pkt;
-	switch (c) {
-		case 0:
-     // proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet OK_Packet\n");
-			return OK_Packet;
-		case 0xff:
-     // proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet ERR_Packet\n");
-			return ERR_Packet;
-		case 0xfe:
-			if (length < 9) {
-        //proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet EOF_Packet\n");
-				return EOF_Packet;
-			}
-		default:
-			//proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet UNKNOWN_Packet\n");
-			return UNKNOWN_Packet;
-	}
-}
-
-int pkt_com_query(unsigned char *pkt, unsigned int length) {
-	unsigned char buf[length];
-	memcpy(buf,pkt+1, length-1);
-	buf[length-1]='\0';
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Query: %s\n", buf);
-	return PKT_PARSED;
-}
-
-int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
-	if (length < 7) return PKT_ERROR;
-
-	uint64_t affected_rows;
-	uint64_t  insert_id;
-#ifdef DEBUG
-	uint16_t  warns;
-#endif /* DEBUG */
-	unsigned char msg[length];
-
-	unsigned int p=0;
-	int rc;
-
-	pkt++; p++;
-	rc=mysql_decode_length(pkt,&affected_rows);
-	pkt	+= rc; p+=rc;
-	rc=mysql_decode_length(pkt,&insert_id);
-	pkt	+= rc; p+=rc;
-	mp->prot_status=CPY2(pkt);
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-#ifdef DEBUG
-	warns=CPY2(pkt);
-#endif /* DEBUG */
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-	pkt++;
-	p++;
-	if (length>p) {
-		memcpy(msg,pkt,length-p);
-		msg[length-p]=0;
-	} else {
-		msg[0]=0;
-	}
-
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)mp->prot_status, (uint16_t)warns, msg);
-	
-	return PKT_PARSED;
-}
-
-
-
-int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
-{
-	if(*pkt != 0xFE || length > 5) return PKT_ERROR;
-#ifdef DEBUG
-	uint16_t warns = 0;
-#endif /* DEBUG */
-
-	if(length > 1) { // 4.1+
-		pkt++;
-#ifdef DEBUG
-		warns    = CPY2(pkt);
-#endif /* DEBUG */
-		pkt    += 2;
-		mp->prot_status  = CPY2(pkt);
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n", mp->prot_status, warns);
-
-//	if(status & SERVER_MORE_RESULTS_EXISTS) {
-//		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n");
-//	}
-
-	return PKT_PARSED;
-}
-
 #ifdef DEBUG
 void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
 	if (strlen(attributes)) {
@@ -522,7 +427,9 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 					break;
 				}
 			default:
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 		}
 	}
 	if (len) { *len=size; }
@@ -661,10 +568,14 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 				if (eof_identifier)
 					(*myds)->DSS=STATE_EOF2;
 				else
+					// LCOV_EXCL_START
 					assert(0);
+					// LCOV_EXCL_STOP
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 		}
 	}
 	if (len) { *len=size; }
@@ -1195,7 +1106,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 				+ 1; // 00
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 			break;
 	}
 
@@ -1220,7 +1133,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 			_ptr[l]=0x00; l++;
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 			break;
 	}
   _ptr[l]=0x00; //l+=1; //0x00
@@ -1313,9 +1228,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   const MARIADB_CHARSET_INFO *ci = NULL;
   ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
   if (!ci) {
+		// LCOV_EXCL_START
 	  proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable.\n",
 			  mysql_thread___default_variables[SQL_CHARACTER_SET], mysql_tracked_variables[SQL_CHARACTER_SET].internal_variable_name);
 	  assert(0);
+		// LCOV_EXCL_STOP
   }
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
@@ -1531,8 +1448,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			const MARIADB_CHARSET_INFO *ci = NULL;
 			ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 			if (!ci) {
+				// LCOV_EXCL_START
 				proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 			charset=ci->nr;
 		}
@@ -1686,8 +1605,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 		if (!ci) {
+			// LCOV_EXCL_START
 			proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 		charset=ci->nr;
 	}
@@ -2436,11 +2357,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					}
 					break;
 				default:
+					// LCOV_EXCL_START
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
 							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 		}
 	}

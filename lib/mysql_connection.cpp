@@ -126,8 +126,10 @@ void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 					j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
 				}
 			} else {
+				// LCOV_EXCL_START
 				proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		} else {
 			j["backends"][conn_num]["conn"][mysql_tracked_variables[idx].internal_variable_name] = std::string((ci && ci->csname)?ci->csname:"");
@@ -174,8 +176,10 @@ void Variable::fill_client_internal_session(json &j, int idx) {
 					j["conn"][mysql_tracked_variables[idx].internal_variable_name] = value;
 				}
 			} else {
+				// LCOV_EXCL_START
 				proxy_error("Cannot find charset [%s] for variables %d\n", value, idx);
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		} else {
 			j["conn"][mysql_tracked_variables[idx].internal_variable_name] = (ci && ci->csname)?ci->csname:"";
@@ -672,8 +676,10 @@ void MySQL_Connection::connect_start() {
 		c = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 
 	if (!c) {
+		// LCOV_EXCL_START
 		proxy_error("Not existing charset number %s\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	{
 		/* We are connecting to backend setting charset in mysql_options.
@@ -726,6 +732,23 @@ void MySQL_Connection::connect_start() {
 	// for having 'CLIENT_DEPRECATE_EOF' in the connection to be stablished.
 	if (mysql_thread___enable_server_deprecate_eof) {
 		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+	}
+
+	if (myds != NULL) {
+		if (myds->sess != NULL) {
+			if (myds->sess->session_fast_forward == true) { // this is a fast_forward connection
+				assert(myds->sess->client_myds != NULL);
+				MySQL_Connection * c = myds->sess->client_myds->myconn;
+				assert(c != NULL);
+				mysql->options.client_flag &= ~(CLIENT_DEPRECATE_EOF); // we disable it by default
+				// if both client_flag and server_capabilities (used for client) , set CLIENT_DEPRECATE_EOF
+				if (c->options.client_flag & CLIENT_DEPRECATE_EOF) {
+					if (c->options.server_capabilities & CLIENT_DEPRECATE_EOF) {
+						mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+					}
+				}
+			}
+		}
 	}
 
 	char *auth_password=NULL;
@@ -843,8 +866,10 @@ void MySQL_Connection::set_names_start() {
 	PROXY_TRACE();
 	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
 	if (!c) {
+		// LCOV_EXCL_START
 		proxy_error("Not existing charset number %u\n", atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
 }
@@ -1610,8 +1635,10 @@ handler_again:
 			break;
 
 		default:
+			// LCOV_EXCL_START
 			assert(0); //we should never reach here
 			break;
+			// LCOV_EXCL_STOP
 		}
 	return async_state_machine;
 }
@@ -1726,7 +1753,9 @@ void MySQL_Connection::next_event(MDB_ASYNC_ST new_st) {
 int MySQL_Connection::async_connect(short event) {
 	PROXY_TRACE();
 	if (mysql==NULL && async_state_machine!=ASYNC_CONNECT_START) {
+		// LCOV_EXCL_START
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	if (async_state_machine==ASYNC_IDLE) {
 		myds->wait_until=0;

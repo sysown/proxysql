@@ -721,12 +721,14 @@ MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
 
 
 MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::find_prepared_statement_by_hash(
-    uint64_t hash, bool lock) {
+    uint64_t hash) {
+    //uint64_t hash, bool lock) { // removed in 2.3
 	MySQL_STMT_Global_info *ret = NULL;  // assume we do not find it
+/* removed in 2.3
 	if (lock) {
 		pthread_rwlock_wrlock(&rwlock_);
 	}
-
+*/
 	auto s = map_stmt_hash_to_info.find(hash);
 	if (s != map_stmt_hash_to_info.end()) {
 		ret = s->second;
@@ -736,9 +738,11 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::find_prepared_statement_by_hash(
 //		__sync_fetch_and_add(&ret->ref_count_client, 1);
 	}
 
+/* removed in 2.3
 	if (lock) {
 		pthread_rwlock_unlock(&rwlock_);
 	}
+*/
 	return ret;
 }
 

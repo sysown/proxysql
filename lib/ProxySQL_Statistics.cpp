@@ -293,8 +293,10 @@ SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -346,8 +348,10 @@ SQLite3_result * ProxySQL_Statistics::get_myhgm_metrics(int interval) {
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	free(query);
@@ -387,8 +391,10 @@ SQLite3_result * ProxySQL_Statistics::get_MySQL_Query_Cache_metrics(int interval
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -430,8 +436,10 @@ SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics(int interval) {
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -473,8 +481,10 @@ SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics(int interval) {
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);

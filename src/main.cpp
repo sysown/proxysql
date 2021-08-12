@@ -1045,6 +1045,9 @@ void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
 		load_ += GloMTH->num_threads;
+	} else {
+		proxy_warning("proxysql instance running without --idle-threads : most workloads benefit from this option\n");
+		proxy_warning("proxysql instance running without --idle-threads : enabling it can potentially improve performance\n");
 	}
 #endif // IDLE_THREADS
 	for (i=0; i<GloMTH->num_threads; i++) {
@@ -1656,6 +1659,7 @@ int main(int argc, const char * argv[]) {
 	{
 		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
 		if (rc == 0) {
+			proxy_info("Current RLIMIT_NOFILE: %d\n", nlimit.rlim_cur);
 			if (nlimit.rlim_cur <= 1024) {
 				proxy_error("Current RLIMIT_NOFILE is very low: %d .  Tune RLIMIT_NOFILE correctly before running ProxySQL\n", nlimit.rlim_cur);
 				if (nlimit.rlim_max > nlimit.rlim_cur) {
@@ -1827,6 +1831,9 @@ __start_label:
 		std::cerr << "Main init phase3 completed in ";
 #endif
 	}
+#ifdef DEBUG
+		std::cerr << "WARNING: this is a DEBUG release and can be slow or perform poorly. Do not use it in production" << std::endl;
+#endif
 
 	{
 		unsigned int missed_heartbeats = 0;
