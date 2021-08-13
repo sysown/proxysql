@@ -4,6 +4,9 @@
 #include <mysql.h>
 #include <string>
 #include <vector>
+#include <random>
+#include <fstream>
+#include <sstream>
 
 #define MYSQL_QUERY(mysql, query) \
 	do { \
@@ -11,6 +14,14 @@
 			fprintf(stderr, "File %s, line %d, Error: %s\n", \
 					__FILE__, __LINE__, mysql_error(mysql)); \
 			return EXIT_FAILURE; \
+		} \
+	} while(0)
+
+#define MYSQL_QUERY_err(mysql, query) \
+	do { \
+		if (mysql_query(mysql, query)) { \
+			fprintf(stderr, "File %s, line %d, Error: %s\n", \
+					__FILE__, __LINE__, mysql_error(mysql)); \
 		} \
 	} while(0)
 
@@ -65,5 +76,22 @@ int execvp(const std::string& file, const std::vector<const char*>& argv, std::s
  * @return int The error code returned by popen.
  */
 int exec(const std::string& cmd, std::string& result);
+
+
+
+// create table test.sbtest1 with num_rows rows
+int create_table_test_sbtest1(int num_rows, MYSQL *mysql);
+int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql);
+
+using mysql_res_row = std::vector<std::string>;
+
+/**
+ * @brief Function that extracts the provided 'MYSQL_RES' into a vector of vector of
+ *   strings.
+ * @param my_res The 'MYSQL_RES' for which to extract the values. In case of
+ *   being NULL an empty vector is returned.
+ * @return The extracted values of all the rows present in the resultset.
+ */
+std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res);
 
 #endif // #define UTILS_H

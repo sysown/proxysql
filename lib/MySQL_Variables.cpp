@@ -24,6 +24,8 @@ MySQL_Variables::MySQL_Variables() {
 	ignore_vars.push_back("interactive_timeout");
 	ignore_vars.push_back("wait_timeout");
 	ignore_vars.push_back("net_read_timeout");
+	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
+	ignore_vars.push_back("session_track_schema");
 	variables_regexp = "";
 	for (auto i = 0; i < SQL_NAME_LAST; i++) {
 		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_ACTION || i == SQL_SET_NAMES) {
@@ -275,8 +277,10 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 				case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE:
 					ci = proxysql_find_charset_nr(charset);
 					if (!ci) {
+						// LCOV_EXCL_START
 						proxy_error("Cannot find character set [%s]\n", mysql_variables.client_get_value(session, idx));
 						assert(0);
+						// LCOV_EXCL_STOP
 					}
 					not_supported_collation = ci->name;
 
@@ -291,8 +295,10 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 					}
 
 					if (!ci) {
+						// LCOV_EXCL_START
 						proxy_error("Cannot find character set [%s]\n", mysql_thread___default_variables[idx]);
 						assert(0);
+						// LCOV_EXCL_STOP
 					}
 					replace_collation = ci->name;
 					replace_collation_nr = ci->nr;
@@ -317,8 +323,10 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 					}
 
 					if (!ci) {
+						// LCOV_EXCL_START
 						proxy_error("Cannot filnd charset [%s]\n", mysql_thread___default_variables[idx]);
 						assert(0);
+						// LCOV_EXCL_STOP
 					}
 					replace_collation_nr = ci->nr;
 
@@ -441,9 +449,11 @@ bool verify_set_names(MySQL_Session* session) {
 				session->previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
+				// LCOV_EXCL_START
 				proxy_error("Wrong status %d\n", session->status);
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		session->set_status(SETTING_SET_NAMES);
 		uint32_t hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
@@ -483,9 +493,11 @@ inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t cli
 				session->previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
+				// LCOV_EXCL_START
 				proxy_error("Wrong status %d\n", session->status);
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		session->set_status(mysql_tracked_variables[idx].status);
 		mysql_variables.server_set_value(session, idx, mysql_variables.client_get_value(session, idx));

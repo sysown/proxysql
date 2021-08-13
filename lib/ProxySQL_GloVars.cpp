@@ -8,6 +8,10 @@
 #include <cxxabi.h>
 #include <uuid/uuid.h>
 
+#include "MySQL_LDAP_Authentication.hpp"
+
+extern MySQL_LDAP_Authentication* GloMyLdapAuth;
+
 static void term_handler(int sig) {
   proxy_warning("Received TERM signal: shutdown in progress...\n");
 #ifdef DEBUG
@@ -388,6 +392,13 @@ uint64_t ProxySQL_GlobalVariables::generate_global_checksum() {
 	if (v->version) {
 		myhash.Update(v->checksum,strlen(v->checksum));
 		myhash.Update(&v->version,sizeof(v->version));
+	}
+	if (GloMyLdapAuth) {
+		v = &checksums_values.ldap_variables;
+		if (v->version) {
+			myhash.Update(v->checksum,strlen(v->checksum));
+			myhash.Update(&v->version,sizeof(v->version));
+		}
 	}
 	uint64_t h1, h2;
 	myhash.Final(&h1, &h2);

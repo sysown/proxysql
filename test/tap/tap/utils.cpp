@@ -157,6 +157,57 @@ int read_pipe(int pipe_fd, std::string& sbuffer) {
 	return res;
 }
 
+int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
+	std::random_device rd;
+	std::mt19937 mt(rd());
+	std::uniform_int_distribution<int> dist(0.0, 9.0);
+
+	diag("Creating %d rows in sbtest1", num_rows);
+	while (num_rows) {
+		std::stringstream q;
+
+		q << "INSERT INTO test.sbtest1 (k, c, pad) values ";
+		bool put_comma = false;
+		int i=0;
+		unsigned int cnt=5+rand()%50;
+		if (cnt > num_rows) cnt = num_rows;
+		for (i=0; i<cnt ; ++i) {
+			num_rows--;
+			int k = dist(mt);
+			std::stringstream c;
+			for (int j=0; j<10; j++) {
+				for (int k=0; k<11; k++) {
+					c << dist(mt);
+				}
+				if (j<9)
+					c << "-";
+			}
+			std::stringstream pad;
+			for (int j=0; j<5; j++) {
+				for (int k=0; k<11; k++) {
+					pad << dist(mt);
+				}
+				if (j<4)
+					pad << "-";
+			}
+			if (put_comma) q << ",";
+			if (!put_comma) put_comma=true;
+			q << "(" << k << ",'" << c.str() << "','" << pad.str() << "')";
+		}
+		MYSQL_QUERY(mysql, q.str().c_str());
+		diag("Inserted %d rows ...", i);
+	}
+	diag("Done!");
+	return 0;
+}
+int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
+	MYSQL_QUERY(mysql, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS test.sbtest1");
+	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
+
+	return add_more_rows_test_sbtest1(num_rows, mysql);
+}
+
 int wexecvp(const std::string& file, const std::vector<const char*>& argv, const to_opts* opts, std::string& s_stdout, std::string& s_stderr) {
 	// Pipes definition
 	constexpr uint8_t NUM_PIPES = 3;
@@ -424,3 +475,25 @@ int exec(const std::string& cmd, std::string& result) {
 	}
 	return err;
 }
+
+std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res) {
+	if (my_res == nullptr) { return {}; }
+
+	std::vector<mysql_res_row> result {};
+	MYSQL_ROW row = nullptr;
+	uint32_t num_fields = mysql_num_fields(my_res);
+
+	while ((row = mysql_fetch_row(my_res))) {
+		mysql_res_row row_values {};
+		uint64_t *lengths = mysql_fetch_lengths(my_res);
+
+		for (uint32_t i = 0; i < num_fields; i++) {
+			std::string field_val(row[i], lengths[i]);
+			row_values.push_back(field_val);
+		}
+
+		result.push_back(row_values);
+	}
+
+	return result;
+};

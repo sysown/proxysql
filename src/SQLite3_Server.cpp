@@ -765,6 +765,14 @@ static void * sqlite3server_main_loop(void *arg)
 			}
 			fds[i].revents=0;
 		}
+		// NOTE: In case the address imposed by 'sqliteserver-mysql_ifaces' isn't avaible,
+		// a infinite loop could take place if 'POLLNVAL' is not checked here.
+		// This means that trying to set a 'mysql_ifaces' to an address that is
+		// already taken will result into an 'assert' in ProxySQL side.
+		if (nfds == 1 && fds[0].revents == POLLNVAL) {
+			proxy_error("revents==POLLNVAL for FD=%d, events=%d\n", fds[i].fd, fds[i].events);
+			assert(fds[0].revents != POLLNVAL);
+		}
 __end_while_pool:
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();

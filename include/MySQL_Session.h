@@ -79,12 +79,22 @@ class MySQL_Session
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *);
+	/**
+	 * @brief Handles 'COM_QUERIES' holding 'USE DB' statements.
+	 *
+	 * @param pkt The packet being processed.
+	 * @param query_digest The query digest returned by the 'QueryProcessor'
+	 *   holding the 'USE' statement without the initial comment.
+	 *
+	 * @details NOTE: This function used to be called from 'handler_special_queries'.
+	 *   But since it was change for handling 'USE' statements which are preceded by
+	 *   comments, it's called after 'QueryProcessor' has processed the query.
+	 */
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt, const char* query_digest);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
 
-	void handler___status_WAITING_SERVER_DATA___STATE_READING_COM_STMT_PREPARE_RESPONSE(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
@@ -277,6 +287,8 @@ class MySQL_Session
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);
 	bool has_any_backend();
+	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
+	void generate_status_one_hostgroup(int hid, std::string& s);
 };
 
 #define KILL_QUERY       1

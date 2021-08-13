@@ -247,7 +247,9 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 		if (it != digest_text_umap->end()) {
 			pta[4] = it->second;
 		} else {
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 	}
 
@@ -1060,7 +1062,9 @@ unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &purge_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1105,7 +1109,9 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_total_size_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1176,7 +1182,9 @@ SQLite3_result * Query_Processor::get_query_digests() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1251,7 +1259,9 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1319,7 +1329,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 			qp=&stmt_exec_qp;
 			qp->digest = qi->stmt_info->digest;
 			qp->digest_text = qi->stmt_info->digest_text;
-			qp->first_comment = NULL;
+			qp->first_comment = qi->stmt_info->first_comment;
 		}
 	}
 #define stackbuffer_size 128
@@ -1710,7 +1720,9 @@ __exit_process_mysql_query:
 	if (len < stackbuffer_size) {
 		// query is in the stack
 	} else {
-		l_free(len+1,query);
+		if (ptr) {
+			l_free(len+1,query);
+		}
 	}
 	if (sess->mirror==false) { // we process comments only on original queries, not on mirrors
 		if (qp && qp->first_comment) {
@@ -1777,8 +1789,10 @@ __exit_process_mysql_query:
 			}
 		}
 		if (check_run == false) {
+			// LCOV_EXCL_START
 			proxy_error("Firewall problem: unknown user\n");
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 	} else {
 		ret->firewall_whitelist_mode = WUS_NOT_FOUND;

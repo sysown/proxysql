@@ -10,8 +10,11 @@ extern int gdbg;
 */
 #ifdef DEBUG
 #define PROXY_TRACE() { proxy_debug(PROXY_DEBUG_GENERIC,10,"TRACE\n"); }
+//#define PROXY_TRACE2() { proxy_info("TRACE\n"); }
+#define PROXY_TRACE2()
 #else
 #define PROXY_TRACE()
+#define PROXY_TRACE2()
 #endif
 
 #ifdef DEBUG
@@ -39,6 +42,17 @@ extern int gdbg;
 		localtime_r(&__timer, &__tm_info); \
 		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info); \
 		proxy_error_func("%s %s:%d:%s(): [ERROR] " fmt, __buffer, __FILE__, __LINE__, __func__ , ## __VA_ARGS__); \
+	} while(0)
+
+#define proxy_error_inline(fi, li, fu, fmt, ...) \
+	do { \
+		time_t __timer; \
+		char __buffer[30]; \
+		struct tm __tm_info; \
+		time(&__timer); \
+		localtime_r(&__timer, &__tm_info); \
+		strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info); \
+		proxy_error_func("%s %s:%d:%s(): [ERROR] " fmt, __buffer, fi, li, fu , ## __VA_ARGS__); \
 	} while(0)
 /*
 #else

@@ -86,7 +86,6 @@ static char * check_latest_version() {
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
 
 	string s = "proxysql-agent/";
 	s += PROXYSQL_VERSION;

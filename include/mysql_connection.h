@@ -25,8 +25,6 @@ public:
 	char *value = (char*)"";
 	void fill_server_internal_session(json &j, int conn_num, int idx);
 	void fill_client_internal_session(json &j, int idx);
-	static const char set_name[SQL_NAME_LAST][64];
-	static const char proxysql_internal_session_name[SQL_NAME_LAST][64];
 };
 
 enum charset_action {
@@ -161,8 +159,10 @@ class MySQL_Connection {
 	void set_names_cont(short event);
 	void real_query_start();
 	void real_query_cont(short event);
+#ifndef PROXYSQL_USE_RESULT
 	void store_result_start();
 	void store_result_cont(short event);
+#endif // PROXYSQL_USE_RESULT
 	void initdb_start();
 	void initdb_cont(short event);
 	void set_option_start();

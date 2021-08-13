@@ -5,6 +5,10 @@ $(error GIT_VERSION is not set)
 endif
 endif
 
+### NOTES:
+### to compile without jemalloc, set environment variable NOJEMALLOC=1
+### to compile with gcov code coverage, set environment variable WITHGCOV=1
+
 O0=-O0
 O2=-O2
 O1=-O1
@@ -18,7 +22,7 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.1.1
+export CURVER?=2.2.0
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 else
