@@ -6409,11 +6409,11 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			int affected_rows=0;
 			SQLite3_result *resultset=NULL;
 			std::string q;
-			if (GloVars.cluster_sync_interfaces) {
-				q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' ORDER BY variable_name";
-			} else {
-				q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL) + " ORDER BY variable_name";
+			q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' AND variable_name NOT IN ('mysql-threads')";
+			if (GloVars.cluster_sync_interfaces == false) {
+				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
 			}
+			q += " ORDER BY variable_name";
 			admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
 			uint64_t hash1 = resultset->raw_checksum();
 			uint32_t d32[2];
