@@ -1137,7 +1137,7 @@ int main(int, char**) {
 		const char* t_update_admin_variables =
 			"UPDATE global_variables SET variable_value='%s' WHERE variable_name='%s'";
 		std::vector<std::tuple<const char*,const char*>> update_admin_variables_values {
-			std::make_tuple("admin-admin_credentials"                          , "admin:admin;radmin:radmin" ),
+			std::make_tuple("admin-admin_credentials"                          , "admin:admin;radmin:radmin;cluster1:secret1pass" ),
 			std::make_tuple("admin-checksum_admin_variables"                   , "true"                      ),
 			std::make_tuple("admin-checksum_mysql_query_rules"                 , "true"                      ),
 			std::make_tuple("admin-checksum_mysql_servers"                     , "true"                      ),
