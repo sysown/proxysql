@@ -184,7 +184,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							} else {
 								query_error = query3;
 								if (query_error_counter == 0) {
-									proxy_error("Cluster: unable to run query on %s:%d using user %s : %s\n", node->hostname, node->port , username, query_error);
+									proxy_error("Cluster: unable to run query on %s:%d using user %s : %s . Error: %s\n", node->hostname, node->port , username, query_error, mysql_error(conn));
 								}
 								if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 							}
@@ -215,7 +215,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								} else {
 									query_error = query2;
 									if (query_error_counter == 0) {
-										proxy_error("Cluster: unable to run query on %s:%d using user %s : %s\n", node->hostname, node->port , username, query_error);
+										proxy_error("Cluster: unable to run query on %s:%d using user %s : %s . Error: %s\n", node->hostname, node->port , username, query_error, mysql_error(conn));
 									}
 									if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 								}
@@ -224,7 +224,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					} else {
 						query_error = query1;
 						if (query_error_counter == 0) {
-							proxy_error("Cluster: unable to run query on %s:%d using user %s : %s\n", node->hostname, node->port , username, query_error);
+							proxy_error("Cluster: unable to run query on %s:%d using user %s : %s . Error: %s\n", node->hostname, node->port , username, query_error, mysql_error(conn));
 						}
 						if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 					}
