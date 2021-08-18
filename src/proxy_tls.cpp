@@ -497,6 +497,13 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 		}
 		GloVars.global.ssl_key_pem_mem = load_file(ssl_key_fp);
         GloVars.global.ssl_cert_pem_mem = load_file(ssl_cert_fp);
+
+		// We set the locations for the certificates to be used for
+		// verifications purposes.
+		if (!SSL_CTX_load_verify_locations(GloVars.global.ssl_ctx, ssl_ca_fp, ssl_ca_fp)) {
+			proxy_error("Unable to load CA certificates location for verification. Shutting down\n");
+			exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
+		}
 	} else {
 		// here we use global.tmp_ssl_ctx instead of global.ssl_ctx
 		// because we will try to swap at the end
@@ -505,6 +512,8 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 				if (SSL_CTX_add_extra_chain_cert(GloVars.global.tmp_ssl_ctx, x509ca) == 1) { // 1 on success
 					if (SSL_CTX_use_PrivateKey(GloVars.global.tmp_ssl_ctx, pkey) == 1) { // 1 on success
 						if (SSL_CTX_check_private_key(GloVars.global.tmp_ssl_ctx) == 1) { // 1 on success
+							if (SSL_CTX_load_verify_locations(GloVars.global.tmp_ssl_ctx, ssl_ca_fp, ssl_ca_fp) == 1) { // 1 on success
+
 							// take the mutex
 							std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
 							// note: we don't free the current SSL context, perhaps used by some connections
@@ -515,6 +524,12 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 							free(GloVars.global.ssl_cert_pem_mem);
 							GloVars.global.ssl_key_pem_mem = load_file(ssl_key_fp);
         					GloVars.global.ssl_cert_pem_mem = load_file(ssl_cert_fp);
+
+							} else {
+								proxy_error("Failed to load location of CA certificates for verification\n");
+								msg = "Unable to load CA certificates location for verification";
+								ret = 1;
+							}
 						} else {
 							proxy_error("Private key does not match the public certificate\n");
 							msg = "Private key does not match the public certificate";
