@@ -366,6 +366,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	}
 	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
 	if (encrypted) {
+		if (ssl) {
+			// NOTE: SSL standard requires a final 'close_notify' alert on socket
+			// shutdown. But for avoiding any kind of locking IO waiting for the
+			// other part, we perform a 'quiet' shutdown. For more context see
+			// MYSQL #29579.
+			SSL_set_quiet_shutdown(ssl, 1);
+			SSL_shutdown(ssl);
+		}
 		if (ssl) SSL_free(ssl);
 /*
 		SSL_free() should also take care of these
@@ -445,7 +453,12 @@ void MySQL_Data_Stream::shut_hard() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown hard fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
 	set_net_failure();
 	if (encrypted) {
+		// NOTE: SSL standard requires a final 'close_notify' alert on socket
+		// shutdown. But for avoiding any kind of locking IO waiting for the
+		// other part, we perform a 'quiet' shutdown. For more context see
+		// MYSQL #29579.
 		SSL_set_quiet_shutdown(ssl, 1);
+		SSL_shutdown(ssl);
 	}
 	if (fd >= 0) {
 		shutdown(fd, SHUT_RDWR);
