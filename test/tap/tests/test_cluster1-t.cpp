@@ -207,6 +207,7 @@ int main(int argc, char** argv) {
 	get_checksum(proxysql_admin, "mysql_variables", chk1);
 	MYSQL_QUERY(proxysql_admin, "SET mysql-have_ssl='true'");
 	MYSQL_QUERY(proxysql_admin, "SET mysql-have_compress='true'");
+	MYSQL_QUERY(proxysql_admin, "SET mysql-auditlog_filename=\"proxy-audit\"");
 	MYSQL_QUERY(proxysql_admin, update_mysql_variables_1);
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	get_checksum(proxysql_admin, "mysql_variables", chk2);

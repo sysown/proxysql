@@ -162,6 +162,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 						//query = query3;
 						//unsigned long long before_query_time2=monotonic_time();
 						if (update_checksum) {
+							unsigned long long before_query_time=monotonic_time();
 							rc_query = mysql_query(conn,query3);
 							if ( rc_query == 0 ) {
 								query_error = NULL;
@@ -184,7 +185,9 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 							} else {
 								query_error = query3;
 								if (query_error_counter == 0) {
-									proxy_error("Cluster: unable to run query on %s:%d using user %s : %s . Error: %s\n", node->hostname, node->port , username, query_error, mysql_error(conn));
+									unsigned long long after_query_time=monotonic_time();
+									unsigned long long elapsed_time_us = (after_query_time - before_query_time);
+									proxy_error("Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n", node->hostname, node->port , username, elapsed_time_us/1000 , query_error, mysql_error(conn));
 								}
 								if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 							}
@@ -215,7 +218,9 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 								} else {
 									query_error = query2;
 									if (query_error_counter == 0) {
-										proxy_error("Cluster: unable to run query on %s:%d using user %s : %s . Error: %s\n", node->hostname, node->port , username, query_error, mysql_error(conn));
+										unsigned long long after_query_time=monotonic_time();
+										unsigned long long elapsed_time_us = (after_query_time - before_query_time);
+										proxy_error("Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n", node->hostname, node->port , username, elapsed_time_us/1000 , query_error, mysql_error(conn));
 									}
 									if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 								}
@@ -224,7 +229,9 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					} else {
 						query_error = query1;
 						if (query_error_counter == 0) {
-							proxy_error("Cluster: unable to run query on %s:%d using user %s : %s . Error: %s\n", node->hostname, node->port , username, query_error, mysql_error(conn));
+							unsigned long long after_query_time=monotonic_time();
+							unsigned long long elapsed_time_us = (after_query_time - start_time);
+							proxy_error("Cluster: unable to run query on %s:%d using user %s after %llums : %s . Error: %s\n", node->hostname, node->port , username, elapsed_time_us/1000, query_error, mysql_error(conn));
 						}
 						if (++query_error_counter == QUERY_ERROR_RATE) query_error_counter = 0;
 					}
