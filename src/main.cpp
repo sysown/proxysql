@@ -1115,6 +1115,7 @@ void ProxySQL_Main_join_all_threads() {
 	if (GloMyMon && MyMon_thread) {
 		cpu_timer t;
 		MyMon_thread->join();
+		delete MyMon_thread;
 		MyMon_thread = NULL;
 #ifdef DEBUG
 		std::cerr << "GloMyMon joined in ";
