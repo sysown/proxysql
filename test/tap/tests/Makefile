@@ -85,7 +85,7 @@ clean:
 
 WITHGCOVVAR := $(shell echo $(WITHGCOV))
 ifeq ($(WITHGCOVVAR),1)
-WGCOV=-DWITHGCOV --coverage
+WGCOV=-DWITHGCOV --coverage -lgcov
 else
 WGCOV=
 endif
@@ -97,7 +97,7 @@ else
 WASAN=
 endif
 
-OPT=-O2 -Wl,--no-as-needed
+OPT=-O2 $(WGCOV) -Wl,--no-as-needed
 debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
