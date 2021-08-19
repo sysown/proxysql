@@ -2254,7 +2254,11 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	}
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {
 		*match = '\0';
-		strcat(query_digest_text_filter_select, match+strlen("@@"));
+		if (strlen(query_digest_text_filter_select) == 0) {
+			memcpy(query_digest_text_filter_select, match, strlen("@@"));
+		} else {
+			strcat(query_digest_text_filter_select, match+strlen("@@"));
+		}
 	}
 
 	std::vector<char*>query_digest_text_filter_select_v;
