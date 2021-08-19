@@ -659,7 +659,14 @@ void MySQL_Connection::connect_start() {
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
 	if (parent->use_ssl) {
-		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
+		mysql_ssl_set(mysql,
+				mysql_thread___ssl_p2s_key,
+				mysql_thread___ssl_p2s_cert,
+				mysql_thread___ssl_p2s_ca,
+				mysql_thread___ssl_p2s_capath,
+				mysql_thread___ssl_p2s_cipher);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
 	}
 	unsigned int timeout= 1;
 	const char *csname = NULL;

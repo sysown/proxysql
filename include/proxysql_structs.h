@@ -805,9 +805,12 @@ __thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 __thread char * mysql_thread___ssl_p2s_ca;
+__thread char * mysql_thread___ssl_p2s_capath;
 __thread char * mysql_thread___ssl_p2s_cert;
 __thread char * mysql_thread___ssl_p2s_key;
 __thread char * mysql_thread___ssl_p2s_cipher;
+__thread char * mysql_thread___ssl_p2s_crl;
+__thread char * mysql_thread___ssl_p2s_crlpath;
 
 /* variables used by events log */
 __thread char * mysql_thread___eventslog_filename;
@@ -957,9 +960,12 @@ extern __thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 extern __thread char * mysql_thread___ssl_p2s_ca;
+extern __thread char * mysql_thread___ssl_p2s_capath;
 extern __thread char * mysql_thread___ssl_p2s_cert;
 extern __thread char * mysql_thread___ssl_p2s_key;
 extern __thread char * mysql_thread___ssl_p2s_cipher;
+extern __thread char * mysql_thread___ssl_p2s_crl;
+extern __thread char * mysql_thread___ssl_p2s_crlpath;
 
 /* variables used by events log */
 extern __thread char * mysql_thread___eventslog_filename;
