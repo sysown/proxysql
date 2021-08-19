@@ -4628,14 +4628,22 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			// NOTE: Only updated the servers that have belong to the same cluster.
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
+				" SELECT %d UNION ALL"
+				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
+				" SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+			")";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
 			mydb->execute(query);
-			//free(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			// NOTE: Only delete the servers that have belong to the same cluster.
+			q=(char*)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
+				" SELECT %d UNION ALL"
+				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
+				" SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+			")";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
@@ -4704,14 +4712,22 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			// NOTE: Only updated the servers that have belong to the same cluster.
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
+				" SELECT %d UNION ALL"
+				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
+				" SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+			")";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
 			mydb->execute(query);
-			//free(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			// NOTE: Only delete the servers that have belong to the same cluster.
+			q=(char*)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
+				" SELECT %d UNION ALL"
+				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
+				" SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+			")";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
@@ -4779,6 +4795,8 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	bool found_writer=false;
 	bool found_reader=false;
 	int read_HG=-1;
+	int offline_HG=-1;
+	int backup_writer_HG=-1;
 	bool need_converge=false;
 	int status=0;
 	if (resultset) {
@@ -4791,6 +4809,8 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			info=it2->second;
 			writer_is_also_reader=info->writer_is_also_reader;
 			read_HG=info->reader_hostgroup;
+			offline_HG=info->offline_hostgroup;
+			backup_writer_HG=info->backup_writer_hostgroup;
 			need_converge=info->need_converge;
 			info->need_converge=false;
 		}
@@ -4835,14 +4855,14 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
+			// NOTE: Only updated the servers that have belong to the same cluster.
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id IN (%d, %d, %d)";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+256);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,backup_writer_HG,read_HG,offline_HG);
 			mydb->execute(query);
-			//free(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			// NOTE: Only delete the servers that have belong to the same cluster.
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id IN (%d, %d, %d)";
+			sprintf(query,q,_hostname,_port,backup_writer_HG,read_HG,offline_HG);
 			mydb->execute(query);
 			q=(char *)"UPDATE mysql_servers_incoming SET status=%d WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
 			// NOTE: In case of the server being 'OFFLINE_SOFT' we preserve this status. Otherwise
