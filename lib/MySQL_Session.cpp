@@ -3904,6 +3904,9 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 				(buffer_type == MYSQL_TYPE_DATETIME)
 			) {
 				free(CurrentQuery.stmt_meta->binds[i].buffer);
+				// NOTE: This memory should be zeroed during initialization,
+				// but we also nullify it here for extra safety. See #3546.
+				CurrentQuery.stmt_meta->binds[i].buffer = NULL;
 			}
 		}
 	}

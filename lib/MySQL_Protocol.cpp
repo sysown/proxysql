@@ -2259,6 +2259,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				continue;
 			} else if (is_nulls[i]==true) {
 				// the parameter is NULL, no need to read any data from the packet
+				// NOTE: We nullify buffers here to reflect that memory wasn't
+				// initalized. See #3546.
+				binds[i].buffer = NULL;
 				continue;
 			}
 
