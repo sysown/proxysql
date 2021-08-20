@@ -6873,6 +6873,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	sqlite3_stmt *statement1=NULL;
 	rc=admindb->prepare_v2(a, &statement1);
 	ASSERT_SQLITE_OK(rc, admindb);
+	pthread_mutex_lock(&sql_query_global_mutex);
 	admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
 	char * username_buf = (char *)malloc(32);
 	char * schemaname_buf = (char *)malloc(64);
@@ -6914,6 +6915,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	}
 	(*proxy_sqlite3_finalize)(statement1);
+	pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 	free(username_buf);
 	free(schemaname_buf);
 	return cnt;

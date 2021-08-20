@@ -819,6 +819,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						result2 = mysql_store_result(conn);
 						proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d completed\n", hostname, port);
 						proxy_info("Cluster: Loading to runtime MySQL Query Rules from peer %s:%d\n", hostname, port);
+						pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
 						GloAdmin->admindb->execute("DELETE FROM mysql_query_rules");
 						GloAdmin->admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
 						MYSQL_ROW row;
@@ -913,6 +914,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 						} else {
 							proxy_info("Cluster: NOT saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 						}
+						pthread_mutex_unlock(&GloAdmin->sql_query_global_mutex);
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_success]->Increment();
 					} else {
 						proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
