@@ -4646,9 +4646,13 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			sprintf(query,q,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			// q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			// sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=(CASE "
+				" (SELECT status FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND"
+					" hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)) WHEN 2 THEN 2 ELSE 0 END)"
+				" WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			converge_group_replication_config(_writer_hostgroup);
@@ -4730,9 +4734,12 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			sprintf(query,q,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			// NOTE: In case of the server being 'OFFLINE_SOFT' we preserve this status. Otherwise we set the server as 'ONLINE'.
+			q=(char *)"UPDATE mysql_servers_incoming SET status=(CASE "
+				" (SELECT status FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND"
+					" hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)) WHEN 2 THEN 2 ELSE 0 END)"
+				" WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			converge_group_replication_config(_writer_hostgroup);
@@ -4799,6 +4806,8 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	int backup_writer_HG=-1;
 	bool need_converge=false;
 	int status=0;
+	bool offline_soft_found=false;
+
 	if (resultset) {
 		// let's get info about this cluster
 		pthread_mutex_lock(&Group_Replication_Info_mutex);
@@ -4820,6 +4829,8 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
 				int hostgroup=atoi(r->fields[0]);
+				offline_soft_found = atoi(r->fields[1]) == 2 ? true : false;
+
 				if (hostgroup==_writer_hostgroup) {
 					status = atoi(r->fields[1]);
 					if (status == 0 || status == 2) {
@@ -4831,6 +4842,13 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 						found_reader=true;
 					}
 				}
+			}
+		}
+		// NOTE: In case of a writer not being found but a 'OFFLINE_SOFT' status
+		// is found in a hostgroup, 'OFFLINE_SOFT' status should be preserved.
+		if (found_writer == false) {
+			if (offline_soft_found) {
+				status = 2;
 			}
 		}
 		if (need_converge==false) {
