@@ -601,6 +601,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				if (v->diff_check >= diff_mqr) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_query_rules version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_mysql_query_rules_from_peer();
+					if (strncmp(v->checksum, GloVars.checksums_values.mysql_query_rules.checksum, 20)==0) {
+						// we copied from the remote server, let's also copy the same epoch
+						GloVars.checksums_values.mysql_query_rules.epoch = v->epoch;
+					}
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mqr*10)) == 0)) {
@@ -628,6 +632,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				if (v->diff_check >= diff_ms) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_mysql_servers_from_peer();
+					if (strncmp(v->checksum, GloVars.checksums_values.mysql_servers.checksum, 20)==0) {
+						// we copied from the remote server, let's also copy the same epoch
+						GloVars.checksums_values.mysql_servers.epoch = v->epoch;
+					}
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ms*10)) == 0)) {
@@ -655,6 +663,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				if (v->diff_check >= diff_mu) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_users version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_mysql_users_from_peer();
+					if (strncmp(v->checksum, GloVars.checksums_values.mysql_users.checksum, 20)==0) {
+						// we copied from the remote server, let's also copy the same epoch
+						GloVars.checksums_values.mysql_users.epoch = v->epoch;
+					}
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mu*10)) == 0)) {
@@ -682,6 +694,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				if (v->diff_check >= diff_ps) {
 					proxy_info("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_proxysql_servers_from_peer();
+					if (strncmp(v->checksum, GloVars.checksums_values.proxysql_servers.checksum, 20)==0) {
+						// we copied from the remote server, let's also copy the same epoch
+						GloVars.checksums_values.proxysql_servers.epoch = v->epoch;
+					}
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ps*10)) == 0)) {
@@ -710,6 +726,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				if (v->diff_check >= diff_mv) {
 					proxy_info("Cluster: detected a peer %s:%d with mysql_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_global_variables_from_peer("mysql");
+					if (strncmp(v->checksum, GloVars.checksums_values.mysql_variables.checksum, 20)==0) {
+						// we copied from the remote server, let's also copy the same epoch
+						GloVars.checksums_values.mysql_variables.epoch = v->epoch;
+					}
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_mv*10)) == 0)) {
@@ -738,6 +758,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				if (v->diff_check >= diff_av) {
 					proxy_info("Cluster: detected a peer %s:%d with admin_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_global_variables_from_peer("admin");
+					if (strncmp(v->checksum, GloVars.checksums_values.admin_variables.checksum, 20)==0) {
+						// we copied from the remote server, let's also copy the same epoch
+						GloVars.checksums_values.admin_variables.epoch = v->epoch;
+					}
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_av*10)) == 0)) {
@@ -766,6 +790,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				if (v->diff_check >= diff_lv) {
 					proxy_info("Cluster: detected a peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					GloProxyCluster->pull_global_variables_from_peer("ldap");
+					if (strncmp(v->checksum, GloVars.checksums_values.ldap_variables.checksum, 20)==0) {
+						// we copied from the remote server, let's also copy the same epoch
+						GloVars.checksums_values.ldap_variables.epoch = v->epoch;
+					}
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_lv*10)) == 0)) {
