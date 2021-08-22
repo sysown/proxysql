@@ -2571,9 +2571,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->mysql_servers_wrlock();
+			//SPA->mysql_servers_wrlock();
+			// before calling load_proxysql_servers_to_runtime() we release
+			// sql_query_global_mutex to prevent a possible deadlock due to
+			// a race condition
+			// load_proxysql_servers_to_runtime() calls ProxySQL_Cluster::load_servers_list()
+			// that then calls ProxySQL_Cluster_Nodes::load_servers_list(), holding a mutex
+			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
 			SPA->load_proxysql_servers_to_runtime();
-			SPA->mysql_servers_wrunlock();
+			// we re-acquired the mutex because it will be released by the calling function
+			pthread_mutex_lock(&SPA->sql_query_global_mutex);
+			//SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers to RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
@@ -2589,9 +2597,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->mysql_servers_wrlock();
+			//SPA->mysql_servers_wrlock();
+			// before save_proxysql_servers_runtime_to_database() we release
+			// sql_query_global_mutex to prevent a possible deadlock due to
+			// a race condition
+			// save_proxysql_servers_runtime_to_database() calls ProxySQL_Cluster::dump_table_proxysql_servers()
+			// that then holds a mutex
+			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
 			SPA->save_proxysql_servers_runtime_to_database(false);
-			SPA->mysql_servers_wrunlock();
+			// we re-acquired the mutex because it will be released by the calling function
+			pthread_mutex_lock(&SPA->sql_query_global_mutex);
+			//SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved ProxySQL servers from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
