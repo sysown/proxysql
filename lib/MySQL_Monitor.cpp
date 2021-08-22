@@ -998,10 +998,10 @@ __fast_exit_monitor_ping_thread:
 		mmsd->t2=monotonic_time();
 		if (mmsd->mysql_error_msg) {
 #ifdef DEBUG
-			proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			proxy_error("Error after %dms: hostgroup %d, server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 #else
-			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+			proxy_error("Error after %dms on server at hostgroup '%d' and hostname %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
@@ -1014,9 +1014,9 @@ __fast_exit_monitor_ping_thread:
 					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
 #ifdef DEBUG
-					proxy_error("Error on: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+					proxy_error("Error on: hostgroup %d, mmsd %p , MYSQL %p , FD %d : %s\n", mmsd->hostgroup_id, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 #else
-					proxy_error("Error on server %s:%d : %s\n", mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+					proxy_error("Error on server at hostgroup '%d' and hostname %s:%d : %s\n", mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
