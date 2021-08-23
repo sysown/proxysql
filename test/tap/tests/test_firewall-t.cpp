@@ -59,7 +59,8 @@ int main(int argc, char** argv) {
 	
 	// Test that firewall initialized and blocks all queries
 	if (mysql_query(mysql, "select @@version")) {
-		ok(mysql_num_rows(result) == 0, "Any query should be blocked");
+		int myerrno = mysql_errno(mysql);
+		ok(myerrno == 1148, "Any query should be blocked");
 	}
 
 	// enable 'Select 1' query

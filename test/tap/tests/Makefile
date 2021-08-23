@@ -73,7 +73,7 @@ OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o
 INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR)
 LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK) -lprometheus-cpp-pull -lprometheus-cpp-core
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK) -lprometheus-cpp-pull -lprometheus-cpp-core
 STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 
 .PHONY: all
@@ -85,13 +85,20 @@ clean:
 
 WITHGCOVVAR := $(shell echo $(WITHGCOV))
 ifeq ($(WITHGCOVVAR),1)
-WGCOV=-DWITHGCOV --coverage
+WGCOV=-DWITHGCOV --coverage -lgcov
 else
 WGCOV=
 endif
 
+WITHASANVAR := $(shell echo $(WITHASAN))
+ifeq ($(WITHASANVAR),1)
+WASAN=-fsanitize=address
+else
+WASAN=
+endif
+
 OPT=-O2 $(WGCOV) -Wl,--no-as-needed
-debug: OPT=-O0 -DDEBUG $(WGCOV) -ggdb -Wl,--no-as-needed
+debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test
@@ -113,6 +120,9 @@ aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
 test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_tokenizer-t -DGITVERSION=\"$(GIT_VERSION)\"
 
+sqlite3-t: sqlite3-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o sqlite3-t -DGITVERSION=\"$(GIT_VERSION)\"
+
 test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_gtid_forwarding-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_gtid_forwarding-t -DGITVERSION=\"$(GIT_VERSION)\"
 
@@ -126,4 +136,4 @@ test_set_collation-t: test_set_collation-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_set_collation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_set_collation-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR)
-	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc ../../../src/obj/proxysql_global.o $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11  $(MYLIBS) -ltap -ldl -lpthread -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc ../../../src/obj/proxysql_global.o $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
