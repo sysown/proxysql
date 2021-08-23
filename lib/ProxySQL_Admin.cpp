@@ -12215,6 +12215,7 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 					newargs[i]=sr->args[i-1];
 				}
 				newargs[0]=sr->filename;
+				proxy_info("Scheduler starting id: %u , filename: %s\n", sr->id, sr->filename);
 				pid_t cpid;
 				cpid = fork();
 				if (cpid == -1) {
