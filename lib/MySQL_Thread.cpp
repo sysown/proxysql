@@ -1282,11 +1282,11 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 				return strdup(variables.ssl_p2s_cert);
 			}
 		}
-		if (!strcmp(name,"ssl_p2_capath")) {
-			if (variables.ssl_p2_capath==NULL || strlen(variables.ssl_p2_capath)==0) {
+		if (!strcmp(name,"ssl_p2s_capath")) {
+			if (variables.ssl_p2s_capath==NULL || strlen(variables.ssl_p2s_capath)==0) {
 				return NULL;
 			} else {
-				return strdup(variables.ssl_p2_capath);
+				return strdup(variables.ssl_p2s_capath);
 			}
 		}
 		if (!strcmp(name,"ssl_p2s_key")) {
