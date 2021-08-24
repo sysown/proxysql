@@ -36,12 +36,13 @@ class MySQL_ResultSet {
 	//PtrSizeArray *PSarrayOUT;
 	MySQL_ResultSet();
 	void init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt=NULL);
-	void init_with_stmt();
+	void init_with_stmt(MySQL_Connection *myconn);
 	~MySQL_ResultSet();
 	unsigned int add_row(MYSQL_ROWS *rows);
 	unsigned int add_row(MYSQL_ROW row);
 	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
+	void remove_last_eof();
 	void add_err(MySQL_Data_Stream *_myds);
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	//bool generate_COM_FIELD_LIST_response(PtrSizeArray *PSarrayFinal);
@@ -64,6 +65,22 @@ class MySQL_Prepared_Stmt_info {
 
 uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
 
+/**
+ * @brief ProxySQL replacement function for 'mysql_stmt_close'. Closes a
+ *   MYSQL_STMT avoiding any blocking commands that are sent by default
+ *   'mysql_stmt_close'.
+ *
+ *   NOTE: This function is not safe, caller must check that the supplied
+ *   argument is not NULL.
+ *
+ * @param mysql_stmt An already initialized 'MYSQL_STMT'. Caller must ensure
+ *   that the supplied argument is not NULL.
+ *
+ * @return The result of calling 'mysql_stmt_close' function over the internally
+ *   modified 'MYSQL_STMT'.
+ */
+my_bool proxy_mysql_stmt_close(MYSQL_STMT* mysql_stmt);
+
 class MySQL_Protocol {
 	private:
 	MySQL_Connection_userinfo *userinfo;
@@ -80,7 +97,6 @@ class MySQL_Protocol {
 		prot_status=0;
 	}
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
-	int parse_mysql_pkt(PtrSize_t *, MySQL_Data_Stream *);
 
 	// members get as arguments:
 	// - a data stream (optionally NULL for some)
@@ -112,10 +128,7 @@ class MySQL_Protocol {
 	// - a data stream (optionally NULL for some)
 	// - pointer to the packet
 	// - size of the packet 
-	bool process_pkt_OK(unsigned char *pkt, unsigned int len);
-	bool process_pkt_EOF(unsigned char *pkt, unsigned int len);
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
-	bool process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);
 

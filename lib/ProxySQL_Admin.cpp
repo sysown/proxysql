@@ -47,6 +47,11 @@
 #include "platform.h"
 #include "microhttpd.h"
 
+
+#ifdef WITHGCOV
+extern "C" void __gcov_dump();
+extern "C" void __gcov_reset();
+#endif
 //#define MYSQL_THREAD_IMPLEMENTATION
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -998,7 +1003,9 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 				if (it2 != uqdt.end()) {
 					rc=(*proxy_sqlite3_bind_text)(statement32, (idx*15)+7, it2->second, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
 				} else {
+					// LCOV_EXCL_START
 					assert(0);
+					// LCOV_EXCL_STOP
 				}
 			}
 			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+8, qds->count_star); ASSERT_SQLITE_OK(rc, sdb);
@@ -1041,7 +1048,9 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 				if (it2 != uqdt.end()) {
 					rc=(*proxy_sqlite3_bind_text)(statement1, 7, it2->second, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
 				} else {
+					// LCOV_EXCL_START
 					assert(0);
+					// LCOV_EXCL_STOP
 				}
 			}
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 8, qds->count_star); ASSERT_SQLITE_OK(rc, sdb);
@@ -1539,6 +1548,21 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (query_no_space_length==strlen("PROXYSQL MEMPROFILE STOP") && !strncasecmp("PROXYSQL MEMPROFILE STOP",query_no_space, query_no_space_length)) {
 		bool en=false;
 		mallctl("prof.active", NULL, NULL, &en, sizeof(bool));
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+#endif
+
+#ifdef WITHGCOV
+	if (query_no_space_length==strlen("PROXYSQL GCOV DUMP") && !strncasecmp("PROXYSQL GCOV DUMP",query_no_space, query_no_space_length)) {
+		proxy_info("Received %s command\n", query_no_space);
+		__gcov_dump();
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+	if (query_no_space_length==strlen("PROXYSQL GCOV RESET") && !strncasecmp("PROXYSQL GCOV RESET",query_no_space, query_no_space_length)) {
+		proxy_info("Received %s command\n", query_no_space);
+		__gcov_reset();
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
@@ -3208,7 +3232,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 SQLite3_result * ProxySQL_Admin::generate_show_fields_from(const char *tablename, char **err) {
 	char *tn=NULL; // tablename
 	// note that tablename is passed with a trailing '
-	tn=(char *)malloc(strlen(tablename));
+	tn=(char *)malloc(strlen(tablename) + 1);
 	unsigned int i=0, j=0;
 	while (i<strlen(tablename)) {
 		if (tablename[i]!='\\' && tablename[i]!='`' && tablename[i]!='\'') {
@@ -3260,13 +3284,24 @@ SQLite3_result * ProxySQL_Admin::generate_show_fields_from(const char *tablename
 	char *pta[6];
 	pta[1]=(char *)"varchar(255)";
 	pta[2]=(char *)"NO";
-	pta[3]=(char *)"";
 	pta[4]=(char *)"";
 	pta[5]=(char *)"";
 	free(q2);
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		pta[0]=r->fields[0];
+		pta[0]=r->fields[1];
+		pta[2]=(char *)"YES";
+		if (r->fields[3]) {
+			if (strcmp(r->fields[3],"1")==0) {
+				pta[2]=(char *)"NO";
+			}
+		}
+		pta[3]=(char *)"";
+		if (r->fields[5]) {
+			if (strcmp(r->fields[5],"0")) {
+				pta[3]=(char *)"PRI";
+			}
+		}
 		result->add_row(pta);
 	}
 	delete resultset;
@@ -3291,7 +3326,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	tn[j]=0;
 	SQLite3_result *resultset=NULL;
 	char *q1=(char *)"PRAGMA table_info(%s)";
-	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
+	char *q2=(char *)malloc(strlen(q1)+strlen(tn)+32);
 	sprintf(q2,q1,tn);
 	int affected_rows;
 	int cols;
@@ -3320,7 +3355,6 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 		*err=strdup((char *)"Table does not exist");
 		return NULL;
 	}
-	free(q2);
 	SQLite3_result *result=new SQLite3_result(18);
 	result->add_column_definition(SQLITE_TEXT,"Name");
 	result->add_column_definition(SQLITE_TEXT,"Engine");
@@ -3344,7 +3378,14 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	pta[1]=(char *)"SQLite";
 	pta[2]=(char *)"10";
 	pta[3]=(char *)"Dynamic";
-	pta[4]=(char *)"10";
+	delete resultset;
+	sprintf(q2,"SELECT COUNT(*) FROM %s",tn);
+	admindb->execute_statement(q2, &error , &cols , &affected_rows , &resultset);
+	char buf[20];
+	sprintf(buf,"%d",resultset->rows_count);
+	pta[4]=buf;
+	delete resultset;
+	free(q2);
 	pta[5]=(char *)"0";
 	pta[6]=(char *)"0";
 	pta[7]=(char *)"0";
@@ -3913,7 +3954,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("show table status like '", query_no_space, strlen("show table status like '"))) {
+		if (!strncasecmp("show table status like '", query_no_space, strlen("show table status like '"))) {
 			char *strA=query_no_space+24;
 			int strAl=strlen(strA);
 			if (strAl<2) { // error
@@ -3927,9 +3968,16 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			run_query=false;
 			goto __run_query;
 		}
-		if (!strncmp("show fields from `", query_no_space, strlen("show fields from `"))) {
-			char *strA=query_no_space+18;
+		if (!strncasecmp("show fields from ", query_no_space, strlen("show fields from "))) {
+			char *strA=query_no_space+17;
 			int strAl=strlen(strA);
+			if (strAl==0) { // error
+				goto __run_query;
+			}
+			if (strA[0]=='`') {
+				strA++;
+				strAl--;
+			}
 			if (strAl<2) { // error
 				goto __run_query;
 			}
@@ -4279,7 +4327,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY GROUP MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL GROUP REPLICATION HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL GROUP REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
@@ -4289,7 +4337,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
 
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY GROUP MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL GALERA HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL GALERA HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
@@ -4298,7 +4346,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			tablename=(char *)"MYSQL GALERA HOSTGROUPS";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
-		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY GROUP MYSQL REPLICATION HOSTGROUPS", query_no_space, strlen(query_no_space)))
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEMORY MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL AURORA HOSTGROUPS") && !strncasecmp("CHECKSUM MEM MYSQL AURORA HOSTGROUPS", query_no_space, strlen(query_no_space)))
 			||
@@ -4969,9 +5017,11 @@ static void * admin_main_loop(void *arg)
 				//*client= client_t;
 				//if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 ) {
 				if ( pthread_create(&child, &attr, child_func[callback_func[i]], passarg) != 0 ) {
+					// LCOV_EXCL_START
 					perror("pthread_create");
 					proxy_error("Thread creation\n");
 					assert(0);
+					// LCOV_EXCL_STOP
 				}
 			}
 			fds[i].revents=0;
@@ -9292,8 +9342,10 @@ void ProxySQL_Admin::flush_debug_filters_database_to_runtime(SQLite3DB *db) {
 	std::string query = "SELECT filename, line, funct FROM debug_filters";
 	admindb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
 	if (error) {
+		// LCOV_EXCL_START
 		proxy_error("Error on %s : %s\n", query.c_str(), error);
 		assert(0);
+		// LCOV_EXCL_STOP
 	} else {
 		std::set<std::string> filters;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -9341,7 +9393,9 @@ int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
 }
 #endif /* DEBUG */
 
-
+/*
+// commented in 2.3 as it seems unused in favour of
+// __insert_or_replace_maintable_select_disktable()
 void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
@@ -9361,17 +9415,18 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 #ifdef DEBUG
 	admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 	admindb->execute("INSERT OR IGNORE INTO main.debug_filters SELECT * FROM disk.debug_filters");
-#endif /* DEBUG */
+#endif // DEBUG
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
  		admindb->execute("INSERT OR IGNORE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
 	}
-#endif /* PROXYSQLCLICKHOUSE */
+#endif // PROXYSQLCLICKHOUSE
 	if (GloMyLdapAuth) {
 		admindb->execute("INSERT OR IGNORE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 }
+*/
 
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -9386,6 +9441,30 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
+	{
+		// online upgrade of mysql-session_idle_ms
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		SQLite3_result *resultset=NULL;
+		std::string q = "SELECT variable_value FROM disk.global_variables WHERE variable_name=\"mysql-session_idle_ms\"";
+		admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
+		if (error) {
+			proxy_error("Error on %s : %s\n", q.c_str(), error);
+		} else {
+			if (resultset->rows_count == 1) {
+      			SQLite3_row *r = resultset->rows[0];
+				if (strcmp(r->fields[0], "1000") == 0) {
+					proxy_warning("Detected mysql-session_idle_ms=1000 : automatically setting it to 1 assuming this is an upgrade from an older version.\n");
+					proxy_warning("Benchmarks and users show that the old default (1000) of mysql-session_idle_ms is not optimal.\n");
+					proxy_warning("This release prevents the value of mysql-session_idle_ms to be 1000.\n");
+					proxy_warning("If you really want to set mysql-session_idle_ms close to 1000 , it is recommended to set it to a closer value like 999 or 1001\n");
+					admindb->execute("UPDATE disk.global_variables SET variable_value=\"1\" WHERE variable_name=\"mysql-session_idle_ms\"");
+				}
+			}
+		}
+		if (resultset) delete resultset;
+	}
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
 	admindb->execute("INSERT OR REPLACE INTO main.scheduler SELECT * FROM disk.scheduler");
 	admindb->execute("INSERT OR REPLACE INTO main.restapi_routes SELECT * FROM disk.restapi_routes");
@@ -9408,6 +9487,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 #endif
 }
 
+/* commented in 2.3 , unused
 void ProxySQL_Admin::__delete_disktable() {
 	admindb->execute("DELETE FROM disk.mysql_servers");
 	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
@@ -9423,16 +9503,17 @@ void ProxySQL_Admin::__delete_disktable() {
 #ifdef DEBUG
 	admindb->execute("DELETE FROM disk.debug_levels");
 	admindb->execute("DELETE FROM disk.debug_filters");
-#endif /* DEBUG */
+#endif // DEBUG
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
 		admindb->execute("DELETE FROM disk.clickhouse_users");
 	}
-#endif /* PROXYSQLCLICKHOUSE */
+#endif // PROXYSQLCLICKHOUSE
 	if (GloMyLdapAuth) {
 		admindb->execute("DELETE FROM disk.mysql_ldap_mapping");
 	}
 }
+*/
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
@@ -9606,6 +9687,7 @@ void ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+/* commented in 2.3 because unused
 void ProxySQL_Admin::flush_mysql_variables__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -9613,7 +9695,7 @@ void ProxySQL_Admin::flush_mysql_variables__from_disk_to_memory() {
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
-
+*/
 void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -9622,6 +9704,7 @@ void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
+/* commented in 2.3 because unused
 void ProxySQL_Admin::flush_admin_variables__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -9629,7 +9712,7 @@ void ProxySQL_Admin::flush_admin_variables__from_disk_to_memory() {
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
-
+*/
 void ProxySQL_Admin::flush_admin_variables__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");

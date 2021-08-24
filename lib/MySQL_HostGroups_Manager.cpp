@@ -1544,39 +1544,7 @@ unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 	return __sync_fetch_and_add(&status.servers_table_version,0);
 }
 
-// add a new row in mysql_servers_incoming
 // we always assume that the calling thread has acquired a rdlock()
-bool MySQL_HostGroups_Manager::server_add(unsigned int hid, char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum MySerStatus status, unsigned int _comp /*, uint8_t _charset */, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms , char *comment) {
-	bool ret=true;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding in mysql_servers_incoming server %s:%d in hostgroup %u with weight %u , status %u, %s compression, max_connections %d, max_replication_lag %u, use_ssl=%u, max_latency_ms=%u\n", add,p,hid,_weight,status, (_comp ? "with" : "without") /*, _charset */ , _max_connections, _max_replication_lag, _use_ssl, _max_latency_ms);
-	int rc;
-	sqlite3_stmt *statement=NULL;
-	//sqlite3 *mydb3=mydb->get_db();
-	char *query=(char *)"INSERT INTO mysql_servers_incoming VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-	rc = mydb->prepare_v2(query, &statement);
-	ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 1, hid); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_text)(statement, 2, add, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 3, p); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 4, gp); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 5, _weight); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 6, status); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 7, _comp); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 8, _max_connections); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 9, _max_replication_lag); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 10, _use_ssl); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_int64)(statement, 11, _max_latency_ms); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_bind_text)(statement, 12, comment, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-
-	SAFE_SQLITE3_STEP2(statement);
-	rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
-	rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
-	(*proxy_sqlite3_finalize)(statement);
-
-	return ret;
-}
-
 int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	if (resultset==NULL) {
 		return 0;
@@ -3220,8 +3188,10 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					conn=(MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
 					break;
 				default: // this should never happen
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 		} else {
 			conn=(MySQL_Connection *)conns->remove_index_fast(i);
@@ -3316,8 +3286,10 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 						pthread_attr_setstacksize (&attr, 256*1024);
 						pthread_t pt;
 						if (pthread_create(&pt, &attr, &kill_query_thread, ka) != 0) {
+							// LCOV_EXCL_START
 							proxy_error("Thread creation\n");
 							assert(0);
+							// LCOV_EXCL_STOP
 						}
 					}
 						break;
@@ -3349,10 +3321,9 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
-	int i,j;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
+	int j;
+	MyHGC *myhgc = MyHGC_find(_hid);
+	if (myhgc) {
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
@@ -3467,10 +3438,9 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	wrlock();
 	drop_all_idle_connections();
 	int num_conn_current=0;
-	int i,j, k;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
+	int j,k;
+	MyHGC* myhgc = MyHGC_find(_hid);
+	if (myhgc) {
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			//PtrArray *pa=mysrvc->ConnectionsFree->conns;
@@ -3847,8 +3817,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 					pta[3]=strdup("SHUNNED_REPLICATION_LAG");
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			sprintf(buf,"%u", mysrvc->ConnectionsUsed->conns_length());
 			pta[4]=strdup(buf);
@@ -4234,8 +4206,10 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			}
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 
 __exit_read_only_action:

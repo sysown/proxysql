@@ -87,6 +87,15 @@ void proxy_create_random_string(char *_to, uint length, struct rand_struct *rand
 	int rc = 0;
 	uint i;
 	rc = RAND_bytes((unsigned char *)to,length);
+#ifdef DEBUG
+	if (rc==1) {
+		// For code coverage (to test the following code and other function)
+		// in DEBUG mode we pretend that RAND_bytes() fails 1% of the time
+		if(rand()%100==0) {
+			rc=0;
+		}
+	}
+#endif // DEBUG
 	if (rc!=1) {
 		for (i=0; i<length ; i++) {
 			*to= (proxy_my_rnd(rand_st) * 94 + 33);
@@ -251,101 +260,6 @@ static uint8_t mysql_encode_length(uint64_t len, char *hd) {
 	return 9;	
 }
 
-
-enum MySQL_response_type mysql_response(unsigned char *pkt, unsigned int length) {
-	unsigned char c=*pkt;
-	switch (c) {
-		case 0:
-     // proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet OK_Packet\n");
-			return OK_Packet;
-		case 0xff:
-     // proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet ERR_Packet\n");
-			return ERR_Packet;
-		case 0xfe:
-			if (length < 9) {
-        //proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet EOF_Packet\n");
-				return EOF_Packet;
-			}
-		default:
-			//proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet UNKNOWN_Packet\n");
-			return UNKNOWN_Packet;
-	}
-}
-
-int pkt_com_query(unsigned char *pkt, unsigned int length) {
-	unsigned char buf[length];
-	memcpy(buf,pkt+1, length-1);
-	buf[length-1]='\0';
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Query: %s\n", buf);
-	return PKT_PARSED;
-}
-
-int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
-	if (length < 7) return PKT_ERROR;
-
-	uint64_t affected_rows;
-	uint64_t  insert_id;
-#ifdef DEBUG
-	uint16_t  warns;
-#endif /* DEBUG */
-	unsigned char msg[length];
-
-	unsigned int p=0;
-	int rc;
-
-	pkt++; p++;
-	rc=mysql_decode_length(pkt,&affected_rows);
-	pkt	+= rc; p+=rc;
-	rc=mysql_decode_length(pkt,&insert_id);
-	pkt	+= rc; p+=rc;
-	mp->prot_status=CPY2(pkt);
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-#ifdef DEBUG
-	warns=CPY2(pkt);
-#endif /* DEBUG */
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-	pkt++;
-	p++;
-	if (length>p) {
-		memcpy(msg,pkt,length-p);
-		msg[length-p]=0;
-	} else {
-		msg[0]=0;
-	}
-
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)mp->prot_status, (uint16_t)warns, msg);
-	
-	return PKT_PARSED;
-}
-
-
-
-int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
-{
-	if(*pkt != 0xFE || length > 5) return PKT_ERROR;
-#ifdef DEBUG
-	uint16_t warns = 0;
-#endif /* DEBUG */
-
-	if(length > 1) { // 4.1+
-		pkt++;
-#ifdef DEBUG
-		warns    = CPY2(pkt);
-#endif /* DEBUG */
-		pkt    += 2;
-		mp->prot_status  = CPY2(pkt);
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n", mp->prot_status, warns);
-
-//	if(status & SERVER_MORE_RESULTS_EXISTS) {
-//		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n");
-//	}
-
-	return PKT_PARSED;
-}
-
 #ifdef DEBUG
 void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
 	if (strlen(attributes)) {
@@ -385,92 +299,6 @@ void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo 
 	sess=__sess;
 	current_PreStmt=NULL;
 }
-
-int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__myds) {
-	unsigned char *pkt=(unsigned char *)PS_entry->ptr;	
-	enum mysql_data_stream_status *DSS=&(*myds)->DSS;
-
-	mysql_hdr hdr;
-	unsigned char cmd;
-	unsigned char *payload;
-	int from=(*myds)->myds_type;	// if the packet is from client or server
-	enum MySQL_response_type c;
-
-	payload=pkt+sizeof(mysql_hdr);
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"MySQL Packet length=%d, senquence_id=%d, addr=%p\n", hdr.pkt_length, hdr.pkt_id, payload);
-
-	switch (*DSS) {
-
-		// client is not connected yet
-		case STATE_NOT_CONNECTED:
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			break;
-
-		// client has sent the handshake
-		case STATE_CLIENT_HANDSHAKE:
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length, this)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			break;
-
-		// connection is idle. Client should be send a command
-		case STATE_SLEEP:
-//			if (!from_client) {
-//				return PKT_ERROR;
-//			}
-			cmd=*payload;
-			switch (cmd) {
-				case COM_QUERY:
-					if (pkt_com_query(payload, hdr.pkt_length)==PKT_PARSED) {
-						//*states=STATE_CLIENT_COM_QUERY;
-						return PKT_PARSED;
-					}
-					break;
-			}
-			//break;
-
-		default:
-		// TO BE REMOVED: begin
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length, this)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				case EOF_Packet:
-					pkt_end(payload, hdr.pkt_length, this);
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			
-		// TO BE REMOVED: end
-			break;
-	}
-	
-	return PKT_ERROR;
-}
-
-
 
 static unsigned char protocol_version=10;
 static uint16_t server_status=SERVER_STATUS_AUTOCOMMIT;
@@ -599,7 +427,9 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 					break;
 				}
 			default:
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 		}
 	}
 	if (len) { *len=size; }
@@ -738,10 +568,14 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 				if (eof_identifier)
 					(*myds)->DSS=STATE_EOF2;
 				else
+					// LCOV_EXCL_START
 					assert(0);
+					// LCOV_EXCL_STOP
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 		}
 	}
 	if (len) { *len=size; }
@@ -1277,7 +1111,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 				+ 1; // 00
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 			break;
 	}
 
@@ -1302,7 +1138,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 			_ptr[l]=0x00; l++;
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 			break;
 	}
   _ptr[l]=0x00; //l+=1; //0x00
@@ -1395,9 +1233,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   const MARIADB_CHARSET_INFO *ci = NULL;
   ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
   if (!ci) {
+		// LCOV_EXCL_START
 	  proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable.\n",
 			  mysql_thread___default_variables[SQL_CHARACTER_SET], mysql_tracked_variables[SQL_CHARACTER_SET].internal_variable_name);
 	  assert(0);
+		// LCOV_EXCL_STOP
   }
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
@@ -1444,81 +1284,6 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 #endif
 	return true;
 }
-
-bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
-
-  if (len < 11) return false;
-
-  mysql_hdr hdr;
-  memcpy(&hdr,pkt,sizeof(mysql_hdr));
-  pkt     += sizeof(mysql_hdr);
-
-	if (*pkt) return false;
-	if (len!=hdr.pkt_length+sizeof(mysql_hdr)) return false;
-
-	uint64_t affected_rows;
-	uint64_t  insert_id;
-#ifdef DEBUG
-	uint16_t  warns;
-#endif /* DEBUG */
-	unsigned char msg[len];
-
-	unsigned int p=0;
-	int rc;
-
-	pkt++; p++;
-	rc=mysql_decode_length(pkt,&affected_rows);
-	pkt += rc; p+=rc;
-	rc=mysql_decode_length(pkt,&insert_id);
-	pkt += rc; p+=rc;
-	prot_status=CPY2(pkt);
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-#ifdef DEBUG
-	warns=CPY2(pkt);
-#endif /* DEBUG */
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-	pkt++;
-	p++;
-	if (len>p) {
-		memcpy(msg,pkt,len-p);
-		msg[len-p]=0;
-	} else {
-		msg[0]=0;
-	}
-
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)prot_status, (uint16_t)warns, msg);
-	
-	return true;
-}
-
-bool MySQL_Protocol::process_pkt_EOF(unsigned char *pkt, unsigned int len) {
-	int ret;
-	mysql_hdr hdr;
-	unsigned char *payload;
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	payload=pkt+sizeof(mysql_hdr);
-	ret=pkt_end(payload, hdr.pkt_length, this);
-	return ( ret==PKT_PARSED ? true : false );
-}
-
-bool MySQL_Protocol::process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len) {
-	bool ret=false;
-
-	unsigned int _len=len-sizeof(mysql_hdr)-1;
-	unsigned char *query=(unsigned char *)l_alloc(_len+1);
-	memcpy(query,pkt+1+sizeof(mysql_hdr),_len);
-	query[_len]=0x00;
-
-	//printf("%s\n",query);
-
-	l_free(_len+1,query);
-
-	ret=true;
-	return ret;
-}
-
 
 bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
@@ -1726,8 +1491,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			const MARIADB_CHARSET_INFO *ci = NULL;
 			ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 			if (!ci) {
+				// LCOV_EXCL_START
 				proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 			charset=ci->nr;
 		}
@@ -1813,6 +1580,15 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	//Copy4B(&hdr,pkt);
 	pkt     += sizeof(mysql_hdr);
 
+	// NOTE: 'mysqlsh' sends a 'COM_INIT_DB' as soon as the connection is openned
+	// before ProxySQL has sent 'Server Greeting' messsage. Because this packet is
+	// unexpected, we simple return 'false' and exit.
+	if (hdr.pkt_id == 0 && *pkt == 2) {
+		ret = false;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client is disconnecting\n", (*myds), (*myds)->sess, user);
+		goto __exit_process_pkt_handshake_response;
+	}
+
 	if ((*myds)->myconn->userinfo->username) {
 		(*myds)->switching_auth_stage=2;
 		if (len==5) {
@@ -1881,8 +1657,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 		if (!ci) {
+			// LCOV_EXCL_START
 			proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 		charset=ci->nr;
 	}
@@ -2533,6 +2311,9 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				continue;
 			} else if (is_nulls[i]==true) {
 				// the parameter is NULL, no need to read any data from the packet
+				// NOTE: We nullify buffers here to reflect that memory wasn't
+				// initalized. See #3546.
+				binds[i].buffer = NULL;
 				continue;
 			}
 
@@ -2631,11 +2412,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					}
 					break;
 				default:
+					// LCOV_EXCL_START
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
 							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 		}
 	}
@@ -2706,6 +2489,7 @@ MySQL_ResultSet::MySQL_ResultSet() {
 	//reset_pid = true;
 }
 void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
+	PROXY_TRACE2();
 	transfer_started=false;
 	resultset_completed=false;
 	myprot=_myprot;
@@ -2783,18 +2567,35 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 			buffer_to_PSarrayOut();
 		}
 	if (!deprecate_eof_active && myds->com_field_list==false) {
-		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
-		sid++;
-		resultset_size += 9;
+		// up to 2.2.0 we used to add an EOF here.
+		// due to bug #3547 we move the logic into add_eof() that can now handle also prepared statements
+		PROXY_TRACE2();
+		add_eof();
 	}
-	//}
-	//if (_stmt) { // binary protocol , we also assume we have ALL the resultset
-	///	init_with_stmt(_stmt);
-	//}
 }
 
 
-void MySQL_ResultSet::init_with_stmt() {
+// due to bug #3547 , in case of an error we remove the EOF
+// and replace it with an ERR
+// note that EOF is added on a packet on its own, instead of using a buffer,
+// so that can be removed using remove_last_eof()
+void MySQL_ResultSet::remove_last_eof() {
+	PROXY_TRACE2();
+	PtrSize_t pkt;
+	if (PSarrayOUT.len) {
+		unsigned int l = PSarrayOUT.len-1;
+		PtrSize_t * pktp = PSarrayOUT.index(l);
+		if (pktp->size == 9) {
+			PROXY_TRACE2();
+			PSarrayOUT.remove_index(l,&pkt);
+			l_free(pkt.size, pkt.ptr);
+			sid--;
+		}
+	}
+}
+
+void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
+	PROXY_TRACE2();
 	assert(stmt);
 	MYSQL_STMT *_stmt = stmt;
 	MySQL_Data_Stream * c_myds = *(myprot->myds);
@@ -2905,7 +2706,20 @@ void MySQL_ResultSet::init_with_stmt() {
 				}
 			}
 		}
-		add_eof();
+		// up to 2.2.0 we were always adding an EOF
+		// due to bug #3547 , in case of an error we remove the EOF
+		// and replace it with an ERR
+		// note that EOF is added on a packet on its own, instead of using a buffer,
+		// so that can be removed
+		int myerr = mysql_stmt_errno(_stmt);
+		if (myerr) {
+			PROXY_TRACE2();
+			remove_last_eof();
+			add_err(myconn->myds);
+		} else {
+			PROXY_TRACE2();
+			add_eof();
+		}
 }
 
 MySQL_ResultSet::~MySQL_ResultSet() {
@@ -3026,12 +2840,14 @@ void MySQL_ResultSet::add_eof() {
 			resultset_size += pkt.size;
 		}
 		else {
-			if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
-				buffer_to_PSarrayOut();
-			}
+			// due to bug #3547 , in case of an error we remove the EOF
+			// and replace it with an ERR
+			// note that EOF is added on a packet on its own, instead of using a buffer,
+			// so that can be removed using remove_last_eof()
+			buffer_to_PSarrayOut();
 			myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
 			resultset_size += 9;
-			buffer_to_PSarrayOut(true);
+			buffer_to_PSarrayOut();
 		}
 		sid++;
 	}
@@ -3054,9 +2870,19 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1317);
 			}
 		} else {
-			myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,mysql_errno(_mysql),sqlstate,mysql_error(_mysql));
+			int myerr = 0;
+			// the error code is returned from:
+			// - mysql_stmt_errno() if using a prepared statement
+			// - mysql_errno() if not using a prepared statement
+			if (stmt) {
+				myerr = mysql_stmt_errno(stmt);
+				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,myerr,sqlstate,mysql_stmt_error(stmt));
+			} else {
+				myerr = mysql_errno(_mysql);
+				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,myerr,sqlstate,mysql_error(_mysql));
+			}
 			// TODO: Check this is a mysql error
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, mysql_errno(_mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, myerr);
 		}
 		PSarrayOUT.add(pkt.ptr,pkt.size);
 		sid++;
@@ -3119,4 +2945,16 @@ unsigned long long MySQL_ResultSet::current_size() {
 		}
 	}
 	return intsize;
+}
+
+my_bool proxy_mysql_stmt_close(MYSQL_STMT* stmt) {
+	// Clean internal structures for 'stmt->mysql->stmts'.
+	if (stmt->mysql) {
+		stmt->mysql->stmts =
+			list_delete(stmt->mysql->stmts, &stmt->list);
+	}
+	// Nullify 'mysql' field to avoid sending a blocking command to the server.
+	stmt->mysql = NULL;
+	// Perform the regular close operation.
+	return mysql_stmt_close(stmt);
 }

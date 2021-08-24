@@ -41,6 +41,8 @@ enum log_event_type {
 
 enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
 
+#define PROXYSQL_USE_RESULT
+
 enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_CONNECT_START,
 	ASYNC_CONNECT_CONT,
@@ -76,8 +78,10 @@ enum MDB_ASYNC_ST { // MariaDB Async State Machine
 	ASYNC_NEXT_RESULT_START,
 	ASYNC_NEXT_RESULT_CONT,
 	ASYNC_NEXT_RESULT_END,
+#ifndef PROXYSQL_USE_RESULT
 	ASYNC_STORE_RESULT_START,
 	ASYNC_STORE_RESULT_CONT,
+#endif // PROXYSQL_USE_RESULT
 	ASYNC_USE_RESULT_START,
 	ASYNC_USE_RESULT_CONT,
 	ASYNC_INITDB_START,
@@ -794,6 +798,7 @@ __thread int mysql_thread___query_digests_grouping_limit;
 __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
 __thread bool mysql_thread___log_mysql_warnings_enabled;
+__thread bool mysql_thread___enable_load_data_local_infile;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -945,6 +950,7 @@ extern __thread int mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
 extern __thread bool mysql_thread___log_mysql_warnings_enabled;
+extern __thread bool mysql_thread___enable_load_data_local_infile;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

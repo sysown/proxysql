@@ -36,7 +36,6 @@ extern MySQL_Threads_Handler *GloMTH;
 extern MySQL_Monitor *GloMyMon;
 extern MySQL_Logger *GloMyLogger;
 
-
 typedef struct mythr_st_vars {
 	enum MySQL_Thread_status_variable v_idx;
 	p_th_counter::metric m_idx;
@@ -422,6 +421,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"connect_timeout_server_max",
 	(char *)"enable_client_deprecate_eof",
 	(char *)"enable_server_deprecate_eof",
+	(char *)"enable_load_data_local_infile",
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
 	(char *)"eventslog_default_log",
@@ -1002,8 +1002,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #else
 	if (glovars.has_debug==true) {
 #endif /* DEBUG */
+		// LCOV_EXCL_START
 		perror("Incompatible debugging version");
 		exit(EXIT_FAILURE);
+		// LCOV_EXCL_STOP
 	}
 	num_threads=0;
 	mysql_threads=NULL;
@@ -1142,7 +1144,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.client_session_track_gtid=true;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
-	variables.session_idle_ms=1000;
+	variables.session_idle_ms=1;
 	variables.session_idle_show_processlist=true;
 #endif // IDLE_THREADS
 	variables.show_processlist_extended = 0;
@@ -1159,6 +1161,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_grouping_limit = 3;
 	variables.enable_client_deprecate_eof=true;
 	variables.enable_server_deprecate_eof=true;
+	variables.enable_load_data_local_infile=false;
 	variables.log_mysql_warnings_enabled=false;
 	// status variables
 	status_variables.mirror_sessions_current=0;
@@ -1348,14 +1351,18 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
+	// LCOV_EXCL_STOP
 }
 
 uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 	if (!strcasecmp(name,"server_capabilities")) return variables.server_capabilities;
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+	// LCOV_EXCL_STOP
 }
 
 int MySQL_Threads_Handler::get_variable_int(const char *name) {
@@ -1383,8 +1390,10 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 
 //VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+	// LCOV_EXCL_STOP
 //VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
@@ -1971,6 +1980,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["default_reconnect"]               = make_tuple(&variables.default_reconnect,               false);
 		VariablesPointers_bool["enable_client_deprecate_eof"]     = make_tuple(&variables.enable_client_deprecate_eof,     false);
 		VariablesPointers_bool["enable_server_deprecate_eof"]     = make_tuple(&variables.enable_server_deprecate_eof,     false);
+		VariablesPointers_bool["enable_load_data_local_infile"]   = make_tuple(&variables.enable_load_data_local_infile,   false);
 		VariablesPointers_bool["enforce_autocommit_on_reads"]     = make_tuple(&variables.enforce_autocommit_on_reads,     false);
 		VariablesPointers_bool["firewall_whitelist_enabled"]      = make_tuple(&variables.firewall_whitelist_enabled,      false);
 		VariablesPointers_bool["kill_backend_connection_when_disconnect"] = make_tuple(&variables.kill_backend_connection_when_disconnect, false);
@@ -2051,7 +2061,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		// query processor and query digest
 		VariablesPointers_int["auto_increment_delay_multiplex"]  = make_tuple(&variables.auto_increment_delay_multiplex,   0,     1000000, false);
 		VariablesPointers_int["default_query_delay"]             = make_tuple(&variables.default_query_delay,              0,   3600*1000, false);
-		VariablesPointers_int["default_query_timeout"]           = make_tuple(&variables.default_query_timeout,            0,   1000*1000, false);
+		VariablesPointers_int["default_query_timeout"]           = make_tuple(&variables.default_query_timeout,         1000,20*24*3600*1000, false);
 		VariablesPointers_int["query_digests_grouping_limit"]    = make_tuple(&variables.query_digests_grouping_limit,     1,        2089, false);
 		VariablesPointers_int["query_digests_max_digest_length"] = make_tuple(&variables.query_digests_max_digest_length, 16, 1*1024*1024, false);
 		VariablesPointers_int["query_digests_max_query_length"]  = make_tuple(&variables.query_digests_max_query_length,  16, 1*1024*1024, false);
@@ -2202,15 +2212,19 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *), bool idles) {
 	if (idles==false) {
 		if (pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]) != 0 ) {
+			// LCOV_EXCL_START
 			proxy_error("Thread creation\n");
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 #ifdef IDLE_THREADS
 	} else {
 		if (GloVars.global.idle_threads) {
 			if (pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]) != 0) {
+				// LCOV_EXCL_START
 				proxy_error("Thread creation\n");
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 #endif // IDLE_THREADS
@@ -2850,7 +2864,7 @@ __run_skip_1a:
 			(curtime >= (pre_poll_time + ttw))) {
 				poll_timeout_bool=true;
 			}
-		unsigned int maintenance_interval = 1000000; // hardcoded value for now
+		unsigned long long maintenance_interval = 1000000; // hardcoded value for now
 #ifdef IDLE_THREADS
 		if (idle_maintenance_thread) {
 			maintenance_interval=maintenance_interval*2;
@@ -2883,9 +2897,11 @@ __run_skip_1a:
 				// poll() timeout, try again
 				continue;
 			if (rc == -1) {
+			// LCOV_EXCL_START
 				// error , exit
 				perror("poll()");
 				exit(EXIT_FAILURE);
+			// LCOV_EXCL_STOP
 			}
 
 		if (__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0) > __thread_MySQL_Thread_Variables_version) {
@@ -2918,15 +2934,18 @@ __run_skip_1a:
 					if (events[i].events == EPOLLIN && events[i].data.u32==0) {
 						unsigned char c;
 						int fd=pipefd[0];
-						if (read(fd, &c, 1)==-1) {
+						if (read(fd, &c, 1)<=0) {
+						} else {
+							//i=rc;
+							maintenance_loop=true;
 						}
-						i=rc;
-						maintenance_loop=true;
 					}
 				}
 			}
 			if (mysql_sessions->len && maintenance_loop) {
-				idle_thread_to_kill_idle_sessions();
+				if (curtime == last_maintenance_time) {
+					idle_thread_to_kill_idle_sessions();
+				}
 			}
 			goto __run_skip_2;
 		}
@@ -3046,14 +3065,20 @@ void MySQL_Thread::idle_thread_check_if_worker_thread_has_unprocess_resumed_sess
 }
 
 void MySQL_Thread::idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr) {
+	bool send_signal = false;
+	// send_signal variable will control if we need to signal or not
+	// the worker thread
 	pthread_mutex_lock(&thr->myexchange.mutex_resumes);
 	if (shutdown==0 && thr->shutdown==0)
-	while (resume_mysql_sessions->len) {
-		MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
-		thr->myexchange.resume_mysql_sessions->add(mysess);
+	if (resume_mysql_sessions->len) {
+		while (resume_mysql_sessions->len) {
+			MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
+			thr->myexchange.resume_mysql_sessions->add(mysess);
+		}
+		send_signal=true; // signal only if there are sessions to resume
 	}
 	pthread_mutex_unlock(&thr->myexchange.mutex_resumes);
-	{
+	if (send_signal) { // signal only if there are sessions to resume
 		unsigned char c=0;
 		//MySQL_Thread *thr=GloMTH->mysql_threads[w].worker;
 		// we signal the thread to inform there are sessions
@@ -3295,7 +3320,7 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 		if (sess->active_transactions == 0) {
 			sess->transaction_started_at = 0;
 		} else {
-			if (sess_active_transactions == 0) {
+			if (sess->transaction_started_at == 0) {
 				sess->transaction_started_at = curtime;
 			}
 		}
@@ -3647,6 +3672,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_reconnect=(bool)GloMTH->get_variable_int((char *)"default_reconnect");
 	mysql_thread___enable_client_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_client_deprecate_eof");
 	mysql_thread___enable_server_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
+	mysql_thread___enable_load_data_local_infile=(bool)GloMTH->get_variable_int((char *)"enable_load_data_local_infile");
 	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");

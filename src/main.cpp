@@ -201,7 +201,6 @@ static char * main_check_latest_version() {
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
 
 	string s = "proxysql-agent/";
 	s += PROXYSQL_VERSION;
@@ -1046,6 +1045,9 @@ void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
 		load_ += GloMTH->num_threads;
+	} else {
+		proxy_warning("proxysql instance running without --idle-threads : most workloads benefit from this option\n");
+		proxy_warning("proxysql instance running without --idle-threads : enabling it can potentially improve performance\n");
 	}
 #endif // IDLE_THREADS
 	for (i=0; i<GloMTH->num_threads; i++) {
@@ -1115,6 +1117,7 @@ void ProxySQL_Main_join_all_threads() {
 	if (GloMyMon && MyMon_thread) {
 		cpu_timer t;
 		MyMon_thread->join();
+		delete MyMon_thread;
 		MyMon_thread = NULL;
 #ifdef DEBUG
 		std::cerr << "GloMyMon joined in ";
@@ -1657,6 +1660,7 @@ int main(int argc, const char * argv[]) {
 	{
 		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
 		if (rc == 0) {
+			proxy_info("Current RLIMIT_NOFILE: %d\n", nlimit.rlim_cur);
 			if (nlimit.rlim_cur <= 1024) {
 				proxy_error("Current RLIMIT_NOFILE is very low: %d .  Tune RLIMIT_NOFILE correctly before running ProxySQL\n", nlimit.rlim_cur);
 				if (nlimit.rlim_max > nlimit.rlim_cur) {
@@ -1710,7 +1714,7 @@ int main(int argc, const char * argv[]) {
 					SHA1(fb, statbuf.st_size, temp);
 					binary_sha1 = (char *)malloc(SHA_DIGEST_LENGTH*2+1);
 					memset(binary_sha1, 0, SHA_DIGEST_LENGTH*2+1);
-					char buf[SHA_DIGEST_LENGTH*2];
+					char buf[SHA_DIGEST_LENGTH*2 + 1];
 					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
 						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
 					}
@@ -1828,6 +1832,9 @@ __start_label:
 		std::cerr << "Main init phase3 completed in ";
 #endif
 	}
+#ifdef DEBUG
+		std::cerr << "WARNING: this is a DEBUG release and can be slow or perform poorly. Do not use it in production" << std::endl;
+#endif
 
 	{
 		unsigned int missed_heartbeats = 0;

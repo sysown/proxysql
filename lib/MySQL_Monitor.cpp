@@ -225,9 +225,13 @@ public:
 				return;
 			}
 		}
+		// LCOV_EXCL_START
 		assert(0);
+		// LCOV_EXCL_STOP
 #endif // DEBUG
+		// LCOV_EXCL_START
 		return;
+		// LCOV_EXCL_STOP
 	};
 };
 
@@ -305,7 +309,9 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 					return;
 				}
 			}
+			// LCOV_EXCL_START
 			assert(0); // it didn't register it
+			// LCOV_EXCL_STOP
 #else
 			return;
 #endif // DEBUG
@@ -326,7 +332,9 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 			return;
 		}
 	}
+	// LCOV_EXCL_START
 	assert(0);
+	// LCOV_EXCL_STOP
 #endif // DEBUG
 }
 
@@ -431,6 +439,7 @@ MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(char *h, int p, struct event_
 		use_ssl=_use_ssl;
 		ST=0;
 		hostgroup_id=g;
+		interr=0;
 	};
 
 MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
@@ -3254,38 +3263,52 @@ __monitor_run:
 	pthread_attr_setstacksize (&attr, 2048*1024);
 	pthread_t monitor_connect_thread;
 	if (pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_ping_thread;
 	if (pthread_create(&monitor_ping_thread, &attr, &monitor_ping_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_read_only_thread;
 	if (pthread_create(&monitor_read_only_thread, &attr, &monitor_read_only_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_group_replication_thread;
 	if (pthread_create(&monitor_group_replication_thread, &attr, &monitor_group_replication_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_galera_thread;
 	if (pthread_create(&monitor_galera_thread, &attr, &monitor_galera_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_aws_aurora_thread;
 	if (pthread_create(&monitor_aws_aurora_thread, &attr, &monitor_aws_aurora_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_replication_lag_thread;
 	if (pthread_create(&monitor_replication_lag_thread, &attr, &monitor_replication_lag_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	while (shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
@@ -4060,8 +4083,6 @@ bool AWS_Aurora_monitor_node::add_entry(AWS_Aurora_status_entry *ase) {
 	return ret; // for now ignored
 }
 
-void * monitor_AWS_Aurora_thread(void *arg);
-
 
 typedef struct _host_def_t {
 	char *host;
@@ -4171,10 +4192,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
 
-		if (mmsd) {
-			delete mmsd;
-			mmsd = NULL;
-		}
+		
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -4251,7 +4269,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		}
 #endif // TEST_AURORA
 
-		if (found_pingable_host == false) {
+		if (found_pingable_host == false&&mmsd) {
 			proxy_error("No node is pingable for AWS Aurora cluster with writer HG %u\n", wHG);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV);
 			next_loop_at = t1 + check_interval_ms * 1000;
@@ -4262,7 +4280,11 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			proxy_info("Running check for AWS Aurora writer HG %u on %s:%d\n", wHG , hpa[cur_host_idx].host, hpa[cur_host_idx].port);
 		}
 #endif // TEST_AURORA
-		mmsd = NULL;
+		if (mmsd) {
+			delete mmsd;
+			mmsd = NULL;
+		}
+		//mmsd = NULL;
 		mmsd = new MySQL_Monitor_State_Data(hpa[cur_host_idx].host, hpa[cur_host_idx].port, NULL, hpa[cur_host_idx].use_ssl);
 		mmsd->writer_hostgroup = wHG;
 		mmsd->aws_aurora_check_timeout_ms = check_timeout_ms;
@@ -4302,7 +4324,36 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 #ifdef TEST_AURORA
 	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM REPLICA_HOST_STATUS ORDER BY SERVER_ID");
 #else
-	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS > 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
+	// for reference we list the old queries.
+	// original implementation:
+	// mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS > 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
+	// to fix a bug in Aurora , see https://github.com/sysown/proxysql/issues/3082
+	// mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS > 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
+	// slightly modifying the previous query. Replacing:
+	//   "REPLICA_LAG_IN_MILLISECONDS > 0"
+	// with:
+	//   "REPLICA_LAG_IN_MILLISECONDS >= 0"
+	// mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE (REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000) OR SESSION_ID = 'MASTER_SESSION_ID' ORDER BY SERVER_ID");
+	{
+		const char * query =
+			"SELECT SERVER_ID,"
+			"IF("
+				"SESSION_ID = 'MASTER_SESSION_ID' AND "
+				"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP ASC LIMIT 1), "
+				"'probably_former_MASTER_SESSION_ID', SESSION_ID"
+			") SESSION_ID, " // it seems that during a failover, the old writer can keep MASTER_SESSION_ID because not updated
+			"LAST_UPDATE_TIMESTAMP, "
+			"IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, "
+			"CPU "
+			"FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE"
+			" ( "
+			"(REPLICA_LAG_IN_MILLISECONDS >= 0 AND REPLICA_LAG_IN_MILLISECONDS <= 600000)" // lag between 0 and 10 minutes
+			" OR SESSION_ID = 'MASTER_SESSION_ID'" // or server with MASTER_SESSION_ID
+			" ) "
+			"AND LAST_UPDATE_TIMESTAMP > NOW() - INTERVAL 180 SECOND" // ignore decommissioned or renamed nodes, see https://github.com/sysown/proxysql/issues/3484
+			" ORDER BY SERVER_ID";
+		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, query);
+	}
 #endif // TEST_AURORA
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
@@ -4607,8 +4658,10 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 					hgs_array[i] = tmp_hgs_array[i];
 					proxy_info("Starting Monitor thread for AWS Aurora writer HG %u\n", hgs_array[i]);
 					if (pthread_create(&pthreads_array[i], NULL, monitor_AWS_Aurora_thread_HG, &hgs_array[i]) != 0) {
+						// LCOV_EXCL_START
 						proxy_error("Thread creation\n");
 						assert(0);
+						// LCOV_EXCL_STOP
 					}
 				}
 				free(tmp_hgs_array);
@@ -4686,168 +4739,6 @@ __sleep_monitor_aws_aurora:
 		WorkItem *item=NULL;
 		GloMyMon->queue->add(item);
 	}
-	return NULL;
-}
-
-void * monitor_AWS_Aurora_thread(void *arg) {
-	mysql_close(mysql_init(NULL));
-	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
-	mysql_thr->curtime=monotonic_time();
-	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-
-	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
-	unsigned long long start_time=mysql_thr->curtime;
-
-
-	mmsd->t1=start_time;
-
-	bool crc=false;
-	if (mmsd->mysql==NULL) { // we don't have a connection, let's create it
-		bool rc;
-		rc=mmsd->create_new_connection();
-		crc=true;
-		if (rc==false) {
-			unsigned long long now=monotonic_time();
-			char * new_error = (char *)malloc(50+strlen(mmsd->mysql_error_msg));
-			sprintf(new_error,"timeout or error in creating new connection: %s",mmsd->mysql_error_msg);
-			free(mmsd->mysql_error_msg);
-			mmsd->mysql_error_msg = new_error;
-			proxy_error("Error on AWS Aurora check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
-			goto __exit_monitor_aws_aurora_thread;
-		}
-	}
-
-	mmsd->t1=monotonic_time();
-	mmsd->interr=0; // reset the value
-#ifdef TEST_AURORA
-	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM REPLICA_HOST_STATUS ORDER BY SERVER_ID");
-#else
-	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, IF(SESSION_ID = 'MASTER_SESSION_ID', 0, REPLICA_LAG_IN_MILLISECONDS) AS REPLICA_LAG_IN_MILLISECONDS, CPU FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS ORDER BY SERVER_ID");
-#endif // TEST_AURORA
-	while (mmsd->async_exit_status) {
-		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
-		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
-			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
-			goto __exit_monitor_aws_aurora_thread;
-		}
-		if (GloMyMon->shutdown==true) {
-			goto __fast_exit_monitor_aws_aurora_thread;	// exit immediately
-		}
-		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
-			mmsd->async_exit_status=mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
-		}
-	}
-	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
-	while (mmsd->async_exit_status) {
-		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
-		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
-			mmsd->mysql_error_msg=strdup("timeout check");
-			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
-			goto __exit_monitor_aws_aurora_thread;
-		}
-		if (GloMyMon->shutdown==true) {
-			goto __fast_exit_monitor_aws_aurora_thread;	// exit immediately
-		}
-		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
-			mmsd->async_exit_status=mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
-		}
-	}
-	if (mmsd->interr) { // check failed
-		mmsd->mysql_error_msg=strdup(mysql_error(mmsd->mysql));
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-	}
-
-__exit_monitor_aws_aurora_thread:
-	mmsd->t2=monotonic_time();
-	{
-		// TODO : complete this
-		char buf[128];
-		char *s=NULL;
-		int l=strlen(mmsd->hostname);
-		if (l<110) {
-			s=buf;
-		}	else {
-			s=(char *)malloc(l+16);
-		}
-		sprintf(s,"%s:%d",mmsd->hostname,mmsd->port);
-		AWS_Aurora_status_entry *ase = new AWS_Aurora_status_entry(mmsd->t1, mmsd->t2-mmsd->t1, mmsd->mysql_error_msg);
-		if (mmsd->interr == 0 && mmsd->result) {
-			int num_fields=0;
-			num_fields = mysql_num_fields(mmsd->result);
-			if (num_fields!=5) {
-				proxy_error("Incorrect number of fields, please report a bug\n");
-			} else {
-				MYSQL_ROW row;
-				while ((row = mysql_fetch_row(mmsd->result))) {
-					AWS_Aurora_replica_host_status_entry *arhse = new AWS_Aurora_replica_host_status_entry(row[0], row[1], row[2], row[3], row[4]);
-					ase->add_host_status(arhse);
-				}
-			}
-			mysql_free_result(mmsd->result);
-			mmsd->result=NULL;
-		}
-//__end_process_aws_aurora_result:
-		if (mmsd->mysql_error_msg) {
-		}
-		unsigned long long time_now=realtime_time();
-		time_now=time_now-(mmsd->t2 - start_time);
-		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-		//auto it =
-		// TODO : complete this
-		std::map<std::string, AWS_Aurora_monitor_node *>::iterator it2;
-		it2 = GloMyMon->AWS_Aurora_Hosts_Map.find(s);
-		AWS_Aurora_monitor_node *node=NULL;
-		if (it2!=GloMyMon->AWS_Aurora_Hosts_Map.end()) {
-			node=it2->second;
-			node->add_entry(ase);
-		} else {
-			node = new AWS_Aurora_monitor_node(mmsd->hostname,mmsd->port,mmsd->writer_hostgroup);
-			node->add_entry(ase);
-			GloMyMon->AWS_Aurora_Hosts_Map.insert(std::make_pair(s,node));
-		}
-		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-		// clean up
-		if (l<110) {
-		} else {
-			free(s);
-		}
-	}
-	if (mmsd->interr) { // check failed
-	} else {
-		if (crc==false) {
-			if (mmsd->mysql) {
-				GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-				mmsd->mysql=NULL;
-			}
-		}
-	}
-__fast_exit_monitor_aws_aurora_thread:
-	if (mmsd->mysql) {
-		// if we reached here we didn't put the connection back
-		if (mmsd->mysql_error_msg) {
-			mysql_close(mmsd->mysql); // if we reached here we should destroy it
-			mmsd->mysql=NULL;
-		} else {
-			if (crc) {
-				bool rc=mmsd->set_wait_timeout();
-				if (rc) {
-					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
-				} else {
-					mysql_close(mmsd->mysql); // set_wait_timeout failed
-				}
-				mmsd->mysql=NULL;
-			} else { // really not sure how we reached here, drop it
-				mysql_close(mmsd->mysql);
-				mmsd->mysql=NULL;
-			}
-		}
-	}
-	delete mysql_thr;
 	return NULL;
 }
 

@@ -219,3 +219,4 @@ bool Proxy_file_regular(const char *path) {
 		if (sb.st_mode & S_IFREG) return true;
 	return false;
 }
+
