@@ -659,7 +659,14 @@ void MySQL_Connection::connect_start() {
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
 	if (parent->use_ssl) {
-		mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
+		mysql_ssl_set(mysql,
+				mysql_thread___ssl_p2s_key,
+				mysql_thread___ssl_p2s_cert,
+				mysql_thread___ssl_p2s_ca,
+				mysql_thread___ssl_p2s_capath,
+				mysql_thread___ssl_p2s_cipher);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
 	}
 	unsigned int timeout= 1;
 	const char *csname = NULL;
@@ -1012,7 +1019,7 @@ handler_again:
 			}
 			if (!ret_mysql) {
 				// always increase the counter
-				proxy_error("Failed to mysql_real_connect() on %s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
+				proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
     		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
     		NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
@@ -2292,7 +2299,11 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	}
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {
 		*match = '\0';
-		strcat(query_digest_text_filter_select, match+strlen("@@"));
+		if (strlen(query_digest_text_filter_select) == 0) {
+			memcpy(query_digest_text_filter_select, match, strlen("@@"));
+		} else {
+			strcat(query_digest_text_filter_select, match+strlen("@@"));
+		}
 	}
 
 	std::vector<char*>query_digest_text_filter_select_v;

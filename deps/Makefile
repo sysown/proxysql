@@ -165,6 +165,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
+WITHASAN := $(shell echo $(WITHASAN))
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
@@ -189,6 +190,9 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../cr_new_stmt_metadata_removal.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ps_buffer_stmt_read_all_rows.patch
+ifeq ($(WITHASAN),1)
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_asan.patch
+endif
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
 
