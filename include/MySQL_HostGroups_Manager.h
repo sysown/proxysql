@@ -417,6 +417,8 @@ class MySQL_HostGroups_Manager {
 	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
 	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
 
+	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
+
 	public:
 	std::mutex galera_set_writer_mutex;
 	pthread_rwlock_t gtid_rwlock;
@@ -582,7 +584,6 @@ class MySQL_HostGroups_Manager {
 	 *   'true' for enabling the server if it's 'SHUNNED', 'false' for disabling it.
 	 */
 	void group_replication_lag_action(int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable);
-
 	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
 	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup);

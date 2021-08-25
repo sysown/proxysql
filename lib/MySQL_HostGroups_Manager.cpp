@@ -3386,25 +3386,29 @@ __exit_replication_lag_action:
  * @param lag_count The lag count, computed by 'get_lag_behind_count'.
  * @param enable Boolean specifying if the server should be enabled or not.
  */
-void lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable) {
+void MySQL_HostGroups_Manager::group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable) {
 	if (myhgc == NULL || address == NULL) return;
 
 	for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
-			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && enable == false) {
-				proxy_warning(
-					"Shunning server %s:%d from HG %u with replication lag, count number: '%d'\n",
-					address, port, myhgc->hid, lag_count
-				);
-				mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
-			} else {
-				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && enable == true) {
+
+			if (enable == true) {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG || mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 					mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-					proxy_warning(
-						"Re-enabling server %s:%d from HG %u with replication lag, count number: '%d'\n",
-						address, port, myhgc->hid, lag_count
-					);
+					proxy_info("Re-enabling server %u:%s:%d from replication lag\n", myhgc->hid, address, port);
+				}
+			} else {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
+					proxy_warning("Shunning 'soft' server %u:%s:%d with replication lag, count number: %d\n", myhgc->hid, address, port, lag_count);
+					mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED;
+				} else {
+					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+						if (lag_count >= ( mysql_thread___monitor_groupreplication_max_transactions_behind_count * 2 )) {
+							proxy_warning("Shunning 'hard' server %u:%s:%d with replication lag, count number: %d\n", myhgc->hid, address, port, lag_count);
+							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						}
+					}
 				}
 			}
 		}
@@ -3456,7 +3460,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 		) {
 			if (read_only == false) {
 				myhgc = MyHGM->MyHGC_find(_hid);
-				lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
+				group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 			}
 		}
 
@@ -3466,7 +3470,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 			enable
 		) {
 			myhgc = MyHGM->MyHGC_find(reader_hostgroup);
-			lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
+			group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 		}
 	}
 
