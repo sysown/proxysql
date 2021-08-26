@@ -305,7 +305,7 @@ extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
 pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 pthread_mutex_t test_mysql_firewall_whitelist_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -3181,7 +3181,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
-		pthread_mutex_lock(&admin_mutex);
+		//pthread_mutex_lock(&admin_mutex);
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
@@ -3316,7 +3316,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				GloMyMon->populate_monitor_mysql_server_aws_aurora_check_status();
 			}
 		}
-		pthread_mutex_unlock(&admin_mutex);
+		//pthread_mutex_unlock(&admin_mutex);
 	}
 	if (
 		stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_connection_pool_reset ||
@@ -3988,9 +3988,9 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
-			pthread_mutex_lock(&admin_mutex);
+			//pthread_mutex_lock(&admin_mutex);
 			run_query=admin_handler_command_proxysql(query_no_space, query_no_space_length, sess, pa);
-			pthread_mutex_unlock(&admin_mutex);
+			//pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) {
