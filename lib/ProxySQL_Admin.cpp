@@ -3255,9 +3255,15 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				mysql_thread___hostgroup_manager_verbose = old_hostgroup_manager_verbose;
 			}
 			if (runtime_proxysql_servers) {
-				mysql_servers_wrlock();
+				//mysql_servers_wrlock();
+				// before save_proxysql_servers_runtime_to_database() we release
+				// sql_query_global_mutex to prevent a possible deadlock due to
+				// a race condition
+				// save_proxysql_servers_runtime_to_database() calls ProxySQL_Cluster::dump_table_proxysql_servers()
+				pthread_mutex_unlock(&SPA->sql_query_global_mutex);
 				save_proxysql_servers_runtime_to_database(true);
-				mysql_servers_wrunlock();
+				pthread_mutex_lock(&SPA->sql_query_global_mutex);
+				//mysql_servers_wrunlock();
 			}
 			if (runtime_mysql_users) {
 				save_mysql_users_runtime_to_database(true);
