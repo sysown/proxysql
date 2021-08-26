@@ -63,6 +63,8 @@ class ProxySQL_GlobalVariables {
 	char * sqlite3_plugin;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
+	SSL * get_SSL_ctx();
+	void get_SSL_pem_mem(char **key, char **cert);
 	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };
 	struct  {
 		unsigned long long start_time;
@@ -87,7 +89,12 @@ class ProxySQL_GlobalVariables {
 		char *pidfile;
 		bool restart_on_error;
 		int restart_delay;
+		std::mutex ssl_mutex;
 		SSL_CTX *ssl_ctx;	
+		SSL_CTX *tmp_ssl_ctx;
+		// these two buffers are used for the web interface
+		char * ssl_key_pem_mem;
+		char * ssl_cert_pem_mem;
 		bool sqlite3_server;
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
