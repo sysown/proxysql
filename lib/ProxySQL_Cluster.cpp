@@ -695,13 +695,13 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					proxy_info("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					// v->checksum will be destroyed when calling pull_proxysql_servers_from_peer()
 					// thus we need to copy it now
-					char *old_checksum = strdup(v->checksum);
-					GloProxyCluster->pull_proxysql_servers_from_peer();
-					if (strncmp(old_checksum, GloVars.checksums_values.proxysql_servers.checksum, 20)==0) {
+					char *expected_checksum = strdup(v->checksum);
+					GloProxyCluster->pull_proxysql_servers_from_peer((const char *)expected_checksum);
+					if (strncmp(expected_checksum, GloVars.checksums_values.proxysql_servers.checksum, 20)==0) {
 						// we copied from the remote server, let's also copy the same epoch
 						GloVars.checksums_values.proxysql_servers.epoch = v->epoch;
 					}
-					free(old_checksum);
+					free(expected_checksum);
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ps*10)) == 0)) {
@@ -1664,7 +1664,7 @@ __exit_pull_mysql_variables_from_peer:
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_variables_mutex);
 }
 
-void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
+void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const char *expected_checksum) {
 	char * hostname = NULL;
 	uint16_t port = 0;
 	pthread_mutex_lock(&GloProxyCluster->update_proxysql_servers_mutex);
@@ -1688,42 +1688,66 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer() {
 			mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
-			proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d started\n", hostname, port);
+			proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
-				rc_query = mysql_query(conn,"SELECT hostname, port, weight, comment FROM runtime_proxysql_servers");
+				rc_query = mysql_query(conn,"SELECT hostname, port, weight, comment FROM runtime_proxysql_servers ORDER BY hostname, port");
 				if ( rc_query == 0 ) {
+					char **pta=(char **)malloc(sizeof(char *)*4);
+					SQLite3_result *result3=new SQLite3_result(4);
+					result3->add_column_definition(SQLITE_TEXT,"hostname");
+					result3->add_column_definition(SQLITE_TEXT,"port");
+					result3->add_column_definition(SQLITE_TEXT,"weight");
+					result3->add_column_definition(SQLITE_TEXT,"comment");
 					MYSQL_RES *result = mysql_store_result(conn);
-					GloAdmin->admindb->execute("DELETE FROM proxysql_servers");
 					MYSQL_ROW row;
-					char *q=(char *)"INSERT INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %s, %s, '%s')";
 					while ((row = mysql_fetch_row(result))) {
-						int i;
-						int l=0;
-						for (i=0; i<3; i++) {
-							l+=strlen(row[i]);
+						for (int i=0; i<4; i++) {
+						pta[i] = row[i];
 						}
-						char *o=escape_string_single_quotes(row[3],false);
-						char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
-
-						sprintf(query,q,row[0],row[1],row[2],o);
-						if (o!=row[3]) { // there was a copy
-							free(o);
+						result3->add_row(pta);
+					}
+					free(pta);
+					uint64_t hash1 = result3->raw_checksum();
+					uint32_t d32[2];
+					char buf[20];
+					memcpy(&d32, &hash1, sizeof(hash1));
+					sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+					delete result3;
+					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d completed. Computed checksum: %s\n", hostname, port, buf);
+					if (strcmp(buf, expected_checksum)==0) {
+						mysql_data_seek(result,0);
+						GloAdmin->admindb->execute("DELETE FROM proxysql_servers");
+						char *q=(char *)"INSERT INTO proxysql_servers (hostname, port, weight, comment) VALUES (\"%s\", %s, %s, '%s')";
+						while ((row = mysql_fetch_row(result))) {
+							int i;
+							int l=0;
+							for (i=0; i<3; i++) {
+								l+=strlen(row[i]);
+							}
+							char *o=escape_string_single_quotes(row[3],false);
+							char *query = (char *)malloc(strlen(q)+i+strlen(o)+64);
+							sprintf(query,q,row[0],row[1],row[2],o);
+							if (o!=row[3]) { // there was a copy
+								free(o);
+							}
+							GloAdmin->admindb->execute(query);
+							free(query);
 						}
-						GloAdmin->admindb->execute(query);
-						free(query);
+						proxy_info("Cluster: Loading to runtime ProxySQL Servers from peer %s:%d\n", hostname, port);
+						GloAdmin->load_proxysql_servers_to_runtime(false);
+						if (GloProxyCluster->cluster_proxysql_servers_save_to_disk == true) {
+							proxy_info("Cluster: Saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
+							GloAdmin->flush_proxysql_servers__from_memory_to_disk();
+						} else {
+							proxy_info("Cluster: NOT saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
+						}
+						metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_success]->Increment();
+					} else {
+						proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d failed: Checksum changed from %s to %s\n", hostname, port, expected_checksum, buf);
+						metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
 					}
 					mysql_free_result(result);
-					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d completed\n", hostname, port);
-					proxy_info("Cluster: Loading to runtime ProxySQL Servers from peer %s:%d\n", hostname, port);
-					GloAdmin->load_proxysql_servers_to_runtime(false);
-					if (GloProxyCluster->cluster_proxysql_servers_save_to_disk == true) {
-						proxy_info("Cluster: Saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
-						GloAdmin->flush_proxysql_servers__from_memory_to_disk();
-					} else {
-						proxy_info("Cluster: NOT saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
-					}
-					metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_success]->Increment();
 				} else {
 					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();

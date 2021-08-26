@@ -311,6 +311,6 @@ class ProxySQL_Cluster {
      *    - 'admin'.
 	 */
 	void pull_global_variables_from_peer(const std::string& type);
-	void pull_proxysql_servers_from_peer();
+	void pull_proxysql_servers_from_peer(const char *expected_checksum);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */
