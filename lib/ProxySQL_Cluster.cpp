@@ -693,11 +693,15 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			) {
 				if (v->diff_check >= diff_ps) {
 					proxy_info("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					// v->checksum will be destroyed when calling pull_proxysql_servers_from_peer()
+					// thus we need to copy it now
+					char *old_checksum = strdup(v->checksum);
 					GloProxyCluster->pull_proxysql_servers_from_peer();
-					if (strncmp(v->checksum, GloVars.checksums_values.proxysql_servers.checksum, 20)==0) {
+					if (strncmp(old_checksum, GloVars.checksums_values.proxysql_servers.checksum, 20)==0) {
 						// we copied from the remote server, let's also copy the same epoch
 						GloVars.checksums_values.proxysql_servers.epoch = v->epoch;
 					}
+					free(old_checksum);
 				}
 			}
 			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ps*10)) == 0)) {
