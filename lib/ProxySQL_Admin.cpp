@@ -2594,7 +2594,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			// load_proxysql_servers_to_runtime() calls ProxySQL_Cluster::load_servers_list()
 			// that then calls ProxySQL_Cluster_Nodes::load_servers_list(), holding a mutex
 			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
-			SPA->load_proxysql_servers_to_runtime();
+			SPA->load_proxysql_servers_to_runtime(true);
 			// we re-acquired the mutex because it will be released by the calling function
 			pthread_mutex_lock(&SPA->sql_query_global_mutex);
 			//SPA->mysql_servers_wrunlock();
