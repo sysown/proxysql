@@ -15,6 +15,6 @@ done
 
 for i in ${!ALL_TABLES[@]} ; do
 	for p in 6032 `seq 26001 26009` ; do 
-		mysql -u admin -padmin -h 127.0.0.1 -P$p -e "SELECT * FROM ${ALL_TABLES[$i]}" > /dev/null 2> /dev/null &
+		mysql -u admin -padmin -h 127.0.0.1 -P$p -e "SELECT COUNT(*) FROM ${ALL_TABLES[$i]}" > /dev/null 2> /dev/null &
 	done
 done
