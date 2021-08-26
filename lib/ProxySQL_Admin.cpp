@@ -12342,6 +12342,7 @@ void ProxySQL_Admin::flush_proxysql_servers__from_disk_to_memory() {
 }
 
 void ProxySQL_Admin::save_proxysql_servers_runtime_to_database(bool _runtime) {
+	std::lock_guard<std::mutex> lock(proxysql_servers_mutex);
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
 	SQLite3_result *resultset=NULL;

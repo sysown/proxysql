@@ -128,6 +128,8 @@ class ProxySQL_Admin {
 
 	prometheus::SerialExposer serial_exposer;
 
+	std::mutex proxysql_servers_mutex;
+
 	void wrlock();
 	void wrunlock();
 
