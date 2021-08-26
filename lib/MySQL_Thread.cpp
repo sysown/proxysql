@@ -362,9 +362,11 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"eventslog_filename",
 	(char *)"eventslog_filesize",
 	(char *)"eventslog_default_log",
+	(char *)"eventslog_max_files",
 	(char *)"eventslog_format",
 	(char *)"auditlog_filename",
 	(char *)"auditlog_filesize",
+	(char *)"auditlog_max_files",
 	//(char *)"default_charset", // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 	(char *)"handle_unknown_charset",
 	(char *)"free_connections_pct",
@@ -606,9 +608,11 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
 	variables.eventslog_default_log=0;
+	variables.eventslog_max_files=0;
 	variables.eventslog_format=1;
 	variables.auditlog_filename=strdup((char *)"");
 	variables.auditlog_filesize=100*1024*1024;
+	variables.auditlog_max_files=0;
 	//variables.server_capabilities=CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
 	// major upgrade in 2.0.0
 	variables.server_capabilities = CLIENT_MYSQL | CLIENT_FOUND_ROWS | CLIENT_PROTOCOL_41 | CLIENT_IGNORE_SIGPIPE | CLIENT_TRANSACTIONS | CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH;;
@@ -917,6 +921,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 	switch (a) {
 		case 'a':
 			if (!strcmp(name,"auditlog_filesize")) return (int)variables.auditlog_filesize;
+			if (!strcmp(name,"auditlog_max_files")) return (int)variables.auditlog_max_files;
 			if (!strcmp(name,"aurora_max_lag_ms_only_read_from_replicas")) return variables.aurora_max_lag_ms_only_read_from_replicas;
 			if (!strcmp(name,"auto_increment_delay_multiplex")) return (int)variables.auto_increment_delay_multiplex;
 			if (!strcmp(name,"autocommit_false_is_transaction")) return (int)variables.autocommit_false_is_transaction;
@@ -954,6 +959,7 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 		case 'e':
 			if (!strcmp(name,"enforce_autocommit_on_reads")) return (int)variables.enforce_autocommit_on_reads;
 			if (!strcmp(name,"eventslog_default_log")) return (int)variables.eventslog_default_log;
+			if (!strcmp(name,"eventslog_max_files")) return (int)variables.eventslog_max_files;
 			if (!strcmp(name,"eventslog_filesize")) return (int)variables.eventslog_filesize;
 			if (!strcmp(name,"eventslog_format")) return (int)variables.eventslog_format;
 			break;
@@ -1356,12 +1362,20 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d",variables.eventslog_default_log);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"eventslog_max_files")) {
+		sprintf(intbuf,"%d",variables.eventslog_max_files);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"eventslog_format")) {
 		sprintf(intbuf,"%d",variables.eventslog_format);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"auditlog_filesize")) {
 		sprintf(intbuf,"%d",variables.auditlog_filesize);
+		return strdup(intbuf);
+	}
+	if (!strcasecmp(name, "auditlog_max_files")) {
+		sprintf(intbuf, "%d", variables.auditlog_max_files);
 		return strdup(intbuf);
 	}
 	if (!strcasecmp(name,"max_allowed_packet")) {
@@ -2379,6 +2393,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		}
 	}
+	if (!strcasecmp(name,"eventslog_max_files")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv <= 99999999) {
+			variables.eventslog_max_files = intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
 	if (!strcasecmp(name,"eventslog_default_log")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1) {
@@ -2408,6 +2431,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		int intv=atoi(value);
 		if (intv >= 1024*1024 && intv <= 1*1024*1024*1024) {
 			variables.auditlog_filesize=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name, "auditlog_max_files")) {
+		int intv = atoi(value);
+		if (intv >= 0 && intv <= 99999999) {
+			variables.auditlog_max_files=intv;
 			return true;
 		} else {
 			return false;
@@ -4613,11 +4645,13 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___server_version=GloMTH->get_variable_string((char *)"server_version");
 	if (mysql_thread___eventslog_filename) free(mysql_thread___eventslog_filename);
 	mysql_thread___eventslog_filesize=GloMTH->get_variable_int((char *)"eventslog_filesize");
+	mysql_thread___eventslog_max_files=GloMTH->get_variable_int((char *)"eventslog_max_files");
 	mysql_thread___eventslog_default_log=GloMTH->get_variable_int((char *)"eventslog_default_log");
 	mysql_thread___eventslog_format=GloMTH->get_variable_int((char *)"eventslog_format");
 	mysql_thread___eventslog_filename=GloMTH->get_variable_string((char *)"eventslog_filename");
 	if (mysql_thread___auditlog_filename) free(mysql_thread___auditlog_filename);
 	mysql_thread___auditlog_filesize=GloMTH->get_variable_int((char *)"auditlog_filesize");
+	mysql_thread___auditlog_max_files=GloMTH->get_variable_int((char *)"auditlog_max_files");
 	mysql_thread___auditlog_filename=GloMTH->get_variable_string((char *)"auditlog_filename");
 	GloMyLogger->events_set_base_filename(); // both filename and filesize are set here
 	GloMyLogger->audit_set_base_filename(); // both filename and filesize are set here

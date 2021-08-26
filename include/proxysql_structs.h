@@ -778,11 +778,13 @@ __thread char * mysql_thread___ssl_p2s_cipher;
 __thread char * mysql_thread___eventslog_filename;
 __thread int mysql_thread___eventslog_filesize;
 __thread int mysql_thread___eventslog_default_log;
+__thread int mysql_thread___eventslog_max_files;
 __thread int mysql_thread___eventslog_format;
 
 /* variables used by audit log */
 __thread char * mysql_thread___auditlog_filename;
 __thread int mysql_thread___auditlog_filesize;
+__thread int mysql_thread___auditlog_max_files;
 
 /* variables used by the monitoring module */
 __thread int mysql_thread___monitor_enabled;
@@ -926,11 +928,13 @@ extern __thread char * mysql_thread___ssl_p2s_cipher;
 extern __thread char * mysql_thread___eventslog_filename;
 extern __thread int mysql_thread___eventslog_filesize;
 extern __thread int mysql_thread___eventslog_default_log;
+extern __thread int mysql_thread___eventslog_max_files;
 extern __thread int mysql_thread___eventslog_format;
 
 /* variables used by audit log */
 extern __thread char * mysql_thread___auditlog_filename;
 extern __thread int mysql_thread___auditlog_filesize;
+extern __thread int mysql_thread___auditlog_max_files;
 
 /* variables used by the monitoring module */
 extern __thread int mysql_thread___monitor_enabled;
