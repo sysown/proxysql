@@ -3621,6 +3621,20 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			}
 		}
 	}
+
+	// if the client simply executes:
+	// SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing
+	// we just return the count
+	if (strcmp("SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing", query_no_space)==0) {
+		int cnt = GloQPro->get_current_query_rules_fast_routing_count();
+		l_free(query_length,query);
+		char buf[256];
+		sprintf(buf,"SELECT %d AS 'COUNT(*)'", cnt);
+		query=l_strdup(buf);
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
 	if (!strncasecmp("TRUNCATE ", query_no_space, strlen("TRUNCATE "))) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			if (strstr(query_no_space,"stats_mysql_query_digest")) {
