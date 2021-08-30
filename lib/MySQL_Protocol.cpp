@@ -2233,6 +2233,14 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 			my_bool is_null = (null_byte & ( 1 << idx )) >> idx;
 			is_nulls[i]=is_null;
 			binds[i].is_null=&is_nulls[i];
+			// set length, defaults to 0
+			// for parameters with not fixed length, that will be assigned later
+			// we moved this initialization here due to #3585
+			lengths[i]=0;
+			binds[i].length=&lengths[i];
+			// NOTE: We nullify buffers here to reflect that memory wasn't
+			// initalized. See #3546.
+			binds[i].buffer = NULL;
 		}
 		free(null_bitmap); // we are done with it
 
@@ -2251,10 +2259,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				binds[i].buffer_type=(enum enum_field_types)buffer_type;
 				p+=2;
 
-				// set length, defaults to 0
-				// for parameters with not fixed length, that will be assigned later
-				lengths[i]=0;
-				binds[i].length=&lengths[i];
 			}
 		}
 
@@ -2270,9 +2274,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				continue;
 			} else if (is_nulls[i]==true) {
 				// the parameter is NULL, no need to read any data from the packet
-				// NOTE: We nullify buffers here to reflect that memory wasn't
-				// initalized. See #3546.
-				binds[i].buffer = NULL;
 				continue;
 			}
 
