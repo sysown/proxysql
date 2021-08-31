@@ -2033,7 +2033,7 @@ __do_auth:
 		(*myds)->sess->session_fast_forward=fast_forward;
 		(*myds)->sess->user_max_connections=max_connections;
 	}
-	if (password==NULL) {
+	if (password == NULL) {
 		// this is a workaround for bug #603
 		if (
 			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
@@ -2098,7 +2098,7 @@ __do_auth:
 						(*myds)->sess->transaction_persistent=transaction_persistent;
 						(*myds)->sess->session_fast_forward=fast_forward;
 						(*myds)->sess->user_max_connections=max_connections;
-						if (strncmp(password,(char *)pass,strlen(password))==0) {
+						if (strcmp(password, (char *) pass) == 0) {
 							if (backend_username) {
 								free(password);
 								password=NULL;
@@ -2157,8 +2157,8 @@ __do_auth:
 						ret=true;
 					}
 				} else { // mysql_clear_password
-					if (strncmp(password,(char *)pass,strlen(password))==0) {
-						ret=true;
+					if (strcmp(password, (char *) pass) == 0) {
+						ret = true;
 					}
 				}
 			} else {
@@ -3071,4 +3071,16 @@ unsigned long long MySQL_ResultSet::current_size() {
 		}
 	}
 	return intsize;
+}
+
+my_bool proxy_mysql_stmt_close(MYSQL_STMT* stmt) {
+	// Clean internal structures for 'stmt->mysql->stmts'.
+	if (stmt->mysql) {
+		stmt->mysql->stmts =
+			list_delete(stmt->mysql->stmts, &stmt->list);
+	}
+	// Nullify 'mysql' field to avoid sending a blocking command to the server.
+	stmt->mysql = NULL;
+	// Perform the regular close operation.
+	return mysql_stmt_close(stmt);
 }

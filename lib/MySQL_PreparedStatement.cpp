@@ -4,6 +4,7 @@
 #include "SpookyV2.h"
 
 #include "MySQL_PreparedStatement.h"
+#include "MySQL_Protocol.h"
 
 //extern MySQL_STMT_Manager *GloMyStmt;
 //static uint32_t add_prepared_statement_calls = 0;
@@ -691,12 +692,7 @@ MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
 			it != global_stmt_to_backend_stmt.end(); ++it) {
 			uint64_t global_stmt_id = it->first;
 			MYSQL_STMT *stmt = it->second;
-			if (stmt->mysql) {
-				stmt->mysql->stmts =
-				    list_delete(stmt->mysql->stmts, &stmt->list);
-			}
-			stmt->mysql = NULL;
-			mysql_stmt_close(stmt);
+			proxy_mysql_stmt_close(stmt);
 			GloMyStmt->ref_count_server(global_stmt_id, -1);
 		}
 	}
