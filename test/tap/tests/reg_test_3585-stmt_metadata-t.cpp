@@ -45,7 +45,7 @@ int insert_and_check(MYSQL_STMT *stmti, MYSQL_STMT *stmts, int id, char *name1, 
 	long unsigned int name1l = 0;
 	long unsigned int name2l = 0;
 	memset(bindi, 0, sizeof(bindi));
-	memset(bindsi, 0, sizeof(bindi));
+	memset(bindsi, 0, sizeof(bindsi));
 	memset(binds, 0, sizeof(binds));
 
 	int copyid = id;
@@ -375,7 +375,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	diag((char *)"");
+	diag("%s","");
 	MYSQL_TIME ts1;
 	MYSQL_TIME ts2;
 	int i1, i2;
