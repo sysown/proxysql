@@ -1770,6 +1770,15 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	//Copy4B(&hdr,pkt);
 	pkt     += sizeof(mysql_hdr);
 
+	// NOTE: 'mysqlsh' sends a 'COM_INIT_DB' as soon as the connection is openned
+	// before ProxySQL has sent 'Server Greeting' messsage. Because this packet is
+	// unexpected, we simple return 'false' and exit.
+	if (hdr.pkt_id == 0 && *pkt == 2) {
+		ret = false;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client is disconnecting\n", (*myds), (*myds)->sess, user);
+		goto __exit_process_pkt_handshake_response;
+	}
+
 	if ((*myds)->myconn->userinfo->username) {
 		(*myds)->switching_auth_stage=2;
 		if (len==5) {

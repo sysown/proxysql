@@ -93,9 +93,25 @@ else
 PSQLCH=
 endif
 
-MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\"
+WITHASANVAR := $(shell echo $(WITHASAN))
+ifeq ($(WITHASANVAR),1)
+WASAN= -fsanitize=address
+# Force the disable of JEMALLOC, since ASAN isn't compatible.
+export NOJEMALLOC = 1
+else
+WASAN=
+endif
 
-LDFLAGS+=
+MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
+
+ifeq ($(WITHGCOVVAR),1)
+LDFLAGS+= -lgcov --coverage
+endif
+
+ifeq ($(WITHASANVAR),1)
+LDFLAGS+= -fsanitize=address
+endif
+
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
 ifeq ($(NOJEMALLOC),1)
 MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core $(EXTRALINK)

@@ -5,6 +5,15 @@ $(error GIT_VERSION is not set)
 endif
 endif
 
+### NOTES:
+### to compile without jemalloc, set environment variable NOJEMALLOC=1
+### to compile with ASAN, set environment variables NOJEMALLOC=1, WITHASAN=1:
+###   * To perform a full ProxySQL build with ASAN then execute:
+###
+###     ```
+###     make build_deps_debug -j$(nproc) && make debug -j$(nproc) && make build_tap_test_debug -j$(nproc)
+###     ```
+
 O0=-O0
 O2=-O2
 O1=-O1
@@ -128,6 +137,10 @@ build_lib_testall: build_deps_debug
 .PHONY: build_tap_test
 build_tap_test: build_src
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_tap_test_debug
+build_tap_test_debug: build_src
+	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
 .PHONY: build_src_debug
 build_src_debug: build_deps build_lib_debug

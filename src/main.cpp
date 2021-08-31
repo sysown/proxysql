@@ -1115,6 +1115,7 @@ void ProxySQL_Main_join_all_threads() {
 	if (GloMyMon && MyMon_thread) {
 		cpu_timer t;
 		MyMon_thread->join();
+		delete MyMon_thread;
 		MyMon_thread = NULL;
 #ifdef DEBUG
 		std::cerr << "GloMyMon joined in ";
@@ -1710,7 +1711,7 @@ int main(int argc, const char * argv[]) {
 					SHA1(fb, statbuf.st_size, temp);
 					binary_sha1 = (char *)malloc(SHA_DIGEST_LENGTH*2+1);
 					memset(binary_sha1, 0, SHA_DIGEST_LENGTH*2+1);
-					char buf[SHA_DIGEST_LENGTH*2];
+					char buf[SHA_DIGEST_LENGTH*2 + 1];
 					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
 						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
 					}

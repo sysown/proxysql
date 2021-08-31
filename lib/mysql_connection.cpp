@@ -730,6 +730,23 @@ void MySQL_Connection::connect_start() {
 		mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
 	}
 
+	if (myds != NULL) {
+		if (myds->sess != NULL) {
+			if (myds->sess->session_fast_forward == true) { // this is a fast_forward connection
+				assert(myds->sess->client_myds != NULL);
+				MySQL_Connection * c = myds->sess->client_myds->myconn;
+				assert(c != NULL);
+				mysql->options.client_flag &= ~(CLIENT_DEPRECATE_EOF); // we disable it by default
+				// if both client_flag and server_capabilities (used for client) , set CLIENT_DEPRECATE_EOF
+				if (c->options.client_flag & CLIENT_DEPRECATE_EOF) {
+					if (c->options.server_capabilities & CLIENT_DEPRECATE_EOF) {
+						mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+					}
+				}
+			}
+		}
+	}
+
 	char *auth_password=NULL;
 	if (userinfo->password) {
 		if (userinfo->password[0]=='*') { // we don't have the real password, let's pass sha1
@@ -2251,7 +2268,11 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	}
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {
 		*match = '\0';
-		strcat(query_digest_text_filter_select, match+strlen("@@"));
+		if (strlen(query_digest_text_filter_select) == 0) {
+			memcpy(query_digest_text_filter_select, match, strlen("@@"));
+		} else {
+			strcat(query_digest_text_filter_select, match+strlen("@@"));
+		}
 	}
 
 	std::vector<char*>query_digest_text_filter_select_v;
