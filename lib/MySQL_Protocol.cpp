@@ -2231,8 +2231,19 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 			uint8_t null_byte=null_bitmap[i/8];
 			uint8_t idx=i%8;
 			my_bool is_null = (null_byte & ( 1 << idx )) >> idx;
+			if (binds[i].buffer_type == MYSQL_TYPE_NULL)
+				is_null = 1;
 			is_nulls[i]=is_null;
 			binds[i].is_null=&is_nulls[i];
+			// set length, defaults to 0
+			// for parameters with not fixed length, that will be assigned later
+			// we moved this initialization here due to #3585
+			binds[i].is_unsigned=0;
+			lengths[i]=0;
+			binds[i].length=&lengths[i];
+			// NOTE: We nullify buffers here to reflect that memory wasn't
+			// initalized. See #3546.
+			binds[i].buffer = NULL;
 		}
 		free(null_bitmap); // we are done with it
 
@@ -2251,10 +2262,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				binds[i].buffer_type=(enum enum_field_types)buffer_type;
 				p+=2;
 
-				// set length, defaults to 0
-				// for parameters with not fixed length, that will be assigned later
-				lengths[i]=0;
-				binds[i].length=&lengths[i];
 			}
 		}
 
@@ -2270,9 +2277,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				continue;
 			} else if (is_nulls[i]==true) {
 				// the parameter is NULL, no need to read any data from the packet
-				// NOTE: We nullify buffers here to reflect that memory wasn't
-				// initalized. See #3546.
-				binds[i].buffer = NULL;
 				continue;
 			}
 
@@ -2306,11 +2310,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 						p++;
 						MYSQL_TIME ts;
 						memset(&ts,0,sizeof(MYSQL_TIME));
-						memcpy(&ts.neg,p,1);
-						memcpy(&ts.day,p+1,4);
-						memcpy(&ts.hour,p+5,1);
-						memcpy(&ts.minute,p+6,1);
-						memcpy(&ts.second,p+7,1);
+						if (l) {
+							memcpy(&ts.neg,p,1);
+							memcpy(&ts.day,p+1,4);
+							memcpy(&ts.hour,p+5,1);
+							memcpy(&ts.minute,p+6,1);
+							memcpy(&ts.second,p+7,1);
+						}
 						if (l>8) {
 							memcpy(&ts.second_part,p+8,4);
 						}
@@ -2328,9 +2334,11 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 						p++;
 						MYSQL_TIME ts;
 						memset(&ts,0,sizeof(MYSQL_TIME));
-						memcpy(&ts.year,p,2);
-						memcpy(&ts.month,p+2,1);
-						memcpy(&ts.day,p+3,1);
+						if (l) {
+							memcpy(&ts.year,p,2);
+							memcpy(&ts.month,p+2,1);
+							memcpy(&ts.day,p+3,1);
+						}
 						if (l>4) {
 							memcpy(&ts.hour,p+4,1);
 							memcpy(&ts.minute,p+5,1);
