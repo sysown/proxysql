@@ -315,7 +315,7 @@ int main(int argc, char** argv) {
 	}
 
 	int np = 4; // init + prepare
-	np += 21*2; // number of INSERT+SELECT
+	np += 25*2; // number of INSERT+SELECT
 	plan(np);
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
@@ -414,6 +414,12 @@ int main(int argc, char** argv) {
 	insert_and_check(stmti, stmts, 19, NULL,              NULL, NULL, NULL,             NULL, &i2);
 	insert_and_check(stmti, stmts, 20, NULL,              NULL, &i1,  NULL,             NULL, &i2);
 	insert_and_check(stmti, stmts, 21, NULL,              &ts1, &i1,  NULL,             NULL, &i2);
+	ts1.hour = 0; ts1.minute = 0; ts1.second=0;
+	ts2.hour = 0; ts2.minute = 0; ts2.second=0;
+	insert_and_check(stmti, stmts, 22, NULL,              &ts1, NULL, (char *)"world22", &ts2, NULL);
+	insert_and_check(stmti, stmts, 23, (char *)"hello23", NULL, NULL, (char *)"world23", &ts2, NULL);
+	insert_and_check(stmti, stmts, 24, (char *)"hello24", NULL, &i1,  NULL,              NULL, &i2);
+	insert_and_check(stmti, stmts, 25, NULL,              NULL, NULL, (char *)"world25", &ts2, &i2);
 	mysql_close(proxysql_mysql);
 	mysql_close(proxysql_admin);
 
