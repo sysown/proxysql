@@ -1003,7 +1003,7 @@ handler_again:
 			}
 			if (!ret_mysql) {
 				// always increase the counter
-				proxy_error("Failed to mysql_real_connect() on %s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
+				proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
     		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
     		NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);

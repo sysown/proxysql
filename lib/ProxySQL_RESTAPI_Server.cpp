@@ -663,7 +663,12 @@ public:
 
 void * restapi_server_thread(void *arg) {
 	httpserver::webserver * ws = (httpserver::webserver *)arg;
-    ws->start(true);
+	try {
+		ws->start(true);
+	} catch (const std::exception& ex) {
+		proxy_error("Exception starting 'RESTAPI Server': %s\n", ex.what());
+		throw;
+	}
 	return NULL;
 }
 
