@@ -1,3 +1,26 @@
+/**
+ * @file reg_test_3603-stmt_metadata-t.cpp
+ * @brief This test is a regression test for issue #3603. It performs several
+ *   prepared statements using NULL values to check that these values are correctly
+ *   preserved/forgotten when new values are received.
+ * @details For being able to trigger the issue, the test needs to execute the
+ *   statements using 'MYSQL_TYPE_NULL' for supplied 'buffer_types'. Since the
+ *   issue consists in the invalid preservation of the 'NULL' values in
+ *   subsequent executions of the same prepared stmt. This tests performs two
+ *   sequences of actions:
+ *
+ *   1. Sets all the values to 'NULL' in a particular stmt, for later updating
+ *   those values in the subsequent execution of the stmt. If the issue is
+ *   present, reported values should be 'NULL' due to the issue.
+ *   2. Sets all the values of the same stmt to other values than NULL. Because
+ *   of the issue, this stmt needs to be executed twice to if the values were
+ *   'nullified' previously. Later executes an statement making this values to
+ *   NULL, followed by one with values other than NULL. This creates the
+ *   required conditions to provoque a 'heap-buffer-overflow'.
+ *
+ * @date 2020-09-07
+ */
+
 #include <vector>
 #include <string>
 #include <stdio.h>
