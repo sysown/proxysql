@@ -3592,8 +3592,18 @@ __get_pkts_from_client:
 									// For more context check issue: #3493.
 									// ===================================================
 									if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
-										if (strncasecmp((char *)"USE ",CurrentQuery.get_digest_text(),4)==0) {
-											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt, CurrentQuery.get_digest_text());
+										fprintf(stderr,"%s\n", CurrentQuery.get_digest_text());
+										const char *qd = CurrentQuery.get_digest_text();
+										if (
+											(strncasecmp((char *)"USE",qd,3)==0)
+											&&
+											(
+												(strncasecmp((char *)"USE ",qd,4)==0)
+												||
+												(strncasecmp((char *)"USE`",qd,4)==0)
+											)
+										) {
+											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt);
 
 											if (mirror == false) {
 												break;
@@ -5241,18 +5251,25 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 // this function was introduced due to isseu #718
 // some application (like the one written in Perl) do not use COM_INIT_DB , but COM_QUERY with USE dbname
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt, const char* query_digest) {
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
-		char *schemaname=strndup(query_digest+4,strlen(query_digest)-4);
+		string nq=string((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
+		RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)" ");
+		char *sn_tmp = (char *)nq.c_str();
+		while (sn_tmp < ( nq.c_str() + nq.length() - 4 ) && *sn_tmp == ' ')
+			sn_tmp++;
+		//char *schemaname=strdup(nq.c_str()+4);
+		char *schemaname=strdup(sn_tmp+3);
 		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
 		// handle cases like "USE `schemaname`
 		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
 			schemanameptr[strlen(schemanameptr)-1]='\0';
 			schemanameptr++;
 		}
+		proxy_info("%s\n", schemanameptr);
 		client_myds->myconn->userinfo->set_schemaname(schemanameptr,strlen(schemanameptr));
 		free(schemaname);
 		if (mirror==false) {
