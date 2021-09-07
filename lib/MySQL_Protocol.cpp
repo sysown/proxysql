@@ -2454,9 +2454,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		for (i=0;i<num_params;i++) {
 			uint8_t null_byte=null_bitmap[i/8];
 			uint8_t idx=i%8;
-			my_bool is_null = (null_byte & ( 1 << idx )) >> idx;
-			if (binds[i].buffer_type == MYSQL_TYPE_NULL)
-				is_null = 1;
+			uint8_t tmp_is_null = (null_byte & ( 1 << idx )) >> idx;
+			my_bool is_null = tmp_is_null;
+			if (new_params_bound_flag == 0) {
+				// TODO: Add comment
+				if (binds[i].buffer_type == MYSQL_TYPE_NULL)
+					is_null = 1;
+			}
 			is_nulls[i]=is_null;
 			binds[i].is_null=&is_nulls[i];
 			// set length, defaults to 0
@@ -2484,6 +2488,12 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					binds[i].is_unsigned=1;
 				}
 				binds[i].buffer_type=(enum enum_field_types)buffer_type;
+				// NOTE: This is required because further check for nullity rely on
+				// 'is_nulls' instead of 'buffer_type'.
+				if (binds[i].buffer_type == MYSQL_TYPE_NULL) {
+					is_nulls[i]= 1;
+				}
+
 				p+=2;
 
 			}
