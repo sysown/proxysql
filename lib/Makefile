@@ -108,9 +108,17 @@ ifeq ($(UNAME_S),Darwin)
 	IDIRS+= -I/usr/local/opt/openssl/include
 endif
 
+# 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
+# for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
+# internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
+ifeq ($(UNAME_S),Darwin)
+ENABLE_EPOLL=
+else
+ENABLE_EPOLL=-DENABLE_EPOLL
+endif
 
 MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH)
+MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
