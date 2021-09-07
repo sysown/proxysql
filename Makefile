@@ -511,6 +511,7 @@ cleanall:
 	cd deps && ${MAKE} cleanall
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
+	cd test/tap && ${MAKE} clean
 	rm binaries/*deb || true
 	rm binaries/*rpm || true
 
