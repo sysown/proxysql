@@ -3592,7 +3592,6 @@ __get_pkts_from_client:
 									// For more context check issue: #3493.
 									// ===================================================
 									if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
-										fprintf(stderr,"%s\n", CurrentQuery.get_digest_text());
 										const char *qd = CurrentQuery.get_digest_text();
 										if (
 											(strncasecmp((char *)"USE",qd,3)==0)
@@ -5269,7 +5268,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			schemanameptr[strlen(schemanameptr)-1]='\0';
 			schemanameptr++;
 		}
-		proxy_info("%s\n", schemanameptr);
 		client_myds->myconn->userinfo->set_schemaname(schemanameptr,strlen(schemanameptr));
 		free(schemaname);
 		if (mirror==false) {
