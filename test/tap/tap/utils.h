@@ -7,6 +7,8 @@
 #include <sstream>
 #include <vector>
 
+#include <curl/curl.h>
+
 #define MYSQL_QUERY(mysql, query) \
 	do { \
 		if (mysql_query(mysql, query)) { \
@@ -71,5 +73,61 @@ int exec(const std::string& cmd, std::string& result);
 // create table test.sbtest1 with num_rows rows
 int create_table_test_sbtest1(int num_rows, MYSQL *mysql);
 int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql);
+
+using mysql_res_row = std::vector<std::string>;
+
+/**
+ * @brief Function that extracts the provided 'MYSQL_RES' into a vector of vector of
+ *   strings.
+ * @param my_res The 'MYSQL_RES' for which to extract the values. In case of
+ *   being NULL an empty vector is returned.
+ * @return The extracted values of all the rows present in the resultset.
+ */
+std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res);
+
+/**
+ * @brief Dummy write function to avoid CURL to write received output to stdout.
+ * @return Returns the size presented.
+ */
+size_t my_dummy_write(char*, size_t size, size_t nmemb, void*);
+
+/**
+ * @brief Waits until the provided endpoint is ready to be used or the
+ *   timeout period expired. For this checks the return code of
+ *   'perform_simple_post' which only fails in case the 'CURL' request couldn't
+ *   be performed, which is interpreted as endpoint not being yet ready.
+ *
+ * @param endpoint The endpoint to be queried.
+ * @param post_params The required params to be supplied for the 'POST' endpoint
+ *   call.
+ * @param timeout The max time to wait before declaring a timeout, and
+ *   returning '-1'.
+ * @param delay The delay specified in 'ms' to be waited between retries.
+ *
+ * @return '0' in case the endpoint became available before the timeout, or
+ *   '-1' in case the timeout expired.
+ */
+int wait_until_enpoint_ready(
+	std::string endpoint, std::string post_params, uint32_t timeout, uint32_t delay=100
+);
+
+/**
+ * @brief Perform a simple POST query to the specified endpoint using the supplied
+ *  'post_params'.
+ *
+ * @param endpoint The endpoint to be exercised by the POST.
+ * @param post_params The post parameters to be supplied to the script.
+ * @param curl_out_err A uint64_t reference returning the result code of the
+ *   query in case it has been performed. In case the query couldn't be
+ *   performed, this value is never initialized.
+ * @param curl_out_err A string reference to collect the error as a string reported
+ *   by 'libcurl' in case of failure.
+ *
+ * @return The response code of the query in case of the query.
+ */
+CURLcode perform_simple_post(
+	const std::string& endpoint, const std::string& post_params,
+	uint64_t& curl_res_code, std::string& curl_out_err
+);
 
 #endif // #define UTILS_H
