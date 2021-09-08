@@ -556,9 +556,12 @@ class MySQL_Threads_Handler
 		int auditlog_filesize;
 		// SSL related, proxy to server
 		char * ssl_p2s_ca;
+		char * ssl_p2s_capath;
 		char * ssl_p2s_cert;
 		char * ssl_p2s_key;
 		char * ssl_p2s_cipher;
+		char * ssl_p2s_crl;
+		char * ssl_p2s_crlpath;
 		int query_cache_size_MB;
 		int min_num_servers_lantency_awareness;
 		int aurora_max_lag_ms_only_read_from_replicas;

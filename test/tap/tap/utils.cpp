@@ -157,11 +157,7 @@ int read_pipe(int pipe_fd, std::string& sbuffer) {
 	return res;
 }
 
-int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
-	MYSQL_QUERY(mysql, "CREATE DATABASE IF NOT EXISTS test");
-	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS test.sbtest1");
-	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
-
+int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
 	std::random_device rd;
 	std::mt19937 mt(rd());
 	std::uniform_int_distribution<int> dist(0.0, 9.0);
@@ -173,7 +169,9 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 		q << "INSERT INTO test.sbtest1 (k, c, pad) values ";
 		bool put_comma = false;
 		int i=0;
-		for (i=0; i<num_rows && i<20+rand()%50 ; ++i) {
+		unsigned int cnt=5+rand()%50;
+		if (cnt > num_rows) cnt = num_rows;
+		for (i=0; i<cnt ; ++i) {
 			num_rows--;
 			int k = dist(mt);
 			std::stringstream c;
@@ -201,6 +199,13 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 	}
 	diag("Done!");
 	return 0;
+}
+int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
+	MYSQL_QUERY(mysql, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS test.sbtest1");
+	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
+
+	return add_more_rows_test_sbtest1(num_rows, mysql);
 }
 
 int wexecvp(const std::string& file, const std::vector<const char*>& argv, const to_opts* opts, std::string& s_stdout, std::string& s_stderr) {
@@ -492,3 +497,63 @@ std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res) {
 
 	return result;
 };
+
+size_t my_dummy_write(char*, size_t size, size_t nmemb, void*) {
+	return size * nmemb;
+}
+
+CURLcode perform_simple_post(
+	const std::string& endpoint, const std::string& post_params,
+	uint64_t& curl_res_code, std::string& curl_out_err
+) {
+	CURL *curl;
+	CURLcode res;
+
+	curl_global_init(CURL_GLOBAL_ALL);
+
+	curl = curl_easy_init();
+	if(curl) {
+		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_params.c_str());
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &my_dummy_write);
+
+		res = curl_easy_perform(curl);
+
+		if(res != CURLE_OK) {
+			curl_out_err = std::string { curl_easy_strerror(res) };
+		} else {
+			curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &curl_res_code);
+		}
+
+		curl_easy_cleanup(curl);
+	}
+
+	return res;
+}
+
+int wait_until_enpoint_ready(
+	std::string endpoint, std::string post_params, uint32_t timeout, uint32_t delay
+) {
+	double waited = 0;
+	int res = -1;
+
+	while (waited < timeout) {
+		std::string curl_str_err {};
+		uint64_t curl_res_code = 0;
+		int curl_err = perform_simple_post(endpoint, post_params, curl_res_code, curl_str_err);
+
+		if (curl_err != CURLE_OK) {
+			diag(
+				"'curl_err_code': %d, 'curl_err': '%s', waiting for '%d'ms...",
+				curl_err, curl_str_err.c_str(), delay
+			);
+			waited += static_cast<double>(delay) / 1000;
+			usleep(delay * 1000);
+		} else {
+			res = 0;
+			break;
+		}
+	}
+
+	return res;
+}

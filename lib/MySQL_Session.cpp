@@ -504,7 +504,7 @@ MySQL_Session::MySQL_Session() {
 	last_insert_id=0; // #1093
 
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
-	ldap_ctx = NULL;
+	use_ldap_auth = false;
 }
 
 void MySQL_Session::init() {
@@ -546,7 +546,7 @@ void MySQL_Session::reset() {
 	memset(gtid_buf,0,sizeof(gtid_buf));
 	if (session_type == PROXYSQL_SESSION_SQLITE) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
-		if (sqlite_sess->sessdb) {
+		if (sqlite_sess && sqlite_sess->sessdb) {
 			sqlite3 *db = sqlite_sess->sessdb->get_db();
 			if ((*proxy_sqlite3_get_autocommit)(db)==0) {
 				sqlite_sess->sessdb->execute((char *)"COMMIT");
@@ -588,6 +588,7 @@ MySQL_Session::~MySQL_Session() {
 	}
 	if (user_attributes) {
 		free(user_attributes);
+		user_attributes = NULL;
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
@@ -600,10 +601,6 @@ MySQL_Session::~MySQL_Session() {
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
-	}
-	if (ldap_ctx) {
-		GloMyLdapAuth->ldap_ctx_free(ldap_ctx);
-		ldap_ctx = NULL;
 	}
 }
 
@@ -1600,8 +1597,10 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 			pthread_attr_setstacksize (&attr, 256*1024);
 			pthread_t pt;
 			if (pthread_create(&pt, &attr, &kill_query_thread, ka) != 0) {
+				// LCOV_EXCL_START
 				proxy_error("Thread creation\n");
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 	}
@@ -1634,8 +1633,10 @@ bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 				previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		NEXT_IMMEDIATE_NEW(SETTING_MULTI_STMT);
 	}
@@ -1660,8 +1661,10 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
@@ -1723,8 +1726,10 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 				previous_status.push(status);
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_GTIDS);
 	}
@@ -1774,8 +1779,10 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			NEXT_IMMEDIATE_NEW(SETTING_LDAP_USER_VARIABLE);
 		}
@@ -1817,8 +1824,10 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 						previous_status.push(PROCESSING_STMT_EXECUTE);
 						break;
 					default:
+						// LCOV_EXCL_START
 						assert(0);
 						break;
+						// LCOV_EXCL_STOP
 				}
 				NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 			}
@@ -1836,8 +1845,10 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 		}
@@ -1891,8 +1902,10 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
 			NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
@@ -1910,8 +1923,10 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			NEXT_IMMEDIATE_NEW(CHANGING_SCHEMA);
 		}
@@ -1929,8 +1944,10 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 				previous_status.push(status);
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
 		NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
@@ -2013,7 +2030,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 	enum session_status st=status;
 
 	if (
-		(GloMyLdapAuth==NULL) || (ldap_ctx==NULL)
+		(GloMyLdapAuth==NULL) || (use_ldap_auth==false)
 		||
 		(client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
 	) { // nothing to do
@@ -2627,7 +2644,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			st=previous_status.top();
 			previous_status.pop();
 			NEXT_IMMEDIATE_NEW(st);
-			assert(0);
 		}
 		assert(st==status);
 		unsigned long long curtime=monotonic_time();
@@ -2979,7 +2995,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		MySQL_STMT_Global_info *stmt_info=NULL;
 		// we first lock GloStmt
 		GloMyStmt->wrlock();
-		stmt_info=GloMyStmt->find_prepared_statement_by_hash(hash,false);
+		stmt_info=GloMyStmt->find_prepared_statement_by_hash(hash);
 		if (stmt_info) {
 			// the prepared statement exists in GloMyStmt
 			// for this reason, we do not need to prepare it again, and we can already reply to the client
@@ -3037,7 +3053,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
 		if (stmt_global_id == 0) {
 			// FIXME: add error handling
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 		CurrentQuery.stmt_global_id=stmt_global_id;
 		// now we get the statement information
@@ -3185,7 +3203,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			break;
 #endif /* PROXYSQLCLICKHOUSE */
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 	}
 }
 
@@ -3417,8 +3437,10 @@ __get_pkts_from_client:
 						case STATE_SLEEP_MULTI_PACKET:
 							break;
 						default:
+							// LCOV_EXCL_START
 							assert(0);
 							break;
+							// LCOV_EXCL_STOP
 					}
 				}
 				switch (client_myds->DSS) {
@@ -3516,8 +3538,17 @@ __get_pkts_from_client:
 									// For more context check issue: #3493.
 									// ===================================================
 									if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
-										if (strncasecmp((char *)"USE ",CurrentQuery.get_digest_text(),4)==0) {
-											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt, CurrentQuery.get_digest_text());
+										const char *qd = CurrentQuery.get_digest_text();
+										if (
+											(strncasecmp((char *)"USE",qd,3)==0)
+											&&
+											(
+												(strncasecmp((char *)"USE ",qd,4)==0)
+												||
+												(strncasecmp((char *)"USE`",qd,4)==0)
+											)
+										) {
+											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt);
 
 											if (mirror == false) {
 												break;
@@ -3754,8 +3785,10 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 					previous_status.push(PROCESSING_STMT_EXECUTE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			return 1;
 		}
@@ -3877,6 +3910,9 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 				(buffer_type == MYSQL_TYPE_DATETIME)
 			) {
 				free(CurrentQuery.stmt_meta->binds[i].buffer);
+				// NOTE: This memory should be zeroed during initialization,
+				// but we also nullify it here for extra safety. See #3546.
+				CurrentQuery.stmt_meta->binds[i].buffer = NULL;
 			}
 		}
 	}
@@ -3926,8 +3962,10 @@ bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, i
 				previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		if (*errmsg) {
 			free(*errmsg);
@@ -4011,8 +4049,10 @@ bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int
 					previous_status.push(PROCESSING_STMT_PREPARE);
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 				}
 				if (*errmsg) {
 					free(*errmsg);
@@ -4082,8 +4122,10 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 			}
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 }
 
@@ -4125,8 +4167,10 @@ int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 			rc=myconn->async_query(myds->revents, (char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength,&CurrentQuery.mysql_stmt, CurrentQuery.stmt_meta);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	return rc;
 }
@@ -4313,8 +4357,10 @@ handler_again:
 						previous_status.push(PROCESSING_STMT_EXECUTE);
 						break;
 					default:
+						// LCOV_EXCL_START
 						assert(0);
 						break;
+						// LCOV_EXCL_STOP
 				}
 				NEXT_IMMEDIATE(CONNECTING_SERVER);
 			} else {
@@ -4335,7 +4381,7 @@ handler_again:
 							if (handler_again___verify_init_connect()) {
 								goto handler_again;
 							}
-							if (ldap_ctx) {
+							if (use_ldap_auth) {
 								if (handler_again___verify_ldap_user_variable()) {
 									goto handler_again;
 								}
@@ -4436,6 +4482,14 @@ handler_again:
 
 					handler_rc0_Process_GTID(myconn);
 
+					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
+					// see bug #3549
+					if (locked_on_hostgroup >= 0) {
+						assert(myconn != NULL);
+						assert(myconn->mysql != NULL);
+						autocommit = myconn->mysql->server_status & SERVER_STATUS_AUTOCOMMIT;
+					}
+
 					if (mirror == false) {
 						// Support for LAST_INSERT_ID()
 						if (myconn->mysql->insert_id) {
@@ -4468,8 +4522,10 @@ handler_again:
 							handler_rc0_PROCESSING_STMT_EXECUTE(myds);
 							break;
 						default:
+							// LCOV_EXCL_START
 							assert(0);
 							break;
+							// LCOV_EXCL_STOP
 					}
 
 					if (mysql_thread___log_mysql_warnings_enabled) {
@@ -4781,7 +4837,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->DSS=STATE_SSL_INIT;
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl=SSL_new(GloVars.global.ssl_ctx);
+		client_myds->ssl = GloVars.get_SSL_ctx();
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
@@ -4848,10 +4904,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 //#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
-						if (ldap_ctx==NULL) {
-							free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+						if (use_ldap_auth == false) {
+							free_users = GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 						} else {
-							free_users=GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+							free_users = GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->fe_username, &used_users);
 						}
 						break;
 #ifdef PROXYSQLCLICKHOUSE
@@ -4860,8 +4916,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						break;
 #endif /* PROXYSQLCLICKHOUSE */
 					default:
+						// LCOV_EXCL_START
 						assert(0);
 						break;
+						// LCOV_EXCL_STOP
 				}
 			} else {
 				free_users=1;
@@ -5144,12 +5202,18 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 // this function was introduced due to isseu #718
 // some application (like the one written in Perl) do not use COM_INIT_DB , but COM_QUERY with USE dbname
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt, const char* query_digest) {
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
-		char *schemaname=strndup(query_digest+4,strlen(query_digest)-4);
+		string nq=string((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
+		RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)" ");
+		char *sn_tmp = (char *)nq.c_str();
+		while (sn_tmp < ( nq.c_str() + nq.length() - 4 ) && *sn_tmp == ' ')
+			sn_tmp++;
+		//char *schemaname=strdup(nq.c_str()+4);
+		char *schemaname=strdup(sn_tmp+3);
 		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
 		// handle cases like "USE `schemaname`
 		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
@@ -5637,8 +5701,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 												return false;
 											}
 										} else {
+											// LCOV_EXCL_START
 											proxy_error("Cannot find charset/collation [%s]\n", value1.c_str());
 											assert(0);
+											// LCOV_EXCL_STOP
 										}
 									}
 								} else {
@@ -6134,10 +6200,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		reset();
 		init();
 		if (client_authenticated) {
-			if (ldap_ctx==NULL) {
+			if (use_ldap_auth == false) {
 				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
 			} else {
-				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 			}
 		}
 		client_authenticated=false;
@@ -6877,7 +6943,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (GloMyLdapAuth==NULL)
 		return;
-	if (ldap_ctx==NULL)
+	if (use_ldap_auth == false)
 		return;
 	if (client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
 		return;

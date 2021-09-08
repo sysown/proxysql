@@ -253,7 +253,8 @@ class MySQL_STMT_Manager_v14 {
 	public:
 	MySQL_STMT_Manager_v14();
 	~MySQL_STMT_Manager_v14();
-	MySQL_STMT_Global_info * find_prepared_statement_by_hash(uint64_t hash, bool lock=true);
+	//MySQL_STMT_Global_info * find_prepared_statement_by_hash(uint64_t hash, bool lock=true); // removed in 2.3
+	MySQL_STMT_Global_info * find_prepared_statement_by_hash(uint64_t hash);
 	MySQL_STMT_Global_info * find_prepared_statement_by_stmt_id(uint64_t id, bool lock=true);
 	void rdlock() { pthread_rwlock_rdlock(&rwlock_); }
 	void wrlock() { pthread_rwlock_wrlock(&rwlock_); }
