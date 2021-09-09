@@ -2465,10 +2465,7 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 					return f_entry.second.updated_at < s_entry.second.updated_at;
 				}
 			);
-			if (older_elem->first == client_addr) {
-				older_elem->second.error_count += 1;
-				older_elem->second.updated_at = monotonic_time();
-			} else {
+			if (older_elem->first != client_addr) {
 				client_host_cache.erase(older_elem);
 			}
 		}
