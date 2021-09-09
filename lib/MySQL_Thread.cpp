@@ -3995,6 +3995,11 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 				client_host_entry.updated_at != 0 &&
 				client_host_entry.error_count >= static_cast<uint32_t>(mysql_thread___client_host_error_counts)
 			) {
+				std::string client_addr = get_client_addr(addr);
+				proxy_error(
+					"Closing connection because client '%s' reached 'mysql-client_host_error_counts': %d\n",
+					client_addr.c_str(), mysql_thread___client_host_error_counts
+				);
 				close(c);
 				free(addr);
 				status_variables.stvar[st_var_client_host_error_killed_connections] += 1;
