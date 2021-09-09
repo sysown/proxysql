@@ -973,6 +973,7 @@ int main(int, char**) {
 			std::make_tuple("mysql-monitor_threads_queue_maxsize"                          , "129"                        ),
 			std::make_tuple("mysql-monitor_wait_timeout"                                   , "true"                       ),
 			std::make_tuple("mysql-monitor_writer_is_also_reader"                          , "true"                       ),
+			std::make_tuple("mysql-monitor_offline_soft_or_shunned"                        , "true"                       ),
 			std::make_tuple("mysql-max_allowed_packet"                                     , "67108864"                   ),
 			std::make_tuple("mysql-tcp_keepalive_time"                                     , "0"                          ),
 			std::make_tuple("mysql-use_tcp_keepalive"                                      , "false"                      ),

@@ -471,6 +471,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_threads_queue_maxsize",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
+	(char *)"monitor_offline_soft_or_shunned",
 	(char *)"max_allowed_packet",
 	(char *)"tcp_keepalive_time",
 	(char *)"use_tcp_keepalive",
@@ -979,6 +980,12 @@ th_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
+			p_th_gauge::mysql_monitor_offline_soft_or_shunned,
+			"proxysql_mysql_monitor_offline_soft_or_shunned",
+			"Encodes different behaviors for nodes depending on the threshold of the max_transactions_behind parameter(mysql_group_replication_hostgroups table).",
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_interval,
 			"proxysql_mysql_monitor_replication_lag_interval_seconds",
 			"How frequently a replication lag check is performed, in seconds.",
@@ -1062,6 +1069,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
 	variables.monitor_wait_timeout=true;
 	variables.monitor_writer_is_also_reader=true;
+	variables.monitor_offline_soft_or_shunned=true;
 	variables.max_allowed_packet=64*1024*1024;
 	variables.automatic_detect_sqli=false;
 	variables.firewall_whitelist_enabled=false;
@@ -2064,6 +2072,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["monitor_enabled"]                 = make_tuple(&variables.monitor_enabled,                 false);
 		VariablesPointers_bool["monitor_wait_timeout"]            = make_tuple(&variables.monitor_wait_timeout,            false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"]   = make_tuple(&variables.monitor_writer_is_also_reader,   false);
+		VariablesPointers_bool["monitor_offline_soft_or_shunned"] = make_tuple(&variables.monitor_offline_soft_or_shunned, false);
 		VariablesPointers_bool["multiplexing"]                    = make_tuple(&variables.multiplexing,                    false);
 		VariablesPointers_bool["query_cache_stores_empty_result"] = make_tuple(&variables.query_cache_stores_empty_result, false);
 		VariablesPointers_bool["query_digests"]                   = make_tuple(&variables.query_digests,                   false);
@@ -3652,6 +3661,7 @@ void MySQL_Thread::refresh_variables() {
 
 	mysql_thread___monitor_wait_timeout=(bool)GloMTH->get_variable_int((char *)"monitor_wait_timeout");
 	mysql_thread___monitor_writer_is_also_reader=(bool)GloMTH->get_variable_int((char *)"monitor_writer_is_also_reader");
+	mysql_thread___monitor_offline_soft_or_shunned=(bool)GloMTH->get_variable_int((char *)"monitor_offline_soft_or_shunned");
 	mysql_thread___monitor_enabled=(bool)GloMTH->get_variable_int((char *)"monitor_enabled");
 	mysql_thread___monitor_history=GloMTH->get_variable_int((char *)"monitor_history");
 	mysql_thread___monitor_connect_interval=GloMTH->get_variable_int((char *)"monitor_connect_interval");
@@ -4892,6 +4902,7 @@ void MySQL_Threads_Handler::p_update_metrics() {
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_interval]->Set(this->variables.monitor_read_only_interval/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_timeout]->Set(this->variables.monitor_read_only_timeout/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_writer_is_also_reader]->Set(this->variables.monitor_writer_is_also_reader);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_offline_soft_or_shunned]->Set(this->variables.monitor_offline_soft_or_shunned);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_interval]->Set(this->variables.monitor_replication_lag_interval/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_timeout]->Set(this->variables.monitor_replication_lag_timeout/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_history]->Set(this->variables.monitor_history/1000.0);

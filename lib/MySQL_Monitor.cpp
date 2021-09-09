@@ -1588,10 +1588,23 @@ __exit_monitor_group_replication_thread:
 				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"viable_candidate=NO");
 			} else {
 				if (read_only==true) {
-					if (lag_counts >= mysql_thread___monitor_groupreplication_max_transactions_behind_count) {
+					/*if (lag_counts >= mysql_thread___monitor_groupreplication_max_transactions_behind_count) {
 						MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
 					} else {
 						MyHGM->update_group_replication_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+					}*/
+                    if(!mysql_thread___monitor_offline_soft_or_shunned){ //set monitor_offline_soft_or_shunned=false,backward compatible
+                       if (lag_counts >= mysql_thread___monitor_groupreplication_max_transactions_behind_count) {
+	                      MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
+					   } else {
+	                      MyHGM->update_group_replication_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+                       }
+					} else {
+						bool mgr_repl_lag_status = MyHGM->mysql_group_replication_lag_action(mmsd->writer_hostgroup, mmsd->hostname,
+												   mmsd->port, transactions_behind, mmsd->max_transactions_behind);
+					    if((transactions_behind<=mmsd->max_transactions_behind)||(!mgr_repl_lag_status)){
+							MyHGM->update_group_replication_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
+						}
 					}
 				} else {
 					// the node is a writer
