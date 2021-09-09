@@ -3993,9 +3993,10 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 				GloMTH->find_client_host_cache(addr);
 			if (
 				client_host_entry.updated_at != 0 &&
-				client_host_entry.error_count == static_cast<uint32_t>(mysql_thread___client_host_error_counts)
+				client_host_entry.error_count >= static_cast<uint32_t>(mysql_thread___client_host_error_counts)
 			) {
 				close(c);
+				free(addr);
 				status_variables.stvar[st_var_client_host_error_killed_connections] += 1;
 				return;
 			}
