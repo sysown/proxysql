@@ -2395,7 +2395,7 @@ void MySQL_Threads_Handler::stop_listeners() {
  *   member 'client_addr', or empty string if this member is NULL.
  */
 std::string get_client_addr(struct sockaddr* client_addr) {
-	char buf[512];
+	char buf[INET6_ADDRSTRLEN];
 	std::string str_client_addr {};
 
 	if (client_addr == NULL) {
@@ -2405,12 +2405,8 @@ std::string get_client_addr(struct sockaddr* client_addr) {
 	switch (client_addr->sa_family) {
 		case AF_INET: {
 			struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_addr;
-			if (ipv4->sin_port) {
-				inet_ntop(client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-				str_client_addr = std::string { buf };
-			} else {
-				str_client_addr = std::string { "localhost" };
-			}
+			inet_ntop(client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+			str_client_addr = std::string { buf };
 			break;
 		}
 		case AF_INET6: {
