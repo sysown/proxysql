@@ -1530,7 +1530,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
-	if (query_no_space_length==strlen("PROXYSQL FLUSH MYSQL CLIENT HOSTS") && !strncasecmp("PROXYSQL FLUSH MYSQL CLIENT HOSTS",query_no_space, query_no_space_length)) {
+	if (!strcasecmp("PROXYSQL FLUSH MYSQL CLIENT HOSTS", query_no_space)) {
 		proxy_info("Received PROXYSQL FLUSH MYSQL CLIENT HOSTS command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (GloMTH) {
