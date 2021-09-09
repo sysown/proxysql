@@ -2525,8 +2525,8 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 
 	if (error) {
 		pthread_mutex_lock(&mutex_client_host_cache);
-		// If the cache is full, find the latest entry on it, and update/remove it.
-		if (client_host_cache.size() == static_cast<size_t>(mysql_thread___client_host_cache_size)) {
+		// If the cache is full, find the oldest entry on it, and update/remove it.
+		if (client_host_cache.size() >= static_cast<size_t>(mysql_thread___client_host_cache_size)) {
 			auto older_elem = std::min_element(
 				client_host_cache.begin(),
 				client_host_cache.end(),
@@ -2547,8 +2547,14 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 			cache_entry->second.error_count += 1;
 			cache_entry->second.updated_at = monotonic_time();
 		} else {
-			MySQL_Client_Host_Cache_Entry new_entry { monotonic_time(), 1 };
-			client_host_cache.insert({client_addr, new_entry});
+			// Notice than the value of 'mysql_thread___client_host_cache_size' can
+			// change at runtime. Due to this, we should only insert when the size of the
+			// cache is smaller than this value, otherwise we could end in situations in
+			// which cache doesn't shrink after it's size is reduced at runtime.
+			if (client_host_cache.size() < static_cast<size_t>(mysql_thread___client_host_cache_size)) {
+				MySQL_Client_Host_Cache_Entry new_entry { monotonic_time(), 1 };
+				client_host_cache.insert({client_addr, new_entry});
+			}
 		}
 		pthread_mutex_unlock(&mutex_client_host_cache);
 	} else {
