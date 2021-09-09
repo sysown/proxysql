@@ -2443,6 +2443,77 @@ MySQL_Client_Host_Cache_Entry MySQL_Threads_Handler::find_client_host_cache(stru
 	return entry;
 }
 
+/**
+ * @brief Number of columns for representing a 'MySQL_Client_Host_Cache_Entry'
+ *   in a 'SQLite3_result'.
+ */
+const int CLIENT_HOST_CACHE_COLUMNS = 3;
+
+/**
+ * @brief Helper function that converts a given client address and a
+ *   'MySQL_Client_Host_Cache_Entry', into a row for a 'SQLite3_result' for
+ *   table 'STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE'.
+ *
+ * @param address The client address to be added to the resulset row.
+ * @param entry The 'MySQL_Client_Host_Cache_Entry' to be added to the resulset
+ *   row.
+ *
+ * @return A pointer array holding the values for each of the columns of the
+ *   row. It should be freed through helper function 'free_client_host_cache_row'.
+ */
+char** client_host_cache_entry_row(
+	const std::string address, const MySQL_Client_Host_Cache_Entry& entry
+) {
+	// INET6_ADDRSTRLEN length should be enough for holding any member:
+	//  { address: MAX INET6_ADDRSTRLEN, updated_at: uint64_t, error_count: uint32_t }
+	char buff[INET6_ADDRSTRLEN];
+	char** row =
+		static_cast<char**>(malloc(sizeof(char*)*CLIENT_HOST_CACHE_COLUMNS));
+
+	row[0]=strdup(address.c_str());
+	sprintf(buff, "%u", entry.error_count);
+	row[1]=strdup(buff);
+	sprintf(buff, "%lu", entry.updated_at);
+	row[2]=strdup(buff);
+
+	return row;
+}
+
+/**
+ * @brief Helper function to free the row returned by
+ * 'client_host_cache_entry_row'.
+ *
+ * @param row The pointer array holding the row values to be freed.
+ */
+void free_client_host_cache_row(char** row) {
+	for (int i = 0; i < CLIENT_HOST_CACHE_COLUMNS; i++) {
+		free(row[i]);
+	}
+	free(row);
+}
+
+SQLite3_result* MySQL_Threads_Handler::get_client_host_cache(bool reset) {
+	SQLite3_result *result = new SQLite3_result(CLIENT_HOST_CACHE_COLUMNS);
+
+	pthread_mutex_lock(&mutex_client_host_cache);
+	result->add_column_definition(SQLITE_TEXT,"client_address");
+	result->add_column_definition(SQLITE_TEXT,"error_count");
+	result->add_column_definition(SQLITE_TEXT,"last_updated");
+
+	for (const auto& cache_entry : client_host_cache) {
+		char** row = client_host_cache_entry_row(cache_entry.first, cache_entry.second);
+		result->add_row(row);
+		free_client_host_cache_row(row);
+	}
+
+	if (reset) {
+		client_host_cache.clear();
+	}
+
+	pthread_mutex_unlock(&mutex_client_host_cache);
+	return result;
+}
+
 void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_sockaddr, bool error) {
 	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
 		return;

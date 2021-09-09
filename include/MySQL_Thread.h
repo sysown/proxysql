@@ -596,6 +596,15 @@ class MySQL_Threads_Handler
 	 *    - 'address_family' is either 'AF_INET' or 'AF_INET6'.
 	 *    - The address obtained from it isn't '127.0.0.1'.
 	 *
+	 *   In case 'client_sockaddr' matches the previous description, the update
+	 *   of the client host cache is performed in the following way:
+	 *     1. If the cache is full, the oldest element in the cache is searched.
+	 *     In case the oldest element address doesn't match the supplied
+	 *     address, the oldest element is removed.
+	 *     2. The cache is searched looking for the supplied address, in case of
+	 *     being found, the entry is updated, otherwise the entry is inserted in
+	 *     the cache.
+	 *
 	 * @param client_sockaddr A 'sockaddr' holding the required client information
 	 *   to update the 'client_host_cache_map'.
 	 * @param error 'true' if there was an error in the connection that should be
@@ -628,6 +637,22 @@ class MySQL_Threads_Handler
 	 * @brief Delete all the entries in the 'client_host_cache' internal map.
 	 */
 	void flush_client_host_cache();
+	/**
+	 * @brief Returns the current entries of 'client_host_cache' in a
+	 *   'SQLite3_result'. In case the param 'reset' is specified, the structure
+	 *   is cleaned after being queried.
+	 *
+	 * @param reset If 'true' the entries of the internal structure
+	 *   'client_host_cache' will be cleaned after scrapping.
+	 *
+	 * @return SQLite3_result holding the current entries of the
+	 *   'client_host_cache'. In the following format:
+	 *
+	 *    [ 'client_address', 'error_num', 'last_updated' ]
+	 *
+	 *    Where 'last_updated' is the last updated time expressed in 'ns'.
+	 */
+	SQLite3_result* get_client_host_cache(bool reset);
 	/**
 	 * @brief Callback to update the metrics.
 	 */
