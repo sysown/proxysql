@@ -8806,11 +8806,8 @@ void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
 		query=(char*)"INSERT INTO stats_mysql_client_host_cache VALUES (?1, ?2, ?3)";
 	}
 
-	if (reset) {
-		statsdb->execute("DELETE FROM stats_mysql_client_host_cache_reset");
-	} else {
-		statsdb->execute("DELETE FROM stats_mysql_client_host_cache");
-	}
+	statsdb->execute("DELETE FROM stats_mysql_client_host_cache_reset");
+	statsdb->execute("DELETE FROM stats_mysql_client_host_cache");
 
 	rc = statsdb->prepare_v2(query, &statement);
 	ASSERT_SQLITE_OK(rc, statsdb);
@@ -8828,6 +8825,11 @@ void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
 	}
 
 	(*proxy_sqlite3_finalize)(statement);
+
+	if (reset) {
+		statsdb->execute("INSERT INTO stats_mysql_client_host_cache SELECT * FROM stats_mysql_client_host_cache_reset");
+	}
+
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
