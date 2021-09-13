@@ -460,6 +460,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_groupreplication_healthcheck_timeout",
 	(char *)"monitor_groupreplication_healthcheck_max_timeout_count",
 	(char *)"monitor_groupreplication_max_transactions_behind_count",
+	(char *)"monitor_groupreplication_max_transactions_behind_for_read_only",
 	(char *)"monitor_galera_healthcheck_interval",
 	(char *)"monitor_galera_healthcheck_timeout",
 	(char *)"monitor_galera_healthcheck_max_timeout_count",
@@ -1057,6 +1058,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_groupreplication_healthcheck_timeout=800;
 	variables.monitor_groupreplication_healthcheck_max_timeout_count=3;
 	variables.monitor_groupreplication_max_transactions_behind_count=3;
+	variables.monitor_groupreplication_max_transactions_behind_for_read_only=1;
 	variables.monitor_galera_healthcheck_interval=5000;
 	variables.monitor_galera_healthcheck_timeout=800;
 	variables.monitor_galera_healthcheck_max_timeout_count=3;
@@ -2127,6 +2129,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_groupreplication_healthcheck_timeout"]           = make_tuple(&variables.monitor_groupreplication_healthcheck_timeout,           100,       600*1000, false);
 		VariablesPointers_int["monitor_groupreplication_healthcheck_max_timeout_count"] = make_tuple(&variables.monitor_groupreplication_healthcheck_max_timeout_count,   1,             10, false);
 		VariablesPointers_int["monitor_groupreplication_max_transactions_behind_count"] = make_tuple(&variables.monitor_groupreplication_max_transactions_behind_count,   1,             10, false);
+		VariablesPointers_int["monitor_groupreplication_max_transactions_behind_for_read_only"] = make_tuple(&variables.monitor_groupreplication_max_transactions_behind_for_read_only,   0, 2, false);
 
 		VariablesPointers_int["monitor_galera_healthcheck_interval"]          = make_tuple(&variables.monitor_galera_healthcheck_interval,          50, 7*24*3600*1000, false);
 		VariablesPointers_int["monitor_galera_healthcheck_timeout"]           = make_tuple(&variables.monitor_galera_healthcheck_timeout,           50,       600*1000, false);
@@ -3868,6 +3871,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_groupreplication_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_max_timeout_count");
 	mysql_thread___monitor_groupreplication_max_transactions_behind_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_max_transactions_behind_count");
+	mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only=GloMTH->get_variable_int((char *)"monitor_groupreplication_max_transactions_behind_for_read_only");
 	mysql_thread___monitor_galera_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_interval");
 	mysql_thread___monitor_galera_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_timeout");
 	mysql_thread___monitor_galera_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_max_timeout_count");
