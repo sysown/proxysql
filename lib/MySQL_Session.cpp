@@ -4841,6 +4841,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+		l_free(pkt->size,pkt->ptr);
 		return;
 	}
 
@@ -5101,6 +5102,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			free(_s);
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
+		}
+		if (client_addr) {
+			free(client_addr);
 		}
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
