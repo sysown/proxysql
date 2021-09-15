@@ -64,6 +64,8 @@ void perform_helper_test(
 	nlohmann::json input_json {};
 	input_json["user"] = "sbtest1";
 	input_json["pass"] = "sbtest1";
+	input_json["ch_user"] = "root";
+	input_json["ch_pass"] = "root";
 	input_json["auth"] = auth;
 	input_json["charset"] = "";
 	input_json["port"] = 6033;
@@ -75,16 +77,29 @@ void perform_helper_test(
 	std::vector<const char*> v_argv { helper_path.c_str(), input_str.c_str() };
 	int res = execvp(helper_path, v_argv, result);
 
-	diag("Result from helper, err_code: '%d', err: '%s'", res, result.c_str());
+	diag("Result from helper, err_code: '%d', result: '%s'", res, result.c_str());
 
-	bool success = false;
+	std::string err_msg {};
 	int exp_switching_auth_type = -1;
 	int act_switching_auth_type = 0;
 	std::string def_auth_plugin {};
 	bool act_SSL_val;
+	std::vector<std::string> exp_ch_usernames {};
+
+	if (change_user) {
+		exp_ch_usernames = { "root", "sbtest1", "root" };
+	} else {
+		exp_ch_usernames = { "sbtest1", "sbtest1", "sbtest1" };
+	}
+
+	std::vector<std::string> act_ch_usernames {};
 
 	try {
 		nlohmann::json output_res = nlohmann::json::parse(result);
+
+		if (output_res.contains("err_msg")) {
+			err_msg = output_res.at("err_msg");
+		}
 
 		act_switching_auth_type = output_res.at("switching_auth_type");
 		def_auth_plugin = output_res.at("def_auth_plugin");
@@ -97,17 +112,35 @@ void perform_helper_test(
 		} else if (auth == "caching_sha2_password") {
 			exp_switching_auth_type = 1;
 		}
+
+		act_ch_usernames.push_back(output_res.at("client_com_change_user_1"));
+		act_ch_usernames.push_back(output_res.at("client_com_change_user_2"));
+		act_ch_usernames.push_back(output_res.at("client_com_change_user_3"));
 	} catch (const std::exception& ex) {
 		diag("Invalid JSON result from helper, parsing failed: '%s'", ex.what());
 	}
 
+	std::string exp_user_names_str =
+		std::accumulate(exp_ch_usernames.begin(), exp_ch_usernames.end(), std::string(),
+		[](const std::string& str, const std::string& splice) -> std::string {
+			return str + (str.length() > 0 ? "," : "") + splice;
+		});
+	std::string act_user_names_str =
+		std::accumulate(act_ch_usernames.begin(), act_ch_usernames.end(), std::string(),
+		[](const std::string& str, const std::string& splice) -> std::string {
+			return str + (str.length() > 0 ? "," : "") + splice;
+		});
+
 	ok(
-		(exp_switching_auth_type == act_switching_auth_type) && (exp_SSL_val == act_SSL_val),
+		(exp_switching_auth_type == act_switching_auth_type) &&
+		(exp_SSL_val == act_SSL_val) && err_msg.empty() &&
+		exp_ch_usernames == act_ch_usernames,
 		"Connect and COM_CHANGE_USER should work for the supplied values.\n"
-		" + Expected values where: (client_auth_plugin='%s', switching_auth_type='%d', SSL='%d'),\n"
-		" + Actual values where: (client_auth_plugin='%s', switching_auth_type='%d', SSL='%d'),",
-		auth.c_str(), exp_switching_auth_type, exp_SSL_val,
-		def_auth_plugin.c_str(), act_switching_auth_type, act_SSL_val
+		" + Expected values where: (client_auth_plugin='%s', switching_auth_type='%d', SSL='%d', usernames=['%s']),\n"
+		" + Actual values where: (client_auth_plugin='%s', switching_auth_type='%d', SSL='%d, usernames=['%s']').\n"
+		" Error message: %s.\n",
+		auth.c_str(), exp_switching_auth_type, exp_SSL_val, exp_user_names_str.c_str(), def_auth_plugin.c_str(),
+		act_switching_auth_type, act_SSL_val, act_user_names_str.c_str(), err_msg.c_str()
 	);
 }
 
