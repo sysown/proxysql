@@ -34,8 +34,9 @@ class Thread
 
     int start(unsigned int ss=64, bool jemalloc_tcache=true);
     int join();
-    int detach();
-    pthread_t self();
+// commenting the following code because we don't use it
+//    int detach();
+//    pthread_t self();
     
     virtual void* run() = 0;
     

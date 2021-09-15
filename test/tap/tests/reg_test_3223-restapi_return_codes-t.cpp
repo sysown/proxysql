@@ -25,57 +25,6 @@
 using std::string;
 
 
-/**
- * @brief Dummy write function to avoid CURL to write received output to stdout.
- * @return Returns the size presented.
- */
-size_t my_dummy_write(char*, size_t size, size_t nmemb, void*) {
-	return size * nmemb;
-}
-
-/**
- * @brief Perform a simple POST query to the specified endpoint using the supplied
- *  'post_params'.
- *
- * @param endpoint The endpoint to be exercised by the POST.
- * @param post_params The post parameters to be supplied to the script.
- * @param curl_out_err A uint64_t reference returning the result code of the
- *   query in case it has been performed. In case the query couldn't be
- *   performed, this value is never initialized.
- * @param curl_out_err A string reference to collect the error as a string reported
- *   by 'libcurl' in case of failure.
- *
- * @return The response code of the query in case of the query.
- */
-CURLcode perform_simple_post(
-	const string& endpoint, const string& post_params, uint64_t& curl_res_code,
-	string& curl_out_err
-) {
-	CURL *curl;
-	CURLcode res;
-
-	curl_global_init(CURL_GLOBAL_ALL);
-
-	curl = curl_easy_init();
-	if(curl) {
-		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_params.c_str());
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &my_dummy_write);
-
-		res = curl_easy_perform(curl);
-
-		if(res != CURLE_OK) {
-			curl_out_err = std::string { curl_easy_strerror(res) };
-		} else {
-			curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &curl_res_code);
-		}
-
-		curl_easy_cleanup(curl);
-	}
-
-	return res;
-}
-
 const std::string base_address { "http://localhost:6070/sync/" };
 
 std::vector<std::tuple<std::string, std::string, long>> valid_endpoints {
@@ -95,49 +44,6 @@ std::vector<std::tuple<std::string, std::string, long>> invalid_requests {
 	// supplied with invalid params
 	std::make_tuple( "valid_output_script", "", 400 )
 };
-
-/**
- * @brief Waits until the provided endpoint is ready to be used or the
- *   timeout period expired. For this checks the return code of
- *   'perform_simple_post' which only fails in case the 'CURL' request couldn't
- *   be performed, which is interpreted as endpoint not being yet ready.
- *
- * @param endpoint The endpoint to be queried.
- * @param post_params The required params to be supplied for the 'POST' endpoint
- *   call.
- * @param timeout The max time to wait before declaring a timeout, and
- *   returning '-1'.
- * @param delay The delay specified in 'ms' to be waited between retries.
- *
- * @return '0' in case the endpoint became available before the timeout, or
- *   '-1' in case the timeout expired.
- */
-int wait_until_enpoint_ready(
-	std::string endpoint, std::string post_params, uint32_t timeout, uint32_t delay=100
-) {
-	double waited = 0;
-	int res = -1;
-
-	while (waited < timeout) {
-		std::string curl_str_err {};
-		uint64_t curl_res_code = 0;
-		int curl_err = perform_simple_post(endpoint, post_params, curl_res_code, curl_str_err);
-
-		if (curl_err != CURLE_OK) {
-			diag(
-				"'curl_err_code': %d, 'curl_err': '%s', waiting for '%d'ms...",
-				curl_err, curl_str_err.c_str(), delay
-			);
-			waited += static_cast<double>(delay) / 1000;
-			usleep(delay * 1000);
-		} else {
-			res = 0;
-			break;
-		}
-	}
-
-	return res;
-}
 
 int main(int argc, char** argv) {
 	CommandLine cl;

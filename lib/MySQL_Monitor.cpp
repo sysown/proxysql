@@ -1084,7 +1084,14 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql=mysql_init(NULL);
 		assert(mysql);
 		if (use_ssl) {
-			mysql_ssl_set(mysql, mysql_thread___ssl_p2s_key, mysql_thread___ssl_p2s_cert, mysql_thread___ssl_p2s_ca, NULL, mysql_thread___ssl_p2s_cipher);
+			mysql_ssl_set(mysql,
+					mysql_thread___ssl_p2s_key,
+					mysql_thread___ssl_p2s_cert,
+					mysql_thread___ssl_p2s_ca,
+					mysql_thread___ssl_p2s_capath,
+					mysql_thread___ssl_p2s_cipher);
+			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
+			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
 		}
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
 		if (timeout==0) timeout=1;
@@ -1413,7 +1420,11 @@ void * monitor_group_replication_thread(void *arg) {
 	//mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	mmsd->interr=0; // reset the value
 #ifdef TEST_GROUPREP
-	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS");
+	{
+		std::string s { "SELECT viable_candidate,read_only,transactions_behind FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS" };
+		s += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,s.c_str());
+	}
 #else
 	mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status");
 #endif
@@ -1554,10 +1565,12 @@ __exit_monitor_group_replication_thread:
 					mmsd->hostname, mmsd->port, num_timeouts, mmsd->max_transactions_behind_count);
 			}
 		}
-		int lag_counts = 0;
-		if (read_only) {
-			lag_counts = node->get_lag_behind_count(mmsd->max_transactions_behind);
-		}
+		// NOTE: Previously 'lag_counts' was only updated for 'read_only'
+		// because 'writers' were never selected for being set 'OFFLINE' due to
+		// replication lag. Since the change of this behavior to 'SHUNNING'
+		// with replication lag, no matter it's 'read_only' value, 'lag_counts'
+		// is computed everytime.
+		int lag_counts = node->get_lag_behind_count(mmsd->max_transactions_behind);
 		pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
 
 		// NOTE: we update MyHGM outside the mutex group_replication_mutex
@@ -1581,16 +1594,26 @@ __exit_monitor_group_replication_thread:
 				MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"viable_candidate=NO");
 			} else {
 				if (read_only==true) {
-					if (lag_counts >= mysql_thread___monitor_groupreplication_max_transactions_behind_count) {
-						MyHGM->update_group_replication_set_offline(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"slave is lagging");
-					} else {
-						MyHGM->update_group_replication_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
-					}
+					MyHGM->update_group_replication_set_read_only(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup, (char *)"read_only=YES");
 				} else {
 					// the node is a writer
 					// TODO: for now we don't care about the number of writers
 					MyHGM->update_group_replication_set_writer(mmsd->hostname, mmsd->port, mmsd->writer_hostgroup);
 				}
+
+				// NOTE: Replication lag action should takes place **after** the
+				// servers have been placed in the correct hostgroups, otherwise
+				// during the reconfiguration of the servers due to 'update_group_replication_set_writer'
+				// there would be a small window in which the 'SHUNNED' server
+				// will be treat as 'ONLINE' letting some new connections to
+				// take places, before it becomes 'SHUNNED' again.
+				bool enable = true;
+				if (lag_counts >= mysql_thread___monitor_groupreplication_max_transactions_behind_count) {
+					enable = false;
+				}
+				MyHGM->group_replication_lag_action(
+					mmsd->writer_hostgroup, mmsd->hostname, mmsd->port, lag_counts, read_only, enable
+				);
 			}
 		}
 
@@ -2147,7 +2170,7 @@ void * monitor_replication_lag_thread(void *arg) {
 		int l = strlen(percona_heartbeat_table);
 		if (l) {
 			use_percona_heartbeat = true;
-			char *base_query = (char *)"SELECT MIN(ROUND(TIMESTAMPDIFF(MICROSECOND, ts, SYSDATE(6))/1000000)) AS Seconds_Behind_Master FROM %s";
+			char *base_query = (char *)"SELECT MAX(ROUND(TIMESTAMPDIFF(MICROSECOND, ts, SYSDATE(6))/1000000)) AS Seconds_Behind_Master FROM %s";
 			char *replication_query = (char *)malloc(strlen(base_query)+l);
 			sprintf(replication_query,base_query,percona_heartbeat_table);
 			mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,replication_query);

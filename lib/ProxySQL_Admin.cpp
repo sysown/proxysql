@@ -82,6 +82,7 @@ char * proxysql_version = NULL;
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
+/*
 static long
 get_file_size (const char *filename) {
 	FILE *fp;
@@ -119,7 +120,7 @@ static char * load_file (const char *filename) {
 	fclose (fp);
 	return buffer;
 }
-
+*/
 
 static int round_intv_to_time_interval(int& intv) {
 	if (intv > 300) {
@@ -296,6 +297,8 @@ extern ClickHouse_Server *GloClickHouseServer;
 extern SQLite3_Server *GloSQLite3Server;
 
 extern char * binary_sha1;
+
+extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -486,6 +489,9 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define STATS_SQLITE_TABLE_MYSQL_ERRORS "CREATE TABLE stats_mysql_errors (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , errno INT NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, schemaname, errno) )"
 #define STATS_SQLITE_TABLE_MYSQL_ERRORS_RESET "CREATE TABLE stats_mysql_errors_reset (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , errno INT NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, schemaname, errno) )"
+
+#define STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE "CREATE TABLE stats_mysql_client_host_cache (client_address VARCHAR NOT NULL, error_count INT NOT NULL, last_updated BIGINT NOT NULL)"
+#define STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET "CREATE TABLE stats_mysql_client_host_cache_reset (client_address VARCHAR NOT NULL, error_count INT NOT NULL, last_updated BIGINT NOT NULL)"
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
@@ -1527,6 +1533,17 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		return false;
 	}
 
+	if (!strcasecmp("PROXYSQL FLUSH MYSQL CLIENT HOSTS", query_no_space)) {
+		proxy_info("Received PROXYSQL FLUSH MYSQL CLIENT HOSTS command\n");
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (GloMTH) {
+			GloMTH->flush_client_host_cache();
+		}
+		SPA->flush_error_log();
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+
 	if (
 		(query_no_space_length==strlen("PROXYSQL FLUSH CONFIGDB") && !strncasecmp("PROXYSQL FLUSH CONFIGDB",query_no_space, query_no_space_length)) // see #923
 	) {
@@ -1535,6 +1552,19 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		SPA->flush_configdb();
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+
+	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
+		proxy_info("Received %s command\n", query_no_space);
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		std::string s;
+		int rc = ProxySQL_create_or_load_TLS(false, s);
+		if (rc == 0) {
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, s.length() ? (char *)s.c_str() : NULL);
+		} else {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, s.length() ? (char *)s.c_str() : (char *)"RELOAD TLS failed");
+		}
 		return false;
 	}
 
@@ -2909,6 +2939,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_query_rules=false;
 	bool stats_mysql_users=false;
 	bool stats_mysql_gtid_executed=false;
+	bool stats_mysql_client_host_cache=false;
+	bool stats_mysql_client_host_cache_reset=false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -2996,6 +3028,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_users=true; refresh=true; }
 	if (strstr(query_no_space,"stats_mysql_gtid_executed"))
 		{ stats_mysql_gtid_executed=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_client_host_cache"))
+		{ stats_mysql_client_host_cache=true; refresh=true; }
+	if (strstr(query_no_space,"stats_mysql_client_host_cache_reset"))
+		{ stats_mysql_client_host_cache_reset=true; refresh=true; }
 
 	if (strstr(query_no_space,"stats_proxysql_servers_checksums"))
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
@@ -3134,6 +3170,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 //		}
 		if (stats_mysql_prepared_statements_info) {
 			stats___mysql_prepared_statements_info();
+		}
+
+		if (stats_mysql_client_host_cache) {
+			stats___mysql_client_host_cache(false);
+		}
+		if (stats_mysql_client_host_cache_reset) {
+			stats___mysql_client_host_cache(true);
 		}
 
 		if (admin) {
@@ -5510,6 +5553,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_users", STATS_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES); // workaround for issue #708
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_prepared_statements_info", ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache_reset", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET);
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);
@@ -5996,8 +6041,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					if (GloVars.web_interface_plugin == NULL) {
 						char *key_pem;
 						char *cert_pem;
-						key_pem = load_file(ssl_key_fp);
-						cert_pem = load_file(ssl_cert_fp);
+						GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
 						Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
 							variables.web_port,
 							NULL, NULL, http_handler, NULL,
@@ -6060,8 +6104,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							Admin_HTTP_Server = NULL;
 							char *key_pem;
 							char *cert_pem;
-							key_pem = load_file(ssl_key_fp);
-							cert_pem = load_file(ssl_cert_fp);
+							GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
 							Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
 								variables.web_port,
 								NULL, NULL, http_handler, NULL,
@@ -8741,6 +8784,52 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 			statsdb->execute("INSERT INTO stats_mysql_query_digest SELECT * FROM stats_mysql_query_digest_reset");
 		}
 	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
+void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
+	if (!GloQPro) return;
+
+	SQLite3_result* resultset = GloMTH->get_client_host_cache(reset);
+	if (resultset==NULL) return;
+
+	statsdb->execute("BEGIN");
+
+	int rc = 0;
+	sqlite3_stmt* statement=NULL;
+	char* query = NULL;
+
+	if (reset) {
+		query=(char*)"INSERT INTO stats_mysql_client_host_cache_reset VALUES (?1, ?2, ?3)";
+	} else {
+		query=(char*)"INSERT INTO stats_mysql_client_host_cache VALUES (?1, ?2, ?3)";
+	}
+
+	statsdb->execute("DELETE FROM stats_mysql_client_host_cache_reset");
+	statsdb->execute("DELETE FROM stats_mysql_client_host_cache");
+
+	rc = statsdb->prepare_v2(query, &statement);
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+		SQLite3_row *row = *it;
+
+		rc=(*proxy_sqlite3_bind_text)(statement, 1, row->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2, atoll(row->fields[1])); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 3, atoll(row->fields[2])); ASSERT_SQLITE_OK(rc, statsdb);
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement);
+		rc=(*proxy_sqlite3_reset)(statement);
+	}
+
+	(*proxy_sqlite3_finalize)(statement);
+
+	if (reset) {
+		statsdb->execute("INSERT INTO stats_mysql_client_host_cache SELECT * FROM stats_mysql_client_host_cache_reset");
+	}
+
 	statsdb->execute("COMMIT");
 	delete resultset;
 }

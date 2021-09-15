@@ -90,7 +90,7 @@ class MySQL_Session
 	 *   But since it was change for handling 'USE' statements which are preceded by
 	 *   comments, it's called after 'QueryProcessor' has processed the query.
 	 */
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt, const char* query_digest);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
@@ -259,7 +259,7 @@ class MySQL_Session
 
 	Session_Regex **match_regexes;
 
-	void *ldap_ctx;
+	bool use_ldap_auth;
 
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum variable_name changing_variable_idx;
