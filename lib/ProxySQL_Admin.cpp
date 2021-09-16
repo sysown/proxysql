@@ -1539,7 +1539,6 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (GloMTH) {
 			GloMTH->flush_client_host_cache();
 		}
-		SPA->flush_error_log();
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
