@@ -1029,10 +1029,14 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	shutdown_=0;
 	pthread_rwlock_init(&rwlock,NULL);
 	pthread_attr_init(&attr);
+	// Zero initialize all variables
+	memset(&variables, 0, sizeof(variables));
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
 	variables.query_retries_on_failure=1;
 	variables.client_multi_statements=true;
+	variables.client_host_cache_size=0;
+	variables.client_host_error_counts=0;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
@@ -2428,6 +2432,11 @@ std::string get_client_addr(struct sockaddr* client_addr) {
 
 MySQL_Client_Host_Cache_Entry MySQL_Threads_Handler::find_client_host_cache(struct sockaddr* client_sockaddr) {
 	MySQL_Client_Host_Cache_Entry entry { 0, 0 };
+	// Client_sockaddr **shouldn't** ever by 'NULL', no matter the
+	// 'session_type' in from which this function is called. Because
+	// `MySQL_Session::client_myds::client_addr` should **always** be
+	// initialized before `handler` is called.
+	assert(client_sockaddr != NULL);
 	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
 		return entry;
 	}
@@ -2518,6 +2527,11 @@ SQLite3_result* MySQL_Threads_Handler::get_client_host_cache(bool reset) {
 }
 
 void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_sockaddr, bool error) {
+	// Client_sockaddr **shouldn't** ever by 'NULL', no matter the
+	// 'session_type' in from which this function is called. Because
+	// `MySQL_Session::client_myds::client_addr` should **always** be
+	// initialized before `handler` is called.
+	assert(client_sockaddr != NULL);
 	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
 		return;
 	}
