@@ -2430,6 +2430,13 @@ std::string get_client_addr(struct sockaddr* client_addr) {
 
 MySQL_Client_Host_Cache_Entry MySQL_Threads_Handler::find_client_host_cache(struct sockaddr* client_sockaddr) {
 	MySQL_Client_Host_Cache_Entry entry { 0, 0 };
+	if (client_sockaddr == NULL) {
+		// NOTE: client_sockaddr **shouldn't** ever by 'NULL', no matter the
+		// 'session_type' in from which this function is called. Because
+		// `MySQL_Session::client_myds::client_addr` should **always** be
+		// initialized before `handler` is called.
+		assert(0);
+	}
 	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
 		return entry;
 	}
@@ -2520,6 +2527,13 @@ SQLite3_result* MySQL_Threads_Handler::get_client_host_cache(bool reset) {
 }
 
 void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_sockaddr, bool error) {
+	if (client_sockaddr == NULL) {
+		// NOTE: client_sockaddr **shouldn't** ever by 'NULL', no matter the
+		// 'session_type' in from which this function is called. Because
+		// `MySQL_Session::client_myds::client_addr` should **always** be
+		// initialized before `handler` is called.
+		assert(0);
+	}
 	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
 		return;
 	}
