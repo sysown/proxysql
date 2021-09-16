@@ -1033,6 +1033,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.shun_recovery_time_sec=10;
 	variables.query_retries_on_failure=1;
 	variables.client_multi_statements=true;
+	variables.client_host_cache_size=0;
+	variables.client_host_error_counts=0;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
