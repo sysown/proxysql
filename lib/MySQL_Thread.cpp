@@ -1029,6 +1029,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	shutdown_=0;
 	pthread_rwlock_init(&rwlock,NULL);
 	pthread_attr_init(&attr);
+	// Zero initialize all variables
+	memset(&variables, 0, sizeof(variables));
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
 	variables.query_retries_on_failure=1;
