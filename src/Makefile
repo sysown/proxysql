@@ -168,5 +168,5 @@ $(LIBPROXYSQLAR):
 default: $(EXECUTABLE)
 
 clean:
-	rm -f *.pid $(ODIR)/*.o *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE)
+	rm -f *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE)
 
