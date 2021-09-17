@@ -799,6 +799,8 @@ __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
 __thread bool mysql_thread___log_mysql_warnings_enabled;
 __thread bool mysql_thread___enable_load_data_local_infile;
+__thread int mysql_thread___client_host_cache_size;
+__thread int mysql_thread___client_host_error_counts;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -842,6 +844,7 @@ __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
 __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
+__thread int mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only;
 __thread int mysql_thread___monitor_galera_healthcheck_interval;
 __thread int mysql_thread___monitor_galera_healthcheck_timeout;
 __thread int mysql_thread___monitor_galera_healthcheck_max_timeout_count;
@@ -954,6 +957,8 @@ extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
 extern __thread bool mysql_thread___log_mysql_warnings_enabled;
 extern __thread bool mysql_thread___enable_load_data_local_infile;
+extern __thread int mysql_thread___client_host_cache_size;
+extern __thread int mysql_thread___client_host_error_counts;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
@@ -996,6 +1001,7 @@ extern __thread int mysql_thread___monitor_replication_lag_count;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+extern __thread int mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only;
 extern __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 extern __thread int mysql_thread___monitor_galera_healthcheck_interval;
 extern __thread int mysql_thread___monitor_galera_healthcheck_timeout;

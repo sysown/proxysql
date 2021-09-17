@@ -2233,7 +2233,12 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 			uint8_t tmp_is_null = (null_byte & ( 1 << idx )) >> idx;
 			my_bool is_null = tmp_is_null;
 			if (new_params_bound_flag == 0) {
-				// TODO: Add comment
+				// NOTE: Just impose 'is_null' to be '1' using the values from
+				// previous bindings when we know values for these **haven't
+				// changed**, this is, when 'new_params_bound_flag' is '0'.
+				// Otherwise we will assume a value to be 'NULL' when the
+				// binding type could have actually been changed from the
+				// previous 'MYSQL_TYPE_NULL'. For more context see #3603.
 				if (binds[i].buffer_type == MYSQL_TYPE_NULL)
 					is_null = 1;
 			}
@@ -2265,7 +2270,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				}
 				binds[i].buffer_type=(enum enum_field_types)buffer_type;
 				// NOTE: This is required because further check for nullity rely on
-				// 'is_nulls' instead of 'buffer_type'.
+				// 'is_nulls' instead of 'buffer_type'. See #3603.
 				if (binds[i].buffer_type == MYSQL_TYPE_NULL) {
 					is_nulls[i]= 1;
 				}
