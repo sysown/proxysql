@@ -504,7 +504,7 @@ MySQL_Session::MySQL_Session() {
 	last_insert_id=0; // #1093
 
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
-	ldap_ctx = NULL;
+	use_ldap_auth = false;
 }
 
 void MySQL_Session::init() {
@@ -546,7 +546,7 @@ void MySQL_Session::reset() {
 	memset(gtid_buf,0,sizeof(gtid_buf));
 	if (session_type == PROXYSQL_SESSION_SQLITE) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)thread->gen_args;
-		if (sqlite_sess->sessdb) {
+		if (sqlite_sess && sqlite_sess->sessdb) {
 			sqlite3 *db = sqlite_sess->sessdb->get_db();
 			if ((*proxy_sqlite3_get_autocommit)(db)==0) {
 				sqlite_sess->sessdb->execute((char *)"COMMIT");
@@ -588,6 +588,7 @@ MySQL_Session::~MySQL_Session() {
 	}
 	if (user_attributes) {
 		free(user_attributes);
+		user_attributes = NULL;
 	}
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Shutdown Session %p\n" , this->thread, this, this);
 	delete command_counters;
@@ -600,10 +601,6 @@ MySQL_Session::~MySQL_Session() {
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
-	}
-	if (ldap_ctx) {
-		GloMyLdapAuth->ldap_ctx_free(ldap_ctx);
-		ldap_ctx = NULL;
 	}
 }
 
@@ -2033,7 +2030,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 	enum session_status st=status;
 
 	if (
-		(GloMyLdapAuth==NULL) || (ldap_ctx==NULL)
+		(GloMyLdapAuth==NULL) || (use_ldap_auth==false)
 		||
 		(client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
 	) { // nothing to do
@@ -4384,7 +4381,7 @@ handler_again:
 							if (handler_again___verify_init_connect()) {
 								goto handler_again;
 							}
-							if (ldap_ctx) {
+							if (use_ldap_auth) {
 								if (handler_again___verify_ldap_user_variable()) {
 									goto handler_again;
 								}
@@ -4839,7 +4836,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->DSS=STATE_SSL_INIT;
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl=SSL_new(GloVars.global.ssl_ctx);
+		client_myds->ssl = GloVars.get_SSL_ctx();
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
@@ -4906,10 +4903,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 //#endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 					case PROXYSQL_SESSION_MYSQL:
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , session_type=PROXYSQL_SESSION_MYSQL\n", this, client_myds);
-						if (ldap_ctx==NULL) {
-							free_users=GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+						if (use_ldap_auth == false) {
+							free_users = GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 						} else {
-							free_users=GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+							free_users = GloMyLdapAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->fe_username, &used_users);
 						}
 						break;
 #ifdef PROXYSQLCLICKHOUSE
@@ -6196,10 +6193,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		reset();
 		init();
 		if (client_authenticated) {
-			if (ldap_ctx==NULL) {
+			if (use_ldap_auth == false) {
 				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
 			} else {
-				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+				GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
 			}
 		}
 		client_authenticated=false;
@@ -6939,7 +6936,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (GloMyLdapAuth==NULL)
 		return;
-	if (ldap_ctx==NULL)
+	if (use_ldap_auth == false)
 		return;
 	if (client_myds==NULL || client_myds->myconn==NULL || client_myds->myconn->userinfo==NULL)
 		return;

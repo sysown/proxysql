@@ -711,6 +711,7 @@ static void *child_mysql(void *arg) {
 
 __exit_child_mysql:
 	delete sqlite_sess;
+	mysql_thr->gen_args = NULL;
 	delete mysql_thr;
 	return NULL;
 }

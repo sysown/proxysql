@@ -69,6 +69,7 @@ int Thread::join()
     return result;
 }
 
+/* commenting the following code because we don't use it
 int Thread::detach()
 {
     int result = -1;
@@ -84,3 +85,4 @@ int Thread::detach()
 pthread_t Thread::self() {
     return m_tid;
 }
+*/
