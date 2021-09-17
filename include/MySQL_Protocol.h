@@ -36,12 +36,13 @@ class MySQL_ResultSet {
 	//PtrSizeArray *PSarrayOUT;
 	MySQL_ResultSet();
 	void init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt=NULL);
-	void init_with_stmt();
+	void init_with_stmt(MySQL_Connection *myconn);
 	~MySQL_ResultSet();
 	unsigned int add_row(MYSQL_ROWS *rows);
 	unsigned int add_row(MYSQL_ROW row);
 	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
+	void remove_last_eof();
 	void add_err(MySQL_Data_Stream *_myds);
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	//bool generate_COM_FIELD_LIST_response(PtrSizeArray *PSarrayFinal);

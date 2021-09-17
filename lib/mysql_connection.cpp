@@ -914,17 +914,18 @@ void MySQL_Connection::stmt_execute_start() {
 	if (_rc) {
 		proxy_error("mysql_stmt_bind_param() failed: %s", mysql_stmt_error(query.stmt));
 	}
-	//proxy_info("Calling mysql_stmt_execute_start, current state: %d\n", query.stmt->state);
+	// if for whatever reason the previous execution failed, state is left to an inconsistent value
+	// see bug #3547
+	// here we force the state to be MYSQL_STMT_PREPARED
+	// it is a nasty hack because we shouldn't change states that should belong to the library
+	// I am not sure if this is a bug in the backend library or not
+	query.stmt->state= MYSQL_STMT_PREPARED;
 	async_exit_status = mysql_stmt_execute_start(&interr , query.stmt);
-	//fprintf(stderr,"Current state: %d\n", query.stmt->state);
 }
 
 void MySQL_Connection::stmt_execute_cont(short event) {
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
-	//proxy_info("Calling mysql_stmt_execute_cont, current state: %d\n", query.stmt->state);
 	async_exit_status = mysql_stmt_execute_cont(&interr , query.stmt , mysql_status(event, true));
-	//proxy_info("mysql_stmt_execute_cont , ret=%d\n", async_exit_status);
-	//fprintf(stderr,"Current state: %d\n", query.stmt->state);
 }
 
 void MySQL_Connection::stmt_execute_store_result_start() {
@@ -1185,6 +1186,7 @@ handler_again:
 			break;
 
 		case ASYNC_STMT_EXECUTE_START:
+			PROXY_TRACE2();
 			stmt_execute_start();
 			__sync_fetch_and_add(&parent->queries_sent,1);
 			__sync_fetch_and_add(&parent->bytes_sent,query.stmt_meta->size);
@@ -1198,6 +1200,7 @@ handler_again:
 			}
 			break;
 		case ASYNC_STMT_EXECUTE_CONT:
+			PROXY_TRACE2();
 			stmt_execute_cont(event);
 			if (async_exit_status) {
 				next_event(ASYNC_STMT_EXECUTE_CONT);
@@ -1207,6 +1210,7 @@ handler_again:
 			break;
 
 		case ASYNC_STMT_EXECUTE_STORE_RESULT_START:
+			PROXY_TRACE2();
 			if (mysql_stmt_errno(query.stmt)) {
 				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
 			}
@@ -1248,6 +1252,7 @@ handler_again:
 			}
 			break;
 		case ASYNC_STMT_EXECUTE_STORE_RESULT_CONT:
+			PROXY_TRACE2();
 			{ // this copied mostly from ASYNC_USE_RESULT_CONT
 				if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
 					unsigned int buffered_data=0;
@@ -1295,6 +1300,7 @@ handler_again:
 			}
 			break;
 		case ASYNC_STMT_EXECUTE_END:
+			PROXY_TRACE2();
 			{
 				if (query.stmt_result) {
 					unsigned long long total_size=0;
@@ -1473,6 +1479,7 @@ handler_again:
 			}
 			break;
 		case ASYNC_QUERY_END:
+			PROXY_TRACE2();
 			if (mysql) {
 				int _myerrno=mysql_errno(mysql);
 				if (_myerrno == 0) {
@@ -1627,6 +1634,7 @@ handler_again:
 }
 
 void MySQL_Connection::process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes) {
+	PROXY_TRACE2();
 	// there is more than 1 row
 	unsigned long long total_size=0;
 	long long unsigned int irs = 0;
@@ -1792,6 +1800,7 @@ bool MySQL_Connection::IsServerOffline() {
 // the calling function should check mysql error in mysql struct
 int MySQL_Connection::async_query(short event, char *stmt, unsigned long length, MYSQL_STMT **_stmt, stmt_execute_metadata_t *stmt_meta) {
 	PROXY_TRACE();
+	PROXY_TRACE2();
 	assert(mysql);
 	assert(ret_mysql);
 	server_status=parent->status; // we copy it here to avoid race condition. The caller will see this
@@ -1829,6 +1838,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	}
 	
 	if (async_state_machine==ASYNC_QUERY_END) {
+		PROXY_TRACE2();
 		compute_unknown_transaction_status();
 		if (mysql_errno(mysql)) {
 			return -1;
@@ -1837,6 +1847,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		}
 	}
 	if (async_state_machine==ASYNC_STMT_EXECUTE_END) {
+		PROXY_TRACE2();
 		query.stmt_meta=NULL;
 		async_state_machine=ASYNC_QUERY_END;
 		compute_unknown_transaction_status();

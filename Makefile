@@ -14,6 +14,12 @@ endif
 ###     make build_deps_debug -j$(nproc) && make debug -j$(nproc) && make build_tap_test_debug -j$(nproc)
 ###     ```
 ### to compile with gcov code coverage, set environment variable WITHGCOV=1
+### to compile with ASAN, set environment variables NOJEMALLOC=1, WITHASAN=1:
+###   * To perform a full ProxySQL build with ASAN then execute:
+###
+###     ```
+###     make build_deps_debug -j$(nproc) && make debug -j$(nproc) && make build_tap_test_debug -j$(nproc)
+###     ```
 
 O0=-O0
 O2=-O2

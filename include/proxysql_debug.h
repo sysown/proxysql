@@ -10,8 +10,11 @@ extern int gdbg;
 */
 #ifdef DEBUG
 #define PROXY_TRACE() { proxy_debug(PROXY_DEBUG_GENERIC,10,"TRACE\n"); }
+//#define PROXY_TRACE2() { proxy_info("TRACE\n"); }
+#define PROXY_TRACE2()
 #else
 #define PROXY_TRACE()
+#define PROXY_TRACE2()
 #endif
 
 #ifdef DEBUG

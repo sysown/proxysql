@@ -2541,6 +2541,7 @@ MySQL_ResultSet::MySQL_ResultSet() {
 	//reset_pid = true;
 }
 void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
+	PROXY_TRACE2();
 	transfer_started=false;
 	resultset_completed=false;
 	myprot=_myprot;
@@ -2618,18 +2619,35 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 			buffer_to_PSarrayOut();
 		}
 	if (!deprecate_eof_active && myds->com_field_list==false) {
-		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
-		sid++;
-		resultset_size += 9;
+		// up to 2.2.0 we used to add an EOF here.
+		// due to bug #3547 we move the logic into add_eof() that can now handle also prepared statements
+		PROXY_TRACE2();
+		add_eof();
 	}
-	//}
-	//if (_stmt) { // binary protocol , we also assume we have ALL the resultset
-	///	init_with_stmt(_stmt);
-	//}
 }
 
 
-void MySQL_ResultSet::init_with_stmt() {
+// due to bug #3547 , in case of an error we remove the EOF
+// and replace it with an ERR
+// note that EOF is added on a packet on its own, instead of using a buffer,
+// so that can be removed using remove_last_eof()
+void MySQL_ResultSet::remove_last_eof() {
+	PROXY_TRACE2();
+	PtrSize_t pkt;
+	if (PSarrayOUT.len) {
+		unsigned int l = PSarrayOUT.len-1;
+		PtrSize_t * pktp = PSarrayOUT.index(l);
+		if (pktp->size == 9) {
+			PROXY_TRACE2();
+			PSarrayOUT.remove_index(l,&pkt);
+			l_free(pkt.size, pkt.ptr);
+			sid--;
+		}
+	}
+}
+
+void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
+	PROXY_TRACE2();
 	assert(stmt);
 	MYSQL_STMT *_stmt = stmt;
 	MySQL_Data_Stream * c_myds = *(myprot->myds);
@@ -2740,7 +2758,20 @@ void MySQL_ResultSet::init_with_stmt() {
 				}
 			}
 		}
-		add_eof();
+		// up to 2.2.0 we were always adding an EOF
+		// due to bug #3547 , in case of an error we remove the EOF
+		// and replace it with an ERR
+		// note that EOF is added on a packet on its own, instead of using a buffer,
+		// so that can be removed
+		int myerr = mysql_stmt_errno(_stmt);
+		if (myerr) {
+			PROXY_TRACE2();
+			remove_last_eof();
+			add_err(myconn->myds);
+		} else {
+			PROXY_TRACE2();
+			add_eof();
+		}
 }
 
 MySQL_ResultSet::~MySQL_ResultSet() {
@@ -2861,12 +2892,14 @@ void MySQL_ResultSet::add_eof() {
 			resultset_size += pkt.size;
 		}
 		else {
-			if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
-				buffer_to_PSarrayOut();
-			}
+			// due to bug #3547 , in case of an error we remove the EOF
+			// and replace it with an ERR
+			// note that EOF is added on a packet on its own, instead of using a buffer,
+			// so that can be removed using remove_last_eof()
+			buffer_to_PSarrayOut();
 			myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
 			resultset_size += 9;
-			buffer_to_PSarrayOut(true);
+			buffer_to_PSarrayOut();
 		}
 		sid++;
 	}
@@ -2889,9 +2922,19 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1317);
 			}
 		} else {
-			myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,mysql_errno(_mysql),sqlstate,mysql_error(_mysql));
+			int myerr = 0;
+			// the error code is returned from:
+			// - mysql_stmt_errno() if using a prepared statement
+			// - mysql_errno() if not using a prepared statement
+			if (stmt) {
+				myerr = mysql_stmt_errno(stmt);
+				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,myerr,sqlstate,mysql_stmt_error(stmt));
+			} else {
+				myerr = mysql_errno(_mysql);
+				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,myerr,sqlstate,mysql_error(_mysql));
+			}
 			// TODO: Check this is a mysql error
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, mysql_errno(_mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, myerr);
 		}
 		PSarrayOUT.add(pkt.ptr,pkt.size);
 		sid++;
