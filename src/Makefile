@@ -146,7 +146,7 @@ ODIR= obj
 
 EXECUTABLE=proxysql
 
-_OBJ = main.o proxysql_global.o SQLite3_Server.o
+_OBJ = main.o proxysql_global.o SQLite3_Server.o proxy_tls.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 $(ODIR)/%.o: %.cpp

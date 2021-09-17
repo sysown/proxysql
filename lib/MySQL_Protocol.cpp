@@ -1501,26 +1501,26 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,pkt,len); }
 #endif
-	bool ret=false;
+	bool ret = false;
 	unsigned int charset;
 	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
 	uint32_t  pass_len;
-	unsigned char *user=NULL;
-	char *db=NULL;
+	unsigned char *user = NULL;
+	char *db = NULL;
 	char *db_tmp = NULL;
 	unsigned char *pass = NULL;
 	MySQL_Connection *myconn = NULL;
-	char *password=NULL;
-	bool use_ssl=false;
-	bool _ret_use_ssl=false;
+	char *password = NULL;
+	bool use_ssl = false;
+	bool _ret_use_ssl = false;
 	unsigned char *auth_plugin = NULL;
 	int auth_plugin_id = 0;
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
 	int default_hostgroup=-1;
-	char *default_schema=NULL;
+	char *default_schema = NULL;
 	char *attributes = NULL;
 	bool schema_locked;
 	bool transaction_persistent = true;
@@ -1854,8 +1854,10 @@ __do_auth:
 					}
 #endif // debug
 					char *backend_username = NULL;
-					(*myds)->sess->ldap_ctx = GloMyLdapAuth->ldap_ctx_init();
-					password = GloMyLdapAuth->lookup((*myds)->sess->ldap_ctx, (char *)user, (char *)pass, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &backend_username);
+					(*myds)->sess->use_ldap_auth = true;
+					password = GloMyLdapAuth->lookup((char *) user, (char *) pass, USERNAME_FRONTEND, 
+						&_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, 
+						&transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes, &backend_username);
 					if (password) {
 #ifdef DEBUG
 						char *tmp_pass=strdup(password);
@@ -1868,7 +1870,7 @@ __do_auth:
 #endif // debug
 						(*myds)->sess->default_hostgroup=default_hostgroup;
 						(*myds)->sess->default_schema=default_schema; // just the pointer is passed
-						(*myds)->sess->user_attributes = attributes; // just the pointer is passed , but for now not available in LDAP
+						(*myds)->sess->user_attributes = attributes; // just the pointer is passed, LDAP returns empty string
 #ifdef DEBUG
 						debug_spiffe_id(user,attributes, __LINE__, __func__);
 #endif
@@ -2285,9 +2287,6 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 				continue;
 			} else if (is_nulls[i]==true) {
 				// the parameter is NULL, no need to read any data from the packet
-				// NOTE: We nullify buffers here to reflect that memory wasn't
-				// initalized. See #3546.
-				binds[i].buffer = NULL;
 				continue;
 			}
 

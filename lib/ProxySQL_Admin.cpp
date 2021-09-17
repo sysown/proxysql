@@ -82,6 +82,7 @@ char * proxysql_version = NULL;
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
+/*
 static long
 get_file_size (const char *filename) {
 	FILE *fp;
@@ -119,7 +120,7 @@ static char * load_file (const char *filename) {
 	fclose (fp);
 	return buffer;
 }
-
+*/
 
 static int round_intv_to_time_interval(int& intv) {
 	if (intv > 300) {
@@ -296,6 +297,8 @@ extern ClickHouse_Server *GloClickHouseServer;
 extern SQLite3_Server *GloSQLite3Server;
 
 extern char * binary_sha1;
+
+extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
@@ -1535,6 +1538,19 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		SPA->flush_configdb();
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+
+	if (strcasecmp("PROXYSQL RELOAD TLS",query_no_space) == 0) {
+		proxy_info("Received %s command\n", query_no_space);
+		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		std::string s;
+		int rc = ProxySQL_create_or_load_TLS(false, s);
+		if (rc == 0) {
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, s.length() ? (char *)s.c_str() : NULL);
+		} else {
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, s.length() ? (char *)s.c_str() : (char *)"RELOAD TLS failed");
+		}
 		return false;
 	}
 
@@ -5996,8 +6012,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 					if (GloVars.web_interface_plugin == NULL) {
 						char *key_pem;
 						char *cert_pem;
-						key_pem = load_file(ssl_key_fp);
-						cert_pem = load_file(ssl_cert_fp);
+						GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
 						Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
 							variables.web_port,
 							NULL, NULL, http_handler, NULL,
@@ -6060,8 +6075,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							Admin_HTTP_Server = NULL;
 							char *key_pem;
 							char *cert_pem;
-							key_pem = load_file(ssl_key_fp);
-							cert_pem = load_file(ssl_cert_fp);
+							GloVars.get_SSL_pem_mem(&key_pem, &cert_pem);
 							Admin_HTTP_Server = MHD_start_daemon(MHD_USE_AUTO | MHD_USE_INTERNAL_POLLING_THREAD | MHD_USE_ERROR_LOG | MHD_USE_SSL,
 								variables.web_port,
 								NULL, NULL, http_handler, NULL,

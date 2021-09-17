@@ -141,6 +141,7 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp.tar.gz
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
+	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/columns/column.h < ../column.h.diff
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a

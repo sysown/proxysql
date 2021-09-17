@@ -514,10 +514,10 @@ void MySQL_Logger::events_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (events.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(events.base_filename)+10);
+		filen=(char *)malloc(strlen(events.base_filename)+11);
 		sprintf(filen,"%s.%08d",events.base_filename,events.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(events.datadir)+strlen(events.base_filename)+10);
+		filen=(char *)malloc(strlen(events.datadir)+strlen(events.base_filename)+11);
 		sprintf(filen,"%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
 	}
 	events.logfile=new std::fstream();
@@ -543,10 +543,10 @@ void MySQL_Logger::audit_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (audit.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(audit.base_filename)+10);
+		filen=(char *)malloc(strlen(audit.base_filename)+11);
 		sprintf(filen,"%s.%08d",audit.base_filename,audit.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(audit.datadir)+strlen(audit.base_filename)+10);
+		filen=(char *)malloc(strlen(audit.datadir)+strlen(audit.base_filename)+11);
 		sprintf(filen,"%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
 	}
 	audit.logfile=new std::fstream();
@@ -638,7 +638,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+8);
+		ca=(char *)malloc(cl+9);
 		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
@@ -707,7 +707,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	}
 	sl+=strlen(sa);
 	if (sl && myds->myconn->parent->port) {
-		sa=(char *)malloc(sl+8);
+		sa=(char *)malloc(sl+9);
 		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
@@ -820,7 +820,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+8);
+		ca=(char *)malloc(cl+9);
 		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
@@ -857,7 +857,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 	sl+=strlen(sa);
 	if (sl && myds->myconn->parent->port) {
-		sa=(char *)malloc(sl+8);
+		sa=(char *)malloc(sl+9);
 		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
