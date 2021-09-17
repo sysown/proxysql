@@ -13,6 +13,7 @@ endif
 ###     ```
 ###     make build_deps_debug -j$(nproc) && make debug -j$(nproc) && make build_tap_test_debug -j$(nproc)
 ###     ```
+### to compile with gcov code coverage, set environment variable WITHGCOV=1
 
 O0=-O0
 O2=-O2

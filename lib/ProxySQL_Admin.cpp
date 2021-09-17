@@ -47,6 +47,11 @@
 #include "platform.h"
 #include "microhttpd.h"
 
+
+#ifdef WITHGCOV
+extern "C" void __gcov_dump();
+extern "C" void __gcov_reset();
+#endif
 //#define MYSQL_THREAD_IMPLEMENTATION
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -113,6 +118,38 @@ static char * load_file (const char *filename) {
 	}
 	fclose (fp);
 	return buffer;
+}
+
+
+static int round_intv_to_time_interval(int& intv) {
+	if (intv > 300) {
+		int v = 600;
+	} else {
+		if (intv > 120) {
+			intv = 300;
+		} else {
+			if (intv > 60) {
+				intv = 120;
+			} else {
+				if (intv > 30) {
+					intv = 60;
+				} else {
+					if (intv > 10) {
+						intv = 30;
+					} else {
+						if (intv > 5) {
+							intv = 10;
+						} else {
+							if (intv > 1) {
+								intv = 5;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return intv;
 }
 
 /*
@@ -773,6 +810,105 @@ static ProxySQL_Admin *SPA=NULL;
 static void * (*child_func[3]) (void *arg);
 
 
+const std::vector<std::string> LOAD_ADMIN_VARIABLES_TO_MEMORY = {
+	"LOAD ADMIN VARIABLES TO MEMORY" ,
+	"LOAD ADMIN VARIABLES TO MEM" ,
+	"LOAD ADMIN VARIABLES FROM DISK" };
+
+const std::vector<std::string> SAVE_ADMIN_VARIABLES_FROM_MEMORY = {
+	"SAVE ADMIN VARIABLES FROM MEMORY" ,
+	"SAVE ADMIN VARIABLES FROM MEM" ,
+	"SAVE ADMIN VARIABLES TO DISK" };
+
+const std::vector<std::string> LOAD_ADMIN_VARIABLES_FROM_MEMORY = {
+	"LOAD ADMIN VARIABLES FROM MEMORY" ,
+	"LOAD ADMIN VARIABLES FROM MEM" ,
+	"LOAD ADMIN VARIABLES TO RUNTIME" ,
+	"LOAD ADMIN VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_ADMIN_VARIABLES_TO_MEMORY = {
+	"SAVE ADMIN VARIABLES TO MEMORY" ,
+	"SAVE ADMIN VARIABLES TO MEM" ,
+	"SAVE ADMIN VARIABLES FROM RUNTIME" ,
+	"SAVE ADMIN VARIABLES FROM RUN" };
+
+const std::vector<std::string> LOAD_MYSQL_SERVERS_TO_MEMORY = {
+	"LOAD MYSQL SERVERS TO MEMORY" ,
+	"LOAD MYSQL SERVERS TO MEM" ,
+	"LOAD MYSQL SERVERS FROM DISK" };
+
+const std::vector<std::string> SAVE_MYSQL_SERVERS_FROM_MEMORY = {
+	"SAVE MYSQL SERVERS FROM MEMORY" ,
+	"SAVE MYSQL SERVERS FROM MEM" ,
+	"SAVE MYSQL SERVERS TO DISK" };
+
+const std::vector<std::string> LOAD_MYSQL_SERVERS_FROM_MEMORY = {
+	"LOAD MYSQL SERVERS FROM MEMORY" ,
+	"LOAD MYSQL SERVERS FROM MEM" ,
+	"LOAD MYSQL SERVERS TO RUNTIME" ,
+	"LOAD MYSQL SERVERS TO RUN" };
+
+const std::vector<std::string> SAVE_MYSQL_SERVERS_TO_MEMORY = {
+	"SAVE MYSQL SERVERS TO MEMORY" ,
+	"SAVE MYSQL SERVERS TO MEM" ,
+	"SAVE MYSQL SERVERS FROM RUNTIME" ,
+	"SAVE MYSQL SERVERS FROM RUN" };
+
+const std::vector<std::string> LOAD_MYSQL_USERS_TO_MEMORY = {
+	"LOAD MYSQL USERS TO MEMORY" ,
+	"LOAD MYSQL USERS TO MEM" ,
+	"LOAD MYSQL USERS FROM DISK" };
+
+const std::vector<std::string> SAVE_MYSQL_USERS_FROM_MEMORY = {
+	"SAVE MYSQL USERS FROM MEMORY" ,
+	"SAVE MYSQL USERS FROM MEM" ,
+	"SAVE MYSQL USERS TO DISK" };
+
+const std::vector<std::string> LOAD_MYSQL_USERS_FROM_MEMORY = {
+	"LOAD MYSQL USERS FROM MEMORY" ,
+	"LOAD MYSQL USERS FROM MEM" ,
+	"LOAD MYSQL USERS TO RUNTIME" ,
+	"LOAD MYSQL USERS TO RUN" };
+
+const std::vector<std::string> SAVE_MYSQL_USERS_TO_MEMORY = {
+	"SAVE MYSQL USERS TO MEMORY" ,
+	"SAVE MYSQL USERS TO MEM" ,
+	"SAVE MYSQL USERS FROM RUNTIME" ,
+	"SAVE MYSQL USERS FROM RUN" };
+
+const std::vector<std::string> LOAD_MYSQL_VARIABLES_TO_MEMORY = {
+	"LOAD MYSQL VARIABLES TO MEMORY" ,
+	"LOAD MYSQL VARIABLES TO MEM" ,
+	"LOAD MYSQL VARIABLES FROM DISK" };
+
+const std::vector<std::string> SAVE_MYSQL_VARIABLES_FROM_MEMORY = {
+	"SAVE MYSQL VARIABLES FROM MEMORY" ,
+	"SAVE MYSQL VARIABLES FROM MEM" ,
+	"SAVE MYSQL VARIABLES TO DISK" };
+
+const std::vector<std::string> LOAD_MYSQL_VARIABLES_FROM_MEMORY = {
+	"LOAD MYSQL VARIABLES FROM MEMORY" ,
+	"LOAD MYSQL VARIABLES FROM MEM" ,
+	"LOAD MYSQL VARIABLES TO RUNTIME" ,
+	"LOAD MYSQL VARIABLES TO RUN" };
+
+const std::vector<std::string> SAVE_MYSQL_VARIABLES_TO_MEMORY = {
+	"SAVE MYSQL VARIABLES TO MEMORY" ,
+	"SAVE MYSQL VARIABLES TO MEM" ,
+	"SAVE MYSQL VARIABLES FROM RUNTIME" ,
+	"SAVE MYSQL VARIABLES FROM RUN" };
+
+
+bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length) {
+	for (std::vector<std::string>::const_iterator it=cmds.begin(); it!=cmds.end(); ++it) {
+		if (query_no_space_length==it->length() && !strncasecmp(it->c_str(), query_no_space, query_no_space_length)) {
+			proxy_info("Received %s command\n", query_no_space);
+			return true;
+		}
+	}
+	return false;
+}
+
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	int r = 0;
 	if (!GloQPro) return 0;
@@ -1413,6 +1549,21 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	}
 #endif
 
+#ifdef WITHGCOV
+	if (query_no_space_length==strlen("PROXYSQL GCOV DUMP") && !strncasecmp("PROXYSQL GCOV DUMP",query_no_space, query_no_space_length)) {
+		proxy_info("Received %s command\n", query_no_space);
+		__gcov_dump();
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+	if (query_no_space_length==strlen("PROXYSQL GCOV RESET") && !strncasecmp("PROXYSQL GCOV RESET",query_no_space, query_no_space_length)) {
+		proxy_info("Received %s command\n", query_no_space);
+		__gcov_reset();
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return false;
+	}
+#endif
+
 	if (query_no_space_length==strlen("PROXYSQL KILL") && !strncasecmp("PROXYSQL KILL",query_no_space, query_no_space_length)) {
 		proxy_info("Received PROXYSQL KILL command\n");
 		exit(EXIT_SUCCESS);
@@ -1921,14 +2072,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 	if ((query_no_space_length>17) && ( (!strncasecmp("SAVE MYSQL USERS ", query_no_space, 17)) || (!strncasecmp("LOAD MYSQL USERS ", query_no_space, 17))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL USERS TO MEMORY") && !strncasecmp("LOAD MYSQL USERS TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL USERS TO MEM") && !strncasecmp("LOAD MYSQL USERS TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL USERS FROM DISK") && !strncasecmp("LOAD MYSQL USERS FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(LOAD_MYSQL_USERS_TO_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_users__from_disk_to_memory();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading mysql users to MEMORY\n");
@@ -1936,14 +2080,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-		if (
-			(query_no_space_length==strlen("SAVE MYSQL USERS FROM MEMORY") && !strncasecmp("SAVE MYSQL USERS FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL USERS FROM MEM") && !strncasecmp("SAVE MYSQL USERS FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL USERS TO DISK") && !strncasecmp("SAVE MYSQL USERS TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(SAVE_MYSQL_USERS_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_users__from_memory_to_disk();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saving mysql users to DISK\n");
@@ -1951,16 +2088,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL USERS FROM MEMORY") && !strncasecmp("LOAD MYSQL USERS FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL USERS FROM MEM") && !strncasecmp("LOAD MYSQL USERS FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL USERS TO RUNTIME") && !strncasecmp("LOAD MYSQL USERS TO RUNTIME",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL USERS TO RUN") && !strncasecmp("LOAD MYSQL USERS TO RUN",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(LOAD_MYSQL_USERS_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->init_users();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql users to RUNTIME\n");
@@ -1996,16 +2124,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-		if (
-			(query_no_space_length==strlen("SAVE MYSQL USERS TO MEMORY") && !strncasecmp("SAVE MYSQL USERS TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL USERS TO MEM") && !strncasecmp("SAVE MYSQL USERS TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL USERS FROM RUNTIME") && !strncasecmp("SAVE MYSQL USERS FROM RUNTIME",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL USERS FROM RUN") && !strncasecmp("SAVE MYSQL USERS FROM RUN",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(SAVE_MYSQL_USERS_TO_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_mysql_users_runtime_to_database(false);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql users from RUNTIME\n");
@@ -2061,35 +2180,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-/*
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			if (GloVars.configfile_open) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
-				if (GloVars.confFile->OpenFile(NULL)==true) {
-					int rows=0;
-					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-					rows=SPA->Read_Global_Variables_from_configfile("mysql");
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables from CONFIG\n");
-					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
-					GloVars.confFile->CloseFile();
-				} else {
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
-					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
-					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
-					free(m);
-				}
-			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
-				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
-			}
-			return false;
-		}
-*/
 		if (
 			(query_no_space_length==strlen("SAVE SQLITESERVER VARIABLES TO MEMORY") && !strncasecmp("SAVE SQLITESERVER VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 			||
@@ -2155,35 +2245,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-/*
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			if (GloVars.configfile_open) {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
-				if (GloVars.confFile->OpenFile(NULL)==true) {
-					int rows=0;
-					ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-					rows=SPA->Read_Global_Variables_from_configfile("mysql");
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables from CONFIG\n");
-					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
-					GloVars.confFile->CloseFile();
-				} else {
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
-					char *s=(char *)"Unable to open or parse config file %s";
-					char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-					sprintf(m,s,GloVars.config_file);
-					SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
-					free(m);
-				}
-			} else {
-				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
-				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
-			}
-			return false;
-		}
-*/
 		if (
 			(query_no_space_length==strlen("SAVE CLICKHOUSE VARIABLES TO MEMORY") && !strncasecmp("SAVE CLICKHOUSE VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 			||
@@ -2251,35 +2312,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				return false;
 			}
 	
-	/*
-			if (
-				(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM CONFIG") && !strncasecmp("LOAD MYSQL VARIABLES FROM CONFIG",query_no_space, query_no_space_length))
-			) {
-				proxy_info("Received %s command\n", query_no_space);
-				if (GloVars.configfile_open) {
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading from file %s\n", GloVars.config_file);
-					if (GloVars.confFile->OpenFile(NULL)==true) {
-						int rows=0;
-						ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-						rows=SPA->Read_Global_Variables_from_configfile("mysql");
-						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables from CONFIG\n");
-						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, rows);
-						GloVars.confFile->CloseFile();
-					} else {
-						proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unable to open or parse config file %s\n", GloVars.config_file);
-						char *s=(char *)"Unable to open or parse config file %s";
-						char *m=(char *)malloc(strlen(s)+strlen(GloVars.config_file)+1);
-						sprintf(m,s,GloVars.config_file);
-						SPA->send_MySQL_ERR(&sess->client_myds->myprot, m);
-						free(m);
-					}
-				} else {
-					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
-					SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
-				}
-				return false;
-			}
-	*/
 			if (
 				(query_no_space_length==strlen("SAVE LDAP VARIABLES TO MEMORY") && !strncasecmp("SAVE LDAP VARIABLES TO MEMORY",query_no_space, query_no_space_length))
 				||
@@ -2301,44 +2333,21 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO MEMORY") && !strncasecmp("LOAD MYSQL VARIABLES TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO MEM") && !strncasecmp("LOAD MYSQL VARIABLES TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM DISK") && !strncasecmp("LOAD MYSQL VARIABLES FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length) ) {
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
 			*ql=strlen(*q)+1;
 			return true;
 		}
 
-		if (
-			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM MEMORY") && !strncasecmp("SAVE MYSQL VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM MEM") && !strncasecmp("SAVE MYSQL VARIABLES FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL VARIABLES TO DISK") && !strncasecmp("SAVE MYSQL VARIABLES TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(SAVE_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
 			*ql=strlen(*q)+1;
 			return true;
 		}
 
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM MEMORY") && !strncasecmp("LOAD MYSQL VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES FROM MEM") && !strncasecmp("LOAD MYSQL VARIABLES FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO RUNTIME") && !strncasecmp("LOAD MYSQL VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL VARIABLES TO RUN") && !strncasecmp("LOAD MYSQL VARIABLES TO RUN",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->load_mysql_variables_to_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql variables to RUNTIME\n");
@@ -2374,16 +2383,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-		if (
-			(query_no_space_length==strlen("SAVE MYSQL VARIABLES TO MEMORY") && !strncasecmp("SAVE MYSQL VARIABLES TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL VARIABLES TO MEM") && !strncasecmp("SAVE MYSQL VARIABLES TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM RUNTIME") && !strncasecmp("SAVE MYSQL VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL VARIABLES FROM RUN") && !strncasecmp("SAVE MYSQL VARIABLES FROM RUN",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(SAVE_MYSQL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_mysql_variables_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql variables from RUNTIME\n");
@@ -2395,14 +2395,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>19) && ( (!strncasecmp("SAVE MYSQL SERVERS ", query_no_space, 19)) || (!strncasecmp("LOAD MYSQL SERVERS ", query_no_space, 19))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO MEMORY") && !strncasecmp("LOAD MYSQL SERVERS TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO MEM") && !strncasecmp("LOAD MYSQL SERVERS TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM DISK") && !strncasecmp("LOAD MYSQL SERVERS FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(LOAD_MYSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_servers__from_disk_to_memory();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to MEMORY\n");
@@ -2410,14 +2403,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-		if (
-			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM MEMORY") && !strncasecmp("SAVE MYSQL SERVERS FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM MEM") && !strncasecmp("SAVE MYSQL SERVERS FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL SERVERS TO DISK") && !strncasecmp("SAVE MYSQL SERVERS TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(SAVE_MYSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_servers__from_memory_to_disk();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers to DISK\n");
@@ -2425,16 +2411,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM MEMORY") && !strncasecmp("LOAD MYSQL SERVERS FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL SERVERS FROM MEM") && !strncasecmp("LOAD MYSQL SERVERS FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO RUNTIME") && !strncasecmp("LOAD MYSQL SERVERS TO RUNTIME",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL SERVERS TO RUN") && !strncasecmp("LOAD MYSQL SERVERS TO RUN",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(LOAD_MYSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->mysql_servers_wrlock();
 			SPA->load_mysql_servers_to_runtime();
@@ -2472,16 +2449,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-		if (
-			(query_no_space_length==strlen("SAVE MYSQL SERVERS TO MEMORY") && !strncasecmp("SAVE MYSQL SERVERS TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL SERVERS TO MEM") && !strncasecmp("SAVE MYSQL SERVERS TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM RUNTIME") && !strncasecmp("SAVE MYSQL SERVERS FROM RUNTIME",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL SERVERS FROM RUN") && !strncasecmp("SAVE MYSQL SERVERS FROM RUN",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(SAVE_MYSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->mysql_servers_wrlock();
 			SPA->save_mysql_servers_runtime_to_database(false);
@@ -2792,44 +2760,21 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE ADMIN VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD ADMIN VARIABLES ", query_no_space, 21))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO MEMORY") && !strncasecmp("LOAD ADMIN VARIABLES TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO MEM") && !strncasecmp("LOAD ADMIN VARIABLES TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD ADMIN VARIABLES FROM DISK") && !strncasecmp("LOAD ADMIN VARIABLES FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(LOAD_ADMIN_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length) ) {
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'admin-%'");
 			*ql=strlen(*q)+1;
 			return true;
 		}
 
-		if (
-			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM MEMORY") && !strncasecmp("SAVE ADMIN VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM MEM") && !strncasecmp("SAVE ADMIN VARIABLES FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO DISK") && !strncasecmp("SAVE ADMIN VARIABLES TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(SAVE_ADMIN_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'admin-%'");
 			*ql=strlen(*q)+1;
 			return true;
 		}
 
-		if (
-			(query_no_space_length==strlen("LOAD ADMIN VARIABLES FROM MEMORY") && !strncasecmp("LOAD ADMIN VARIABLES FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD ADMIN VARIABLES FROM MEM") && !strncasecmp("LOAD ADMIN VARIABLES FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO RUNTIME") && !strncasecmp("LOAD ADMIN VARIABLES TO RUNTIME",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD ADMIN VARIABLES TO RUN") && !strncasecmp("LOAD ADMIN VARIABLES TO RUN",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(LOAD_ADMIN_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->load_admin_variables_to_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded admin variables to RUNTIME\n");
@@ -2865,16 +2810,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			return false;
 		}
 
-		if (
-			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO MEMORY") && !strncasecmp("SAVE ADMIN VARIABLES TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE ADMIN VARIABLES TO MEM") && !strncasecmp("SAVE ADMIN VARIABLES TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM RUNTIME") && !strncasecmp("SAVE ADMIN VARIABLES FROM RUNTIME",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE ADMIN VARIABLES FROM RUN") && !strncasecmp("SAVE ADMIN VARIABLES FROM RUN",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
+		if ( is_admin_command_or_alias(SAVE_ADMIN_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_admin_variables_from_runtime();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved admin variables from RUNTIME\n");
@@ -3344,13 +3280,24 @@ SQLite3_result * ProxySQL_Admin::generate_show_fields_from(const char *tablename
 	char *pta[6];
 	pta[1]=(char *)"varchar(255)";
 	pta[2]=(char *)"NO";
-	pta[3]=(char *)"";
 	pta[4]=(char *)"";
 	pta[5]=(char *)"";
 	free(q2);
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
-		pta[0]=r->fields[0];
+		pta[0]=r->fields[1];
+		pta[2]=(char *)"YES";
+		if (r->fields[3]) {
+			if (strcmp(r->fields[3],"1")==0) {
+				pta[2]=(char *)"NO";
+			}
+		}
+		pta[3]=(char *)"";
+		if (r->fields[5]) {
+			if (strcmp(r->fields[5],"0")) {
+				pta[3]=(char *)"PRI";
+			}
+		}
 		result->add_row(pta);
 	}
 	delete resultset;
@@ -3375,7 +3322,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	tn[j]=0;
 	SQLite3_result *resultset=NULL;
 	char *q1=(char *)"PRAGMA table_info(%s)";
-	char *q2=(char *)malloc(strlen(q1)+strlen(tn));
+	char *q2=(char *)malloc(strlen(q1)+strlen(tn)+32);
 	sprintf(q2,q1,tn);
 	int affected_rows;
 	int cols;
@@ -3404,7 +3351,6 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 		*err=strdup((char *)"Table does not exist");
 		return NULL;
 	}
-	free(q2);
 	SQLite3_result *result=new SQLite3_result(18);
 	result->add_column_definition(SQLITE_TEXT,"Name");
 	result->add_column_definition(SQLITE_TEXT,"Engine");
@@ -3428,7 +3374,14 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	pta[1]=(char *)"SQLite";
 	pta[2]=(char *)"10";
 	pta[3]=(char *)"Dynamic";
-	pta[4]=(char *)"10";
+	delete resultset;
+	sprintf(q2,"SELECT COUNT(*) FROM %s",tn);
+	admindb->execute_statement(q2, &error , &cols , &affected_rows , &resultset);
+	char buf[20];
+	sprintf(buf,"%d",resultset->rows_count);
+	pta[4]=buf;
+	delete resultset;
+	free(q2);
 	pta[5]=(char *)"0";
 	pta[6]=(char *)"0";
 	pta[7]=(char *)"0";
@@ -3997,7 +3950,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			query_length=strlen(query)+1;
 			goto __run_query;
 		}
-		if (!strncmp("show table status like '", query_no_space, strlen("show table status like '"))) {
+		if (!strncasecmp("show table status like '", query_no_space, strlen("show table status like '"))) {
 			char *strA=query_no_space+24;
 			int strAl=strlen(strA);
 			if (strAl<2) { // error
@@ -4011,9 +3964,16 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			run_query=false;
 			goto __run_query;
 		}
-		if (!strncmp("show fields from `", query_no_space, strlen("show fields from `"))) {
-			char *strA=query_no_space+18;
+		if (!strncasecmp("show fields from ", query_no_space, strlen("show fields from "))) {
+			char *strA=query_no_space+17;
 			int strAl=strlen(strA);
+			if (strAl==0) { // error
+				goto __run_query;
+			}
+			if (strA[0]=='`') {
+				strA++;
+				strAl--;
+			}
 			if (strAl<2) { // error
 				goto __run_query;
 			}
@@ -6143,26 +6103,6 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			const char *value = r->fields[1];
-/*
-			// COMPLETELY DISABLING THIS because we disable must mysql-default_ variables
-			//
-			if (!strcasecmp(r->fields[0], "default_character_set_results") || !strcasecmp(r->fields[0], "default_character_set_client") ||
-					!strcasecmp(r->fields[0], "default_character_set_database") || !strcasecmp(r->fields[0], "default_character_set_connection") ||
-					!strcasecmp(r->fields[0], "default_charset")) {
-				const MARIADB_CHARSET_INFO *ci = NULL;
-				char q[1000];
-				ci = proxysql_find_charset_name(value);
-				if (!ci) {
-					proxy_warning("The %s set to invalid value in the configuration file. Changing to default utf8\n", r->fields[0]);
-					sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-%s\",\"%s\")",r->fields[0],"utf8");
-					db->execute(q);
-					value = "utf8";
-					GloMTH->set_variable(r->fields[0],"utf8");
-				} else {
-					GloMTH->set_variable(r->fields[0],ci->csname);
-				}
-			} else {
-*/
 				bool rc=GloMTH->set_variable(r->fields[0],value);
 				if (rc==false) {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],value);
@@ -7322,29 +7262,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (!strcasecmp(name,"stats_mysql_connection_pool")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 300) {
-				if (intv > 120) {
-					intv = 300;
-				} else {
-					if (intv > 60) {
-						intv = 120;
-					} else {
-						if (intv > 30) {
-							intv = 60;
-						} else {
-							if (intv > 10) {
-								intv = 30;
-							} else {
-								if (intv > 5) {
-									intv = 10;
-								} else {
-									if (intv > 1) {
-										intv = 5;
-									}
-								}
-							}
-						}
-					}
-				}
+				intv = round_intv_to_time_interval(intv);
 				variables.stats_mysql_connection_pool=intv;
 				GloProxyStats->variables.stats_mysql_connection_pool=intv;
 				return true;
@@ -7355,29 +7273,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (!strcasecmp(name,"stats_mysql_connections")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 300) {
-				if (intv > 120) {
-					intv = 300;
-				} else {
-					if (intv > 60) {
-						intv = 120;
-					} else {
-						if (intv > 30) {
-							intv = 60;
-						} else {
-							if (intv > 10) {
-								intv = 30;
-							} else {
-								if (intv > 5) {
-									intv = 10;
-								} else {
-									if (intv > 1) {
-										intv = 5;
-									}
-								}
-							}
-						}
-					}
-				}
+				intv = round_intv_to_time_interval(intv);
 				variables.stats_mysql_connections=intv;
 				GloProxyStats->variables.stats_mysql_connections=intv;
 				return true;
@@ -7388,29 +7284,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (!strcasecmp(name,"stats_mysql_query_cache")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 300) {
-				if (intv > 120) {
-					intv = 300;
-				} else {
-					if (intv > 60) {
-						intv = 120;
-					} else {
-						if (intv > 30) {
-							intv = 60;
-						} else {
-							if (intv > 10) {
-								intv = 30;
-							} else {
-								if (intv > 5) {
-									intv = 10;
-								} else {
-									if (intv > 1) {
-										intv = 5;
-									}
-								}
-							}
-						}
-					}
-				}
+				intv = round_intv_to_time_interval(intv);
 				variables.stats_mysql_query_cache=intv;
 				GloProxyStats->variables.stats_mysql_query_cache=intv;
 				return true;
@@ -7431,29 +7305,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (!strcasecmp(name,"stats_system_cpu")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 600) {
-				if (intv > 120) {
-					intv = 300;
-				} else {
-					if (intv > 60) {
-						intv = 120;
-					} else {
-						if (intv > 30) {
-							intv = 60;
-						} else {
-							if (intv > 10) {
-								intv = 30;
-							} else {
-								if (intv > 5) {
-									intv = 10;
-								} else {
-									if (intv > 1) {
-										intv = 5;
-									}
-								}
-							}
-						}
-					}
-				}
+				intv = round_intv_to_time_interval(intv);
 				variables.stats_system_cpu=intv;
 				GloProxyStats->variables.stats_system_cpu=intv;
 				return true;
@@ -7465,29 +7317,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (!strcasecmp(name,"stats_system_memory")) {
 			int intv=atoi(value);
 			if (intv >= 0 && intv <= 600) {
-				if (intv > 120) {
-					intv = 300;
-				} else {
-					if (intv > 60) {
-						intv = 120;
-					} else {
-						if (intv > 30) {
-							intv = 60;
-						} else {
-							if (intv > 10) {
-								intv = 30;
-							} else {
-								if (intv > 5) {
-									intv = 10;
-								} else {
-									if (intv > 1) {
-										intv = 5;
-									}
-								}
-							}
-						}
-					}
-				}
+				intv = round_intv_to_time_interval(intv);
 				variables.stats_system_memory=intv;
 				GloProxyStats->variables.stats_system_memory=intv;
 				return true;
@@ -10565,14 +10395,6 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 	ch_account_details_t **ads=NULL;
 	int num_users;
 	int i;
-/*
-	char *qf=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,COALESCE((SELECT backend FROM mysql_users WHERE username='%s' AND frontend=1),0),1,%d)";
-	char *qb=(char *)"REPLACE INTO mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,1,COALESCE((SELECT frontend FROM mysql_users WHERE username='%s' AND backend=1),0),%d)";
-	char *qfr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username='%s' AND frontend=1),0),1,%d)";
-	char *qbr=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES('%s','%s',1,%d,%d,'%s',%d,%d,%d,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username='%s' AND backend=1),0),%d)";
-	char *qfr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,COALESCE((SELECT backend FROM runtime_mysql_users WHERE username=?9 AND frontend=1),0),1,?10)";
-	char *qbr_stmt1=(char *)"REPLACE INTO runtime_mysql_users(username,password,active,use_ssl,default_hostgroup,default_schema,schema_locked,transaction_persistent,fast_forward,backend,frontend,max_connections) VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,1,COALESCE((SELECT frontend FROM runtime_mysql_users WHERE username=?9 AND backend=1),0),?10)";
-*/
 	char *qf=(char *)"REPLACE INTO clickhouse_users(username,password,active,max_connections) VALUES('%s','%s',1,%d)";
 	char *qb=(char *)"REPLACE INTO clickhouse_users(username,password,active,max_connections) VALUES('%s','%s',1,%d)";
 	char *qfr=(char *)"REPLACE INTO runtime_clickhouse_users(username,password,active,max_connections) VALUES('%s','%s',1,%d)";
@@ -10585,20 +10407,16 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 	char *q_stmt1_b=NULL;
 	sqlite3_stmt *f_statement1=NULL;
 	sqlite3_stmt *b_statement1=NULL;
-	//sqlite3 *mydb3=admindb->get_db();
 	if (_runtime) {
 		int rc;
 		q_stmt1_f=qfr_stmt1;
 		q_stmt1_b=qbr_stmt1;
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q_stmt1_f, -1, &f_statement1, 0);
 		rc = admindb->prepare_v2(q_stmt1_f, &f_statement1);
 		ASSERT_SQLITE_OK(rc, admindb);
-		//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q_stmt1_b, -1, &b_statement1, 0);
 		rc = admindb->prepare_v2(q_stmt1_b, &b_statement1);
 		ASSERT_SQLITE_OK(rc, admindb);
 	}
 	for (i=0; i<num_users; i++) {
-	//fprintf(stderr,"%s %d\n", ads[i]->username, ads[i]->default_hostgroup);
 		ch_account_details_t *ad=ads[i];
 		sqlite3_stmt *statement1=NULL;
 		if (ads[i]->default_hostgroup >= 0) {

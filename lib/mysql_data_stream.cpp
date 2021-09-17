@@ -1308,88 +1308,6 @@ int MySQL_Data_Stream::array2buffer_full() {
 	return rc; 
 }
 
-int MySQL_Data_Stream::myds_connect(char *address, int connect_port, int *pending_connect) {
-	//assert(myconn==NULL);
-
-	assert(myconn); // this assert() is to remove the next condition
-	if (myconn==NULL) myconn= new MySQL_Connection(); // FIXME: why here? // 20141011 /// should be removed
-
-	myconn->last_time_used=sess->thread->curtime;
-	struct sockaddr_un u;
-	struct sockaddr_in a;
-	int s=0;
-	int len=0;
-	int rc=0;
-
-
-	if (connect_port) {
-		// TCP socket
-		if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-			perror("socket");
-			close(s);
-			return -1;
-		}
-#ifdef FD_CLOEXEC
-		int f_=fcntl(s, F_GETFL);
-		// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
-		fcntl(s, F_SETFL, f_|FD_CLOEXEC);
-#endif /* FD_CLOEXEC */
-		ioctl_FIONBIO(s, 1);
-		memset(&a, 0, sizeof(a));
-		a.sin_port = htons(connect_port);
-		a.sin_family = AF_INET;
-
-		if (!inet_aton(address, (struct in_addr *) &a.sin_addr.s_addr)) {
-			perror("bad IP address format");
-			close(s);
-			return -1;
-		}
-	} else {
-		// UNIX socket domain
-		if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
-			perror("socket");
-			close(s);
-			return -1;
-		}
-#ifdef FD_CLOEXEC
-		int f_=fcntl(s, F_GETFL);
-		// asynchronously set also FD_CLOEXEC , this to prevent then when a fork happens the FD are duplicated to new process
-		fcntl(s, F_SETFL, f_|FD_CLOEXEC);
-#endif /* FD_CLOEXEC */
-		ioctl_FIONBIO(s, 1);
-		memset(u.sun_path,0,UNIX_PATH_MAX);
-		u.sun_family = AF_UNIX;
-		strncpy(u.sun_path, address, UNIX_PATH_MAX-1);
-		len=strlen(u.sun_path)+sizeof(u.sun_family);
-	}
-
-	if (connect_port) {
-		rc=connect(s, (struct sockaddr *) &a, sizeof(a));
-		int arg_on=1;
-		setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(int));
-#ifdef __APPLE__
-		setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (char *) &arg_on, sizeof(int));
-#endif
-	} else {
-		rc=connect(s, (struct sockaddr *) &u, len);
-	}
-	if (rc==-1) {
-		if (errno!=EINPROGRESS) {
-			perror("connect()");
-			shutdown(s, SHUT_RDWR);
-			close(s);
-			return -1;
-		}
-	} else {
-		*pending_connect=0;
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, old_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->fd, s);
-	myconn->fd=s;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, new_mysql_net_fd=%d, fd=%d\n", this->sess, this, myconn->fd, s);
-	return s;
-
-}
-
 int MySQL_Data_Stream::assign_fd_from_mysql_conn() {
 	assert(myconn);
 	//proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p, oldFD=%d, newFD=%d\n", this->sess, this, fd, myconn->myconn.net.fd);
@@ -1405,11 +1323,6 @@ void MySQL_Data_Stream::unplug_backend() {
   mypolls->remove_index_fast(poll_fds_idx);
   mypolls=NULL;
   fd=0;
-}
-
-void MySQL_Data_Stream::clean_net_failure() {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p\n", this->sess, this);
-	net_failure=false;
 }
 
 void MySQL_Data_Stream::set_net_failure() {
@@ -1439,9 +1352,16 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
-		( (intv) && (mc->last_time_used > mc->creation_time + intv) )
+		(( (intv) && (mc->last_time_used > mc->creation_time + intv) )
 		||
-		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection )
+		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection ))
+		&&
+		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
+		// no need to reset the session. The destruction and creation of a new
+		// session in case this session has exceeded the time specified by
+		// 'connection_max_age_ms' will be deferred to the next time the session
+		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
+		sess->status != PINGING_SERVER
 	) {
 		if (mysql_thread___reset_connection_algorithm == 2) {
 			sess->create_new_session_and_reset_connection(this);
