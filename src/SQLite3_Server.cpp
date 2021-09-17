@@ -816,6 +816,22 @@ static void *child_mysql(void *arg) {
 		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
 		sess->to_process=1;
+
+		// Get and set the client address before the sesion is processed.
+		union {
+			struct sockaddr_in in;
+			struct sockaddr_in6 in6;
+		} custom_sockaddr;
+		struct sockaddr *addr=(struct sockaddr *)malloc(sizeof(custom_sockaddr));
+		socklen_t addrlen=sizeof(custom_sockaddr);
+		memset(addr, 0, sizeof(custom_sockaddr));
+		sess->client_myds->client_addrlen=addrlen;
+		sess->client_myds->client_addr=addr;
+		int g_rc = getpeername(sess->client_myds->fd, addr, &addrlen);
+		if (g_rc == -1) {
+			proxy_error("'getpeername' failed with error: %d\n", rc);
+		}
+
 		int rc=sess->handler();
 		if (rc==-1) goto __exit_child_mysql;
 	}
