@@ -125,7 +125,9 @@ int listen_on_unix(char *path, int backlog) {
 
 
 
-
+/*
+// THIS CODE IS BEING COMMENTED BECAUSED UNUSED (probably since 2015)
+//
 int connect_socket(char *address, int connect_port)
 {
 	struct sockaddr_in a;
@@ -155,3 +157,4 @@ int connect_socket(char *address, int connect_port)
 	}
 	return s;
 }
+*/

@@ -2779,6 +2779,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	MySrvC *mysrvcCandidates_static[32];
 	MySrvC **mysrvcCandidates = mysrvcCandidates_static;
 	unsigned int num_candidates = 0;
+	bool max_connections_reached = false;
 	if (l>32) {
 		mysrvcCandidates = (MySrvC **)malloc(sizeof(MySrvC *)*l);
 	}
@@ -2814,6 +2815,8 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 							}
 						}
 					}
+				} else {
+					max_connections_reached = true;
 				}
 			} else {
 				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -2911,7 +2914,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 			if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
 				last_hg_log = time(NULL);
-				proxy_error("Hostgroup %u has no servers available! Checking servers shunned for more than %u second%s\n", hid, max_wait_sec, max_wait_sec == 1 ? "" : "s");
+				proxy_error("Hostgroup %u has no servers available%s! Checking servers shunned for more than %u second%s\n", hid,
+				(max_connections_reached ? " or max_connections reached for all servers" : ""),
+				max_wait_sec, max_wait_sec == 1 ? "" : "s");
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
@@ -3776,7 +3781,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	wrunlock();
 }
 
-SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
+SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int *hid) {
   const int colnum=14;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
@@ -3800,17 +3805,23 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
-			if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
-				//__sync_fetch_and_sub(&status.server_connections_connected, mysrvc->ConnectionsFree->conns->len);
-				mysrvc->ConnectionsFree->drop_all_connections();
-			}
-			// drop idle connections if beyond max_connection
-			while (mysrvc->ConnectionsFree->conns_length() && mysrvc->ConnectionsUsed->conns_length()+mysrvc->ConnectionsFree->conns_length() > mysrvc->max_connections) {
-				//MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
-				MySQL_Connection *conn=mysrvc->ConnectionsFree->remove(0);
-				delete conn;
-				//__sync_fetch_and_sub(&status.server_connections_connected, 1);
+			if (hid == NULL) {
+				if (mysrvc->status!=MYSQL_SERVER_STATUS_ONLINE) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d is not online\n", mysrvc->address, mysrvc->port);
+					//__sync_fetch_and_sub(&status.server_connections_connected, mysrvc->ConnectionsFree->conns->len);
+					mysrvc->ConnectionsFree->drop_all_connections();
+				}
+				// drop idle connections if beyond max_connection
+				while (mysrvc->ConnectionsFree->conns_length() && mysrvc->ConnectionsUsed->conns_length()+mysrvc->ConnectionsFree->conns_length() > mysrvc->max_connections) {
+					//MySQL_Connection *conn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->remove_index_fast(0);
+					MySQL_Connection *conn=mysrvc->ConnectionsFree->remove(0);
+					delete conn;
+					//__sync_fetch_and_sub(&status.server_connections_connected, 1);
+				}
+			} else {
+				if (*hid != (int)myhgc->hid) {
+					continue;
+				}
 			}
 			char buf[1024];
 			char **pta=(char **)malloc(sizeof(char *)*colnum);
