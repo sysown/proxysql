@@ -15,10 +15,6 @@ class ProxySQL_ConfigFile {
   bool OpenFile(const char *);
   void CloseFile();
   bool ReadGlobals();
-  bool configVariable(const char *, const char *, int &, int, int, int, int);
-  bool configVariable(const char *, const char *, int64_t &, int64_t, int64_t, int64_t, int64_t);
-  bool configVariable(const char *, const char *, bool &, bool);
-  bool configVariable(const char *, const char *, char **, const char *);
 };
 
 

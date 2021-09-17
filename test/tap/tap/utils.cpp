@@ -169,7 +169,9 @@ int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
 		q << "INSERT INTO test.sbtest1 (k, c, pad) values ";
 		bool put_comma = false;
 		int i=0;
-		for (i=0; i<num_rows && i<20+rand()%50 ; ++i) {
+		unsigned int cnt=5+rand()%50;
+		if (cnt > num_rows) cnt = num_rows;
+		for (i=0; i<cnt ; ++i) {
 			num_rows--;
 			int k = dist(mt);
 			std::stringstream c;

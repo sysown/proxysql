@@ -225,9 +225,13 @@ public:
 				return;
 			}
 		}
+		// LCOV_EXCL_START
 		assert(0);
+		// LCOV_EXCL_STOP
 #endif // DEBUG
+		// LCOV_EXCL_START
 		return;
+		// LCOV_EXCL_STOP
 	};
 };
 
@@ -305,7 +309,9 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 					return;
 				}
 			}
+			// LCOV_EXCL_START
 			assert(0); // it didn't register it
+			// LCOV_EXCL_STOP
 #else
 			return;
 #endif // DEBUG
@@ -326,7 +332,9 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 			return;
 		}
 	}
+	// LCOV_EXCL_START
 	assert(0);
+	// LCOV_EXCL_STOP
 #endif // DEBUG
 }
 
@@ -3255,38 +3263,52 @@ __monitor_run:
 	pthread_attr_setstacksize (&attr, 2048*1024);
 	pthread_t monitor_connect_thread;
 	if (pthread_create(&monitor_connect_thread, &attr, &monitor_connect_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_ping_thread;
 	if (pthread_create(&monitor_ping_thread, &attr, &monitor_ping_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_read_only_thread;
 	if (pthread_create(&monitor_read_only_thread, &attr, &monitor_read_only_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_group_replication_thread;
 	if (pthread_create(&monitor_group_replication_thread, &attr, &monitor_group_replication_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_galera_thread;
 	if (pthread_create(&monitor_galera_thread, &attr, &monitor_galera_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_aws_aurora_thread;
 	if (pthread_create(&monitor_aws_aurora_thread, &attr, &monitor_aws_aurora_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	pthread_t monitor_replication_lag_thread;
 	if (pthread_create(&monitor_replication_lag_thread, &attr, &monitor_replication_lag_pthread,NULL) != 0) {
+		// LCOV_EXCL_START
 		proxy_error("Thread creation\n");
 		assert(0);
+		// LCOV_EXCL_STOP
 	}
 	while (shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
@@ -4636,8 +4658,10 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 					hgs_array[i] = tmp_hgs_array[i];
 					proxy_info("Starting Monitor thread for AWS Aurora writer HG %u\n", hgs_array[i]);
 					if (pthread_create(&pthreads_array[i], NULL, monitor_AWS_Aurora_thread_HG, &hgs_array[i]) != 0) {
+						// LCOV_EXCL_START
 						proxy_error("Thread creation\n");
 						assert(0);
+						// LCOV_EXCL_STOP
 					}
 				}
 				free(tmp_hgs_array);
