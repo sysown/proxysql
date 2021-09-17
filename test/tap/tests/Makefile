@@ -90,8 +90,15 @@ else
 WASAN=
 endif
 
-OPT=-O2 -Wl,--no-as-needed
-debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WASAN)
+WITHASANVAR := $(shell echo $(WITHASAN))
+ifeq ($(WITHASANVAR),1)
+WASAN=-fsanitize=address
+else
+WASAN=
+endif
+
+OPT=-O2 $(WGCOV) -Wl,--no-as-needed
+debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test
