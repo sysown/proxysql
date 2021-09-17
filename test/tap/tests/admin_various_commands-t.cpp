@@ -82,6 +82,10 @@ int main() {
 		{ 1 , "SHOW admin VARIABLES" },
 		{ 3 , "sHoW DATABASES" },
 		{ 3 , "sHoW SCHEMAS" },
+		{ 5, "SHOW TABLES LIKE '%runtime%'" },
+		{ 10, "SHOW MYSQL STATUS" },
+		{ 1, "SELECT DATABASE()" },
+		{ 1, "SELECT DATABASE() AS name" },
 /*
 		{  , "" },
 		{  , "" },

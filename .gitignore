@@ -49,6 +49,7 @@ src/*pem
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
+src/proxysql-save.cfg
 
 proxysql-2.0.0/
 docker/images/proxysql/rhel-compliant/rpmmacros

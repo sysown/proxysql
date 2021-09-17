@@ -1002,8 +1002,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #else
 	if (glovars.has_debug==true) {
 #endif /* DEBUG */
+		// LCOV_EXCL_START
 		perror("Incompatible debugging version");
 		exit(EXIT_FAILURE);
+		// LCOV_EXCL_STOP
 	}
 	num_threads=0;
 	mysql_threads=NULL;
@@ -1142,7 +1144,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.client_session_track_gtid=true;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
-	variables.session_idle_ms=1000;
+	variables.session_idle_ms=1;
 	variables.session_idle_show_processlist=true;
 #endif // IDLE_THREADS
 	variables.show_processlist_extended = 0;
@@ -1349,14 +1351,18 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
+	// LCOV_EXCL_STOP
 }
 
 uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 	if (!strcasecmp(name,"server_capabilities")) return variables.server_capabilities;
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+	// LCOV_EXCL_STOP
 }
 
 int MySQL_Threads_Handler::get_variable_int(const char *name) {
@@ -1384,8 +1390,10 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 
 //VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+	// LCOV_EXCL_STOP
 //VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
@@ -2204,15 +2212,19 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *), bool idles) {
 	if (idles==false) {
 		if (pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]) != 0 ) {
+			// LCOV_EXCL_START
 			proxy_error("Thread creation\n");
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 #ifdef IDLE_THREADS
 	} else {
 		if (GloVars.global.idle_threads) {
 			if (pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]) != 0) {
+				// LCOV_EXCL_START
 				proxy_error("Thread creation\n");
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 #endif // IDLE_THREADS
@@ -2885,9 +2897,11 @@ __run_skip_1a:
 				// poll() timeout, try again
 				continue;
 			if (rc == -1) {
+			// LCOV_EXCL_START
 				// error , exit
 				perror("poll()");
 				exit(EXIT_FAILURE);
+			// LCOV_EXCL_STOP
 			}
 
 		if (__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0) > __thread_MySQL_Thread_Variables_version) {
@@ -3306,7 +3320,7 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 		if (sess->active_transactions == 0) {
 			sess->transaction_started_at = 0;
 		} else {
-			if (sess_active_transactions == 0) {
+			if (sess->transaction_started_at == 0) {
 				sess->transaction_started_at = curtime;
 			}
 		}
