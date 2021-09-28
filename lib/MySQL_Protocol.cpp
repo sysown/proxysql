@@ -1463,6 +1463,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			ret = false;
 			return ret;
 		}
+		// set the default charset for this session
+		(*myds)->sess->default_charset = charset;
 		if ((*myds)->sess->user_attributes) {
 			if (user_attributes_has_spiffe(__LINE__, __func__, user)) {
 				// if SPIFFE was used, CHANGE_USER is not allowed.
@@ -1781,6 +1783,8 @@ __do_auth:
 			ret = false;
 			goto __exit_do_auth;
 		}
+		// set the default session charset
+		(*myds)->sess->default_charset = charset;
 	}
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 #ifdef PROXYSQLCLICKHOUSE
