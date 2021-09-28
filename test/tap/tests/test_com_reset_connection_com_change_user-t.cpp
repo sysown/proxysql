@@ -51,7 +51,7 @@ void variable_rows_to_json(MYSQL_RES *result, json& j) {
 int get_tracked_mysql_vars(MYSQL* proxysql, std::vector<var_val>& vars) {
 	int err = 0;
 	std::string query {
-		"SELECT LOWER(variable_name), variable_value FROM performance_schema.session_variables WHERE variable_name IN ("
+		"SELECT /*+ ;hostgroup=0 */ LOWER(variable_name), variable_value FROM performance_schema.session_variables WHERE variable_name IN ("
 	};
 
 	for (const auto& varname : tracked_variables) {
@@ -288,7 +288,7 @@ int set_session_variables(MYSQL* proxysql) {
 }
 
 int get_session_variables(MYSQL* proxysql, std::vector<session_var>& sess_vars) {
-	std::string select_query { "SELECT " };
+	std::string select_query { "SELECT /*+ ;hostgroup=0 */ " };
 
 	for (const auto& sess_var : dummy_session_variables) {
 		select_query += sess_var.first;
@@ -409,7 +409,7 @@ int test_simple_select_after_reset(MYSQL* proxysql, const CommandLine&, const st
 	MYSQL_QUERY(proxysql, "DO 1");
 
 	// Check that a simple select works
-	int err_code = mysql_query(proxysql, "SELECT 1");
+	int err_code = mysql_query(proxysql, "SELECT /*+ ;hostgroup=0 */ 1");
 	if (err_code != EXIT_SUCCESS) {
 		diag("Simple 'SELECT 1' query failed at ('%s':'%d') with error '%d'", __FILE__, __LINE__, err_code);
 		return EXIT_FAILURE;
@@ -1093,7 +1093,7 @@ std::vector<std::pair<std::string, test_function>> tests_fns {
 	{ "test_simple_select_after_reset", test_simple_select_after_reset },
 	{ "test_transaction_rollback", test_transaction_rollback },
 	{ "test_tracked_variables_cleanup", test_tracked_variables_cleanup },
-	{ "test_session_variables_cleanup", test_user_defined_variables_cleanup },
+	{ "test_user_defined_variables_cleanup", test_user_defined_variables_cleanup },
 	{ "test_simple_reset_admin", test_simple_reset_admin },
 	{ "test_recover_session_values", test_recover_session_values },
 	// NOTE: This is not a proper test for ProxySQL, was used during development to verify that the
