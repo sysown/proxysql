@@ -3713,7 +3713,9 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess_time/1000 > (unsigned long long)mysql_thread___connect_timeout_client) {
 				proxy_warning("Closing not established client connection %s:%d after %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, sess_time/1000);
 				sess->healthy = 0;
-				GloMTH->update_client_host_cache(sess->client_myds->client_addr, true);
+				if (mysql_thread___client_host_cache_size) {
+					GloMTH->update_client_host_cache(sess->client_myds->client_addr, true);
+				}
 			}
 		}
 		if (maintenance_loop) {
