@@ -2553,8 +2553,10 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 					return f_entry.second.updated_at < s_entry.second.updated_at;
 				}
 			);
-			if (older_elem->first != client_addr) {
-				client_host_cache.erase(older_elem);
+			if (older_elem != client_host_cache.end()) {
+				if (older_elem->first != client_addr) {
+					client_host_cache.erase(older_elem);
+				}
 			}
 		}
 
