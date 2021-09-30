@@ -2543,7 +2543,10 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 	if (error) {
 		pthread_mutex_lock(&mutex_client_host_cache);
 		// If the cache is full, find the oldest entry on it, and update/remove it.
-		if (client_host_cache.size() >= static_cast<size_t>(mysql_thread___client_host_cache_size)) {
+		if (
+			mysql_thread___client_host_cache_size &&
+			client_host_cache.size() >= static_cast<size_t>(mysql_thread___client_host_cache_size)
+		) {
 			auto older_elem = std::min_element(
 				client_host_cache.begin(),
 				client_host_cache.end(),
@@ -2553,8 +2556,10 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 					return f_entry.second.updated_at < s_entry.second.updated_at;
 				}
 			);
-			if (older_elem->first != client_addr) {
-				client_host_cache.erase(older_elem);
+			if (older_elem != client_host_cache.end()) {
+				if (older_elem->first != client_addr) {
+					client_host_cache.erase(older_elem);
+				}
 			}
 		}
 
@@ -3711,7 +3716,9 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess_time/1000 > (unsigned long long)mysql_thread___connect_timeout_client) {
 				proxy_warning("Closing not established client connection %s:%d after %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, sess_time/1000);
 				sess->healthy = 0;
-				GloMTH->update_client_host_cache(sess->client_myds->client_addr, true);
+				if (mysql_thread___client_host_cache_size) {
+					GloMTH->update_client_host_cache(sess->client_myds->client_addr, true);
+				}
 			}
 		}
 		if (maintenance_loop) {
