@@ -2293,17 +2293,18 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	}
 	//filter @@session. and @@
 	char *match=NULL;
+	char* last_pos=NULL;
+	const int at_session_offset = strlen("@@session.");
+	const int double_at_offset = strlen("@@");
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@session."))) {
-		*match = '\0';
-		strcat(query_digest_text_filter_select, match+strlen("@@session."));
+		memmove(match, match + at_session_offset, strlen(match) - at_session_offset);
+		last_pos = match + strlen(match) - at_session_offset;
+		*last_pos = '\0';
 	}
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {
-		*match = '\0';
-		if (strlen(query_digest_text_filter_select) == 0) {
-			memcpy(query_digest_text_filter_select, match, strlen("@@"));
-		} else {
-			strcat(query_digest_text_filter_select, match+strlen("@@"));
-		}
+		memmove(match, match + double_at_offset, strlen(match) - double_at_offset);
+		last_pos = match + strlen(match) - double_at_offset;
+		*last_pos = '\0';
 	}
 
 	std::vector<char*>query_digest_text_filter_select_v;
