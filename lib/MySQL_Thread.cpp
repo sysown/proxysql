@@ -2543,7 +2543,10 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 	if (error) {
 		pthread_mutex_lock(&mutex_client_host_cache);
 		// If the cache is full, find the oldest entry on it, and update/remove it.
-		if (client_host_cache.size() >= static_cast<size_t>(mysql_thread___client_host_cache_size)) {
+		if (
+			mysql_thread___client_host_cache_size &&
+			client_host_cache.size() >= static_cast<size_t>(mysql_thread___client_host_cache_size)
+		) {
 			auto older_elem = std::min_element(
 				client_host_cache.begin(),
 				client_host_cache.end(),
