@@ -80,6 +80,8 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	plan(26);
+
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
