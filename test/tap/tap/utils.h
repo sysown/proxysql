@@ -141,4 +141,13 @@ CURLcode perform_simple_post(
 	uint64_t& curl_res_code, std::string& curl_out_err
 );
 
+/**
+ * @brief Generates a random string of the length of the provider 'strSize'
+ *  parameter.
+ *
+ * @param strSize The size of the string to be generated.
+ * @return A random string.
+ */
+std::string random_string(std::size_t strSize);
+
 #endif // #define UTILS_H

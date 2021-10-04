@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 #include <cstring>
 #include <mysql.h>
@@ -556,4 +557,29 @@ int wait_until_enpoint_ready(
 	}
 
 	return res;
+}
+
+std::string random_string(std::size_t strSize) {
+	std::string dic { "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" };
+
+	std::random_device rd {};
+	std::mt19937 generator { rd() };
+
+	std::shuffle(dic.begin(), dic.end(), generator);
+
+	if (strSize < dic.size()) {
+		return dic.substr(0, strSize);
+	} else {
+		std::size_t req_modulus = static_cast<std::size_t>(strSize / dic.size());
+		std::size_t req_reminder = strSize % dic.size();
+		std::string random_str {};
+
+		for (std::size_t i = 0; i < req_modulus; i++) {
+			random_str.append(dic);
+		}
+
+		random_str.append(dic.substr(0, req_reminder));
+
+		return random_str;
+	}
 }
