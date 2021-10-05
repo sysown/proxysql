@@ -4656,15 +4656,15 @@ handler_again:
 						myconn->MyRS = NULL;
 					}
 
-					RequestEnd(myds);
-					finishQuery(myds,myconn,prepared_stmt_with_no_params);
-
 					if (rc == -1) {
 						int myerr = mysql_errno(myconn->mysql);
 						proxy_error(
 							"'SHOW WARNINGS' failed to be executed over backend connection with error: '%d'\n", myerr
 						);
 					}
+
+					RequestEnd(myds);
+					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 
 					handler_ret = 0;
 					return handler_ret;
