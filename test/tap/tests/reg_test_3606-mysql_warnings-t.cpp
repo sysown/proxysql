@@ -54,7 +54,7 @@ int create_testing_tables(MYSQL* mysql_server) {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	uint32_t c_operations = 100;
+	uint32_t c_operations = 500;
 
 	plan(1 + c_operations + (c_operations - 1) * 3);
 
