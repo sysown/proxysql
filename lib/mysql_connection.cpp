@@ -2309,8 +2309,9 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 
 	std::vector<char*>query_digest_text_filter_select_v;
 	char* query_digest_text_filter_select_tok = NULL;
+	char* save_query_digest_text_ptr = NULL;
 	if (query_digest_text_filter_select) {
-	query_digest_text_filter_select_tok = strtok(query_digest_text_filter_select, ",");
+		query_digest_text_filter_select_tok = strtok_r(query_digest_text_filter_select, ",", &save_query_digest_text_ptr);
 	}
 	while(query_digest_text_filter_select_tok){
 		//filter "as"/space/alias,such as select @@version as a, @@version b
@@ -2329,19 +2330,20 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 		}else{
 			query_digest_text_filter_select_v.push_back(query_digest_text_filter_select_tok);
 		}
-		query_digest_text_filter_select_tok=strtok(NULL, ",");
+		query_digest_text_filter_select_tok=strtok_r(NULL, ",", &save_query_digest_text_ptr);
 	}
 
 	std::vector<char*>keep_multiplexing_variables_v;
 	char* keep_multiplexing_variables_tmp;
+	char* save_keep_multiplexing_variables_ptr = NULL;
 	unsigned long keep_multiplexing_variables_len=strlen(mysql_thread___keep_multiplexing_variables);
 	keep_multiplexing_variables_tmp=(char*)malloc(keep_multiplexing_variables_len+1);
 	memcpy(keep_multiplexing_variables_tmp, mysql_thread___keep_multiplexing_variables, keep_multiplexing_variables_len);
 	keep_multiplexing_variables_tmp[keep_multiplexing_variables_len]='\0';
-	char* keep_multiplexing_variables_tok=strtok(keep_multiplexing_variables_tmp, " ,");
+	char* keep_multiplexing_variables_tok=strtok_r(keep_multiplexing_variables_tmp, " ,", &save_keep_multiplexing_variables_ptr);
 	while (keep_multiplexing_variables_tok){
 		keep_multiplexing_variables_v.push_back(keep_multiplexing_variables_tok);
-		keep_multiplexing_variables_tok=strtok(NULL, " ,");
+		keep_multiplexing_variables_tok=strtok_r(NULL, " ,", &save_keep_multiplexing_variables_ptr);
 	}
 
 	for (std::vector<char*>::iterator it=query_digest_text_filter_select_v.begin();it!=query_digest_text_filter_select_v.end();it++){
