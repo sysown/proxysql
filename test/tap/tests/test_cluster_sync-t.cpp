@@ -169,7 +169,7 @@ int main(int, char**) {
 
 		const std::string docker_command =
 			std::string("docker run -p 16032:6032 ") + "-v " + std::string(cl.workdir) + "../../../:/tmp/proxysql"
-			" ubuntu:19.10 sh -c \"./tmp/proxysql/src/proxysql -f -M -c /tmp/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf\" " +
+			" ubuntu:20.04 sh -c \"./tmp/proxysql/src/proxysql -f -M -c /tmp/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf\" " +
 			std::string("> ") + cluster_sync_node_stderr + " 2>&1";
 
 		int exec_res = system(docker_command.c_str());
