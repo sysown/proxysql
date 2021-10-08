@@ -168,8 +168,9 @@ int main(int, char**) {
 		const std::string stats_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql_stats.db";
 
 		const std::string docker_command =
-			std::string("docker run -p 16032:6032 ") + "-v " + std::string(cl.workdir) + "../../../:/tmp/proxysql"
-			" ubuntu:20.04 sh -c \"./tmp/proxysql/src/proxysql -f -M -c /tmp/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf\" " +
+			std::string("docker run -p 16032:6032 -e ASAN_OPTIONS=abort_on_error=0:halt_on_error=0:fast_unwind_on_fatal=1:detect_leaks=0 ") +
+			"-v " + std::string(cl.workdir) + "../../../:/tmp/proxysql ubuntu:20.04 sh -c" +
+			" \"./tmp/proxysql/src/proxysql -f -M -c /tmp/proxysql/test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf\" " +
 			std::string("> ") + cluster_sync_node_stderr + " 2>&1";
 
 		int exec_res = system(docker_command.c_str());
@@ -1267,11 +1268,13 @@ cleanup:
 	mysql_options(proxysql_replica, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
 	mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
 	proxy_replica_th.join();
+	mysql_close(proxysql_replica);
 
 	remove(fmt_config_file.c_str());
 
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM proxysql_servers");
 	MYSQL_QUERY(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+	mysql_close(proxysql_admin);
 
 	return exit_status();
 }
