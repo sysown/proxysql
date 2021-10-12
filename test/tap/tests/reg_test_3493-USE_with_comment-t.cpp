@@ -6,12 +6,15 @@
  *   test performs the following actions:
  *
  *   1. Open a MYSQL connection to ProxySQL.
- *   2. Drops and creates a new database called 'reg_test_3493_use_comment'.
- *   3. Checks the currently selected database in **a new backend database
- *      connection** by means of the connection annotation
- *      "create_new_connection=1". This way it's ensured that ProxySQL is
- *      properly keeping track of the database selected in the issued 'USE'
- *      statement.
+ *   2. Drops and creates multiple databases called 'reg_test_3493_use_comment-N'.
+ *   3. Performs a 'USE' statement in the connection.
+ *   3. Checks the currently selected database in **a new backend database connection** by means of the
+ *      connection annotation "create_new_connection=1". This way it's ensured that ProxySQL is properly keeping
+ *      track of the database selected in the issued 'USE' statement.
+ *   4. Perform the exact same test with 'mysql-query_digests=0'. This just ensures that ProxySQL is properly
+ *      executing the 'USE' statement in the backend connection, tracking MAY not be perform, depending on
+ *      whether the query fails to be parsed or not, but since 'create_new_connection' annotation shouldn't have
+ *      any effect, queries will be executed in the same backend connection, and thus, test should succeed.
  */
 
 #include <cstring>
@@ -40,57 +43,7 @@ void parse_result_json_column(MYSQL_RES *result, json& j) {
 
 std::vector<std::pair<std::string,std::string>> db_query;
 
-int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
-	MYSQL* proxysql_mysql = mysql_init(NULL);
-
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment", "/*+ placeholder_comment */ USE reg_test_3493_use_comment"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-a1`", "USE /*+ placeholder_comment */ `reg_test_3493_use_comment-a1`"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_1", "  USE /*+ placeholder_comment */   `reg_test_3493_use_comment_1`"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_2", "USE/*+ placeholder_comment */ `reg_test_3493_use_comment_2`"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_3", "USE /*+ placeholder_comment */`reg_test_3493_use_comment_3`"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_4", "  USE /*+ placeholder_comment */   reg_test_3493_use_comment_4"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_5", "USE/*+ placeholder_comment */ reg_test_3493_use_comment_5"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_6", "USE /*+ placeholder_comment */reg_test_3493_use_comment_6"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-1`", "  USE /*+ placeholder_comment */   `reg_test_3493_use_comment-1`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-2`", "USE/*+ placeholder_comment */ `reg_test_3493_use_comment-2`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-3`", "USE /*+ placeholder_comment */`reg_test_3493_use_comment-3`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-4`", "/*+ placeholder_comment */USE          `reg_test_3493_use_comment-4`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-5`", "USE/*+ placeholder_comment */`reg_test_3493_use_comment-5`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-6`", "/* comment */USE`reg_test_3493_use_comment-6`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-7`", "USE`reg_test_3493_use_comment-7`"));
-
-	plan(db_query.size());
-
-	if (
-		!mysql_real_connect(
-			proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_mysql)
-		);
-		return EXIT_FAILURE;
-	}
-
-	// Prepare the DB for the test
-	for (std::vector<std::pair<std::string,std::string>>::iterator it = db_query.begin(); it != db_query.end() ; it++) {
-	//	MYSQL_QUERY(proxysql_mysql, "DROP DATABASE IF EXISTS reg_test_3493_use_comment");
-	//	MYSQL_QUERY(proxysql_mysql, "CREATE DATABASE reg_test_3493_use_comment");
-		std::string s = "";
-		s = "DROP DATABASE IF EXISTS " + it->first;
-		MYSQL_QUERY(proxysql_mysql, s.c_str());
-		s = "CREATE DATABASE " + it->first;
-		MYSQL_QUERY(proxysql_mysql, s.c_str());
-	}
-
+int test_use_queries(MYSQL* proxysql_mysql) {
 	for (std::vector<std::pair<std::string,std::string>>::iterator it = db_query.begin(); it != db_query.end() ; it++) {
 		int i = 0;
 		int err = mysql_query(proxysql_mysql, it->second.c_str());
@@ -130,14 +83,13 @@ int main(int argc, char** argv) {
 			diag("Invalid 'MYSQL_RES' returned from 'SELECT DATABASE()'");
 			return EXIT_FAILURE;
 		}
-
 		MYSQL_ROW row = mysql_fetch_row(result);
 		if (row == nullptr) {
 			diag("Invalid 'MYSQL_ROW' returned from 'SELECT DATABASE()'");
 			return EXIT_FAILURE;
 		}
-
 		std::string database_name { row[0] };
+		mysql_free_result(result);
 
 		if (it->first[0] == '`') {
 			database_name = "`" + database_name + "`";
@@ -150,6 +102,79 @@ int main(int argc, char** argv) {
 		);
 	}
 
+	return EXIT_SUCCESS;
+}
+
+int main(int argc, char** argv) {
+	CommandLine cl;
+
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return -1;
+	}
+
+	MYSQL* proxysql_mysql = mysql_init(NULL);
+
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment", "/*+ placeholder_comment */ USE reg_test_3493_use_comment"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-a1`", "USE /*+ placeholder_comment */ `reg_test_3493_use_comment-a1`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_1", "  USE /*+ placeholder_comment */   `reg_test_3493_use_comment_1`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_2", "USE/*+ placeholder_comment */ `reg_test_3493_use_comment_2`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_3", "USE /*+ placeholder_comment */`reg_test_3493_use_comment_3`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_4", "  USE /*+ placeholder_comment */   reg_test_3493_use_comment_4"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_5", "USE/*+ placeholder_comment */ reg_test_3493_use_comment_5"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_6", "USE /*+ placeholder_comment */reg_test_3493_use_comment_6"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-1`", "  USE /*+ placeholder_comment */   `reg_test_3493_use_comment-1`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-2`", "USE/*+ placeholder_comment */ `reg_test_3493_use_comment-2`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-3`", "USE /*+ placeholder_comment */`reg_test_3493_use_comment-3`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-4`", "/*+ placeholder_comment */USE          `reg_test_3493_use_comment-4`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-5`", "USE/*+ placeholder_comment */`reg_test_3493_use_comment-5`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-6`", "/* comment */USE`reg_test_3493_use_comment-6`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-7`", "USE`reg_test_3493_use_comment-7`"));
+
+	plan(db_query.size() * 2);
+
+	if (
+		!mysql_real_connect(
+			proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0
+		)
+	) {
+		fprintf(
+			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
+			mysql_error(proxysql_mysql)
+		);
+		return EXIT_FAILURE;
+	}
+
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	if (!proxysql_admin) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return EXIT_FAILURE;
+	}
+
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return EXIT_FAILURE;
+	}
+
+	// Prepare the DB for the test
+	for (std::vector<std::pair<std::string,std::string>>::iterator it = db_query.begin(); it != db_query.end() ; it++) {
+		std::string s = "";
+		s = "DROP DATABASE IF EXISTS " + it->first;
+		MYSQL_QUERY(proxysql_mysql, s.c_str());
+		s = "CREATE DATABASE " + it->first;
+		MYSQL_QUERY(proxysql_mysql, s.c_str());
+	}
+
+	MYSQL_QUERY(proxysql_admin, "SET mysql-query_digests='true'");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	// Check 'USE' statements are being properly parsed and tracked when 'mysql-query_digests' is 'ENABLED'.
+	test_use_queries(proxysql_mysql);
+
+	MYSQL_QUERY(proxysql_admin, "SET mysql-query_digests='false'");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	// Check 'USE' statements are being properly executed when 'mysql-query_digests' is 'DISABLED'.
+	test_use_queries(proxysql_mysql);
+
 	// Drop created database
 	for (std::vector<std::pair<std::string,std::string>>::iterator it = db_query.begin(); it != db_query.end() ; it++) {
 		std::string s = "";
@@ -157,6 +182,7 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY(proxysql_mysql, s.c_str());
 	}
 	mysql_close(proxysql_mysql);
+	mysql_close(proxysql_admin);
 
 	return exit_status();
 }
