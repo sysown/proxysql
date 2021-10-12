@@ -127,6 +127,8 @@ int main(int argc, char** argv) {
 	}
 	int rows_read = 0;
 
+	sleep(1); // some INSERT may still be running
+
 	// at this point the table sbtest should have 600 rows:
 	// 300 rows from normal insert, and 100 rows from mirror
 	rc = run_q(conns[0], "SELECT * FROM test.sbtest1");
