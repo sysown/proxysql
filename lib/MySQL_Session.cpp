@@ -3717,6 +3717,21 @@ __get_pkts_from_client:
 			case FAST_FORWARD:
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
+			// This state is required because it covers the following situation:
+			//  1. A new connection is created by a client and the 'FAST_FORWARD' mode is enabled.
+			//  2. The first packet received for this connection isn't a whole packet, i.e, it's either
+			//     split into multiple packets, or it doesn't fit 'queueIN' size (typically
+			//     QUEUE_T_DEFAULT_SIZE).
+			//  3. Session is still in 'CONNECTING_SERVER' state, BUT further packets remain to be received
+			//     from the initial split packet.
+			//
+			//  Because of this, packets received during 'CONNECTING_SERVER' when the previous state is
+			//  'FAST_FORWARD' should be pushed to 'PSarrayOUT'.
+			case CONNECTING_SERVER:
+				if (previous_status.empty() == false && previous_status.top() == FAST_FORWARD) {
+					mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+					break;
+				}
 			case session_status___NONE:
 			default:
 				handler___status_NONE_or_default(pkt);
