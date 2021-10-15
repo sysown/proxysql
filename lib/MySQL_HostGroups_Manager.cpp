@@ -868,7 +868,7 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	ConnectionsFree=new MySrvConnList(this);
 }
 
-void MySrvC::connect_error(int err_num) {
+void MySrvC::connect_error(int err_num, bool get_mutex) {
 	// NOTE: this function operates without any mutex
 	// although, it is not extremely important if any counter is lost
 	// as a single connection failure won't make a significant difference
@@ -920,7 +920,8 @@ void MySrvC::connect_error(int err_num) {
 		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
 			bool _shu=false;
-			MyHGM->wrlock(); // to prevent race conditions, lock here. See #627
+			if (get_mutex==true)
+				MyHGM->wrlock(); // to prevent race conditions, lock here. See #627
 			if (status==MYSQL_SERVER_STATUS_ONLINE) {
 				status=MYSQL_SERVER_STATUS_SHUNNED;
 				shunned_automatic=true;
@@ -928,7 +929,8 @@ void MySrvC::connect_error(int err_num) {
 			} else {
 				_shu=false;
 			}
-			MyHGM->wrunlock();
+			if (get_mutex==true)
+				MyHGM->wrunlock();
 			if (_shu) {
 			proxy_error("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			}

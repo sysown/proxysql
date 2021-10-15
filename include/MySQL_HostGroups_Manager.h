@@ -160,7 +160,7 @@ class MySrvC {	// MySQL Server Container
 	MySrvConnList *ConnectionsFree;
 	MySrvC(char *, uint16_t, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment);
 	~MySrvC();
-	void connect_error(int);
+	void connect_error(int, bool get_mutex=true);
 	void shun_and_killall();
 	/**
 	 * Update the maximum number of used connections
