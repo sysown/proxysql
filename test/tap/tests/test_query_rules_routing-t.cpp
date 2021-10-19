@@ -312,100 +312,6 @@ int create_testing_tables(MYSQL* proxysql, uint32_t num_tables) {
 	return EXIT_SUCCESS;
 }
 
-const double COLISSION_PROB = 1e-8;
-
-/**
- * @brief Helper function to wait for replication to complete, 
- *   performs a simple supplied queried until it succeed or the
- *   timeout expires.
- *
- * @param proxysql A already opened MYSQL connection to ProxySQL.
- * @param proxysql_admin A already opened MYSQL connection to ProxySQL Admin interface.
- * @param check The query to perform until timeout expires.
- * @param timeout The timeout in seconds to retry the query.
- * @param reader_hostgroup The current 'reader hostgroup' for which
- *   servers replication needs to be waited.
- *
- * @return EXIT_SUCCESS in case of success, EXIT_FAILURE
- *   otherwise.
- */
-int wait_for_replication(
-	MYSQL* proxysql,
-	MYSQL* proxysql_admin,
-	const std::string& check,
-	uint32_t timeout,
-	uint32_t read_hostgroup
-) {
-	if (proxysql == NULL) { return EXIT_FAILURE; }
-
-	const std::string t_count_reader_hg_servers {
-		"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d"
-	};
-	std::string count_reader_hg_servers {};
-	size_t size =
-		snprintf(
-			nullptr, 0, t_count_reader_hg_servers.c_str(), read_hostgroup
-		) + 1;
-	{
-		std::unique_ptr<char[]> buf(new char[size]);
-		snprintf(buf.get(), size, t_count_reader_hg_servers.c_str(), read_hostgroup);
-		count_reader_hg_servers = std::string(buf.get(), buf.get() + size - 1);
-	}
-
-	MYSQL_QUERY(proxysql_admin, count_reader_hg_servers.c_str());
-	MYSQL_RES* hg_count_res = mysql_store_result(proxysql_admin);
-	MYSQL_ROW row = mysql_fetch_row(hg_count_res);
-	uint32_t srv_count = strtoul(row[0], NULL, 10);
-	mysql_free_result(hg_count_res);
-
-	if (srv_count > UINT_MAX) {
-		return EXIT_FAILURE;
-	}
-
-	int waited = 0;
-	int queries = 0;
-	int result = EXIT_FAILURE;
-
-	if (srv_count != 0) {
-		int retries =
-			ceil(
-				log10(COLISSION_PROB) /
-				log10(static_cast<long double>(1)/srv_count)
-			);
-		auto start = std::chrono::system_clock::now();
-		std::chrono::duration<double> elapsed {};
-
-		while (elapsed.count() < timeout && queries < retries) {
-			int rc = mysql_query(proxysql, check.c_str());
-
-			if (rc == EXIT_SUCCESS) {
-				MYSQL_RES* st_res = mysql_store_result(proxysql);
-				if (st_res) {
-					mysql_free_result(st_res);
-				}
-
-				queries += 1;
-				continue;
-			} else {
-				queries = 0;
-				waited += 1;
-				sleep(1);
-			}
-
-			auto it_end = std::chrono::system_clock::now();
-			elapsed = it_end - start;
-		}
-
-		if (queries == retries) {
-			result = EXIT_SUCCESS;
-		}
-	} else {
-		result = EXIT_SUCCESS;
-	}
-
-	return result;
-}
-
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -442,13 +348,10 @@ int main(int argc, char** argv) {
 	int c_table_res = create_testing_tables(proxysql_text, 2);
 	if (c_table_res) { return EXIT_FAILURE; }
 
-	int rep_err = wait_for_replication(
-		proxysql_text,
-		proxysql_admin,
-		"SELECT c FROM test.reg_test_3427_0 WHERE id=1",
-		10,
-		1
-	);
+	const std::string rep_check_query {
+		"SELECT CASE WHEN (SELECT COUNT(*) FROM test.reg_test_3427_0 WHERE id=1) = 1 THEN 'TRUE' ELSE 'FALSE' END"
+	};
+	int rep_err = wait_for_replication(proxysql_text, proxysql_admin, rep_check_query, 10, 1);
 	if (rep_err) {
 		fprintf(stderr,
 			"File %s, line %d, Error: %s\n",
