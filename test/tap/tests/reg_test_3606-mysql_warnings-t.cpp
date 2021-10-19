@@ -169,6 +169,15 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	const std::string rep_check_query {
+		"SELECT CASE WHEN (SELECT COUNT(*) FROM test.reg_test_3606_mysql_warnings) = 500 THEN 'TRUE' ELSE 'FALSE' END"
+	};
+	int wait_res = wait_for_replication(proxy_mysql, proxy_admin, rep_check_query, 10, 1);
+	if (wait_res != EXIT_SUCCESS) {
+		diag("Waiting for replication failed... Exiting");
+		return EXIT_FAILURE;
+	}
+
 	// Prepare STMT queries
 	std::vector<MYSQL_STMT*> stmts {};
 	for (std::size_t i = 0; i < stmt_queries.size(); i++) {
