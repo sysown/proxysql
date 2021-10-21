@@ -327,6 +327,10 @@ int main(int argc, char** argv) {
 		if (unshun_var_err == EXIT_FAILURE) { goto cleanup; }
 	}
 
+	// Disable Monitor for the following tests
+	MYSQL_QUERY(proxysql_admin, "SET mysql-monitor_enabled=0");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
 	{
 		int simulator_err = test_proxysql_simulator_error(proxysql_admin);
 		if (simulator_err == EXIT_FAILURE) { goto cleanup; }
