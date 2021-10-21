@@ -7042,4 +7042,28 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	free(domain_name);
 }
 
+MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
+	MySrvC* f_server = nullptr;
+
+	MyHGC* myhgc = nullptr;
+	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
+		myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+
+		if (myhgc->hid == _hid) {
+			break;
+		}
+	}
+
+	if (myhgc != nullptr) {
+		for (uint32_t j = 0; j < myhgc->mysrvs->cnt(); j++) {
+			MySrvC* mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
+
+			if (strcmp(mysrvc->address, addr.c_str()) == 0 && mysrvc->port == port) {
+				f_server = mysrvc;
+			}
+		}
+	}
+
+	return f_server;
+}
 

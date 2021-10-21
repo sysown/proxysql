@@ -610,6 +610,7 @@ class MySQL_HostGroups_Manager {
 
 	void shutdown();
 	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);
+	MySrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */
