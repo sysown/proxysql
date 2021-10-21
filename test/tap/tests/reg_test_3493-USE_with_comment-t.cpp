@@ -50,19 +50,19 @@ int main(int argc, char** argv) {
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment", "/*+ placeholder_comment */ USE reg_test_3493_use_comment"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-a1`", "USE /*+ placeholder_comment */ `reg_test_3493_use_comment-a1`"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_1", "  USE /*+ placeholder_comment */   `reg_test_3493_use_comment_1`"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_2", "USE/*+ placeholder_comment */ `reg_test_3493_use_comment_2`"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_3", "USE /*+ placeholder_comment */`reg_test_3493_use_comment_3`"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_4", "  USE /*+ placeholder_comment */   reg_test_3493_use_comment_4"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_5", "USE/*+ placeholder_comment */ reg_test_3493_use_comment_5"));
-	db_query.push_back(std::make_pair("reg_test_3493_use_comment_6", "USE /*+ placeholder_comment */reg_test_3493_use_comment_6"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-1`", "  USE /*+ placeholder_comment */   `reg_test_3493_use_comment-1`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-2`", "USE/*+ placeholder_comment */ `reg_test_3493_use_comment-2`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-3`", "USE /*+ placeholder_comment */`reg_test_3493_use_comment-3`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-4`", "/*+ placeholder_comment */USE          `reg_test_3493_use_comment-4`"));
-	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-5`", "USE/*+ placeholder_comment */`reg_test_3493_use_comment-5`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment", "/* placeholder_comment */ USE reg_test_3493_use_comment"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-a1`", "USE /* placeholder_comment */ `reg_test_3493_use_comment-a1`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_1", "  USE /* placeholder_comment */   `reg_test_3493_use_comment_1`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_2", "USE/* placeholder_comment */ `reg_test_3493_use_comment_2`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_3", "USE /* placeholder_comment */`reg_test_3493_use_comment_3`"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_4", "  USE /* placeholder_comment */   reg_test_3493_use_comment_4"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_5", "USE/* placeholder_comment */ reg_test_3493_use_comment_5"));
+	db_query.push_back(std::make_pair("reg_test_3493_use_comment_6", "USE /* placeholder_comment */reg_test_3493_use_comment_6"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-1`", "  USE /* placeholder_comment */   `reg_test_3493_use_comment-1`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-2`", "USE/* placeholder_comment */ `reg_test_3493_use_comment-2`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-3`", "USE /* placeholder_comment */`reg_test_3493_use_comment-3`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-4`", "/* placeholder_comment */USE          `reg_test_3493_use_comment-4`"));
+	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-5`", "USE/* placeholder_comment */`reg_test_3493_use_comment-5`"));
 	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-6`", "/* comment */USE`reg_test_3493_use_comment-6`"));
 	db_query.push_back(std::make_pair("`reg_test_3493_use_comment-7`", "USE`reg_test_3493_use_comment-7`"));
 
@@ -107,19 +107,19 @@ int main(int argc, char** argv) {
 		// statement.
 		switch (i%5) {
 			case 0:
-				MYSQL_QUERY(proxysql_mysql, "/*+ ;create_new_connection=1 */ SELECT DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "/* ;create_new_connection=1 */ SELECT DATABASE()");
 				break;
 			case 1:
-				MYSQL_QUERY(proxysql_mysql, "/*+ ;create_new_connection=1 */SELECT DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "/* ;create_new_connection=1 */SELECT DATABASE()");
 				break;
 			case 2:
-				MYSQL_QUERY(proxysql_mysql, "SELECT /*+ ;create_new_connection=1 */ DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "SELECT /* ;create_new_connection=1 */ DATABASE()");
 				break;
 			case 3:
-				MYSQL_QUERY(proxysql_mysql, "SELECT/*+ ;create_new_connection=1 */ DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "SELECT/* ;create_new_connection=1 */ DATABASE()");
 				break;
 			case 4:
-				MYSQL_QUERY(proxysql_mysql, "SELECT /*+ ;create_new_connection=1 */DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "SELECT /* ;create_new_connection=1 */DATABASE()");
 				break;
 			default:
 				assert(0);

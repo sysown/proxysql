@@ -148,9 +148,9 @@ int main(int argc, char** argv) {
 			std::string query_t {};
 
 			if (param) {
-				query_t = "SELECT /*+ ;hostgroup=0;%d */ * FROM test.reg_test_3427 WHERE id IN (?)";
+				query_t = "SELECT /* ;hostgroup=0;%d */ * FROM test.reg_test_3427 WHERE id IN (?)";
 			} else {
-				query_t = "SELECT /*+ ;hostgroup=0;%d */ * FROM test.reg_test_3427";
+				query_t = "SELECT /* ;hostgroup=0;%d */ * FROM test.reg_test_3427";
 			}
 
 			std::string query {};

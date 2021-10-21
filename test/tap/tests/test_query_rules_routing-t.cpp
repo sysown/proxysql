@@ -80,31 +80,31 @@ std::vector<dst_hostgroup_test> dst_hostgroup_tests {
 		},
 		{
 			{
-				"SELECT /*+ ;%s */ 1",
+				"SELECT /* ;%s */ 1",
 				1
 			},
 			{
-				"SELECT /*+ ;%s */ c FROM test.reg_test_3427_0 WHERE id=1",
+				"SELECT /* ;%s */ c FROM test.reg_test_3427_0 WHERE id=1",
 				1
 			},
 			{
-				"SELECT /*+ ;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 20",
+				"SELECT /* ;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 20",
 				1
 			},
 			{
-				"SELECT /*+ ;%s */ SUM(k) c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10",
+				"SELECT /* ;%s */ SUM(k) c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10",
 				1
 			},
 			{
-				"INSERT /*+ ;%s */ INTO test.reg_test_3427_0 (k) VALUES (2)",
+				"INSERT /* ;%s */ INTO test.reg_test_3427_0 (k) VALUES (2)",
 				0
 			},
 			{
-				"UPDATE /*+ ;%s */ test.reg_test_3427_0 SET pad=\"random\" WHERE id=2",
+				"UPDATE /* ;%s */ test.reg_test_3427_0 SET pad=\"random\" WHERE id=2",
 				0
 			},
 			{
-				"SELECT DISTINCT /*+ ;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10 ORDER BY c",
+				"SELECT DISTINCT /* ;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10 ORDER BY c",
 				1
 			}
 		}
@@ -118,23 +118,23 @@ std::vector<dst_hostgroup_test> dst_hostgroup_tests {
 		},
 		{
 			{
-				"UPDATE /*+ ;%s */ test.reg_test_3427_0 SET pad=\"random\" WHERE id=2",
+				"UPDATE /* ;%s */ test.reg_test_3427_0 SET pad=\"random\" WHERE id=2",
 				0
 			},
 			{
-				"SELECT DISTINCT /*+ ;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10 ORDER BY c",
+				"SELECT DISTINCT /* ;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10 ORDER BY c",
 				1
 			},
 			{
-				"SELECT /*+ ;%s */ c FROM test.reg_test_3427_1 WHERE id BETWEEN 1 AND 10 ORDER BY c",
+				"SELECT /* ;%s */ c FROM test.reg_test_3427_1 WHERE id BETWEEN 1 AND 10 ORDER BY c",
 				0
 			},
 			{
-				"INSERT /*+ ;%s */ INTO test.reg_test_3427_0 (k) VALUES (2)",
+				"INSERT /* ;%s */ INTO test.reg_test_3427_0 (k) VALUES (2)",
 				0
 			},
 			{
-				"SELECT DISTINCT /*+ ;hostgroup=0;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10 ORDER BY c",
+				"SELECT DISTINCT /* ;hostgroup=0;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10 ORDER BY c",
 				0
 			},
 		}
@@ -148,31 +148,31 @@ std::vector<dst_hostgroup_test> dst_hostgroup_tests {
 		},
 		{
 			{
-				"UPDATE /*+ ;%s */ test.reg_test_3427_0 SET pad=\"random\" WHERE id=2",
+				"UPDATE /* ;%s */ test.reg_test_3427_0 SET pad=\"random\" WHERE id=2",
 				0
 			},
 			{
-				"SELECT /*+ ;hostgroup=0;%s */ c FROM test.reg_test_3427_0 WHERE id=1",
+				"SELECT /* ;hostgroup=0;%s */ c FROM test.reg_test_3427_0 WHERE id=1",
 				0
 			},
 			{
-				"SELECT /*+ ;hostgroup=0;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 20",
+				"SELECT /* ;hostgroup=0;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 20",
 				0
 			},
 			{
-				"SELECT /*+ ;hostgroup=0;%s */ SUM(k) c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10",
+				"SELECT /* ;hostgroup=0;%s */ SUM(k) c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10",
 				0
 			},
 			{
-				"SELECT /*+ ;%s */ c FROM test.reg_test_3427_0 WHERE id=1",
+				"SELECT /* ;%s */ c FROM test.reg_test_3427_0 WHERE id=1",
 				1
 			},
 			{
-				"SELECT /*+ ;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 20",
+				"SELECT /* ;%s */ c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 20",
 				1
 			},
 			{
-				"SELECT /*+ ;%s */ SUM(k) c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10",
+				"SELECT /* ;%s */ SUM(k) c FROM test.reg_test_3427_0 WHERE id BETWEEN 1 AND 10",
 				1
 			}
 		}
