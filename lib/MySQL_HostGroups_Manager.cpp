@@ -901,6 +901,7 @@ void MySrvC::connect_error(int err_num) {
 		case 1120:
 		case 1203: // User %s already has more than 'max_user_connections' active connections
 		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
+		case 3118: // Access denied for user '%s'. Account is locked..
 			return;
 			break;
 		default:
