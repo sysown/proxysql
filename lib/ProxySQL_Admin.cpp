@@ -125,7 +125,7 @@ static char * load_file (const char *filename) {
 
 static int round_intv_to_time_interval(int& intv) {
 	if (intv > 300) {
-		int v = 600;
+		intv = 600;
 	} else {
 		if (intv > 120) {
 			intv = 300;
