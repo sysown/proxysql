@@ -465,8 +465,6 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 
 	int ret = 0;
 
-	CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_OFF);
-
 	bio_err = BIO_new_fp(stderr, BIO_NOCLOSE);
 
 	if (bootstrap == true) {
