@@ -47,7 +47,7 @@ int prepare_stmt(
 ) {
 	int res = EXIT_SUCCESS;
 	std::string query {
-		"SELECT /*+ ;hostgroup=0 */ id,c1,c2 FROM test.reg_test_3546 WHERE date IN (?)"
+		"SELECT /* ;hostgroup=0 */ id,c1,c2 FROM test.reg_test_3546 WHERE date IN (?)"
 	};
 
 	if (mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()))) {
