@@ -1175,7 +1175,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ssl_p2s_cipher=NULL;
 	variables.ssl_p2s_crl=NULL;
 	variables.ssl_p2s_crlpath=NULL;
-	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,version");
+	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,transaction_isolation,version");
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
