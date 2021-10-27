@@ -1,5 +1,3 @@
-#include <map>
-#include <mutex>
 //#include <thread>
 #include "proxysql.h"
 #include "cpp.h"
@@ -807,6 +805,9 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultse
 		return;
 	}
 	time_t ts = time(NULL);
+
+	load_variable_name_id_map_if_empty();
+
 	query = "INSERT INTO history_mysql_status_variables VALUES ";
 	int idx = 0;
 	for (int i=0; i < resultset->rows_count; i++) {
@@ -823,7 +824,7 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultse
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		rc=(*proxy_sqlite3_bind_int64)(statement, idx+1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc=(*proxy_sqlite3_bind_text)(statement, idx+2, r->fields[0] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // name
+		rc=(*proxy_sqlite3_bind_int64)(statement, idx+2, get_variable_id_for_name(r->fields[0])); ASSERT_SQLITE_OK(rc, statsdb_disk); // variable_id
 		rc=(*proxy_sqlite3_bind_text)(statement, idx+3, r->fields[1] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // value
 		idx+=3;
 	}
@@ -1068,5 +1069,109 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 		statsdb_disk->execute(buf);
 		sprintf(buf,"DELETE FROM mysql_query_cache_hour WHERE timestamp < %ld", ts - 3600*24*365);
 		statsdb_disk->execute(buf);
+	}
+}
+
+int64_t ProxySQL_Statistics::get_variable_id_for_name(std::string variable_name) {
+	lock_guard<mutex> lock(mu);
+
+	int64_t variable_id = -1; // Negative value indicates not yet found.
+
+	if (variable_name_id_map.find(variable_name) != variable_name_id_map.end()) {
+		variable_id = variable_name_id_map[variable_name];
+	} else {
+		// No matching variable_id found in map. Try loading from the SQLite lookup table on disk 
+		SQLite3_result *result = NULL;
+		int cols;
+		int affected_rows;
+		char *error = NULL;
+		
+		std::string var_id_query = "SELECT variable_id FROM history_mysql_status_variables_lookup WHERE variable_name=\"" + variable_name + "\"";
+		statsdb_disk->execute_statement(var_id_query.c_str(), &error , &cols , &affected_rows , &result);
+
+		// @note: Perhaps a better solution here in case of SQLite errors? Originally considered returning std::optional (but that's c++17) or negative value if not found.
+		// This would also mean having to change the index calculations and prepared statement in MySQL_Threads_Handler_sets_v2() to skip variables with missing ids.
+		// So, for now, this code follows the convention originally used above which exits if there are SQLite errors.
+
+		if (error) {
+			proxy_error("SQLITE ERROR %s", error);
+			free(error);
+			error = NULL;
+			exit(EXIT_SUCCESS); 
+		} 
+		
+		if (result) {
+			if (result->rows_count > 0) {
+				// matching variable_id for variable_name in lookup table
+				SQLite3_row *r = result->rows[0];
+				variable_id = strtoll(r->fields[0], NULL, 10);
+			}
+			delete result;
+			result = NULL;
+		}	
+
+		if (variable_id < 0) {
+			// No match found, create a new record in the lookup table and then return the newly generated id
+			string insert_var_query = "INSERT INTO history_mysql_status_variables_lookup(variable_name) VALUES(\"" + variable_name + "\")";
+			statsdb_disk->execute_statement(insert_var_query.c_str(), &error, &cols, &affected_rows, &result);
+
+			if (error) {
+				proxy_error("SQLITE CRITICAL ERROR: %s", error);
+				if (result)
+					free(result);
+
+				free(error);
+				error = NULL;
+				exit(EXIT_SUCCESS);
+			} else {
+				variable_id = sqlite3_last_insert_rowid(statsdb_disk->get_db());
+			}
+
+			if (result)
+				free(result);
+		} 
+
+		// Update the map if a lookup record id was found, or if a new record was generated.
+		if (variable_id > 0)
+			variable_name_id_map[variable_name] = variable_id;
+
+	}
+
+	return variable_id;
+}
+
+void ProxySQL_Statistics::load_variable_name_id_map_if_empty() {
+	lock_guard<mutex> lock(mu);
+
+	if (!variable_name_id_map.empty())
+		return;
+
+	// Load id and name records from the lookup table and store in the map
+	SQLite3_result *result = NULL;
+	int cols;
+	int affected_rows;
+	char *error = NULL;
+	
+	string query = "SELECT variable_id, variable_name FROM history_mysql_status_variables_lookup";
+	statsdb_disk->execute_statement(query.c_str(), &error , &cols , &affected_rows , &result);
+
+	if (error) {
+		proxy_error("SQLITE CRITICAL ERROR: %s", error);
+		if (result)
+			delete result;
+
+		free(error);
+		error = NULL;
+		exit(EXIT_SUCCESS);
+	}
+
+	if (result) {
+		for (int i = 0; i < result->rows_count; i++) {
+			SQLite3_row *r = result->rows[i];
+			int64_t variable_id = strtoll(r->fields[0], NULL, 10);
+			string variable_name = r->fields[1];
+			variable_name_id_map[variable_name] = variable_id;
+		}
+		delete result;
 	}
 }

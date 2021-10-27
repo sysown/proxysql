@@ -5,6 +5,8 @@
 //#include "thread.h"
 //#include "wqueue.h"
 #include <vector>
+#include <map>
+#include <mutex>
 
 #define STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS_V1_4 "CREATE TABLE mysql_connections (timestamp INT NOT NULL, Client_Connections_aborted INT NOT NULL, Client_Connections_connected INT NOT NULL, Client_Connections_created INT NOT NULL, Server_Connections_aborted INT NOT NULL, Server_Connections_connected INT NOT NULL, Server_Connections_created INT NOT NULL, ConnPool_get_conn_failure INT NOT NULL, ConnPool_get_conn_immediate INT NOT NULL, ConnPool_get_conn_success INT NOT NULL, Questions INT NOT NULL, Slow_queries INT NOT NULL, PRIMARY KEY (timestamp))"
 
@@ -122,6 +124,7 @@ class ProxySQL_Statistics {
 	void MySQL_Threads_Handler_sets(SQLite3_result *);
 	void MyHGM_Handler_sets(SQLite3_result *, SQLite3_result *);
 	void system_cpu_sets();
+
 #ifndef NOJEM
 	void system_memory_sets();
 #endif
@@ -134,6 +137,26 @@ class ProxySQL_Statistics {
 #endif
 	SQLite3_result * get_MySQL_Query_Cache_metrics(int interval);
 	void disk_upgrade_mysql_connections();
+
+	private:
+	/** 
+	 * @brief Retreives the variable id mapped to the provided variable name associated in the history_mysql_variables_lookup table.
+	 * 
+	 * If the variable_name does not have an associaed variable_id assigned in the map, a new variable_id is created for it by loading or creating it using the lookup table.
+	 * This then updates the map if necessary to match the lookup table for the given name.
+	 * 
+	 * @param variable_name The string variable name identifier
+	 * @return Integer variable id for the given variable name
+	 */
+	int64_t get_variable_id_for_name(std::string variable_name);
+
+	/** @brief If the variable_name_id_map is empty, then load its contents from all of the history_variables_lookup table records */
+	void load_variable_name_id_map_if_empty();
+
+	private:
+	/** @brief Map with the key being the variable_name and the value being the variable_id, used for history_mysql_variables data. Matches the history_mysql_variables_lookup. */
+	std::map<std::string, int64_t> variable_name_id_map;
+	std::mutex mu;
 };
 
 #endif /* CLASS_PROXYSQL_STATISTICS_H */
