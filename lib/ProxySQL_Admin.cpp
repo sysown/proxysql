@@ -5081,7 +5081,11 @@ __end_while_pool:
 					SQLite3_result * resultset=MyHGM->SQL3_Get_ConnPool_Stats();
 					if (resultset) {
 						SQLite3_result * resultset2 = NULL;
+					#ifdef DEBUG
+						if (true) {
+					#else
 						if (GloVars.web_interface_plugin) {
+					#endif
 							resultset2 = MyHGM->SQL3_Connection_Pool(false);
 						}
 						GloProxyStats->MyHGM_Handler_sets(resultset, resultset2);

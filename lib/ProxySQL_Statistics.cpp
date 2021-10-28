@@ -644,7 +644,11 @@ void ProxySQL_Statistics::system_memory_sets() {
 
 void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset1, SQLite3_result *resultset2) {
 	MyHGM_Handler_sets_v1(resultset1);
+#ifdef DEBUG
+	if (resultset2) {
+#else
 	if (GloVars.web_interface_plugin && resultset2) {
+#endif
 		MySQL_Threads_Handler_sets_v2(resultset1);
 		MyHGM_Handler_sets_connection_pool(resultset2);
 	}
@@ -789,7 +793,11 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 
 void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) {
 	MySQL_Threads_Handler_sets_v1(resultset);
+#ifdef DEBUG
+	if (true) {
+#else
 	if (GloVars.web_interface_plugin) {
+#endif
 		MySQL_Threads_Handler_sets_v2(resultset);
 	}
 }
@@ -1072,12 +1080,17 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 	}
 }
 
+bool ProxySQL_Statistics::knows_variable_name(std::string variable_name) const
+{
+	return (variable_name_id_map.find(variable_name) != variable_name_id_map.end());
+}
+
 int64_t ProxySQL_Statistics::get_variable_id_for_name(std::string variable_name) {
 	lock_guard<mutex> lock(mu);
 
 	int64_t variable_id = -1; // Negative value indicates not yet found.
 
-	if (variable_name_id_map.find(variable_name) != variable_name_id_map.end()) {
+	if (knows_variable_name(variable_name)) {
 		variable_id = variable_name_id_map[variable_name];
 	} else {
 		// No matching variable_id found in map. Try loading from the SQLite lookup table on disk 
@@ -1086,55 +1099,46 @@ int64_t ProxySQL_Statistics::get_variable_id_for_name(std::string variable_name)
 		int affected_rows;
 		char *error = NULL;
 		
-		std::string var_id_query = "SELECT variable_id FROM history_mysql_status_variables_lookup WHERE variable_name=\"" + variable_name + "\"";
-		statsdb_disk->execute_statement(var_id_query.c_str(), &error , &cols , &affected_rows , &result);
-
-		// @note: Perhaps a better solution here in case of SQLite errors? Originally considered returning std::optional (but that's c++17) or negative value if not found.
-		// This would also mean having to change the index calculations and prepared statement in MySQL_Threads_Handler_sets_v2() to skip variables with missing ids.
-		// So, for now, this code follows the convention originally used above which exits if there are SQLite errors.
-
-		if (error) {
-			proxy_error("SQLITE ERROR %s", error);
-			free(error);
-			error = NULL;
-			exit(EXIT_SUCCESS); 
-		} 
-		
-		if (result) {
-			if (result->rows_count > 0) {
-				// matching variable_id for variable_name in lookup table
-				SQLite3_row *r = result->rows[0];
-				variable_id = strtoll(r->fields[0], NULL, 10);
-			}
-			delete result;
-			result = NULL;
-		}	
-
-		if (variable_id < 0) {
-			// No match found, create a new record in the lookup table and then return the newly generated id
-			string insert_var_query = "INSERT INTO history_mysql_status_variables_lookup(variable_name) VALUES(\"" + variable_name + "\")";
-			statsdb_disk->execute_statement(insert_var_query.c_str(), &error, &cols, &affected_rows, &result);
+		auto select_var_id = [&]() -> int64_t {
+			string var_id_query = "SELECT variable_id FROM history_mysql_status_variables_lookup WHERE variable_name=\"" + variable_name + "\"";
+			statsdb_disk->execute_statement(var_id_query.c_str(), &error , &cols , &affected_rows , &result);
 
 			if (error) {
-				proxy_error("SQLITE CRITICAL ERROR: %s", error);
-				if (result)
-					free(result);
-
+				proxy_error("SQLITE ERROR %s", error);
 				free(error);
 				error = NULL;
-				exit(EXIT_SUCCESS);
-			} else {
-				variable_id = sqlite3_last_insert_rowid(statsdb_disk->get_db());
-			}
+				exit(EXIT_SUCCESS); 
+			} 
+			
+			if (result) {
+				if (result->rows_count > 0) {
+					// matching variable_id for variable_name in lookup table
+					SQLite3_row *r = result->rows[0];
+					return strtoll(r->fields[0], NULL, 10);
+				}
+				delete result;
+				result = NULL;
+			}	
+			return -1;
+		};
 
-			if (result)
-				free(result);
+		variable_id = select_var_id(); // Check for variable name present in the lookup
+
+		if (variable_id < 0) {
+			// No match found, create a new record in the lookup table and then select the newly generated id
+			string insert_var_query = "INSERT INTO history_mysql_status_variables_lookup(variable_name) VALUES(\"" + variable_name + "\")";
+			if (statsdb_disk->execute(insert_var_query.c_str())) {
+				variable_id = select_var_id();
+			}
 		} 
 
 		// Update the map if a lookup record id was found, or if a new record was generated.
-		if (variable_id > 0)
+		if (variable_id > 0) {
 			variable_name_id_map[variable_name] = variable_id;
-
+		} else {
+			proxy_error("CRITIAL ERROR: Statistics could not find or generate variable_id for variable_name: %s", variable_name);
+			exit(EXIT_SUCCESS);
+		}
 	}
 
 	return variable_id;
