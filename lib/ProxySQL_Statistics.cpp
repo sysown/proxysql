@@ -1080,12 +1080,12 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 	}
 }
 
-bool ProxySQL_Statistics::knows_variable_name(std::string variable_name) const
+bool ProxySQL_Statistics::knows_variable_name(const std::string & variable_name) const
 {
 	return (variable_name_id_map.find(variable_name) != variable_name_id_map.end());
 }
 
-int64_t ProxySQL_Statistics::get_variable_id_for_name(std::string variable_name) {
+int64_t ProxySQL_Statistics::get_variable_id_for_name(const std::string & variable_name) {
 	lock_guard<mutex> lock(mu);
 
 	int64_t variable_id = -1; // Negative value indicates not yet found.
@@ -1100,7 +1100,7 @@ int64_t ProxySQL_Statistics::get_variable_id_for_name(std::string variable_name)
 		char *error = NULL;
 		
 		auto select_var_id = [&]() -> int64_t {
-			string var_id_query = "SELECT variable_id FROM history_mysql_status_variables_lookup WHERE variable_name=\"" + variable_name + "\"";
+			const string var_id_query = "SELECT variable_id FROM history_mysql_status_variables_lookup WHERE variable_name=\"" + variable_name + "\"";
 			statsdb_disk->execute_statement(var_id_query.c_str(), &error , &cols , &affected_rows , &result);
 
 			if (error) {

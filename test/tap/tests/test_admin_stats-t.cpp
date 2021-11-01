@@ -1,6 +1,14 @@
 /**
  * @file test_admin_stats-t.cpp
  * @brief This tests the Statistics module and its lookup code and tables.
+ * 
+ * @details The following tests are performed :
+ *  1. The lookup table has at least 50 rows generated after first metrics inserted
+ *  2. There should be multiple distinct timestaps present in the history table
+ *  3. The number of distinct variable_id's in the lookup and history tables should match
+ *  4. Each variable_id has the same number of rows in history table
+ *  5. The number of rows in the history table increases appropriately after insert interval changes
+ *
  * @date 2021-10-28
  */
 
@@ -18,6 +26,7 @@
 #include "utils.h"
 
 using std::string;
+using std::to_string;
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -47,14 +56,16 @@ int main(int argc, char** argv) {
 	}
 
 	// Setup the interval of how often new status entries are created
-	uint16_t new_stats_interval_sec = 2;
+	uint16_t new_stats_interval_sec = 5; // @note: valid values 5, 10, 30, 60, 120, 300
 
-	// @TODO: run command to set the interval
+	// Run command to set the interval
+	MYSQL_QUERY(proxysql_admin, ("SET admin-stats_mysql_connections=" + to_string(new_stats_interval_sec)).c_str());
+	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");	
 
 	// If on a fresh install, wait long enough for the first run of stats to be created
 	// The lookup table will be empty until the first run!
-	sleep(new_stats_interval_sec * 2);
-
+	sleep(new_stats_interval_sec + 1);
+	
     // Test 1: Lookup table has at least 50 rows
 	int64_t lookup_row_count = 0;
     MYSQL_QUERY(proxysql_admin, "SELECT COUNT(*) FROM history_mysql_status_variables_lookup");
@@ -72,7 +83,9 @@ int main(int argc, char** argv) {
 		lookup_row_count
 	);
 
-	// Test 2: Distinct timestamps in 
+	sleep(new_stats_interval_sec + 1);
+
+	// Test 2: There are multiple distinct timestaps present in history table
 	int64_t distinct_timestamp_count = 0; 
 	MYSQL_QUERY(proxysql_admin, "SELECT COUNT(DISTINCT(timestamp)) FROM history_mysql_status_variables");
 	result = mysql_store_result(proxysql_admin);
@@ -118,20 +131,20 @@ int main(int argc, char** argv) {
 		distinct_var_ids_in_lookup
 	);
 
-	// Test 4: Check that for each variable_id has same number of rows in history table
+	// Test 4: Each variable_id has same number of rows in history table
 
-	// @note: As the CI tests are done on a fresh install, these should match in this instance
+	// As the CI tests are done on a fresh install, these should match in this instance
 	// In practice, they could differ if new metrics variables are added.
 
 	std::vector<int64_t> rows_per_var_id;
 	time_t two_mins_ago = time(nullptr) - 60*2;
-	string query = "SELECT variable_id, COUNT(*) FROM history_mysql_status_variables WHERE timestamp < " + std::to_string(two_mins_ago) + " GROUP BY variable_id";
+	const string query = "SELECT variable_id, COUNT(*) FROM history_mysql_status_variables WHERE timestamp < " + to_string(two_mins_ago) + " GROUP BY variable_id";
 	MYSQL_QUERY(proxysql_admin, query.c_str());
 	result = mysql_store_result(proxysql_admin);
 
 	for (int i = 0; i < result->row_count; i++) {
 		row = mysql_fetch_row(result);
-		rows_per_var_id.push_back(strtoll(row[0], nullptr, 10));
+		rows_per_var_id.push_back(strtoll(row[1], nullptr, 10));
 	}
 
 	mysql_free_result(result);
@@ -143,7 +156,7 @@ int main(int argc, char** argv) {
 		"Each variable_id in the history table has the same number of rows."
 	);
 
-	// Test 5: Number of rows in history table increases after connections stat changes
+	// Test 5: Number of rows in history table increases appropriately after insert interval changes
 	int64_t history_rows_before = 0;
 	int64_t history_rows_after = 0;
 
@@ -156,8 +169,13 @@ int main(int argc, char** argv) {
 
 	mysql_free_result(result);
 
-	MYSQL_QUERY(proxysql_admin, "SET admin-stats_mysql_connections=10");
-	
+	// Increase interval and wait for next round of inserts.
+	// distinct_var_ids_in_history should equal the # of records inserted.
+	// If the interval isn't updated, then there'd be double what's expected.
+	new_stats_interval_sec = 10;
+	MYSQL_QUERY(proxysql_admin, ("SET admin-stats_mysql_connections=" + to_string(new_stats_interval_sec)).c_str());
+	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
 	sleep(new_stats_interval_sec + 1); // give it time to insert next round of stats
 
 	MYSQL_QUERY(proxysql_admin, "SELECT COUNT(*) FROM history_mysql_status_variables");
@@ -170,10 +188,11 @@ int main(int argc, char** argv) {
 	mysql_free_result(result);
 
 	ok(
-		history_rows_before < history_rows_after,
-		"Number of rows in history table increases after connections stat changes. Before: %lu After: %lu",
+		(history_rows_before + distinct_var_ids_in_history) == history_rows_after,
+		"Number of rows in history table increases correctly after insert interval change. Before: %lu After: %lu Difference should be: %lu",
 		history_rows_before,
-		history_rows_after
+		history_rows_after,
+		distinct_var_ids_in_history
 	);
 
 	return exit_status();

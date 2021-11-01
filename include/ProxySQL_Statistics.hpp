@@ -147,13 +147,13 @@ class ProxySQL_Statistics {
 	 * @param variable_name The string variable name identifier
 	 * @return Integer variable id for the given variable name
 	 */
-	int64_t get_variable_id_for_name(std::string variable_name);
+	int64_t get_variable_id_for_name(const std::string & variable_name);
 
 	/** @brief If the variable_name_id_map is empty, then load its contents from all of the history_variables_lookup table records */
 	void load_variable_name_id_map_if_empty();
 
 	/** @return True if the given variable_name is registered in the variable_name_id_map. */
-	bool knows_variable_name(std::string variable_name) const;
+	bool knows_variable_name(const std::string & variable_name) const;
 
 	private:
 	/** @brief Map with the key being the variable_name and the value being the variable_id, used for history_mysql_variables data. Matches the history_mysql_variables_lookup. */
