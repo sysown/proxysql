@@ -1104,7 +1104,7 @@ int64_t ProxySQL_Statistics::get_variable_id_for_name(const std::string & variab
 			statsdb_disk->execute_statement(var_id_query.c_str(), &error , &cols , &affected_rows , &result);
 
 			if (error) {
-				proxy_error("SQLITE ERROR %s", error);
+				proxy_error("SQLITE CRITICAL ERROR %s. Shutting down\n", error);
 				free(error);
 				error = NULL;
 				exit(EXIT_SUCCESS); 
@@ -1136,7 +1136,7 @@ int64_t ProxySQL_Statistics::get_variable_id_for_name(const std::string & variab
 		if (variable_id > 0) {
 			variable_name_id_map[variable_name] = variable_id;
 		} else {
-			proxy_error("CRITIAL ERROR: Statistics could not find or generate variable_id for variable_name: %s", variable_name);
+			proxy_error("CRITICAL ERROR: Statistics could not find or generate variable_id for variable_name: %s. Shutting down\n", variable_name.c_str());
 			exit(EXIT_SUCCESS);
 		}
 	}
@@ -1160,7 +1160,7 @@ void ProxySQL_Statistics::load_variable_name_id_map_if_empty() {
 	statsdb_disk->execute_statement(query.c_str(), &error , &cols , &affected_rows , &result);
 
 	if (error) {
-		proxy_error("SQLITE CRITICAL ERROR: %s", error);
+		proxy_error("SQLITE CRITICAL ERROR: %s. Shutting down\n", error);
 		if (result)
 			delete result;
 
