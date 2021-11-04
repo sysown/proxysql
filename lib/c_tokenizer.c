@@ -217,6 +217,15 @@ static inline void replace_with_q_mark(
 			(*p_r)++;
 
 			*grouping_limit_exceeded=1;
+		} else {
+			// since delimiters are always copied, if 'grouping_lim' is exceeded, we remove any extra ','
+			// that have been copied after the previously placed '...'.
+			//
+			// NOTE: Avoid copying delimiters in case of query grouping can lead to commas not being copied
+			// before values not being replaced, like 'NULL' values.
+			if (*(*p_r - 1) == ',') {
+				(*p_r)--;
+			}
 		}
 	}
 }
@@ -728,13 +737,9 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 		}
 
 		if (lowercase==0) {
-			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
-				*p_r++ = !is_space_char(*s) ? *s : ' ';
-			}
+			*p_r++ = !is_space_char(*s) ? *s : ' ';
 		} else {
-			if (!grouping_digest || !grouping_limit_exceeded || !(*s == ',')) {
-				*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
-			}
+			*p_r++ = !is_space_char(*s) ? (tolower(*s)) : ' ';
 		}
 
 		if (*s == '(') {
