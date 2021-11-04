@@ -402,6 +402,11 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 									if (*(s+2) == 'l' || *(s+2) == 'L') {
 										if (*(s+3) == 'l' || *(s+3) == 'L') {
 											if (i==len-4) {
+												// replace spaces before NULL values
+												if (*(p_r - 1) == ' ' && is_token_char(*(p_r - 2))) {
+													p_r--;
+												}
+
 												replace_with_q_mark(
 													grouping_digest, grouping_lim, &grouping_count,
 													&p_r, &grouping_limit_exceeded
@@ -411,6 +416,11 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 												return r;
 											} else {
 												if (is_token_char(*(s+4))){
+													// replace spaces before NULL values
+													if (*(p_r - 1) == ' ' && is_token_char(*(p_r - 2))) {
+														p_r--;
+													}
+
 													replace_with_q_mark(
 														grouping_digest, grouping_lim, &grouping_count,
 														&p_r, &grouping_limit_exceeded
