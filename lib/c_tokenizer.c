@@ -677,10 +677,15 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						}
 
 						// Remove spaces before number counting with possible '.' presence
-						if (*_p == '.' && (*(_p + 1) == ' ' || *(_p + 1) == '.') && (*(_p+2) == '-' || *(_p+2) == '+') ) {
+						if (_p >= r && *_p == '.' && (*(_p + 1) == ' ' || *(_p + 1) == '.') && (*(_p+2) == '-' || *(_p+2) == '+') ) {
 							if (*(_p + 1) == ' ') {
 								p_r--;
 							}
+							p_r--;
+						}
+
+						// Remove spaces after a opening bracket when followed by a number
+						if (_p >= r && *(_p+1) == '(' && *(_p+2) == ' ') {
 							p_r--;
 						}
 
