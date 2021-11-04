@@ -382,8 +382,8 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						}
 						continue;
 					}
-					// suppress spaces before closing brackets when grouping is present
-					if (p >= r && *p == '.' && is_space_char(prev_char) && (*s == ')')) {
+					// suppress spaces before closing brackets when grouping or mark is present
+					if (p >= r && (*p == '.' || *p == '?') && is_space_char(prev_char) && (*s == ')')) {
 						prev_char = *s;
 						--p_r;
 						*p_r++ = *s;
