@@ -612,6 +612,8 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 						grouping_digest, grouping_lim, &grouping_count, &p_r, &grouping_limit_exceeded
 					);
 
+					prev_char = qutr_char;
+					qutr_char = 0;
 					flag = 0;
 					if(i < len)
 						s++;
