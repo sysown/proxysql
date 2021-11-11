@@ -273,6 +273,14 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 
 	while(i < len)
 	{
+		// Handy for debugging purposes
+		// ============================
+		// printf(
+		// 	"state-1: { flag: `%d`, prev_char: `%c`, s: `%s`, p_r: `%s`, r: `%s`}\n",
+		// 	flag, prev_char, s, p_r, r
+		// );
+		// ============================
+
 		// =================================================
 		// START - read token char and set flag what's going on.
 		// =================================================
@@ -297,11 +305,27 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 			}
 
 			// comment type 3 - start with '--'
+
+			// NOTE: Looks like the general rule for parsing comments of this type could simply be:
+			//
+			//  - `.*--.*` which could be translated into `(*s == '-' && *(s+1) == '-')`.
+			//
+			// But this can not hold, since the first '-' could have been consumed previously, for example
+			// during the parsing of a digit:
+			//
+			// - `select 1.1-- final_comment\n`
+			//
+			// For this reason 'prev_char' needs to be checked too when searching for the `--` pattern.
 			else if(i != (len-1) && prev_char == '-' && *s == '-' && ((*(s+1)==' ') || (*(s+1)=='\n') || (*(s+1)=='\r') || (*(s+1)=='\t') ))
 			{
 				flag = 3;
 			}
 
+			// Previous character can be a consumed ' ' instead of '-' as in the previous case, for this
+			// reason, we need to look ahead for '--'.
+			//
+			// NOTE: There is no reason for not checking for the subsequent space char that should follow
+			// the '-- ', otherwise we would consider valid queries as `SELECT --1` like comments.
 			else if (i != (len-1) && *s == '-' && (*(s+1)=='-')) {
 				if (prev_char != '-') {
 					flag = 3;
