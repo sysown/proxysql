@@ -26,6 +26,20 @@ using std::string;
 using std::tuple;
 
 const vector<pair<string, string>> query_digest_pairs {
+	// TODO: KnownIssue - 10
+	// {
+	// 	"select /* COMMENT */ 1",
+	// 	"select ?"
+	// 	// Actual: "select  ?# final_comment"
+	// },
+	{
+		"select/* COMMENT */ 1",
+		"select ?"
+	},
+	{
+		"select/* COMMENT */1",
+		"select ?"
+	},
 	// initial '#' comments
 	{
 		"# random_comment \n   select 1.1",
@@ -75,6 +89,11 @@ const vector<pair<string, string>> query_digest_pairs {
 		"-- random_comment\n select 1.1-- final_comment   \n",
 		"select ?"
 	},
+	// NOTE: Comments with '--' should always be followed by an space.
+	// {
+	// 	"-- random_comment\n select 1.1--final_comment   \n",
+	// 	"select ?"
+	// },
 	{
 		"-- random_comment\n select 1.1   --final_comment  \n  ",
 		"select ?"
@@ -365,6 +384,7 @@ int main(int argc, char** argv) {
 		for (size_t i = 0; i < query_digest_pairs.size(); i++) {
 			const auto& query = query_digest_pairs[i].first;
 			const auto& query_str_rep = replace_str(query_digest_pairs[i].first, "\n", "\\n");
+			char* first_comment = NULL;
 			std::string exp_res {};
 
 			if (replace_digits == false) {
@@ -373,7 +393,7 @@ int main(int argc, char** argv) {
 				exp_res = replace_numbers(query_digest_pairs[i].second, '?');
 			}
 
-			char* c_res = mysql_query_digest_and_first_comment(const_cast<char*>(query.c_str()), query.length(), NULL, buf);
+			char* c_res = mysql_query_digest_and_first_comment(const_cast<char*>(query.c_str()), query.length(), &first_comment, buf);
 			const std::string result(c_res);
 			std::string ok_msg {};
 
