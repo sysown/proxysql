@@ -626,7 +626,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					}
 
 					// Remove spaces before each literal found
-					if ( _p >= r && is_space_char(*(_p + 2))) {
+					if ( _p >= r && is_space_char(*(_p + 2)) && !is_normal_char(*(_p + 1))) {
 						if ( _p >= r && ( *(_p+3) == '\''|| *(_p+3) == '"' )) {
 							p_r--;
 						}
