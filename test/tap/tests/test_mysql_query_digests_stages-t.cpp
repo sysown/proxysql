@@ -7,8 +7,7 @@
 #include <chrono>
 #include <ctype.h>
 
-#include "nlohmann/json.hpp"
-
+#include "json.hpp"
 #include "proxysql.h"
 #include "utils.h"
 #include "command_line.h"
