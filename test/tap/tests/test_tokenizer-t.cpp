@@ -144,6 +144,8 @@ const vector<pair<string, string>> query_digest_pairs {
 	{ "select (-'89')", "select (?)", },
 	{ "select 10,-'89'", "select ?,?", },
 	{ "select  10, -'89' ", "select ?,?", },
+	// string - leading strings get it's extra spaces removed, but not firsts
+	{ "select  '10', -'89' ", "select ?,?", },
 	{ "select  10,  -'89 ',+'5'", "select ?,?,?", },
 	// TODO: KnownIssue - 7: Spaces not removed after parenthesis when literal strings are preceded by '+|-'
 	{ "select CONCAT( -'89'+'10')", "select CONCAT( ?+?)", },
