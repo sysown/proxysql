@@ -15,6 +15,7 @@ extern __thread bool mysql_thread___query_digests_lowercase;
 extern __thread bool mysql_thread___query_digests_replace_null;
 extern __thread bool mysql_thread___query_digests_no_digits;
 extern __thread bool mysql_thread___query_digests_grouping_limit;
+extern __thread bool mysql_thread___query_digests_groups_grouping_limit;
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
@@ -819,6 +820,7 @@ typedef struct options {
 	bool replace_null;
 	bool replace_number;
 	int grouping_limit;
+	int groups_grouping_limit;
 } options;
 
 static inline void get_options(struct options* opts) {
@@ -826,6 +828,7 @@ static inline void get_options(struct options* opts) {
 	opts->replace_null = mysql_thread___query_digests_replace_null;
 	opts->replace_number = mysql_thread___query_digests_no_digits;
 	opts->grouping_limit = mysql_thread___query_digests_grouping_limit;
+	opts->groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
 }
 
 enum p_st {
@@ -1503,6 +1506,267 @@ void first_stage_parsing(char** const res, shared_st* shared_st, options* opts, 
 	*shared_st->res_cur_pos = 0;
 }
 
+static __attribute__((always_inline)) inline
+void second_stage_parsing(char** const res, shared_st* shared_st, const options* opts) {
+	char* digest_end = shared_st->res_cur_pos;
+	shared_st->res_pre_pos = *res;
+	shared_st->res_cur_pos = *res;
+
+	// second stage: Space and (+|-) replacement
+	while (shared_st->res_cur_pos < digest_end - 1) {
+		if (*shared_st->res_cur_pos == ' ') {
+			char lc = *(shared_st->res_cur_pos-1);
+			char rc = *(shared_st->res_cur_pos+1);
+
+			if (lc == '(' || rc == ')') {
+				shared_st->res_cur_pos++;
+			} else if ((is_arithmetic_op(lc) && rc == '?') || lc == ',' || rc == ',') {
+				shared_st->res_cur_pos++;
+			} else if (is_arithmetic_op(rc) && lc == '?' && is_token_char(lc)) {
+				shared_st->res_cur_pos++;
+			} else {
+				*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+			}
+		} else if (*shared_st->res_cur_pos == '+' || *shared_st->res_cur_pos == '-') {
+			char llc = *(shared_st->res_cur_pos-2);
+			char lc = *(shared_st->res_cur_pos-1);
+			char rc = *(shared_st->res_cur_pos+1);
+
+			// patterns to cover:
+			//  - ? + ?
+			//  - ?,+?
+			//  - c +?
+			//  - c + ?
+			//  - c+ ?
+			//  - c+?
+			if (lc == ' ') {
+				if (is_normal_char(llc)) {
+					shared_st->res_cur_pos++;
+				} else if (is_token_char(llc) && llc != '?' && rc == '?') {
+					shared_st->res_cur_pos++;
+				} else {
+					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+				}
+			} else {
+				if (is_token_char(lc) && lc != '?' && (rc == '?' || rc == ' ')) {
+					shared_st->res_cur_pos++;
+				} else {
+					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+				}
+			}
+		} else if (opts->replace_number == 1 && is_digit_char(*shared_st->res_cur_pos) ) {
+			if (*(shared_st->res_pre_pos-1) != '?') {
+				*shared_st->res_pre_pos++ = '?';
+			}
+			shared_st->res_cur_pos++;
+		} else {
+			*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+		}
+	}
+
+	*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+	*shared_st->res_pre_pos = 0;
+}
+
+static __attribute__((always_inline)) inline
+void third_stage_parsing(char** const res, shared_st* shared_st, options* opts) {
+	if (opts->grouping_limit == 0) { return; }
+
+	char* digest_end = shared_st->res_pre_pos;
+	shared_st->res_pre_pos = *res;
+	shared_st->res_cur_pos = *res;
+
+	char group_candidate = 0;
+
+	// it's a fixed pattern, we can perform a lookahead replacement
+	while (shared_st->res_cur_pos < digest_end - 1) {
+		char* cur_char = shared_st->res_cur_pos;
+		char pattern_fits = shared_st->res_cur_pos < digest_end - opts->grouping_limit*2;
+
+		if (group_candidate == 1 && pattern_fits) {
+			// NOTE: Minimal viable pattern for replacement is the starting point: '?,?,'.
+			// This pattern also matches the size of a 32bit register, so probably will only
+			// take one comparison for matching it. This removes a lot of false cases matching the first
+			// '?', or '?,' that could be found in column names when digit replacement is performed.
+			char is_min_pattern =
+				*cur_char == '?' && *(cur_char+1) == ',' &&
+				*(cur_char+2) == '?' && (*(cur_char+3) == ',' || *(cur_char+3) == ')');
+
+			// The pattern to match shouldn't be preceded by an arithmetic operator, otherwise, patterns
+			// like this '?+?,?,?' could start counting from the first match of '?,', which shouldn't be
+			// the case.
+			if (is_arithmetic_op(*(cur_char-1)) == 0 && is_min_pattern) {
+				int pattern_len = 0;
+				char pattern_broken = 0;
+				char* pattern_pos = shared_st->res_cur_pos;
+
+				while ((pattern_pos < digest_end - 1) && pattern_broken == 0) {
+					if (*pattern_pos == '?' && *(pattern_pos+1) == ',') {
+						pattern_pos += 2;
+						pattern_len += 1;
+					} else {
+						if (*(pattern_pos+1) == ')') {
+							pattern_broken = 2;
+						} else {
+							pattern_broken = 1;
+						}
+					}
+				}
+
+				// in case of the final pattern being '?)', we need to count the '?' as being replaced for
+				// the grouping for matching replacements of the exact length.
+				int f_pattern_len = pattern_broken == 2 ? pattern_len * 2 + 1 : pattern_len * 2;
+
+				if (f_pattern_len >= (opts->grouping_limit * 2 + 3)) {
+					for (int i = 0; i < pattern_len; i++) {
+						if (i < opts->grouping_limit) {
+							*shared_st->res_pre_pos++ = '?';
+							*shared_st->res_pre_pos++ = ',';
+						} else if (i == opts->grouping_limit) {
+							*shared_st->res_pre_pos++ = '.';
+							*shared_st->res_pre_pos++ = '.';
+							*shared_st->res_pre_pos++ = '.';
+						}
+					}
+
+					// we jump over the final '?' in case the final pattern was '?)'
+					if (pattern_broken == 2) {
+						shared_st->res_cur_pos = pattern_pos + 1;
+					} else {
+						shared_st->res_cur_pos = pattern_pos - 1;
+					}
+				} else {
+					for (int i = 0; i < pattern_len; i++) {
+						*shared_st->res_pre_pos++ = '?';
+						*shared_st->res_pre_pos++ = ',';
+					}
+
+					// Update the current position to the position where pattern was broken
+					shared_st->res_cur_pos = pattern_pos;
+				}
+			} else {
+				*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+			}
+		} else {
+			*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+		}
+
+		// grouping candidates always start with '('
+		if (*cur_char == '(') {
+			group_candidate = 1;
+		} else if (*cur_char == ')') {
+			group_candidate = 0;
+		}
+	}
+
+	*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+	*shared_st->res_pre_pos = 0;
+}
+
+bool is_group_pattern(const char* pos, const options* opts) {
+	int group_size = (1 + opts->grouping_limit*2 +  3  + 1);
+	bool is_group_pattern = 1;
+	int i = 0;
+
+	for (i = 0; i < group_size; i++) {
+		if (i == 0) {
+			if (*pos != '(') {
+				is_group_pattern = 0;
+				break;
+			}
+		} else if (i == group_size - 1) {
+			if (*(pos + i) != ')') {
+				is_group_pattern = 0;
+				break;
+			}
+		} else if (i % 2 == 1) {
+			if (i <= opts->grouping_limit * 2) {
+				if (*(pos + i) != '?') {
+					is_group_pattern = 0;
+					break;
+				}
+			} else {
+				if (*(pos + i) != '.') {
+					is_group_pattern = 0;
+					break;
+				}
+			}
+		} else {
+			if (i <= opts->grouping_limit * 2) {
+				if (*(pos + i) != ',') {
+					is_group_pattern = 0;
+					break;
+				}
+			} else {
+				if (*(pos + i) != '.') {
+					is_group_pattern = 0;
+					break;
+				}
+			}
+		}
+	}
+
+	return is_group_pattern;
+}
+
+static __attribute__((always_inline)) inline
+void fourth_stage_parsing(char** const res, shared_st* shared_st, const options* opts) {
+	if (opts->groups_grouping_limit == 0 || opts->grouping_limit == 0) { return; }
+
+	//                       '( +       ?,?,n            + ... + ')  ,'
+	int group_pattern_size = (1 + opts->grouping_limit*2 +  3  + 1 + 1);
+	char* digest_end = shared_st->res_pre_pos;
+	shared_st->res_pre_pos = *res;
+	shared_st->res_cur_pos = *res;
+
+	// it's a fixed pattern, we can perform a lookahead replacement
+	while (shared_st->res_cur_pos < digest_end - 1) {
+		char* cur_char = shared_st->res_cur_pos;
+		char pattern_fits =
+			shared_st->res_cur_pos <=
+			// NOTE: Final '- 1' due to repeating comma in the pattern not in the final case.
+			(digest_end - (group_pattern_size * (opts->groups_grouping_limit + 1) - 1));
+
+		// fast check for knowing that this can potentially be a group pattern
+		if (pattern_fits && *cur_char == '(' && *(cur_char+1) == '?' && *(cur_char+2) == ',') {
+			char* pattern_start = cur_char;
+			char* cur_pattern_pos = cur_char;
+			int found_group_patterns = 0;
+
+			while(cur_pattern_pos <= digest_end - (group_pattern_size - 1)) {
+				if (is_group_pattern(cur_pattern_pos, opts) == 1) {
+
+					if (cur_pattern_pos == digest_end - (group_pattern_size - 1)) {
+						cur_pattern_pos += group_pattern_size - 1;
+					} else {
+						cur_pattern_pos += group_pattern_size;
+					}
+
+					found_group_patterns += 1;
+				} else {
+					break;
+				}
+			}
+
+			// count found forward patterns
+			if (found_group_patterns > opts->groups_grouping_limit) {
+				memcpy(shared_st->res_pre_pos, pattern_start, group_pattern_size * opts->groups_grouping_limit);
+				shared_st->res_pre_pos += group_pattern_size * opts->groups_grouping_limit;
+				*shared_st->res_pre_pos++ = '.';
+				*shared_st->res_pre_pos++ = '.';
+				*shared_st->res_pre_pos++ = '.';
+
+				shared_st->res_cur_pos = cur_pattern_pos;
+			}
+		}
+
+		*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+	}
+
+	*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+	*shared_st->res_pre_pos = 0;
+}
+
 /**
  * @brief Helper function for testing 'first_stage' digest parsing.
  *
@@ -1532,6 +1796,42 @@ char* mysql_query_digest_first_stage(const char* const q, int q_len, char** cons
 
     // perform just the first stage parsing
 	first_stage_parsing(&res, &shared_st, &opts, fst_cmnt);
+
+    return res;
+}
+
+/**
+ * @brief Helper function for testing 'second_stage' digest parsing.
+ *
+ * @param q Query to be parsed.
+ * @param q_len Length of the supplied queried.
+ * @param fst_cmnt First comment to be filled in case of being found in the query.
+ * @param buf Buffer to be used for writing the resulting digest.
+ *
+ * @return The processed digest. Caller is responsible from freeing if buffer wasn't provided.
+ */
+char* mysql_query_digest_second_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
+	/* buffer to store first comment. */
+	int d_max_len = get_digest_max_len(q_len);
+	char* res = get_result_buffer(d_max_len, buf);
+
+	// global options
+	struct options opts;
+	get_options(&opts);
+
+	// state shared between all the parsing states
+	struct shared_st shared_st = { 0 };
+	shared_st.q = q;
+	shared_st.d_max_len = d_max_len;
+	shared_st.res = res;
+	shared_st.res_cur_pos = res;
+	shared_st.res_pre_pos = res;
+
+    // perform just the first stage parsing
+	first_stage_parsing(&res, &shared_st, &opts, fst_cmnt);
+
+	// second stage parsing
+	second_stage_parsing(&res, &shared_st, &opts);
 
     return res;
 }
@@ -1579,60 +1879,12 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 	shared_st.res_pre_pos = res;
 
 	first_stage_parsing(&res, &shared_st, &opts, fst_cmnt);
-
-	char* digest_end = shared_st.res_cur_pos;
-	shared_st.res_pre_pos = res;
-	shared_st.res_cur_pos = res;
-
-	// Second stage: Space and (+|-) replacement (WIP)
-	while (shared_st.res_cur_pos < digest_end - 1) {
-		if (*shared_st.res_cur_pos == ' ') {
-			char lc = *(shared_st.res_cur_pos-1);
-			char rc = *(shared_st.res_cur_pos+1);
-
-			if (lc == '(' || rc == ')') {
-				shared_st.res_cur_pos++;
-			} else if ((is_arithmetic_op(lc) && rc == '?') || lc == ',' || rc == ',') {
-				shared_st.res_cur_pos++;
-			} else if (is_arithmetic_op(rc) && lc == '?' && is_token_char(lc)) {
-				shared_st.res_cur_pos++;
-			} else {
-				*shared_st.res_pre_pos++ = *shared_st.res_cur_pos++;
-			}
-		} else if (*shared_st.res_cur_pos == '+' || *shared_st.res_cur_pos == '-') {
-			char llc = *(shared_st.res_cur_pos-2);
-			char lc = *(shared_st.res_cur_pos-1);
-			char rc = *(shared_st.res_cur_pos+1);
-
-			// patterns to cover:
-			//  - ? + ?
-			//  - ?,+?
-			//  - c +?
-			//  - c + ?
-			//  - c+ ?
-			//  - c+?
-			if (lc == ' ') {
-				if (is_normal_char(llc)) {
-					shared_st.res_cur_pos++;
-				} else if (is_token_char(llc) && llc != '?' && rc == '?') {
-					shared_st.res_cur_pos++;
-				} else {
-					*shared_st.res_pre_pos++ = *shared_st.res_cur_pos++;
-				}
-			} else {
-				if (is_token_char(lc) && lc != '?' && (rc == '?' || rc == ' ')) {
-					shared_st.res_cur_pos++;
-				} else {
-					*shared_st.res_pre_pos++ = *shared_st.res_cur_pos++;
-				}
-			}
-		} else {
-			*shared_st.res_pre_pos++ = *shared_st.res_cur_pos++;
-		}
-	}
-
-	*shared_st.res_pre_pos++ = *shared_st.res_cur_pos++;
-	*shared_st.res_pre_pos = 0;
+	// second stage parsing
+	second_stage_parsing(&res, &shared_st, &opts);
+	// third stage parsing
+	third_stage_parsing(&res, &shared_st, &opts);
+	// fourth stage parsing
+	fourth_stage_parsing(&res, &shared_st, &opts);
 
 	return res;
 }

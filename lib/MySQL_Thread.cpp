@@ -497,6 +497,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_digests_max_digest_length",
 	(char *)"query_digests_max_query_length",
 	(char *)"query_digests_grouping_limit",
+	(char *)"query_digests_groups_grouping_limit",
 	(char *)"wait_timeout",
 	(char *)"throttle_max_bytes_per_second_to_client",
 	(char *)"throttle_ratio_server_to_client",
@@ -1180,6 +1181,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.session_debug=true;
 #endif /*debug */
 	variables.query_digests_grouping_limit = 3;
+	variables.query_digests_groups_grouping_limit= 0;
 	variables.enable_client_deprecate_eof=true;
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
@@ -2156,6 +2158,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["default_query_delay"]             = make_tuple(&variables.default_query_delay,              0,   3600*1000, false);
 		VariablesPointers_int["default_query_timeout"]           = make_tuple(&variables.default_query_timeout,         1000,20*24*3600*1000, false);
 		VariablesPointers_int["query_digests_grouping_limit"]    = make_tuple(&variables.query_digests_grouping_limit,     1,        2089, false);
+		VariablesPointers_int["query_digests_groups_grouping_limit"] = make_tuple(&variables.query_digests_groups_grouping_limit, 0, 2089, false);
 		VariablesPointers_int["query_digests_max_digest_length"] = make_tuple(&variables.query_digests_max_digest_length, 16, 1*1024*1024, false);
 		VariablesPointers_int["query_digests_max_query_length"]  = make_tuple(&variables.query_digests_max_query_length,  16, 1*1024*1024, false);
 		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
@@ -3966,6 +3969,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
 	mysql_thread___query_digests_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_grouping_limit");
+	mysql_thread___query_digests_groups_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_groups_grouping_limit");
 	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas=GloMTH->get_variable_int((char *)"aurora_max_lag_ms_only_read_from_replicas");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
