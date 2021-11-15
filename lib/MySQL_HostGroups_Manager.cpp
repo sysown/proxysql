@@ -2936,9 +2936,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
+/*
 		unsigned int New_sum=0;
 		unsigned int New_TotalUsedConn=0;
-
 		// we will now scan again to ignore overloaded servers
 		for (j=0; j<num_candidates; j++) {
 			mysrvc = mysrvcCandidates[j];
@@ -2956,7 +2956,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				num_candidates--;
 			}
 		}
+*/
 
+		unsigned int New_sum=sum;
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
@@ -2970,7 +2972,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		}
 
 		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
-		if (sess->thread->variables.min_num_servers_lantency_awareness) {
+		if (sess && sess->thread->variables.min_num_servers_lantency_awareness) {
 			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
 				unsigned int servers_with_latency = 0;
 				unsigned int total_latency_us = 0;

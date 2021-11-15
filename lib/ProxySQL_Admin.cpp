@@ -3791,6 +3791,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							run_query=false;
 						}
 						break;
+#ifdef DEBUG
 					case 51:
 						{
 							char msg[256];
@@ -3800,6 +3801,29 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							run_query=false;
 						}
 						break;
+					case 52:
+						{
+							char msg[256];
+							SPA->mysql_servers_wrlock();
+							SPA->admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id=5211");
+							SPA->admindb->execute("INSERT INTO mysql_servers (hostgroup_id, hostname, port, weight) VALUES (5211,'127.0.0.2',3306,10000)");
+							SPA->admindb->execute("INSERT INTO mysql_servers (hostgroup_id, hostname, port, weight) VALUES (5211,'127.0.0.3',3306,8000)");
+							SPA->admindb->execute("INSERT INTO mysql_servers (hostgroup_id, hostname, port, weight) VALUES (5211,'127.0.0.4',3306,8000)");
+							SPA->admindb->execute("INSERT INTO mysql_servers (hostgroup_id, hostname, port, weight) VALUES (5211,'127.0.0.5',3306,7000)");
+							SPA->load_mysql_servers_to_runtime();
+							SPA->mysql_servers_wrunlock();
+							proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to RUNTIME\n");
+							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
+							sprintf(msg, "Tested in %llums\n", d);
+							SPA->mysql_servers_wrlock();
+							SPA->admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id=5211");
+							SPA->load_mysql_servers_to_runtime();
+							SPA->mysql_servers_wrunlock();
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							run_query=false;
+						}
+						break;
+#endif // DEBUG
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
 						run_query=false;
@@ -12569,6 +12593,7 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read
 	return d;
 }
 
+#ifdef DEBUG
 // NEVER USED THIS FUNCTION IN PRODUCTION.
 // THIS IS FOR TESTING PURPOSE ONLY
 // IT ACCESSES MyHGM without lock
@@ -12598,3 +12623,51 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_HG_l
 	unsigned long long d = t2-t1;
 	return d;
 }
+
+// NEVER USED THIS FUNCTION IN PRODUCTION.
+// THIS IS FOR TESTING PURPOSE ONLY
+// IT ACCESSES MyHGM without lock
+unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211() {
+	unsigned long long t1 = monotonic_time();
+	const unsigned int NS = 4;
+	unsigned int cu[NS] = { 50, 10, 10, 0 };
+	unsigned int hid = 0;
+	MyHGC * myhgc = NULL;
+	myhgc = MyHGM->MyHGC_lookup(5211);
+	assert(myhgc);
+	assert(myhgc->mysrvs->servers->len == NS);
+	unsigned int cnt[NS];
+	for (unsigned int i=0; i<NS; i++) {
+		cnt[i]=0;
+	}
+	for (unsigned int i=0; i<NS; i++) {
+		MySrvC * m = (MySrvC *)myhgc->mysrvs->servers->index(i);
+		m->ConnectionsUsed->conns->len=cu[i];
+	}
+	unsigned int NL = 1000;
+	for (unsigned int i=0; i<NL; i++) {
+		MySrvC * mysrvc = myhgc->get_random_MySrvC(NULL, NULL, -1, NULL);
+		assert(mysrvc);
+		for (unsigned int k=0; k<NS; k++) {
+			MySrvC * m = (MySrvC *)myhgc->mysrvs->servers->index(k);
+			if (m == mysrvc)
+				cnt[k]++;
+		}
+	}
+	{
+		unsigned int tc = 0;
+		for (unsigned int k=0; k<NS; k++) {
+			tc += cnt[k];
+		}
+		assert(tc == NL);
+	}
+	for (unsigned int k=0; k<NS; k++) {
+		proxy_info("Balancing_HG5211: server %u, cnt: %u\n", k, cnt[k]);
+	}
+	unsigned long long t2 = monotonic_time();
+	t1 /= 1000;
+	t2 /= 1000;
+	unsigned long long d = t2-t1;
+	return d;
+}
+#endif //DEBUG
