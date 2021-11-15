@@ -835,10 +835,13 @@ enum p_st {
 	st_cmnt_type_3 = 3,
 	st_literal_string = 4,
 	st_literal_number = 5,
+	st_replace_null = 6
 };
 
 typedef struct shared_st {
 	enum p_st st;
+	/* @brief Maximum length of the resulting digest. */
+	int d_max_len;
 	/* @brief Pointer to current reading position of the supplied query. */
 	const char* q;
 	/* @brief Length of the supplied query. */
@@ -906,7 +909,7 @@ static inline char* get_result_buffer(int len, char* buf) {
  * @return The next processing state.
  */
 static __attribute__((always_inline)) inline
-enum p_st get_next_st(struct shared_st* shared_st) {
+enum p_st get_next_st(char** const res, const struct options* opts, struct shared_st* shared_st) {
 	char prev_char = shared_st->prev_char;
 	enum p_st st = st_no_mark_found;
 
@@ -921,7 +924,7 @@ enum p_st get_next_st(struct shared_st* shared_st) {
 	// cmnt type 3 - start with '--'
 	else if (
 		// shared_st->query isn't over, need to check next character
-		shared_st->q_cur_pos < (shared_st->q_len-2) &&
+		shared_st->q_cur_pos < (shared_st->d_max_len-2) &&
 		// found starting pattern '-- ' (space is required)
 		*shared_st->q == '-' && *(shared_st->q+1) == '-' && is_space_char(*(shared_st->q+2))
 	) {
@@ -939,6 +942,13 @@ enum p_st get_next_st(struct shared_st* shared_st) {
 	// may be digit - start with digit
 	else if (is_token_char(prev_char) && is_digit_char(*shared_st->q)) {
 		st = st_literal_number;
+	}
+	// NULL processing
+	else if (
+		is_token_char(shared_st->prev_char) &&
+		(*shared_st->q == 'n' || *shared_st->q == 'N') && opts->replace_null
+	) {
+		st = st_replace_null;
 	}
 
 	return st;
@@ -982,7 +992,7 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 	if (*shared_st->q == '/' && *(shared_st->q+1) == '*') {
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 
-		if (shared_st->q_cur_pos != (shared_st->q_len - 2) && *(shared_st->q+2) == '!') {
+		if (shared_st->q_cur_pos != (shared_st->d_max_len - 2) && *(shared_st->q+2) == '!') {
 			c_t_1_st->is_cmd = 1;
 		}
 
@@ -1119,7 +1129,7 @@ enum p_st process_cmnt_type_2(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
 		shared_st->q_cur_pos += 1;
 	}
 
-	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->q_len - 1)) {
+	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->d_max_len - 1)) {
 		next_state = st_no_mark_found;
 		shared_st->prev_char = ' ';
 
@@ -1140,7 +1150,7 @@ enum p_st process_cmnt_type_3(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
 		shared_st->q_cur_pos += 3;
 	}
 
-	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->q_len - 1)) {
+	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->d_max_len - 1)) {
 		next_state = st_no_mark_found;
 		shared_st->prev_char = ' ';
 
@@ -1185,7 +1195,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 	// satisfied closing string - swap string to ?
 	if(
 		*shared_st->q == str_st->delim_char &&
-		(shared_st->q_len == shared_st->q_cur_pos+1 || *(shared_st->q + SIZECHAR) != str_st->delim_char)
+		(shared_st->d_max_len == shared_st->q_cur_pos+1 || *(shared_st->q + SIZECHAR) != str_st->delim_char)
 	) {
 		shared_st->res_cur_pos = shared_st->res_pre_pos;
 
@@ -1194,7 +1204,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 		shared_st->prev_char = '?';
 
 		// don't copy this char if last
-		if (shared_st->q_len == shared_st->q_cur_pos + 1) {
+		if (shared_st->d_max_len == shared_st->q_cur_pos + 1) {
 			shared_st->copy_next_char = 0;
 			// keep the same state, no token was found
 			return next_state;
@@ -1206,7 +1216,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 
 		// update the shared state
 		shared_st->prev_char = str_st->delim_char;
-		if(shared_st->q_cur_pos < shared_st->q_len) {
+		if(shared_st->q_cur_pos < shared_st->d_max_len) {
 			shared_st->q++;
 		}
 		shared_st->q_cur_pos++;
@@ -1243,7 +1253,7 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 			shared_st->prev_char = '?';
 
 			// don't copy this char if last and is not token
-			if (is_token_char(*shared_st->q) == 0 && shared_st->q_len == shared_st->q_cur_pos + 1) {
+			if (is_token_char(*shared_st->q) == 0 && shared_st->d_max_len == shared_st->q_cur_pos + 1) {
 				shared_st->copy_next_char = 0;
 				// keep the same state, no token was found
 				return next_state;
@@ -1256,17 +1266,104 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 	return next_state;
 }
 
+/**
+ * @brief Alternative impl for 'NULL' replacement, unused right now.
+ */
 static __attribute__((always_inline)) inline
-void first_stage_parsing(shared_st* shared_st, char** res, options* opts, char** fst_cmnt) {
+enum p_st process_replace_null_single_chars(shared_st* shared_st, literal_null_st* null_st) {
+	enum p_st next_st = st_replace_null;
+	const char* null_str = "null";
+
+	if (null_st->null_pos <= 3) {
+		if (tolower(*shared_st->q) == null_str[null_st->null_pos]) {
+			null_st->null_pos++;
+		} else {
+			next_st = st_no_mark_found;
+		}
+
+		if (shared_st->q_cur_pos == shared_st->d_max_len - 1 && null_st->null_pos == 4) {
+			// no need for changing the state it's the last char
+			shared_st->copy_next_char = 0;
+			shared_st->res_cur_pos = shared_st->res_pre_pos;
+
+			// place the replacement mark
+			*shared_st->res_cur_pos++ = '?';
+			shared_st->prev_char = '?';
+		}
+	} else if (null_st->null_pos == 4){
+		if (is_token_char(*shared_st->q)) {
+			shared_st->copy_next_char = 0;
+			shared_st->res_cur_pos = shared_st->res_pre_pos;
+
+			// place the replacement mark
+			*shared_st->res_cur_pos++ = '?';
+			shared_st->prev_char = '?';
+
+			// don't copy current char, go immediately back to initial state
+			next_st = st_no_mark_found;
+		}
+	}
+
+	return next_st;
+}
+
+static __attribute__((always_inline)) inline
+enum p_st process_replace_null(shared_st* shared_st) {
+	enum p_st next_st = st_no_mark_found;
+	char null_found = 0;
+
+	if ((shared_st->d_max_len - shared_st->q_cur_pos) > 4) {
+		// printf(
+		// 	"replace_null: '%d', '%d', 'q': `%s`, 'res': `%s`\n",
+		// 	shared_st->q_len, shared_st->q_cur_pos, shared_st->q, shared_st->res
+		// );
+
+		null_found =
+			(*shared_st->q == 'N' || *shared_st->q == 'n') &&
+			(*(shared_st->q+1) == 'U' || *(shared_st->q+1) == 'u') &&
+			(*(shared_st->q+2) == 'L' || *(shared_st->q+2) == 'l') &&
+			(*(shared_st->q+3) == 'L' || *(shared_st->q+3) == 'l') &&
+			is_token_char(*(shared_st->q+4));
+	} else if ((shared_st->d_max_len - shared_st->q_cur_pos) == 4) {
+		null_found =
+			(*shared_st->q == 'N' || *shared_st->q == 'n') &&
+			(*(shared_st->q+1) == 'U' || *(shared_st->q+1) == 'u') &&
+			(*(shared_st->q+2) == 'L' || *(shared_st->q+2) == 'l') &&
+			(*(shared_st->q+3) == 'L' || *(shared_st->q+3) == 'l');
+	} else {
+		null_found = 0;
+	}
+
+	if (null_found == 1) {
+		// place the replacement mark
+		shared_st->res_cur_pos = shared_st->res_pre_pos;
+		*shared_st->res_cur_pos++ = '?';
+		shared_st->prev_char = '?';
+
+		shared_st->q += 4;
+		shared_st->q_cur_pos += 4;
+	} else {
+		// process the first char and continue
+		*shared_st->res_cur_pos++ = *shared_st->q;
+		shared_st->q++;
+		shared_st->q_cur_pos++;
+	}
+
+	return next_st;
+}
+
+static __attribute__((always_inline)) inline
+void first_stage_parsing(char** const res, shared_st* shared_st, options* opts, char** fst_cmnt) {
 	// state required between different iterations of special parsing states
 	struct cmnt_type_1_st c_t_1_st = { 0 };
 	struct literal_string_st literal_str_st = { 0 };
 	struct literal_digit_st literal_digit_st = { 0 };
+	// struct literal_null_st literal_null_st = { 0 };
 
 	enum p_st cur_st = st_no_mark_found;
 
 	// start char consumption
-	while (shared_st->q_cur_pos < shared_st->q_len) {
+	while (shared_st->q_cur_pos < shared_st->d_max_len) {
 		// printf(
 		// 	"st_no_mark_found: {"
 		// 		"max_len: '%d', st: `%d`, prev_char: '%c', q_cur_pos: '%d', c_next_char: '%d',"
@@ -1279,7 +1376,7 @@ void first_stage_parsing(shared_st* shared_st, char** res, options* opts, char**
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
 			shared_st->res_pre_pos = shared_st->res_cur_pos;
-			cur_st = get_next_st(shared_st);
+			cur_st = get_next_st(res, opts, shared_st);
 
 			// if next st isn't 'no_mark_found' transition to it without consuming current char
 			if (cur_st != st_no_mark_found) {
@@ -1299,7 +1396,7 @@ void first_stage_parsing(shared_st* shared_st, char** res, options* opts, char**
 				// suppress all the double spaces.
 				// ==============================
 				//
-				// The supression is performed using the address of the second space found as the
+				// The suppression is performed using the address of the second space found as the
 				// pivoting point for further space suppression in the result buffer:
 				//
 				// ```
@@ -1363,6 +1460,14 @@ void first_stage_parsing(shared_st* shared_st, char** res, options* opts, char**
 					shared_st->copy_next_char = 1;
 					continue;
 				}
+			} else if (cur_st == st_replace_null) {
+				// shared_st->copy_next_char = 1;
+				cur_st = process_replace_null(shared_st);
+				if (cur_st == st_no_mark_found) {
+					// literal_null_st.null_pos = 0;
+					shared_st->copy_next_char = 1;
+					continue;
+				}
 			}
 
 			if (shared_st->copy_next_char) {
@@ -1402,11 +1507,11 @@ void first_stage_parsing(shared_st* shared_st, char** res, options* opts, char**
  * @brief Helper function for testing 'first_stage' digest parsing.
  *
  * @param q Query to be parsed.
- * @param q_len Lenght of the supplied queried.
+ * @param q_len Length of the supplied queried.
  * @param fst_cmnt First comment to be filled in case of being found in the query.
  * @param buf Buffer to be used for writing the resulting digest.
  *
- * @return The processed digest. Caller is reponsible from freeing if buffer wasn't provided.
+ * @return The processed digest. Caller is responsible from freeing if buffer wasn't provided.
  */
 char* mysql_query_digest_first_stage(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
 	/* buffer to store first comment. */
@@ -1420,13 +1525,13 @@ char* mysql_query_digest_first_stage(const char* const q, int q_len, char** cons
 	// state shared between all the parsing states
 	struct shared_st shared_st = { 0 };
 	shared_st.q = q;
-	shared_st.q_len = d_max_len;
+	shared_st.d_max_len = d_max_len;
 	shared_st.res = res;
 	shared_st.res_cur_pos = res;
 	shared_st.res_pre_pos = res;
 
     // perform just the first stage parsing
-	first_stage_parsing(&shared_st, &res, &opts, fst_cmnt);
+	first_stage_parsing(&res, &shared_st, &opts, fst_cmnt);
 
     return res;
 }
@@ -1467,12 +1572,13 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 	// state shared between all the parsing states
 	struct shared_st shared_st = { 0 };
 	shared_st.q = q;
-	shared_st.q_len = d_max_len;
+	shared_st.q_len = q_len;
+	shared_st.d_max_len = d_max_len;
 	shared_st.res = res;
 	shared_st.res_cur_pos = res;
 	shared_st.res_pre_pos = res;
 
-	first_stage_parsing(&shared_st, &res, &opts, fst_cmnt);
+	first_stage_parsing(&res, &shared_st, &opts, fst_cmnt);
 
 	char* digest_end = shared_st.res_cur_pos;
 	shared_st.res_pre_pos = res;
@@ -1543,7 +1649,7 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 		// TODO: Remove exp space replacement
 		*shared_st->res_cur_pos++ = *shared_st->q;
 
-		// consume the delimitir from the query
+		// consume the delimiter from the query
 		shared_st->q++;
 		shared_st->q_cur_pos++;
 	}
@@ -1568,7 +1674,7 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 	// satisfied closing string - swap string to ?
 	if(
 		*shared_st->q == str_st->delim_char &&
-		(shared_st->q_len == shared_st->q_cur_pos+1 || *(shared_st->q + SIZECHAR) != str_st->delim_char)
+		(shared_st->d_max_len == shared_st->q_cur_pos+1 || *(shared_st->q + SIZECHAR) != str_st->delim_char)
 	) {
 		shared_st->res_cur_pos = shared_st->res_pre_pos;
 		char* _p = shared_st->res_pre_pos - 3;
@@ -1599,7 +1705,7 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 		shared_st->prev_char = '?';
 
 		// don't copy this char if last
-		if (shared_st->q_len == shared_st->q_cur_pos + 1) {
+		if (shared_st->d_max_len == shared_st->q_cur_pos + 1) {
 			shared_st->copy_next_char = 0;
 			// keep the same state, no token was found
 			return next_state;
@@ -1611,7 +1717,7 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 
 		// update the shared state
 		shared_st->prev_char = str_st->delim_char;
-		if(shared_st->q_cur_pos < shared_st->q_len) {
+		if(shared_st->q_cur_pos < shared_st->d_max_len) {
 			shared_st->q++;
 		}
 		shared_st->q_cur_pos++;
@@ -1652,7 +1758,7 @@ enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st*
 	}
 
 	// token char or last char
-	if (is_token_char(*shared_st->q) || shared_st->q_len == shared_st->q_cur_pos + 1) {
+	if (is_token_char(*shared_st->q) || shared_st->d_max_len == shared_st->q_cur_pos + 1) {
 		if (is_digit_string(shared_st->res_pre_pos, shared_st->res_cur_pos)) {
 			shared_st->res_cur_pos = shared_st->res_pre_pos;
 
@@ -1700,7 +1806,7 @@ enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st*
 			shared_st->prev_char = '?';
 
 			// don't copy this char if last
-			if (shared_st->q_len == shared_st->q_cur_pos + 1) {
+			if (shared_st->d_max_len == shared_st->q_cur_pos + 1) {
 				shared_st->copy_next_char = 0;
 				// keep the same state, no token was found
 				return next_state;
@@ -1770,6 +1876,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	struct shared_st shared_st = { 0 };
 	shared_st.q = q;
 	shared_st.q_len = q_len;
+	shared_st.d_max_len = d_max_len;
 	shared_st.res = res;
 	shared_st.res_cur_pos = res;
 	shared_st.res_pre_pos = res;
@@ -1795,7 +1902,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
 			shared_st.res_pre_pos = shared_st.res_cur_pos;
-			cur_st = get_next_st(&shared_st);
+			cur_st = get_next_st(&res, &opts, &shared_st);
 
 			// if next st isn't 'no_mark_found' transition to it without consuming current char
 			if (cur_st != st_no_mark_found) {
