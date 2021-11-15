@@ -151,16 +151,20 @@ static char is_digit_string(char *f, char *t)
 	int is_hex = 0;
 	int i = 0;
 
-	// 0x, 0X
+	// 0x, 0X, n.m, nE+m, nE-m, Em
 	while(f != t)
 	{
+		char is_float =
+			*f == '.' || tolower(*f) == 'e' ||
+			(tolower(*(f-1)) == 'e' && (*f == '+' || *f == '-'));
+
 		if(i == 1 && *(f-1) == '0' && (*f == 'x' || *f == 'X'))
 		{
 			is_hex = 1;
 		}
 
 		// none hex
-		else if(!is_hex && !is_digit_char(*f))
+		else if(!is_hex && !is_digit_char(*f) && is_float == 0)
 		{
 			return 0;
 		}
@@ -173,10 +177,6 @@ static char is_digit_string(char *f, char *t)
 		f++;
 		i++;
 	}
-
-	// need to be added function ----------------
-	// 23e
-	// 23e+1
 
 	return 1;
 }
@@ -1231,22 +1231,10 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 		shared_st->q_cur_pos++;
 	}
 
-	// is float
-	if (
-		*shared_st->q == '.' || (*shared_st->q == 'e' || *shared_st->q == 'E') ||
-		(
-			(*shared_st->q == '+' || *shared_st->q == '-') &&
-			(shared_st->prev_char == 'e' || shared_st->prev_char == 'E')
-		)
-	) {
-		shared_st->prev_char = *shared_st->q;
-		shared_st->copy_next_char = 0;
-
-		return next_state;
-	}
-
 	// token char or last char
-	if (is_token_char(*shared_st->q) || shared_st->q_len == shared_st->q_cur_pos + 1) {
+	char is_float_char = *shared_st->q == '.' ||
+		( tolower(shared_st->prev_char) == 'e' && ( *shared_st->q == '-' || *shared_st->q == '+' ) );
+	if ((is_token_char(*shared_st->q) && is_float_char == 0) || shared_st->d_max_len == shared_st->q_cur_pos + 1) {
 		if (is_digit_string(shared_st->res_pre_pos, shared_st->res_cur_pos)) {
 			shared_st->res_cur_pos = shared_st->res_pre_pos;
 
