@@ -95,7 +95,6 @@ class GTID_Server_Data {
 
 class MySrvConnList {
 	private:
-	PtrArray *conns;
 	MySrvC *mysrvc;
 	int find_idx(MySQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
@@ -109,6 +108,7 @@ class MySrvConnList {
 		return -1;
 	}
 	public:
+	PtrArray *conns;
 	MySrvConnList(MySrvC *);
 	~MySrvConnList();
 	void add(MySQL_Connection *);
