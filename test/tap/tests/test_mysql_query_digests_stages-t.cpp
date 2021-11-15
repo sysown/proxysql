@@ -6,6 +6,7 @@
 #include <iostream>
 #include <chrono>
 #include <ctype.h>
+#include <regex>
 
 #include "json.hpp"
 #include "proxysql.h"
@@ -15,9 +16,10 @@
 
 __thread int mysql_thread___query_digests_max_query_length = 65000;
 __thread bool mysql_thread___query_digests_lowercase = false;
-__thread bool mysql_thread___query_digests_replace_null = false;
+__thread bool mysql_thread___query_digests_replace_null = true;
 __thread bool mysql_thread___query_digests_no_digits = false;
 __thread int mysql_thread___query_digests_grouping_limit = 3;
+__thread int mysql_thread___query_digests_groups_grouping_limit = 1;
 
 using std::vector;
 using std::string;
@@ -114,17 +116,32 @@ uint64_t benchmark_parsing(const vector<string>& queries, int mode, uint32_t ite
 			if (mode == 0) {
 				c_res =
 					mysql_query_digest_and_first_comment(
-						const_cast<char*>(query.c_str()), query.length(), &first_comment, buf
+						const_cast<char*>(query.c_str()), query.length(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL)
 					);
-			} else if (mode == 1){
+			} else if (mode == 1) {
 				c_res =
 					mysql_query_digest_and_first_comment_one_it(
-						const_cast<char*>(query.c_str()), query.length(), &first_comment, buf
+						const_cast<char*>(query.c_str()), query.length(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL)
 					);
-			} else {
+			} else if (mode == 2) {
 				c_res =
 					mysql_query_digest_and_first_comment_2(
-						const_cast<char*>(query.c_str()), query.length(), &first_comment, buf
+						const_cast<char*>(query.c_str()), query.length(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL)
+					);
+			} else if (mode == 3) {
+				c_res =
+					mysql_query_digest_first_stage(
+						const_cast<char*>(query.c_str()), query.length(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL)
+					);
+			} else if (mode == 4) {
+				c_res =
+					mysql_query_digest_second_stage(
+						const_cast<char*>(query.c_str()), query.length(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL)
 					);
 			}
 
@@ -138,7 +155,6 @@ uint64_t benchmark_parsing(const vector<string>& queries, int mode, uint32_t ite
 	return duration.count();
 }
 
-
 const string DIGESTS_TEST_FILENAME { "tokenizer_payloads/regular_tokenizer_digests.hjson" };
 
 /**
@@ -147,11 +163,23 @@ const string DIGESTS_TEST_FILENAME { "tokenizer_payloads/regular_tokenizer_diges
  *   1. The result of first stage parsing.
  *   2. The result of second stage parsing. Can be empty.
  *   3. The result of third stage parsing. Can be empty.
+ *   4. Digit replacement result. Can be empty.
  *
  *   The parsing performed to the query is incremental. If the results for stages 2 and 3 are present then
  *   parsing of stages 2 and 3 are performed, and results are checked.
  */
-using query_digest_test = tuple<string, string, string, string>;
+using query_digest_test = tuple<string, string, string, string, string, string>;
+
+struct dt_idx {
+	enum : int {
+		query = 0,
+		first_stage = 1,
+		second_stage = 2,
+		third_stage = 3,
+		fourth_stage = 5,
+		digit_replacement = 4
+	};
+};
 
 int get_tests_defs(const string& filepath, vector<query_digest_test>& tests_def, uint32_t& test_num) {
 	std::ifstream file_stream(filepath);
@@ -161,29 +189,57 @@ int get_tests_defs(const string& filepath, vector<query_digest_test>& tests_def,
 	uint32_t res_test_num = 0;
 
 	try {
-		nlohmann::json j_test_defs = nlohmann::json::parse(test_file_contents, nullptr, true, true);
+		std::regex comment_pattern { ".*\\/\\/.*[\\r\\n]" };
+		string test_file_no_comments { std::regex_replace(test_file_contents, comment_pattern, "") };
+		nlohmann::json j_test_defs = nlohmann::json::parse(test_file_no_comments, nullptr, true);
 
 		for (const auto& j_test_def : j_test_defs) {
-			const string& query = j_test_def.at("q");
-			const string& s1 = j_test_def.at("s1");
-			string s2 {};
-			string s3 {};
+			const auto& j_queries = j_test_def.at("q");
+			vector<string> s_queries {};
 
-			if (j_test_def.contains("s2")) {
-				s2 = j_test_def["s2"];
-				res_test_num++;
+			if (j_queries.is_array()) {
+				for (const auto& query : j_queries) {
+					s_queries.push_back(query);
+				}
+			} else {
+				s_queries.push_back(string { j_queries });
 			}
 
-			// TODO: Stage 3 is WIP
-			/*
-			if (j_test_def.contains("s3")) {
-				s3 = j_test_def["s3"];
+			for (const string& s_query : s_queries) {
+				string s1 {};
+				string s2 {};
+				string s3 {};
+				string s4 {};
+				// digit replacement
+				string dr {};
+
+				if (j_test_def.contains("s1")) {
+					s1 = j_test_def["s1"];
+				}
+
+				if (j_test_def.contains("s2")) {
+					s2 = j_test_def["s2"];
+					res_test_num++;
+				}
+
+				if (j_test_def.contains("s3")) {
+					s3 = j_test_def["s3"];
+					res_test_num++;
+				}
+
+				if (j_test_def.contains("s4")) {
+					s4 = j_test_def["s4"];
+					res_test_num++;
+				}
+
+				if (j_test_def.contains("dr")) {
+					dr = j_test_def["dr"];
+					res_test_num++;
+				}
+
+				res_tests_def.push_back({ s_query, s1, s2, s3, dr, s4 });
 				res_test_num++;
 			}
-			*/
-
-			res_tests_def.push_back({ query, s1, s2, s3 });
-			res_test_num++;
 		}
 	} catch (const std::exception& ex){
 		diag("Failed to parse the test payload file '%s' with ex: '%s'", filepath.c_str(), ex.what());
@@ -197,40 +253,100 @@ int get_tests_defs(const string& filepath, vector<query_digest_test>& tests_def,
 	return EXIT_SUCCESS;
 }
 
-void process_digest_tests(const vector<query_digest_test>& tests_def) {
+int process_digest_tests(const vector<query_digest_test>& tests_def) {
 	char buf[QUERY_DIGEST_BUF];
+	int res = EXIT_SUCCESS;
 
 	for (size_t i = 0; i < tests_def.size(); i++) {
-		const auto& query = std::get<0>(tests_def[i]);
-		const auto& digest_stage_1 = std::get<1>(tests_def[i]);
-		const auto& digest_stage_2 = std::get<2>(tests_def[i]);
-		const auto& digest_stage_3 = std::get<3>(tests_def[i]);
+		const auto& query = std::get<dt_idx::query>(tests_def[i]);
+		const auto& digest_stage_1 = std::get<dt_idx::first_stage>(tests_def[i]);
+		const auto& digest_stage_2 = std::get<dt_idx::second_stage>(tests_def[i]);
+		const auto& digest_stage_3 = std::get<dt_idx::third_stage>(tests_def[i]);
+		const auto& digest_stage_4 = std::get<dt_idx::fourth_stage>(tests_def[i]);
+		const auto& digest_no_digits = std::get<dt_idx::digit_replacement>(tests_def[i]);
 		const auto& query_str_rep = replace_str(std::get<0>(tests_def[i]), "\n", "\\n");
 
 		char* first_comment = NULL;
 		string exp_res {};
 		char* c_res = NULL;
 
-		c_res = mysql_query_digest_first_stage(query.c_str(), query.size(), &first_comment, buf);
-		std::string stage_1_res(c_res);
-
-		ok(
-			stage_1_res == digest_stage_1,
-			"Digest should be equal to exp result for 'STAGE 1' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
-			query.c_str(), stage_1_res.c_str(), digest_stage_1.c_str()
-		);
-
-		if (digest_stage_2.empty() == false) {
-			c_res = mysql_query_digest_and_first_comment_2(query.c_str(), query.size(), &first_comment, buf);
-			std::string stage_2_res(c_res);
+		// consistency check for the received data
+		if (query.empty() || digest_stage_1.empty()) {
+			diag(
+				"Invalid digest received by 'process_digest_tests', empty query or 's1' provided - ('%s', '%s')",
+				query.c_str(), digest_stage_1.c_str()
+			);
+			res = EXIT_FAILURE;
+		} else {
+			c_res = mysql_query_digest_first_stage(query.c_str(), query.size(), &first_comment,
+					((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+			std::string stage_1_res(c_res);
 
 			ok(
-				stage_2_res == digest_stage_2,
-				"Digest should be equal to exp result for 'STAGE 2' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
-				query.c_str(), stage_2_res.c_str(), digest_stage_2.c_str()
+				stage_1_res == digest_stage_1,
+				"Digest should be equal to exp result for 'STAGE 1' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+				query.c_str(), stage_1_res.c_str(), digest_stage_1.c_str()
 			);
+
+			if (digest_stage_2.empty() == false) {
+				c_res = mysql_query_digest_second_stage(query.c_str(), query.size(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+				std::string stage_2_res(c_res);
+
+				ok(
+					stage_2_res == digest_stage_2,
+					"Digest should be equal to exp result for 'STAGE 2' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+					query.c_str(), stage_2_res.c_str(), digest_stage_2.c_str()
+				);
+			}
+
+			if (digest_stage_3.empty() == false) {
+				int backup_groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
+				mysql_thread___query_digests_groups_grouping_limit = 0;
+				c_res = mysql_query_digest_and_first_comment_2(query.c_str(), query.size(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+				std::string stage_3_res(c_res);
+
+				ok(
+					stage_3_res == digest_stage_3,
+					"Digest should be equal to exp result for 'STAGE 3' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+					query.c_str(), stage_3_res.c_str(), digest_stage_3.c_str()
+				);
+
+				mysql_thread___query_digests_groups_grouping_limit = backup_groups_grouping_limit;
+			}
+
+			if (digest_stage_4.empty() == false) {
+				c_res = mysql_query_digest_and_first_comment_2(query.c_str(), query.size(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+				std::string stage_4_res(c_res);
+
+				ok(
+					stage_4_res == digest_stage_4,
+					"Digest should be equal to exp result for 'STAGE 4' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+					query.c_str(), stage_4_res.c_str(), digest_stage_4.c_str()
+				);
+			}
+
+			if (digest_no_digits.empty() == false) {
+				int no_digits_backup = mysql_thread___query_digests_no_digits;
+				mysql_thread___query_digests_no_digits = 1;
+
+				c_res = mysql_query_digest_and_first_comment_2(query.c_str(), query.size(), &first_comment,
+						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+				std::string no_digits_res(c_res);
+				ok(
+					no_digits_res == digest_no_digits,
+					"Digest should be equal to exp result for 'NoDigits' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+					query.c_str(), no_digits_res.c_str(), digest_no_digits.c_str()
+				);
+
+				mysql_thread___query_digests_no_digits = no_digits_backup;
+			}
 		}
 	}
+
+	return res;
 }
 
 int main(int argc, char** argv) {
@@ -242,6 +358,8 @@ int main(int argc, char** argv) {
 	}
 
 	const string digests_filepath { string(cl.workdir) + DIGESTS_TEST_FILENAME };
+	// const string digests_filepath { string(cl.workdir) + "tokenizer_payloads/large_digests.hjson" };
+
 	vector<query_digest_test> tests_defs {};
 	uint32_t tests_num = 0;
 
@@ -270,20 +388,32 @@ int main(int argc, char** argv) {
 		int len = 0;
 		uint64_t duration = 0;
 
-		// duration = benchmark_parsing(queries, 0, 1000000, len);
-		// std::cout << "Current: " << duration << "\n";
-		// duration = benchmark_parsing(queries, 1, 1000000, len);
-		// std::cout << "One iteration: " << duration << "\n";
-		duration = benchmark_parsing(queries, 2, 1000000, len);
-		std::cout << "Stages: " << duration << "\n";
-		std::cout << "Size: " << queries.size() << "\n";
+		std::cout << "Size: " << queries.size() << "\n\n";
 
-		// duration = benchmark_parsing(queries, 1, 1000000, len);
-		// std::cout << "One iteration: " << duration << "\n";
-		// duration = benchmark_parsing(queries, 2, 1000000, len);
-		// std::cout << "Stages: " << duration << "\n";
-		// duration = benchmark_parsing(queries, 0, 1000000, len);
-		// std::cout << "Current: " << duration << "\n";
+		uint64_t iterations = 100000;
+		duration = benchmark_parsing(queries, 0, iterations, len);
+		std::cout << "Current:       " << duration << "\n";
+		duration = benchmark_parsing(queries, 1, iterations, len);
+		std::cout << "One iteration: " << duration << "\n";
+		duration = benchmark_parsing(queries, 2, iterations, len);
+		std::cout << "Stages:        " << duration << "\n";
+		duration = benchmark_parsing(queries, 3, iterations, len);
+		std::cout << "First stage:   " << duration << "\n";
+		duration = benchmark_parsing(queries, 4, iterations, len);
+		std::cout << "Second stage:  " << duration << "\n";
+
+		std::cout << "\n";
+
+		duration = benchmark_parsing(queries, 1, iterations, len);
+		std::cout << "One iteration: " << duration << "\n";
+		duration = benchmark_parsing(queries, 3, iterations, len);
+		std::cout << "First stage:   " << duration << "\n";
+		duration = benchmark_parsing(queries, 2, iterations, len);
+		std::cout << "Stages:        " << duration << "\n";
+		duration = benchmark_parsing(queries, 4, iterations, len);
+		std::cout << "Second stage:  " << duration << "\n";
+		duration = benchmark_parsing(queries, 0, iterations, len);
+		std::cout << "Current:       " << duration << "\n";
 	}
 	*/
 

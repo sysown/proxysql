@@ -1,93 +1,51 @@
 [
-	// Comments: /* */
 	// NOTE: KnownIssue - 10
 	{
-		"q": "select /* COMMENT */ 1",
-		"s1": "select ?"
-	},
-	{
-		"q": "select/* COMMENT */ 1",
-		"s1": "select ?"
-	},
-	{
-		"q": "select/* COMMENT */1",
-		"s1": "select ?"
-	},
-	{
-		"q": "/* COMMENT */select 1",
-		"s1": "select ?"
-	},
-	{
-		"q": "/* COMMENT */ select 1 ",
-		"s1": "select ?"
-	},
-	{
-		"q": "select 1/* COMMENT */  ",
-		"s1": "select ?"
-	},
-	{
-		"q": "select 1 /* COMMENT */ ",
-		"s1": "select ?"
-	},
-	// Comments: initial '#'
-	{
-		"q": "# random_comment \n   select 1.1",
-		"s1": "select ?"
-	},
-	{
-		"q": "#random_comment \nselect 1.1",
-		"s1": "select ?"
-	},
-	{
-		"q": "#random_comment\nselect 1.1",
-		"s1": "select ?"
-	},
-	// Comments: initial '--'
-	{
-		"q": "-- random_comment \n select 1.1",
-		"s1": "select ?"
-	},
-	{
-		"q": "   --   random_comment\nselect 1.1",
-		"s1": "select ?"
-	},
-	// Comments: final/initial '#|--'
-	{
-		"q": "# random_comment\n select 1.1 #final_comment\n   ",
-		"s1": "select ?"
-	},
-	// NOTE: KnownIssue - 1
-	{
-		"q": "# random_comment\n select 1.1# final_comment   \n",
-		"s1": "select ?"
-	},
-	{
-		"q": "# random_comment\n select 1.1   #final_comment  \n  ",
-		"s1": "select ?"
-	},
-	{
-		"q": "-- random_comment\n select 1.1 -- final_comment\n   ",
-		"s1": "select ?"
-	},
-	{
-		"q": "-- random_comment\n select 1.1-- final_comment   \n",
-		"s1": "select ?"
-	},
-	{
-		"q": "-- random_comment\n select 1.1   -- final_comment  \n  ",
+		"q": [
+			// Comments: /* */
+			"select /* COMMENT */ 1",
+			"select/* COMMENT */ 1",
+			"select/* COMMENT */1",
+			"/* COMMENT */select 1",
+			"/* COMMENT */ select 1 ",
+			"select 1/* COMMENT */  ",
+			"select 1 /* COMMENT */ ",
+			// Comments: initial '#'
+			"# random_comment \n   select 1.1",
+			"#random_comment \nselect 1.1",
+			"#random_comment\nselect 1.1",
+			// Comments: initial '--'
+			"-- random_comment \n select 1.1",
+			"   --   random_comment\nselect 1.1",
+			// Comments: final/initial '#|--'
+			"# random_comment\n select 1.1 #final_comment\n   ",
+			// NOTE: KnownIssue - 1
+			"# random_comment\n select 1.1# final_comment   \n",
+			"# random_comment\n select 1.1   #final_comment  \n  ",
+			"-- random_comment\n select 1.1 -- final_comment\n   ",
+			"-- random_comment\n select 1.1-- final_comment   \n",
+			"-- random_comment\n select 1.1   -- final_comment  \n  "
+		],
 		"s1": "select ?"
 	},
 	// Floats
-	{ "q": "select 1.1", "s1": "select ?" },
-	{ "q": "select 99.1929", "s1": "select ?" },
-	// Exponentials
-	{ "q": "select 1.1e9", "s1": "select ?" },
-	{ "q": "select 1.1e+9", "s1": "select ?" },
-	{ "q": "select 1.1e-9", "s1": "select ?" },
-	// NOTE: KnownIssue - 2: Exponentials are case sensitive
-	{ "q": "select 1.1E9",  "s1": "select ?" },
-	{ "q": "select 1.1E+9", "s1": "select ?" },
-	{ "q": "select 1.1E-9", "s1": "select ?" },
+	{
+		"q": [
+			"select 1.1",
+			// Exponentials
+			"select 99.1929",
+			"select 1.1e9",
+			"select 1.1e+9",
+			"select 1.1e-9",
+			// NOTE: KnownIssue - 2: Exponentials are case sensitive
+			"select 1.1E9",
+			"select 1.1E+9",
+			"select 1.1E-9",
+			// hexadecimal
+			"select 0x100"
+		],
+		"s1": "select ?"
+	},
 	// Operators
 	{
 		"q":  "select 1 +1",
@@ -181,6 +139,23 @@
 		"q":  "select \"1+ 1, 1 -1, 1 * 1 , 1/1 , 100 % 3\"",
 		"s1": "select ?"
 	},
+	{
+		"q":  "SELECT N'string', _utf8'str\\'i\nng'",
+		"s1":  "SELECT N?, _utf8?i ng",
+		"s2":  "SELECT N?,_utf8?i ng"
+	},
+	{
+		"q": "create table test.1_null_digests (null_c1 TEXT, c2 TEXT, c3 TEXT)",
+		"s1": "create table test.1_null_digests (null_c1 TEXT, c2 TEXT, c3 TEXT)",
+		"s2": "create table test.1_null_digests (null_c1 TEXT,c2 TEXT,c3 TEXT)",
+		"dr": "create table test.?_null_digests (null_c? TEXT,c? TEXT,c? TEXT)"
+	},
+	{
+		"q": "select * from 1_value",
+		"s1": "select * from 1_value",
+		"s2": "select * from 1_value",
+		"dr": "select * from ?_value"
+	},
 	// string - preceded by signs - outside parenthesis, not preceded by commas
 	{
 		"q":  "select -\"1\"",
@@ -246,16 +221,40 @@
 	{
 		"q": "select * fromt t", "s1": "select * fromt t"
 	},
-	// SimpleGroping: Query digest reduction
+	// NULL values replacement
 	{
-		"q":  "SELECT * FROM tablename WHERE id IN (1,2,3,4,5,6,7,8,9,10)",
-		"s1": "SELECT * FROM tablename WHERE id IN (?,?,?,?,?,?,?,?,?,?)",
-		"s3": "SELECT * FROM tablename WHERE id IN (?,?,?,...)"
+		"q":  "select NULL",
+		"s1": "select ?"
 	},
+	{
+		"q":  "select nUlL",
+		"s1": "select ?"
+	},
+	{
+		"q":  "SELECT * FROM nulltablenull WHERE null_id IN (NULL  ,2,3, 'NULL' ,5,NulL,null,NULL8,9,10)",
+		"s1": "SELECT * FROM nulltablenull WHERE null_id IN (? ,?,?, ? ,?,?,?,NULL8,?,?)",
+		"s2": "SELECT * FROM nulltablenull WHERE null_id IN (?,?,?,?,?,?,?,NULL8,?,?)"
+	},
+	{
+		"q":  "SELECT * FROM table_NULL WHERE null_id IN (NULL  ,2,3, NULL ,5,6,7,NULL8,9,10)",
+		"s1": "SELECT * FROM table_NULL WHERE null_id IN (? ,?,?, ? ,?,?,?,NULL8,?,?)",
+		"s2": "SELECT * FROM table_NULL WHERE null_id IN (?,?,?,?,?,?,?,NULL8,?,?)"
+	},
+	{
+		"q":  "create table test.null_digests_2 (null_c1 TEXT, c2 TEXT, c3 TEXT)",
+		"s1": "create table test.null_digests_2 (null_c1 TEXT, c2 TEXT, c3 TEXT)",
+		"s2": "create table test.null_digests_2 (null_c1 TEXT,c2 TEXT,c3 TEXT)"
+	},
+	// SimpleGroping: Query digest reduction
 	{
 		"q":  "SELECT * FROM tablename WHERE id IN (1,2,3,4)",
 		"s1": "SELECT * FROM tablename WHERE id IN (?,?,?,?)",
 		"s2": "SELECT * FROM tablename WHERE id IN (?,?,?,?)",
+		"s3": "SELECT * FROM tablename WHERE id IN (?,?,?,?)"
+	},
+	{
+		"q":  "SELECT * FROM tablename WHERE id IN (1,2,3,4,5,6,7,8,9,10)",
+		"s1": "SELECT * FROM tablename WHERE id IN (?,?,?,?,?,?,?,?,?,?)",
 		"s3": "SELECT * FROM tablename WHERE id IN (?,?,?,...)"
 	},
 	// SimpleGroping: Invalid query grouping
@@ -263,7 +262,8 @@
 		"q":  "SELECT * tablename where id IN (1,2,3,4,5,6,7,8,  AND j in (1,2,3,4,5,6  and k=1",
 		"s1": "SELECT * tablename where id IN (?,?,?,?,?,?,?,?, AND j in (?,?,?,?,?,? and k=?",
 		"s2": "SELECT * tablename where id IN (?,?,?,?,?,?,?,?,AND j in (?,?,?,?,?,? and k=?",
-		"s3": "SELECT * tablename where id IN (?,?,?,...,AND j in (?,?,?,... and k=?"
+		"s3": "SELECT * tablename where id IN (?,?,?,...,AND j in (?,?,?,...,? and k=?"
+        //                                                                   ^ due to pattern breaking, symbol isn't collapsed
 	},
 	// SimpleGroping: Insert queries with mixed spacing
 	{
@@ -293,32 +293,57 @@
 		"q":  "INSERT INTO db.table (col1, col2,col3,col4) VALUES ('val',2,3,'foo')",
 		"s1": "INSERT INTO db.table (col1, col2,col3,col4) VALUES (?,?,?,?)",
 		"s2": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)",
-		"s3": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,...)"
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)"
 	},
 	{
 		"q":  "INSERT INTO db.table ( col1, col2,col3,col4 ) VALUES ('val',2,3,'foo')",
 		"s1": "INSERT INTO db.table ( col1, col2,col3,col4 ) VALUES (?,?,?,?)",
 		"s2": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)",
-		"s3": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,...)"
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)"
 	},
 	{
 		"q":  "INSERT INTO db.table_25 (col1, col2,col3,col4) VALUES ('val',2,3,'foo')",
 		"s1": "INSERT INTO db.table_25 (col1, col2,col3,col4) VALUES (?,?,?,?)",
 		"s2": "INSERT INTO db.table_25 (col1,col2,col3,col4) VALUES (?,?,?,?)",
-		"s3": "INSERT INTO db.table_25 (col1,col2,col3,col4) VALUES (?,?,?,...)"
+		"dr": "INSERT INTO db.table_? (col?,col?,col?,col?) VALUES (?,?,?,?)",
+		"s3": "INSERT INTO db.table_25 (col1,col2,col3,col4) VALUES (?,?,?,?)"
 	},
 	{
 		"q":  "INSERT INTO db.table1_25 ( col_121,col2121  ,col12_3, col41203_   ) VALUES ( 'val', -2, 3, 'foo' )",
 		"s1": "INSERT INTO db.table1_25 ( col_121,col2121 ,col12_3, col41203_ ) VALUES ( ?, -?, ?, ? )",
 		"s2": "INSERT INTO db.table1_25 (col_121,col2121,col12_3,col41203_) VALUES (?,?,?,?)",
-		"s3": "INSERT INTO db.table1_25 (col_121,col2121,col12_3,col41203_) VALUES (?,?,?,...)"
+		"dr": "INSERT INTO db.table?_? (col_?,col?,col?_?,col?_) VALUES (?,?,?,?)",
+		"s3": "INSERT INTO db.table1_25 (col_121,col2121,col12_3,col41203_) VALUES (?,?,?,?)"
 	},
 	// SimpleGrouping: Insert queries with operators breaking grouping sequence
 	{
 		"q":  "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',2,3,'foo', 5 + 10, 6 - 9)",
 		"s1": "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES (?,?,?,?, ? + ?, ? - ?)",
 		"s2": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?+?,?-?)",
+		"dr": "INSERT INTO db.table (col?,col?,col?,col?,col?) VALUES (?,?,?,?,?+?,?-?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?+?,?-?)"
+		//                                                                      ^ not collapsed due to pattern breaking
+	},
+	{
+		"q":  "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',1, 2,3,'foo', 5 + 10, 6 - 9)",
+		"s1": "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES (?,?, ?,?,?, ? + ?, ? - ?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?,?+?,?-?)",
 		"s3": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...,?+?,?-?)"
-		//                                                                       ^ non specified behavior
+		//                                                                        ^ not collapsed due to pattern breaking
+	},
+	{
+		"q":  "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',1, 2,3,'foo', 5 + 10, 6 - 9, 12, 3, 4, 5, 4,5,6)",
+		"s1": "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES (?,?, ?,?,?, ? + ?, ? - ?, ?, ?, ?, ?, ?,?,?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?,?+?,?-?,?,?,?,?,?,?,?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...,?+?,?-?,?,?,?,...)",
+		"dr": "INSERT INTO db.table (col?,col?,col?,col?,col?) VALUES (?,?,?,...,?+?,?-?,?,?,?,...)"
+		//                                                                        ^ not collapsed due to pattern breaking
+	},
+	{
+		"q":  "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',1, 2,3,'foo'), ('val2', 2,3,4,'foo2')",
+		"s1": "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES (?,?, ?,?,?), (?, ?,?,?,?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?),(?,?,?,?,?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...),(?,?,?,...)",
+		"s4": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...),..."
 	}
 ]
