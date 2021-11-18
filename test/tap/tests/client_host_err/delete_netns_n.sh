@@ -1,4 +1,9 @@
 #!/bin/bash
+
+# NOTE: This script is currently unused, but it's left here because it's useful
+# for deleting network namespaces in a easy way. It could be of use for future
+# testing.
+
 if [[ $EUID -ne 0 ]]; then
    echo "This script must be run as root"
    exit 1

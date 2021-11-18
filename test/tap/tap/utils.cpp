@@ -1,9 +1,15 @@
 #include <algorithm>
-#include <string>
+#include <chrono>
 #include <cstring>
-#include <mysql.h>
+#include <fcntl.h>
+#include <iostream>
+#include <numeric>
+#include <memory>
+#include <string>
 #include <unistd.h>
 #include <sys/wait.h>
+
+#include <mysql.h>
 
 #include "tap.h"
 #include "utils.h"
@@ -561,6 +567,7 @@ int wait_until_enpoint_ready(
 	return res;
 }
 
+
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {
@@ -663,4 +670,117 @@ int create_extra_users(
 	}
 
 	return EXIT_SUCCESS;
+
+std::string random_string(std::size_t strSize) {
+	std::string dic { "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" };
+
+	std::random_device rd {};
+	std::mt19937 generator { rd() };
+
+	std::shuffle(dic.begin(), dic.end(), generator);
+
+	if (strSize < dic.size()) {
+		return dic.substr(0, strSize);
+	} else {
+		std::size_t req_modulus = static_cast<std::size_t>(strSize / dic.size());
+		std::size_t req_reminder = strSize % dic.size();
+		std::string random_str {};
+
+		for (std::size_t i = 0; i < req_modulus; i++) {
+			random_str.append(dic);
+		}
+
+		random_str.append(dic.substr(0, req_reminder));
+
+		return random_str;
+	}
+}
+
+const double COLISSION_PROB = 1e-8;
+
+int wait_for_replication(
+	MYSQL* proxy, MYSQL* proxy_admin, const std::string& check, uint32_t timeout, uint32_t read_hg
+) {
+	if (proxy == NULL) { return EXIT_FAILURE; }
+
+	const std::string t_count_reader_hg_servers {
+		"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d"
+	};
+	std::string count_reader_hg_servers {};
+	size_t size =
+		snprintf( nullptr, 0, t_count_reader_hg_servers.c_str(), read_hg) + 1;
+	{
+		std::unique_ptr<char[]> buf(new char[size]);
+		snprintf(buf.get(), size, t_count_reader_hg_servers.c_str(), read_hg);
+		count_reader_hg_servers = std::string(buf.get(), buf.get() + size - 1);
+	}
+
+	MYSQL_QUERY(proxy_admin, count_reader_hg_servers.c_str());
+	MYSQL_RES* hg_count_res = mysql_store_result(proxy_admin);
+	MYSQL_ROW row = mysql_fetch_row(hg_count_res);
+	uint32_t srv_count = strtoul(row[0], NULL, 10);
+	mysql_free_result(hg_count_res);
+
+	if (srv_count > UINT_MAX) {
+		return EXIT_FAILURE;
+	}
+
+	int waited = 0;
+	int queries = 0;
+	int result = EXIT_FAILURE;
+
+	if (srv_count != 0) {
+		int retries = ceil(log10(COLISSION_PROB) / log10(static_cast<long double>(1)/srv_count));
+		auto start = std::chrono::system_clock::now();
+		std::chrono::duration<double> elapsed {};
+
+		while (elapsed.count() < timeout && queries < retries) {
+			int rc = mysql_query(proxy, check.c_str());
+			bool correct_result = false;
+
+			if (rc == EXIT_SUCCESS) {
+				MYSQL_RES* st_res = mysql_store_result(proxy);
+				if (st_res) {
+					uint32_t field_num = mysql_num_fields(st_res);
+					uint32_t row_num = mysql_num_rows(st_res);
+
+					if (field_num == 1 && row_num == 1) {
+						MYSQL_ROW row = mysql_fetch_row(st_res);
+
+						std::string exp_res { "TRUE" };
+						if (strcasecmp(exp_res.c_str(), row[0]) == 0) {
+							correct_result = true;
+							queries += 1;
+						}
+					}
+
+					mysql_free_result(st_res);
+				}
+			} else {
+				diag(
+					"Replication check failed due to query error: ('%d','%s')",
+					mysql_errno(proxy), mysql_error(proxy)
+				);
+			}
+
+			if (correct_result == false) {
+				queries = 0;
+				waited += 1;
+				sleep(1);
+			} else {
+				continue;
+			}
+
+			auto it_end = std::chrono::system_clock::now();
+			elapsed = it_end - start;
+		}
+
+		if (queries == retries) {
+			result = EXIT_SUCCESS;
+		}
+	} else {
+		result = EXIT_SUCCESS;
+	}
+
+	return result;
 }

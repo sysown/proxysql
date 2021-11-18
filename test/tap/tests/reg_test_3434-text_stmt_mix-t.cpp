@@ -221,7 +221,7 @@ std::string build_random_select_query(
 ) {
 	// Force the 'hostgroup' for the 'SELECT' query
 	std::string t_query {
-		"SELECT /*+ ;hostgroup=%d,%s */ * FROM %s WHERE id IN ("
+		"SELECT /* ;hostgroup=%d,%s */ * FROM %s WHERE id IN ("
 	};
 
 	for (uint32_t i = 0; i < num_params; i++) {

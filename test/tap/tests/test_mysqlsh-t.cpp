@@ -89,8 +89,6 @@ int main(int argc, char** argv) {
 			} else {
 				ok(false, "Invalid resulset. Expected 'num_fields' = 1, not %d", concat_num_fields);
 			}
-
-			mysql_free_result(concat_res);
 		}
 
 		mysql_free_result(concat_res);

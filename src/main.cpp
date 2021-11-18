@@ -1168,7 +1168,7 @@ bool ProxySQL_daemonize_phase2() {
 	//daemon_log(LOG_INFO, "Starting ProxySQL\n");
 	//daemon_log(LOG_INFO, "Sucessfully started");
 	proxy_info("Starting ProxySQL\n");
-	proxy_info("Sucessfully started\n");
+	proxy_info("Successfully started\n");
 	return true;
 }
 
@@ -1464,6 +1464,10 @@ __start_label:
 #ifdef DEBUG
 		std::cerr << "WARNING: this is a DEBUG release and can be slow or perform poorly. Do not use it in production" << std::endl;
 #endif
+	proxy_info("For information about products and services visit: https://proxysql.com/\n");
+	proxy_info("For online documentation visit: https://proxysql.com/documentation/\n");
+	proxy_info("For support visit: https://proxysql.com/services/support/\n");
+	proxy_info("For consultancy visit: https://proxysql.com/services/consulting/\n");
 
 	{
 		unsigned int missed_heartbeats = 0;
