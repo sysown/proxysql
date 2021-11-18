@@ -4546,8 +4546,12 @@ handler_again:
 					if (mysql_thread___log_mysql_warnings_enabled) {
 						auto warn_no = mysql_warning_count(myconn->mysql);
 						if (warn_no > 0) {
+							RequestEnd(myds);
+							writeout();
+
 							myconn->async_state_machine=ASYNC_IDLE;
 							myds->DSS=STATE_MARIADB_GENERIC;
+
 							NEXT_IMMEDIATE(SHOW_WARNINGS);
 						}
 					}
@@ -4651,26 +4655,41 @@ handler_again:
 			break;
 
 		case SHOW_WARNINGS:
+			// Performs a 'SHOW WARNINGS' query over the current backend connection and returns the connection back
+			// to the connection pool when finished. Actual logging of received warnings is performed in
+			// 'MySQL_Connection' while processing 'ASYNC_USE_RESULT_CONT'.
 			{
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
-				int pre_rc = myconn->async_query(mybe->server_myds->revents,(char *)"show warnings", strlen((char *)"show warnings"));
-				if (pre_rc==0) {
-					int myerr=mysql_errno(myconn->mysql);
+
+				// Setting POLLOUT is required just in case this state has been reached when 'RunQuery' from
+				// 'PROCESSING_QUERY' state has immediately return. This is because in case 'mysql_real_query_start'
+				// immediately returns with '0' the session is never processed again by 'MySQL_Thread', and 'revents' is
+				// never updated with the result of polling through the 'MySQL_Thread::mypolls'.
+				myds->revents |= POLLOUT;
+
+				int rc = myconn->async_query(
+					mybe->server_myds->revents,(char *)"SHOW WARNINGS", strlen((char *)"SHOW WARNINGS")
+				);
+				if (rc == 0 || rc == -1) {
+					// Cleanup the connection resulset from 'SHOW WARNINGS' for the next query.
+					if (myconn->MyRS != NULL) {
+						delete myconn->MyRS;
+						myconn->MyRS = NULL;
+					}
+
+					if (rc == -1) {
+						int myerr = mysql_errno(myconn->mysql);
+						proxy_error(
+							"'SHOW WARNINGS' failed to be executed over backend connection with error: '%d'\n", myerr
+						);
+					}
 
 					RequestEnd(myds);
-					writeout();
+					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 
 					handler_ret = 0;
 					return handler_ret;
-					if ( myerr > 0 ) {
-						char sqlstate[10];
-						sprintf(sqlstate,"%s",mysql_sqlstate(mybe->server_myds->myconn->mysql));
-						RequestEnd(mybe->server_myds);
-						break;
-					}
-					mybe->server_myds->myconn->async_free_result();
-					NEXT_IMMEDIATE(PROCESSING_QUERY);
 				} else {
 					goto handler_again;
 				}
