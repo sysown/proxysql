@@ -411,6 +411,7 @@ void MySQL_Listeners_Manager::del(unsigned int idx) {
 static char * mysql_thread_variables_names[]= {
 	(char *)"shun_on_failures",
 	(char *)"shun_recovery_time_sec",
+	(char *)"unshun_algorithm",
 	(char *)"query_retries_on_failure",
 	(char *)"client_multi_statements",
 	(char *)"client_host_cache_size",
@@ -1033,6 +1034,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	memset(&variables, 0, sizeof(variables));
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
+	variables.unshun_algorithm=0;
 	variables.query_retries_on_failure=1;
 	variables.client_multi_statements=true;
 	variables.client_host_cache_size=0;
@@ -2176,6 +2178,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["reset_connection_algorithm"]  = make_tuple(&variables.reset_connection_algorithm,  1,               2, false);
 		VariablesPointers_int["shun_on_failures"]            = make_tuple(&variables.shun_on_failures,            0,        10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"]      = make_tuple(&variables.shun_recovery_time_sec,      0,     3600*24*365, false);
+		VariablesPointers_int["unshun_algorithm"]            = make_tuple(&variables.unshun_algorithm,            0,               1, false);
 		VariablesPointers_int["hostgroup_manager_verbose"]   = make_tuple(&variables.hostgroup_manager_verbose,   1,               2, false);
 		VariablesPointers_int["tcp_keepalive_time"]          = make_tuple(&variables.tcp_keepalive_time,          0,            7200, false);
 		VariablesPointers_int["min_num_servers_lantency_awareness"]        = make_tuple(&variables.min_num_servers_lantency_awareness,        0, 10000, false);
@@ -3836,6 +3839,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___shun_on_failures=GloMTH->get_variable_int((char *)"shun_on_failures");
 	mysql_thread___shun_recovery_time_sec=GloMTH->get_variable_int((char *)"shun_recovery_time_sec");
+	mysql_thread___unshun_algorithm=GloMTH->get_variable_int((char *)"unshun_algorithm");
 	mysql_thread___query_retries_on_failure=GloMTH->get_variable_int((char *)"query_retries_on_failure");
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
 	mysql_thread___client_multi_statements=(bool)GloMTH->get_variable_int((char *)"client_multi_statements");

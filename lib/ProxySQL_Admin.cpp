@@ -12,6 +12,7 @@
 #include "proxysql.h"
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
+#include "proxysql_utils.h"
 #include "cpp.h"
 
 #include "MySQL_Data_Stream.h"
@@ -3598,6 +3599,84 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			}
 		}
 	}
+#ifdef DEBUG
+	/**
+	 * @brief Handles the 'PROXYSQL_SIMULATOR' command. Performing the operation specified in the payload
+	 *   format.
+	 * @details The 'PROXYSQL_SIMULATOR' command is specified the following format. Allowing to perform a
+	 *   certain internal state changing operation. Payload spec:
+	 *   ```
+	 *   PROXYSQL_SIMULATOR ${operation} ${hg} ${address}:${port} ${operation_params}
+	 *   ```
+	 *
+	 *   Supported operations include:
+	 *     - mysql_error: Find the server specified by 'hostname:port' in the specified hostgroup and calls
+	 *       'MySrvC::connect_error()' with the provider 'error_code'.
+	 *
+	 *   Payload example:
+	 *   ```
+	 *   PROXYSQL_SIMULATOR mysql_error 1 127.0.0.1 3306 1234
+	 *   ```
+	 */
+	if (!strncasecmp("PROXYSQL_SIMULATOR ", query_no_space, strlen("PROXYSQL_SIMULATOR "))) {
+		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+			proxy_warning("Received PROXYSQL_SIMULATOR command: %s\n", query_no_space);
+
+			re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
+			re2::RE2 pattern("\\s*(\\w+) (\\d+) (\\d+\\.\\d+\\.\\d+\\.\\d+):(\\d+) (\\d+)\\s*\\;*", opts);
+			re2::StringPiece input(query_no_space + strlen("PROXYSQL_SIMULATOR"));
+
+			std::string command, s_hg, srv_addr, s_port, s_errcode {};
+			bool c_res = re2::RE2::Consume(&input, pattern, &command, &s_hg, &srv_addr, &s_port, &s_errcode);
+
+			long i_hg = 0;
+			long i_port = 0;
+			long i_errcode = 0;
+
+			if (c_res == true) {
+				char* endptr = nullptr;
+				i_hg = std::strtol(s_hg.c_str(), &endptr, 10);
+				if (errno == ERANGE || errno == EINVAL) i_hg = LONG_MIN;
+				i_port = std::strtol(s_port.c_str(), &endptr, 10);
+				if (errno == ERANGE || errno == EINVAL) i_port = LONG_MIN;
+				i_errcode = std::strtol(s_errcode.c_str(), &endptr, 10);
+				if (errno == ERANGE || errno == EINVAL) i_errcode = LONG_MIN;
+			}
+
+			if (c_res == true && i_hg != LONG_MIN && i_port != LONG_MIN && i_errcode != LONG_MIN) {
+				MyHGM->wrlock();
+
+				MySrvC* mysrvc = MyHGM->find_server_in_hg(i_hg, srv_addr, i_port);
+				if (mysrvc != nullptr) {
+					int backup_mysql_thread___shun_on_failures = mysql_thread___shun_on_failures;
+					mysql_thread___shun_on_failures = 1;
+
+					// Set the error twice to surpass 'mysql_thread___shun_on_failures' value.
+					mysrvc->connect_error(i_errcode, false);
+					mysrvc->connect_error(i_errcode, false);
+
+					mysql_thread___shun_on_failures = backup_mysql_thread___shun_on_failures;
+
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+				} else {
+					std::string t_err_msg { "Supplied server '%s:%d' wasn't found in hg '%d'" };
+					std::string err_msg {};
+					string_format(t_err_msg, err_msg, srv_addr.c_str(), i_port, i_hg);
+
+					proxy_info("%s\n", err_msg.c_str());
+					SPA->send_MySQL_ERR(&sess->client_myds->myprot, const_cast<char*>(err_msg.c_str()));
+				}
+
+				MyHGM->wrunlock();
+			} else {
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char*)"Invalid arguments supplied with query 'PROXYSQL_SIMULATOR'");
+			}
+
+			run_query=false;
+			goto __run_query;
+		}
+	}
+#endif // DEBUG
 	if (!strncasecmp("PROXYSQLTEST ", query_no_space, strlen("PROXYSQLTEST "))) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			int test_n = 0;

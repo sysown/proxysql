@@ -868,7 +868,7 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	ConnectionsFree=new MySrvConnList(this);
 }
 
-void MySrvC::connect_error(int err_num) {
+void MySrvC::connect_error(int err_num, bool get_mutex) {
 	// NOTE: this function operates without any mutex
 	// although, it is not extremely important if any counter is lost
 	// as a single connection failure won't make a significant difference
@@ -921,7 +921,8 @@ void MySrvC::connect_error(int err_num) {
 		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
 			bool _shu=false;
-			MyHGM->wrlock(); // to prevent race conditions, lock here. See #627
+			if (get_mutex==true)
+				MyHGM->wrlock(); // to prevent race conditions, lock here. See #627
 			if (status==MYSQL_SERVER_STATUS_ONLINE) {
 				status=MYSQL_SERVER_STATUS_SHUNNED;
 				shunned_automatic=true;
@@ -929,7 +930,8 @@ void MySrvC::connect_error(int err_num) {
 			} else {
 				_shu=false;
 			}
-			MyHGM->wrunlock();
+			if (get_mutex==true)
+				MyHGM->wrunlock();
 			if (_shu) {
 			proxy_error("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			}
@@ -2814,6 +2816,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								mysrvc->shunned_and_kill_all_connections=false;
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
 								mysrvc->time_last_detected_error=0;
+								// note: the following function scans all the hostgroups.
+								// This is ok for now because we only have a global mutex.
+								// If one day we implement a mutex per hostgroup (unlikely,
+								// but possible), this must be taken into consideration
+								if (mysql_thread___unshun_algorithm == 1) {
+									MyHGM->unshun_server_all_hostgroups(mysrvc->address, mysrvc->port, t, max_wait_sec, &mysrvc->myhgc->hid);
+								}
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 									if (gtid_trxid) {
@@ -3223,6 +3232,47 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		}
 	}
 	return NULL; // never reach here
+}
+
+void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid) {
+	// we scan all hostgroups looking for a specific server to unshun
+	// if skip_hid is not NULL , the specific hostgroup is skipped
+	int i, j;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		if (skip_hid != NULL && myhgc->hid == *skip_hid) {
+			// if skip_hid is not NULL, we skip that specific hostgroup
+			continue;
+		}
+		bool found = false; // was this server already found in this hostgroup?
+		for (j=0; found==false && j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+				// we only care for SHUNNED nodes
+				// Note that we check for address and port only for status==MYSQL_SERVER_STATUS_SHUNNED ,
+				// that means that potentially we will pass by the matching node and still looping .
+				// This is potentially an optimization because we only check status and do not perform any strcmp()
+				if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+					// we found the server in this hostgroup
+					// no need to process more servers in the same hostgroup
+					found = true;
+					if (t > mysrvc->time_last_detected_error && (t - mysrvc->time_last_detected_error) > max_wait_sec) {
+						if (
+							(mysrvc->shunned_and_kill_all_connections==false) // it is safe to bring it back online
+							||
+							(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
+						) {
+							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+							mysrvc->shunned_automatic=false;
+							mysrvc->shunned_and_kill_all_connections=false;
+							mysrvc->connect_ERR_at_time_last_detected_error=0;
+							mysrvc->time_last_detected_error=0;
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
@@ -6995,4 +7045,28 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	free(domain_name);
 }
 
+MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
+	MySrvC* f_server = nullptr;
+
+	MyHGC* myhgc = nullptr;
+	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
+		myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+
+		if (myhgc->hid == _hid) {
+			break;
+		}
+	}
+
+	if (myhgc != nullptr) {
+		for (uint32_t j = 0; j < myhgc->mysrvs->cnt(); j++) {
+			MySrvC* mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
+
+			if (strcmp(mysrvc->address, addr.c_str()) == 0 && mysrvc->port == port) {
+				f_server = mysrvc;
+			}
+		}
+	}
+
+	return f_server;
+}
 
