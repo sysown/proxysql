@@ -595,7 +595,7 @@ using th_gauge_vector = std::vector<th_gauge_tuple>;
  * @note Many metrics in this map, share a common "id name", because
  *  they differ only by label, because of this, HELP is shared between
  *  them. For better visual identification of this groups they are
- *  sepparated using a line separator comment.
+ *  separated using a line separator comment.
  */
 const std::tuple<th_counter_vector, th_gauge_vector>
 th_metrics_map = std::make_tuple(
@@ -821,7 +821,7 @@ th_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_th_counter::mysql_unexpected_frontend_com_quit,
 			"proxysql_mysql_unexpected_frontend_com_quit_total",
-			"Unexpecte 'COM_QUIT' received from the client.",
+			"Unexpected 'COM_QUIT' received from the client.",
 			metric_tags {}
 		),
 		std::make_tuple (

@@ -84,6 +84,7 @@ struct p_admin_gauge {
 		stmt_server_active_unique,
 		stmt_max_stmt_id,
 		stmt_cached,
+		fds_in_use,
 		__size
 	};
 };

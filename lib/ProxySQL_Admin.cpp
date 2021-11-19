@@ -28,6 +28,7 @@
 
 #include "Web_Interface.hpp"
 
+#include <dirent.h>
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -125,7 +126,7 @@ static char * load_file (const char *filename) {
 
 static int round_intv_to_time_interval(int& intv) {
 	if (intv > 300) {
-		int v = 600;
+		intv = 600;
 	} else {
 		if (intv > 120) {
 			intv = 300;
@@ -807,6 +808,12 @@ admin_metrics_map = std::make_tuple(
 			p_admin_gauge::stmt_cached,
 			"proxysql_stmt_cached",
 			"This is the number of global prepared statements for which proxysql has metadata.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::fds_in_use,
+			"proxysql_fds_in_use",
+			"The number of file descriptors currently in use by ProxySQL.",
 			metric_tags {}
 		)
 	}
@@ -7939,6 +7946,30 @@ void ProxySQL_Admin::p_update_metrics() {
 	this->p_update_stmt_metrics();
 }
 
+/**
+ * @brief Gets the number of currently opened file descriptors. In case of error '-1' is
+ *   returned and error is logged.
+ * @return On success, the number of currently opened file descriptors, '-1' otherwise.
+ */
+int32_t get_open_fds() {
+	DIR* dir = opendir("/proc/self/fd");
+	if (dir == NULL) {
+		proxy_error("'opendir()' failed with error: '%d'\n", errno);
+		return -1;
+	}
+
+	struct dirent* dp = nullptr;
+	int32_t count = -3;
+
+	while ((dp = readdir(dir)) != NULL) {
+		count++;
+	}
+
+	closedir(dir);
+
+	return count;
+}
+
 void ProxySQL_Admin::p_stats___memory_metrics() {
 	if (!GloMTH) return;
 
@@ -8032,6 +8063,12 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 	const auto& stack_memory_cluster_threads =
 		__sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads, 0);
 	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_cluster_threads]->Set(stack_memory_cluster_threads);
+
+	// Update opened file descriptors
+	int32_t cur_fds = get_open_fds();
+	if (cur_fds != -1) {
+		this->metrics.p_gauge_array[p_admin_gauge::fds_in_use]->Set(cur_fds);
+	}
 }
 
 void ProxySQL_Admin::stats___memory_metrics() {
