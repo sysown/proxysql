@@ -901,7 +901,6 @@ void MySrvC::connect_error(int err_num) {
 		case 1120:
 		case 1203: // User %s already has more than 'max_user_connections' active connections
 		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
-		case 3118: // Access denied for user '%s'. Account is locked..
 			return;
 			break;
 		default:
@@ -3549,22 +3548,8 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	drop_all_idle_connections();
 	int num_conn_current=0;
 	int j,k;
-	MyHGC* myhgc = NULL;
-	for (int i=0; i<(int)MyHostGroups->len; i++) {
-		if (_hid == -1) {
-			// all hostgroups must be examined
-			// as of version 2.3.2 , this is always the case
-			myhgc=(MyHGC *)MyHostGroups->index(i);
-		} else {
-			// only one hostgroup is examined
-			// as of version 2.3.2 , this never happen
-			// but the code support this functionality
-			myhgc = MyHGC_find(_hid);
-			i = (int)MyHostGroups->len; // to exit from this "for" loop
-			if (myhgc == NULL)
-				continue; // immediately exit
-		}
-		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
+	MyHGC* myhgc = MyHGC_find(_hid);
+	if (myhgc) {
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			//PtrArray *pa=mysrvc->ConnectionsFree->conns;

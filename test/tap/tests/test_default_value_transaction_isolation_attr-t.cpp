@@ -50,140 +50,12 @@ void parse_result_json_column(MYSQL_RES *result, json& j) {
 	}
 }
 
-/**
- * @brief Create a MySQL user for testing purposes in the server determined
- *  by supplied *already established* MySQL connection.
- *
- * @param mysql_server An already opened connection to a MySQL server.
- * @param user The name of the user to be created.
- * @param pass The password for the user to be created.
- *
- * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise.
- */
-int create_mysql_user(
-	MYSQL* mysql_server,
-	const std::string& user,
-	const std::string& pass
-) {
-	const std::string t_drop_user_query { "DROP USER IF EXISTS %s@'%%'" };
-	std::string drop_user_query {};
-	string_format(t_drop_user_query, drop_user_query, user.c_str());
-
-	const std::string t_create_user_query {
-		"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH 'mysql_native_password' BY \"%s\""
-	};
-	std::string create_user_query {};
-	string_format(t_create_user_query, create_user_query, user.c_str(), pass.c_str());
-
-	const std::string t_grant_usage_query { "GRANT USAGE ON *.* TO %s@'%%'" };
-	std::string grant_usage_query { };
-	string_format(t_grant_usage_query, grant_usage_query, user.c_str());
-
-	MYSQL_QUERY(mysql_server, drop_user_query.c_str());
-	MYSQL_QUERY(mysql_server, create_user_query.c_str());
-	MYSQL_QUERY(mysql_server, grant_usage_query.c_str());
-
-	return EXIT_SUCCESS;
-}
-
-/**
- * @brief Creates the new supplied user in ProxySQL with the provided
- *   attributes.
- *
- * @param proxysql_admin An already opened connection to ProxySQL Admin.
- * @param user The username of the user to be created.
- * @param pass The password of the user to be created.
- * @param attributes The 'attributes' value for the 'attributes' column
- *   for the user to be created.
- *
- * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise.
- */
-int create_proxysql_user(
-	MYSQL* proxysql_admin,
-	const std::string& user,
-	const std::string& pass,
-	const std::string& attributes
-) {
-	std::string t_del_user_query { "DELETE FROM mysql_users WHERE username='%s'" };
-	std::string del_user_query {};
-	string_format(t_del_user_query, del_user_query, user.c_str());
-
-	std::string t_insert_user {
-		"INSERT INTO mysql_users (username,password,active,attributes)"
-		" VALUES ('%s','%s',1,'%s')"
-	};
-	std::string insert_user {};
-	string_format(t_insert_user, insert_user, user.c_str(), pass.c_str(), attributes.c_str());
-
-	MYSQL_QUERY(proxysql_admin, del_user_query.c_str());
-	MYSQL_QUERY(proxysql_admin, insert_user.c_str());
-
-	return EXIT_SUCCESS;
-}
-
-using user_config = std::tuple<std::string, std::string, std::string, std::string>;
-
-/**
- * @brief Create the extra required users for the test in
- *   both MYSQL and ProxySQL.
- *
- * @param proxysql_admin An already opened connection to ProxySQL admin
- *   interface.
- * @param mysql_server An already opened connection to a backend MySQL
- *   server.
- * @param user_attributes The user attributes whose should  be part of user
- *   configuration in ProxySQL side.
- *
- * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise.
- */
-int create_extra_users(
-	MYSQL* proxysql_admin,
-	MYSQL* mysql_server,
-	const std::vector<user_config>& users_config
-) {
-	std::vector<std::pair<std::string, std::string>> v_user_pass {};
-	std::transform(
-		std::begin(users_config),
-		std::end(users_config),
-		std::back_inserter(v_user_pass),
-		[](const user_config& u_config) {
-			return std::pair<std::string, std::string> {
-				std::get<0>(u_config),
-				std::get<1>(u_config)
-			};
-		}
-	);
-
-	// create the MySQL users
-	for (const auto& user_pass : v_user_pass) {
-		int c_user_res =
-			create_mysql_user(mysql_server, user_pass.first, user_pass.second);
-		if (c_user_res) {
-			return c_user_res;
-		}
-	}
-
-	// create the ProxySQL users
-	for (const auto& user_config : users_config) {
-		int c_p_user_res =
-			create_proxysql_user(
-				proxysql_admin,
-				std::get<0>(user_config),
-				std::get<1>(user_config),
-				std::get<2>(user_config)
-			);
-		if (c_p_user_res) {
-			return c_p_user_res;
-		}
-	}
-
-	return EXIT_SUCCESS;
-}
+using user_attributes = std::tuple<std::string, std::string, std::string, std::string>;
 
 /**
  * @brief User names and attributes to be check and verified.
  */
-const std::vector<user_config> c_user_attributes {
+const std::vector<user_attributes> c_user_attributes {
 	std::make_tuple(
 		"sbtest1",
 		"sbtest1",
@@ -377,15 +249,22 @@ int main(int argc, char** argv) {
 	}
 
 	// Creating the new required users
+	std::vector<user_config> users_configs {};
+	std::transform(
+		c_user_attributes.begin(), c_user_attributes.end(), std::back_inserter(users_configs),
+		[] (const user_attributes& u_attr) -> user_config {
+			return make_tuple(std::get<0>(u_attr), std::get<1>(u_attr), std::get<2>(u_attr));
+		}
+	);
 	int c_users_res =
-		create_extra_users(proxysql_admin, mysql_server, c_user_attributes);
+		create_extra_users(proxysql_admin, mysql_server, users_configs);
 	if (c_users_res) { return c_users_res; }
 
 	// Load ProxySQL users to runtime
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
 
 	// Performing the connection checks
-	std::vector<user_config> user_attributes { c_user_attributes };
+	std::vector<user_attributes> user_attributes { c_user_attributes };
 	auto rng = std::default_random_engine {};
 	std::shuffle(std::begin(user_attributes), std::end(user_attributes), rng);
 

@@ -12,7 +12,6 @@ Useful links
 ===============	
 
 - [Official website](https://www.proxysql.com/)	
-- [Subscriptions and Support](https://proxysql.com/services/support/) 
 - [Documentation](https://www.proxysql.com/Documentation)
 - [DockerHub Repository](https://hub.docker.com/r/proxysql/proxysql)
 - [Benchmarks and blog posts](http://www.proxysql.blogspot.com/)	
