@@ -95,6 +95,7 @@ class GTID_Server_Data {
 
 class MySrvConnList {
 	private:
+	PtrArray *conns;
 	MySrvC *mysrvc;
 	int find_idx(MySQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
@@ -108,7 +109,6 @@ class MySrvConnList {
 		return -1;
 	}
 	public:
-	PtrArray *conns;
 	MySrvConnList(MySrvC *);
 	~MySrvConnList();
 	void add(MySQL_Connection *);
@@ -160,7 +160,7 @@ class MySrvC {	// MySQL Server Container
 	MySrvConnList *ConnectionsFree;
 	MySrvC(char *, uint16_t, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment);
 	~MySrvC();
-	void connect_error(int, bool get_mutex=true);
+	void connect_error(int);
 	void shun_and_killall();
 	/**
 	 * Update the maximum number of used connections
@@ -609,8 +609,6 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *get_mysql_errors(bool);
 
 	void shutdown();
-	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);
-	MySrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

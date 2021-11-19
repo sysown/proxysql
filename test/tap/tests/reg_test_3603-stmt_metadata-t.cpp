@@ -555,7 +555,7 @@ int main(int argc, char** argv) {
 			"start_time=?,trck_num=? where id=?";
 
 	// Force the 'hostgroup' for the 'SELECT' query to avoid replication issues
-	std::string query_s = "SELECT /* ;hostgroup=0 */ * FROM test.reg_test_3603 WHERE id=?";
+	std::string query_s = "SELECT /*+ ;hostgroup=0 */ * FROM test.reg_test_3603 WHERE id=?";
 
 	// init and prepare INSERT
 	MYSQL_STMT *stmti = mysql_stmt_init(proxysql_mysql);

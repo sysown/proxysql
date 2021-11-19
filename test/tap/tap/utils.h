@@ -142,33 +142,56 @@ CURLcode perform_simple_post(
 );
 
 /**
- * @brief Generates a random string of the length of the provider 'strSize'
- *  parameter.
- *
- * @param strSize The size of the string to be generated.
- * @return A random string.
+ * NOTE: This is a duplicate of 'proxysql_find_charset_collate' in 'MySQL_Variables.h'. Including
+ * 'MySQL_Variables' is not a easy task due to its interdependeces with other ProxySQL modules.
  */
-std::string random_string(std::size_t strSize);
+MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
 
 /**
- * @brief Helper function to wait for replication to complete,
- *   performs a simple supplied queried until it succeed or the
- *   timeout expires.
+ * @brief Creates the new supplied user in ProxySQL with the provided
+ *   attributes.
  *
- * @param proxy A already opened MYSQL connection to ProxySQL.
- * @param proxy_admin A already opened MYSQL connection to ProxySQL Admin interface.
- * @param check Query to perform until timeout expires. The query is expected to produce
- *   a result with only one ROW and one FIELD containing non-case sensitive strings "TRUE"
- *   or "FALSE". "TRUE" meaning that the replication check succeed.
- * @param timeout The timeout in seconds to retry the query.
- * @param reader_hg The current 'reader hostgroup' for which
- *   servers replication needs to be waited.
+ * @param proxysql_admin An already opened connection to ProxySQL Admin.
+ * @param user The username of the user to be created.
+ * @param pass The password of the user to be created.
+ * @param attributes The 'attributes' value for the 'attributes' column
+ *   for the user to be created.
  *
- * @return EXIT_SUCCESS in case of success, EXIT_FAILURE
- *   otherwise.
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise.
  */
-int wait_for_replication(
-	MYSQL* proxy, MYSQL* proxy_admin, const std::string& check, uint32_t timeout, uint32_t reader_hg
+int create_proxysql_user(
+	MYSQL* proxysql_admin, const std::string& user, const std::string& pass, const std::string& attributes
+);
+
+/**
+ * @brief Create a MySQL user for testing purposes in the server determined
+ *  by supplied *already established* MySQL connection.
+ *
+ * @param mysql_server An already opened connection to a MySQL server.
+ * @param user The name of the user to be created.
+ * @param pass The password for the user to be created.
+ *
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise.
+ */
+int create_mysql_user(MYSQL* mysql_server, const std::string& user, const std::string& pass);
+
+using user_config = std::tuple<std::string, std::string, std::string>;
+
+/**
+ * @brief Create the extra required users for the test in
+ *   both MYSQL and ProxySQL.
+ *
+ * @param proxysql_admin An already opened connection to ProxySQL admin
+ *   interface.
+ * @param mysql_server An already opened connection to a backend MySQL
+ *   server.
+ * @param user_attributes The user attributes whose should  be part of user
+ *   configuration in ProxySQL side.
+ *
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise.
+ */
+int create_extra_users(
+	MYSQL* proxysql_admin, MYSQL* mysql_server, const std::vector<user_config>& users_config
 );
 
 #endif // #define UTILS_H

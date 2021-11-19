@@ -747,7 +747,6 @@ __thread int mysql_thread___ping_interval_server_msec;
 __thread int mysql_thread___ping_timeout_server;
 __thread int mysql_thread___shun_on_failures;
 __thread int mysql_thread___shun_recovery_time_sec;
-__thread int mysql_thread___unshun_algorithm;
 __thread int mysql_thread___query_retries_on_failure;
 __thread bool mysql_thread___client_multi_statements;
 __thread int mysql_thread___connect_retries_on_failure;
@@ -906,7 +905,6 @@ extern __thread int mysql_thread___ping_interval_server_msec;
 extern __thread int mysql_thread___ping_timeout_server;
 extern __thread int mysql_thread___shun_on_failures;
 extern __thread int mysql_thread___shun_recovery_time_sec;
-extern __thread int mysql_thread___unshun_algorithm;
 extern __thread int mysql_thread___query_retries_on_failure;
 extern __thread bool mysql_thread___client_multi_statements;
 extern __thread int mysql_thread___connect_retries_on_failure;
@@ -1053,6 +1051,9 @@ typedef struct {
 	char * default_value;       // default value
 	bool is_global_variable;	// is it a global variable?
 } mysql_variable_st;
+
+TODO: 'SQL_CHARACTER_SET_DATABASE' is a variable that shouldn't be set, or tracked on our side, since it's meant to be only updated by the server:
+ - https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_character_set_database
 */
 mysql_variable_st mysql_tracked_variables[] {
     { SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true, false,  false, false, (char *)"charset", (char *)"charset", (char *)"utf8" , true} , // should be before SQL_CHARACTER_SET_RESULTS

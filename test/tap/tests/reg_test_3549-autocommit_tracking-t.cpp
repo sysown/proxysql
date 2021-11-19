@@ -138,19 +138,19 @@ std::vector<std::pair<std::string, test_spec>> test_definitions {
 		"simple_set_autocommit_no_lock",
 		{
 			{ "SET autocommit=1",             1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  1 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1", 1 },
 			{ "SET autocommit=0",             0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  0 }
+			{ "SELECT /*+ ;hostgroup=0 */ 1", 0 }
 		}
 	},
 	{
 		"simple_set_autocommit_no_lock_2",
 		{
 			{ "SET autocommit=0",             0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  0 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1", 0 },
 			{ "COMMIT",                       0 },
 			{ "SET autocommit=1",             1 },
-			{ "SELECT /* ;hostgroup=0 */ 1", 1 }
+			{ "SELECT /*+ ;hostgroup=0 */ 1", 1 }
 		}
 	},
 	{
@@ -158,9 +158,9 @@ std::vector<std::pair<std::string, test_spec>> test_definitions {
 		{
 			{ "SET @session_var=1",           1 },
 			{ "SET autocommit=1",             1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  1 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1", 1 },
 			{ "SET autocommit=0",             0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  0 }
+			{ "SELECT /*+ ;hostgroup=0 */ 1", 0 }
 		}
 	},
 	{
@@ -168,10 +168,10 @@ std::vector<std::pair<std::string, test_spec>> test_definitions {
 		{
 			{ "SET @session_var=1",           1 },
 			{ "SET autocommit=0",             0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  0 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1", 0 },
 			{ "COMMIT",                       0 },
 			{ "SET autocommit=1",             1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",  1 }
+			{ "SELECT /*+ ;hostgroup=0 */ 1", 1 }
 		}
 	},
 	{
@@ -181,19 +181,19 @@ std::vector<std::pair<std::string, test_spec>> test_definitions {
 		"complex_set_autocommit_no_lock_1",
 		{
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             1 },
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 }
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             0 }
 		}
 	},
 	{
 		"complex_set_autocommit_no_lock_2",
 		{
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             0 },
 			{ "COMMIT",                                                                                   0 },
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 }
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             1 }
 		}
 	},
 	{
@@ -201,9 +201,9 @@ std::vector<std::pair<std::string, test_spec>> test_definitions {
 		{
 			{ "SET @session_var=1",                                                                       1 },
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             1 },
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 }
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             0 }
 		}
 	},
 	{
@@ -211,26 +211,26 @@ std::vector<std::pair<std::string, test_spec>> test_definitions {
 		{
 			{ "SET @session_var=1",                                                                       1 },
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             0 },
 			{ "COMMIT",                                                                                   0 },
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 }
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             1 }
 		}
 	},
 	{
 		"mix_set_autocommit_1",
 		{
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             0 },
 			{ "COMMIT",                                                                                   0 },
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             1 },
 			{ "SET autocommit=0",                                                                         0 },
 			{ "COMMIT",                                                                                   0 },
 			{ "SET autocommit=1",                                                                         1 },
 			{ "BEGIN",                                                                                    1 },
 			{ "SET @session_var=1",                                                                       1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             1 },
 			{ "COMMIT",                                                                                   1 },
 		}
 	},
@@ -238,16 +238,16 @@ std::vector<std::pair<std::string, test_spec>> test_definitions {
 		"mix_set_autocommit_2",
 		{
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=0", 0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             0 },
 			{ "COMMIT",                                                                                   0 },
 			{ "SET time_zone='+04:00', character_set_client='latin1', max_join_size=10000, autocommit=1", 1 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              1 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             1 },
 			{ "SET autocommit=0",                                                                         0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             0 },
 			{ "COMMIT",                                                                                   0 },
 			{ "BEGIN",                                                                                    0 },
 			{ "SET @session_var=1",                                                                       0 },
-			{ "SELECT /* ;hostgroup=0 */ 1",                                                              0 },
+			{ "SELECT /*+ ;hostgroup=0 */ 1",                                                             0 },
 			{ "COMMIT",                                                                                   0 },
 		}
 	},
