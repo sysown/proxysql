@@ -228,7 +228,7 @@ int main(int argc, char** argv) {
 		std::cerr << double( end - begin ) / 1000 << " millisecs.\n" ;
 		fr += (end - begin);
 	}
-	ok (fr < (nofr * 2) , "Times for: Single HG = %dms , multi HG = %dms", (int)(nofr/1000), (int)(fr/1000));
+	ok (fr < (nofr * 3) , "Times for: Single HG = %dms , multi HG = %dms", (int)(nofr/1000), (int)(fr/1000));
 cleanup:
 
 	mysql_close(proxysql_admin);
