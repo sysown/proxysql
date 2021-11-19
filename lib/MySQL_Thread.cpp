@@ -1028,6 +1028,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize=0;
 	shutdown_=0;
+	bootstrapping_listeners = true;
 	pthread_rwlock_init(&rwlock,NULL);
 	pthread_attr_init(&attr);
 	// Zero initialize all variables
@@ -2368,6 +2369,10 @@ void MySQL_Threads_Handler::shutdown_threads() {
 }
 
 void MySQL_Threads_Handler::start_listeners() {
+	// we set bootstrapping_listeners to true
+	// In this way MySQL_Thread will knows there are more listeners to add
+	// and it will continue looping until all listeners are added
+	bootstrapping_listeners = true;
 	char *_tmp=NULL;
 	_tmp=GloMTH->get_variable((char *)"interfaces");
 	if (strlen(_tmp)==0) {
@@ -2382,6 +2387,8 @@ void MySQL_Threads_Handler::start_listeners() {
 		listener_add((char *)token);
 	}
 	free_tokenizer( &tok );
+	// no more listeners to add
+	bootstrapping_listeners = false;
 }
 
 void MySQL_Threads_Handler::stop_listeners() {
@@ -3104,9 +3111,15 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		pthread_mutex_unlock(&thread_mutex);
-		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_add,0))) {	// spin here
-			poll_listener_add(n);
-			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+		while ( // spin here if ...
+			(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
+			||
+			(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
+		) {
+			if (n) {
+				poll_listener_add(n);
+				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);

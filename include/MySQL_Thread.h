@@ -584,6 +584,9 @@ class MySQL_Threads_Handler
 		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
 		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
 	} status_variables;
+
+	std::atomic<bool> bootstrapping_listeners;
+
 	/**
 	 * @brief Update the client host cache with the supplied 'client_sockaddr',
 	 *   and the supplied 'error' parameter specifying if there was a connection
