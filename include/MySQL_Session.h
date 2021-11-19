@@ -122,11 +122,6 @@ class MySQL_Session
 	bool handler_special_queries(PtrSize_t *);
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
-	/**
-	 * @brief Performs the cleanup of current session state, and the required operations to the supplied
-	 *   'MySQL_Data_Stream' required for processing further queries.
-	 * @param The 'MySQL_Data_Stream' which executed the previous query and which status should be updated.
-	 */
 	void RequestEnd(MySQL_Data_Stream *);
 	void LogQuery(MySQL_Data_Stream *);
 
@@ -308,18 +303,6 @@ class MySQL_Session
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
-	/**
-	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
-	 *  'transaction_persistent_hostgroup', and updates the 'MySQL_Data_Stream' and 'MySQL_Connection' before
-	 *  returning the connection back to the connection pool. After this operation the session should be ready
-	 *  for handling new client connections.
-	 *
-	 * @param myds The 'MySQL_Data_Stream' which status should be updated.
-	 * @param myconn The 'MySQL_Connection' which status should be updated, and which should be returned to
-	 *   the connection pool.
-	 * @param prepared_stmt_with_no_params specifies if the processed query was a prepared statement with no
-	 *   params.
-	 */
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);

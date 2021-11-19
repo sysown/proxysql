@@ -87,7 +87,7 @@ int query_and_check_session_variables(MYSQL *mysql, std::string collation, int i
 	MYSQL_RES* proxy_res = nullptr;
 	std::string query = "";
 	if (new_connection)
-		query += "/* ;create_new_connection=1 */ ";
+		query += "/*+ ;create_new_connection=1 */ ";
 	query += "SELECT lower(variable_name), variable_value FROM performance_schema.session_variables WHERE";
 	query +=" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection') ORDER BY Variable_name";
 

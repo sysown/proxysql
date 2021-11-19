@@ -192,33 +192,6 @@ using user_config = std::tuple<std::string, std::string, std::string>;
  */
 int create_extra_users(
 	MYSQL* proxysql_admin, MYSQL* mysql_server, const std::vector<user_config>& users_config
- * @brief Generates a random string of the length of the provider 'strSize'
- *  parameter.
- *
- * @param strSize The size of the string to be generated.
- * @return A random string.
- */
-std::string random_string(std::size_t strSize);
-
-/**
- * @brief Helper function to wait for replication to complete,
- *   performs a simple supplied queried until it succeed or the
- *   timeout expires.
- *
- * @param proxy A already opened MYSQL connection to ProxySQL.
- * @param proxy_admin A already opened MYSQL connection to ProxySQL Admin interface.
- * @param check Query to perform until timeout expires. The query is expected to produce
- *   a result with only one ROW and one FIELD containing non-case sensitive strings "TRUE"
- *   or "FALSE". "TRUE" meaning that the replication check succeed.
- * @param timeout The timeout in seconds to retry the query.
- * @param reader_hg The current 'reader hostgroup' for which
- *   servers replication needs to be waited.
- *
- * @return EXIT_SUCCESS in case of success, EXIT_FAILURE
- *   otherwise.
- */
-int wait_for_replication(
-	MYSQL* proxy, MYSQL* proxy_admin, const std::string& check, uint32_t timeout, uint32_t reader_hg
 );
 
 #endif // #define UTILS_H

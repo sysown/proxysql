@@ -47,7 +47,7 @@ int prepare_stmt(
 ) {
 	int res = EXIT_SUCCESS;
 	std::string query {
-		"SELECT /* ;hostgroup=0 */ id,c1,c2 FROM test.reg_test_3546 WHERE date IN (?)"
+		"SELECT /*+ ;hostgroup=0 */ id,c1,c2 FROM test.reg_test_3546 WHERE date IN (?)"
 	};
 
 	if (mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()))) {
@@ -89,6 +89,7 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	MYSQL_STMT* stmt_param = nullptr;
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
@@ -100,6 +101,12 @@ int main(int argc, char** argv) {
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
+	}
+
+	stmt_param = mysql_stmt_init(proxysql_mysql);
+	if (!stmt_param) {
+		diag("mysql_stmt_init(), out of memory");
+		goto exit;
 	}
 
 	// Insert the row to be queried with the prepared statement.
@@ -125,13 +132,6 @@ int main(int argc, char** argv) {
 	}
 
 	{
-		MYSQL_STMT* stmt_param = nullptr;
-		stmt_param = mysql_stmt_init(proxysql_mysql);
-		if (!stmt_param) {
-			diag("mysql_stmt_init(), out of memory");
-			goto exit;
-		}
-
 		// Set the number of maximum connections for servers in the writer hostgroup
 		std::string t_update_mysql_servers {
 			"UPDATE mysql_servers SET max_connections=1 WHERE hostgroup_id=%d"
@@ -246,11 +246,10 @@ int main(int argc, char** argv) {
 				);
 			}
 		}
-
-		mysql_stmt_close(stmt_param);
 	}
 
 exit:
+	if (stmt_param) { mysql_stmt_close(stmt_param); }
 	mysql_close(proxysql_mysql);
 	mysql_close(proxysql_admin);
 
