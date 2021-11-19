@@ -5081,6 +5081,8 @@ __end_while_pool:
 					SQLite3_result * resultset=MyHGM->SQL3_Get_ConnPool_Stats();
 					if (resultset) {
 						SQLite3_result * resultset2 = NULL;
+
+					// In debug, run the code to generate metrics so that it can be tested even if the web interface plugin isn't loaded.
 					#ifdef DEBUG
 						if (true) {
 					#else

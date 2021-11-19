@@ -644,6 +644,8 @@ void ProxySQL_Statistics::system_memory_sets() {
 
 void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset1, SQLite3_result *resultset2) {
 	MyHGM_Handler_sets_v1(resultset1);
+
+// In debug, enable metrics features for debugging and testing even if the web interface plugin is not loaded. 
 #ifdef DEBUG
 	if (resultset2) {
 #else
@@ -793,6 +795,7 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 
 void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) {
 	MySQL_Threads_Handler_sets_v1(resultset);
+// In debug, enable metrics features for debugging and testing even if the web interface plugin is not loaded. 
 #ifdef DEBUG
 	if (true) {
 #else
@@ -1089,9 +1092,10 @@ int64_t ProxySQL_Statistics::get_variable_id_for_name(const std::string & variab
 	lock_guard<mutex> lock(mu);
 
 	int64_t variable_id = -1; // Negative value indicates not yet found.
+	auto it = variable_name_id_map.find(variable_name);
 
-	if (knows_variable_name(variable_name)) {
-		variable_id = variable_name_id_map[variable_name];
+	if (it != variable_name_id_map.end()) {
+		variable_id = it->second;
 	} else {
 		// No matching variable_id found in map. Try loading from the SQLite lookup table on disk 
 		SQLite3_result *result = NULL;
@@ -1114,7 +1118,9 @@ int64_t ProxySQL_Statistics::get_variable_id_for_name(const std::string & variab
 				if (result->rows_count > 0) {
 					// matching variable_id for variable_name in lookup table
 					SQLite3_row *r = result->rows[0];
-					return strtoll(r->fields[0], NULL, 10);
+					int64_t found_variable_id = strtoll(r->fields[0], NULL, 10);
+					delete result;
+					return found_variable_id;
 				}
 				delete result;
 				result = NULL;
