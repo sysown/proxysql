@@ -459,6 +459,7 @@ class MySQL_Threads_Handler
 		int ping_timeout_server;
 		int shun_on_failures;
 		int shun_recovery_time_sec;
+		int unshun_algorithm;
 		int query_retries_on_failure;
 		bool client_multi_statements;
 		bool connection_warming;

@@ -90,19 +90,19 @@ int test_use_queries(MYSQL* proxysql_mysql, bool enabled_digests) {
 		// statement.
 		switch (i%5) {
 			case 0:
-				MYSQL_QUERY(proxysql_mysql, "/*+ ;create_new_connection=1 */ SELECT DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "/* ;create_new_connection=1 */ SELECT DATABASE()");
 				break;
 			case 1:
-				MYSQL_QUERY(proxysql_mysql, "/*+ ;create_new_connection=1 */SELECT DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "/* ;create_new_connection=1 */SELECT DATABASE()");
 				break;
 			case 2:
-				MYSQL_QUERY(proxysql_mysql, "SELECT /*+ ;create_new_connection=1 */ DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "SELECT /* ;create_new_connection=1 */ DATABASE()");
 				break;
 			case 3:
-				MYSQL_QUERY(proxysql_mysql, "SELECT/*+ ;create_new_connection=1 */ DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "SELECT/* ;create_new_connection=1 */ DATABASE()");
 				break;
 			case 4:
-				MYSQL_QUERY(proxysql_mysql, "SELECT /*+ ;create_new_connection=1 */DATABASE()");
+				MYSQL_QUERY(proxysql_mysql, "SELECT /* ;create_new_connection=1 */DATABASE()");
 				break;
 			default:
 				assert(0);

@@ -55,8 +55,9 @@ libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-1.1.0h || true
 	cd libssl && rm -rf openssl-1.1.1g || true
 	cd libssl && rm -rf openssl-1.1.1j || true
-	cd libssl && tar -zxf openssl-1.1.1j.tar.gz
-	cd libssl/openssl  && ./config no-ssl3
+	cd libssl && rm -rf openssl-openssl-3.0.0 || true
+	cd libssl && tar -zxf openssl-3.0.0.tar.gz
+	cd libssl/openssl  && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
@@ -105,7 +106,7 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && rm -rf curl-7.77.0 || true
 	cd curl && tar -zxf curl-7.77.0.tar.gz
 	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
-	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
 curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
@@ -157,7 +158,7 @@ libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-5.2.0
-	cd jemalloc && tar -jxf jemalloc-5.2.0.tar.bz2
+	cd jemalloc && tar --no-same-owner -jxf jemalloc-5.2.0.tar.bz2
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue823.520.patch
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue2358.patch
 	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
@@ -288,6 +289,7 @@ cleanall:
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.1g || true
 	cd libssl && rm -rf openssl-1.1.1j || true
+	cd libssl && rm -rf openssl-openssl-3.0.0 || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-0.9.0 || true
 .PHONY: cleanall
