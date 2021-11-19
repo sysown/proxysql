@@ -960,6 +960,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["qpo"]["retries"] = qpo->retries;
 	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
 	j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
+	j["client"]["userinfo"]["schemaname"] = ( client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "" );
 #ifdef DEBUG
 	j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
 #endif
@@ -3539,15 +3540,27 @@ __get_pkts_from_client:
 									// ===================================================
 									if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
 										const char *qd = CurrentQuery.get_digest_text();
-										if (
-											(strncasecmp((char *)"USE",qd,3)==0)
-											&&
-											(
-												(strncasecmp((char *)"USE ",qd,4)==0)
-												||
-												(strncasecmp((char *)"USE`",qd,4)==0)
-											)
-										) {
+										bool use_db_query = false;
+
+										if (qd != NULL) {
+											if (
+												(strncasecmp((char *)"USE",qd,3)==0)
+												&&
+												(
+													(strncasecmp((char *)"USE ",qd,4)==0)
+													||
+													(strncasecmp((char *)"USE`",qd,4)==0)
+												)
+											) {
+												use_db_query = true;
+											}
+										} else {
+											if (pkt.size > (5+4) && strncasecmp((char *)"USE ", (char *)pkt.ptr+5, 4) == 0) {
+												use_db_query = true;
+											}
+										}
+
+										if (use_db_query) {
 											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt);
 
 											if (mirror == false) {
