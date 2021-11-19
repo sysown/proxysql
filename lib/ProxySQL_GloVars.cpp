@@ -50,8 +50,6 @@ void crash_handler(int sig) {
 		}
 		//free(strings); // we don't free, we are crashing anyway
 	}
-	fprintf(stderr, "To report a crashing bug visit: https://github.com/sysown/proxysql/issues\n");
-	fprintf(stderr, "For support visit: https://proxysql.com/services/support/\n");
 
 
 #endif /* __GLIBC__ */
