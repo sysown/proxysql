@@ -815,6 +815,9 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 	return r;
 }
 
+/**
+ * @brief Struct for holding all the configuration options used for query digests generation.
+ */
 typedef struct options {
 	bool lowercase;
 	bool replace_null;
@@ -823,6 +826,12 @@ typedef struct options {
 	int groups_grouping_limit;
 } options;
 
+/**
+ * @brief Helper functiont that initializes the supplied 'options' struct with the configuration variables
+ *   values.
+ *
+ * @param opts The options struct to be initialized.
+ */
 static inline void get_options(struct options* opts) {
 	opts->lowercase = mysql_thread___query_digests_lowercase;
 	opts->replace_null = mysql_thread___query_digests_replace_null;
@@ -831,6 +840,9 @@ static inline void get_options(struct options* opts) {
 	opts->groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
 }
 
+/**
+ * @brief Enum holding all the states responsible for value parsing using during 'stage 1' parsing.
+ */
 enum p_st {
 	st_no_mark_found = 0,
 	st_cmnt_type_1 = 1,
@@ -841,8 +853,15 @@ enum p_st {
 	st_replace_null = 6
 };
 
+/**
+ * @brief Parsing information from received query and the result buffer shared between the different
+ *   processing stages.
+ */
 typedef struct shared_st {
 	enum p_st st;
+	/* @brief Global computed compression offset from the previous iteration. Used when uncompressed query
+	 * exceeds the maximum buffer side specified by `mysql_thread___query_digests_max_query_length` */
+	int gl_c_offset;
 	/* @brief Maximum length of the resulting digest. */
 	int d_max_len;
 	/* @brief Pointer to current reading position of the supplied query. */
@@ -851,8 +870,10 @@ typedef struct shared_st {
 	int q_len;
 	/* @brief Current position of the iteration over the supplied queried. */
 	int q_cur_pos;
-	/* @brief Pointer to the beginning of the result buffer. */
-	char* res;
+	/* @brief Pointer to the initial position of the result buffer. */
+	char* res_init_pos;
+	/* @brief Pointer to the initial position of the result buffer *for current processing iteration* */
+	char* res_it_init_pos;
 	/* @brief Current position of the iteration over the return buffer. */
 	char* res_cur_pos;
 	/* @brief Position in the return buffer prior to the start of any parsing st that isn't 'no_mark_found'. */
@@ -863,21 +884,141 @@ typedef struct shared_st {
 	bool copy_next_char;
 } shared_st;
 
+/**
+ * @brief State used for parsing 'type_1' comments, i.e: /\* *\/.
+ */
 typedef struct cmnt_type_1_st {
+	/**
+	 * @brief Flag to announce if the found commet is a 'cmd' comment.
+	 */
 	bool is_cmd;
+	/**
+	 * @brief Counter holding the lenght of the 'cmd' comment currently being processed.
+	 */
 	int cur_cmd_cmnt_len;
+	/**
+	 * @brief Flag showing first comment parsing state. '0' when no comment or end has been found, and '1'
+	 *   when the first comment has already been found.
+	 * @details This flag is NEVER reset, since only the first found comment is retrieved for being further
+	 *   processed.
+	 */
 	int fst_cmnt_end;
+	/**
+	 * @brief Counter keeping track of the number of chars copied into 'first_comment' buffer.
+	 */
 	int fst_cmnt_len;
 } cmnt_type_1_st;
 
+/**
+ * @brief State used for parsing 'literal strings' values, i.e: 'foo', "bar", etc..
+ */
 typedef struct literal_string_st {
+	/**
+	 * @brief Boolean flag showing if the first delimiter from a literal string has been found.
+	 *   '0' when hasn't yet been found, and '1' while in the processing a literal string.
+	 */
 	int delim_num;
+	/**
+	 * @brief Found char delimiter found for the literal string being processed.
+	 */
 	char delim_char;
 } literal_string_st;
 
+/**
+ * @brief State used for parsing 'literal digit' values, e.g: 84, 0x100, 1E-10, etc...
+ */
 typedef struct literal_digit_st {
 	bool first_digit;
+	char* start_pos;
 } literal_digit_st;
+
+/**
+ * @brief Created for an alternative implementation of NULL parsing.
+ *   Currently unused. TODO: Remove.
+ */
+typedef struct literal_null_st {
+	int null_pos;
+} literal_null_st;
+
+/**
+ * @brief State used for 'stage_1' parsing.
+ */
+typedef struct stage_1_st {
+	struct cmnt_type_1_st cmnt_type_1_st;
+	struct literal_string_st literal_str_st;
+	struct literal_digit_st literal_digit_st;
+	/**
+	 * @brief Holds the previous iteration parsing ending position.
+	 */
+	char* pre_it_pos;
+	/**
+	 * @brief Previous iteration parsing ending position for 'stage_1'.
+	 * @details This position should be kept as the 'stage_1' final position may differ from final positions
+	 *   for later stages. This event takes place when 'stage_1' hasn't finished parsing a value which
+	 *   requires copying (i.e. a 'number literal') and digest buffer runned out of space. Under this
+	 *   circunstance, later stages don't process the 'number literal' interval, but copy it's values in case
+	 *   that a later 'stage_1' iteration can resume the literal parsing.
+	 */
+	char* new_end_pos;
+} stage_1_st;
+
+/**
+ * @brief Holds the state used for 'stage_2' parsing.
+ */
+typedef struct stage_2_st {
+	/**
+	 * @brief Previous iteration last parsing position in the result buffer, after the stage
+	 *   compression has taken place.
+	 */
+	char* pre_it_pos;
+	/**
+	 * @brief Last iteration computed compression offset resulted after stage processing.
+	 */
+	int c_offset;
+} stage_2_st;
+
+typedef struct stage_3_st {
+	/**
+	 * @brief Previous iteration last parsing position in the result buffer, after the stage
+	 *   compression has taken place.
+	 */
+	char* pre_it_pos;
+	/**
+	 * @brief Last iteration computed compression offset resulted after stage processing.
+	 */
+	int c_offset;
+} stage_3_st;
+
+typedef struct stage_4_st {
+	/**
+	 * @brief Previous iteration last parsing position in the result buffer, after the stage
+	 *   compression has taken place.
+	 */
+	char* pre_it_pos;
+	/**
+	 * @brief Last iteration computed compression offset resulted after stage processing.
+	 */
+	int c_offset;
+} stage_4_st;
+
+static __attribute__((always_inline)) inline
+void init_shared_st(struct shared_st* shared_st, const char* const q, int q_len, int d_max_len, char* res) {
+	shared_st->q = q;
+	shared_st->q_len = q_len;
+	shared_st->d_max_len = d_max_len;
+	// all position start with the beginning of the result buffer
+	shared_st->res_init_pos = res;
+	shared_st->res_it_init_pos = res;
+	shared_st->res_cur_pos = res;
+	shared_st->res_pre_pos = res;
+	// initial state for the first stage state machine
+	shared_st->st = st_no_mark_found;
+}
+
+static __attribute__((always_inline)) inline
+void init_stage_1_st(struct stage_1_st* fst_stage_st) {
+	fst_stage_st->literal_digit_st.first_digit = 1;
+}
 
 static inline int get_digest_max_len(int len) {
 	int digest_max_len = 0;
@@ -912,7 +1053,7 @@ static inline char* get_result_buffer(int len, char* buf) {
  * @return The next processing state.
  */
 static __attribute__((always_inline)) inline
-enum p_st get_next_st(char** const res, const struct options* opts, struct shared_st* shared_st) {
+enum p_st get_next_st(const struct options* opts, struct shared_st* shared_st) {
 	char prev_char = shared_st->prev_char;
 	enum p_st st = st_no_mark_found;
 
@@ -964,7 +1105,7 @@ enum p_st get_next_st(char** const res, const struct options* opts, struct share
  * @param shared_st The shared state to modify.
  */
 static __attribute__((always_inline)) inline
-void copy_next_char(options* opts, shared_st* shared_st) {
+void copy_next_char(shared_st* shared_st, options* opts) {
 	// copy the next character; translating any space char into ' '
 	if (opts->lowercase==0) {
 		*shared_st->res_cur_pos++ = !is_space_char(*shared_st->q) ? *shared_st->q : ' ';
@@ -995,7 +1136,7 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 	if (*shared_st->q == '/' && *(shared_st->q+1) == '*') {
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 
-		if (shared_st->q_cur_pos != (shared_st->d_max_len - 2) && *(shared_st->q+2) == '!') {
+		if (shared_st->q_cur_pos != (shared_st->q_len-2) && *(shared_st->q+2) == '!') {
 			c_t_1_st->is_cmd = 1;
 		}
 
@@ -1021,7 +1162,7 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 
 	// first comment hasn't finished, we are yet copying it
 	if (c_t_1_st->fst_cmnt_end == 0) {
-		// copy the char into 'fst_cmnt'
+		// copy the char into 'fst_cmnt' buffer
 		if (c_t_1_st->fst_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
 			if (*fst_cmnt == NULL) {
 				// initialize the 'first_comment' and set a final NULL terminator for safety
@@ -1077,6 +1218,8 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 					}
 				}
 
+				// TODO: Requires boundary checks before performing the memcpy, the comment could not fit in
+				// the return buffer.
 				if (end) {
 					// copy the cmd comment minus the annotation and the marks
 					memcpy(
@@ -1096,17 +1239,19 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 				}
 			}
 
+			// Re-initialize the comment state
 			c_t_1_st->is_cmd = 0;
+			c_t_1_st->cur_cmd_cmnt_len = 0;
 		}
 
 		// TODO: Related to previous todo. Remember this is a relatively new change in the current code
 		// not at the beggining and previous char is not ' '
 		if (
-			shared_st->res != shared_st->res_cur_pos &&
+			shared_st->res_init_pos != shared_st->res_cur_pos &&
 			*shared_st->res_cur_pos != ' ' && *(shared_st->res_cur_pos-1) != ' '
 		) {
 			*shared_st->res_cur_pos++ = ' ';
-		} else if (shared_st->res != shared_st->res_cur_pos && *shared_st->res_cur_pos == ' ') {
+		} else if (shared_st->res_init_pos != shared_st->res_cur_pos && *shared_st->res_cur_pos == ' ') {
 			shared_st->res_cur_pos++;
 		}
 
@@ -1132,7 +1277,7 @@ enum p_st process_cmnt_type_2(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
 		shared_st->q_cur_pos += 1;
 	}
 
-	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->d_max_len - 1)) {
+	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->q_len - 1)) {
 		next_state = st_no_mark_found;
 		shared_st->prev_char = ' ';
 
@@ -1153,7 +1298,7 @@ enum p_st process_cmnt_type_3(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
 		shared_st->q_cur_pos += 3;
 	}
 
-	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->d_max_len - 1)) {
+	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->q_len - 1)) {
 		next_state = st_no_mark_found;
 		shared_st->prev_char = ' ';
 
@@ -1170,12 +1315,15 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 
 	// process the first delimiter
 	if (str_st->delim_num == 0) {
+		// store found delimiter
 		str_st->delim_char = *shared_st->q;
 		str_st->delim_num = 1;
 
-		// consume the delimitir from the query
-		shared_st->q++;
-		shared_st->q_cur_pos++;
+		// consume the delimiter from the query
+		// TODO: Document why this isn't necessary in a generic way in the stage processing description
+		// shared_st->q++;
+		// shared_st->q_cur_pos++;
+		return next_state;
 	}
 
 	// need to be ignored case
@@ -1198,8 +1346,10 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 	// satisfied closing string - swap string to ?
 	if(
 		*shared_st->q == str_st->delim_char &&
-		(shared_st->d_max_len == shared_st->q_cur_pos+1 || *(shared_st->q + SIZECHAR) != str_st->delim_char)
+		(shared_st->q_len == shared_st->q_cur_pos+1 || *(shared_st->q + SIZECHAR) != str_st->delim_char)
 	) {
+		// NOTE: may not be necessary since we don't increment 'res_cur_pos' during this state. Since all the
+		// characters are ignored.
 		shared_st->res_cur_pos = shared_st->res_pre_pos;
 
 		// place the replacement mark
@@ -1207,7 +1357,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 		shared_st->prev_char = '?';
 
 		// don't copy this char if last
-		if (shared_st->d_max_len == shared_st->q_cur_pos + 1) {
+		if (shared_st->q_len == shared_st->q_cur_pos + 1) {
 			shared_st->copy_next_char = 0;
 			// keep the same state, no token was found
 			return next_state;
@@ -1219,7 +1369,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 
 		// update the shared state
 		shared_st->prev_char = str_st->delim_char;
-		if(shared_st->q_cur_pos < shared_st->d_max_len) {
+		if(shared_st->q_cur_pos < shared_st->q_len) {
 			shared_st->q++;
 		}
 		shared_st->q_cur_pos++;
@@ -1237,32 +1387,38 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 
 	// consume the first digit
 	if (digit_st->first_digit == 1 && is_token_char(*(shared_st->q-1)) && is_digit_char(*shared_st->q)) {
-		*shared_st->res_cur_pos++ = *shared_st->q;
+		// store the start position of digit literal in the result buffer for later iterations
+		digit_st->start_pos = shared_st->res_pre_pos;
+
+		// store the first digit
+		*shared_st->res_cur_pos = *shared_st->q;
 		digit_st->first_digit = 0;
 
-		shared_st->q++;
-		shared_st->q_cur_pos++;
+		// increment the position in query buffer
+		// shared_st->q++;
+		// shared_st->q_cur_pos++;
 	}
 
 	// token char or last char
 	char is_float_char = *shared_st->q == '.' ||
 		( tolower(shared_st->prev_char) == 'e' && ( *shared_st->q == '-' || *shared_st->q == '+' ) );
-	if ((is_token_char(*shared_st->q) && is_float_char == 0) || shared_st->d_max_len == shared_st->q_cur_pos + 1) {
-		if (is_digit_string(shared_st->res_pre_pos, shared_st->res_cur_pos)) {
-			shared_st->res_cur_pos = shared_st->res_pre_pos;
+	if ((is_token_char(*shared_st->q) && is_float_char == 0) || shared_st->q_len == shared_st->q_cur_pos + 1) {
+		if (is_digit_string(digit_st->start_pos, shared_st->res_cur_pos)) {
+			shared_st->res_cur_pos = digit_st->start_pos;
 
 			// place the replacement mark
 			*shared_st->res_cur_pos++ = '?';
 			shared_st->prev_char = '?';
 
 			// don't copy this char if last and is not token
-			if (is_token_char(*shared_st->q) == 0 && shared_st->d_max_len == shared_st->q_cur_pos + 1) {
+			if (is_token_char(*shared_st->q) == 0 && shared_st->q_len == shared_st->q_cur_pos + 1) {
 				shared_st->copy_next_char = 0;
 				// keep the same state, no token was found
 				return next_state;
 			}
 		}
 
+		digit_st->start_pos = NULL;
 		next_state = st_no_mark_found;
 	}
 
@@ -1270,7 +1426,7 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 }
 
 /**
- * @brief Alternative impl for 'NULL' replacement, unused right now.
+ * @brief Alternative impl for 'NULL' replacement, unused right now. TODO: Remove.
  */
 static __attribute__((always_inline)) inline
 enum p_st process_replace_null_single_chars(shared_st* shared_st, literal_null_st* null_st) {
@@ -1284,7 +1440,7 @@ enum p_st process_replace_null_single_chars(shared_st* shared_st, literal_null_s
 			next_st = st_no_mark_found;
 		}
 
-		if (shared_st->q_cur_pos == shared_st->d_max_len - 1 && null_st->null_pos == 4) {
+		if (shared_st->q_cur_pos == shared_st->q_len - 1 && null_st->null_pos == 4) {
 			// no need for changing the state it's the last char
 			shared_st->copy_next_char = 0;
 			shared_st->res_cur_pos = shared_st->res_pre_pos;
@@ -1311,23 +1467,18 @@ enum p_st process_replace_null_single_chars(shared_st* shared_st, literal_null_s
 }
 
 static __attribute__((always_inline)) inline
-enum p_st process_replace_null(shared_st* shared_st) {
+enum p_st process_replace_null(shared_st* shared_st, options* opts) {
 	enum p_st next_st = st_no_mark_found;
 	char null_found = 0;
 
-	if ((shared_st->d_max_len - shared_st->q_cur_pos) > 4) {
-		// printf(
-		// 	"replace_null: '%d', '%d', 'q': `%s`, 'res': `%s`\n",
-		// 	shared_st->q_len, shared_st->q_cur_pos, shared_st->q, shared_st->res
-		// );
-
+	if ((shared_st->q_len - shared_st->q_cur_pos) > 4) {
 		null_found =
 			(*shared_st->q == 'N' || *shared_st->q == 'n') &&
 			(*(shared_st->q+1) == 'U' || *(shared_st->q+1) == 'u') &&
 			(*(shared_st->q+2) == 'L' || *(shared_st->q+2) == 'l') &&
 			(*(shared_st->q+3) == 'L' || *(shared_st->q+3) == 'l') &&
 			is_token_char(*(shared_st->q+4));
-	} else if ((shared_st->d_max_len - shared_st->q_cur_pos) == 4) {
+	} else if ((shared_st->q_len - shared_st->q_cur_pos) == 4) {
 		null_found =
 			(*shared_st->q == 'N' || *shared_st->q == 'n') &&
 			(*(shared_st->q+1) == 'U' || *(shared_st->q+1) == 'u') &&
@@ -1347,39 +1498,44 @@ enum p_st process_replace_null(shared_st* shared_st) {
 		shared_st->q_cur_pos += 4;
 	} else {
 		// process the first char and continue
-		*shared_st->res_cur_pos++ = *shared_st->q;
-		shared_st->q++;
-		shared_st->q_cur_pos++;
+		copy_next_char(shared_st, opts);
 	}
 
 	return next_st;
 }
 
 static __attribute__((always_inline)) inline
-void first_stage_parsing(char** const res, shared_st* shared_st, options* opts, char** fst_cmnt) {
+void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts, char** fst_cmnt) {
 	// state required between different iterations of special parsing states
-	struct cmnt_type_1_st c_t_1_st = { 0 };
-	struct literal_string_st literal_str_st = { 0 };
-	struct literal_digit_st literal_digit_st = { 0 };
-	// struct literal_null_st literal_null_st = { 0 };
+	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len - 1;
+	cmnt_type_1_st* const cmnt_type_1_st = &stage_1_st->cmnt_type_1_st;
+	literal_string_st* const literal_str_st = &stage_1_st->literal_str_st;
+	literal_digit_st* const literal_digit_st = &stage_1_st->literal_digit_st;
 
-	enum p_st cur_st = st_no_mark_found;
+	// starting state can belong to a previous iteration
+	enum p_st cur_st = shared_st->st;
 
-	// start char consumption
-	while (shared_st->q_cur_pos < shared_st->d_max_len) {
+	if (stage_1_st->new_end_pos != NULL) {
+		shared_st->res_cur_pos = stage_1_st->new_end_pos;
+		shared_st->res_pre_pos = stage_1_st->new_end_pos;
+	}
+
+	// Stop when either:
+	//  1. There is no more room left the result buffer.
+	//  2. The final position of the received query has been reached.
+	while (shared_st->res_cur_pos <= res_final_pos && shared_st->q_cur_pos < shared_st->q_len) {
 		// printf(
-		// 	"st_no_mark_found: {"
-		// 		"max_len: '%d', st: `%d`, prev_char: '%c', q_cur_pos: '%d', c_next_char: '%d',"
-		// 		" q: `%s`, res: `%s`"
+		// 	"stage_1_parsing: {\n"
+		// 	"    max_len: '%d', cur_pos: '%ld', cur_st: `%d`, prev_char: '%c', c_next_char: '%d', q_cur_pos: '%d', \n"
+		// 	"    q: `%s`, res_init_pos: `%s`, res_cur_pos: `%s`\n"
 		// 	"}\n",
-		// 	shared_st->q_len, cur_st, shared_st->prev_char, shared_st->q_cur_pos,
-		// 	shared_st->copy_next_char, shared_st->q, shared_st->res
+		// 	shared_st->d_max_len, shared_st->res_cur_pos - shared_st->res_init_pos, cur_st, shared_st->prev_char,
+		// 	shared_st->copy_next_char, shared_st->q_cur_pos, shared_st->q, shared_st->res_init_pos, shared_st->res_cur_pos
 		// );
-
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
 			shared_st->res_pre_pos = shared_st->res_cur_pos;
-			cur_st = get_next_st(res, opts, shared_st);
+			cur_st = get_next_st(opts, shared_st);
 
 			// if next st isn't 'no_mark_found' transition to it without consuming current char
 			if (cur_st != st_no_mark_found) {
@@ -1390,7 +1546,7 @@ void first_stage_parsing(char** const res, shared_st* shared_st, options* opts, 
 				// Removal of spaces that doesn't belong to any particular parsing state.
 
 				// ignore all the leading spaces
-				if (shared_st->res_cur_pos == shared_st->res && is_space_char(*shared_st->q)) {
+				if (shared_st->res_cur_pos == shared_st->res_init_pos && is_space_char(*shared_st->q)) {
 					shared_st->q++;
 					shared_st->q_cur_pos++;
 					continue;
@@ -1422,27 +1578,27 @@ void first_stage_parsing(char** const res, shared_st* shared_st, options* opts, 
 				}
 
 				// copy the current char
-				copy_next_char(opts, shared_st);
+				copy_next_char(shared_st, opts);
 			}
 		} else {
 			if (cur_st == st_cmnt_type_1) {
 				// by default, we don't copy the next char for comments
 				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_1(shared_st, &c_t_1_st, fst_cmnt);
+				cur_st = process_cmnt_type_1(shared_st, cmnt_type_1_st, fst_cmnt);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_cmnt_type_2) {
 				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_2(shared_st, &c_t_1_st);
+				cur_st = process_cmnt_type_2(shared_st, cmnt_type_1_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_cmnt_type_3) {
 				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_3(shared_st, &c_t_1_st);
+				cur_st = process_cmnt_type_3(shared_st, cmnt_type_1_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
@@ -1450,22 +1606,22 @@ void first_stage_parsing(char** const res, shared_st* shared_st, options* opts, 
 			} else if (cur_st == st_literal_string) {
 				// NOTE: Not required to copy since spaces are not going to be processed here
 				shared_st->copy_next_char = 0;
-				cur_st = process_literal_string(shared_st, &literal_str_st);
+				cur_st = process_literal_string(shared_st, literal_str_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_literal_number) {
 				shared_st->copy_next_char = 1;
-				cur_st = process_literal_digit(shared_st, &literal_digit_st, opts);
+				cur_st = process_literal_digit(shared_st, literal_digit_st, opts);
 				if (cur_st == st_no_mark_found) {
-					literal_digit_st.first_digit = 1;
+					literal_digit_st->first_digit = 1;
 					shared_st->copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_replace_null) {
 				// shared_st->copy_next_char = 1;
-				cur_st = process_replace_null(shared_st);
+				cur_st = process_replace_null(shared_st, opts);
 				if (cur_st == st_no_mark_found) {
 					// literal_null_st.null_pos = 0;
 					shared_st->copy_next_char = 1;
@@ -1474,7 +1630,7 @@ void first_stage_parsing(char** const res, shared_st* shared_st, options* opts, 
 			}
 
 			if (shared_st->copy_next_char) {
-				copy_next_char(opts, shared_st);
+				copy_next_char(shared_st, opts);
 			} else {
 				// if we do not copy we skip the next char, but copy it to `prev_char`
 				shared_st->prev_char = *shared_st->q++;
@@ -1483,37 +1639,51 @@ void first_stage_parsing(char** const res, shared_st* shared_st, options* opts, 
 		}
 	}
 
-	// remove all trailing whitespaces
-	// ===============================
-	//
-	// Final spaces left by comments which are never collapsed, ex:
-	//
-	// ```
-	// Q: `select 1.1   -- final_comment  \n`
-	// D: `select ?  `
-	//              ^ never collapsed
-	// ```
-	if (shared_st->res_cur_pos > shared_st->res) {
-		char* wspace = shared_st->res_cur_pos - 1;
-		while (*wspace == ' ') {
-			wspace--;
-		}
-		wspace++;
-		*wspace = '\0';
-	}
-
 	// place the final null terminator
 	*shared_st->res_cur_pos = 0;
+	shared_st->st = cur_st;
+
+	// store final state position
+	stage_1_st->pre_it_pos = shared_st->res_cur_pos;
+
+	// if stage isn't finished parsing an element, set the current parsing position at which the last
+	// element was copied.
+	if (shared_st->st == st_literal_number) {
+		stage_1_st->new_end_pos = shared_st->res_cur_pos;
+	} else {
+		stage_1_st->new_end_pos = NULL;
+	}
 }
 
 static __attribute__((always_inline)) inline
-void second_stage_parsing(char** const res, shared_st* shared_st, const options* opts) {
-	char* digest_end = shared_st->res_cur_pos;
-	shared_st->res_pre_pos = *res;
-	shared_st->res_cur_pos = *res;
+void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* stage_2_st, const options* opts) {
+	char* digest_end = NULL;
+
+	if (shared_st->st == st_literal_number && stage_1_st->literal_digit_st.start_pos != NULL) {
+		digest_end = stage_1_st->literal_digit_st.start_pos - 1;
+	} else {
+		digest_end = shared_st->res_cur_pos - 1;
+	}
+
+	// compute the starting point for the second stage
+	if (shared_st->res_init_pos != shared_st->res_it_init_pos) {
+		char* next_start_pos =
+			stage_2_st->pre_it_pos - (shared_st->gl_c_offset - stage_2_st->c_offset) - (5 + 1);
+
+		if (next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end) {
+			shared_st->res_cur_pos = next_start_pos;
+			shared_st->res_pre_pos = next_start_pos;
+		} else {
+			shared_st->res_cur_pos = shared_st->res_init_pos;
+			shared_st->res_pre_pos = shared_st->res_init_pos;
+		}
+	} else {
+		shared_st->res_cur_pos = shared_st->res_init_pos;
+		shared_st->res_pre_pos = shared_st->res_init_pos;
+	}
 
 	// second stage: Space and (+|-) replacement
-	while (shared_st->res_cur_pos < digest_end - 1) {
+	while (shared_st->res_cur_pos <= digest_end) {
 		if (*shared_st->res_cur_pos == ' ') {
 			char lc = *(shared_st->res_cur_pos-1);
 			char rc = *(shared_st->res_cur_pos+1);
@@ -1564,25 +1734,95 @@ void second_stage_parsing(char** const res, shared_st* shared_st, const options*
 		}
 	}
 
-	*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
-	*shared_st->res_pre_pos = 0;
+	// store this iteration position and compute the compression offset
+	int c_2_offset = digest_end - shared_st->res_pre_pos + 1;
+	stage_2_st->c_offset = c_2_offset > 0 ? c_2_offset : 0;
+
+	if (digest_end == stage_1_st->literal_digit_st.start_pos - 1 && stage_1_st->new_end_pos) {
+		char* f_digits = stage_1_st->literal_digit_st.start_pos;
+		stage_1_st->literal_digit_st.start_pos = shared_st->res_pre_pos;
+		stage_2_st->pre_it_pos = stage_1_st->literal_digit_st.start_pos;
+
+		while (f_digits < stage_1_st->new_end_pos) {
+			*shared_st->res_pre_pos++ = *f_digits++;
+			shared_st->res_cur_pos++;
+		}
+
+		*shared_st->res_pre_pos = 0;
+		stage_1_st->new_end_pos = shared_st->res_pre_pos;
+	} else {
+		*shared_st->res_pre_pos = 0;
+		stage_2_st->pre_it_pos = shared_st->res_pre_pos;
+	}
+
+	shared_st->res_cur_pos = shared_st->res_pre_pos;
 }
 
 static __attribute__((always_inline)) inline
-void third_stage_parsing(char** const res, shared_st* shared_st, options* opts) {
+void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* stage_3_st, options* opts) {
 	if (opts->grouping_limit == 0) { return; }
 
-	char* digest_end = shared_st->res_pre_pos;
-	shared_st->res_pre_pos = *res;
-	shared_st->res_cur_pos = *res;
+	char* digest_end = NULL;
+
+	// compute the 'digest_end' for the stage 3
+	if (shared_st->st == st_literal_number && stage_1_st->literal_digit_st.start_pos != NULL) {
+		digest_end = stage_1_st->literal_digit_st.start_pos - 1;
+	} else {
+		digest_end = shared_st->res_cur_pos - 1;
+	}
+
+	// compute the starting point for the third stage
+	if (shared_st->res_init_pos != shared_st->res_it_init_pos) {
+		int min_group_size = opts->grouping_limit*2 > 10 ? opts->grouping_limit*2 : 10;
+		char* next_start_pos =
+			stage_3_st->pre_it_pos - (shared_st->gl_c_offset - stage_3_st->c_offset) - ( min_group_size + 1 );
+
+		if (next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end) {
+			shared_st->res_cur_pos = next_start_pos;
+			shared_st->res_pre_pos = next_start_pos;
+		} else {
+			shared_st->res_cur_pos = shared_st->res_init_pos;
+			shared_st->res_pre_pos = shared_st->res_init_pos;
+		}
+	} else {
+		shared_st->res_cur_pos = shared_st->res_init_pos;
+		shared_st->res_pre_pos = shared_st->res_init_pos;
+	}
 
 	char group_candidate = 0;
 
 	// it's a fixed pattern, we can perform a lookahead replacement
-	while (shared_st->res_cur_pos < digest_end - 1) {
+	while (shared_st->res_cur_pos <= digest_end) {
+		if (group_candidate == 1 && (shared_st->res_pre_pos - shared_st->res_init_pos) > 4) {
+			char found_exp_pack =
+				*(shared_st->res_pre_pos) == ',' &&
+				*(shared_st->res_pre_pos-1) == '.' &&
+				*(shared_st->res_pre_pos-2) == '.' &&
+				*(shared_st->res_pre_pos-3) == '.';
+
+			if (found_exp_pack == 1) {
+				// collapse new patterns founds after the expansion
+				char* new_cur_pos = shared_st->res_cur_pos + 1;
+
+				while ((new_cur_pos <= digest_end)) {
+					if (*new_cur_pos == '?' && *(new_cur_pos+1) == ',') {
+						new_cur_pos += 2;
+					} else {
+						if (*new_cur_pos == '?' && *(new_cur_pos+1) == ')') {
+							new_cur_pos += 1;
+						}
+						break;
+					}
+				}
+
+				if (new_cur_pos > shared_st->res_cur_pos + 1) {
+					shared_st->res_cur_pos = new_cur_pos;
+				}
+			}
+		}
+
 		char* cur_char = shared_st->res_cur_pos;
 		char pattern_fits = shared_st->res_cur_pos < digest_end - opts->grouping_limit*2;
-
 		if (group_candidate == 1 && pattern_fits) {
 			// NOTE: Minimal viable pattern for replacement is the starting point: '?,?,'.
 			// This pattern also matches the size of a 32bit register, so probably will only
@@ -1600,7 +1840,7 @@ void third_stage_parsing(char** const res, shared_st* shared_st, options* opts) 
 				char pattern_broken = 0;
 				char* pattern_pos = shared_st->res_cur_pos;
 
-				while ((pattern_pos < digest_end - 1) && pattern_broken == 0) {
+				while ((pattern_pos < digest_end) && pattern_broken == 0) {
 					if (*pattern_pos == '?' && *(pattern_pos+1) == ',') {
 						pattern_pos += 2;
 						pattern_len += 1;
@@ -1659,8 +1899,27 @@ void third_stage_parsing(char** const res, shared_st* shared_st, options* opts) 
 		}
 	}
 
-	*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
-	*shared_st->res_pre_pos = 0;
+	int c_3_offset = digest_end - (shared_st->res_pre_pos - 1);
+	stage_3_st->c_offset = c_3_offset > 0 ? c_3_offset : 0;
+
+	if (digest_end == stage_1_st->literal_digit_st.start_pos - 1 && stage_1_st->new_end_pos) {
+		char* f_digits = stage_1_st->literal_digit_st.start_pos;
+		stage_1_st->literal_digit_st.start_pos = shared_st->res_pre_pos;
+		stage_3_st->pre_it_pos = stage_1_st->literal_digit_st.start_pos;
+
+		while (f_digits < stage_1_st->new_end_pos) {
+			*shared_st->res_pre_pos++ = *f_digits++;
+			shared_st->res_cur_pos++;
+		}
+
+		*shared_st->res_pre_pos = 0;
+		stage_1_st->new_end_pos = shared_st->res_pre_pos;
+	} else {
+		*shared_st->res_pre_pos = 0;
+		stage_3_st->pre_it_pos = shared_st->res_pre_pos;
+	}
+
+	shared_st->res_cur_pos = shared_st->res_pre_pos;
 }
 
 bool is_group_pattern(const char* pos, const options* opts) {
@@ -1710,22 +1969,80 @@ bool is_group_pattern(const char* pos, const options* opts) {
 }
 
 static __attribute__((always_inline)) inline
-void fourth_stage_parsing(char** const res, shared_st* shared_st, const options* opts) {
+void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* stage_4_st, const options* opts) {
 	if (opts->groups_grouping_limit == 0 || opts->grouping_limit == 0) { return; }
 
 	//                       '( +       ?,?,n            + ... + ')  ,'
 	int group_pattern_size = (1 + opts->grouping_limit*2 +  3  + 1 + 1);
-	char* digest_end = shared_st->res_pre_pos;
-	shared_st->res_pre_pos = *res;
-	shared_st->res_cur_pos = *res;
+	char* digest_end = NULL;
+
+	if (shared_st->st == st_literal_number && stage_1_st->literal_digit_st.start_pos != NULL) {
+		digest_end = stage_1_st->literal_digit_st.start_pos - 1;
+	} else {
+		digest_end = shared_st->res_cur_pos - 1;
+	}
+
+	// compute the starting point for the fourth stage
+	if (shared_st->res_init_pos != shared_st->res_it_init_pos) {
+		char* next_start_pos = stage_4_st->pre_it_pos - (group_pattern_size * (opts->groups_grouping_limit + 1));
+
+		if (next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end) {
+			shared_st->res_cur_pos = next_start_pos;
+			shared_st->res_pre_pos = next_start_pos;
+		} else {
+			shared_st->res_cur_pos = shared_st->res_init_pos;
+			shared_st->res_pre_pos = shared_st->res_init_pos;
+		}
+	} else {
+		shared_st->res_cur_pos = shared_st->res_init_pos;
+		shared_st->res_pre_pos = shared_st->res_init_pos;
+	}
 
 	// it's a fixed pattern, we can perform a lookahead replacement
-	while (shared_st->res_cur_pos < digest_end - 1) {
+	while (shared_st->res_cur_pos <= digest_end) {
 		char* cur_char = shared_st->res_cur_pos;
+
+		if ((shared_st->res_pre_pos - shared_st->res_init_pos) > 5) {
+			char found_exp_pack =
+				*(shared_st->res_pre_pos-1) == '.' &&
+				*(shared_st->res_pre_pos-2) == '.' &&
+				*(shared_st->res_pre_pos-3) == '.' &&
+				*(shared_st->res_pre_pos-4) == ',' &&
+				*(shared_st->res_pre_pos-5) == ')';
+
+			if (found_exp_pack == 1) {
+				char* cur_pattern_pos = cur_char;
+				int found_group_patterns = 0;
+
+				while(cur_pattern_pos + (group_pattern_size - 2) <= digest_end) {
+					if (is_group_pattern(cur_pattern_pos, opts) == 1) {
+						if (cur_pattern_pos + (group_pattern_size - 1) == digest_end) {
+							cur_pattern_pos += group_pattern_size - 1;
+						} else {
+							cur_pattern_pos += group_pattern_size;
+						}
+
+						found_group_patterns += 1;
+					} else {
+						break;
+					}
+				}
+
+				if (cur_pattern_pos > shared_st->res_cur_pos + 1) {
+					shared_st->res_cur_pos = cur_pattern_pos;
+				}
+
+				if (cur_pattern_pos == digest_end) {
+					break;
+				}
+			}
+		}
+
 		char pattern_fits =
 			shared_st->res_cur_pos <=
-			// NOTE: Final '- 1' due to repeating comma in the pattern not in the final case.
-			(digest_end - (group_pattern_size * (opts->groups_grouping_limit + 1) - 1));
+			// NOTE: Final '+ 1' due to repeating comma in the pattern not in the final case, and the
+			// fact that digest_end is the final character, which is part of the pattern
+			(digest_end - (group_pattern_size * (opts->groups_grouping_limit + 1)) + 2);
 
 		// fast check for knowing that this can potentially be a group pattern
 		if (pattern_fits && *cur_char == '(' && *(cur_char+1) == '?' && *(cur_char+2) == ',') {
@@ -1733,13 +2050,11 @@ void fourth_stage_parsing(char** const res, shared_st* shared_st, const options*
 			char* cur_pattern_pos = cur_char;
 			int found_group_patterns = 0;
 
-			while(cur_pattern_pos <= digest_end - (group_pattern_size - 1)) {
+			while(cur_pattern_pos + (group_pattern_size - 2) <= digest_end) {
 				if (is_group_pattern(cur_pattern_pos, opts) == 1) {
-
-					if (cur_pattern_pos == digest_end - (group_pattern_size - 1)) {
-						cur_pattern_pos += group_pattern_size - 1;
-					} else {
-						cur_pattern_pos += group_pattern_size;
+					cur_pattern_pos += group_pattern_size - 1;
+					if (*cur_pattern_pos == ',') {
+						cur_pattern_pos++;
 					}
 
 					found_group_patterns += 1;
@@ -1750,7 +2065,7 @@ void fourth_stage_parsing(char** const res, shared_st* shared_st, const options*
 
 			// count found forward patterns
 			if (found_group_patterns > opts->groups_grouping_limit) {
-				memcpy(shared_st->res_pre_pos, pattern_start, group_pattern_size * opts->groups_grouping_limit);
+				memmove(shared_st->res_pre_pos, pattern_start, group_pattern_size * opts->groups_grouping_limit);
 				shared_st->res_pre_pos += group_pattern_size * opts->groups_grouping_limit;
 				*shared_st->res_pre_pos++ = '.';
 				*shared_st->res_pre_pos++ = '.';
@@ -1760,11 +2075,69 @@ void fourth_stage_parsing(char** const res, shared_st* shared_st, const options*
 			}
 		}
 
-		*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+		if (shared_st->res_cur_pos > digest_end) {
+			break;
+		} else {
+			*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+		}
 	}
 
-	*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
-	*shared_st->res_pre_pos = 0;
+	int c_4_offset = digest_end - (shared_st->res_pre_pos - 1);
+	stage_4_st->c_offset = c_4_offset > 0 ? c_4_offset : 0;
+
+	if (digest_end == stage_1_st->literal_digit_st.start_pos - 1 && stage_1_st->new_end_pos) {
+		char* f_digits = stage_1_st->literal_digit_st.start_pos;
+		stage_1_st->literal_digit_st.start_pos = shared_st->res_pre_pos;
+		stage_4_st->pre_it_pos = stage_1_st->literal_digit_st.start_pos;
+
+		while (f_digits < stage_1_st->new_end_pos) {
+			*shared_st->res_pre_pos++ = *f_digits++;
+			shared_st->res_cur_pos++;
+		}
+
+		*shared_st->res_pre_pos = 0;
+		stage_1_st->new_end_pos = shared_st->res_pre_pos;
+	} else {
+		*shared_st->res_pre_pos = 0;
+		stage_4_st->pre_it_pos = shared_st->res_pre_pos;
+	}
+
+	shared_st->res_cur_pos = shared_st->res_pre_pos;
+}
+
+static __attribute__((always_inline)) inline
+void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* opts) {
+	// Simple final cleanup for making queries more homogeneous when trimmed.
+	// TODO: Give a sensible example of trimmed number processing.
+	if (stage_1_st->literal_digit_st.start_pos != NULL) {
+		if (shared_st->d_max_len <= (shared_st->res_cur_pos - shared_st->res_init_pos)) {
+			if (shared_st->st == st_literal_number && is_digit_char(*stage_1_st->literal_digit_st.start_pos)) {
+				*stage_1_st->literal_digit_st.start_pos++ = '?';
+				*stage_1_st->literal_digit_st.start_pos = '\0';
+			}
+		}
+	}
+
+	// remove all trailing whitespaces
+	// ===============================
+	//
+	// Final spaces left by comments which are never collapsed, ex:
+	//
+	// ```
+	// Q: `select 1.1   -- final_comment  \n`
+	// D: `select ?  `
+	//              ^ never collapsed
+	// ```
+	if (shared_st->res_cur_pos > shared_st->res_init_pos) {
+		char* wspace = shared_st->res_cur_pos - 1;
+		while (*wspace == ' ') {
+			wspace--;
+		}
+		wspace++;
+		*wspace = '\0';
+		// NOTE: Update the last position
+		shared_st->res_cur_pos = wspace;
+	}
 }
 
 /**
@@ -1788,14 +2161,15 @@ char* mysql_query_digest_first_stage(const char* const q, int q_len, char** cons
 
 	// state shared between all the parsing states
 	struct shared_st shared_st = { 0 };
-	shared_st.q = q;
-	shared_st.d_max_len = d_max_len;
-	shared_st.res = res;
-	shared_st.res_cur_pos = res;
-	shared_st.res_pre_pos = res;
+	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+
+	struct stage_1_st stage_1_st = { 0 };
+	init_stage_1_st(&stage_1_st);
 
     // perform just the first stage parsing
-	first_stage_parsing(&res, &shared_st, &opts, fst_cmnt);
+	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
+
+	final_stage(&shared_st, &stage_1_st, &opts);
 
     return res;
 }
@@ -1821,17 +2195,19 @@ char* mysql_query_digest_second_stage(const char* const q, int q_len, char** con
 
 	// state shared between all the parsing states
 	struct shared_st shared_st = { 0 };
-	shared_st.q = q;
-	shared_st.d_max_len = d_max_len;
-	shared_st.res = res;
-	shared_st.res_cur_pos = res;
-	shared_st.res_pre_pos = res;
+	init_shared_st(&shared_st, q, q_len, d_max_len, res);
+
+	struct stage_1_st stage_1_st = { 0 };
+	init_stage_1_st(&stage_1_st);
+	struct stage_2_st stage_2_st = { 0 };
 
     // perform just the first stage parsing
-	first_stage_parsing(&res, &shared_st, &opts, fst_cmnt);
+	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
 
 	// second stage parsing
-	second_stage_parsing(&res, &shared_st, &opts);
+	stage_2_parsing(&shared_st, &stage_1_st, &stage_2_st, &opts);
+
+	final_stage(&shared_st, &stage_1_st, &opts);
 
     return res;
 }
@@ -1871,20 +2247,57 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 
 	// state shared between all the parsing states
 	struct shared_st shared_st = { 0 };
-	shared_st.q = q;
-	shared_st.q_len = q_len;
-	shared_st.d_max_len = d_max_len;
-	shared_st.res = res;
-	shared_st.res_cur_pos = res;
-	shared_st.res_pre_pos = res;
+	init_shared_st(&shared_st, q, q_len, d_max_len, res);
 
-	first_stage_parsing(&res, &shared_st, &opts, fst_cmnt);
-	// second stage parsing
-	second_stage_parsing(&res, &shared_st, &opts);
-	// third stage parsing
-	third_stage_parsing(&res, &shared_st, &opts);
-	// fourth stage parsing
-	fourth_stage_parsing(&res, &shared_st, &opts);
+	// individual states for stages
+	struct stage_1_st stage_1_st = { 0 };
+	init_stage_1_st(&stage_1_st);
+	struct stage_2_st stage_2_st = { 0 };
+	struct stage_3_st stage_3_st = { 0 };
+	struct stage_4_st stage_4_st = { 0 };
+
+	char min_digest_size = 0;
+
+	// TODO: This may requires a stopping point, configurable or not, otherwise parsing can become very slow for
+	// very big queries that will require multiple compression stages for processing them. Instead if a
+	// maximum number of iterations is imposed, those queries will stop being parsed before the maximum
+	// compression, but the overhead can be greatly reduced. Example of these queries can be:
+	//
+	// ```
+	//                                                             ˇ Query continues...
+	// INSERT INTO db.table (colj-1,colk,...) VALUES (?,...),(?,...) ON DUPLICATE KEY UPDATE col1 = VALUES(col2) + VALUES(col3)')
+	//                           'n' number of values ^      ^ 'm' number of repetitions
+	// ```
+	//
+	// If 'n' and 'm' are big numbers, the number of iterations for performing the collapsing would totally be
+	// dependent of: length(query) / max_query_digest_length. Most of this kind of query, will keep being
+	// collapsed, since none of the iterations will fill the buffer, since all the new values will be
+	// collapsed. Due to this, we might want to offer a way or limit to stop the iteration and offer a
+	// trade off between compression and performance for very big queries.
+	while (min_digest_size == 0) {
+		stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
+		stage_2_parsing(&shared_st, &stage_1_st, &stage_2_st, &opts);
+		stage_3_parsing(&shared_st, &stage_1_st, &stage_3_st, &opts);
+		stage_4_parsing(&shared_st, &stage_1_st, &stage_4_st, &opts);
+
+		// compute the compression offset of the whole iteration
+		shared_st.gl_c_offset = stage_1_st.pre_it_pos - shared_st.res_cur_pos;
+		if (
+			shared_st.q_cur_pos >= shared_st.q_len ||
+			d_max_len <= (shared_st.res_cur_pos - shared_st.res_init_pos) ||
+			shared_st.gl_c_offset == 0
+		) {
+			min_digest_size = 1;
+		} else {
+			// we need to update the shared state for processing again from the previous ending point
+			char* new_start_point = shared_st.res_cur_pos;
+			shared_st.res_it_init_pos = new_start_point;
+			shared_st.res_cur_pos = new_start_point;
+			shared_st.res_pre_pos = new_start_point;
+		}
+	}
+
+	final_stage(&shared_st, &stage_1_st, &opts);
 
 	return res;
 }
@@ -1932,7 +2345,7 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 		char* _p = shared_st->res_pre_pos - 3;
 
 		// remove '+|-' symbols before the found literal
-		if ( _p >= shared_st->res && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
+		if ( _p >= shared_st->res_init_pos && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 			if (
 				( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) ||
 				( ( *(_p+1) == ' ' ) && ( *_p == ',' || *_p == '(' ) )
@@ -1942,11 +2355,11 @@ enum p_st process_literal_string_space_rm(shared_st* shared_st, literal_string_s
 		}
 
 		// remove spaces before the found literal
-		if ( _p >= shared_st->res && is_space_char(*(_p + 2))) {
+		if ( _p >= shared_st->res_init_pos && is_space_char(*(_p + 2))) {
 			if  (
 				( *(_p+1) == ',' ) || ( *(_p+1) == '(' ) || ( is_arithmetic_op(*(_p+1)) )
 			) {
-				if ( _p >= shared_st->res && ( *(_p+3) == '\''|| *(_p+3) == '"' )) {
+				if ( _p >= shared_st->res_init_pos && ( *(_p+3) == '\''|| *(_p+3) == '"' )) {
 					shared_st->res_cur_pos--;
 				}
 			}
@@ -2017,7 +2430,7 @@ enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st*
 			char* _p = shared_st->res_pre_pos - 3;
 
 			// remove symbol and keep parenthesis or comma
-			if (_p >= shared_st->res && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
+			if (_p >= shared_st->res_init_pos && ( *(_p+2) == '-' || *(_p+2) == '+') ) {
 				if (
 					( *(_p+1) == ',' ) || (*(_p+1) == '(') ||
 					( (*(_p+1) == ' ') && (*_p == ',' || *_p == '(') )
@@ -2027,7 +2440,7 @@ enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st*
 			}
 
 			// Remove spaces before number counting with possible '.' presence
-			if (_p >= shared_st->res && *_p == '.' &&
+			if (_p >= shared_st->res_init_pos && *_p == '.' &&
 				(*(_p+1) == ' ' || *(_p+1) == '.') &&
 				(*(_p+2) == '-' || *(_p+2) == '+')
 			) {
@@ -2038,14 +2451,14 @@ enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st*
 			}
 
 			// remove spaces after a opening bracket when followed by a number
-			if (_p >= shared_st->res && *(_p+1) == '(' && *(_p+2) == ' ') {
+			if (_p >= shared_st->res_init_pos && *(_p+1) == '(' && *(_p+2) == ' ') {
 				shared_st->res_cur_pos--;
 			}
 
 			// remove spaces before number
-			if (_p >= shared_st->res && is_space_char(*(_p + 2))) {
+			if (_p >= shared_st->res_init_pos && is_space_char(*(_p + 2))) {
 				// a point '.' can be found prior to a number in case of query grouping
-				if ( _p >= shared_st->res &&
+				if ( _p >= shared_st->res_init_pos &&
 					(*(_p+1) == '-' || *(_p+1) == '+' || *(_p+1) == '*' || *(_p+1) == '/' ||
 					 *(_p+1) == '%' || *(_p+1) == ',' || *(_p+1) == '.')
 				) {
@@ -2129,7 +2542,8 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	shared_st.q = q;
 	shared_st.q_len = q_len;
 	shared_st.d_max_len = d_max_len;
-	shared_st.res = res;
+	shared_st.res_init_pos = res;
+	shared_st.res_it_init_pos = res;
 	shared_st.res_cur_pos = res;
 	shared_st.res_pre_pos = res;
 
@@ -2154,7 +2568,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
 			shared_st.res_pre_pos = shared_st.res_cur_pos;
-			cur_st = get_next_st(&res, &opts, &shared_st);
+			cur_st = get_next_st(&opts, &shared_st);
 
 			// if next st isn't 'no_mark_found' transition to it without consuming current char
 			if (cur_st != st_no_mark_found) {
@@ -2165,7 +2579,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 				// Removal of spaces that doesn't belong to any particular parsing state.
 
 				// ignore all the leading spaces
-				if (shared_st.res_cur_pos == shared_st.res && is_space_char(*shared_st.q)) {
+				if (shared_st.res_cur_pos == shared_st.res_init_pos && is_space_char(*shared_st.q)) {
 					shared_st.q++;
 					shared_st.q_cur_pos++;
 					continue;
@@ -2200,7 +2614,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 					char* p = shared_st.res_cur_pos - 2;
 
 					// suppress spaces before arithmetic operators
-					if (p >= shared_st.res && is_space_char(shared_st.prev_char) && is_arithmetic_op(*shared_st.q)) {
+					if (p >= shared_st.res_init_pos && is_space_char(shared_st.prev_char) && is_arithmetic_op(*shared_st.q)) {
 						if (*p == '?') {
 							shared_st.prev_char = *shared_st.q;
 							--shared_st.res_cur_pos;
@@ -2213,7 +2627,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 					}
 					// suppress spaces before and after commas
 					if (
-						p >= shared_st.res && is_space_char(shared_st.prev_char) &&
+						p >= shared_st.res_init_pos && is_space_char(shared_st.prev_char) &&
 						((*shared_st.q == ',') || (*p == ','))
 					) {
 						if (*shared_st.q == ',') {
@@ -2231,7 +2645,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 					}
 					// suppress spaces before closing brackets when grouping or mark is present
 					if (
-						p >= shared_st.res && (*p == '.' || *p == '?') &&
+						p >= shared_st.res_init_pos && (*p == '.' || *p == '?') &&
 						is_space_char(shared_st.prev_char) && (*shared_st.q == ')')
 					) {
 						shared_st.prev_char = *shared_st.q;
@@ -2245,7 +2659,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 				}
 
 				// copy the current char
-				copy_next_char(&opts, &shared_st);
+				copy_next_char(&shared_st, &opts);
 			}
 		} else {
 			if (cur_st == st_cmnt_type_1) {
@@ -2288,7 +2702,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 			}
 
 			if (shared_st.copy_next_char) {
-				copy_next_char(&opts, &shared_st);
+				copy_next_char(&shared_st, &opts);
 			} else {
 				// if we do not copy we skip the next char, but copy it to `prev_char`
 				shared_st.prev_char = *shared_st.q++;
@@ -2307,7 +2721,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	// D: `select ?  `
 	//              ^ never collapsed
 	// ```
-	if (shared_st.res_cur_pos > shared_st.res) {
+	if (shared_st.res_cur_pos > shared_st.res_it_init_pos) {
 		char* wspace = shared_st.res_cur_pos - 1;
 		while (*wspace == ' ') {
 			wspace--;
