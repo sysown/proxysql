@@ -19,6 +19,7 @@ __thread bool mysql_thread___query_digests_lowercase = false;
 __thread bool mysql_thread___query_digests_replace_null = false;
 __thread bool mysql_thread___query_digests_no_digits = false;
 __thread int mysql_thread___query_digests_grouping_limit = 3;
+__thread int mysql_thread___query_digests_groups_grouping_limit = 1;
 
 using std::vector;
 using std::pair;
