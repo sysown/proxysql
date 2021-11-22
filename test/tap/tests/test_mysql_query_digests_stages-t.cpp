@@ -181,168 +181,202 @@ struct dt_idx {
 	};
 };
 
-int get_tests_defs(const string& filepath, vector<query_digest_test>& tests_def, uint32_t& test_num) {
+nlohmann::json get_tests_defs(const string& filepath) {
 	std::ifstream file_stream(filepath);
 	std::string test_file_contents((std::istreambuf_iterator<char>(file_stream)), (std::istreambuf_iterator<char>()));
 
-	vector<query_digest_test> res_tests_def {};
+	std::regex comment_pattern { ".*\\/\\/.*[\\r\\n]" };
+	string test_file_no_comments { std::regex_replace(test_file_contents, comment_pattern, "") };
+	nlohmann::json j_test_defs = nlohmann::json::parse(test_file_no_comments, nullptr, true);
+
+	return j_test_defs;
+}
+
+int count_test_defs(const nlohmann::json& j_test_defs, uint32_t& test_num) {
 	uint32_t res_test_num = 0;
 
 	try {
-		std::regex comment_pattern { ".*\\/\\/.*[\\r\\n]" };
-		string test_file_no_comments { std::regex_replace(test_file_contents, comment_pattern, "") };
-		nlohmann::json j_test_defs = nlohmann::json::parse(test_file_no_comments, nullptr, true);
-
 		for (const auto& j_test_def : j_test_defs) {
 			const auto& j_queries = j_test_def.at("q");
-			vector<string> s_queries {};
 
-			if (j_queries.is_array()) {
-				for (const auto& query : j_queries) {
-					s_queries.push_back(query);
-				}
-			} else {
-				s_queries.push_back(string { j_queries });
-			}
+			for (const string& s_query : j_queries) {
+				bool contains_supp_check =
+					j_test_def.contains("s1") ||
+					j_test_def.contains("s2") ||
+					j_test_def.contains("s3") ||
+					j_test_def.contains("s4") ||
+					j_test_def.contains("dr");
 
-			for (const string& s_query : s_queries) {
-				string s1 {};
-				string s2 {};
-				string s3 {};
-				string s4 {};
-				// digit replacement
-				string dr {};
-
-				if (j_test_def.contains("s1")) {
-					s1 = j_test_def["s1"];
-				}
-
-				if (j_test_def.contains("s2")) {
-					s2 = j_test_def["s2"];
+				if (contains_supp_check) {
 					res_test_num++;
 				}
-
-				if (j_test_def.contains("s3")) {
-					s3 = j_test_def["s3"];
-					res_test_num++;
-				}
-
-				if (j_test_def.contains("s4")) {
-					s4 = j_test_def["s4"];
-					res_test_num++;
-				}
-
-				if (j_test_def.contains("dr")) {
-					dr = j_test_def["dr"];
-					res_test_num++;
-				}
-
-				res_tests_def.push_back({ s_query, s1, s2, s3, dr, s4 });
-				res_test_num++;
 			}
 		}
 	} catch (const std::exception& ex){
-		diag("Failed to parse the test payload file '%s' with ex: '%s'", filepath.c_str(), ex.what());
+		diag("Invalid test definition doesn't specify a query: '%s'", ex.what());
 		return EXIT_FAILURE;
 	}
 
 	// return results
-	tests_def = res_tests_def;
 	test_num = res_test_num;
 
 	return EXIT_SUCCESS;
 }
 
-int process_digest_tests(const vector<query_digest_test>& tests_def) {
+int process_digest_test(const nlohmann::json& test_def) {
 	char buf[QUERY_DIGEST_BUF];
-	int res = EXIT_SUCCESS;
+	char* first_comment = NULL;
+	std::string query { test_def.at("q") };
+	char* c_query = (char*)malloc(query.size());
+	memcpy(c_query, query.c_str(), query.size());
 
-	for (size_t i = 0; i < tests_def.size(); i++) {
-		const auto& query = std::get<dt_idx::query>(tests_def[i]);
-		const auto& digest_stage_1 = std::get<dt_idx::first_stage>(tests_def[i]);
-		const auto& digest_stage_2 = std::get<dt_idx::second_stage>(tests_def[i]);
-		const auto& digest_stage_3 = std::get<dt_idx::third_stage>(tests_def[i]);
-		const auto& digest_stage_4 = std::get<dt_idx::fourth_stage>(tests_def[i]);
-		const auto& digest_no_digits = std::get<dt_idx::digit_replacement>(tests_def[i]);
-		const auto& query_str_rep = replace_str(std::get<0>(tests_def[i]), "\n", "\\n");
+	if (test_def.contains("s1")) {
+		std::string digest_stage_1 { test_def.at("s1") };
+		char* c_res = mysql_query_digest_first_stage(c_query, query.size(), &first_comment,
+				((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+		std::string stage_1_res(c_res);
 
-		char* first_comment = NULL;
-		string exp_res {};
-		char* c_res = NULL;
-
-		// consistency check for the received data
-		if (query.empty() || digest_stage_1.empty()) {
-			diag(
-				"Invalid digest received by 'process_digest_tests', empty query or 's1' provided - ('%s', '%s')",
-				query.c_str(), digest_stage_1.c_str()
-			);
-			res = EXIT_FAILURE;
-		} else {
-			c_res = mysql_query_digest_first_stage(query.c_str(), query.size(), &first_comment,
+		ok(
+			stage_1_res == digest_stage_1,
+			"Digest should be equal to exp result for 'STAGE 1' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+			query.c_str(), stage_1_res.c_str(), digest_stage_1.c_str()
+		);
+	}
+	if (test_def.contains("s2")) {
+		std::string digest_stage_2 { test_def.at("s2") };
+		if (digest_stage_2.empty() == false) {
+			char* c_res = mysql_query_digest_second_stage(c_query, query.size(), &first_comment,
 					((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
-			std::string stage_1_res(c_res);
+			std::string stage_2_res(c_res);
 
 			ok(
-				stage_1_res == digest_stage_1,
-				"Digest should be equal to exp result for 'STAGE 1' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
-				query.c_str(), stage_1_res.c_str(), digest_stage_1.c_str()
+				stage_2_res == digest_stage_2,
+				"Digest should be equal to exp result for 'STAGE 2' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+				query.c_str(), stage_2_res.c_str(), digest_stage_2.c_str()
+			);
+		}
+	}
+	if (test_def.contains("s3")) {
+		std::string digest_stage_3 { test_def.at("s3") };
+		if (digest_stage_3.empty() == false) {
+			int backup_groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
+			mysql_thread___query_digests_groups_grouping_limit = 0;
+			char* c_res = mysql_query_digest_and_first_comment_2(c_query, query.size(), &first_comment,
+					((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+			std::string stage_3_res(c_res);
+
+			ok(
+				stage_3_res == digest_stage_3,
+				"Digest should be equal to exp result for 'STAGE 3' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+				query.c_str(), stage_3_res.c_str(), digest_stage_3.c_str()
 			);
 
-			if (digest_stage_2.empty() == false) {
-				c_res = mysql_query_digest_second_stage(query.c_str(), query.size(), &first_comment,
-						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
-				std::string stage_2_res(c_res);
+			mysql_thread___query_digests_groups_grouping_limit = backup_groups_grouping_limit;
+		}
+	}
+	if (test_def.contains("s4")) {
+		std::string digest_stage_4 { test_def.at("s4") };
+		if (digest_stage_4.empty() == false) {
+			char* c_res = mysql_query_digest_and_first_comment_2(c_query, query.size(), &first_comment,
+					((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+			std::string stage_4_res(c_res);
 
-				ok(
-					stage_2_res == digest_stage_2,
-					"Digest should be equal to exp result for 'STAGE 2' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
-					query.c_str(), stage_2_res.c_str(), digest_stage_2.c_str()
-				);
+			ok(
+				stage_4_res == digest_stage_4,
+				"Digest should be equal to exp result for 'STAGE 4' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+				query.c_str(), stage_4_res.c_str(), digest_stage_4.c_str()
+			);
+		}
+	}
+	if (test_def.contains("dr")) {
+		std::string digest_no_digits { test_def.at("dr") };
+		if (digest_no_digits.empty() == false) {
+			int no_digits_backup = mysql_thread___query_digests_no_digits;
+			mysql_thread___query_digests_no_digits = 1;
+
+			char* c_res = mysql_query_digest_and_first_comment_2(c_query, query.size(), &first_comment,
+					((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+			std::string no_digits_res(c_res);
+			ok(
+				no_digits_res == digest_no_digits,
+				"Digest should be equal to exp result for 'NoDigits' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+				query.c_str(), no_digits_res.c_str(), digest_no_digits.c_str()
+			);
+
+			mysql_thread___query_digests_no_digits = no_digits_backup;
+		}
+	}
+	if (test_def.contains("mz")) {
+		vector<nlohmann::json> mz_tests_defs {};
+
+		if (test_def.at("mz").is_array()) {
+			for (const nlohmann::json& mz_test_def : test_def.at("mz")) {
+				mz_tests_defs.push_back(mz_test_def);
+			}
+		} else {
+			mz_tests_defs.push_back(test_def.at("mz"));
+		}
+
+		for (const nlohmann::json& mz_test_def : mz_tests_defs) {
+			int digest_max_size = mz_test_def.at("digest_max_size");
+			int grouping_limit = mz_test_def.at("grouping_limit");
+			int groups_grouping_limit = mz_test_def.at("groups_grouping_limit");
+			string exp_digest = mz_test_def.at("digest");
+			int replace_digits = 0;
+
+			if (mz_test_def.contains("replace_digits")) {
+				replace_digits = mz_test_def.at("replace_digits");
 			}
 
-			if (digest_stage_3.empty() == false) {
-				int backup_groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
-				mysql_thread___query_digests_groups_grouping_limit = 0;
-				c_res = mysql_query_digest_and_first_comment_2(query.c_str(), query.size(), &first_comment,
-						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
-				std::string stage_3_res(c_res);
+			int backup_digest_max_length = mysql_thread___query_digests_max_query_length;
+			mysql_thread___query_digests_max_query_length = digest_max_size;
+			int backup_grouping_limit = mysql_thread___query_digests_grouping_limit;
+			mysql_thread___query_digests_grouping_limit = grouping_limit;
+			int backup_groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
+			mysql_thread___query_digests_groups_grouping_limit = groups_grouping_limit;
+			int no_digits_backup = mysql_thread___query_digests_no_digits;
+			mysql_thread___query_digests_no_digits = replace_digits;
 
-				ok(
-					stage_3_res == digest_stage_3,
-					"Digest should be equal to exp result for 'STAGE 3' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
-					query.c_str(), stage_3_res.c_str(), digest_stage_3.c_str()
-				);
+			char* c_res = mysql_query_digest_and_first_comment_2(c_query, query.size(), &first_comment,
+					((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
+			std::string digest_res(c_res);
+			ok(
+				exp_digest == digest_res,
+				"Digest should be equal to exp result for 'MultipleSettings' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
+				query.c_str(), digest_res.c_str(), exp_digest.c_str()
+			);
 
-				mysql_thread___query_digests_groups_grouping_limit = backup_groups_grouping_limit;
+			mysql_thread___query_digests_max_query_length = backup_digest_max_length;
+			mysql_thread___query_digests_grouping_limit = backup_grouping_limit;
+			mysql_thread___query_digests_groups_grouping_limit = backup_groups_grouping_limit;
+			mysql_thread___query_digests_no_digits = no_digits_backup;
+		}
+	}
+
+	free(c_query);
+
+	return EXIT_SUCCESS;
+}
+
+int process_digest_tests(const nlohmann::json& tests_defs) {
+	int res = EXIT_SUCCESS;
+
+	for (const auto& test_def : tests_defs) {
+		if (test_def.at("q").is_array()) {
+			vector<nlohmann::json> same_digest_tests {};
+
+			for (const string& query : test_def.at("q")) {
+				nlohmann::json new_test_def = test_def;
+				new_test_def["q"] = query;
+
+				same_digest_tests.push_back(new_test_def);
 			}
 
-			if (digest_stage_4.empty() == false) {
-				c_res = mysql_query_digest_and_first_comment_2(query.c_str(), query.size(), &first_comment,
-						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
-				std::string stage_4_res(c_res);
-
-				ok(
-					stage_4_res == digest_stage_4,
-					"Digest should be equal to exp result for 'STAGE 4' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
-					query.c_str(), stage_4_res.c_str(), digest_stage_4.c_str()
-				);
+			for (const auto& s_digest_test : same_digest_tests) {
+				process_digest_test(s_digest_test);
 			}
-
-			if (digest_no_digits.empty() == false) {
-				int no_digits_backup = mysql_thread___query_digests_no_digits;
-				mysql_thread___query_digests_no_digits = 1;
-
-				c_res = mysql_query_digest_and_first_comment_2(query.c_str(), query.size(), &first_comment,
-						((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
-				std::string no_digits_res(c_res);
-				ok(
-					no_digits_res == digest_no_digits,
-					"Digest should be equal to exp result for 'NoDigits' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
-					query.c_str(), no_digits_res.c_str(), digest_no_digits.c_str()
-				);
-
-				mysql_thread___query_digests_no_digits = no_digits_backup;
-			}
+		} else {
+			process_digest_test(test_def);
 		}
 	}
 
@@ -358,32 +392,34 @@ int main(int argc, char** argv) {
 	}
 
 	const string digests_filepath { string(cl.workdir) + DIGESTS_TEST_FILENAME };
-	// const string digests_filepath { string(cl.workdir) + "tokenizer_payloads/large_digests.hjson" };
 
-	vector<query_digest_test> tests_defs {};
 	uint32_t tests_num = 0;
 
-	int err = get_tests_defs(digests_filepath, tests_defs, tests_num);
-	if (err == EXIT_FAILURE) {
-		diag("Failed to execute 'get_tests_defs' at ('%s':'%d')", __FILE__, __LINE__);
+	nlohmann::json tests_defs {};
+
+	try {
+		tests_defs = get_tests_defs(digests_filepath);
+	} catch (const std::exception& ex) {
+		diag("'get_tests_defs' failed at ('%s':'%d') with exception: '%s'", __FILE__, __LINE__, ex.what());
 	}
 
 	plan(tests_num);
 
 	process_digest_tests(tests_defs);
 
-	// Simple benchmarking for tracking impls overhead.
 	/*
+	// Simple benchmarking for tracking impls overhead.
 	{
-		err = get_tests_defs(digests_filepath, tests_defs, tests_num);
-		if (err == EXIT_FAILURE) {
-			diag("Failed to execute 'get_tests_defs' at ('%s':'%d')", __FILE__, __LINE__);
-		}
 		vector<string> queries {};
-		std::transform(
-			tests_defs.begin(), tests_defs.end(), std::back_inserter(queries),
-			[](const query_digest_test& test_def){ return std::get<0>(test_def); }
-		);
+		for (const auto& test_def : tests_defs) {
+			if (test_def.at("q").is_array()) {
+				for (const string& query : test_def.at("q")) {
+					queries.push_back(query);
+				}
+			} else {
+				queries.push_back(static_cast<std::string>(test_def.at("q")));
+			}
+		}
 
 		int len = 0;
 		uint64_t duration = 0;
