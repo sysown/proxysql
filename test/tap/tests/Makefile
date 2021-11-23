@@ -81,7 +81,7 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora generate_set_session_csv || true
+	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora generate_set_session_csv set_testing-240.csv || true
 
 WITHGCOVVAR := $(shell echo $(WITHGCOV))
 ifeq ($(WITHGCOVVAR),1)
@@ -101,14 +101,14 @@ OPT=-O2 $(WGCOV) -Wl,--no-as-needed
 debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
-tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test
+tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test set_testing-240.csv
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
 set_testing-240.csv: generate_set_session_csv
 	./generate_set_session_csv > set_testing-240.csv
 
-%-t:%-t.cpp $(TAP_LIBDIR)/libtap.a set_testing-240.csv
+%-t:%-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
