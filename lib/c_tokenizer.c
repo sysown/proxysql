@@ -484,6 +484,11 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					}
 					cmd=0;
 				}
+				if (flag == 1 && prev_char == '*' && *s == '/') {
+					if (r != p_r && *p_r != ' ') { // not at the beginning, and previous char is not ' '
+						*p_r++ = ' ';
+					}
+				}
 				prev_char = ' ';
 				flag = 0;
 				s++;

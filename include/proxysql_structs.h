@@ -830,15 +830,20 @@ __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
 __thread bool mysql_thread___log_mysql_warnings_enabled;
 __thread bool mysql_thread___enable_load_data_local_infile;
+__thread int mysql_thread___client_host_cache_size;
+__thread int mysql_thread___client_host_error_counts;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 __thread char * mysql_thread___ssl_p2s_ca;
+__thread char * mysql_thread___ssl_p2s_capath;
 __thread char * mysql_thread___ssl_p2s_cert;
 __thread char * mysql_thread___ssl_p2s_key;
 __thread char * mysql_thread___ssl_p2s_cipher;
+__thread char * mysql_thread___ssl_p2s_crl;
+__thread char * mysql_thread___ssl_p2s_crlpath;
 
 /* variables used by events log */
 __thread char * mysql_thread___eventslog_filename;
@@ -870,6 +875,7 @@ __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
 __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
+__thread int mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only;
 __thread int mysql_thread___monitor_galera_healthcheck_interval;
 __thread int mysql_thread___monitor_galera_healthcheck_timeout;
 __thread int mysql_thread___monitor_galera_healthcheck_max_timeout_count;
@@ -982,15 +988,20 @@ extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
 extern __thread bool mysql_thread___log_mysql_warnings_enabled;
 extern __thread bool mysql_thread___enable_load_data_local_infile;
+extern __thread int mysql_thread___client_host_cache_size;
+extern __thread int mysql_thread___client_host_error_counts;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 extern __thread char * mysql_thread___ssl_p2s_ca;
+extern __thread char * mysql_thread___ssl_p2s_capath;
 extern __thread char * mysql_thread___ssl_p2s_cert;
 extern __thread char * mysql_thread___ssl_p2s_key;
 extern __thread char * mysql_thread___ssl_p2s_cipher;
+extern __thread char * mysql_thread___ssl_p2s_crl;
+extern __thread char * mysql_thread___ssl_p2s_crlpath;
 
 /* variables used by events log */
 extern __thread char * mysql_thread___eventslog_filename;
@@ -1021,6 +1032,7 @@ extern __thread int mysql_thread___monitor_replication_lag_count;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+extern __thread int mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only;
 extern __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 extern __thread int mysql_thread___monitor_galera_healthcheck_interval;
 extern __thread int mysql_thread___monitor_galera_healthcheck_timeout;
@@ -1061,6 +1073,9 @@ typedef struct {
 	char * default_value;       // default value
 	bool is_global_variable;	// is it a global variable?
 } mysql_variable_st;
+
+TODO: 'SQL_CHARACTER_SET_DATABASE' is a variable that shouldn't be set, or tracked on our side, since it's meant to be only updated by the server:
+ - https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_character_set_database
 */
 /* NOTE:
 	make special ATTENTION that the order in mysql_variable_name

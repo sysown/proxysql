@@ -100,10 +100,23 @@ else
 WGCOV=
 endif
 
-MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV)
+WITHASANVAR := $(shell echo $(WITHASAN))
+ifeq ($(WITHASANVAR),1)
+WASAN= -fsanitize=address
+# Force the disable of JEMALLOC, since ASAN isn't compatible.
+export NOJEMALLOC = 1
+else
+WASAN=
+endif
+
+MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
 
 ifeq ($(WITHGCOVVAR),1)
 LDFLAGS+= -lgcov --coverage
+endif
+
+ifeq ($(WITHASANVAR),1)
+LDFLAGS+= -fsanitize=address
 endif
 
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
@@ -140,7 +153,7 @@ ODIR= obj
 
 EXECUTABLE=proxysql
 
-_OBJ = main.o proxysql_global.o SQLite3_Server.o
+_OBJ = main.o proxysql_global.o SQLite3_Server.o proxy_tls.o
 OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 
 $(ODIR)/%.o: %.cpp

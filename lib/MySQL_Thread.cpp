@@ -88,6 +88,7 @@ mythr_st_vars_t MySQL_Thread_status_variables_counter_array[] {
 	{ st_var_whitelisted_sqli_fingerprint,p_th_counter::whitelisted_sqli_fingerprint,     (char *)"whitelisted_sqli_fingerprint" },
 	{ st_var_max_connect_timeout_err,     p_th_counter::max_connect_timeouts,             (char *)"max_connect_timeouts" },
 	{ st_var_generated_pkt_err,           p_th_counter::generated_error_packets,          (char *)"generated_error_packets" },
+	{ st_var_client_host_error_killed_connections, p_th_counter::client_host_error_killed_connections, (char *)"client_host_error_killed_connections" },
 };
 
 mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
@@ -412,6 +413,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"shun_recovery_time_sec",
 	(char *)"query_retries_on_failure",
 	(char *)"client_multi_statements",
+	(char *)"client_host_cache_size",
+	(char *)"client_host_error_counts",
 	(char *)"connect_retries_on_failure",
 	(char *)"connect_retries_delay",
 	(char *)"connection_delay_multiplex_ms",
@@ -457,6 +460,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_groupreplication_healthcheck_timeout",
 	(char *)"monitor_groupreplication_healthcheck_max_timeout_count",
 	(char *)"monitor_groupreplication_max_transactions_behind_count",
+	(char *)"monitor_groupreplication_max_transactions_behind_for_read_only",
 	(char *)"monitor_galera_healthcheck_interval",
 	(char *)"monitor_galera_healthcheck_timeout",
 	(char *)"monitor_galera_healthcheck_max_timeout_count",
@@ -539,9 +543,12 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"session_debug",
 #endif /* DEBUG */
 	(char *)"ssl_p2s_ca",
+	(char *)"ssl_p2s_capath",
 	(char *)"ssl_p2s_cert",
 	(char *)"ssl_p2s_key",
 	(char *)"ssl_p2s_cipher",
+	(char *)"ssl_p2s_crl",
+	(char *)"ssl_p2s_crlpath",
 	(char *)"stacksize",
 	(char *)"threads",
 	(char *)"init_connect",
@@ -587,7 +594,7 @@ using th_gauge_vector = std::vector<th_gauge_tuple>;
  * @note Many metrics in this map, share a common "id name", because
  *  they differ only by label, because of this, HELP is shared between
  *  them. For better visual identification of this groups they are
- *  sepparated using a line separator comment.
+ *  separated using a line separator comment.
  */
 const std::tuple<th_counter_vector, th_gauge_vector>
 th_metrics_map = std::make_tuple(
@@ -813,7 +820,7 @@ th_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_th_counter::mysql_unexpected_frontend_com_quit,
 			"proxysql_mysql_unexpected_frontend_com_quit_total",
-			"Unexpecte 'COM_QUIT' received from the client.",
+			"Unexpected 'COM_QUIT' received from the client.",
 			metric_tags {}
 		),
 		std::make_tuple (
@@ -862,6 +869,12 @@ th_metrics_map = std::make_tuple(
 			p_th_counter::mysql_killed_backend_queries,
 			"proxysql_mysql_killed_backend_queries_total",
 			"Killed backend queries.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_th_counter::client_host_error_killed_connections,
+			"proxysql_client_host_error_killed_connections",
+			"Killed client connections because address exceeded 'client_host_error_counts'.",
 			metric_tags {}
 		)
 	},
@@ -1002,8 +1015,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #else
 	if (glovars.has_debug==true) {
 #endif /* DEBUG */
+		// LCOV_EXCL_START
 		perror("Incompatible debugging version");
 		exit(EXIT_FAILURE);
+		// LCOV_EXCL_STOP
 	}
 	num_threads=0;
 	mysql_threads=NULL;
@@ -1012,12 +1027,17 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize=0;
 	shutdown_=0;
+	bootstrapping_listeners = true;
 	pthread_rwlock_init(&rwlock,NULL);
 	pthread_attr_init(&attr);
+	// Zero initialize all variables
+	memset(&variables, 0, sizeof(variables));
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
 	variables.query_retries_on_failure=1;
 	variables.client_multi_statements=true;
+	variables.client_host_cache_size=0;
+	variables.client_host_error_counts=0;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
@@ -1043,6 +1063,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_groupreplication_healthcheck_timeout=800;
 	variables.monitor_groupreplication_healthcheck_max_timeout_count=3;
 	variables.monitor_groupreplication_max_transactions_behind_count=3;
+	variables.monitor_groupreplication_max_transactions_behind_for_read_only=1;
 	variables.monitor_galera_healthcheck_interval=5000;
 	variables.monitor_galera_healthcheck_timeout=800;
 	variables.monitor_galera_healthcheck_max_timeout_count=3;
@@ -1142,16 +1163,19 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.client_session_track_gtid=true;
 	variables.sessions_sort=true;
 #ifdef IDLE_THREADS
-	variables.session_idle_ms=1000;
+	variables.session_idle_ms=1;
 	variables.session_idle_show_processlist=true;
 #endif // IDLE_THREADS
 	variables.show_processlist_extended = 0;
 	variables.servers_stats=true;
 	variables.default_reconnect=true;
 	variables.ssl_p2s_ca=NULL;
+	variables.ssl_p2s_capath=NULL;
 	variables.ssl_p2s_cert=NULL;
 	variables.ssl_p2s_key=NULL;
 	variables.ssl_p2s_cipher=NULL;
+	variables.ssl_p2s_crl=NULL;
+	variables.ssl_p2s_crlpath=NULL;
 	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,version");
 #ifdef DEBUG
 	variables.session_debug=true;
@@ -1169,8 +1193,10 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	// Initialize prometheus metrics
 	init_prometheus_counter_array<th_metrics_map_idx, p_th_counter>(th_metrics_map, this->status_variables.p_counter_array);
 	init_prometheus_gauge_array<th_metrics_map_idx, p_th_gauge>(th_metrics_map, this->status_variables.p_gauge_array);
-}
 
+	// Init client_host_cache mutex
+	pthread_mutex_init(&mutex_client_host_cache, NULL);
+}
 
 unsigned int MySQL_Threads_Handler::get_global_version() {
 	return __sync_fetch_and_add(&__global_MySQL_Thread_Variables_version,0);
@@ -1274,6 +1300,13 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 				return strdup(variables.ssl_p2s_cert);
 			}
 		}
+		if (!strcmp(name,"ssl_p2s_capath")) {
+			if (variables.ssl_p2s_capath==NULL || strlen(variables.ssl_p2s_capath)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_capath);
+			}
+		}
 		if (!strcmp(name,"ssl_p2s_key")) {
 			if (variables.ssl_p2s_key==NULL || strlen(variables.ssl_p2s_key)==0) {
 				return NULL;
@@ -1286,6 +1319,20 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 				return NULL;
 			} else {
 				return strdup(variables.ssl_p2s_cipher);
+			}
+		}
+		if (!strcmp(name,"ssl_p2s_crl")) {
+			if (variables.ssl_p2s_crl==NULL || strlen(variables.ssl_p2s_crl)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_crl);
+			}
+		}
+		if (!strcmp(name,"ssl_p2s_crlpath")) {
+			if (variables.ssl_p2s_crlpath==NULL || strlen(variables.ssl_p2s_crlpath)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_crlpath);
 			}
 		}
 	}
@@ -1349,14 +1396,18 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
+	// LCOV_EXCL_STOP
 }
 
 uint16_t MySQL_Threads_Handler::get_variable_uint16(char *name) {
 	if (!strcasecmp(name,"server_capabilities")) return variables.server_capabilities;
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+	// LCOV_EXCL_STOP
 }
 
 int MySQL_Threads_Handler::get_variable_int(const char *name) {
@@ -1384,8 +1435,10 @@ int MySQL_Threads_Handler::get_variable_int(const char *name) {
 
 //VALGRIND_DISABLE_ERROR_REPORTING;
 	if (!strcmp(name,"stacksize")) return ( stacksize ? stacksize : DEFAULT_STACK_SIZE);
+	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return 0;
+	// LCOV_EXCL_STOP
 //VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
@@ -1492,6 +1545,13 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 				return strdup(variables.ssl_p2s_ca);
 			}
 		}
+		if (!strcasecmp(name,"ssl_p2s_capath")) {
+			if (variables.ssl_p2s_capath==NULL || strlen(variables.ssl_p2s_capath)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_capath);
+			}
+		}
 		if (!strcasecmp(name,"ssl_p2s_cert")) {
 			if (variables.ssl_p2s_cert==NULL || strlen(variables.ssl_p2s_cert)==0) {
 				return NULL;
@@ -1511,6 +1571,20 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 				return NULL;
 			} else {
 				return strdup(variables.ssl_p2s_cipher);
+			}
+		}
+		if (!strcasecmp(name,"ssl_p2s_crl")) {
+			if (variables.ssl_p2s_crl==NULL || strlen(variables.ssl_p2s_crl)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_crl);
+			}
+		}
+		if (!strcasecmp(name,"ssl_p2s_crlpath")) {
+			if (variables.ssl_p2s_crlpath==NULL || strlen(variables.ssl_p2s_crlpath)==0) {
+				return NULL;
+			} else {
+				return strdup(variables.ssl_p2s_crlpath);
 			}
 		}
 	}
@@ -1813,6 +1887,15 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return true;
 	}
+	if (!strcasecmp(name,"ssl_p2s_capath")) {
+		if (variables.ssl_p2s_capath) free(variables.ssl_p2s_capath);
+		variables.ssl_p2s_capath=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.ssl_p2s_capath=strdup(value);
+		}
+		return true;
+	}
 	if (!strcasecmp(name,"ssl_p2s_cert")) {
 		if (variables.ssl_p2s_cert) free(variables.ssl_p2s_cert);
 		variables.ssl_p2s_cert=NULL;
@@ -1837,6 +1920,24 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		if (vallen) {
 			if (strcmp(value,"(null)"))
 				variables.ssl_p2s_cipher=strdup(value);
+		}
+		return true;
+	}
+	if (!strcasecmp(name,"ssl_p2s_crl")) {
+		if (variables.ssl_p2s_crl) free(variables.ssl_p2s_crl);
+		variables.ssl_p2s_crl=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.ssl_p2s_crl=strdup(value);
+		}
+		return true;
+	}
+	if (!strcasecmp(name,"ssl_p2s_crlpath")) {
+		if (variables.ssl_p2s_crlpath) free(variables.ssl_p2s_crlpath);
+		variables.ssl_p2s_crlpath=NULL;
+		if (vallen) {
+			if (strcmp(value,"(null)"))
+				variables.ssl_p2s_crlpath=strdup(value);
 		}
 		return true;
 	}
@@ -2033,6 +2134,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_groupreplication_healthcheck_timeout"]           = make_tuple(&variables.monitor_groupreplication_healthcheck_timeout,           100,       600*1000, false);
 		VariablesPointers_int["monitor_groupreplication_healthcheck_max_timeout_count"] = make_tuple(&variables.monitor_groupreplication_healthcheck_max_timeout_count,   1,             10, false);
 		VariablesPointers_int["monitor_groupreplication_max_transactions_behind_count"] = make_tuple(&variables.monitor_groupreplication_max_transactions_behind_count,   1,             10, false);
+		VariablesPointers_int["monitor_groupreplication_max_transactions_behind_for_read_only"] = make_tuple(&variables.monitor_groupreplication_max_transactions_behind_for_read_only,   0, 2, false);
 
 		VariablesPointers_int["monitor_galera_healthcheck_interval"]          = make_tuple(&variables.monitor_galera_healthcheck_interval,          50, 7*24*3600*1000, false);
 		VariablesPointers_int["monitor_galera_healthcheck_timeout"]           = make_tuple(&variables.monitor_galera_healthcheck_timeout,           50,       600*1000, false);
@@ -2090,6 +2192,9 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["handle_unknown_charset"]        = make_tuple(&variables.handle_unknown_charset,        0, HANDLE_UNKNOWN_CHARSET__MAX_HANDLE_VALUE, false);
 		VariablesPointers_int["ping_interval_server_msec"]     = make_tuple(&variables.ping_interval_server_msec,  1000, 7*24*3600*1000, false);
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
+		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
+		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
+
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
 		VariablesPointers_int["eventslog_filesize"]    = make_tuple(&variables.eventslog_filesize,   1024*1024, 1*1024*1024*1024, false);
@@ -2204,15 +2309,19 @@ void MySQL_Threads_Handler::init(unsigned int num, size_t stack) {
 proxysql_mysql_thread_t * MySQL_Threads_Handler::create_thread(unsigned int tn, void *(*start_routine) (void *), bool idles) {
 	if (idles==false) {
 		if (pthread_create(&mysql_threads[tn].thread_id, &attr, start_routine , &mysql_threads[tn]) != 0 ) {
+			// LCOV_EXCL_START
 			proxy_error("Thread creation\n");
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 #ifdef IDLE_THREADS
 	} else {
 		if (GloVars.global.idle_threads) {
 			if (pthread_create(&mysql_threads_idles[tn].thread_id, &attr, start_routine , &mysql_threads_idles[tn]) != 0) {
+				// LCOV_EXCL_START
 				proxy_error("Thread creation\n");
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 #endif // IDLE_THREADS
@@ -2257,6 +2366,10 @@ void MySQL_Threads_Handler::shutdown_threads() {
 }
 
 void MySQL_Threads_Handler::start_listeners() {
+	// we set bootstrapping_listeners to true
+	// In this way MySQL_Thread will knows there are more listeners to add
+	// and it will continue looping until all listeners are added
+	bootstrapping_listeners = true;
 	char *_tmp=NULL;
 	_tmp=GloMTH->get_variable((char *)"interfaces");
 	if (strlen(_tmp)==0) {
@@ -2271,6 +2384,8 @@ void MySQL_Threads_Handler::start_listeners() {
 		listener_add((char *)token);
 	}
 	free_tokenizer( &tok );
+	// no more listeners to add
+	bootstrapping_listeners = false;
 }
 
 void MySQL_Threads_Handler::stop_listeners() {
@@ -2283,6 +2398,200 @@ void MySQL_Threads_Handler::stop_listeners() {
 		listener_del((char *)token);
 	}
 	free_tokenizer( &tok );
+}
+
+/**
+ * @brief Gets the client address stored in 'client_addr' member as
+ *   an string if available. If member 'client_addr' is NULL, returns an
+ *   empty string.
+ *
+ * @return Either an string holding the string representation of internal
+ *   member 'client_addr', or empty string if this member is NULL.
+ */
+std::string get_client_addr(struct sockaddr* client_addr) {
+	char buf[INET6_ADDRSTRLEN];
+	std::string str_client_addr {};
+
+	if (client_addr == NULL) {
+		return str_client_addr;
+	}
+
+	switch (client_addr->sa_family) {
+		case AF_INET: {
+			struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_addr;
+			inet_ntop(client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
+			str_client_addr = std::string { buf };
+			break;
+		}
+		case AF_INET6: {
+			struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_addr;
+			inet_ntop(client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
+			str_client_addr = std::string { buf };
+			break;
+		}
+		default:
+			str_client_addr = std::string { "localhost" };
+			break;
+	}
+
+	return str_client_addr;
+}
+
+MySQL_Client_Host_Cache_Entry MySQL_Threads_Handler::find_client_host_cache(struct sockaddr* client_sockaddr) {
+	MySQL_Client_Host_Cache_Entry entry { 0, 0 };
+	// Client_sockaddr **shouldn't** ever by 'NULL', no matter the
+	// 'session_type' in from which this function is called. Because
+	// `MySQL_Session::client_myds::client_addr` should **always** be
+	// initialized before `handler` is called.
+	assert(client_sockaddr != NULL);
+	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
+		return entry;
+	}
+	std::string client_addr = get_client_addr(client_sockaddr);
+	if (client_addr == "127.0.0.1") {
+		return entry;
+	}
+
+	pthread_mutex_lock(&mutex_client_host_cache);
+	auto found_entry = client_host_cache.find(client_addr);
+	if (found_entry != client_host_cache.end()) {
+		entry = found_entry->second;
+	}
+	pthread_mutex_unlock(&mutex_client_host_cache);
+
+	return entry;
+}
+
+/**
+ * @brief Number of columns for representing a 'MySQL_Client_Host_Cache_Entry'
+ *   in a 'SQLite3_result'.
+ */
+const int CLIENT_HOST_CACHE_COLUMNS = 3;
+
+/**
+ * @brief Helper function that converts a given client address and a
+ *   'MySQL_Client_Host_Cache_Entry', into a row for a 'SQLite3_result' for
+ *   table 'STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE'.
+ *
+ * @param address The client address to be added to the resulset row.
+ * @param entry The 'MySQL_Client_Host_Cache_Entry' to be added to the resulset
+ *   row.
+ *
+ * @return A pointer array holding the values for each of the columns of the
+ *   row. It should be freed through helper function 'free_client_host_cache_row'.
+ */
+char** client_host_cache_entry_row(
+	const std::string address, const MySQL_Client_Host_Cache_Entry& entry
+) {
+	// INET6_ADDRSTRLEN length should be enough for holding any member:
+	//  { address: MAX INET6_ADDRSTRLEN, updated_at: uint64_t, error_count: uint32_t }
+	char buff[INET6_ADDRSTRLEN];
+	char** row =
+		static_cast<char**>(malloc(sizeof(char*)*CLIENT_HOST_CACHE_COLUMNS));
+
+	row[0]=strdup(address.c_str());
+	sprintf(buff, "%u", entry.error_count);
+	row[1]=strdup(buff);
+	sprintf(buff, "%lu", entry.updated_at);
+	row[2]=strdup(buff);
+
+	return row;
+}
+
+/**
+ * @brief Helper function to free the row returned by
+ * 'client_host_cache_entry_row'.
+ *
+ * @param row The pointer array holding the row values to be freed.
+ */
+void free_client_host_cache_row(char** row) {
+	for (int i = 0; i < CLIENT_HOST_CACHE_COLUMNS; i++) {
+		free(row[i]);
+	}
+	free(row);
+}
+
+SQLite3_result* MySQL_Threads_Handler::get_client_host_cache(bool reset) {
+	SQLite3_result *result = new SQLite3_result(CLIENT_HOST_CACHE_COLUMNS);
+
+	pthread_mutex_lock(&mutex_client_host_cache);
+	result->add_column_definition(SQLITE_TEXT,"client_address");
+	result->add_column_definition(SQLITE_TEXT,"error_count");
+	result->add_column_definition(SQLITE_TEXT,"last_updated");
+
+	for (const auto& cache_entry : client_host_cache) {
+		char** row = client_host_cache_entry_row(cache_entry.first, cache_entry.second);
+		result->add_row(row);
+		free_client_host_cache_row(row);
+	}
+
+	if (reset) {
+		client_host_cache.clear();
+	}
+
+	pthread_mutex_unlock(&mutex_client_host_cache);
+	return result;
+}
+
+void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_sockaddr, bool error) {
+	// Client_sockaddr **shouldn't** ever by 'NULL', no matter the
+	// 'session_type' in from which this function is called. Because
+	// `MySQL_Session::client_myds::client_addr` should **always** be
+	// initialized before `handler` is called.
+	assert(client_sockaddr != NULL);
+	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
+		return;
+	}
+	std::string client_addr = get_client_addr(client_sockaddr);
+	if (client_addr == "127.0.0.1") {
+		return;
+	}
+
+	if (error) {
+		pthread_mutex_lock(&mutex_client_host_cache);
+		// If the cache is full, find the oldest entry on it, and update/remove it.
+		if (client_host_cache.size() >= static_cast<size_t>(mysql_thread___client_host_cache_size)) {
+			auto older_elem = std::min_element(
+				client_host_cache.begin(),
+				client_host_cache.end(),
+				[] (const std::pair<std::string, MySQL_Client_Host_Cache_Entry>& f_entry,
+					const std::pair<std::string, MySQL_Client_Host_Cache_Entry>& s_entry)
+				{
+					return f_entry.second.updated_at < s_entry.second.updated_at;
+				}
+			);
+			if (older_elem->first != client_addr) {
+				client_host_cache.erase(older_elem);
+			}
+		}
+
+		// Find the entry for the client, and update/insert it.
+		auto cache_entry = client_host_cache.find(client_addr);
+		if (cache_entry != client_host_cache.end()) {
+			cache_entry->second.error_count += 1;
+			cache_entry->second.updated_at = monotonic_time();
+		} else {
+			// Notice than the value of 'mysql_thread___client_host_cache_size' can
+			// change at runtime. Due to this, we should only insert when the size of the
+			// cache is smaller than this value, otherwise we could end in situations in
+			// which cache doesn't shrink after it's size is reduced at runtime.
+			if (client_host_cache.size() < static_cast<size_t>(mysql_thread___client_host_cache_size)) {
+				MySQL_Client_Host_Cache_Entry new_entry { monotonic_time(), 1 };
+				client_host_cache.insert({client_addr, new_entry});
+			}
+		}
+		pthread_mutex_unlock(&mutex_client_host_cache);
+	} else {
+		pthread_mutex_lock(&mutex_client_host_cache);
+		client_host_cache.erase(client_addr);
+		pthread_mutex_unlock(&mutex_client_host_cache);
+	}
+}
+
+void MySQL_Threads_Handler::flush_client_host_cache() {
+	pthread_mutex_lock(&mutex_client_host_cache);
+	client_host_cache.clear();
+	pthread_mutex_unlock(&mutex_client_host_cache);
 }
 
 MySQL_Threads_Handler::~MySQL_Threads_Handler() {
@@ -2305,10 +2614,14 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.auditlog_filename) free(variables.auditlog_filename);
 	if (variables.ssl_p2s_ca) free(variables.ssl_p2s_ca);
+	if (variables.ssl_p2s_capath) free(variables.ssl_p2s_capath);
 	if (variables.ssl_p2s_cert) free(variables.ssl_p2s_cert);
 	if (variables.ssl_p2s_key) free(variables.ssl_p2s_key);
 	if (variables.ssl_p2s_cipher) free(variables.ssl_p2s_cipher);
-	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
+	if (variables.ssl_p2s_crl) free(variables.ssl_p2s_crl);
+	if (variables.ssl_p2s_crlpath) free(variables.ssl_p2s_crlpath);
+
+  for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (variables.default_variables[i]) {
 			free(variables.default_variables[i]);
 			variables.default_variables[i]=NULL;
@@ -2440,9 +2753,12 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___eventslog_filename) { free(mysql_thread___eventslog_filename); mysql_thread___eventslog_filename=NULL; }
 	if (mysql_thread___auditlog_filename) { free(mysql_thread___auditlog_filename); mysql_thread___auditlog_filename=NULL; }
 	if (mysql_thread___ssl_p2s_ca) { free(mysql_thread___ssl_p2s_ca); mysql_thread___ssl_p2s_ca=NULL; }
+	if (mysql_thread___ssl_p2s_capath) { free(mysql_thread___ssl_p2s_capath); mysql_thread___ssl_p2s_capath=NULL; }
 	if (mysql_thread___ssl_p2s_cert) { free(mysql_thread___ssl_p2s_cert); mysql_thread___ssl_p2s_cert=NULL; }
 	if (mysql_thread___ssl_p2s_key) { free(mysql_thread___ssl_p2s_key); mysql_thread___ssl_p2s_key=NULL; }
 	if (mysql_thread___ssl_p2s_cipher) { free(mysql_thread___ssl_p2s_cipher); mysql_thread___ssl_p2s_cipher=NULL; }
+	if (mysql_thread___ssl_p2s_crl) { free(mysql_thread___ssl_p2s_crl); mysql_thread___ssl_p2s_crl=NULL; }
+	if (mysql_thread___ssl_p2s_crlpath) { free(mysql_thread___ssl_p2s_crlpath); mysql_thread___ssl_p2s_crlpath=NULL; }
 
 
 	if (match_regexes) {
@@ -2788,9 +3104,15 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		pthread_mutex_unlock(&thread_mutex);
-		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_add,0))) {	// spin here
-			poll_listener_add(n);
-			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+		while ( // spin here if ...
+			(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
+			||
+			(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
+		) {
+			if (n) {
+				poll_listener_add(n);
+				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);
@@ -2885,9 +3207,11 @@ __run_skip_1a:
 				// poll() timeout, try again
 				continue;
 			if (rc == -1) {
+			// LCOV_EXCL_START
 				// error , exit
 				perror("poll()");
 				exit(EXIT_FAILURE);
+			// LCOV_EXCL_STOP
 			}
 
 		if (__sync_add_and_fetch(&__global_MySQL_Thread_Variables_version,0) > __thread_MySQL_Thread_Variables_version) {
@@ -3306,7 +3630,7 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 		if (sess->active_transactions == 0) {
 			sess->transaction_started_at = 0;
 		} else {
-			if (sess_active_transactions == 0) {
+			if (sess->transaction_started_at == 0) {
 				sess->transaction_started_at = curtime;
 			}
 		}
@@ -3401,6 +3725,7 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess_time/1000 > (unsigned long long)mysql_thread___connect_timeout_client) {
 				proxy_warning("Closing not established client connection %s:%d after %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, sess_time/1000);
 				sess->healthy = 0;
+				GloMTH->update_client_host_cache(sess->client_myds->client_addr, true);
 			}
 		}
 		if (maintenance_loop) {
@@ -3542,12 +3867,18 @@ void MySQL_Thread::refresh_variables() {
 	// SSL proxy to server
 	if (mysql_thread___ssl_p2s_ca) free(mysql_thread___ssl_p2s_ca);
 	mysql_thread___ssl_p2s_ca=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
+	if (mysql_thread___ssl_p2s_capath) free(mysql_thread___ssl_p2s_capath);
+	mysql_thread___ssl_p2s_capath=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
 	if (mysql_thread___ssl_p2s_cert) free(mysql_thread___ssl_p2s_cert);
 	mysql_thread___ssl_p2s_cert=GloMTH->get_variable_string((char *)"ssl_p2s_cert");
 	if (mysql_thread___ssl_p2s_key) free(mysql_thread___ssl_p2s_key);
 	mysql_thread___ssl_p2s_key=GloMTH->get_variable_string((char *)"ssl_p2s_key");
 	if (mysql_thread___ssl_p2s_cipher) free(mysql_thread___ssl_p2s_cipher);
 	mysql_thread___ssl_p2s_cipher=GloMTH->get_variable_string((char *)"ssl_p2s_cipher");
+	if (mysql_thread___ssl_p2s_crl) free(mysql_thread___ssl_p2s_crl);
+	mysql_thread___ssl_p2s_crl=GloMTH->get_variable_string((char *)"ssl_p2s_crl");
+	if (mysql_thread___ssl_p2s_crlpath) free(mysql_thread___ssl_p2s_crlpath);
+	mysql_thread___ssl_p2s_crlpath=GloMTH->get_variable_string((char *)"ssl_p2s_crlpath");
 
 	mysql_thread___monitor_wait_timeout=(bool)GloMTH->get_variable_int((char *)"monitor_wait_timeout");
 	mysql_thread___monitor_writer_is_also_reader=(bool)GloMTH->get_variable_int((char *)"monitor_writer_is_also_reader");
@@ -3568,6 +3899,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_groupreplication_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_timeout");
 	mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_healthcheck_max_timeout_count");
 	mysql_thread___monitor_groupreplication_max_transactions_behind_count=GloMTH->get_variable_int((char *)"monitor_groupreplication_max_transactions_behind_count");
+	mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only=GloMTH->get_variable_int((char *)"monitor_groupreplication_max_transactions_behind_for_read_only");
 	mysql_thread___monitor_galera_healthcheck_interval=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_interval");
 	mysql_thread___monitor_galera_healthcheck_timeout=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_timeout");
 	mysql_thread___monitor_galera_healthcheck_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_galera_healthcheck_max_timeout_count");
@@ -3660,6 +3992,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___enable_server_deprecate_eof=(bool)GloMTH->get_variable_int((char *)"enable_server_deprecate_eof");
 	mysql_thread___enable_load_data_local_infile=(bool)GloMTH->get_variable_int((char *)"enable_load_data_local_infile");
 	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
+	mysql_thread___client_host_cache_size=GloMTH->get_variable_int((char *)"client_host_cache_size");
+	mysql_thread___client_host_error_counts=GloMTH->get_variable_int((char *)"client_host_error_counts");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
@@ -3695,9 +4029,12 @@ MySQL_Thread::MySQL_Thread() {
 
 	// SSL proxy to server
 	mysql_thread___ssl_p2s_ca=NULL;
+	mysql_thread___ssl_p2s_capath=NULL;
 	mysql_thread___ssl_p2s_cert=NULL;
 	mysql_thread___ssl_p2s_key=NULL;
 	mysql_thread___ssl_p2s_cipher=NULL;
+	mysql_thread___ssl_p2s_crl=NULL;
+	mysql_thread___ssl_p2s_crlpath=NULL;
 
 	last_maintenance_time=0;
 	maintenance_loop=true;
@@ -3736,7 +4073,6 @@ void MySQL_Thread::unregister_session_connection_handler(int idx, bool _new) {
 	mysql_sessions->remove_index_fast(idx);
 }
 
-
 void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n) {
 	int c;
 	union {
@@ -3758,6 +4094,25 @@ void MySQL_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsig
 	}
 	c=accept(myds->fd, addr, &addrlen);
 	if (c>-1) { // accept() succeeded
+		if (mysql_thread___client_host_cache_size) {
+			MySQL_Client_Host_Cache_Entry client_host_entry =
+				GloMTH->find_client_host_cache(addr);
+			if (
+				client_host_entry.updated_at != 0 &&
+				client_host_entry.error_count >= static_cast<uint32_t>(mysql_thread___client_host_error_counts)
+			) {
+				std::string client_addr = get_client_addr(addr);
+				proxy_error(
+					"Closing connection because client '%s' reached 'mysql-client_host_error_counts': %d\n",
+					client_addr.c_str(), mysql_thread___client_host_error_counts
+				);
+				close(c);
+				free(addr);
+				status_variables.stvar[st_var_client_host_error_killed_connections] += 1;
+				return;
+			}
+		}
+
 		// create a new client connection
 		mypolls.fds[n].revents=0;
 		MySQL_Session *sess=create_new_session_and_client_data_stream(c);

@@ -183,6 +183,8 @@ void * my_conn_thread(void *arg) {
 			}
 		}
 
+		// this allows connections to be moved around
+		// and will also trigger --idle-threads code
 		int sleepDelay = fastrand()%100;
 		usleep(sleepDelay * 1000);
 

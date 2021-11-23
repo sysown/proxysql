@@ -417,6 +417,8 @@ class MySQL_HostGroups_Manager {
 	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
 	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
 
+	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
+
 	public:
 	std::mutex galera_set_writer_mutex;
 	pthread_rwlock_t gtid_rwlock;
@@ -558,7 +560,30 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
 	void converge_group_replication_config(int _writer_hostgroup);
-
+	/**
+	 * @brief Set the supplied server as SHUNNED, this function shall be called
+	 *   to 'SHUNNED' those servers which replication lag is bigger than:
+	 *     - `mysql_thread___monitor_groupreplication_max_transactions_behind_count`
+	 *
+	 * @details The function automatically handles the appropriate operation to
+	 *   perform on the supplied server, based on the supplied 'enable' flag and
+	 *   in 'monitor_groupreplication_max_transaction_behind_for_read_only'
+	 *   variable. In case the value of the variable is:
+	 *
+	 *     * '0' or '2': It's required to search the writer hostgroup for
+	 *       finding the supplied server.
+	 *     * '1' or '2': It's required to search the reader hostgroup for
+	 *       finding the supplied server.
+	 *
+	 * @param _hid The writer hostgroup.
+	 * @param address The server address.
+	 * @param port The server port.
+	 * @param lag_counts The computed lag for the sever.
+	 * @param read_only Boolean specifying the read_only flag value of the server.
+	 * @param enable Boolean specifying if the server needs to be disabled / enabled,
+	 *   'true' for enabling the server if it's 'SHUNNED', 'false' for disabling it.
+	 */
+	void group_replication_lag_action(int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable);
 	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
 	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup);
