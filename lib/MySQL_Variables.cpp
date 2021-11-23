@@ -24,9 +24,33 @@ MySQL_Variables::MySQL_Variables() {
 	ignore_vars.push_back("interactive_timeout");
 	ignore_vars.push_back("wait_timeout");
 	ignore_vars.push_back("net_read_timeout");
+	ignore_vars.push_back("net_write_timeout");
+	ignore_vars.push_back("net_buffer_length");
+	ignore_vars.push_back("read_buffer_size");
+	ignore_vars.push_back("read_rnd_buffer_size");
 	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
 	ignore_vars.push_back("session_track_schema");
 	variables_regexp = "";
+	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
+		// we initialized all the internal_variable_name if set to NULL
+		if (mysql_tracked_variables[i].internal_variable_name == NULL) {
+			mysql_tracked_variables[i].internal_variable_name = mysql_tracked_variables[i].set_variable_name;
+		}
+	}
+/*
+   NOTE:
+	make special ATTENTION that the order in mysql_variable_name
+	and mysql_tracked_variables[] is THE SAME
+   NOTE:
+	MySQL_Variables::MySQL_Variables() has a built-in check to make sure that the order is correct,
+	and that variables are in alphabetical order
+*/
+	for (int i = SQL_NAME_LAST_LOW_WM; i < SQL_NAME_LAST_HIGH_WM; i++) {
+		assert(i == mysql_tracked_variables[i].idx);
+		if (i > SQL_NAME_LAST_LOW_WM+1) {
+			assert(strcmp(mysql_tracked_variables[i].set_variable_name, mysql_tracked_variables[i-1].set_variable_name) > 0);
+		}
+	}
 	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_ACTION || i == SQL_SET_NAMES) {
 			MySQL_Variables::updaters[i] = NULL;
@@ -476,7 +500,7 @@ inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t cli
 			}
 		}
 		// this variable is relevant only if status == SETTING_VARIABLE
-		session->changing_variable_idx = (enum variable_name)idx;
+		session->changing_variable_idx = (enum mysql_variable_name)idx;
 		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
 				session->previous_status.push(PROCESSING_QUERY);

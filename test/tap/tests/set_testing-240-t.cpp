@@ -335,7 +335,7 @@ int main(int argc, char *argv[]) {
 		return exit_status();
 	}
 
-	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
+	std::string fileName2(std::string(cl.workdir) + "/set_testing-240.csv");
 
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
@@ -377,13 +377,12 @@ int main(int argc, char *argv[]) {
 	host = cl.host;
 	port = cl.port;
 
-	if (!readTestCases(fileName)) {
-		fprintf(stderr, "Cannot read %s\n", fileName.c_str());
+	if (!readTestCasesJSON(fileName2)) {
+		fprintf(stderr, "Cannot read %s\n", fileName2.c_str());
 		return exit_status();
 	}
-
-	queries = 300;
-
+	queries = 1500;
+	//queries = testCases.size();
 	plan(queries * num_threads);
 
 	if (strcmp(host,"localhost")==0) {

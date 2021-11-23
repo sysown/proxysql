@@ -16,7 +16,7 @@ SetParser::SetParser(std::string nq) {
 	free(query_no_space);
 }
 
-#define QUOTES "(?:'|\")?"
+#define QUOTES "(?:'|\"|`)?"
 #define SPACES " *"
 #define NAMES "(NAMES)"
 #define NAME_VALUE "((?:\\w|\\d)+)"

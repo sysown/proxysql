@@ -189,3 +189,4 @@ test/tap/tests/galera_1_timeout_count
 test/tap/tests/galera_2_timeout_no_count
 test/tap/tests/setparser_test
 test/tap/tests/generate_set_session_csv
+test/tap/tests/set_testing-240.csv

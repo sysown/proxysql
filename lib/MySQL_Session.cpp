@@ -5480,8 +5480,43 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
+					} else if (
+						   (var == "default_storage_engine")
+						|| (var == "default_tmp_storage_engine")
+					) {
+						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+						int idx = SQL_NAME_LAST_HIGH_WM;
+						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
+							if (mysql_tracked_variables[i].is_number == false && mysql_tracked_variables[i].is_bool == false) {
+								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
+									idx = mysql_tracked_variables[i].idx;
+									break;
+								}
+							}
+						}
+						if (idx != SQL_NAME_LAST_HIGH_WM) {
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
+							uint32_t var_hash_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+							if (mysql_variables.client_get_hash(this, mysql_tracked_variables[idx].idx) != var_hash_int) {
+								if (!mysql_variables.client_set_value(this, mysql_tracked_variables[idx].idx, value1.c_str())) {
+									return false;
+								}
+							}
+						}
 					// the following two blocks of code will be simplified later
-					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
+					} else if (
+						   (var == "foreign_key_checks")
+						|| (var == "innodb_strict_mode")
+						|| (var == "innodb_table_locks")
+						|| (var == "sql_auto_is_null")
+						|| (var == "sql_safe_updates")
+						|| (var == "unique_checks")
+					) {
 						int idx = SQL_NAME_LAST_HIGH_WM;
 						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
 							if (mysql_tracked_variables[i].is_bool) {
@@ -5496,7 +5531,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							}
 						}
-					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") || (var == "wsrep_sync_wait") || (var == "group_concat_max_len") ) {
+					} else if (
+						   (var == "auto_increment_increment")
+						|| (var == "auto_increment_offset")
+						|| (var == "group_concat_max_len")
+						|| (var == "innodb_lock_wait_timeout")
+						|| (var == "join_buffer_size")
+						|| (var == "lock_wait_timeout")
+						|| (var == "max_join_size")
+						|| (var == "sql_select_limit")
+						|| (var == "wsrep_sync_wait")
+					) {
 						int idx = SQL_NAME_LAST_HIGH_WM;
 						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
 							if (mysql_tracked_variables[i].is_number) {
@@ -5577,6 +5622,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							return false;
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET Time Zone value %s\n", value1.c_str());
+						{
+							// reformat +1:23 to +01:23
+							if (value1.length() == 5) {
+								if (value1[0]=='+' || value1[0]=='-') {
+									if (value1[2]==':') {
+										std::string s = std::string(value1,0,1);
+										s += "0";
+										s += std::string(value1,1,4);
+										value1 = s;
+									}
+								}
+							}
+						}
 						uint32_t time_zone_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 						if (mysql_variables.client_get_hash(this, SQL_TIME_ZONE) != time_zone_int) {
 							if (!mysql_variables.client_set_value(this, SQL_TIME_ZONE, value1.c_str()))
