@@ -21,83 +21,6 @@
 #include "utils.h"
 #include "command_line.h"
 
-/*
-std::vector<std::string> split(const std::string& s, char delimiter)
-{
-	std::vector<std::string> tokens;
-	std::string token;
-	std::istringstream tokenStream(s);
-	while (std::getline(tokenStream, token, delimiter))
-	{
-		tokens.push_back(token);
-	}
-	return tokens;
-}
-
-using nlohmann::json;
-
-struct TestCase {
-	std::string command;
-	json expected_vars;
-	json reset_vars;
-};
-
-std::vector<TestCase> testCases;
-
-#define MAX_LINE 1024
-
-int readTestCases(const std::string& fileName) {
-	FILE* fp = fopen(fileName.c_str(), "r");
-	if (!fp) return 0;
-
-	char buf[MAX_LINE], col1[MAX_LINE], col2[MAX_LINE], col3[MAX_LINE] = {0};
-	int n = 0;
-	for(;;) {
-		if (fgets(buf, sizeof(buf), fp) == NULL) break;
-		n = sscanf(buf, " \"%[^\"]\", \"%[^\"]\", \"%[^\"]\"", col1, col2, col3);
-		if (n == 0) break;
-
-		char *p = col2;
-		while(*p++) if(*p == '\'') *p = '\"';
-
-		json vars = json::parse(col2);
-
-		p = col3;
-		while(col3[0] != 0 && *p++) if(*p == '\'') *p = '\"';
-
-		json reset_vars;
-		if (p != col3) {
-			reset_vars = json::parse(col3);
-		}
-
-		testCases.push_back({col1, vars, reset_vars});
-	}
-
-	fclose(fp);
-	return 1;
-}
-
-unsigned long long monotonic_time() {
-	struct timespec ts;
-	//clock_gettime(CLOCK_MONOTONIC_COARSE, &ts); // this is faster, but not precise
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
-}
-
-struct cpu_timer
-{
-	cpu_timer() {
-		begin = monotonic_time();
-	}
-	~cpu_timer()
-	{
-		unsigned long long end = monotonic_time();
-		std::cerr << double( end - begin ) / 1000000 << " secs.\n" ;
-		begin=end-begin;
-	};
-	unsigned long long begin;
-};
-*/
 std::string bn = "";
 int queries_per_connections=1;
 unsigned int num_threads=1;
@@ -187,7 +110,7 @@ void * my_conn_thread(void *arg) {
 	for (j=0; j<queries; j++) {
 		int fr = fastrand();
 		int r1=fr%count;
-		int r2=fastrand()%testCases.size();
+		int r2=rand()%testCases.size();
 
 		if (j%queries_per_connections==0) {
 			mysql=mysqlconns[r1];
@@ -420,36 +343,13 @@ int main(int argc, char *argv[]) {
 		std::cerr << bn << ": " << q << std::endl;
 		MYSQL_QUERY(mysqladmin, q.c_str());
 	}
-	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql)
-		return exit_status();
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n",
-				__FILE__, __LINE__, mysql_error(mysql));
+
+	if (detect_version(cl, is_mariadb, is_cluster) != 0) {
+		diag("Cannot detect MySQL version");
 		return exit_status();
 	}
-	MYSQL_QUERY(mysql, "select @@version");
-	MYSQL_RES *result = mysql_store_result(mysql);
-	MYSQL_ROW row;
-	while ((row = mysql_fetch_row(result)))
-	{
-		if (strstr(row[0], "Maria")) {
-			is_mariadb = true;
-		}
-		else {
-			is_mariadb = false;
-		}
 
-		char* first_dash = strstr(row[0], "-");
-		if (!first_dash || !strstr(first_dash+1, "-")) {
-			is_cluster = false;
-		} else {
-			is_cluster = true;
-		}
-	}
 
-	mysql_free_result(result);
-	mysql_close(mysql);
 
 	num_threads = 10;
 	queries = 1000;

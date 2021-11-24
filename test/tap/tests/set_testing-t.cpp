@@ -22,6 +22,7 @@
 #include <iostream>
 #include <fstream>
 #include <mutex>
+#include <algorithm>
 
 #include "json.hpp"
 #include "re2/re2.h"
@@ -227,11 +228,11 @@ void * my_conn_thread(void *arg) {
 			}
 
 			if (k == mysql_vars.end())
-				fprintf(stderr, "Variable %s->%s in mysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
+				diag("Variable %s->%s in mysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 
 			if (s == proxysql_vars["conn"].end())
-				fprintf(stderr, "Variable %s->%s in proxysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
+				diag("Variable %s->%s in proxysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 
 			bool verified_special_sqlmode = false;
@@ -247,7 +248,11 @@ void * my_conn_thread(void *arg) {
 					std::string e_val { el.value() };
 					std::string k_val { k.value() };
 					std::string s_val { s.value() };
-					if (el.value() == s.value()) { // but same in proxysql
+					if (e_val != s_val) {
+						// try to replace " with '
+						std::replace( e_val.begin(), e_val.end(), '"', '\'');
+					}
+					if (e_val == s_val) { // but same in proxysql
 						std::string str_val { el.value() };
 						if (strcasecmp(str_val.c_str(), "TRADITIONAL")==0) {
 							if (k.value() == "STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION") {
@@ -304,11 +309,11 @@ void * my_conn_thread(void *arg) {
 				} else {
 					__sync_fetch_and_add(&g_failed, 1);
 					testPassed = false;
-					fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data [%lu]: %s\n\n proxysql data [%lu]: %s\n\n csv data %s\n\n\n",
-							el.value().dump().c_str(), el.key().c_str(),
-							mysql_vars.size(), mysql_vars.dump().c_str(),
-							proxysql_vars.size(), proxysql_vars.dump().c_str(),
-							vars.dump().c_str());
+					diag("Test failed for this case %s->%s.\n\nmysql data [%lu]: %s\n\n proxysql data [%lu]: %s\n\n csv data %s\n\n\n",
+							el.value().dump(2).c_str(), el.key().c_str(),
+							mysql_vars.size(), mysql_vars.dump(2).c_str(),
+							proxysql_vars["conn"].size(), proxysql_vars["conn"].dump(2).c_str(),
+							vars.dump(2).c_str());
 					diag("FAILED FOR: connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
 					//ok(testPassed, "connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
 					// In case of failing test, exit completely.
@@ -329,6 +334,7 @@ void * my_conn_thread(void *arg) {
 }
 
 
+
 int main(int argc, char *argv[]) {
 	CommandLine cl;
 
@@ -339,37 +345,11 @@ int main(int argc, char *argv[]) {
 
 	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
 
-	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql)
-		return exit_status();
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n",
-				__FILE__, __LINE__, mysql_error(mysql));
+
+	if (detect_version(cl, is_mariadb, is_cluster) != 0) {
+		diag("Cannot detect MySQL version");
 		return exit_status();
 	}
-	MYSQL_QUERY(mysql, "select @@version");
-	MYSQL_RES *result = mysql_store_result(mysql);
-	MYSQL_ROW row;
-	while ((row = mysql_fetch_row(result)))
-	{
-		if (strstr(row[0], "Maria")) {
-			is_mariadb = true;
-		}
-		else {
-			is_mariadb = false;
-		}
-
-		char* first_dash = strstr(row[0], "-");
-		if (!first_dash || !strstr(first_dash+1, "-")) {
-			is_cluster = false;
-		} else {
-			// FIXME: we need a better version detection
-			is_cluster = true;
-		}
-	}
-
-	mysql_free_result(result);
-	mysql_close(mysql);
 
 	num_threads = 10;
 	queries_per_connections = 10;

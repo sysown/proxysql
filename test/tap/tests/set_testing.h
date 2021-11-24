@@ -444,3 +444,39 @@ bool check_session_track_gtids(const std::string& expVal, const std::string& sVa
 	return res;
 }
 
+int detect_version(CommandLine& cl, bool& is_mariadb, bool& is_cluster) {
+	MYSQL* mysql = mysql_init(NULL);
+	if (!mysql)
+		return 1;
+	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n",
+				__FILE__, __LINE__, mysql_error(mysql));
+		return 1;
+	}
+
+	MYSQL_QUERY(mysql, "select @@version");
+	MYSQL_RES *result = mysql_store_result(mysql);
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(result)))
+	{
+		if (strstr(row[0], "Maria")) {
+			is_mariadb = true;
+		}
+		else {
+			is_mariadb = false;
+		}
+	}
+	mysql_free_result(result);
+	MYSQL_QUERY(mysql, "SHOW VARIABLES LIKE 'wsrep_sync_wait'");
+	result = mysql_store_result(mysql);
+	unsigned long long nr = mysql_num_rows(result);
+	if (nr == 0) {
+		is_cluster = false;
+	} else {
+		is_cluster = true;
+	}
+	mysql_free_result(result);
+	mysql_close(mysql);
+	return 0;
+}
+
