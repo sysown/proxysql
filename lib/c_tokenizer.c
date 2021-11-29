@@ -1218,22 +1218,21 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 					}
 				}
 
-				// TODO: Requires boundary checks before performing the memcpy, the comment could not fit in
-				// the return buffer.
+				// copy the cmd comment minus the annotation and the marks
 				if (end) {
-					// copy the cmd comment minus the annotation and the marks
-					memcpy(
-						shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len,
-						c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len
-					);
+					// check if the comment to be copied is going to fit in the target buffer
+					const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len - 1;
+					int res_free_space = res_final_pos - shared_st->res_cur_pos;
+					int comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
+					int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
 
-					shared_st->res_cur_pos += c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
+					memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
+					shared_st->res_cur_pos += copy_length;
 
 					// TODO: Check if the copy can be prevented as in the outer check for non-cmd comments
-
-					// The extra space is reshared_st->quired due to the removal of '*/', this is relevant because the
-					// comment can be in the middle of the actual shared_st->query.
-					if (*(shared_st->res_cur_pos - 1 ) != ' ') {
+					// The extra space is due to the removal of '*/', this is relevant because the
+					// comment can be in the middle of the query.
+					if (*(shared_st->res_cur_pos - 1 ) != ' ' && shared_st->res_cur_pos != res_final_pos) {
 						*shared_st->res_cur_pos++ = ' ';
 					}
 				}
