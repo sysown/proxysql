@@ -337,7 +337,7 @@ void * __qc;
 void * __mysql_thread;
 void * __mysql_threads_handler;
 void * __query_processor;
-//void * __mysql_auth; 
+//void * __mysql_auth;
 
 
 
@@ -464,6 +464,7 @@ void * mysql_shared_query_cache_funct(void *arg) {
 
 void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 	GloVars.errorlog = NULL;
+	GloVars.pid = NULL;
 	GloVars.parse(argc,argv);
 	GloVars.process_opts_pre();
 	GloVars.restart_on_missing_heartbeats = 10; // default
@@ -497,6 +498,14 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 			rc=root.lookupValue("errorlog", errorlog_path);
 			if (rc==true) {
 				GloVars.errorlog = strdup(errorlog_path.c_str());
+			}
+		}
+		if (root.exists("pidfile")==true) {
+			string pidfile_path;
+			bool rc;
+			rc=root.lookupValue("pidfile", pidfile_path);
+			if (rc==true) {
+				GloVars.pid = strdup(pidfile_path.c_str());
 			}
 		}
 		if (root.exists("sqlite3_plugin")==true) {
@@ -587,8 +596,10 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 		sprintf(GloVars.errorlog,"%s/%s",GloVars.datadir, (char *)"proxysql.log");
 	}
 
-	GloVars.pid=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.pid")+2);
-	sprintf(GloVars.pid,"%s/%s",GloVars.datadir, (char *)"proxysql.pid");
+	if (GloVars.pid == NULL) {
+		GloVars.pid=(char *)malloc(strlen(GloVars.datadir)+strlen((char *)"proxysql.pid")+2);
+		sprintf(GloVars.pid,"%s/%s",GloVars.datadir, (char *)"proxysql.pid");
+	}
 
 	if (GloVars.__cmd_proxysql_initial==true) {
 		std::cerr << "Renaming database file " << GloVars.admindb << endl;
