@@ -1259,14 +1259,13 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
  *   by char until finding the delimiter.
  *
  * @param shared_st Shared state used to continue the query processing.
- * @param c_t_1_st TODO: Remove, unused.
  *
  * @return The next processing state, it could be either:
  *   - 'st_cmnt_type_2' if the comment hasn't yet completed to be parsed.
  *   - 'st_no_mark_found' if the comment has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_cmnt_type_2(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
+enum p_st process_cmnt_type_2(shared_st* shared_st) {
 	enum p_st next_state = st_cmnt_type_2;
 
 	// discard processed "#"
@@ -1292,14 +1291,13 @@ enum p_st process_cmnt_type_2(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
  *   by char until finding the delimiter.
  *
  * @param shared_st Shared state used to continue the query processing.
- * @param c_t_1_st TODO: Remove, unused.
  *
  * @return The next processing state, it could be either:
  *   - 'st_cmnt_type_3' if the comment hasn't yet completed to be parsed.
  *   - 'st_no_mark_found' if the comment has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_cmnt_type_3(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
+enum p_st process_cmnt_type_3(shared_st* shared_st) {
 	enum p_st next_state = st_cmnt_type_3;
 
 	// discard processed "-- "
@@ -1752,14 +1750,14 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts
 				}
 			} else if (cur_st == st_cmnt_type_2) {
 				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_2(shared_st, cmnt_type_1_st);
+				cur_st = process_cmnt_type_2(shared_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_cmnt_type_3) {
 				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_3(shared_st, cmnt_type_1_st);
+				cur_st = process_cmnt_type_3(shared_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
@@ -2893,14 +2891,14 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 				}
 			} else if (cur_st == st_cmnt_type_2) {
 				shared_st.copy_next_char = 0;
-				cur_st = process_cmnt_type_2(&shared_st, &c_t_1_st);
+				cur_st = process_cmnt_type_2(&shared_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st.copy_next_char = 1;
 					continue;
 				}
 			} else if (cur_st == st_cmnt_type_3) {
 				shared_st.copy_next_char = 0;
-				cur_st = process_cmnt_type_3(&shared_st, &c_t_1_st);
+				cur_st = process_cmnt_type_3(&shared_st);
 				if (cur_st == st_no_mark_found) {
 					shared_st.copy_next_char = 1;
 					continue;
