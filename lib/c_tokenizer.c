@@ -139,6 +139,8 @@ static inline char is_hex_char(char c)
 }
 
 // between pointer, check string is number - need to be changed more functions
+// TODO: f-1 shouldn't be access if 'f' is the first position supplied, could lead to
+// buffer overflow.
 static char is_digit_string(char *f, char *t)
 {
 	if(f == t)
@@ -859,9 +861,10 @@ enum p_st {
  *   processing stages.
  */
 typedef struct shared_st {
+	/* @brief The current state being processed by 'stage_1'. */
 	enum p_st st;
 	/* @brief Global computed compression offset from the previous iteration. Used when uncompressed query
-	 * exceeds the maximum buffer side specified by `mysql_thread___query_digests_max_query_length` */
+		exceeds the maximum buffer side specified by `mysql_thread___query_digests_max_query_length` */
 	int gl_c_offset;
 	/* @brief Maximum length of the resulting digest. */
 	int d_max_len;
@@ -881,7 +884,7 @@ typedef struct shared_st {
 	char* res_pre_pos;
 	/* @brief Last copied char to the result buffer. */
 	char prev_char;
-	/* @brief Decides whether or not the next char should be copy */
+	/* @brief Decides whether or not the next char should be copy during 'stage_1'. */
 	bool copy_next_char;
 } shared_st;
 
@@ -889,13 +892,9 @@ typedef struct shared_st {
  * @brief State used for parsing 'type_1' comments, i.e: /\* *\/.
  */
 typedef struct cmnt_type_1_st {
-	/**
-	 * @brief Flag to announce if the found commet is a 'cmd' comment.
-	 */
+	/* @brief Flag to announce if the found comment is a 'cmd' comment. */
 	bool is_cmd;
-	/**
-	 * @brief Counter holding the lenght of the 'cmd' comment currently being processed.
-	 */
+	/* @brief Counter holding the length of the 'cmd' comment currently being processed. */
 	int cur_cmd_cmnt_len;
 	/**
 	 * @brief Flag showing first comment parsing state. '0' when no comment or end has been found, and '1'
@@ -904,9 +903,7 @@ typedef struct cmnt_type_1_st {
 	 *   processed.
 	 */
 	int fst_cmnt_end;
-	/**
-	 * @brief Counter keeping track of the number of chars copied into 'first_comment' buffer.
-	 */
+	/* @brief Counter keeping track of the number of chars copied into 'first_comment' buffer. */
 	int fst_cmnt_len;
 } cmnt_type_1_st;
 
@@ -919,9 +916,7 @@ typedef struct literal_string_st {
 	 *   '0' when hasn't yet been found, and '1' while in the processing a literal string.
 	 */
 	int delim_num;
-	/**
-	 * @brief Found char delimiter found for the literal string being processed.
-	 */
+	/* @brief Found char delimiter found for the literal string being processed. */
 	char delim_char;
 } literal_string_st;
 
@@ -948,9 +943,7 @@ typedef struct stage_1_st {
 	struct cmnt_type_1_st cmnt_type_1_st;
 	struct literal_string_st literal_str_st;
 	struct literal_digit_st literal_digit_st;
-	/**
-	 * @brief Holds the previous iteration parsing ending position.
-	 */
+	/* @brief Holds the previous iteration parsing ending position. */
 	char* pre_it_pos;
 	/**
 	 * @brief Previous iteration parsing ending position for 'stage_1'.
@@ -967,38 +960,26 @@ typedef struct stage_1_st {
  * @brief Holds the state used for 'stage_2' parsing.
  */
 typedef struct stage_2_st {
-	/**
-	 * @brief Previous iteration last parsing position in the result buffer, after the stage
-	 *   compression has taken place.
-	 */
+	/* @brief Previous iteration last parsing position in the result buffer, after the stage
+		compression has taken place. */
 	char* pre_it_pos;
-	/**
-	 * @brief Last iteration computed compression offset resulted after stage processing.
-	 */
+	/* @brief Last iteration computed compression offset resulted after stage processing. */
 	int c_offset;
 } stage_2_st;
 
 typedef struct stage_3_st {
-	/**
-	 * @brief Previous iteration last parsing position in the result buffer, after the stage
-	 *   compression has taken place.
-	 */
+	/* @brief Previous iteration last parsing position in the result buffer, after the stage
+		compression has taken place. */
 	char* pre_it_pos;
-	/**
-	 * @brief Last iteration computed compression offset resulted after stage processing.
-	 */
+	/* @brief Last iteration computed compression offset resulted after stage processing. */
 	int c_offset;
 } stage_3_st;
 
 typedef struct stage_4_st {
-	/**
-	 * @brief Previous iteration last parsing position in the result buffer, after the stage
-	 *   compression has taken place.
-	 */
+	/* @brief Previous iteration last parsing position in the result buffer, after the stage
+		compression has taken place. */
 	char* pre_it_pos;
-	/**
-	 * @brief Last iteration computed compression offset resulted after stage processing.
-	 */
+	/* @brief Last iteration computed compression offset resulted after stage processing. */
 	int c_offset;
 } stage_4_st;
 
@@ -1049,7 +1030,7 @@ static inline char* get_result_buffer(int len, char* buf) {
  * @brief Return the next st to be processed. State filtering based on end of query being reached is also
  *   performed here.
 *
- * @param shared_st The shared processing state used to decide which is the next processing state.
+ * @param shared_st The shared processing state used to decide which is the next 'processing state'.
  *
  * @return The next processing state.
  */
@@ -1122,12 +1103,17 @@ char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
 
 /**
  * @brief Process a detected comment of type "/\* *\/". Determines when to exit the 'st_cmnt_type_1' state.
- * @details Function assumes that 'q' is pointing to the initial mark '/' of the comment start, and that
- *   it's safe to look forward for '*'.
+ * @details Function assumes that 'shared_st->q' is pointing to the initial mark '/' of the comment start, and
+ *   that it's safe to look forward for '*'. State 'st_cmnt_type_1' doesn't copy any data to the result
+ *   buffer, unless the comment is a 'cmd' comment, in which case the comment is copied from the query to the
+ *   resulting buffer **after** the comment final delimiter '*\/' has been found.
  *
- * @param shared_st TODO.
+ * @param shared_st Shared state used to continue the query processing.
+ * @param c_t_1_st The 'comment_type_1' parsing state, holds the found information about the comment being parsed.
  *
- * @return  TODO.
+ * @return The next processing state, it could be either:
+ *   - 'st_cmnt_type_1' if the comment hasn't yet completed to be parsed.
+ *   - 'st_no_mark_found' if the comment has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
 enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
@@ -1137,6 +1123,7 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 	if (*shared_st->q == '/' && *(shared_st->q+1) == '*') {
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 
+		// check length before accessing beyond 'q_cur_pos + 1'
 		if (shared_st->q_cur_pos != (shared_st->q_len-2) && *(shared_st->q+2) == '!') {
 			c_t_1_st->is_cmd = 1;
 		}
@@ -1146,10 +1133,9 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 		shared_st->q_cur_pos += 2 + c_t_1_st->is_cmd;
 	}
 
-
-//  TODO: Check if there is exclusion between this to by spec. To further clarify, should comments '/*!'
-//  be not considered first comments to be copied into the supplied 'fst_cmnt' memory? Or should they be
-//  considered for further processing?
+//  TODO: Check if there is exclusion between this regular first comments and first comment that are 'cmd'
+//  comments by spec. To further clarify, should comments '/*!' be not considered first comments to be copied
+//  into the supplied 'fst_cmnt' memory? Or should they be considered for further processing?
 //  {
 
 	// we are parsing a "/*!" comment
@@ -1244,8 +1230,8 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 			c_t_1_st->cur_cmd_cmnt_len = 0;
 		}
 
-		// TODO: Related to previous todo. Remember this is a relatively new change in the current code
-		// not at the beggining and previous char is not ' '
+		// TODO: Related to previous TODO. Remember this is a relatively new change in the current code
+		// not at the beginning and previous char is not ' '
 		if (
 			shared_st->res_init_pos != shared_st->res_cur_pos &&
 			*shared_st->res_cur_pos != ' ' && *(shared_st->res_cur_pos-1) != ' '
@@ -1267,6 +1253,18 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 	return next_st;
 }
 
+/**
+ * @brief Handles the processing state 'st_cmnt_type_2'.
+ * @details State 'st_cmnt_type_2' doesn't copy any data to the result buffer. It just skip the current char
+ *   by char until finding the delimiter.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param c_t_1_st TODO: Remove, unused.
+ *
+ * @return The next processing state, it could be either:
+ *   - 'st_cmnt_type_2' if the comment hasn't yet completed to be parsed.
+ *   - 'st_no_mark_found' if the comment has completed to be parsed.
+ */
 static __attribute__((always_inline)) inline
 enum p_st process_cmnt_type_2(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
 	enum p_st next_state = st_cmnt_type_2;
@@ -1288,6 +1286,18 @@ enum p_st process_cmnt_type_2(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
 	return next_state;
 }
 
+/**
+ * @brief Handles the processing state 'st_cmnt_type_3'.
+ * @details State 'st_cmnt_type_2' doesn't copy any data to the result buffer. It just skip the current char
+ *   by char until finding the delimiter.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param c_t_1_st TODO: Remove, unused.
+ *
+ * @return The next processing state, it could be either:
+ *   - 'st_cmnt_type_3' if the comment hasn't yet completed to be parsed.
+ *   - 'st_no_mark_found' if the comment has completed to be parsed.
+ */
 static __attribute__((always_inline)) inline
 enum p_st process_cmnt_type_3(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
 	enum p_st next_state = st_cmnt_type_3;
@@ -1309,6 +1319,19 @@ enum p_st process_cmnt_type_3(shared_st* shared_st, cmnt_type_1_st* c_t_1_st) {
 	return next_state;
 }
 
+/**
+ * @brief Handles the processing state 'st_literal_string'.
+ * @details State 'st_literal_string' doesn't copy any data to the result buffer, instead, it just skips the
+ *   current char until the end delimiter is found. Then replaces the previous position in the result buffer
+ *   with the mark '?'.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param str_st The literal string parsing state, holds the information so far found about the state.
+ *
+ * @return The next processing state, it could be either:
+ *   - 'st_literal_string' if the string literal hasn't yet completed to be parsed.
+ *   - 'st_no_mark_found' if the string literal has completed to be parsed.
+ */
 static __attribute__((always_inline)) inline
 enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st) {
 	enum p_st next_state = st_literal_string;
@@ -1319,10 +1342,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 		str_st->delim_char = *shared_st->q;
 		str_st->delim_num = 1;
 
-		// consume the delimiter from the query
-		// TODO: Document why this isn't necessary in a generic way in the stage processing description
-		// shared_st->q++;
-		// shared_st->q_cur_pos++;
+		// NOTE: Don't increment the position in query buffer, as explained in 'stage_1_parsing'.
 		return next_state;
 	}
 
@@ -1381,12 +1401,24 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 	return next_state;
 }
 
+/**
+ * @brief Handles the processing state 'st_literal_digit'.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param digit_st The literal digit parsing state, holds the information so far found about the state.
+ * @param opts TODO: Currently unused, remove.
+ *
+ * @return The next processing state, it could be either:
+ *   - 'st_literal_digit' if the literal number hasn't yet completed to be parsed.
+ *   - 'st_no_mark_found' if the literal number has completed to be parsed.
+ */
 static __attribute__((always_inline)) inline
 enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st, options* opts) {
 	enum p_st next_state = st_literal_number;
 
-	// consume the first digit
-	if (digit_st->first_digit == 1 && is_token_char(*(shared_st->q-1)) && is_digit_char(*shared_st->q)) {
+	// process the first digit
+	// if (digit_st->first_digit == 1 && is_token_char(*(shared_st->q-1)) && is_digit_char(*shared_st->q)) {
+	if (digit_st->first_digit == 1 && is_token_char(shared_st->prev_char) && is_digit_char(*shared_st->q)) {
 		// store the start position of digit literal in the result buffer for later iterations
 		digit_st->start_pos = shared_st->res_pre_pos;
 
@@ -1394,9 +1426,7 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 		*shared_st->res_cur_pos = *shared_st->q;
 		digit_st->first_digit = 0;
 
-		// increment the position in query buffer
-		// shared_st->q++;
-		// shared_st->q_cur_pos++;
+		// NOTE: Don't increment the position in query buffer, as explained in 'stage_1_parsing'.
 	}
 
 	// token char or last char
@@ -1419,6 +1449,7 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 		}
 
 		digit_st->start_pos = NULL;
+		digit_st->first_digit = 0;
 		next_state = st_no_mark_found;
 	}
 
@@ -1466,6 +1497,17 @@ enum p_st process_replace_null_single_chars(shared_st* shared_st, literal_null_s
 	return next_st;
 }
 
+/**
+ * @brief Process the 'st_replace_null' state.
+ * @details This state processing function doesn't check if 'replace_null' feature is enabled or not. If the
+ *   feature isn't enabled, this state should never be reached. The state 'st_replace_null' is a one operation
+ *   state always, if the 'NULL' value to be replaced isn't found, processing goes back to 'st_no_mark_found'
+ *   state  immediately, for this reason, this state is responsible of copying the current char before
+ *   returning.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param opts Options to be used for the copying of the current char.
+ */
 static __attribute__((always_inline)) inline
 enum p_st process_replace_null(shared_st* shared_st, options* opts) {
 	enum p_st next_st = st_no_mark_found;
@@ -1504,10 +1546,129 @@ enum p_st process_replace_null(shared_st* shared_st, options* opts) {
 	return next_st;
 }
 
+/**
+ * @brief Gets the 'digest_end' position to be used as the end of character iteration for the currently
+ *   processed stage.
+ * @details If the stage being processed is a 'compression' stage, i.e, it isn't 'stage 1'. The end of the
+ *   digest for performing the compression *could be* neither the final position in which 'stage 1'
+ *   finalized or the end of the buffer being used to write the digest. If 'stage 1' was parsing a number,
+ *   the position used for the end of the compression stage shall be the position of the starting digit in
+ *   the number being parsed marked by 'stage_1_st->literal_digit_st.start_pos'.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param stage_1_st The 'stage 1' state used to decide which will be the 'digest_end' position for the
+ *   current stage.
+ */
+static __attribute__((always_inline)) inline
+char* get_stage_digest_end(shared_st* shared_st, stage_1_st* stage_1_st) {
+	char* digest_end = NULL;
+
+	if (shared_st->st == st_literal_number && stage_1_st->literal_digit_st.start_pos != NULL) {
+		digest_end = stage_1_st->literal_digit_st.start_pos - 1;
+	} else {
+		digest_end = shared_st->res_cur_pos - 1;
+	}
+
+	return digest_end;
+}
+
+/**
+ * @brief Sets the new starting position for the current stage being processed.
+ * @details Sets the new starting position for the current stage to be the supplied 'next_start_pos', only
+ *   if some boundary conditions hold, otherwise, it sets 'res_init_pos' as the new starting position.
+ *
+ *   Extra details:
+ *   If the current stages processing iteration isn't the first one, the previous iteration of the
+ *   current stage to be processed already performed a compression till a certain position. Iterating the
+ *   whole result buffer again in this iteration is pointless, since most of the buffer should have been
+ *   already compressed by this stage.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param stage_1_st The 'stage 1' state used to decide which will be the 'digest_end' position for the
+ *   current stage.
+ */
+static __attribute__((always_inline)) inline
+void set_stage_next_start_pos(shared_st* shared_st, char* digest_end, char* next_start_pos) {
+	bool initial_it = shared_st->res_init_pos == shared_st->res_it_init_pos;
+	bool valid_next_start_pos = next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end;
+
+	if (initial_it == 0 && valid_next_start_pos) {
+		shared_st->res_cur_pos = next_start_pos;
+		shared_st->res_pre_pos = next_start_pos;
+	} else {
+		shared_st->res_cur_pos = shared_st->res_init_pos;
+		shared_st->res_pre_pos = shared_st->res_init_pos;
+	}
+}
+
+/**
+ * @brief Finalizes the compression stage and updates the supplied stage iteration final position 'stage_pre_it_pos'.
+ * @details Copies the required characters beyond stage 'digest_end' that haven't been processed by the
+ *   compression stage, like for example, when 'stage 1' was interrupted parsing a digit because the result
+ *   buffer run out of memory.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param digest_end The computed 'digest_end' for the stage being processed.
+ * @param stage_1_st The state from the previous iteration of 'stage 1'.
+ * @param stage_pre_it_pos Pointer to be updated with the final position being processed for compression by
+ *   the stage.
+ */
+static __attribute__((always_inline)) inline
+void end_compression_stage_it(shared_st* shared_st, char* digest_end, stage_1_st* stage_1_st, char** stage_pre_it_pos) {
+	if (digest_end == stage_1_st->literal_digit_st.start_pos - 1 && stage_1_st->new_end_pos) {
+		char* f_digits = stage_1_st->literal_digit_st.start_pos;
+		stage_1_st->literal_digit_st.start_pos = shared_st->res_pre_pos;
+		*stage_pre_it_pos = stage_1_st->literal_digit_st.start_pos;
+
+		while (f_digits < stage_1_st->new_end_pos) {
+			*shared_st->res_pre_pos++ = *f_digits++;
+			shared_st->res_cur_pos++;
+		}
+
+		*shared_st->res_pre_pos = 0;
+		stage_1_st->new_end_pos = shared_st->res_pre_pos;
+	} else {
+		*shared_st->res_pre_pos = 0;
+		*stage_pre_it_pos = shared_st->res_pre_pos;
+	}
+}
+
+/**
+ * @brief Performs the first stage parsing. This stage replaces values and extra spaces from the query, and
+ *   extracts any 'first comment' found within it.
+ * @details This parsing stage is responsible for replacing the following elements from the query:
+ *   - String literals.
+ *   - Number literals: Hexadecimal, scientific notation, floating point numbers, regular numbers.
+ *   - NULL literals, if option 'replace_nulls' is supplied.
+ *   - Comments of any class; the first comment found of type '/\**\/' should be retrieved via 'fst_cmnt'
+ *     parameter. If the comment is a 'cmd' comment, it should be copied into the query digest instead of
+ *     being ignored.
+ *   - Leading spaces and double spaces found.
+ *
+ *   This stage is the unique stage that performs copy of the characters being processed, all the other stages
+ *   perform further compression on the query digest resulted after this stage initial value replacement.
+ *
+ *   Implementation Details:
+ *   1. The stage parsing is implemented as an main loop consuming the characters present in the supplied query
+ *   buffer, this iteration stops when all the characters have been consumed or the result buffer is
+ *   exhausted.
+ *   2. The detection of parsing states is performed by function 'get_next_st', whenever a new parsing state
+ *   is required for parsing current and subsequent chars, the transition to that state happens immediately,
+ *   without consuming current char.
+ *   3. The state processing functions are responsible for deciding whether or not the characters processed
+ *   during that state are copied into the resulting buffer. For states that doesn't automatically switch back
+ *   to neutral state 'st_no_mark_found', it's *not required* to consume the first digit. Since this will
+ *   automatically takes place at the end of the current iteration.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param stage_1_st The first stage state to be updated.
+ * @param opts Options used to homogenize queries via 'lowercase' or 'replace_nulls' options.
+ * @param fst_cmnt Pointer to be updated with the found first comment, left unmodified otherwise.
+ */
 static __attribute__((always_inline)) inline
 void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts, char** fst_cmnt) {
 	// state required between different iterations of special parsing states
-	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len - 1;
+	char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len - 1;
 	cmnt_type_1_st* const cmnt_type_1_st = &stage_1_st->cmnt_type_1_st;
 	literal_string_st* const literal_str_st = &stage_1_st->literal_str_st;
 	literal_digit_st* const literal_digit_st = &stage_1_st->literal_digit_st;
@@ -1515,23 +1676,23 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts
 	// starting state can belong to a previous iteration
 	enum p_st cur_st = shared_st->st;
 
+	// if the previous iteration was parsing a number
 	if (stage_1_st->new_end_pos != NULL) {
 		shared_st->res_cur_pos = stage_1_st->new_end_pos;
 		shared_st->res_pre_pos = stage_1_st->new_end_pos;
+	}
+
+	// NOTE: Required for 'digest_corner_cases_3.hjson'
+	// Space detection can fail when comming from another iteration if 'prev_char' is not reset.
+	// This can allow to copy the null terminator due to the logic in 'double spaces' supression.
+	if (shared_st->res_init_pos != shared_st->res_it_init_pos) {
+		shared_st->prev_char = *(shared_st->res_pre_pos - 1);
 	}
 
 	// Stop when either:
 	//  1. There is no more room left the result buffer.
 	//  2. The final position of the received query has been reached.
 	while (shared_st->res_cur_pos <= res_final_pos && shared_st->q_cur_pos < shared_st->q_len) {
-		// printf(
-		// 	"stage_1_parsing: {\n"
-		// 	"    max_len: '%d', cur_pos: '%ld', cur_st: `%d`, prev_char: '%c', c_next_char: '%d', q_cur_pos: '%d', \n"
-		// 	"    q: `%s`, res_init_pos: `%s`, res_cur_pos: `%s`\n"
-		// 	"}\n",
-		// 	shared_st->d_max_len, shared_st->res_cur_pos - shared_st->res_init_pos, cur_st, shared_st->prev_char,
-		// 	shared_st->copy_next_char, shared_st->q_cur_pos, shared_st->q, shared_st->res_init_pos, shared_st->res_cur_pos
-		// );
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
 			shared_st->res_pre_pos = shared_st->res_cur_pos;
@@ -1655,32 +1816,44 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts
 	}
 }
 
+/**
+ * @brief Performs the second stage parsing. This stage is is already a compression stage responsible of
+ *   removing the following patterns:
+ *   - Spaces after '(', and before ')'.
+ *   - Spaces before and after arithmetic operators.
+ *   - Removal of (+|-) when acting on a single value.
+ *   - When enabled, via 'mysql_thread___query_digests_no_digits', removal of digits that aren't literals.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param stage_1_st The state resulting from the previous execution of 'stage 1'.
+ * @param stage_2_st The state from previous execution of 'stage 2' to be udpated.
+ * @param opts Options used for deciding wether or not enabling digits replacement.
+ */
 static __attribute__((always_inline)) inline
 void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* stage_2_st, const options* opts) {
-	char* digest_end = NULL;
+	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
 
-	if (shared_st->st == st_literal_number && stage_1_st->literal_digit_st.start_pos != NULL) {
-		digest_end = stage_1_st->literal_digit_st.start_pos - 1;
-	} else {
-		digest_end = shared_st->res_cur_pos - 1;
-	}
-
-	// compute the starting point for the second stage
-	if (shared_st->res_init_pos != shared_st->res_it_init_pos) {
-		char* next_start_pos =
-			stage_2_st->pre_it_pos - (shared_st->gl_c_offset - stage_2_st->c_offset) - (5 + 1);
-
-		if (next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end) {
-			shared_st->res_cur_pos = next_start_pos;
-			shared_st->res_pre_pos = next_start_pos;
-		} else {
-			shared_st->res_cur_pos = shared_st->res_init_pos;
-			shared_st->res_pre_pos = shared_st->res_init_pos;
-		}
-	} else {
-		shared_st->res_cur_pos = shared_st->res_init_pos;
-		shared_st->res_pre_pos = shared_st->res_init_pos;
-	}
+	// Compute the starting point for the second stage. The offset chosen of (5 + 1) is derived from the
+	// pattern: `? + ddd` where 'd' stands for 'digit'. This pattern could take place in case the first
+	// stage was interrupted while parsing a digit.
+	//
+	// previous_iteration:
+	//
+	// ```
+	//    `,? + d`
+	//          ^ first digit 'stage_1' position && last 'stage_2' compression pos
+	// ```
+	//
+	// next_iteration:
+	//
+	// ```
+	//    `,? + d`
+	//     ^ next_start pos
+	// ```
+	//
+	// Using an offset of at least `6` should prevent missing patterns in this current iteration.
+	char* next_start_pos = stage_2_st->pre_it_pos - (shared_st->gl_c_offset - stage_2_st->c_offset) - (5 + 1);
+	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
 
 	// second stage: Space and (+|-) replacement
 	while (shared_st->res_cur_pos <= digest_end) {
@@ -1709,10 +1882,11 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 			//  - c + ?
 			//  - c+ ?
 			//  - c+?
+			//  - c, + ?
 			if (lc == ' ') {
 				if (is_normal_char(llc)) {
 					shared_st->res_cur_pos++;
-				} else if (is_token_char(llc) && llc != '?' && rc == '?') {
+				} else if (is_token_char(llc) && llc != '?' && (rc == '?' || rc == ' ')) {
 					shared_st->res_cur_pos++;
 				} else {
 					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
@@ -1738,85 +1912,109 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 	int c_2_offset = digest_end - shared_st->res_pre_pos + 1;
 	stage_2_st->c_offset = c_2_offset > 0 ? c_2_offset : 0;
 
-	if (digest_end == stage_1_st->literal_digit_st.start_pos - 1 && stage_1_st->new_end_pos) {
-		char* f_digits = stage_1_st->literal_digit_st.start_pos;
-		stage_1_st->literal_digit_st.start_pos = shared_st->res_pre_pos;
-		stage_2_st->pre_it_pos = stage_1_st->literal_digit_st.start_pos;
-
-		while (f_digits < stage_1_st->new_end_pos) {
-			*shared_st->res_pre_pos++ = *f_digits++;
-			shared_st->res_cur_pos++;
-		}
-
-		*shared_st->res_pre_pos = 0;
-		stage_1_st->new_end_pos = shared_st->res_pre_pos;
-	} else {
-		*shared_st->res_pre_pos = 0;
-		stage_2_st->pre_it_pos = shared_st->res_pre_pos;
-	}
-
+	end_compression_stage_it(shared_st, digest_end, stage_1_st, &stage_2_st->pre_it_pos);
 	shared_st->res_cur_pos = shared_st->res_pre_pos;
 }
 
+/**
+ * @brief Performs the third stage compression. This stage is a compression stage responsible for collapsing
+ *   the value grouping pattern like '(?,?,?)' into '(?,...)' using the config value given by
+ *   'mysql_thread___query_digests_grouping_limit'.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param stage_1_st The state resulting from the previous execution of 'stage 1'.
+ * @param stage_3_st The state from previous execution of 'stage 2' to be updated.
+ * @param opts Options used for deciding how to perform the group collapsing.
+ */
 static __attribute__((always_inline)) inline
 void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* stage_3_st, options* opts) {
 	if (opts->grouping_limit == 0) { return; }
 
-	char* digest_end = NULL;
-
 	// compute the 'digest_end' for the stage 3
-	if (shared_st->st == st_literal_number && stage_1_st->literal_digit_st.start_pos != NULL) {
-		digest_end = stage_1_st->literal_digit_st.start_pos - 1;
-	} else {
-		digest_end = shared_st->res_cur_pos - 1;
-	}
+	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
 
-	// compute the starting point for the third stage
-	if (shared_st->res_init_pos != shared_st->res_it_init_pos) {
-		int min_group_size = opts->grouping_limit*2 > 10 ? opts->grouping_limit*2 : 10;
-		char* next_start_pos =
-			stage_3_st->pre_it_pos - (shared_st->gl_c_offset - stage_3_st->c_offset) - ( min_group_size + 1 );
+	// Compute the starting point for the third stage. The 'min_group_size' value is obtained from
+	// the following pattern:
+	//
+	// previous_iteration - after 'stage_3':
+	//
+	// ```
+	//    `(?,?,?,?,?,?,...+ d`
+	//     ^                 ^ first digit 'stage_1' position && last 'stage_3' compression pos
+	//     | required min 'next_start_pos' for next 'stage_3'
+	// ```
+	//
+	// The break down is:
+	//   * opts->grouping_limit*2: Maximum number of characters of groups left.
+	//   * 7: sizeof('...+ ') + sizeof('(') + 1.
+	//
+	int min_group_size = opts->grouping_limit*2 + 7;
+	char* next_start_pos =
+		stage_3_st->pre_it_pos - (shared_st->gl_c_offset - stage_3_st->c_offset) - (min_group_size + 1);
 
-		if (next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end) {
-			shared_st->res_cur_pos = next_start_pos;
-			shared_st->res_pre_pos = next_start_pos;
-		} else {
-			shared_st->res_cur_pos = shared_st->res_init_pos;
-			shared_st->res_pre_pos = shared_st->res_init_pos;
-		}
-	} else {
-		shared_st->res_cur_pos = shared_st->res_init_pos;
-		shared_st->res_pre_pos = shared_st->res_init_pos;
-	}
+	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
 
 	char group_candidate = 0;
 
 	// it's a fixed pattern, we can perform a lookahead replacement
 	while (shared_st->res_cur_pos <= digest_end) {
+		// If this isn't the first iteration, it's possible to found an expansion pack '...' that is followed
+		// by characters copied in 'stage_1' during this iteration:
+		//
+		// ```
+		//    `(?,?,?,?,?,?,...,?,?)`
+		//                     ^ last 'stage_3' compression pos, followed by new: `,?,?)`
+		// ```
 		if (group_candidate == 1 && (shared_st->res_pre_pos - shared_st->res_init_pos) > 4) {
 			char found_exp_pack =
-				*(shared_st->res_pre_pos) == ',' &&
 				*(shared_st->res_pre_pos-1) == '.' &&
 				*(shared_st->res_pre_pos-2) == '.' &&
-				*(shared_st->res_pre_pos-3) == '.';
+				*(shared_st->res_pre_pos-3) == '.' &&
+				*(shared_st->res_pre_pos-4) == ',';
 
-			if (found_exp_pack == 1) {
+			if (found_exp_pack == 1 && ((digest_end - shared_st->res_cur_pos) >= 1)) {
 				// collapse new patterns founds after the expansion
-				char* new_cur_pos = shared_st->res_cur_pos + 1;
+				char* new_cur_pos = shared_st->res_cur_pos;
+				bool is_last = 0;
 
-				while ((new_cur_pos <= digest_end)) {
+				// if the first character is a ',' we skip it to count the '?,' patterns
+				if (*new_cur_pos == ',') {
+					new_cur_pos += 1;
+				}
+
+				while ((new_cur_pos < digest_end)) {
 					if (*new_cur_pos == '?' && *(new_cur_pos+1) == ',') {
 						new_cur_pos += 2;
 					} else {
 						if (*new_cur_pos == '?' && *(new_cur_pos+1) == ')') {
 							new_cur_pos += 1;
+							is_last = 1;
 						}
 						break;
 					}
 				}
 
-				if (new_cur_pos > shared_st->res_cur_pos + 1) {
+				// We update the current position if either:
+				//  * At least one '?,' was found.
+				//  * The final pattern '?)' was found.
+				if ((new_cur_pos > shared_st->res_cur_pos + 1) || is_last) {
 					shared_st->res_cur_pos = new_cur_pos;
+				}
+
+				// If the first stage hasn't finished parsing a number literal, the following situation is
+				// possible, since we previously skipped the found ',':
+				//
+				// ```
+				//    `(?,?,?,...,dddd)`
+				//                ^ new_cur_pos
+				// ```
+				//
+				// In this case, we break to avoid copying the last char. That copy should be performed by
+				// `end_compression_stage_it`.
+				if (stage_1_st->literal_digit_st.start_pos) {
+					if (new_cur_pos >= digest_end && is_digit_char(*new_cur_pos)) {
+						break;
+					}
 				}
 			}
 		}
@@ -1902,26 +2100,19 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 	int c_3_offset = digest_end - (shared_st->res_pre_pos - 1);
 	stage_3_st->c_offset = c_3_offset > 0 ? c_3_offset : 0;
 
-	if (digest_end == stage_1_st->literal_digit_st.start_pos - 1 && stage_1_st->new_end_pos) {
-		char* f_digits = stage_1_st->literal_digit_st.start_pos;
-		stage_1_st->literal_digit_st.start_pos = shared_st->res_pre_pos;
-		stage_3_st->pre_it_pos = stage_1_st->literal_digit_st.start_pos;
-
-		while (f_digits < stage_1_st->new_end_pos) {
-			*shared_st->res_pre_pos++ = *f_digits++;
-			shared_st->res_cur_pos++;
-		}
-
-		*shared_st->res_pre_pos = 0;
-		stage_1_st->new_end_pos = shared_st->res_pre_pos;
-	} else {
-		*shared_st->res_pre_pos = 0;
-		stage_3_st->pre_it_pos = shared_st->res_pre_pos;
-	}
-
+	end_compression_stage_it(shared_st, digest_end, stage_1_st, &stage_3_st->pre_it_pos);
 	shared_st->res_cur_pos = shared_st->res_pre_pos;
 }
 
+/**
+ * @brief Check if there is a group pattern of kind '(?,?,?)' following the supplied position.
+ *
+ * @param pos The starting pattern position. The initial '('.
+ * @param opts Options used to compute the pattern length.
+ *
+ * @return '1' if a pattern has been found, '0' otherwise.
+ */
+static inline
 bool is_group_pattern(const char* pos, const options* opts) {
 	int group_size = (1 + opts->grouping_limit*2 +  3  + 1);
 	bool is_group_pattern = 1;
@@ -1968,35 +2159,56 @@ bool is_group_pattern(const char* pos, const options* opts) {
 	return is_group_pattern;
 }
 
+/**
+ * @brief Performs the fourth stage compression. This stage is a compression stage responsible for collapsing
+ *   the value grouping patterns already compressed by 'stage 3' into a more compact representation, e.g:
+ *
+ * Pattern:
+ *
+ * ```
+ * (?,?,...),(?,?,...),(?,?,...),(?,?,...),(?,?,...)
+ * ```
+ *
+ * For 'mysql_thread___query_digests_groups_grouping_limit=3' would be compressed into:
+ *
+ * ```
+ * (?,?,...),(?,?,...),(?,?,...),...
+ * ```
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param stage_1_st The state resulting from the previous execution of 'stage 1'.
+ * @param stage_4_st The state from previous execution of 'stage 4' to be updated.
+ * @param opts Options used for deciding how to perform the group collapsing.
+ */
 static __attribute__((always_inline)) inline
 void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* stage_4_st, const options* opts) {
 	if (opts->groups_grouping_limit == 0 || opts->grouping_limit == 0) { return; }
 
+	char* digest_end = get_stage_digest_end(shared_st, stage_1_st);
 	//                       '( +       ?,?,n            + ... + ')  ,'
 	int group_pattern_size = (1 + opts->grouping_limit*2 +  3  + 1 + 1);
-	char* digest_end = NULL;
-
-	if (shared_st->st == st_literal_number && stage_1_st->literal_digit_st.start_pos != NULL) {
-		digest_end = stage_1_st->literal_digit_st.start_pos - 1;
-	} else {
-		digest_end = shared_st->res_cur_pos - 1;
-	}
+	// Compute the starting point for the fourth stage. Since the previous iteration could have ended in a
+	// non-collapsed chain of patterns (if the expanded version of last pattern didn't fit in the buffer). The
+	// last position from the previous iteration could be:
+	//
+	// * 'mysql_thread___query_digests_grouping_limit': 2
+	// * 'mysql_thread___query_digests_groups_grouping_limit': 6
+	//
+	// ```
+	// (?,?,...),(?,?,...),(?,?,...),(?,?,...),(?,?,...),(?,?,...),(?,?,+d)
+	//                                                                   ^ last position
+	// ```
+	//
+	// Since the '7' pattern was never found, no collapsing took place, so in order to ensure that we lie
+	// behind the whole pattern for this iteration we use the offset:
+	//
+	// ```
+	// (group_pattern_size * (opts->groups_grouping_limit + 2))
+	// ```
+	char* next_start_pos = stage_4_st->pre_it_pos - (group_pattern_size * (opts->groups_grouping_limit + 2));
 
 	// compute the starting point for the fourth stage
-	if (shared_st->res_init_pos != shared_st->res_it_init_pos) {
-		char* next_start_pos = stage_4_st->pre_it_pos - (group_pattern_size * (opts->groups_grouping_limit + 1));
-
-		if (next_start_pos >= shared_st->res_init_pos && next_start_pos < digest_end) {
-			shared_st->res_cur_pos = next_start_pos;
-			shared_st->res_pre_pos = next_start_pos;
-		} else {
-			shared_st->res_cur_pos = shared_st->res_init_pos;
-			shared_st->res_pre_pos = shared_st->res_init_pos;
-		}
-	} else {
-		shared_st->res_cur_pos = shared_st->res_init_pos;
-		shared_st->res_pre_pos = shared_st->res_init_pos;
-	}
+	set_stage_next_start_pos(shared_st, digest_end, next_start_pos);
 
 	// it's a fixed pattern, we can perform a lookahead replacement
 	while (shared_st->res_cur_pos <= digest_end) {
@@ -2014,6 +2226,12 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 				char* cur_pattern_pos = cur_char;
 				int found_group_patterns = 0;
 
+				// Jump over the found comma or space, same as in 'stage_3'. For a specific case regarding
+				// the space see 'digest_corner_cases_2.hjson' payload.
+				if (*cur_pattern_pos == ',' || *cur_pattern_pos == ' ') {
+					cur_pattern_pos += 1;
+				}
+
 				while(cur_pattern_pos + (group_pattern_size - 2) <= digest_end) {
 					if (is_group_pattern(cur_pattern_pos, opts) == 1) {
 						if (cur_pattern_pos + (group_pattern_size - 1) == digest_end) {
@@ -2029,10 +2247,11 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 				}
 
 				if (cur_pattern_pos > shared_st->res_cur_pos + 1) {
-					shared_st->res_cur_pos = cur_pattern_pos;
+					shared_st->res_cur_pos = cur_pattern_pos - 1;
+					continue;
 				}
 
-				if (cur_pattern_pos == digest_end) {
+				if (cur_pattern_pos >= digest_end) {
 					break;
 				}
 			}
@@ -2085,30 +2304,40 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 	int c_4_offset = digest_end - (shared_st->res_pre_pos - 1);
 	stage_4_st->c_offset = c_4_offset > 0 ? c_4_offset : 0;
 
-	if (digest_end == stage_1_st->literal_digit_st.start_pos - 1 && stage_1_st->new_end_pos) {
-		char* f_digits = stage_1_st->literal_digit_st.start_pos;
-		stage_1_st->literal_digit_st.start_pos = shared_st->res_pre_pos;
-		stage_4_st->pre_it_pos = stage_1_st->literal_digit_st.start_pos;
-
-		while (f_digits < stage_1_st->new_end_pos) {
-			*shared_st->res_pre_pos++ = *f_digits++;
-			shared_st->res_cur_pos++;
-		}
-
-		*shared_st->res_pre_pos = 0;
-		stage_1_st->new_end_pos = shared_st->res_pre_pos;
-	} else {
-		*shared_st->res_pre_pos = 0;
-		stage_4_st->pre_it_pos = shared_st->res_pre_pos;
-	}
+	end_compression_stage_it(shared_st, digest_end, stage_1_st, &stage_4_st->pre_it_pos);
 
 	shared_st->res_cur_pos = shared_st->res_pre_pos;
 }
 
+/**
+ * @brief Final stage, reponsible of performing final cleanups to the digest after the rest of the processing
+ *   is performed, at the moment it peforms:
+ *
+ *   * Final space replacement.
+ *   * Trimmed digits replacement.
+ *
+ * @param shared_st Shared state used to continue the query processing.
+ * @param stage_1_st Stage 1 final state, used for the trimmed digits replacement.
+ * @param opts Options, currently unused.
+ */
 static __attribute__((always_inline)) inline
 void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* opts) {
 	// Simple final cleanup for making queries more homogeneous when trimmed.
-	// TODO: Give a sensible example of trimmed number processing.
+	// Since literal number processing requires the copy of the literal into the output buffer, processing
+	// could finish before a number is completely parsed, due to compression non being able to create enough
+	// room to complete the processing. In this case, it's possible to have digest ending like:
+	//
+	// ```
+	// INSERT INTO db.table pi_value VALUES (3.141592
+	//                                              ^ end because no room for parsing all the digits
+	// ```
+	//
+	// In this case a final effor is performed to homogenize the query, replacing the literal by '?':
+	//
+	// ```
+	// INSERT INTO db.table pi_value VALUES (?
+	//                                       ^ replaced literal
+	// ```
 	if (stage_1_st->literal_digit_st.start_pos != NULL) {
 		if (shared_st->d_max_len <= (shared_st->res_cur_pos - shared_st->res_init_pos)) {
 			if (shared_st->st == st_literal_number && is_digit_char(*stage_1_st->literal_digit_st.start_pos)) {
@@ -2135,7 +2364,8 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 		}
 		wspace++;
 		*wspace = '\0';
-		// NOTE: Update the last position
+		// NOTE: Since this is the last operation this isn't really required. But it's left in case this block
+		// is moved in the future.
 		shared_st->res_cur_pos = wspace;
 	}
 }
@@ -2258,7 +2488,7 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 
 	char min_digest_size = 0;
 
-	// TODO: This may requires a stopping point, configurable or not, otherwise parsing can become very slow for
+	// TODO: This may requires a stopping point, configurable or not, otherwise parsing can become slow for
 	// very big queries that will require multiple compression stages for processing them. Instead if a
 	// maximum number of iterations is imposed, those queries will stop being parsed before the maximum
 	// compression, but the overhead can be greatly reduced. Example of these queries can be:
@@ -2556,15 +2786,6 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 
 	// start char consumption
 	while (shared_st.q_cur_pos < d_max_len) {
-		// printf(
-		// 	"st_no_mark_found: {"
-		// 		"max_len: '%d', st: `%d`, prev_char: '%c', q_cur_pos: '%d', c_next_char: '%d',"
-		// 		" q: `%s`, res: `%s`"
-		// 	"}\n",
-		// 	d_max_len, cur_st, shared_st.prev_char, shared_st.q_cur_pos, shared_st.copy_next_char,
-		// 	shared_st.q, shared_st.res
-		// );
-
 		if (cur_st == st_no_mark_found) {
 			// update the last position over the return buffer to be the current position
 			shared_st.res_pre_pos = shared_st.res_cur_pos;
