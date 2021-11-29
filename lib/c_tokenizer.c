@@ -488,6 +488,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 					if (fc_len<FIRST_COMMENT_MAX_LENGTH-1) {
 						if (*first_comment==NULL) {
 							*first_comment=(char *)malloc(FIRST_COMMENT_MAX_LENGTH);
+							*(*first_comment + FIRST_COMMENT_MAX_LENGTH - 1) = 0;
 						}
 						char *c=*first_comment+fc_len;
 						*c = !is_space_char(*s) ? *s : ' ';
