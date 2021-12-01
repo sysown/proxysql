@@ -2488,6 +2488,16 @@ MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
 	//reset_pid = true;
 }
+
+void MySQL_ResultSet::buffer_init(MySQL_Protocol* myproto) {
+	if (buffer==NULL) {
+		buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	}
+
+	buffer_used=0;
+	myprot = myproto;
+}
+
 void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
 	PROXY_TRACE2();
 	transfer_started=false;
