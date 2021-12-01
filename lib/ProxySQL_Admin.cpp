@@ -598,6 +598,7 @@ static char * admin_variables_names[]= {
 	(char *)"web_enabled",
 	(char *)"web_port",
 	(char *)"web_verbosity",
+	(char *)"web_prefix",
 	(char *)"prometheus_memory_metrics_interval",
 #ifdef DEBUG
   (char *)"debug",
@@ -5326,6 +5327,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.web_port = 6080;
 	variables.web_port_old = variables.web_port;
 	variables.web_verbosity = 0;
+	variables.web_prefix = strdup((char *)"");
 	variables.p_memory_metrics_interval = 61;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
@@ -5781,6 +5783,9 @@ void ProxySQL_Admin::admin_shutdown() {
 	}
 	if (variables.telnet_stats_ifaces) {
 		free(variables.telnet_stats_ifaces);
+	}
+	if (variables.web_prefix) {
+		free(variables.web_prefix);
 	}
 };
 
@@ -7206,6 +7211,9 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.web_port);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"web_prefix")) {
+		return s_strdup(variables.web_prefix);
+	}
 	if (!strcasecmp(name,"prometheus_memory_metrics_interval")) {
 		sprintf(intbuf, "%d", variables.p_memory_metrics_interval);
 		return strdup(intbuf);
@@ -7629,6 +7637,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 10) {
 			variables.web_verbosity=intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"web_prefix")) {
+		if (value) {
+			if (variables.web_prefix)
+				free(variables.web_prefix);
+			variables.web_prefix=strdup(value);
 			return true;
 		} else {
 			return false;

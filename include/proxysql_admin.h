@@ -177,6 +177,7 @@ class ProxySQL_Admin {
 		int web_verbosity;
 		int web_port;
 		int web_port_old;
+		char * web_prefix;
 		int p_memory_metrics_interval;
 #ifdef DEBUG
 		bool debug;

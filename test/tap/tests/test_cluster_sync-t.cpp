@@ -1171,7 +1171,8 @@ int main(int, char**) {
 			std::make_tuple("admin-vacuum_stats"                               , "true"                      ),
 		//	std::make_tuple("admin-version"                                    , "2.1.0-231-gbc0963e3_DEBUG" ), This changes at runtime, but it's not stored
 			std::make_tuple("admin-web_enabled"                                , "false"                     ),
-			std::make_tuple("admin-web_port"                                   , "6080"                      )
+			std::make_tuple("admin-web_port"                                   , "6080"                      ),
+			std::make_tuple("admin-web_prefix"                                 , ""                          ),
 		};
 		std::vector<std::string> update_admin_variables_queries {};
 

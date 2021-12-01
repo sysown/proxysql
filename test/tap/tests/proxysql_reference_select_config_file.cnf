@@ -66,6 +66,7 @@ admin_variables =
 	version="admin"
 	web_enabled="admin"
 	web_port="admin"
+	web_prefix="admin"
 }
 
 mysql_variables = 
