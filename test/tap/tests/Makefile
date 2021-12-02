@@ -132,5 +132,8 @@ test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $
 create_connection_annotation: test_connection_annotation-t.cpp
 	g++ -DTEST_AURORA -DDEBUG test_connection_annotation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_connection_annotation-t -DGITVERSION=\"$(GIT_VERSION)\"
 
+test_set_collation-t: test_set_collation-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_set_collation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_set_collation-t -DGITVERSION=\"$(GIT_VERSION)\"
+
 setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR)
 	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc ../../../src/obj/proxysql_global.o $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"

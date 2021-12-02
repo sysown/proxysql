@@ -348,7 +348,7 @@ int main(int argc, char** argv) {
 	int rc;
 	std::string query_i = "INSERT INTO test.reg_test_3585 VALUES (? , ? , ? , ? , ? , ? , ?)";
 	// Force the 'hostgroup' for the 'SELECT' query to avoid replication issues
-	std::string query_s = "SELECT /*+ ;hostgroup=0 */ * FROM test.reg_test_3585 WHERE id=?";
+	std::string query_s = "SELECT /* ;hostgroup=0 */ * FROM test.reg_test_3585 WHERE id=?";
 
 	// init and prepare INSERT
 	MYSQL_STMT *stmti = mysql_stmt_init(proxysql_mysql);
