@@ -8,15 +8,11 @@ CURL_DIR=$(DEPS_PATH)/curl/curl
 CURL_IDIR=$(CURL_DIR)/include
 CURL_LDIR=$(CURL_DIR)/lib/.libs
 
-CURL_DIR=$(DEPS_PATH)/curl/curl
-CURL_IDIR=$(CURL_DIR)/include
-CURL_LDIR=$(CURL_DIR)/lib/.libs
-
 IDIR=../../../include
 LDIR=../../../lib
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
-INCLUDEDIRS=-I$(IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR)
+INCLUDEDIRS=-I$(IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -I${CURL_IDIR}
 
 .PHONY: all
 all: libtap.a
