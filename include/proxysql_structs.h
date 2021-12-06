@@ -1053,6 +1053,9 @@ typedef struct {
 	char * default_value;       // default value
 	bool is_global_variable;	// is it a global variable?
 } mysql_variable_st;
+
+TODO: 'SQL_CHARACTER_SET_DATABASE' is a variable that shouldn't be set, or tracked on our side, since it's meant to be only updated by the server:
+ - https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_character_set_database
 */
 mysql_variable_st mysql_tracked_variables[] {
     { SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true, false,  false, false, (char *)"charset", (char *)"charset", (char *)"utf8" , true} , // should be before SQL_CHARACTER_SET_RESULTS

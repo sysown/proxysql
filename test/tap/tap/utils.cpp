@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <string>
 #include <cstring>
 #include <fcntl.h>
 #include <iostream>
@@ -13,6 +14,13 @@
 
 #include "tap.h"
 #include "utils.h"
+
+#include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
+#include <iostream>
+
+#include "proxysql_utils.h"
 
 int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value) {
 	char query[128];
@@ -672,4 +680,108 @@ int wait_for_replication(
 	}
 
 	return result;
+}
+
+MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
+	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
+	do {
+		if (!strcasecmp(c->name, collatename)) {
+			return c;
+		}
+		++c;
+	} while (c[0].nr != 0);
+	return NULL;
+}
+
+int create_proxysql_user(
+	MYSQL* proxysql_admin,
+	const std::string& user,
+	const std::string& pass,
+	const std::string& attributes
+) {
+	std::string t_del_user_query { "DELETE FROM mysql_users WHERE username='%s'" };
+	std::string del_user_query {};
+	string_format(t_del_user_query, del_user_query, user.c_str());
+
+	std::string t_insert_user {
+		"INSERT INTO mysql_users (username,password,active,attributes)"
+		" VALUES ('%s','%s',1,'%s')"
+	};
+	std::string insert_user {};
+	string_format(t_insert_user, insert_user, user.c_str(), pass.c_str(), attributes.c_str());
+
+	MYSQL_QUERY(proxysql_admin, del_user_query.c_str());
+	MYSQL_QUERY(proxysql_admin, insert_user.c_str());
+
+	return EXIT_SUCCESS;
+}
+
+int create_mysql_user(
+	MYSQL* mysql_server,
+	const std::string& user,
+	const std::string& pass
+) {
+	const std::string t_drop_user_query { "DROP USER IF EXISTS %s@'%%'" };
+	std::string drop_user_query {};
+	string_format(t_drop_user_query, drop_user_query, user.c_str());
+
+	const std::string t_create_user_query {
+		"CREATE USER IF NOT EXISTS %s@'%%' IDENTIFIED WITH 'mysql_native_password' BY \"%s\""
+	};
+	std::string create_user_query {};
+	string_format(t_create_user_query, create_user_query, user.c_str(), pass.c_str());
+
+	const std::string t_grant_all_query { "GRANT ALL ON *.* TO %s@'%%'" };
+	std::string grant_all_query { };
+	string_format(t_grant_all_query, grant_all_query, user.c_str());
+
+	MYSQL_QUERY(mysql_server, drop_user_query.c_str());
+	MYSQL_QUERY(mysql_server, create_user_query.c_str());
+	MYSQL_QUERY(mysql_server, grant_all_query.c_str());
+
+	return EXIT_SUCCESS;
+}
+
+int create_extra_users(
+	MYSQL* proxysql_admin,
+	MYSQL* mysql_server,
+	const std::vector<user_config>& users_config
+) {
+	std::vector<std::pair<std::string, std::string>> v_user_pass {};
+	std::transform(
+		std::begin(users_config),
+		std::end(users_config),
+		std::back_inserter(v_user_pass),
+		[](const user_config& u_config) {
+			return std::pair<std::string, std::string> {
+				std::get<0>(u_config),
+				std::get<1>(u_config)
+			};
+		}
+	);
+
+	// create the MySQL users
+	for (const auto& user_pass : v_user_pass) {
+		int c_user_res =
+			create_mysql_user(mysql_server, user_pass.first, user_pass.second);
+		if (c_user_res) {
+			return c_user_res;
+		}
+	}
+
+	// create the ProxySQL users
+	for (const auto& user_config : users_config) {
+		int c_p_user_res =
+			create_proxysql_user(
+				proxysql_admin,
+				std::get<0>(user_config),
+				std::get<1>(user_config),
+				std::get<2>(user_config)
+			);
+		if (c_p_user_res) {
+			return c_p_user_res;
+		}
+	}
+
+	return EXIT_SUCCESS;
 }
