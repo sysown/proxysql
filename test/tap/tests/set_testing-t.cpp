@@ -208,6 +208,14 @@ void * my_conn_thread(void *arg) {
 		queryInternalStatus(mysql, proxysql_vars, paddress);
 
 		//diag("MySQL vars: %lu , ProxySQL vars: %lu" , mysql_vars.size(), proxysql_vars.size());
+		{
+			int lhg = proxysql_vars["locked_on_hostgroup"];
+			if (lhg != -1) {
+				diag("ProxySQL locked_on_hostgroup %d", lhg);
+				diag("FAILED FOR: connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+				exit(EXIT_FAILURE);
+			}
+		}
 
 		if (!testCases[r2].reset_vars.empty()) {
 			for (const auto& var : testCases[r2].reset_vars) {
