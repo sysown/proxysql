@@ -6714,13 +6714,21 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 
 		char **p=(char **)malloc(sizeof(char*)*result->columns);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*result->columns);
+
+		MySQL_ResultSet MyRS {};
+		MyRS.buffer_init(myprot);
+
 		for (int r=0; r<result->rows_count; r++) {
 		for (int i=0; i<result->columns; i++) {
 			l[i]=result->rows[r]->sizes[i];
 			p[i]=result->rows[r]->fields[i];
 		}
-		myprot->generate_pkt_row(true,NULL,NULL,sid,result->columns,l,p); sid++;
+			sid = myprot->generate_pkt_row3(&MyRS, NULL, sid, result->columns, l, p, 0); sid++;
 		}
+
+		MyRS.buffer_to_PSarrayOut();
+		MyRS.get_resultset(myds->PSarrayOUT);
+
 		myds->DSS=STATE_ROW;
 
 		if (deprecate_eof_active) {
