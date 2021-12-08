@@ -54,6 +54,9 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// Numbers of tests counted per functional test
+	plan(4 + 3 + 2 + 3);
+
 	// Just in case more than 1024 connections want to be tried
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
@@ -121,6 +124,9 @@ int main(int argc, char** argv) {
 
 		std::for_each(query_threads.begin(), query_threads.end(), [](std::thread& th) -> void { th.join(); });
 		std::for_each(proxy_conns.begin(), proxy_conns.end(), [](MYSQL* conn) -> void { mysql_close(conn); });
+
+		// Give some extra time to ProxySQL for the sessions processing
+		usleep(500 * 1000);
 
 		// Check that all the queries succeeded because sessions received the connection from connection pool
 		bool conns_succeed = std::accumulate(
@@ -298,7 +304,7 @@ int main(int argc, char** argv) {
 		std::for_each(query_threads.begin(), query_threads.end(), [](std::thread& th) -> void { th.join(); });
 		std::for_each(proxy_conns.begin(), proxy_conns.end(), [](MYSQL* conn) -> void { mysql_close(conn); });
 
-		// Wait until ProxySQL has destroyed all the sessions that never recevied a connection
+		// Give some extra time to ProxySQL for the sessions processing
 		usleep(500 * 1000);
 
 		MYSQL_QUERY(proxysql_admin, "SELECT * FROM stats_mysql_hostgroups_latencies WHERE hostgroup=1");
