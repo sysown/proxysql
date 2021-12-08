@@ -195,6 +195,13 @@ class MyHGC {	// MySQL Host Group Container
 	unsigned int hid;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
+	uint64_t sessions_waited;
+	uint64_t sessions_waited_time_total;
+	uint64_t sessions_waiting;
+	uint64_t sessions_with_conn;
+	uint64_t conns_total;
+	uint64_t queries_total;
+
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
@@ -536,12 +543,22 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
-
+	/**
+	 * @brief Locking function to be used to update the session waiting metrics of a particular hostgroup.
+	 *
+	 * @param hid The id of the hostgroup used to search for the hostgroup 'MyHGC' which values will be updated
+	 *   using the supplied 'MySQL_Session'.
+	 * @param sess The 'MySQL_Session' to be used for updating the values of the provided 'MyHGC'.
+	 * @param get_conn_failed Wether getting a connection from the 'connection pool' for the supplied
+	 *   'MySQL_Session' failed or not.
+	 */
+	void update_hostgroup_sessions_waiting_metrics(int64_t hid, MySQL_Session* sess, bool get_conn_failed);
 	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
 	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = NULL);
+	SQLite3_result * SQL3_Hostgroups_Sessions_Metrics(bool _reset);
 	SQLite3_result * SQL3_Free_Connections();
 
 	void push_MyConn_to_pool(MySQL_Connection *, bool _lock=true);

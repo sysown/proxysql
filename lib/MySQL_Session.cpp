@@ -475,6 +475,8 @@ MySQL_Session::MySQL_Session() {
 	mirrorPkt.ptr=NULL;
 	mirrorPkt.size=0;
 	set_status(session_status___NONE);
+	waiting_in_hg = -1;
+	conn_pull_next_wait_start = 0;
 
 	idle_since = 0;
 	transaction_started_at = 0;
@@ -6821,6 +6823,11 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	GloQPro->delete_QP_out(qpo);
 	// if there is an associated myds, clean its status
 	if (myds) {
+		if (myds->myconn && myds->myconn->parent) {
+			// count query execution in total hostgroup executed queries
+			__sync_fetch_and_add(&myds->myconn->parent->myhgc->queries_total, 1);
+		}
+
 		// if there is a mysql connection, clean its status
 		if (myds->myconn) {
 			myds->myconn->async_free_result();

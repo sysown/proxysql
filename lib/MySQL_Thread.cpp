@@ -5217,6 +5217,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 									gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
 									if (gtid_found) { // this server has the correct GTID
 										c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+										// Update the total connections get for this hostgroup
+										__sync_fetch_and_add(&c->parent->myhgc->conns_total, 1);
 										return c;
 									} else {
 										parents.push_back(mysrvc); // stop evaluating this server
@@ -5231,6 +5233,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 								}
 								// return the connection
 								c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+								// Update the total connections get for this hostgroup
+								__sync_fetch_and_add(&c->parent->myhgc->conns_total, 1);
 								return c;
 							}
 						}

@@ -967,6 +967,13 @@ MyHGC::MyHGC(int _hid) {
 	mysrvs=new MySrvList(this);
 	current_time_now = 0;
 	new_connections_now = 0;
+
+	this->sessions_with_conn = 0;
+	this->sessions_waiting = 0;
+	this->sessions_waited = 0;
+	this->sessions_waited_time_total = 0;
+	this->conns_total = 0;
+	this->queries_total = 0;
 }
 
 
@@ -3275,6 +3282,48 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
+/**
+ * @brief Helper function that updates the session waiting metrics of provided 'MyHGC' based on wether
+ *   getting a connection from connection pool succeed or failed.
+ *
+ * @param myhgc The 'MyHGC' to be updated with the provided 'MySQL_Session' values.
+ * @param sess The 'MySQL_Session' to be used for updating the values of the provided 'MyHGC'.
+ * @param get_conn_failed Wether getting a connection from the 'connection pool' for the supplied
+ *   'MySQL_Session' failed or not.
+ */
+void update_myhgc_sessions_waiting_metrics(MyHGC* myhgc, MySQL_Session* sess, bool get_conn_failed) {
+	if (get_conn_failed) {
+		if (sess->waiting_in_hg == -1) {
+			sess->waiting_in_hg = myhgc->hid;
+
+			myhgc->sessions_waiting += 1;
+			myhgc->sessions_waited += 1;
+			sess->conn_pull_next_wait_start = monotonic_time();
+		} else {
+			uint64_t cur_time = monotonic_time();
+			myhgc->sessions_waited_time_total += cur_time - sess->conn_pull_next_wait_start;
+			sess->conn_pull_next_wait_start = cur_time;
+		}
+	} else {
+		if (sess->waiting_in_hg == myhgc->hid) {
+			myhgc->sessions_waiting -= 1;
+			myhgc->sessions_waited_time_total += monotonic_time() - sess->conn_pull_next_wait_start;
+			sess->conn_pull_next_wait_start = 0;
+			sess->waiting_in_hg = -1;
+		}
+	}
+}
+
+
+void MySQL_HostGroups_Manager::update_hostgroup_sessions_waiting_metrics(
+	int64_t hid, MySQL_Session* sess, bool get_conn_failed
+) {
+	wrlock();
+	MyHGC* myhgc = MyHGC_lookup(hid);
+	update_myhgc_sessions_waiting_metrics(myhgc, sess, get_conn_failed);
+	wrunlock();
+}
+
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
@@ -3291,8 +3340,12 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 			mysrvc->ConnectionsUsed->add(conn);
 			status.myconnpoll_get_ok++;
 			mysrvc->update_max_connections_used();
+			// Update the total connections get for this particular hostgroup
+			myhgc->conns_total++;
 		}
 	}
+	update_myhgc_sessions_waiting_metrics(myhgc, sess, conn == nullptr);
+
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, (conn ? conn->parent->address : "") , (conn ? conn->parent->port : 0 ));
 	return conn;
@@ -4048,6 +4101,52 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 		}
 	}
 	wrunlock();
+	return result;
+}
+
+SQLite3_result * MySQL_HostGroups_Manager::SQL3_Hostgroups_Sessions_Metrics(bool _reset) {
+	const int COLNUM = 6;
+
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Hostgroups Session Metrics\n");
+	SQLite3_result *result=new SQLite3_result(COLNUM);
+	result->add_column_definition(SQLITE_TEXT,"hostgroup");
+	result->add_column_definition(SQLITE_TEXT,"sessions_waiting");
+	result->add_column_definition(SQLITE_TEXT,"sessions_waited");
+	result->add_column_definition(SQLITE_TEXT,"sessions_waited_time_total");
+	result->add_column_definition(SQLITE_TEXT,"conns_total");
+	result->add_column_definition(SQLITE_TEXT,"queries_total");
+
+	wrlock();
+	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
+		MyHGC* myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+
+		std::string hostgroup_str = std::to_string(myhgc->hid);
+		std::string sessions_waiting_str = std::to_string(myhgc->sessions_waiting);
+		std::string sessions_waited_str = std::to_string(myhgc->sessions_waited);
+		std::string sessions_waited_time_total_str = std::to_string(myhgc->sessions_waited_time_total);
+		std::string conns_total_str = std::to_string(myhgc->conns_total);
+		std::string queries_total_str = std::to_string(myhgc->queries_total);
+
+		std::array<char*, COLNUM> pta {};
+		pta[0] = strdup(hostgroup_str.c_str());
+		pta[1] = strdup(sessions_waiting_str.c_str());
+		pta[2] = strdup(sessions_waited_str.c_str());
+		pta[3] = strdup(sessions_waited_time_total_str.c_str());
+		pta[4] = strdup(conns_total_str.c_str());
+		pta[5] = strdup(queries_total_str.c_str());
+
+		result->add_row(&pta.front());
+
+		if (_reset) {
+			myhgc->sessions_waiting = 0;
+			myhgc->sessions_waited = 0;
+			myhgc->sessions_waited_time_total = 0;
+			myhgc->conns_total = 0;
+			myhgc->queries_total = 0;
+		}
+	}
+	wrunlock();
+
 	return result;
 }
 
