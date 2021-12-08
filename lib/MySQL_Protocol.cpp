@@ -1347,6 +1347,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	unsigned char *user=NULL;
 	char *password=NULL;
 	char *db=NULL;
+	char* user_attributes=NULL;
 	mysql_hdr hdr;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	int default_hostgroup=-1;
@@ -1373,11 +1374,12 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, NULL);
+		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, &user_attributes);
 	}
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
+	(*myds)->sess->user_attributes=user_attributes;
 	if (password==NULL) {
 		ret=false;
 	} else {
@@ -1463,6 +1465,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			ret = false;
 			return ret;
 		}
+		// set the default charset for this session
+		(*myds)->sess->default_charset = charset;
 		if ((*myds)->sess->user_attributes) {
 			if (user_attributes_has_spiffe(__LINE__, __func__, user)) {
 				// if SPIFFE was used, CHANGE_USER is not allowed.
@@ -1474,6 +1478,18 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				proxy_error("Client %s:%d is trying to run CHANGE_USER , but this is disabled because it previously used SPIFFE ID. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port);
 				ret = false;
 				return ret;
+			}
+
+			char* user_attributes = (*myds)->sess->user_attributes;
+			if (strlen(user_attributes)) {
+				nlohmann::json j_user_attributes = nlohmann::json::parse(user_attributes);
+				auto default_transaction_isolation = j_user_attributes.find("default-transaction_isolation");
+
+				if (default_transaction_isolation != j_user_attributes.end()) {
+					std::string def_trx_isolation_val =
+						j_user_attributes["default-transaction_isolation"].get<std::string>();
+					mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
+				}
 			}
 		}
 		assert(sess);
@@ -1781,6 +1797,8 @@ __do_auth:
 			ret = false;
 			goto __exit_do_auth;
 		}
+		// set the default session charset
+		(*myds)->sess->default_charset = charset;
 	}
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 #ifdef PROXYSQLCLICKHOUSE
@@ -2470,6 +2488,16 @@ MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
 	//reset_pid = true;
 }
+
+void MySQL_ResultSet::buffer_init(MySQL_Protocol* myproto) {
+	if (buffer==NULL) {
+		buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	}
+
+	buffer_used=0;
+	myprot = myproto;
+}
+
 void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
 	PROXY_TRACE2();
 	transfer_started=false;

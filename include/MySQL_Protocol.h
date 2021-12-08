@@ -37,6 +37,16 @@ class MySQL_ResultSet {
 	MySQL_ResultSet();
 	void init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt=NULL);
 	void init_with_stmt(MySQL_Connection *myconn);
+	/**
+	 * @brief Simple initialization of resulset of 'MySQL_ResultSet' without a resulset.
+	 * @details This initialization allows to reuse the logic from function 'generate_pkt_row3' for filling
+	 *   the resulset for later extracting the generated 'PtrSizeArray' via 'buffer_to_PSarrayOut' and
+	 *   'get_resultset'.
+	 *
+	 *   IMPORTANT-NOTE: Other member functions are not safe to be used after this initialization.
+	 * @param myproto Used to initialize internal 'MySQL_Protocol' field.
+	 */
+	void buffer_init(MySQL_Protocol* myproto);
 	~MySQL_ResultSet();
 	unsigned int add_row(MYSQL_ROWS *rows);
 	unsigned int add_row(MYSQL_ROW row);

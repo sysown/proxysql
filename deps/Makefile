@@ -173,6 +173,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
 	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
@@ -224,6 +225,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-v1.11.tar.gz -C prometheus-cpp/3rdparty/civetweb
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
 	cd prometheus-cpp/prometheus-cpp && patch -p0 < ../registry_counters_reset.patch
+	cd prometheus-cpp/prometheus-cpp && patch -p0 < ../include_limits.patch
 	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 

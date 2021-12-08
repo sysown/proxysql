@@ -1,0 +1,12 @@
+diff --git core/src/histogram.cc core/src/histogram.cc
+index 8023529..b298fd4 100644
+--- core/src/histogram.cc
++++ core/src/histogram.cc
+@@ -3,6 +3,7 @@
+ #include <algorithm>
+ #include <cassert>
+ #include <iterator>
++#include <limits>
+ #include <numeric>
+ #include <ostream>
+ 

@@ -2,6 +2,7 @@
 #include "MySQL_Thread.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "proxysql_utils.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "SpookyV2.h"
@@ -85,6 +86,24 @@ extern SQLite3_Server *GloSQLite3Server;
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
+
+std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
+	if (session_type == PROXYSQL_SESSION_MYSQL) {
+		return "PROXYSQL_SESSION_MYSQL";
+	} else if (session_type == PROXYSQL_SESSION_ADMIN) {
+		return "PROXYSQL_SESSION_ADMIN";
+	} else if (session_type == PROXYSQL_SESSION_STATS) {
+		return "PROXYSQL_SESSION_STATS";
+	} else if (session_type == PROXYSQL_SESSION_SQLITE) {
+		return "PROXYSQL_SESSION_SQLITE";
+	} else if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
+		return "PROXYSQL_SESSION_CLICKHOUSE";
+	} else if (session_type == PROXYSQL_SESSION_MYSQL_EMU) {
+		return "PROXYSQL_SESSION_MYSQL_EMU";
+	} else {
+		return "PROXYSQL_SESSION_NONE";
+	}
+};
 
 Session_Regex::Session_Regex(char *p) {
 	s=strdup(p);
@@ -3320,6 +3339,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		case _MYSQL_COM_PROCESS_KILL:
 			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(pkt);
 			break;
+		case _MYSQL_COM_RESET_CONNECTION:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(pkt);
+			break;
 		default:
 			return false;
 			break;
@@ -6313,6 +6335,53 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got MYSQL_COM_RESET_CONNECTION packet\n");
+
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+		// Backup the current relevant session values
+		int default_hostgroup = this->default_hostgroup;
+		bool transaction_persistent = this->transaction_persistent;
+
+		// Re-initialize the session
+		reset();
+		init();
+
+		// Recover the relevant session values
+		this->default_hostgroup = default_hostgroup;
+		this->transaction_persistent = transaction_persistent;
+		client_myds->myconn->set_charset(default_charset, NAMES);
+
+		if (user_attributes != NULL && strlen(user_attributes)) {
+			nlohmann::json j_user_attributes = nlohmann::json::parse(user_attributes);
+			auto default_transaction_isolation = j_user_attributes.find("default-transaction_isolation");
+
+			if (default_transaction_isolation != j_user_attributes.end()) {
+				std::string def_trx_isolation_val =
+					j_user_attributes["default-transaction_isolation"].get<std::string>();
+				mysql_variables.client_set_value(this, SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
+			}
+		}
+
+		l_free(pkt->size,pkt->ptr);
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+	} else {
+		l_free(pkt->size,pkt->ptr);
+
+		std::string t_sql_error_msg { "Received unsupported 'COM_RESET_CONNECTION' for session type '%s'" };
+		std::string sql_error_msg {};
+		string_format(t_sql_error_msg, sql_error_msg, proxysql_session_type_str(session_type).c_str());
+
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1047,(char *)"28000", sql_error_msg.c_str(), true);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+	}
+}
+
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
 
@@ -6647,13 +6716,21 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 
 		char **p=(char **)malloc(sizeof(char*)*result->columns);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*result->columns);
+
+		MySQL_ResultSet MyRS {};
+		MyRS.buffer_init(myprot);
+
 		for (int r=0; r<result->rows_count; r++) {
 		for (int i=0; i<result->columns; i++) {
 			l[i]=result->rows[r]->sizes[i];
 			p[i]=result->rows[r]->fields[i];
 		}
-		myprot->generate_pkt_row(true,NULL,NULL,sid,result->columns,l,p); sid++;
+			sid = myprot->generate_pkt_row3(&MyRS, NULL, sid, result->columns, l, p, 0); sid++;
 		}
+
+		MyRS.buffer_to_PSarrayOut();
+		MyRS.get_resultset(myds->PSarrayOUT);
+
 		myds->DSS=STATE_ROW;
 
 		if (deprecate_eof_active) {
