@@ -14,6 +14,10 @@
 #include "tap.h"
 #include "utils.h"
 
+using std::vector;
+using std::string;
+using std::map;
+
 int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value) {
 	char query[128];
 
@@ -672,4 +676,55 @@ int wait_for_replication(
 	}
 
 	return result;
+}
+
+map<string,vector<string>> fetch_row_values(MYSQL_RES* res) {
+	map<string, vector<string>> row_map {};
+
+	if (res == NULL) {
+		return row_map;
+	}
+
+	std::vector<std::string> field_names {};
+
+	MYSQL_ROW row = nullptr;
+	int num_fields = mysql_num_fields(res);
+	MYSQL_FIELD* fields = mysql_fetch_fields(res);
+
+	for(int i = 0; i < num_fields; i++) {
+		row_map.insert({string { fields[i].name }, vector<string> {}});
+	}
+
+	while ((row = mysql_fetch_row(res))) {
+		for(int i = 0; i < num_fields; i++) {
+			string field_name { fields[i].name };
+
+			if (row[i]) {
+				row_map[field_name].push_back(row[i]);
+			} else {
+				row_map[field_name].push_back("");
+			}
+		}
+	}
+
+	return row_map;
+}
+
+int open_connections(const CommandLine& cl, uint32_t cons_num, std::vector<MYSQL*>& proxy_conns) {
+	std::vector<MYSQL*> result {};
+
+	for (uint32_t i = 0; i < cons_num; i++) {
+		MYSQL* proxysql_mysql = mysql_init(NULL);
+
+		if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+			return EXIT_FAILURE;
+		} else {
+			result.push_back(proxysql_mysql);
+		}
+	}
+
+	proxy_conns = result;
+
+	return EXIT_SUCCESS;
 }

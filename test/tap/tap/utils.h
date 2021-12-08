@@ -1,6 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <map>
 #include <mysql.h>
 #include <string>
 #include <vector>
@@ -9,6 +10,8 @@
 #include <sstream>
 
 #include <curl/curl.h>
+
+#include "command_line.h"
 
 #define MYSQL_QUERY(mysql, query) \
 	do { \
@@ -170,5 +173,26 @@ std::string random_string(std::size_t strSize);
 int wait_for_replication(
 	MYSQL* proxy, MYSQL* proxy_admin, const std::string& check, uint32_t timeout, uint32_t reader_hg
 );
+
+/**
+ * @brief Returns the rows contained in the resulset as a map using columns names as indexes and row values as
+ *   vectors. Missing row values are converted into empty strings.
+ * @param res The 'MYSQL_RES' to be converted into a map.
+ * @return A map holding the column names as indexes and the row values as vectors, or an empty map if
+ *   resulset is NULL.
+ */
+std::map<std::string,std::vector<std::string>> fetch_row_values(MYSQL_RES* res);
+
+/**
+ * @brief Opens the number of specified connections againts ProxySQL and returns them in the supplied vector
+ *   if no error takes place. In case of error, the error is logged to 'stderr'.
+ *
+ * @param cl The command line arguments required for connection creation.
+ * @param cons_num The number of connections to create and insert into the received vector.
+ * @param proxy_conns A reference to a vector to update with the created connections.
+ *
+ * @return EXIT_SUCCESS in case all the connections could be created, EXIT_FAILURE otherwise.
+ */
+int open_connections(const CommandLine& cl, uint32_t cons_num, std::vector<MYSQL*>& proxy_conns);
 
 #endif // #define UTILS_H
