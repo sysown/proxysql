@@ -227,6 +227,7 @@ void queryInternalStatus(MYSQL *mysql, json& j, std::string& paddress) {
 	std::vector<std::string> bools_variables = {
 		"sql_auto_is_null",
 		"sql_safe_updates",
+		"sql_log_bin",
 		"foreign_key_checks",
 		"unique_checks"
 	};
@@ -239,6 +240,7 @@ void queryInternalStatus(MYSQL *mysql, json& j, std::string& paddress) {
 			}
 		}
 		if (el.key() == "conn") {
+/*			
 			std::string sql_log_bin_value;
 
 			// sql_log_bin {0|1}
@@ -250,7 +252,7 @@ void queryInternalStatus(MYSQL *mysql, json& j, std::string& paddress) {
 				el.value().erase("sql_log_bin");
 				j["conn"]["sql_log_bin"] = "OFF";
 			}
-
+*/
 			{
 				for (std::vector<std::string>::iterator it = bools_variables.begin(); it != bools_variables.end(); it++) {
 					std::string v = el.value()[*it].dump();

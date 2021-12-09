@@ -1052,7 +1052,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 					_myconn->variables[idx].fill_server_internal_session(j, i, idx);
 				}
 				for (std::vector<uint32_t>::const_iterator it_c = _myconn->dynamic_variables_idx.begin(); it_c != _myconn->dynamic_variables_idx.end(); it_c++) {
-					_myconn->variables[*it_c].fill_client_internal_session(j, *it_c);
+					_myconn->variables[*it_c].fill_server_internal_session(j, i, *it_c);
 				}
 				sprintf(buff,"%p",_myconn);
 				j["backends"][i]["conn"]["address"] = buff;
@@ -2161,7 +2161,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 	if (myconn->async_state_machine==ASYNC_IDLE) {
 		char *q=(char *)"SET SQL_LOG_BIN=%s";
 		query=(char *)malloc(strlen(q)+8);
-		sprintf(query,q,mysql_variables.client_get_value(this, SQL_LOG_BIN));
+		sprintf(query,q,mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN));
 		query_length=strlen(query);
 	}
 	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
@@ -2170,12 +2170,12 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 		query=NULL;
 	}
 	if (rc==0) {
-		if (!strcmp("0", mysql_variables.client_get_value(this, SQL_LOG_BIN)) || !strcasecmp("OFF",  mysql_variables.client_get_value(this, SQL_LOG_BIN))) {
+		if (!strcmp("0", mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN)) || !strcasecmp("OFF",  mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN))) {
 			// Pay attention here. STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0 sets sql_log_bin to ZERO:
 			//   - sql_log_bin=0 => true
 			//   - sql_log_bin=1 => false
 			myconn->set_status(true, STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0);
-		} else if (!strcmp("1", mysql_variables.client_get_value(this, SQL_LOG_BIN)) || !strcasecmp("ON",  mysql_variables.client_get_value(this, SQL_LOG_BIN))) {
+		} else if (!strcmp("1", mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN)) || !strcasecmp("ON",  mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN))) {
 			myconn->set_status(false, STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0);
 		}
 		myds->revents|=POLLOUT; // we also set again POLLOUT to send a query immediately!
@@ -5371,7 +5371,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-
+/*
 // this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
 // returned values:
 // 0 : no action
@@ -5389,11 +5389,11 @@ int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool
 	if (rc && ( i==0 || i==1) ) {
 		//fprintf(stderr,"sql_log_bin=%d\n", i);
 		if (i == 1) {
-			if (!mysql_variables.client_set_value(this, SQL_LOG_BIN, "1"))
+			if (!mysql_variables.client_set_value(this, SQL_SQL_LOG_BIN, "1"))
 				return 1;
 		}
 		else if (i == 0) {
-			if (!mysql_variables.client_set_value(this, SQL_LOG_BIN, "0"))
+			if (!mysql_variables.client_set_value(this, SQL_SQL_LOG_BIN, "0"))
 				return 1;
 		}
 
@@ -5447,6 +5447,7 @@ int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool
 	}
 	return 0;
 }
+*/
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, bool prepared) {
 /*
@@ -5511,12 +5512,15 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 			RE2::GlobalReplace(&nq,(char *)"^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/",(char *)"SET\\1");
 			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
+/*
+			// we do not threat SET SQL_LOG_BIN as a special case
 			if (match_regexes && match_regexes[0]->match(dig)) {
 				int rc = handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(pkt, lock_hostgroup, nTrx, nq);
 				if (rc == 1) return false;
 				if (rc == 2) return true;
 				// if rc == 0 , continue as normal
 			}
+*/
 			if (
 				(
 					match_regexes && (match_regexes[1]->match(dig))
@@ -5624,6 +5628,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						|| (var == "innodb_strict_mode")
 						|| (var == "innodb_table_locks")
 						|| (var == "sql_auto_is_null")
+						|| (var == "sql_log_bin")
 						|| (var == "sql_safe_updates")
 						|| (var == "unique_checks")
 					) {

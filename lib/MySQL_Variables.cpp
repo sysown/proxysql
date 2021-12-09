@@ -56,7 +56,7 @@ MySQL_Variables::MySQL_Variables() {
 			MySQL_Variables::updaters[i] = NULL;
 			MySQL_Variables::verifiers[i] = NULL;
 		}
-		else if (i == SQL_LOG_BIN) {
+		else if (i == SQL_SQL_LOG_BIN) {
 			MySQL_Variables::verifiers[i] = verify_server_variable;
 			MySQL_Variables::updaters[i] = logbin_update_server_variable;
 		} else {
@@ -570,7 +570,6 @@ bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, strin
 			}
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		}
-		//exit_after_SetParse = true;
 	} else {
 		sess->unable_to_parse_set_statement(lock_hostgroup);
 		return false;
