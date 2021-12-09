@@ -1176,7 +1176,7 @@ int main(int argc, char** argv) {
 	};
 
 	MYSQL* mysql_server = mysql_init(NULL);
-	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 3306, NULL, 0)) {
+	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
 	}
