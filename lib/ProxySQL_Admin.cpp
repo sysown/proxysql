@@ -4202,6 +4202,33 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	// add support for SELECT current_user() and SELECT user()
+	// see https://github.com/sysown/proxysql/issues/1105#issuecomment-990940585
+	if (
+		(strcasecmp("SELECT current_user()", query_no_space) == 0)
+		||
+		(strcasecmp("SELECT user()", query_no_space) == 0)
+	) {
+		bool current = false;
+		if (strcasestr(query_no_space, "current") != NULL)
+			current = true;
+		l_free(query_length,query);
+		std::string s = "SELECT '";
+		s += sess->client_myds->myconn->userinfo->username ;
+		if (strlen(sess->client_myds->addr.addr) > 0) {
+			s += "@";
+			s += sess->client_myds->addr.addr;
+		}
+		s += "' AS '";
+		if (current == true) {
+			s+= "current_";
+		}
+		s += "user()'";
+		query=l_strdup(s.c_str());
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
 	if (!strncasecmp("select @@sql_mode", query_no_space, strlen("select @@sql_mode"))) {
 		l_free(query_length,query);
 		char *q = const_cast<char*>("SELECT \"\" as \"@@sql_mode\"");
