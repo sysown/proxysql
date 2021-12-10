@@ -558,6 +558,7 @@ endif
 endif
 endif
 endif
+endif
 
 .PHONY: uninstall
 uninstall:
