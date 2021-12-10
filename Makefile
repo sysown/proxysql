@@ -538,6 +538,9 @@ else
 ifeq ($(DISTRO),"CentOS Linux")
 		chkconfig --level 0123456 proxysql on
 else
+ifeq ($(DISTRO),"Rocky Linux")
+		chkconfig --level 0123456 proxysql on
+else
 ifeq ($(DISTRO),"Red Hat Enterprise Linux Server")
 		chkconfig --level 0123456 proxysql on
 else
