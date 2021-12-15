@@ -247,7 +247,7 @@ class MySQL_Session
 	int pending_connect;
 	enum proxysql_session_type session_type;
 	/* @brief Keeps track in which MyHGCs the session is already registered. */
-	int64_t waiting_in_hg;
+	int waiting_in_hg;
 	uint64_t conn_pull_next_wait_start;
 
 	// bool

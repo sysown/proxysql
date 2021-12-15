@@ -195,9 +195,9 @@ class MyHGC {	// MySQL Host Group Container
 	unsigned int hid;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
-	uint64_t sessions_waited;
-	uint64_t sessions_waited_time_total;
-	uint64_t sessions_waiting;
+	uint64_t conns_reqs_waited;
+	uint64_t conns_reqs_waited_time_total;
+	uint64_t conns_reqs_waiting;
 	uint64_t sessions_with_conn;
 	uint64_t conns_total;
 	uint64_t queries_total;
@@ -552,7 +552,7 @@ class MySQL_HostGroups_Manager {
 	 * @param get_conn_failed Wether getting a connection from the 'connection pool' for the supplied
 	 *   'MySQL_Session' failed or not.
 	 */
-	void update_hostgroup_sessions_waiting_metrics(int64_t hid, MySQL_Session* sess, bool get_conn_failed);
+	void update_hostgroup_conns_reqs_waiting_metrics(int64_t hid, MySQL_Session* sess, bool get_conn_failed);
 	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 
 	void drop_all_idle_connections();
