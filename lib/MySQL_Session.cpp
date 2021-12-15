@@ -4353,6 +4353,19 @@ handler_again:
 				handler_ret = 0;
 				return handler_ret;
 			}
+			if (qpo->qps_queue != NULL) {
+				bool got_token = qpo->qps_queue->token_bucket.consume(1);
+				if (got_token == false) {
+					// TODO: Fixed value now, should depend on 'qpo->qps_queue->session_queue'
+					this->pause_until = thread->curtime + 10*1000;
+					handler_ret = 0;
+					return handler_ret;
+				} else {
+					__sync_fetch_and_sub(&qpo->qps_queue->session_queue, 1);
+					qpo->qps_queue.reset();
+					qpo->qps_queue = nullptr;
+				}
+			}
 			if (mysql_thread___connect_timeout_server_max) {
 				if (mybe->server_myds->max_connect_time==0)
 					mybe->server_myds->max_connect_time=thread->curtime+(long long)mysql_thread___connect_timeout_server_max*1000;

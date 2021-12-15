@@ -2,8 +2,11 @@
 #define __CLASS_QUERY_PROCESSOR_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "TokenBucket.h"
 
 #include <set>
+#include <memory>
+#include <queue>
 
 // Optimization introduced in 2.0.6
 // to avoid a lot of unnecessary copy
@@ -111,6 +114,16 @@ struct _Query_Processor_rule_t {
 
 typedef struct _Query_Processor_rule_t QP_rule_t;
 
+struct QPS_Limit_Bucket {
+	TokenBucket token_bucket;
+	uint64_t session_queue;
+
+	QPS_Limit_Bucket(const uint64_t rate, const uint64_t burst_size) :
+		token_bucket(rate, burst_size), session_queue(0) {}
+};
+
+KHASH_MAP_INIT_STR(khQPSLimitBucket, std::shared_ptr<QPS_Limit_Bucket>);
+
 class Query_Processor_Output {
 	public:
 	void *ptr;
@@ -139,6 +152,8 @@ class Query_Processor_Output {
 	char *min_gtid;
 	bool create_new_conn;
 	std::string *new_query;
+	std::shared_ptr<QPS_Limit_Bucket> qps_queue;
+
 	void * operator new(size_t size) {
 		return l_alloc(size);
 	}
@@ -178,6 +193,7 @@ class Query_Processor_Output {
 		min_gtid=NULL;
 		firewall_whitelist_mode = WUS_NOT_FOUND;
 		create_new_conn=0;
+		qps_queue = NULL;
 	}
 	void destroy() {
 		if (error_msg) {
@@ -268,6 +284,10 @@ class Query_Processor {
 	char * rules_fast_routing___keys_values;
 	unsigned long long rules_fast_routing___keys_values___size;
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
+	khash_t(khQPSLimitBucket)* qps_limit_rules;
+	pthread_rwlock_t qps_limit_rwlock;
+	char* qps_limit_rules_values;
+	uint64_t qps_limit_rules_values_size;
 
 	// firewall
 	pthread_mutex_t global_mysql_firewall_whitelist_mutex;
@@ -335,6 +355,11 @@ class Query_Processor {
 	SQLite3_result * fast_routing_resultset;
 	void load_fast_routing(SQLite3_result *resultset);
 	SQLite3_result * get_current_query_rules_fast_routing();
+	// QPS limit rules
+	SQLite3_result* qps_limit_resultset;
+	void load_qps_limits(SQLite3_result* resultset);
+	SQLite3_result* get_current_qps_limit_rules();
+
 	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
 	int testing___find_HG_in_mysql_query_rules_fast_routing_dual(char *username, char *schemaname, int flagIN);
 

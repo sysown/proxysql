@@ -432,6 +432,7 @@ class ProxySQL_Admin {
 
 	unsigned int ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int, bool);
 	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual);
+	void save_mysql_qps_limit_rules_from_runtime(bool _runtime);
 	void ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
 #ifdef DEBUG
