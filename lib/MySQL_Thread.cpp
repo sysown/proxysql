@@ -5537,7 +5537,8 @@ void MySQL_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds) {
 
 void MySQL_Thread::tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds) {
 	if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
-		mypolls.poll_timeout= myds->sess->pause_until - curtime;
+		uint64_t new_poll_timeout = myds->sess->pause_until - curtime;
+		mypolls.poll_timeout= new_poll_timeout == 0 ? 1 : new_poll_timeout;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , pause_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->sess->pause_until, curtime);
 	}
 }
