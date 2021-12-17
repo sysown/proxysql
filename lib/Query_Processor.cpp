@@ -1789,17 +1789,25 @@ __exit_process_mysql_query:
 				bool got_token = s_bucket->token_bucket.consume(1);
 				if (got_token == false) {
 					__sync_fetch_and_add(&s_bucket->session_queue, 1);
+					// const uint64_t tg_qps = __sync_fetch_and_add(&s_bucket->qps, 0);
+					// const uint64_t time_per_token = 1000000 / tg_qps;
+					// ret->delay += time_per_token/1000;
 
 					ret->qps_queue = s_bucket;
 					// TODO: Fixed value for now
 					ret->delay += 10;
 				}
 			} else {
-				__sync_fetch_and_add(&s_bucket->session_queue, 1);
+				if (sess->qps_queue == NULL) {
+					uint64_t cur_queue = __sync_fetch_and_add(&s_bucket->session_queue, 1) + 1;
+					// const uint64_t tg_qps = __sync_fetch_and_add(&s_bucket->qps, 0);
+					// const uint64_t time_per_token = 1000000 / tg_qps;
+					// ret->delay += cur_queue*time_per_token/1000;
 
-				ret->qps_queue = s_bucket;
-				// TODO: Fixed value now, should depend on 'qpo->qps_queue->session_queue'
-				ret->delay += 10;
+					ret->qps_queue = s_bucket;
+					// TODO: Fixed value now, should depend on 'qpo->qps_queue->session_queue'
+					ret->delay += 10;
+				}
 			}
 		}
 	}
@@ -2857,7 +2865,7 @@ void Query_Processor::load_qps_limits(SQLite3_result *resultset) {
 	// First invalidate current values from map
 	for (khint_t k = kh_begin(qps_limit_rules); k != kh_end(qps_limit_rules); ++k) {
 		if (kh_exist(qps_limit_rules, k)) {
-			kh_value(qps_limit_rules, k)->token_bucket.disable();
+			kh_value(qps_limit_rules, k)->qps_limit = -1;
 		}
 	}
 
@@ -2889,8 +2897,7 @@ void Query_Processor::load_qps_limits(SQLite3_result *resultset) {
 			khiter_t elem_it = kh_get(khQPSLimitBucket, qps_limit_rules, ptr);
 			if (elem_it != kh_end(qps_limit_rules)) {
 				std::shared_ptr<QPS_Limit_Bucket>& f_elem = kh_value(qps_limit_rules, elem_it);
-				f_elem->token_bucket.update(qps_limit, bucket_size);
-				f_elem->token_bucket.enable();
+				f_elem->update(qps_limit, bucket_size);
 			} else {
 				khiter_t k = kh_put(khQPSLimitBucket, qps_limit_rules, ptr, &ret);
 				new (&kh_value(qps_limit_rules, k)) std::shared_ptr<QPS_Limit_Bucket>(
@@ -2917,7 +2924,7 @@ void Query_Processor::load_qps_limits(SQLite3_result *resultset) {
 		if (kh_exist(qps_limit_rules, k)) {
 			std::shared_ptr<QPS_Limit_Bucket>& s_bucket = kh_value(qps_limit_rules, k);
 
-			if (s_bucket->token_bucket.is_disabled()) {
+			if (__sync_fetch_and_add(&s_bucket->qps_limit, 0) == -1) {
 				s_bucket->session_queue = 0;
 				s_bucket.reset();
 

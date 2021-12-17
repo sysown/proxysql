@@ -117,9 +117,15 @@ typedef struct _Query_Processor_rule_t QP_rule_t;
 struct QPS_Limit_Bucket {
 	TokenBucket token_bucket;
 	uint64_t session_queue;
+	int64_t qps_limit;
 
-	QPS_Limit_Bucket(const uint64_t rate, const uint64_t burst_size) :
-		token_bucket(rate, burst_size), session_queue(0) {}
+	QPS_Limit_Bucket(const int64_t qps_limit, const uint64_t burst_size) :
+		token_bucket(qps_limit, burst_size), session_queue(0), qps_limit(qps_limit) {}
+
+	void update(const int64_t qps_limit, const uint64_t burst_size) {
+		this->token_bucket.update(qps_limit, burst_size);
+		this->qps_limit = qps_limit;
+	}
 };
 
 KHASH_MAP_INIT_STR(khQPSLimitBucket, std::shared_ptr<QPS_Limit_Bucket>);

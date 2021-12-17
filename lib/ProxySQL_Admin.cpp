@@ -396,7 +396,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE mysql_query_rules_fast_routing (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, schemaname, flagIN) )"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_QPS_LIMIT_RULES "CREATE TABLE mysql_qps_limit_rules (username VARCHAR NOT NULL, schemaname VARCHAR NOT NULL, flagIN INT NOT NULL DEFAULT 0, qps_limit INT NOT NULL DEFAULT 0, bucket_size INT NOT NULL DEFAULT 0, PRIMARY KEY (username, schemaname, flagIN) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_QPS_LIMIT_RULES "CREATE TABLE mysql_qps_limit_rules (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , qps_limit INT NOT NULL DEFAULT 0 , bucket_size INT NOT NULL DEFAULT 0 , PRIMARY KEY (username, schemaname, flagIN) )"
 
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
@@ -469,7 +469,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE runtime_mysql_query_rules_fast_routing (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, schemaname, flagIN) )"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QPS_LIMIT_RULES "CREATE TABLE runtime_mysql_qps_limit_rules (username VARCHAR NOT NULL, schemaname VARCHAR NOT NULL, flagIN INT NOT NULL DEFAULT 0, qps_limit INT NOT NULL DEFAULT 0, bucket_size INT NOT NULL DEFAULT 0, PRIMARY KEY (username, schemaname, flagIN) )"
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QPS_LIMIT_RULES "CREATE TABLE runtime_mysql_qps_limit_rules (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , qps_limit INT NOT NULL DEFAULT 0 , bucket_size INT NOT NULL DEFAULT 0 , PRIMARY KEY (username, schemaname, flagIN) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER "CREATE TABLE runtime_scheduler (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '')" 
 
@@ -9730,6 +9730,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_qps_limit_rules SELECT * FROM disk.mysql_qps_limit_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");

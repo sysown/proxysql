@@ -38,21 +38,15 @@ public:
 	TokenBucket(const TokenBucket &other) {
 		timePerToken_ = other.timePerToken_.load();
 		timePerBurst_ = other.timePerBurst_.load();
-		disabled_ = other.disabled_.load();
 	}
 
 	TokenBucket &operator=(const TokenBucket &other) {
 		timePerToken_ = other.timePerToken_.load();
 		timePerBurst_ = other.timePerBurst_.load();
-		disabled_ = other.disabled_.load();
 		return *this;
 	}
 
 	bool consume(const uint64_t tokens) {
-		if (disabled_.load(std::memory_order_relaxed) == true) {
-			return true;
-		}
-
 		const uint64_t now =
 				std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()
@@ -84,25 +78,12 @@ public:
 		return false;
 	}
 
-	void disable() {
-		disabled_ = true;
-	}
-
-	void enable() {
-		disabled_ = false;
-	}
-
 	void update(const uint64_t rate, const uint64_t burstSize) {
 		timePerToken_ = 1000000 / rate;
-		timePerBurst_ = burstSize;
-	}
-
-	bool is_disabled() {
-		return disabled_.load(std::memory_order_relaxed);
+		timePerBurst_ = burstSize * timePerToken_;
 	}
 
 private:
-	std::atomic<bool> disabled_ = {false};
 	std::atomic<uint64_t> time_ = {0};
 	std::atomic<uint64_t> timePerToken_ = {0};
 	std::atomic<uint64_t> timePerBurst_ = {0};
