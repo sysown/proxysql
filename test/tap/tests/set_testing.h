@@ -193,6 +193,8 @@ void queryVariables(MYSQL *mysql, json& j, std::string& paddress) {
 	query << ", 'default_storage_engine', 'default_tmp_storage_engine'";
 	query << ", 'innodb_lock_wait_timeout', 'innodb_strict_mode', 'innodb_table_locks'";
 	query << ", 'join_buffer_size', 'lock_wait_timeout'";
+	query << ", 'sort_buffer_size', 'optimizer_search_depth', 'optimizer_prune_level', 'max_execution_time', 'tmp_table_size'";
+	query << ", 'lc_messages', 'lc_time_names', 'timestamp'";
 	query << ")";
 	//fprintf(stderr, "TRACE : QUERY 3 : variables %s\n", query.str().c_str());
 	if (mysql_query(mysql, query.str().c_str())) {

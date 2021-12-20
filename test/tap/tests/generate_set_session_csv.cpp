@@ -66,7 +66,7 @@ class variable {
 std::unordered_map<std::string, variable *> vars;
 
 
-void add_value_j(std::string& j, std::string& s, variable *v) {
+void add_value_j(std::string& j, const std::string& s, variable *v) {
 	if (v->is_bool == true) {
 		if (
 			(strcasestr(s.c_str(), "OFF") != NULL)
@@ -115,6 +115,8 @@ int main() {
 	vars["sql_log_bin"]->add(bool_values);
 	vars["sql_safe_updates"] = new variable("sql_safe_updates", true, false, true);
 	vars["sql_safe_updates"]->add(bool_values);
+	vars["sql_big_selects"] = new variable("sql_safe_updates", true, false, true);
+	vars["sql_big_selects"]->add(bool_values);
 //	vars["wsrep_sync_wait"] = new variable("wsrep_sync_wait", true, false);
 //	vars["wsrep_sync_wait"]->add(bool_values);
 	vars["sql_auto_is_null"] = new variable("sql_auto_is_null", true, false, true);
@@ -139,8 +141,8 @@ int main() {
 	vars["auto_increment_offset"] = new variable("auto_increment_offset", true, true, false);
 	vars["auto_increment_offset"]->add(int_values_small, 20);
 	vars["sql_select_limit"] = new variable("sql_select_limit", true, true, false);
-	vars["sql_select_limit"]->add(int_values_small, 50);
-	vars["sql_select_limit"]->add(int_values, 50);
+	vars["sql_select_limit"]->add(int_values_small, 80);
+	vars["sql_select_limit"]->add(int_values, 80);
 	vars["group_concat_max_len"] = new variable("group_concat_max_len", true, true, false);
 	vars["group_concat_max_len"]->add(int_values_small, 123);
 	vars["group_concat_max_len"]->add(int_values, 123);
@@ -161,13 +163,53 @@ int main() {
 	vars["max_join_size"] = new variable("max_join_size", true, true, false);
 	vars["max_join_size"]->add(int_values, 1000);
 	vars["max_join_size"]->add("18446744073709551615");
-	
+	vars["max_join_size"]->add("DEFAULT");
+	vars["tmp_table_size"] = new variable("tmp_table_size", true, true, false);
+	vars["tmp_table_size"]->add(int_values, 10050);
+	vars["tmp_table_size"]->add("18446744000000051615");
+	vars["max_heap_table_size"] = new variable("max_heap_table_size", true, true, false);
+	vars["max_heap_table_size"]->add(int_values, 20031);
+	vars["max_heap_table_size"]->add("18446000744000051615");
+	vars["sort_buffer_size"] = new variable("sort_buffer_size", true, true, false);
+	vars["sort_buffer_size"]->add(int_values, 40123);
+	vars["sort_buffer_size"]->add("18446744073709551615");
+	vars["max_execution_time"] = new variable("max_execution_time", true, true, false);
+	vars["max_execution_time"]->add(int_values, 1293);
+	vars["max_execution_time"]->add(int_values_small, 343);
+	vars["max_execution_time"]->add("0");
+	vars["long_query_time"] = new variable("long_query_time", true, true, false);
+	vars["long_query_time"]->add(int_values, 2951);
+	vars["long_query_time"]->add(int_values_small, 498);
+	vars["long_query_time"]->add("0");
+	vars["max_sort_length"] = new variable("max_sort_length", true, true, false);
+	vars["max_sort_length"]->add(int_values, 1123);
+	vars["optimizer_prune_level"] = new variable("optimizer_prune_level", true, true, false);
+	vars["optimizer_prune_level"]->add({0, 1}, 0);
+	vars["optimizer_search_depth"] = new variable("optimizer_search_depth", true, true, false);
+	vars["optimizer_search_depth"]->add({0, 1, 12, 30, 62}, 0);
+	vars["timestamp"] = new variable("timestamp", true, true, false);
+	vars["timestamp"]->add("1640011196");
+	for (unsigned long long i = 0 ; i < 10 ; i++) {
+		unsigned long long ts = 1640011196 + i*3600*24;
+		vars["timestamp"]->add(std::to_string(ts));
+	}
 	vars["session_track_gtids"] = new variable("session_track_gtids", true, true, false);
 	vars["session_track_gtids"]->add("OWN_GTID");
 //	vars["session_track_gtids"]->add("OFF");
 //	vars["session_track_gtids"]->add("ALL_GTID");
 	
 	
+	vars["lc_time_names"] = new variable("lc_time_names", true, false, false);
+	vars["lc_time_names"]->add(std::vector<std::string> {"en_US", "'en_US'", "`en_US`", "\"en_US\""});
+	vars["lc_time_names"]->add(std::vector<std::string> {"en_GB", "'en_GB'", "`en_GB`", "\"en_GB\""});
+	vars["lc_time_names"]->add(std::vector<std::string> {"ja_JP", "'ja_JP'", "`ja_JP`", "\"ja_JP\""});
+	vars["lc_time_names"]->add(std::vector<std::string> {"pt_BR", "'pt_BR'", "`pt_BR`", "\"pt_BR\""});
+
+	vars["lc_messages"] = new variable("lc_messages", true, false, false);
+	vars["lc_messages"]->add(std::vector<std::string> {"it_IT", "'it_IT'", "`it_IT`", "\"it_IT\""});
+	vars["lc_messages"]->add(std::vector<std::string> {"es_ES", "'es_ES'", "`es_ES`", "\"es_ES\""});
+	vars["lc_messages"]->add(std::vector<std::string> {"fr_FR", "'fr_FR'", "`fr_FR`", "\"fr_FR\""});
+
 	vars["time_zone"] = new variable("time_zone", true, false, false);
 	vars["time_zone"]->add(std::vector<std::string> {"'+01:00'", "`+02:15`", "\"+03:30\""});
 	vars["time_zone"]->add(std::vector<std::string> {"'+04:45'", "`+05:00`", "\"+06:10\""});
@@ -213,7 +255,7 @@ example:
 			i++;
 		}
 	}
-	for (int i=0; i<10000; i++) {
+	for (int i=0; i<20000; i++) {
 		int ne = rand()%4+1;
 		variable * va[ne];
 		for (int ine = 0; ine < ne; ) {
@@ -242,8 +284,9 @@ example:
 			std::string s = v->values[r];
 			//std::cout << v->name << "=";
 			query += v->name + "=";
+			std::string s1 = "";
 			if (s[0] == '"') {
-				std::string s1 = std::string(s,0,s.length()-1);
+				s1 = std::string(s,0,s.length()-1);
 				//std::cout << "\\" << s1 << "\\\"";
 				query+= "\\" + s1 + "\\\"";
 			} else {
@@ -251,6 +294,22 @@ example:
 			}
 			j += "\"" + v->name + "\":\"";
 			add_value_j(j,s,v);
+			if (v->name == "max_join_size") {
+				// see https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_max_join_size
+				std::string s2 = s;
+				if (s1.length() > 0) {
+					s2 = s1;
+				}
+				j+= "\", ";
+				j += "\"";
+				j += "sql_big_selects";
+				j += "\":\"";
+				if (strcasecmp(s2.c_str(),(char *)"default")==0 || s2 == "18446744073709551615") {
+					add_value_j(j,"ON",vars["sql_big_selects"]);
+				} else {
+					add_value_j(j,"OFF",vars["sql_big_selects"]);
+				}
+			}
 			if (ine != ne -1) {
 				query+= ", ";
 				j+= "\", ";

@@ -362,7 +362,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Cannot read %s\n", fileName2.c_str());
 		return exit_status();
 	}
-	queries = 1500;
+	queries = 2500;
 	//queries = testCases.size();
 	plan(queries * num_threads);
 
