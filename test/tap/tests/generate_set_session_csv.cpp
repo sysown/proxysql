@@ -174,8 +174,7 @@ int main() {
 	vars["sort_buffer_size"]->add(int_values, 40123);
 	vars["sort_buffer_size"]->add("18446744073709551615");
 	vars["max_execution_time"] = new variable("max_execution_time", true, true, false);
-	vars["max_execution_time"]->add(int_values, 1293);
-	vars["max_execution_time"]->add(int_values_small, 343);
+	vars["max_execution_time"]->add(int_values, 12930);
 	vars["max_execution_time"]->add("0");
 	vars["long_query_time"] = new variable("long_query_time", true, true, false);
 	vars["long_query_time"]->add(int_values, 2951);
