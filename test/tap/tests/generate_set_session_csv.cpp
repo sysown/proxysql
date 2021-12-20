@@ -202,7 +202,7 @@ int main() {
 	vars["lc_time_names"] = new variable("lc_time_names", true, false, false);
 	vars["lc_time_names"]->add(std::vector<std::string> {"en_US", "'en_US'", "`en_US`", "\"en_US\""});
 	vars["lc_time_names"]->add(std::vector<std::string> {"en_GB", "'en_GB'", "`en_GB`", "\"en_GB\""});
-	vars["lc_time_names"]->add(std::vector<std::string> {"ja_JP", "'ja_JP'", "`ja_JP`", "\"ja_JP\""});
+	//vars["lc_time_names"]->add(std::vector<std::string> {"ja_JP", "'ja_JP'", "`ja_JP`", "\"ja_JP\""});
 	vars["lc_time_names"]->add(std::vector<std::string> {"pt_BR", "'pt_BR'", "`pt_BR`", "\"pt_BR\""});
 
 	vars["lc_messages"] = new variable("lc_messages", true, false, false);
