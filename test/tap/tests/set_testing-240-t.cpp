@@ -243,6 +243,46 @@ void * my_conn_thread(void *arg) {
 			bool verified_special_sqlmode = false;
 			bool special_sqlmode = false;
 
+			bool parsing_optimizer_switch = false;
+			bool optimizer_switch_matches = false;
+
+			if (el.key() == "long_query_time") {
+				// we remove the decimals
+				std::string tsnd = mysql_vars["long_query_time"];
+				if (tsnd.find(".") != std::string::npos) {
+					tsnd = tsnd.substr(0, tsnd.find("."));
+					mysql_vars["long_query_time"]=tsnd;
+				}
+			}
+
+			if (el.key() == "timestamp") {
+				// we remove the decimals
+				std::string tsnd = mysql_vars["timestamp"];
+				if (tsnd.find(".") != std::string::npos) {
+					tsnd = tsnd.substr(0, tsnd.find("."));
+					mysql_vars["timestamp"]=tsnd;
+				}
+			}
+			if (el.key() == "max_join_size") {
+				if (el.value() == "DEFAULT") {
+					if (mysql_vars["max_join_size"] == "18446744073709551615") {
+						mysql_vars["max_join_size"] = "DEFAULT";
+					}
+				}
+			}
+
+			if (el.key() == "optimizer_switch") {
+				parsing_optimizer_switch = true;
+				std::string e_val { el.value() };
+				std::string k_val { k.value() };
+				std::string s_val { s.value() };
+				if (e_val == s_val) { // it matches in proxysql
+					if (strstr(k_val.c_str(), e_val.c_str()) != NULL) {
+						optimizer_switch_matches = true;
+					}
+				}
+			}
+
 			if (el.key() == "sql_mode") {
 				if (!el.value().is_string()) {
 					diag("Invalid value for 'sql_mode' found. Provided value should be of 'string' type");
@@ -300,7 +340,8 @@ void * my_conn_thread(void *arg) {
 				(special_sqlmode == true && verified_special_sqlmode == false) ||
 				(k == mysql_vars.end()) ||
 				(s == proxysql_vars["conn"].end()) ||
-				(special_sqlmode == false &&
+				( (parsing_optimizer_switch == true) && (optimizer_switch_matches == false) ) ||
+				(special_sqlmode == false && parsing_optimizer_switch == false &&
 					(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
 				)

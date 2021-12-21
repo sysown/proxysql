@@ -589,7 +589,11 @@ bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string
 		}
 	}
 	if (!only_digit_chars) {
-		if (strcasecmp(mysql_tracked_variables[idx].set_variable_name,(char *)"sql_select_limit")==0) { // only sql_select_limit allows value "default"
+		if (
+			(strcasecmp(mysql_tracked_variables[idx].set_variable_name,(char *)"sql_select_limit")==0) // sql_select_limit allows value "default"
+			||
+			(strcasecmp(mysql_tracked_variables[idx].set_variable_name,(char *)"max_join_size")==0) // max_join_size allows value "default"
+		) {
 			if (strcasecmp(v,"default")==0) {
 				only_digit_chars = true;
 			}

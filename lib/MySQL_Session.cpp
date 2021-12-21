@@ -5631,6 +5631,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						|| (var == "default_tmp_storage_engine")
 						|| (var == "lc_messages")
 						|| (var == "lc_time_names")
+						|| (var == "optimizer_switch")
 					) {
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");

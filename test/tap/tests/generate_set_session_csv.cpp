@@ -169,7 +169,17 @@ int main() {
 	vars["tmp_table_size"]->add("18446744000000051615");
 	vars["max_heap_table_size"] = new variable("max_heap_table_size", true, true, false);
 	vars["max_heap_table_size"]->add(int_values, 20031);
-	vars["max_heap_table_size"]->add("18446000744000051615");
+	vars["max_heap_table_size"]->add("8446744073709547520");
+	{
+		// join_buffer_size uses blocks of 1024 , so we need to round it
+		std::vector<std::string>& vals = vars["max_heap_table_size"]->values;
+		for (std::vector<std::string>::iterator it = vals.begin(); it != vals.end(); it++) {
+			unsigned long long a = std::stoll(*it);
+			a = a/1024;
+			a *= 1024;
+			*it = std::to_string(a);
+		}
+	}
 	vars["sort_buffer_size"] = new variable("sort_buffer_size", true, true, false);
 	vars["sort_buffer_size"]->add(int_values, 40123);
 	vars["sort_buffer_size"]->add("18446744073709551615");
@@ -198,6 +208,11 @@ int main() {
 //	vars["session_track_gtids"]->add("ALL_GTID");
 	
 	
+	vars["optimizer_switch"] = new variable("optimizer_switch", true, false, false);
+	vars["optimizer_switch"]->add(std::vector<std::string> {"'materialization=off'", "`materialization=on`", "\"materialization=off\""});
+	vars["optimizer_switch"]->add(std::vector<std::string> {"'index_merge_union=off'", "`index_merge_union=on`", "\"index_merge_union=off\""});
+	vars["optimizer_switch"]->add(std::vector<std::string> {"'semijoin=off'", "`semijoin=on`", "\"semijoin=off\""});
+
 	vars["lc_time_names"] = new variable("lc_time_names", true, false, false);
 	vars["lc_time_names"]->add(std::vector<std::string> {"en_US", "'en_US'", "`en_US`", "\"en_US\""});
 	vars["lc_time_names"]->add(std::vector<std::string> {"en_GB", "'en_GB'", "`en_GB`", "\"en_GB\""});
