@@ -119,6 +119,8 @@ struct QPS_Limit_Bucket {
 	uint64_t session_queue;
 	int64_t qps_limit;
 
+	QPS_Limit_Bucket() = delete;
+
 	QPS_Limit_Bucket(const int64_t qps_limit, const uint64_t burst_size) :
 		token_bucket(qps_limit, burst_size), session_queue(0), qps_limit(qps_limit) {}
 

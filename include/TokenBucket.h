@@ -31,8 +31,13 @@ public:
 	TokenBucket() {}
 
 	TokenBucket(const uint64_t rate, const uint64_t burstSize) {
-		timePerToken_ = 1000000 / rate;
-		timePerBurst_ = burstSize * timePerToken_;
+		if (rate == 0) {
+			timePerToken_ = 0;
+			timePerBurst_ = 0;
+		} else {
+			timePerToken_ = 1000000 / rate;
+			timePerBurst_ = burstSize * timePerToken_;
+		}
 	}
 
 	TokenBucket(const TokenBucket &other) {
@@ -47,12 +52,13 @@ public:
 	}
 
 	bool consume(const uint64_t tokens) {
+		const uint64_t timeNeeded = tokens * timePerToken_.load(std::memory_order_relaxed);
+		if (timeNeeded == 0) { return false; }
+
 		const uint64_t now =
 				std::chrono::duration_cast<std::chrono::microseconds>(
 					std::chrono::steady_clock::now().time_since_epoch()
 				).count();
-		const uint64_t timeNeeded =
-				tokens * timePerToken_.load(std::memory_order_relaxed);
 		const uint64_t minTime =
 				now - timePerBurst_.load(std::memory_order_relaxed);
 		uint64_t oldTime = time_.load(std::memory_order_relaxed);
@@ -79,8 +85,13 @@ public:
 	}
 
 	void update(const uint64_t rate, const uint64_t burstSize) {
-		timePerToken_ = 1000000 / rate;
-		timePerBurst_ = burstSize * timePerToken_;
+		if (rate == 0) {
+			timePerToken_ = 0;
+			timePerBurst_ = 0;
+		} else {
+			timePerToken_ = 1000000 / rate;
+			timePerBurst_ = burstSize * timePerToken_;
+		}
 	}
 
 private:

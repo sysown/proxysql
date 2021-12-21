@@ -1789,24 +1789,28 @@ __exit_process_mysql_query:
 				bool got_token = s_bucket->token_bucket.consume(1);
 				if (got_token == false) {
 					__sync_fetch_and_add(&s_bucket->session_queue, 1);
-					// const uint64_t tg_qps = __sync_fetch_and_add(&s_bucket->qps, 0);
-					// const uint64_t time_per_token = 1000000 / tg_qps;
-					// ret->delay += time_per_token/1000;
+					const uint64_t qps_limit = __sync_fetch_and_add(&s_bucket->qps_limit, 0);
+					uint64_t time_per_token = 0;
+
+					if (qps_limit != 0) {
+						time_per_token = 1000000 / qps_limit;
+						ret->delay += time_per_token/1000;
+					}
 
 					ret->qps_queue = s_bucket;
-					// TODO: Fixed value for now
-					ret->delay += 10;
 				}
 			} else {
 				if (sess->qps_queue == NULL) {
 					uint64_t cur_queue = __sync_fetch_and_add(&s_bucket->session_queue, 1) + 1;
-					// const uint64_t tg_qps = __sync_fetch_and_add(&s_bucket->qps, 0);
-					// const uint64_t time_per_token = 1000000 / tg_qps;
-					// ret->delay += cur_queue*time_per_token/1000;
+					const uint64_t qps_limit = __sync_fetch_and_add(&s_bucket->qps_limit, 0);
+					uint64_t time_per_token = 0;
+
+					if (qps_limit != 0) {
+						time_per_token = 1000000 / qps_limit;
+						ret->delay += cur_queue * time_per_token/1000;
+					}
 
 					ret->qps_queue = s_bucket;
-					// TODO: Fixed value now, should depend on 'qpo->qps_queue->session_queue'
-					ret->delay += 10;
 				}
 			}
 		}

@@ -4367,12 +4367,14 @@ handler_again:
 				const int64_t qps_limit = __sync_fetch_and_add(&this->qps_queue->qps_limit, 0);
 
 				if (qps_limit != -1 && this->qps_queue->token_bucket.consume(1) == false) {
-					// TODO: Fixed value now, should depend on 'qpo->qps_queue->session_queue'
-					// uint64_t cur_queue = __sync_fetch_and_add(&this->qps_queue->session_queue, 0);
-					// uint64_t time_per_token = 1000000 / tg_qps;
-					// this->pause_until = thread->curtime + cur_queue*time_per_token;
+					uint64_t cur_queue = __sync_fetch_and_add(&this->qps_queue->session_queue, 0);
+					uint64_t time_per_token = 0;
 
-					this->pause_until = thread->curtime + 10*1000;
+					if (qps_limit != 0) {
+						time_per_token = 1000000 / qps_limit;
+						this->pause_until = thread->curtime + cur_queue*time_per_token;
+					}
+
 					handler_ret = 0;
 					return handler_ret;
 				} else {
