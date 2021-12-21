@@ -69,6 +69,38 @@ static inline char is_normal_char(char c) {
 	return 0;
 }
 
+static const std::set<std::string> mysql_variables_boolean = {
+	"foreign_key_checks",
+	"innodb_strict_mode",
+	"innodb_table_locks",
+	"sql_auto_is_null",
+	"sql_big_selects",
+	"sql_log_bin",
+	"sql_safe_updates",
+	"unique_checks",
+};
+
+static const std::set<std::string> mysql_variables_numeric = {
+	"auto_increment_increment",
+	"auto_increment_offset",
+	"group_concat_max_len",
+	"innodb_lock_wait_timeout",
+	"join_buffer_size",
+	"lock_wait_timeout",
+	"long_query_time",
+	"max_execution_time",
+	"max_heap_table_size",
+	"max_join_size",
+	"max_sort_length",
+	"optimizer_prune_level",
+	"optimizer_search_depth",
+	"sort_buffer_size",
+	"sql_select_limit",
+	"timestamp",
+	"tmp_table_size",
+	"wsrep_sync_wait"
+};
+
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
@@ -5597,6 +5629,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					} else if (
 						   (var == "default_storage_engine")
 						|| (var == "default_tmp_storage_engine")
+						|| (var == "lc_messages")
+						|| (var == "lc_time_names")
+						|| (var == "optimizer_switch")
 					) {
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");
@@ -5622,16 +5657,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								}
 							}
 						}
-					// the following two blocks of code will be simplified later
-					} else if (
-						   (var == "foreign_key_checks")
-						|| (var == "innodb_strict_mode")
-						|| (var == "innodb_table_locks")
-						|| (var == "sql_auto_is_null")
-						|| (var == "sql_log_bin")
-						|| (var == "sql_safe_updates")
-						|| (var == "unique_checks")
-					) {
+					//} else if (
+					} else if (mysql_variables_boolean.find(var) != mysql_variables_boolean.end()) {
 						int idx = SQL_NAME_LAST_HIGH_WM;
 						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
 							if (mysql_tracked_variables[i].is_bool) {
@@ -5646,17 +5673,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							}
 						}
-					} else if (
-						   (var == "auto_increment_increment")
-						|| (var == "auto_increment_offset")
-						|| (var == "group_concat_max_len")
-						|| (var == "innodb_lock_wait_timeout")
-						|| (var == "join_buffer_size")
-						|| (var == "lock_wait_timeout")
-						|| (var == "max_join_size")
-						|| (var == "sql_select_limit")
-						|| (var == "wsrep_sync_wait")
-					) {
+					} else if (mysql_variables_numeric.find(var) != mysql_variables_numeric.end()) {
 						int idx = SQL_NAME_LAST_HIGH_WM;
 						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
 							if (mysql_tracked_variables[i].is_number) {
