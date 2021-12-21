@@ -3472,12 +3472,12 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					assert(myds->sess->status!=session_status___NONE);
 				} else {
 					// no events
-					if (myds->wait_until && curtime > myds->wait_until) {
+					if (myds->wait_until && curtime >= myds->wait_until) {
 						// timeout
 						myds->sess->to_process=1;
 						assert(myds->sess->status!=session_status___NONE);
 					} else {
-						if (myds->sess->pause_until && curtime > myds->sess->pause_until) {
+						if (myds->sess->pause_until && curtime >= myds->sess->pause_until) {
 							// timeout
 							myds->sess->to_process=1;
 						}
@@ -5477,11 +5477,11 @@ void MySQL_Thread::check_timing_out_session(unsigned int n) {
 	// no events. This section is copied from process_data_on_data_stream()
 	MySQL_Data_Stream *_myds=mypolls.myds[n];
 	if (_myds && _myds->sess) {
-		if (_myds->wait_until && curtime > _myds->wait_until) {
+		if (_myds->wait_until && curtime >= _myds->wait_until) {
 			// timeout
 			_myds->sess->to_process=1;
 		} else {
-			if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
+			if (_myds->sess->pause_until && curtime >= _myds->sess->pause_until) {
 				// timeout
 				_myds->sess->to_process=1;
 			}
@@ -5537,8 +5537,7 @@ void MySQL_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds) {
 
 void MySQL_Thread::tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds) {
 	if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
-		uint64_t new_poll_timeout = myds->sess->pause_until - curtime;
-		mypolls.poll_timeout= new_poll_timeout == 0 ? 1 : new_poll_timeout;
+		mypolls.poll_timeout= myds->sess->pause_until - curtime;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , pause_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->sess->pause_until, curtime);
 	}
 }
