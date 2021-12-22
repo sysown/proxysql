@@ -2492,10 +2492,14 @@ char** client_host_cache_entry_row(
 	char** row =
 		static_cast<char**>(malloc(sizeof(char*)*CLIENT_HOST_CACHE_COLUMNS));
 
+	time_t __now = time(NULL);
+	unsigned long long curtime = monotonic_time();
+	time_t last_updated = __now - curtime/1000000 + entry.updated_at/1000000;
+
 	row[0]=strdup(address.c_str());
 	sprintf(buff, "%u", entry.error_count);
 	row[1]=strdup(buff);
-	sprintf(buff, "%lu", entry.updated_at);
+	sprintf(buff, "%lu", last_updated);
 	row[2]=strdup(buff);
 
 	return row;
