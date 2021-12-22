@@ -60,10 +60,9 @@ const uint32_t NUM_LOOPBACK_ADDRS = 5;
 
 using host_cache_entry = std::tuple<std::string, uint32_t, uint64_t>;
 
-inline unsigned long long monotonic_time() {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
+inline unsigned long long realtime_time_s() {
+	time_t __now = time(NULL);
+	return __now;
 }
 
 std::vector<host_cache_entry> get_client_host_cache_entries(MYSQL* proxysql_admin) {
@@ -151,7 +150,7 @@ int test_cache_filled_by_invalid_conn(const CommandLine& cl, MYSQL* proxysql_adm
 	// There shouldn't be any other entries in the cache for this test.
 	MYSQL_QUERY(proxysql_admin, "PROXYSQL FLUSH MYSQL CLIENT HOSTS");
 
-	uint64_t pre_command_time = monotonic_time();
+	uint64_t pre_command_time = realtime_time_s();
 	const std::string exp_client_addr { "127.0.0.2" };
 
 	diag("Performing connection to fill 'client_host_cache'");
@@ -175,12 +174,13 @@ int test_cache_filled_by_invalid_conn(const CommandLine& cl, MYSQL* proxysql_adm
 		const std::string client_addr { std::get<0>(unique_entry) };
 		const uint32_t error_count { std::get<1>(unique_entry) };
 		const uint64_t last_updated { std::get<2>(unique_entry) };
-		uint64_t post_command_time = monotonic_time();
+		uint64_t post_command_time = realtime_time_s();
 
 		ok(
-			client_addr == exp_client_addr && error_count == 1 && (pre_command_time < last_updated < post_command_time),
-			"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld),"
-			" act(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld)",
+			client_addr == exp_client_addr && error_count == 1 &&
+			(pre_command_time <= (last_updated + 1) && (last_updated - 1) <= post_command_time),
+			"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld),"
+			" act(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld)",
 			exp_client_addr.c_str(), 1, pre_command_time, last_updated, post_command_time, client_addr.c_str(), error_count,
 			pre_command_time, last_updated, post_command_time
 		);
@@ -206,7 +206,7 @@ int test_cache_entry_count_by_invalid_conn(const CommandLine& cl, MYSQL* proxysq
 	MYSQL_QUERY(proxysql_admin, "PROXYSQL FLUSH MYSQL CLIENT HOSTS");
 	int errors = 0;
 	const std::string exp_client_addr { "127.0.0.2" };
-	uint64_t pre_command_time = monotonic_time();
+	uint64_t pre_command_time = realtime_time_s();
 
 	diag("Performing connection to fill 'client_host_cache'");
 	for (errors = 0; errors < 5; errors++) {
@@ -232,13 +232,13 @@ int test_cache_entry_count_by_invalid_conn(const CommandLine& cl, MYSQL* proxysq
 		const std::string client_addr { std::get<0>(unique_entry) };
 		const uint32_t error_count { std::get<1>(unique_entry) };
 		const uint64_t last_updated { std::get<2>(unique_entry) };
-		uint64_t post_command_time = monotonic_time();
+		uint64_t post_command_time = realtime_time_s();
 
 		ok(
 			client_addr == exp_client_addr && error_count == errors &&
-			(pre_command_time < last_updated < post_command_time),
-			"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld),"
-			" act(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld)",
+			(pre_command_time <= (last_updated + 1) && (last_updated - 1) <= post_command_time),
+			"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld),"
+			" act(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld)",
 			exp_client_addr.c_str(), 1, pre_command_time, last_updated, post_command_time,
 			client_addr.c_str(), error_count, pre_command_time, last_updated, post_command_time
 		);
@@ -268,7 +268,7 @@ int test_cache_entry_count_by_mult_invalid_conns(const CommandLine& cl, MYSQL* p
 	MYSQL_QUERY(proxysql_admin, "PROXYSQL FLUSH MYSQL CLIENT HOSTS");
 	int errors = 0;
 
-	uint64_t pre_command_time = monotonic_time();
+	uint64_t pre_command_time = realtime_time_s();
 
 	printf("\n");
 	diag("Performing connections to fill 'client_host_cache'");
@@ -299,15 +299,15 @@ int test_cache_entry_count_by_mult_invalid_conns(const CommandLine& cl, MYSQL* p
 			const std::string client_addr { std::get<0>(entry) };
 			const uint32_t error_count { std::get<1>(entry) };
 			const uint64_t last_updated { std::get<2>(entry) };
-			uint64_t post_command_time = monotonic_time();
+			uint64_t post_command_time = realtime_time_s();
 
 			std::string exp_client_addr { "127.0.0." + std::to_string(entry_num) };
 
 			ok(
 				client_addr == exp_client_addr && error_count == errors &&
-				(pre_command_time < last_updated < post_command_time),
-				"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld),"
-				" act(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld)",
+				(pre_command_time <= (last_updated + 1) && (last_updated - 1) <= post_command_time),
+				"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld),"
+				" act(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld)",
 				exp_client_addr.c_str(), errors, pre_command_time, last_updated, post_command_time,
 				client_addr.c_str(), error_count, pre_command_time, last_updated, post_command_time
 			);
@@ -348,7 +348,7 @@ int test_client_exceeding_cache_error_limit(const CommandLine& cl, MYSQL* proxys
 		loopback_addrs.push_back("127.0.0." + std::to_string(i));
 	}
 
-	uint64_t pre_command_time = monotonic_time();
+	uint64_t pre_command_time = realtime_time_s();
 
 	printf("\n");
 	diag("Performing connections to fill 'client_host_cache'");
@@ -379,15 +379,15 @@ int test_client_exceeding_cache_error_limit(const CommandLine& cl, MYSQL* proxys
 			const std::string client_addr { std::get<0>(entry) };
 			const uint32_t error_count { std::get<1>(entry) };
 			const uint64_t last_updated { std::get<2>(entry) };
-			uint64_t post_command_time = monotonic_time();
+			uint64_t post_command_time = realtime_time_s();
 
 			std::string exp_client_addr { "127.0.0." + std::to_string(entry_num) };
 
 			ok(
 				client_addr == exp_client_addr && error_count == errors &&
-				(pre_command_time < last_updated < post_command_time),
-				"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld),"
-				" act(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld)",
+				(pre_command_time <= (last_updated + 1) && (last_updated - 1) <= post_command_time),
+				"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld),"
+				" act(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld)",
 				exp_client_addr.c_str(), errors, pre_command_time, last_updated, post_command_time,
 				client_addr.c_str(), error_count, pre_command_time, last_updated, post_command_time
 			);
@@ -519,7 +519,7 @@ int test_client_exceeding_changed_error_limit(const CommandLine& cl, MYSQL* prox
 	int errors = 0;
 
 
-	uint64_t pre_command_time = monotonic_time();
+	uint64_t pre_command_time = realtime_time_s();
 
 	std::string loopback_addr { "127.0.0.2" };
 	diag("Performing connections to fill 'client_host_cache'");
@@ -581,7 +581,7 @@ int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* pr
 		loopback_addrs.push_back("127.0.0." + std::to_string(i));
 	}
 
-	uint64_t pre_command_time = monotonic_time();
+	uint64_t pre_command_time = realtime_time_s();
 
 	printf("\n");
 	diag("Performing connections to fill 'client_host_cache'");
@@ -598,7 +598,7 @@ int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* pr
 
 	// Update the latest entry in the cache, oldest member "10.200.1.2" should go away.
 	{
-		uint64_t pre_command_time = monotonic_time();
+		uint64_t pre_command_time = realtime_time_s();
 
 		diag("1. Checking that the connection updates the entry and the oldest entry is removed");
 
@@ -631,9 +631,9 @@ int test_cache_size_decrease_by_new_connections(const CommandLine& cl, MYSQL* pr
 		}
 
 		ok(
-			exp_client_addr == act_client_addr && last_updated > pre_command_time,
+			exp_client_addr == act_client_addr && (last_updated + 1) >= pre_command_time,
 			"Entry should be present and updated with the following values -"
-			" exp('%s', %ld > %ld), act('%s', %ld > %ld)", exp_client_addr.c_str(),
+			" exp('%s', %ld >= %ld), act('%s', %ld >= %ld)", exp_client_addr.c_str(),
 			last_updated, pre_command_time, act_client_addr.c_str(), last_updated,
 			pre_command_time
 		);
@@ -799,7 +799,7 @@ int test_cache_populated_timeout_conns(const CommandLine& cl, MYSQL* proxysql_ad
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxysql_admin, "PROXYSQL FLUSH MYSQL CLIENT HOSTS");
 
-	uint64_t pre_command_time = monotonic_time();
+	uint64_t pre_command_time = realtime_time_s();
 
 	for (int i = 2; i < NUM_LOOPBACK_ADDRS; i++) {
 		std::string loopback_addr { "127.0.0." + std::to_string(i) };
@@ -818,15 +818,15 @@ int test_cache_populated_timeout_conns(const CommandLine& cl, MYSQL* proxysql_ad
 		const std::string client_addr { std::get<0>(entry) };
 		const uint32_t error_count { std::get<1>(entry) };
 		const uint64_t last_updated { std::get<2>(entry) };
-		uint64_t post_command_time = monotonic_time();
+		uint64_t post_command_time = realtime_time_s();
 
 		std::string exp_client_addr { "127.0.0." + std::to_string(entry_num + 2) };
 
 		ok(
 			client_addr == exp_client_addr && error_count == errors &&
-			(pre_command_time < last_updated < post_command_time),
-			"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld),"
-			" act(addr: %s, err_count: %d, last_updated: %ld < %ld < %ld)",
+			(pre_command_time <= (last_updated + 1) && (last_updated - 1) <= post_command_time),
+			"Entry should match expected values - exp(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld),"
+			" act(addr: %s, err_count: %d, last_updated: %ld <= %ld +/- 1 <= %ld)",
 			exp_client_addr.c_str(), errors, pre_command_time, last_updated, post_command_time,
 			client_addr.c_str(), error_count, pre_command_time, last_updated, post_command_time
 		);
