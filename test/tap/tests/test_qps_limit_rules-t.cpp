@@ -240,6 +240,11 @@ int check_multi_conn_qps_limits_count(vector<MYSQL*> conns, const int64_t qps_li
 	usleep(WAIT_TIME_US);
 	__sync_fetch_and_add(&stop, 1);
 
+	uint64_t pre_total_query_count = 0;
+	for (size_t i = 0; i < conns_count.size(); i++) {
+		pre_total_query_count += __sync_fetch_and_add(&conns_count[i], 0);
+	}
+
 	int conns_res = EXIT_SUCCESS;
 	for (std::future<int>& conn_th : conns_ths) {
 		if (conn_th.valid()) {
@@ -266,24 +271,45 @@ int check_multi_conn_qps_limits_count(vector<MYSQL*> conns, const int64_t qps_li
 
 	size_t conn_num = 0;
 	uint64_t total_query_count = 0;
-	for (uint64_t query_count : conns_count) {
-		double exp_conn_qps = ret_expected_qps(qps_limit, burst_size, CONN_TIME) / conns.size();
-		uint32_t conn_epsilon = (exp_conn_qps * 25) / 100;
+	uint32_t total_conn_epsilon_fails = 0;
 
-		bool condition =
-			conns_res == EXIT_SUCCESS &&
-			(query_count / CONN_TIME) > exp_conn_qps - conn_epsilon && (query_count / CONN_TIME) < exp_conn_qps + conn_epsilon;
+	double exp_conn_qps = ret_expected_qps(qps_limit, burst_size, CONN_TIME) / conns.size();
+	uint32_t soft_conn_epsilon = (exp_conn_qps * 15) / 100;
+	uint32_t hard_conn_epsilon = (exp_conn_qps * 50) / 100;
+
+	// We only allow a 10% of connections to exceed the expected variance imposed by 'conn_epsilon'
+	uint32_t max_conn_epsilon_fails = (conns.size() * 10) / 100;
+	max_conn_epsilon_fails = max_conn_epsilon_fails == 0 ? 1 : max_conn_epsilon_fails;
+
+	for (uint64_t query_count : conns_count) {
+		double act_qps = query_count / CONN_TIME;
+
+		if (act_qps < exp_conn_qps - soft_conn_epsilon || act_qps > exp_conn_qps + soft_conn_epsilon) {
+			diag(
+				"Conn_num '%ld' failed to match 'SOFT_CONN_EPSILON' limits: "
+				" { QPS_Limit: '%ld', Exp_QPS: '%lf', QPS: '%lf', SOFT_CONN_EPSILON: '%d' }",
+				conn_num, qps_limit, exp_conn_qps, act_qps, soft_conn_epsilon
+			);
+			total_conn_epsilon_fails += 1;
+		}
 
 		ok(
-			condition,
+			conns_res == EXIT_SUCCESS &&
+			act_qps > exp_conn_qps - hard_conn_epsilon && act_qps < exp_conn_qps + hard_conn_epsilon,
 			"Expected QPS for conn_num '%ld':"
-			" { err: '%d', burst_size: '%ld', QPS_Limit: '%ld', Exp_QPS: '%lf', QPS: '%lf', EPSILON: '%d' }",
-			conn_num, conns_res, burst_size, qps_limit, exp_conn_qps, query_count / CONN_TIME, conn_epsilon
+			" { err: '%d', burst_size: '%ld', QPS_Limit: '%ld', Exp_QPS: '%lf', QPS: '%lf', HARD_CONN_EPSILON: '%d' }",
+			conn_num, conns_res, burst_size, qps_limit, exp_conn_qps, act_qps, hard_conn_epsilon
 		);
 
 		conn_num += 1;
 		total_query_count += query_count;
 	}
+
+	ok(
+		total_conn_epsilon_fails <= max_conn_epsilon_fails,
+		"SOFT conns QPS limits below 'max_conn_epsilon_fails': { max_fails: '%d', act_fails: '%d' }",
+		max_conn_epsilon_fails, total_conn_epsilon_fails
+	);
 
 	double exp_qps = ret_expected_qps(qps_limit, burst_size, CONN_TIME);
 	double total_qps = total_query_count / CONN_TIME;
@@ -291,8 +317,8 @@ int check_multi_conn_qps_limits_count(vector<MYSQL*> conns, const int64_t qps_li
 
 	ok(
 		total_qps > exp_qps - total_qps_epsilon && total_qps < exp_qps + total_qps_epsilon,
-		"Averall QPS: { Total_Queries: '%ld', Exp_QPS: '%lf', QPS: '%lf', Epsilon: '%lf' }",
-		total_query_count, exp_qps, total_qps, total_qps_epsilon
+		"Averall QPS: { Pre_Total_Queries: '%ld', Total_Queries: '%ld', Exp_QPS: '%lf', QPS: '%lf', Epsilon: '%lf' }",
+		pre_total_query_count, total_query_count, exp_qps, total_qps, total_qps_epsilon
 	);
 	diag("");
 
@@ -429,7 +455,7 @@ int main(int argc, char** argv) {
 		// Test 1: Expected tests
 		tests_payloads.size()*2 +
 		// Test 2: Expected tests
-		10*tests_payloads.size()*((test_2_its + 1)*test_2_its/2) + test_2_its*tests_payloads.size()*2 - test_2_its*5*tests_payloads.size() +
+		10*tests_payloads.size()*((test_2_its + 1)*test_2_its/2) + test_2_its*tests_payloads.size()*3 - test_2_its*5*tests_payloads.size() +
 		// Test 3: Expected tests
 		tests_payloads.size() * test_3_target_conns.size() +
 		// Test 4: Expected tests
