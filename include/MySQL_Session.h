@@ -8,6 +8,7 @@
 using json = nlohmann::json;
 
 extern class MySQL_Variables mysql_variables;
+struct QPS_Limit_Bucket;
 
 enum proxysql_session_type {
 	PROXYSQL_SESSION_MYSQL,
@@ -217,6 +218,7 @@ class MySQL_Session
 	MySQL_Data_Stream *server_myds;
 	char * default_schema;
 	char * user_attributes;
+	std::shared_ptr<QPS_Limit_Bucket> qps_queue;
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()

@@ -423,6 +423,8 @@ __thread std::vector<QP_rule_t *> * _thr_SQP_rules;
 __thread khash_t(khStrInt) * _thr_SQP_rules_fast_routing;
 __thread char * _thr___rules_fast_routing___keys_values;
 __thread Command_Counter * _thr_commands_counters[MYSQL_COM_QUERY___NONE];
+__thread khash_t(khQPSLimitBucket)* _thr_qps_limit_rules;
+__thread char * _thr___qps_limit_rules___keys_values;
 
 Query_Processor::Query_Processor() {
 #ifdef DEBUG
@@ -523,6 +525,11 @@ Query_Processor::Query_Processor() {
 	rules_fast_routing = kh_init(khStrInt); // create a hashtable
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
+	// Initialize QPS limits hashtable
+	qps_limit_resultset = NULL;
+	qps_limit_rules = kh_init(khQPSLimitBucket);
+	qps_limit_rules_values = NULL;
+	qps_limit_rules_values_size = 0;
 	new_req_conns_count = 0;
 };
 
@@ -534,6 +541,12 @@ Query_Processor::~Query_Processor() {
 		free(rules_fast_routing___keys_values);
 		rules_fast_routing___keys_values = NULL;
 		rules_fast_routing___keys_values___size = 0;
+	}
+	kh_destroy(khQPSLimitBucket, qps_limit_rules);
+	if (qps_limit_rules_values) {
+		free(qps_limit_rules_values);
+		qps_limit_rules_values = NULL;
+		qps_limit_rules_values_size = 0;
 	}
 	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
 		QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
@@ -569,6 +582,8 @@ void Query_Processor::init_thread() {
 	_thr_SQP_rules=new std::vector<QP_rule_t *>;
 	_thr_SQP_rules_fast_routing = kh_init(khStrInt); // create a hashtable
 	_thr___rules_fast_routing___keys_values = NULL;
+	_thr_qps_limit_rules = kh_init(khQPSLimitBucket); // create a hashtable
+	_thr___qps_limit_rules___keys_values= NULL;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) _thr_commands_counters[i] = new Command_Counter(i);
 };
 
@@ -581,6 +596,11 @@ void Query_Processor::end_thread() {
 	if (_thr___rules_fast_routing___keys_values) {
 		free(_thr___rules_fast_routing___keys_values);
 		_thr___rules_fast_routing___keys_values = NULL;
+	}
+	kh_destroy(khQPSLimitBucket, _thr_qps_limit_rules);
+	if (_thr___qps_limit_rules___keys_values) {
+		free(_thr___qps_limit_rules___keys_values);
+		_thr___qps_limit_rules___keys_values = NULL;
 	}
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete _thr_commands_counters[i];
 };
@@ -709,6 +729,9 @@ void Query_Processor::reset_all(bool lock) {
 	free(rules_fast_routing___keys_values);
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
+	free(qps_limit_rules_values);
+	qps_limit_rules_values = NULL;
+	qps_limit_rules_values_size = 0;
 	if (lock)
 		pthread_rwlock_unlock(&rwlock);
 	rules_mem_used=0;
@@ -864,6 +887,27 @@ SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 		result->add_row(r);
 	}
 	pthread_rwlock_unlock(&rwlock);
+	return result;
+}
+
+SQLite3_result * Query_Processor::get_current_qps_limit_rules() {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current QPS limit rules, using Global version %d\n", version);
+	SQLite3_result* result = new SQLite3_result(5);
+
+	pthread_rwlock_rdlock(&rwlock);
+
+	result->add_column_definition(SQLITE_TEXT,"username");
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"flagIN");
+	result->add_column_definition(SQLITE_TEXT,"qps_limit");
+	result->add_column_definition(SQLITE_TEXT,"bucket_size");
+
+	for (SQLite3_row* r : qps_limit_resultset->rows) {
+		result->add_row(r);
+	}
+
+	pthread_rwlock_unlock(&rwlock);
+
 	return result;
 }
 
@@ -1419,6 +1463,36 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				ptr = ptr2+strlen(ptr2)+1;
 			}
 		}
+
+		kh_destroy(khQPSLimitBucket, _thr_qps_limit_rules);
+		_thr_qps_limit_rules = kh_init(khQPSLimitBucket); // create a hashtable
+		if (_thr___qps_limit_rules___keys_values) {
+			free(_thr___qps_limit_rules___keys_values);
+			_thr___qps_limit_rules___keys_values = NULL;
+		}
+		if (qps_limit_rules_values_size) {
+			_thr___qps_limit_rules___keys_values = (char *)malloc(qps_limit_rules_values_size);
+			memcpy(_thr___qps_limit_rules___keys_values, qps_limit_rules_values, qps_limit_rules_values_size);
+			char* ptr = _thr___qps_limit_rules___keys_values;
+
+			while (ptr < _thr___qps_limit_rules___keys_values + qps_limit_rules_values_size) {
+				char* entry_values_ptr = ptr + strlen(ptr) + 1;
+				// NOTE: Each thread token bucket is the total number divided by the number of threads.
+				// We make sure to set at least '1' for thread QPS limit when global limit isn't '0'.
+				int qps_limit = ceil(atoi(entry_values_ptr) / static_cast<double>(GloMTH->num_threads));
+				entry_values_ptr = entry_values_ptr + strlen(entry_values_ptr) + 1;
+				int bucket_size = atoi(entry_values_ptr);
+
+				int ret = 0;
+				khiter_t k = kh_put(khQPSLimitBucket, _thr_qps_limit_rules, ptr, &ret); // add the key
+				new (&kh_value(_thr_qps_limit_rules, k)) std::shared_ptr<QPS_Limit_Bucket>(
+					new QPS_Limit_Bucket(qps_limit, bucket_size)
+				);
+
+				ptr = entry_values_ptr + strlen(entry_values_ptr) + 1;
+			}
+		}
+
 		//for (std::unordered_map<std::string, int>::iterator it = rules_fast_routing.begin(); it != rules_fast_routing.end(); ++it) {
 		//	_thr_SQP_rules_fast_routing->insert(
 		//}
@@ -1716,6 +1790,75 @@ __exit_process_mysql_query:
 			}
 		}
 	}
+
+	if (_thr___qps_limit_rules___keys_values) {
+		char keybuf[256];
+		char* keybuf_ptr = keybuf;
+		const char* u = sess->client_myds->myconn->userinfo->username;
+		const char* s = sess->client_myds->myconn->userinfo->schemaname;
+		size_t keylen = strlen(u)+strlen(rand_del)+strlen(s)+30; // 30 is a big number
+
+		if (keylen > 250) {
+			keybuf_ptr = (char *)malloc(keylen);
+		}
+
+		sprintf(keybuf_ptr,"%s%s%s---%d", u, rand_del, s, flagIN);
+		std::shared_ptr<QPS_Limit_Bucket> s_bucket = nullptr;
+
+		// Search the map, using the following key order:
+		//   1. Username + Schemaname + FlagIN
+		//   2. Username + FlagIN
+		//   3. Schemaname + FlagIN
+		khiter_t elem_it = kh_get(khQPSLimitBucket, _thr_qps_limit_rules, keybuf_ptr);
+		if (elem_it == kh_end(_thr_qps_limit_rules)) {
+			sprintf(keybuf_ptr,"%s%s---%d", u, rand_del, flagIN);
+			elem_it = kh_get(khQPSLimitBucket, _thr_qps_limit_rules, keybuf_ptr);
+
+			if (elem_it == kh_end(_thr_qps_limit_rules)) {
+				sprintf(keybuf_ptr,"%s%s---%d", rand_del, s, flagIN);
+				elem_it = kh_get(khQPSLimitBucket, _thr_qps_limit_rules, keybuf_ptr);
+			}
+		}
+
+		if (elem_it != kh_end(_thr_qps_limit_rules)) {
+			s_bucket = kh_value(_thr_qps_limit_rules, elem_it);
+		}
+
+		if (s_bucket != nullptr) {
+			if (s_bucket->session_queue == 0) {
+				bool got_token = s_bucket->token_bucket.consume(1);
+				if (got_token == false) {
+					s_bucket->session_queue += 1;
+
+					const uint64_t qps_limit = s_bucket->qps_limit;
+					uint64_t time_per_token = 0;
+
+					if (qps_limit != 0) {
+						time_per_token = 1000000 / qps_limit;
+						ret->delay += time_per_token/1000;
+					}
+
+					ret->qps_queue = s_bucket;
+				}
+			} else {
+				if (sess->qps_queue == NULL) {
+					s_bucket->session_queue += 1;
+
+					const uint64_t cur_queue = s_bucket->session_queue;
+					const uint64_t qps_limit = s_bucket->qps_limit;
+					uint64_t time_per_token = 0;
+
+					if (qps_limit != 0) {
+						time_per_token = 1000000 / qps_limit;
+						ret->delay += cur_queue * time_per_token/1000;
+					}
+
+					ret->qps_queue = s_bucket;
+				}
+			}
+		}
+	}
+
 	// FIXME : there is too much data being copied around
 	if (len < stackbuffer_size) {
 		// query is in the stack
@@ -2761,6 +2904,86 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 	delete fast_routing_resultset;
 	fast_routing_resultset = resultset; // save it
 	rules_mem_used += fast_routing_resultset->get_size();
+};
+
+void Query_Processor::load_qps_limits(SQLite3_result *resultset) {
+	unsigned long long tot_size = 0;
+
+	// First invalidate current values from map
+	for (khint_t k = kh_begin(qps_limit_rules); k != kh_end(qps_limit_rules); ++k) {
+		if (kh_exist(qps_limit_rules, k)) {
+			kh_value(qps_limit_rules, k)->qps_limit = -1;
+		}
+	}
+
+	size_t rand_del_size = strlen(rand_del);
+	int num_rows = resultset->rows_count;
+	if (num_rows) {
+		for (SQLite3_row* r : resultset->rows) {
+			size_t row_length =
+				strlen(r->fields[0]) + strlen(r->fields[1]) + strlen(r->fields[2]) +
+				strlen(r->fields[3]) + strlen(r->fields[4]);
+
+			row_length += 3; // 3 = 3x NULL bytes
+			row_length += 3; // "---"
+			row_length += rand_del_size;
+
+			tot_size += row_length;
+		}
+
+		qps_limit_rules_values = (char *)malloc(tot_size);
+		qps_limit_rules_values_size = tot_size;
+		char* ptr = qps_limit_rules_values;
+
+		for (SQLite3_row* r : resultset->rows) {
+			sprintf(ptr,"%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
+			int ret = 0;
+			// NOTE: Each thread token bucket is the total number divided by the number of threads.
+			// We make sure to set at least '1' for thread QPS limit when global limit isn't '0'.
+			int qps_limit = ceil(atoi(r->fields[3]) / static_cast<double>(GloMTH->num_threads));
+			int bucket_size = atoi(r->fields[4]);
+
+			khiter_t elem_it = kh_get(khQPSLimitBucket, qps_limit_rules, ptr);
+			if (elem_it != kh_end(qps_limit_rules)) {
+				std::shared_ptr<QPS_Limit_Bucket>& f_elem = kh_value(qps_limit_rules, elem_it);
+				f_elem->update(qps_limit, bucket_size);
+			} else {
+				khiter_t k = kh_put(khQPSLimitBucket, qps_limit_rules, ptr, &ret);
+				new (&kh_value(qps_limit_rules, k)) std::shared_ptr<QPS_Limit_Bucket>(
+					new QPS_Limit_Bucket(qps_limit, bucket_size)
+				);
+			}
+
+			int l = strlen((const char *)ptr);
+			ptr += l;
+			ptr++; // NULL 1
+			l = strlen(r->fields[3]);
+			memcpy(ptr, r->fields[3], l+1);
+			ptr += l;
+			ptr++; // NULL 2
+			l = strlen(r->fields[4]);
+			memcpy(ptr, r->fields[4], l+1);
+			ptr += l;
+			ptr++; // NULL 3
+		}
+	}
+
+	// Search for still invalid values, de-initialize and remove them from the map
+	for (khint_t k = kh_begin(qps_limit_rules); k != kh_end(qps_limit_rules); ++k) {
+		if (kh_exist(qps_limit_rules, k)) {
+			std::shared_ptr<QPS_Limit_Bucket>& s_bucket = kh_value(qps_limit_rules, k);
+
+			if (__sync_fetch_and_add(&s_bucket->qps_limit, 0) == -1) {
+				s_bucket->session_queue = 0;
+				s_bucket.reset();
+
+				kh_del(khQPSLimitBucket, qps_limit_rules, k);
+			}
+		}
+	}
+
+	delete qps_limit_resultset;
+	qps_limit_resultset = resultset;
 };
 
 // this testing function doesn't care if the user exists or not

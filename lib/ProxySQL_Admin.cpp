@@ -396,6 +396,8 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE mysql_query_rules_fast_routing (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, schemaname, flagIN) )"
 
+#define ADMIN_SQLITE_TABLE_MYSQL_QPS_LIMIT_RULES "CREATE TABLE mysql_qps_limit_rules (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , qps_limit INT NOT NULL DEFAULT 0 , bucket_size INT NOT NULL DEFAULT 0 , PRIMARY KEY (username, schemaname, flagIN) )"
+
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
 #define ADMIN_SQLITE_RUNTIME_GLOBAL_VARIABLES "CREATE TABLE runtime_global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
@@ -466,6 +468,8 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT CHECK (flagIN >= 0) NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT CHECK (proxy_port >= 0 AND proxy_port <= 65535), digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , flagOUT INT CHECK (flagOUT >= 0), replace_pattern VARCHAR CHECK(CASE WHEN replace_pattern IS NULL THEN 1 WHEN replace_pattern IS NOT NULL AND match_pattern IS NOT NULL THEN 1 ELSE 0 END) , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , cache_empty_result INT CHECK (cache_empty_result IN (0,1)) DEFAULT NULL , cache_timeout INT CHECK(cache_timeout >= 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED CHECK (timeout >= 0) , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED CHECK (delay >=0) , next_query_flagIN INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , OK_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1,2)) , gtid_from_hostgroup INT UNSIGNED , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '' , comment VARCHAR)"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE runtime_mysql_query_rules_fast_routing (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, schemaname, flagIN) )"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QPS_LIMIT_RULES "CREATE TABLE runtime_mysql_qps_limit_rules (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , qps_limit INT NOT NULL DEFAULT 0 , bucket_size INT NOT NULL DEFAULT 0 , PRIMARY KEY (username, schemaname, flagIN) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER "CREATE TABLE runtime_scheduler (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '')" 
 
@@ -2792,6 +2796,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->save_mysql_query_rules_from_runtime(false);
 			SPA->save_mysql_query_rules_fast_routing_from_runtime(false);
+			SPA->save_mysql_qps_limit_rules_from_runtime(false);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
@@ -2957,6 +2962,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool runtime_mysql_servers=false;
 	bool runtime_mysql_query_rules=false;
 	bool runtime_mysql_query_rules_fast_routing=false;
+	bool runtime_mysql_qps_limit_rules=false;
 
 	bool runtime_proxysql_servers=false;
 	bool runtime_checksums_values=false;
@@ -3090,6 +3096,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (strstr(query_no_space,"runtime_mysql_query_rules_fast_routing")) {
 				runtime_mysql_query_rules_fast_routing=true; refresh=true;
+			}
+			if (strstr(query_no_space,"runtime_mysql_qps_limit_rules")) {
+				runtime_mysql_qps_limit_rules=true; refresh=true;
 			}
 			if (strstr(query_no_space,"runtime_scheduler")) {
 				runtime_scheduler=true; refresh=true;
@@ -3225,6 +3234,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 			}
 			if (runtime_mysql_query_rules_fast_routing) {
 				save_mysql_query_rules_fast_routing_from_runtime(true);
+			}
+			if (runtime_mysql_qps_limit_rules) {
+				save_mysql_qps_limit_rules_from_runtime(true);
 			}
 			if (runtime_scheduler) {
 				save_scheduler_runtime_to_database(true);
@@ -5624,6 +5636,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
+	insert_into_tables_defs(tables_defs_admin,"mysql_qps_limit_rules", ADMIN_SQLITE_TABLE_MYSQL_QPS_LIMIT_RULES);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_qps_limit_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QPS_LIMIT_RULES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
@@ -5659,6 +5673,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
+	insert_into_tables_defs(tables_defs_config,"mysql_qps_limit_rules", ADMIN_SQLITE_TABLE_MYSQL_QPS_LIMIT_RULES);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
 	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
@@ -9174,6 +9189,50 @@ void ProxySQL_Admin::save_mysql_query_rules_fast_routing_from_runtime(bool _runt
 	resultset = NULL;
 }
 
+void ProxySQL_Admin::save_mysql_qps_limit_rules_from_runtime(bool _runtime) {
+	if (_runtime) {
+		admindb->execute("DELETE FROM runtime_mysql_qps_limit_rules");
+	} else {
+		admindb->execute("DELETE FROM mysql_qps_limit_rules");
+	}
+
+	SQLite3_result * resultset=GloQPro->get_current_qps_limit_rules();
+	if (resultset) {
+		int rc = 0;
+		sqlite3_stmt* statement = NULL;
+		char* query = NULL;
+
+		if (_runtime) {
+			query = (char*)"INSERT INTO runtime_mysql_qps_limit_rules VALUES (?1, ?2, ?3, ?4, ?5)";
+		} else {
+			query = (char*)"INSERT INTO mysql_qps_limit_rules VALUES (?1, ?2, ?3, ?4, ?5)";
+		}
+
+		rc = admindb->prepare_v2(query, &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r1=*it;
+
+			rc=(*proxy_sqlite3_bind_text)(statement, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // username
+			rc=(*proxy_sqlite3_bind_text)(statement, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // schemaname
+			rc=(*proxy_sqlite3_bind_int64)(statement, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb); // flagIn
+			rc=(*proxy_sqlite3_bind_int64)(statement, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb); // QPS
+			rc=(*proxy_sqlite3_bind_int64)(statement, 5, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb); // (Burst) Bucket Size
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+
+		(*proxy_sqlite3_finalize)(statement);
+	}
+
+	if(resultset) delete resultset;
+
+	resultset = NULL;
+}
+
 void ProxySQL_Admin::save_mysql_query_rules_from_runtime(bool _runtime) {
 	if (_runtime) {
 		admindb->execute("DELETE FROM runtime_mysql_query_rules");
@@ -9698,6 +9757,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("INSERT OR REPLACE INTO main.mysql_qps_limit_rules SELECT * FROM disk.mysql_qps_limit_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
@@ -9932,6 +9992,8 @@ void ProxySQL_Admin::flush_mysql_query_rules__from_disk_to_memory() {
 	admindb->execute("INSERT INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
 	admindb->execute("DELETE FROM main.mysql_query_rules_fast_routing");
 	admindb->execute("INSERT INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
+	admindb->execute("DELETE FROM main.mysql_qps_limit_rules");
+	admindb->execute("INSERT INTO main.mysql_qps_limit_rules SELECT * FROM disk.mysql_qps_limit_rules");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -9943,6 +10005,8 @@ void ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
 	admindb->execute("INSERT INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
 	admindb->execute("DELETE FROM disk.mysql_query_rules_fast_routing");
 	admindb->execute("INSERT INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
+	admindb->execute("DELETE FROM disk.mysql_qps_limit_rules");
+	admindb->execute("INSERT INTO disk.mysql_qps_limit_rules SELECT * FROM main.mysql_qps_limit_rules");
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -11447,10 +11511,18 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 	SQLite3_result *resultset2 = NULL;
 	char *query2=(char *)"SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM main.mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN";
 	admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+	char* error_qps_limit = NULL;
+	int cols_qps_limit = 0;
+	int affected_rows_qps_limit = 0;
+	SQLite3_result *resultset_qps_limit = NULL;
+	char* query_qps_limit = (char *)"SELECT username, schemaname, flagIN, qps_limit, bucket_size FROM main.mysql_qps_limit_rules ORDER BY username, schemaname, flagIN";
+	admindb->execute_statement(query_qps_limit, &error_qps_limit , &cols_qps_limit , &affected_rows_qps_limit , &resultset_qps_limit);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else if (error2) {
 		proxy_error("Error on %s : %s\n", query2, error2);
+	} else if (error_qps_limit) {
+		proxy_error("Error on %s : %s\n", query_qps_limit, error_qps_limit);
 	} else {
 		GloQPro->wrlock();
 		if (checksum_variables.checksum_mysql_query_rules) {
@@ -11532,6 +11604,7 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		}
 		GloQPro->sort(false);
 		GloQPro->load_fast_routing(resultset2);
+		GloQPro->load_qps_limits(resultset_qps_limit);
 		GloQPro->wrunlock();
 		GloQPro->commit();
 	}
