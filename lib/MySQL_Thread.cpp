@@ -5561,7 +5561,7 @@ void MySQL_Thread::tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds)
 	if (myds->sess->pause_until > curtime) {
 		if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout)) {
 			// In case of 'poll_timeout' already set, pick the lowest value
-			uint32_t new_poll_timeout = myds->sess->pause_until - curtime;
+			uint64_t new_poll_timeout = myds->sess->pause_until - curtime;
 			if (mypolls.poll_timeout != 0) {
 				 if (new_poll_timeout < mypolls.poll_timeout) {
 					 mypolls.poll_timeout = new_poll_timeout;
