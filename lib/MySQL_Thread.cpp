@@ -5555,9 +5555,9 @@ void MySQL_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds) {
 void MySQL_Thread::tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds) {
 	// Verify that pause until is actually bigger that current time as for 'wait_until', otherwise
 	// we could be unnecessarily setting 'poll_timeout' to a negative value (two complement),
-	// for later imposing the max_vale of 'mysql_thread___poll_timeout'. Or even worse, if 'poll_timeout'
-	// was already set, and 'pause_until' matches 'curtime', we could be resetting the already set
-	// 'poll_timeout' to '0', causing to be later defaulted to 'mysql_thread___poll_timeout'.
+	// for later imposing 'mysql_thread___poll_timeout'. Or even worse, if 'poll_timeout' was already set, and
+	// 'pause_until' matches 'curtime', we could be resetting the already set 'poll_timeout' to '0', causing
+	// to be later defaulted to 'mysql_thread___poll_timeout'.
 	if (myds->sess->pause_until > curtime) {
 		if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout)) {
 			// In case of 'poll_timeout' already set, pick the lowest value
