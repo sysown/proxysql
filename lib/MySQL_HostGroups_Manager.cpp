@@ -1320,6 +1320,30 @@ hg_metrics_map = std::make_tuple(
 			"mysql_error_total",
 			"Tracks the mysql errors encountered.",
 			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_conns_reqs_waited,
+			"proxysql_hostgroup_conns_reqs_waited_total",
+			"Total number of sessions that have waited to receive a connection for the hostgroup from the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_conns_reqs_waited_time_total,
+			"proxysql_hostgroup_conns_reqs_waited_time_total",
+			"Total time waited by all sessions to receive a connection for the hostgroup from the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_conns_total,
+			"proxysql_hostgroup_conns_total",
+			"Total number of connections requested for the hostgroup from the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_queries_total,
+			"proxysql_hostgroup_queries_total",
+			"Total number of queries executed in the hostgroup.",
+			metric_tags {}
 		)
 	},
 	// prometheus dynamic gauges
@@ -1350,6 +1374,12 @@ hg_metrics_map = std::make_tuple(
 			p_hg_dyn_gauge::connection_pool_status,
 			"proxysql_connpool_conns_status",
 			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::hostgroup_conns_reqs_waiting,
+			"proxysql_hostgroup_conns_reqs_waiting",
+			"Total number of sessions currently waiting for a connection for the hostgroup.",
 			metric_tags {}
 		)
 	}
@@ -3937,6 +3967,49 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	wrunlock();
 }
 
+void MySQL_HostGroups_Manager::p_update_hostgroups() {
+	wrlock();
+
+	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
+		MyHGC *myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+
+		const std::string hostgroup_id = std::to_string(myhgc->hid);
+		const std::map<std::string, std::string> common_labels { { "hostgroup", hostgroup_id } };
+
+		p_update_map_gauge(
+			status.p_hostgroups_conns_reqs_waiting,
+			status.p_dyn_gauge_array[p_hg_dyn_gauge::hostgroup_conns_reqs_waiting],
+			hostgroup_id, common_labels, myhgc->conns_reqs_waiting
+		);
+
+		p_update_map_counter(
+			status.p_hostgroups_conns_reqs_waited_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_conns_reqs_waited],
+			hostgroup_id, common_labels, myhgc->conns_reqs_waited
+		);
+
+		p_update_map_counter(
+			status.p_hostgroups_conns_reqs_waited_time_total,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_conns_reqs_waited_time_total],
+			hostgroup_id, common_labels, myhgc->conns_reqs_waited_time_total
+		);
+
+		p_update_map_counter(
+			status.p_hostgroups_conns_total,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_conns_total],
+			hostgroup_id, common_labels, myhgc->conns_total
+		);
+
+		p_update_map_counter(
+			status.p_hostgroups_queries_total,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_queries_total],
+			hostgroup_id, common_labels, myhgc->queries_total
+		);
+	}
+
+	wrunlock();
+}
+
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int *hid) {
   const int colnum=14;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
@@ -4581,6 +4654,8 @@ void MySQL_HostGroups_Manager::p_update_metrics() {
 	this->p_update_connection_pool();
 	// Update the *gtid_executed* metrics
 	this->p_update_mysql_gtid_executed();
+	// Update the *hostgroups* metrics
+	this->p_update_hostgroups();
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {

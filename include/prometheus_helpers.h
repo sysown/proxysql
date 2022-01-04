@@ -285,6 +285,35 @@ inline void p_update_map_counter(
 }
 
 /**
+ * @brief Updates the supplied gauge map gauge corresponding with the supplied identifier.
+ *  In case the identifier doesn't exist in the map, a new gauge is created used the supplied
+ *  metric labels and 'gauge family'.
+ *
+ * @param gauge_map The gauge map to be updated.
+ * @param gauge_family The 'gauge family' required to create a new gauge if not present.
+ * @param m_id The target gauge identifier.
+ * @param m_labels The labels for creating the new gauge if not present.
+ * @param new_val The new value to be set in the gauge.
+ */
+inline void p_update_map_gauge(
+	std::map<std::string, prometheus::Gauge*> gauge_map,
+	prometheus::Family<prometheus::Gauge>* const gauge_family,
+	const std::string m_id,
+	const std::map<std::string, std::string> m_labels,
+	const double new_val
+) {
+	const auto& id_val = gauge_map.find(m_id);
+	if (id_val != gauge_map.end()) {
+		id_val->second->Set(new_val);
+	} else {
+		prometheus::Gauge* new_counter = std::addressof(gauge_family->Add(m_labels));
+		gauge_map.insert({m_id, new_counter});
+
+		new_counter->Set(new_val);
+	}
+}
+
+/**
  * @brief Updates the supplied counter map counter incrementing the counter that correspond
  *  with the supplied identifier. In case of non existing, it creates a new one and increment it.
  *

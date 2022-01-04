@@ -330,6 +330,10 @@ struct p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_mysql_error,
 		mysql_error,
+		hostgroup_conns_reqs_waited,
+		hostgroup_conns_reqs_waited_time_total,
+		hostgroup_conns_total,
+		hostgroup_queries_total,
 		__size
 	};
 };
@@ -345,6 +349,7 @@ struct p_hg_dyn_gauge {
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
+		hostgroup_conns_reqs_waiting,
 		__size
 	};
 };
@@ -420,7 +425,10 @@ class MySQL_HostGroups_Manager {
 	 * @brief Update the "stats_mysql_gtid_executed" counters.
 	 */
 	void p_update_mysql_gtid_executed();
-
+	/**
+	 * @brief Update the "stats_mysql_hostgroups" metrics.
+	 */
+	void p_update_hostgroups();
 	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
 	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
 
@@ -497,6 +505,13 @@ class MySQL_HostGroups_Manager {
 
 		/// Prometheus mysql_error metrics
 		std::map<std::string, prometheus::Counter*> p_mysql_errors_map {};
+
+		/// Prometheus hostgroups metrics
+		std::map<std::string, prometheus::Counter*> p_hostgroups_conns_reqs_waited_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroups_conns_reqs_waited_time_total {};
+		std::map<std::string, prometheus::Counter*> p_hostgroups_conns_total {};
+		std::map<std::string, prometheus::Counter*> p_hostgroups_queries_total {};
+		std::map<std::string, prometheus::Gauge*> p_hostgroups_conns_reqs_waiting{};
 
 		//////////////////////////////////////////////////////
 	} status;
