@@ -3282,48 +3282,6 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
-/**
- * @brief Helper function that updates the session waiting metrics of provided 'MyHGC' based on whether
- *   getting a connection from connection pool succeed or failed.
- *
- * @param myhgc The 'MyHGC' to be updated with the provided 'MySQL_Session' values.
- * @param sess The 'MySQL_Session' to be used for updating the values of the provided 'MyHGC'.
- * @param get_conn_failed Wether getting a connection from the 'connection pool' for the supplied
- *   'MySQL_Session' failed or not.
- */
-void update_myhgc_conns_reqs_waiting_metrics(MyHGC* myhgc, MySQL_Session* sess, bool get_conn_failed) {
-	if (get_conn_failed) {
-		if (sess->waiting_in_hg == -1) {
-			sess->waiting_in_hg = myhgc->hid;
-
-			myhgc->conns_reqs_waiting += 1;
-			myhgc->conns_reqs_waited += 1;
-			sess->conn_pull_next_wait_start = monotonic_time();
-		} else {
-			uint64_t cur_time = monotonic_time();
-			myhgc->conns_reqs_waited_time_total += cur_time - sess->conn_pull_next_wait_start;
-			sess->conn_pull_next_wait_start = cur_time;
-		}
-	} else {
-		if (sess->waiting_in_hg == myhgc->hid) {
-			myhgc->conns_reqs_waiting -= 1;
-			myhgc->conns_reqs_waited_time_total += monotonic_time() - sess->conn_pull_next_wait_start;
-			sess->conn_pull_next_wait_start = 0;
-			sess->waiting_in_hg = -1;
-		}
-	}
-}
-
-
-void MySQL_HostGroups_Manager::update_hostgroup_conns_reqs_waiting_metrics(
-	int64_t hid, MySQL_Session* sess, bool get_conn_failed
-) {
-	wrlock();
-	MyHGC* myhgc = MyHGC_lookup(hid);
-	update_myhgc_conns_reqs_waiting_metrics(myhgc, sess, get_conn_failed);
-	wrunlock();
-}
-
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
@@ -3344,7 +3302,6 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 			myhgc->conns_total++;
 		}
 	}
-	update_myhgc_conns_reqs_waiting_metrics(myhgc, sess, conn == nullptr);
 
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, (conn ? conn->parent->address : "") , (conn ? conn->parent->port : 0 ));

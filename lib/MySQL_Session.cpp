@@ -461,6 +461,66 @@ void MySQL_Session::set_status(enum session_status e) {
 	status=e;
 }
 
+void MySQL_Session::set_waiting_in_hg(int hostgroup_id) {
+	if (this->mybe == NULL) { return; }
+
+	if (this->waiting_in_hg == -1 && hostgroup_id != -1) {
+		// targetting 'hostgroup_id' for a connection
+		if (this->mybe->server_myds && this->mybe->server_myds->myconn == NULL) {
+			// failed to get a connection
+			this->waiting_in_hg = hostgroup_id;
+			this->conn_pull_next_wait_start = thread->curtime;
+
+			// a search is required
+			MyHGM->wrlock();
+			MyHGC* myhgc = MyHGM->MyHGC_lookup(this->waiting_in_hg);
+			MyHGM->wrunlock();
+
+			__sync_fetch_and_add(&myhgc->conns_reqs_waited, 1);
+			__sync_fetch_and_add(&myhgc->conns_reqs_waiting, 1);
+		} else {
+			this->conn_pull_next_wait_start = thread->curtime;
+		}
+	} else if (this->waiting_in_hg != -1 && this->waiting_in_hg == hostgroup_id) {
+		// we can either have received a connection, or still be waiting for one
+		if (this->mybe->server_myds && this->mybe->server_myds->myconn == NULL) {
+			// do nothing, waiting for connection
+		} else {
+			// received a connection, update metrics
+			MyHGC* myhgc = this->mybe->server_myds->myconn->parent->myhgc;
+			const uint64_t waited_time = this->thread->curtime - this->conn_pull_next_wait_start;
+
+			__sync_fetch_and_add(&myhgc->conns_reqs_waited_time_total, waited_time);
+			__sync_fetch_and_sub(&myhgc->conns_reqs_waiting, 1);
+
+			// reset the waiting state, we are no longer waiting in a hostgroup
+			this->waiting_in_hg = -1;
+			this->conn_pull_next_wait_start = 0;
+		}
+	} else if (this->waiting_in_hg != -1 && hostgroup_id == -1) {
+		// waited in a hostgroup for a connection
+		const uint64_t waited_time = this->thread->curtime - this->conn_pull_next_wait_start;
+		MyHGC* myhgc = NULL;
+
+		if (this->mybe->server_myds && this->mybe->server_myds->myconn) {
+			// session got a connection
+			myhgc = this->mybe->server_myds->myconn->parent->myhgc;
+		} else {
+			// session didn't get a connection, so a search is required
+			MyHGM->wrlock();
+			myhgc = MyHGM->MyHGC_lookup(this->waiting_in_hg);
+			MyHGM->wrunlock();
+		}
+
+		__sync_fetch_and_add(&myhgc->conns_reqs_waited_time_total, waited_time);
+		__sync_fetch_and_sub(&myhgc->conns_reqs_waiting, 1);
+
+		this->waiting_in_hg = -1;
+		this->conn_pull_next_wait_start = 0;
+	} else if (this->waiting_in_hg == -1 && hostgroup_id == -1) {
+		// do nothing, either never waited on a hostgroup or we already got a connection
+	}
+}
 
 MySQL_Session::MySQL_Session() {
 	thread_session_id=0;
@@ -3538,6 +3598,9 @@ __get_pkts_from_client:
 										// Note: CurrentQuery sees the query as sent by the client.
 										// shortly after, the packets it used to contain the query will be deallocated
 										CurrentQuery.begin((unsigned char *)pkt.ptr,pkt.size,true);
+										// NOTE: This is shouldn't be necessary, because at this point the session
+										// 'waiting_in_hg' should always already be '-1'.
+										this->set_waiting_in_hg(-1);
 									}
 									rc_break=handler_special_queries(&pkt);
 									if (rc_break==true) {
@@ -6517,6 +6580,8 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				CurrentQuery.waiting_since = 0;
 			}
 		}
+		// update the sessions 'conn_reqs' stats
+		this->set_waiting_in_hg(mybe->hostgroup_id);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p -- server_myds=%p -- MySQL_Connection %p\n", this, mybe->server_myds,  mybe->server_myds->myconn);
 	if (mybe->server_myds->myconn==NULL) {
 		// we couldn't get a connection for whatever reason, ex: no backends, or too busy
@@ -6881,6 +6946,9 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 // this should execute most of the commands executed when a request is finalized
 // this should become the place to hook other functions
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
+	// update the sessions 'conn_reqs' stats
+	this->set_waiting_in_hg(-1);
+
 	// check if multiplexing needs to be disabled
 	char *qdt=CurrentQuery.get_digest_text();
 	if (qdt && myds && myds->myconn) {

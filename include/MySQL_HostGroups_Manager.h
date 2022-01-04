@@ -543,16 +543,6 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
-	/**
-	 * @brief Locking function to be used to update the session waiting metrics of a particular hostgroup.
-	 *
-	 * @param hid The id of the hostgroup used to search for the hostgroup 'MyHGC' which values will be updated
-	 *   using the supplied 'MySQL_Session'.
-	 * @param sess The 'MySQL_Session' to be used for updating the values of the provided 'MyHGC'.
-	 * @param get_conn_failed Wether getting a connection from the 'connection pool' for the supplied
-	 *   'MySQL_Session' failed or not.
-	 */
-	void update_hostgroup_conns_reqs_waiting_metrics(int64_t hid, MySQL_Session* sess, bool get_conn_failed);
 	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 
 	void drop_all_idle_connections();
