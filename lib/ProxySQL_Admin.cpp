@@ -555,7 +555,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define STATS_SQLITE_TABLE_MYSQL_HOSTGROUPS "CREATE TABLE stats_mysql_hostgroups (hostgroup INT , conns_reqs_waiting INT , conns_reqs_waited INT , conns_reqs_waited_time_total INT , conns_total INT , queries_total INT)"
 
-#define STATS_SQLITE_TABLE_MYSQL_HOSTGROUPS_RESET "CREATE TABLE stats_mysql_hostgroups_latencies_reset (hostgroup INT , conns_reqs_waiting INT , conns_reqs_waited INT , conns_reqs_waited_time_total INT , conns_total INT , queries_total INT)"
+#define STATS_SQLITE_TABLE_MYSQL_HOSTGROUPS_RESET "CREATE TABLE stats_mysql_hostgroups_reset (hostgroup INT , conns_reqs_waiting INT , conns_reqs_waited INT , conns_reqs_waited_time_total INT , conns_total INT , queries_total INT)"
 
 static char * admin_variables_names[]= {
 	(char *)"admin_credentials",
