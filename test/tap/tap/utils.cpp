@@ -835,3 +835,54 @@ int open_connections(const CommandLine& cl, uint32_t cons_num, std::vector<MYSQL
 
 	return EXIT_SUCCESS;
 }
+
+std::vector<std::string> split(const std::string& s, char delimiter) {
+	std::vector<std::string> tokens {};
+	std::string token {};
+	std::istringstream tokenStream(s);
+
+	while (std::getline(tokenStream, token, delimiter)) {
+		tokens.push_back(token);
+	}
+
+	return tokens;
+}
+
+std::map<std::string, double> get_prometheus_metric_values(const std::string& metrics_output) {
+	std::vector<std::string> output_lines { split(metrics_output, '\n') };
+	std::map<std::string, double> metrics_map {};
+
+	for (const std::string line : output_lines) {
+		const std::vector<std::string> line_values { split(line, ' ') };
+
+		if (line_values.size() == 2) {
+			metrics_map.insert({line_values.front(), std::stod(line_values.back())});
+		}
+	}
+
+	return metrics_map;
+}
+
+int fetch_prometheus_metrics(MYSQL* proxysql_admin, map<string, double>& prometheus_metrics) {
+	int q_res = mysql_query(proxysql_admin, "SHOW PROMETHEUS METRICS\\G");
+	if (q_res != EXIT_SUCCESS ) {
+		diag("'fetch_prometheus_metrics' failed with error '%d'", mysql_errno(proxysql_admin));
+		return mysql_errno(proxysql_admin);
+	}
+
+	char* row_value = nullptr;
+	MYSQL_RES* p_resulset = mysql_store_result(proxysql_admin);
+	char** data_row = mysql_fetch_row(p_resulset);
+
+	if (data_row[0]) {
+		row_value = data_row[0];
+	} else {
+		row_value = const_cast<char*>("NULL");
+	}
+
+	mysql_free_result(p_resulset);
+
+	prometheus_metrics = get_prometheus_metric_values(row_value);
+
+	return EXIT_SUCCESS;
+}

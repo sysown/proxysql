@@ -27,39 +27,6 @@ using std::vector;
 using std::pair;
 using std::string;
 
-std::vector<std::string> split(const std::string& s, char delimiter) {
-	std::vector<std::string> tokens {};
-	std::string token {};
-	std::istringstream tokenStream(s);
-
-	while (std::getline(tokenStream, token, delimiter)) {
-		tokens.push_back(token);
-	}
-
-	return tokens;
-}
-
-/**
- * @brief Extract the metrics values from the output of the admin command
- *   'SHOW PROMETHEUS METRICS'.
- * @param metrics_output The output of the command 'SHOW PROMETHEUS METRICS'.
- * @return A map holding the metrics identifier and its current value.
- */
-std::map<std::string, double> get_metric_values(std::string metrics_output) {
-	std::vector<std::string> output_lines { split(metrics_output, '\n') };
-	std::map<std::string, double> metrics_map {};
-
-	for (const std::string line : output_lines) {
-		const std::vector<std::string> line_values { split(line, ' ') };
-
-		if (line_values.size() == 2) {
-			metrics_map.insert({line_values.front(), std::stod(line_values.back())});
-		}
-	}
-
-	return metrics_map;
-}
-
 /**
  * @brief Triggers the increment of 'auto_increment_delay_multiplex_metric'.
  * @param proxy Oppened MYSQL handler to ProxySQL.
@@ -272,7 +239,7 @@ int main(int argc, char** argv) {
 			row_value = "NULL";
 		}
 		mysql_free_result(p_resulset);
-		const std::map<string, double> prev_metrics { get_metric_values(row_value) };
+		const std::map<string, double> prev_metrics { get_prometheus_metric_values(row_value) };
 
 		// Execute the action triggering the metric update
 		bool action_res = metric_checker.second.first(proxysql, proxysql_admin, cl);
@@ -288,7 +255,7 @@ int main(int argc, char** argv) {
 			row_value = "NULL";
 		}
 		mysql_free_result(p_resulset);
-		const std::map<string, double> after_metrics { get_metric_values(row_value) };
+		const std::map<string, double> after_metrics { get_prometheus_metric_values(row_value) };
 
 		// Check that the new metrics values matches the expected
 		metric_checker.second.second(prev_metrics, after_metrics);
