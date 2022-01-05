@@ -1,7 +1,7 @@
 version: "2.0"
 services:
   centos67_build:
-    image: proxysql/packaging:build-centos6.7
+    image: proxysql/packaging:build-centos6.7v2
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
@@ -16,7 +16,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
   centos67_dbg_build:
-    image: proxysql/packaging:build-centos6.7
+    image: proxysql/packaging:build-centos6.7v2
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
       - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
@@ -241,6 +241,38 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
+  fedora34_build:
+    image: proxysql/packaging:build-fedora34
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=fedora34
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+  fedora34_dbg_build:
+    image: proxysql/packaging:build-fedora34
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=dbg-fedora34
+      - PROXYSQL_BUILD_TYPE=debug
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
   fedora32_arm64_build:
     image: proxysql/packaging-arm64:build-fedora32
     volumes:
