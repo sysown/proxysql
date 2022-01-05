@@ -181,7 +181,7 @@ clean:
 packages: amd64-packages arm64-packages
 .PHONY: packages
 
-amd64-packages: centos6.7 centos6.7-dbg centos7 centos7-dbg centos8 centos8-dbg ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-dbg debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-dbg fedora24 fedora24-dbg fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg
+amd64-packages: centos6.7 centos6.7-dbg centos7 centos7-dbg centos8 centos8-dbg ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-dbg debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-dbg fedora24 fedora24-dbg fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-dbg
 .PHONY: amd64-packages
 
 arm64-packages: centos7-arm64 centos8-arm64 debian9-arm64 debian10-arm64 debian11-arm64 ubuntu18-arm64 ubuntu20-arm64 fedora32-arm64 fedora33-arm64
@@ -240,6 +240,12 @@ fedora33: binaries/proxysql-${CURVER}-1-fedora33.x86_64.rpm
 
 fedora33-dbg: binaries/proxysql-${CURVER}-1-dbg-fedora33.x86_64.rpm
 .PHONY: fedora33-dbg
+
+fedora34: binaries/proxysql-${CURVER}-1-fedora34.x86_64.rpm
+.PHONY: fedora34
+
+fedora34-dbg: binaries/proxysql-${CURVER}-1-dbg-fedora34.x86_64.rpm
+.PHONY: fedora34-dbg
 
 fedora32-arm64: binaries/proxysql-${CURVER}-1-fedora32.aarch64.rpm
 .PHONY: fedora32-arm64
@@ -400,6 +406,14 @@ binaries/proxysql-${CURVER}-1-fedora33.x86_64.rpm:
 
 binaries/proxysql-${CURVER}-1-dbg-fedora33.x86_64.rpm:
 	docker-compose up fedora33_dbg_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-fedora34.x86_64.rpm:
+	docker-compose up fedora34_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-dbg-fedora34.x86_64.rpm:
+	docker-compose up fedora34_dbg_build
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-ubuntu12_amd64.deb:
