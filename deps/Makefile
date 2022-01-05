@@ -42,9 +42,9 @@ endif
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-3.10.0 || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
-	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/make_parens.py
-	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse_map.py
-	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse2c.py
+ifneq ($(CENTOSVER),6)
+	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
+endif
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 libinjection: libinjection/libinjection/src/libinjection.a
 
@@ -148,7 +148,7 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 
 
-libdaemon/libdaemon/libdaemon/.libs/libdaemon.a: 
+libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
 	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && ./configure --disable-examples
