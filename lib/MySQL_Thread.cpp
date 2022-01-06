@@ -2965,7 +2965,7 @@ void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
 		if (curtime > last_move_to_idle_thread_time + (unsigned long long)mysql_thread___session_idle_ms * 1000) {
-				last_move_to_idle_thread_time=curtime;
+			last_move_to_idle_thread_time=curtime;
 			check_if_move_to_idle_thread=true;
 		}
 	}
@@ -2976,7 +2976,6 @@ void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
 		mypolls.fds[n].revents=0;
 		if (myds) {
 #ifdef IDLE_THREADS
-			//if (GloVars.global.idle_threads) {
 			if (check_if_move_to_idle_thread == true) {
 				// here we try to move it to the maintenance thread
 				if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
