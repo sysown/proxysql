@@ -2961,13 +2961,23 @@ void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 
 // this function was inline in MySQL_Thread::run()
 void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
+	bool check_if_move_to_idle_thread = false;
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		if (curtime > last_move_to_idle_thread_time + (unsigned long long)mysql_thread___session_idle_ms * 1000) {
+				last_move_to_idle_thread_time=curtime;
+			check_if_move_to_idle_thread=true;
+		}
+	}
+#endif
 	for (unsigned int n = 0; n < mypolls.len; n++) {
 		MySQL_Data_Stream *myds=NULL;
 		myds=mypolls.myds[n];
 		mypolls.fds[n].revents=0;
 		if (myds) {
 #ifdef IDLE_THREADS
-			if (GloVars.global.idle_threads) {
+			//if (GloVars.global.idle_threads) {
+			if (check_if_move_to_idle_thread == true) {
 				// here we try to move it to the maintenance thread
 				if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
 					if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
@@ -4051,6 +4061,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_thread___ssl_p2s_crlpath=NULL;
 
 	last_maintenance_time=0;
+	last_move_to_idle_thread_time=0;
 	maintenance_loop=true;
 	retrieve_gtids_required = false;
 

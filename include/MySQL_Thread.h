@@ -178,6 +178,7 @@ class MySQL_Thread
 	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
+	unsigned long long last_move_to_idle_thread_time;
 	std::atomic<unsigned long long> atomic_curtime;
 	PtrArray *mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions;
