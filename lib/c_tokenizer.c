@@ -742,12 +742,12 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							int str_len = p_r - p_r_t + 1;
 							int collapsed = 0;
 
-							for (int i = 0; i < str_len; i++) {
-								char* const c_p_r_t = ((char*)p_r_t + i);
-								char* const n_p_r_t = ((char*)p_r_t + i + 1);
+							for (int j = 0; j < str_len; j++) {
+								char* const c_p_r_t = ((char*)p_r_t + j);
+								char* const n_p_r_t = ((char*)p_r_t + j + 1);
 
 								if (is_digit_char(*c_p_r_t) && is_digit_char(*n_p_r_t)) {
-									memmove(c_p_r_t, c_p_r_t + 1, str_len - i);
+									memmove(c_p_r_t, c_p_r_t + 1, str_len - j);
 									collapsed += 1;
 								}
 							}
@@ -755,8 +755,8 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r -= collapsed;
 
 							int new_str_len = p_r - p_r_t + 1;
-							for (int i = 0; i < new_str_len; i++) {
-								char* const c_p_r_t = ((char*)p_r_t + i);
+							for (int j = 0; j < new_str_len; j++) {
+								char* const c_p_r_t = ((char*)p_r_t + j);
 								if (is_digit_char(*c_p_r_t)) {
 									*c_p_r_t = '?';
 								}
