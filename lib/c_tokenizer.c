@@ -742,7 +742,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							int str_len = p_r - p_r_t + 1;
 							int collapsed = 0;
 
-							for (int i = 0; i < str_len; i++) {
+							for (i = 0; i < str_len; i++) {
 								char* const c_p_r_t = ((char*)p_r_t + i);
 								char* const n_p_r_t = ((char*)p_r_t + i + 1);
 
@@ -755,7 +755,7 @@ char *mysql_query_digest_and_first_comment(char *s, int _len, char **first_comme
 							p_r -= collapsed;
 
 							int new_str_len = p_r - p_r_t + 1;
-							for (int i = 0; i < new_str_len; i++) {
+							for (i = 0; i < new_str_len; i++) {
 								char* const c_p_r_t = ((char*)p_r_t + i);
 								if (is_digit_char(*c_p_r_t)) {
 									*c_p_r_t = '?';
@@ -2052,9 +2052,10 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 				// in case of the final pattern being '?)', we need to count the '?' as being replaced for
 				// the grouping for matching replacements of the exact length.
 				int f_pattern_len = pattern_broken == 2 ? pattern_len * 2 + 1 : pattern_len * 2;
+				int i;
 
 				if (f_pattern_len >= (opts->grouping_limit * 2 + 3)) {
-					for (int i = 0; i < pattern_len; i++) {
+					for (i = 0; i < pattern_len; i++) {
 						if (i < opts->grouping_limit) {
 							*shared_st->res_pre_pos++ = '?';
 							*shared_st->res_pre_pos++ = ',';
@@ -2072,7 +2073,7 @@ void stage_3_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_3_st* s
 						shared_st->res_cur_pos = pattern_pos - 1;
 					}
 				} else {
-					for (int i = 0; i < pattern_len; i++) {
+					for (i = 0; i < pattern_len; i++) {
 						*shared_st->res_pre_pos++ = '?';
 						*shared_st->res_pre_pos++ = ',';
 					}
@@ -2709,8 +2710,9 @@ enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st*
 			if (opts->replace_number) {
 				int str_len = shared_st->res_cur_pos - shared_st->res_pre_pos + 1;
 				int collapsed = 0;
+				int i;
 
-				for (int i = 0; i < str_len; i++) {
+				for (i = 0; i < str_len; i++) {
 					char* const c_p_r_t = ((char*)shared_st->res_pre_pos + i);
 					char* const n_p_r_t = ((char*)shared_st->res_pre_pos + i + 1);
 
@@ -2723,7 +2725,7 @@ enum p_st process_literal_digit_space_rm(shared_st* shared_st, literal_digit_st*
 				shared_st->res_cur_pos -= collapsed;
 
 				int new_str_len = shared_st->res_cur_pos - shared_st->res_pre_pos + 1;
-				for (int i = 0; i < new_str_len; i++) {
+				for (i = 0; i < new_str_len; i++) {
 					char* const c_p_r_t = ((char*)shared_st->res_cur_pos + i);
 					if (is_digit_char(*c_p_r_t)) {
 						*c_p_r_t = '?';
