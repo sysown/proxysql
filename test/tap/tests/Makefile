@@ -68,7 +68,7 @@ ODIR=../../../obj
 
 EXECUTABLE=proxysql
 
-OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o
+OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o ../../../src/obj/proxy_tls.o
 
 INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR)
 LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
@@ -109,16 +109,19 @@ testaurora: aurora
 	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
-	g++ -DTEST_GALERA -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DTEST_GALERA -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) -lproxysql $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
 
 galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
-	g++ -DTEST_GALERA -DDEBUG galera_2_timeout_no_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o galera_2_timeout_no_count -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DTEST_GALERA -DDEBUG galera_2_timeout_no_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) -lproxysql $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o galera_2_timeout_no_count -DGITVERSION=\"$(GIT_VERSION)\"
 
 aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
-	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) -lproxysql $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
 
 test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_tokenizer-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LIBDIR)/libtap.a
+	g++ test_mysql_query_digests_stages-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_mysql_query_digests_stages-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o sqlite3-t -DGITVERSION=\"$(GIT_VERSION)\"
@@ -131,9 +134,6 @@ test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $
 
 create_connection_annotation: test_connection_annotation-t.cpp
 	g++ -DTEST_AURORA -DDEBUG test_connection_annotation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_connection_annotation-t -DGITVERSION=\"$(GIT_VERSION)\"
-
-test_set_collation-t: test_set_collation-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ test_set_collation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_set_collation-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR)
 	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc ../../../src/obj/proxysql_global.o $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"

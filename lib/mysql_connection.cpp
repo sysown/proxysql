@@ -2293,23 +2293,25 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	}
 	//filter @@session. and @@
 	char *match=NULL;
+	char* last_pos=NULL;
+	const int at_session_offset = strlen("@@session.");
+	const int double_at_offset = strlen("@@");
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@session."))) {
-		*match = '\0';
-		strcat(query_digest_text_filter_select, match+strlen("@@session."));
+		memmove(match, match + at_session_offset, strlen(match) - at_session_offset);
+		last_pos = match + strlen(match) - at_session_offset;
+		*last_pos = '\0';
 	}
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {
-		*match = '\0';
-		if (strlen(query_digest_text_filter_select) == 0) {
-			memcpy(query_digest_text_filter_select, match, strlen("@@"));
-		} else {
-			strcat(query_digest_text_filter_select, match+strlen("@@"));
-		}
+		memmove(match, match + double_at_offset, strlen(match) - double_at_offset);
+		last_pos = match + strlen(match) - double_at_offset;
+		*last_pos = '\0';
 	}
 
 	std::vector<char*>query_digest_text_filter_select_v;
 	char* query_digest_text_filter_select_tok = NULL;
+	char* save_query_digest_text_ptr = NULL;
 	if (query_digest_text_filter_select) {
-	query_digest_text_filter_select_tok = strtok(query_digest_text_filter_select, ",");
+		query_digest_text_filter_select_tok = strtok_r(query_digest_text_filter_select, ",", &save_query_digest_text_ptr);
 	}
 	while(query_digest_text_filter_select_tok){
 		//filter "as"/space/alias,such as select @@version as a, @@version b
@@ -2328,19 +2330,20 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 		}else{
 			query_digest_text_filter_select_v.push_back(query_digest_text_filter_select_tok);
 		}
-		query_digest_text_filter_select_tok=strtok(NULL, ",");
+		query_digest_text_filter_select_tok=strtok_r(NULL, ",", &save_query_digest_text_ptr);
 	}
 
 	std::vector<char*>keep_multiplexing_variables_v;
 	char* keep_multiplexing_variables_tmp;
+	char* save_keep_multiplexing_variables_ptr = NULL;
 	unsigned long keep_multiplexing_variables_len=strlen(mysql_thread___keep_multiplexing_variables);
 	keep_multiplexing_variables_tmp=(char*)malloc(keep_multiplexing_variables_len+1);
 	memcpy(keep_multiplexing_variables_tmp, mysql_thread___keep_multiplexing_variables, keep_multiplexing_variables_len);
 	keep_multiplexing_variables_tmp[keep_multiplexing_variables_len]='\0';
-	char* keep_multiplexing_variables_tok=strtok(keep_multiplexing_variables_tmp, " ,");
+	char* keep_multiplexing_variables_tok=strtok_r(keep_multiplexing_variables_tmp, " ,", &save_keep_multiplexing_variables_ptr);
 	while (keep_multiplexing_variables_tok){
 		keep_multiplexing_variables_v.push_back(keep_multiplexing_variables_tok);
-		keep_multiplexing_variables_tok=strtok(NULL, " ,");
+		keep_multiplexing_variables_tok=strtok_r(NULL, " ,", &save_keep_multiplexing_variables_ptr);
 	}
 
 	for (std::vector<char*>::iterator it=query_digest_text_filter_select_v.begin();it!=query_digest_text_filter_select_v.end();it++){

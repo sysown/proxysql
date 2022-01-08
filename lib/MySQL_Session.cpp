@@ -2,6 +2,7 @@
 #include "MySQL_Thread.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "proxysql_utils.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "SpookyV2.h"
@@ -85,6 +86,24 @@ extern SQLite3_Server *GloSQLite3Server;
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
+
+std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
+	if (session_type == PROXYSQL_SESSION_MYSQL) {
+		return "PROXYSQL_SESSION_MYSQL";
+	} else if (session_type == PROXYSQL_SESSION_ADMIN) {
+		return "PROXYSQL_SESSION_ADMIN";
+	} else if (session_type == PROXYSQL_SESSION_STATS) {
+		return "PROXYSQL_SESSION_STATS";
+	} else if (session_type == PROXYSQL_SESSION_SQLITE) {
+		return "PROXYSQL_SESSION_SQLITE";
+	} else if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
+		return "PROXYSQL_SESSION_CLICKHOUSE";
+	} else if (session_type == PROXYSQL_SESSION_MYSQL_EMU) {
+		return "PROXYSQL_SESSION_MYSQL_EMU";
+	} else {
+		return "PROXYSQL_SESSION_NONE";
+	}
+};
 
 Session_Regex::Session_Regex(char *p) {
 	s=strdup(p);
@@ -965,6 +984,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["qpo"]["retries"] = qpo->retries;
 	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
 	j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
+	j["client"]["userinfo"]["schemaname"] = ( client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "" );
 #ifdef DEBUG
 	j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
 #endif
@@ -3322,6 +3342,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		case _MYSQL_COM_PROCESS_KILL:
 			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(pkt);
 			break;
+		case _MYSQL_COM_RESET_CONNECTION:
+			handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(pkt);
+			break;
 		default:
 			return false;
 			break;
@@ -3543,8 +3566,29 @@ __get_pkts_from_client:
 									// For more context check issue: #3493.
 									// ===================================================
 									if (session_type != PROXYSQL_SESSION_CLICKHOUSE) {
-										if (strncasecmp((char *)"USE ",CurrentQuery.get_digest_text(),4)==0) {
-											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt, CurrentQuery.get_digest_text());
+										const char *qd = CurrentQuery.get_digest_text();
+										bool use_db_query = false;
+
+										if (qd != NULL) {
+											if (
+												(strncasecmp((char *)"USE",qd,3)==0)
+												&&
+												(
+													(strncasecmp((char *)"USE ",qd,4)==0)
+													||
+													(strncasecmp((char *)"USE`",qd,4)==0)
+												)
+											) {
+												use_db_query = true;
+											}
+										} else {
+											if (pkt.size > (5+4) && strncasecmp((char *)"USE ", (char *)pkt.ptr+5, 4) == 0) {
+												use_db_query = true;
+											}
+										}
+
+										if (use_db_query) {
+											handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(&pkt);
 
 											if (mirror == false) {
 												break;
@@ -3713,6 +3757,21 @@ __get_pkts_from_client:
 			case FAST_FORWARD:
 				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
 				break;
+			// This state is required because it covers the following situation:
+			//  1. A new connection is created by a client and the 'FAST_FORWARD' mode is enabled.
+			//  2. The first packet received for this connection isn't a whole packet, i.e, it's either
+			//     split into multiple packets, or it doesn't fit 'queueIN' size (typically
+			//     QUEUE_T_DEFAULT_SIZE).
+			//  3. Session is still in 'CONNECTING_SERVER' state, BUT further packets remain to be received
+			//     from the initial split packet.
+			//
+			//  Because of this, packets received during 'CONNECTING_SERVER' when the previous state is
+			//  'FAST_FORWARD' should be pushed to 'PSarrayOUT'.
+			case CONNECTING_SERVER:
+				if (previous_status.empty() == false && previous_status.top() == FAST_FORWARD) {
+					mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+					break;
+				}
 			case session_status___NONE:
 			default:
 				handler___status_NONE_or_default(pkt);
@@ -4527,8 +4586,12 @@ handler_again:
 					if (mysql_thread___log_mysql_warnings_enabled) {
 						auto warn_no = mysql_warning_count(myconn->mysql);
 						if (warn_no > 0) {
+							RequestEnd(myds);
+							writeout();
+
 							myconn->async_state_machine=ASYNC_IDLE;
 							myds->DSS=STATE_MARIADB_GENERIC;
+
 							NEXT_IMMEDIATE(SHOW_WARNINGS);
 						}
 					}
@@ -4632,26 +4695,41 @@ handler_again:
 			break;
 
 		case SHOW_WARNINGS:
+			// Performs a 'SHOW WARNINGS' query over the current backend connection and returns the connection back
+			// to the connection pool when finished. Actual logging of received warnings is performed in
+			// 'MySQL_Connection' while processing 'ASYNC_USE_RESULT_CONT'.
 			{
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
-				int pre_rc = myconn->async_query(mybe->server_myds->revents,(char *)"show warnings", strlen((char *)"show warnings"));
-				if (pre_rc==0) {
-					int myerr=mysql_errno(myconn->mysql);
+
+				// Setting POLLOUT is required just in case this state has been reached when 'RunQuery' from
+				// 'PROCESSING_QUERY' state has immediately return. This is because in case 'mysql_real_query_start'
+				// immediately returns with '0' the session is never processed again by 'MySQL_Thread', and 'revents' is
+				// never updated with the result of polling through the 'MySQL_Thread::mypolls'.
+				myds->revents |= POLLOUT;
+
+				int rc = myconn->async_query(
+					mybe->server_myds->revents,(char *)"SHOW WARNINGS", strlen((char *)"SHOW WARNINGS")
+				);
+				if (rc == 0 || rc == -1) {
+					// Cleanup the connection resulset from 'SHOW WARNINGS' for the next query.
+					if (myconn->MyRS != NULL) {
+						delete myconn->MyRS;
+						myconn->MyRS = NULL;
+					}
+
+					if (rc == -1) {
+						int myerr = mysql_errno(myconn->mysql);
+						proxy_error(
+							"'SHOW WARNINGS' failed to be executed over backend connection with error: '%d'\n", myerr
+						);
+					}
 
 					RequestEnd(myds);
-					writeout();
+					finishQuery(myds,myconn,prepared_stmt_with_no_params);
 
 					handler_ret = 0;
 					return handler_ret;
-					if ( myerr > 0 ) {
-						char sqlstate[10];
-						sprintf(sqlstate,"%s",mysql_sqlstate(mybe->server_myds->myconn->mysql));
-						RequestEnd(mybe->server_myds);
-						break;
-					}
-					mybe->server_myds->myconn->async_free_result();
-					NEXT_IMMEDIATE(PROCESSING_QUERY);
 				} else {
 					goto handler_again;
 				}
@@ -4812,6 +4890,7 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
+	bool handshake_err = true;
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , handshake_response=%d , switching_auth_stage=%d , is_encrypted=%d , client_encrypted=%d\n", this, client_myds, handshake_response_return, client_myds->switching_auth_stage, is_encrypted, client_myds->encrypted);
 	if (
@@ -4836,6 +4915,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+		l_free(pkt->size,pkt->ptr);
 		return;
 	}
 
@@ -4997,6 +5077,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					) {
 						// we are good!
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL);
+						handshake_err = false;
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_OK, this, NULL);
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
@@ -5033,6 +5114,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . STATE_CLIENT_AUTH_OK\n", this, client_myds);
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_OK, this, NULL);
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL, _pid, 0,0,0,0,NULL);
+						handshake_err = false;
 						status=WAITING_CLIENT_DATA;
 						client_myds->DSS=STATE_CLIENT_AUTH_OK;
 					}
@@ -5095,9 +5177,16 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 			free(_s);
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 		}
+		if (client_addr) {
+			free(client_addr);
+		}
 		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 		client_myds->DSS=STATE_SLEEP;
+	}
+
+	if (mysql_thread___client_host_cache_size) {
+		GloMTH->update_client_host_cache(client_myds->client_addr, handshake_err);
 	}
 }
 
@@ -5191,12 +5280,18 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 // this function was introduced due to isseu #718
 // some application (like the one written in Perl) do not use COM_INIT_DB , but COM_QUERY with USE dbname
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt, const char* query_digest) {
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		__sync_fetch_and_add(&MyHGM->status.frontend_use_db, 1);
-		char *schemaname=strndup(query_digest+4,strlen(query_digest)-4);
+		string nq=string((char *)pkt->ptr+sizeof(mysql_hdr)+1,pkt->size-sizeof(mysql_hdr)-1);
+		RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)" ");
+		char *sn_tmp = (char *)nq.c_str();
+		while (sn_tmp < ( nq.c_str() + nq.length() - 4 ) && *sn_tmp == ' ')
+			sn_tmp++;
+		//char *schemaname=strdup(nq.c_str()+4);
+		char *schemaname=strdup(sn_tmp+3);
 		char *schemanameptr=trim_spaces_and_quotes_in_place(schemaname);
 		// handle cases like "USE `schemaname`
 		if(schemanameptr[0]=='`' && schemanameptr[strlen(schemanameptr)-1]=='`') {
@@ -6243,6 +6338,53 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 }
 
+void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
+	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got MYSQL_COM_RESET_CONNECTION packet\n");
+
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+		// Backup the current relevant session values
+		int default_hostgroup = this->default_hostgroup;
+		bool transaction_persistent = this->transaction_persistent;
+
+		// Re-initialize the session
+		reset();
+		init();
+
+		// Recover the relevant session values
+		this->default_hostgroup = default_hostgroup;
+		this->transaction_persistent = transaction_persistent;
+		client_myds->myconn->set_charset(default_charset, NAMES);
+
+		if (user_attributes != NULL && strlen(user_attributes)) {
+			nlohmann::json j_user_attributes = nlohmann::json::parse(user_attributes);
+			auto default_transaction_isolation = j_user_attributes.find("default-transaction_isolation");
+
+			if (default_transaction_isolation != j_user_attributes.end()) {
+				std::string def_trx_isolation_val =
+					j_user_attributes["default-transaction_isolation"].get<std::string>();
+				mysql_variables.client_set_value(this, SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
+			}
+		}
+
+		l_free(pkt->size,pkt->ptr);
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,0,0,NULL);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+	} else {
+		l_free(pkt->size,pkt->ptr);
+
+		std::string t_sql_error_msg { "Received unsupported 'COM_RESET_CONNECTION' for session type '%s'" };
+		std::string sql_error_msg {};
+		string_format(t_sql_error_msg, sql_error_msg, proxysql_session_type_str(session_type).c_str());
+
+		client_myds->setDSS_STATE_QUERY_SENT_NET();
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1047,(char *)"28000", sql_error_msg.c_str(), true);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+	}
+}
+
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
 			// Get a MySQL Connection
 
@@ -6577,13 +6719,21 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 
 		char **p=(char **)malloc(sizeof(char*)*result->columns);
 		unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*result->columns);
+
+		MySQL_ResultSet MyRS {};
+		MyRS.buffer_init(myprot);
+
 		for (int r=0; r<result->rows_count; r++) {
 		for (int i=0; i<result->columns; i++) {
 			l[i]=result->rows[r]->sizes[i];
 			p[i]=result->rows[r]->fields[i];
 		}
-		myprot->generate_pkt_row(true,NULL,NULL,sid,result->columns,l,p); sid++;
+			sid = myprot->generate_pkt_row3(&MyRS, NULL, sid, result->columns, l, p, 0); sid++;
 		}
+
+		MyRS.buffer_to_PSarrayOut();
+		MyRS.get_resultset(myds->PSarrayOUT);
+
 		myds->DSS=STATE_ROW;
 
 		if (deprecate_eof_active) {

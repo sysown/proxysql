@@ -494,8 +494,8 @@ struct __SQP_query_parser_t {
 };
 
 struct _PtrSize_t {
-  void *ptr;
   unsigned int size;
+  void *ptr;
 }; 
 // struct for debugging module
 #ifdef DEBUG
@@ -748,6 +748,7 @@ __thread int mysql_thread___ping_interval_server_msec;
 __thread int mysql_thread___ping_timeout_server;
 __thread int mysql_thread___shun_on_failures;
 __thread int mysql_thread___shun_recovery_time_sec;
+__thread int mysql_thread___unshun_algorithm;
 __thread int mysql_thread___query_retries_on_failure;
 __thread bool mysql_thread___client_multi_statements;
 __thread int mysql_thread___connect_retries_on_failure;
@@ -796,10 +797,13 @@ __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
 __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 __thread int mysql_thread___query_digests_grouping_limit;
+__thread int mysql_thread___query_digests_groups_grouping_limit;
 __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
 __thread bool mysql_thread___log_mysql_warnings_enabled;
 __thread bool mysql_thread___enable_load_data_local_infile;
+__thread int mysql_thread___client_host_cache_size;
+__thread int mysql_thread___client_host_error_counts;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -843,6 +847,7 @@ __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
 __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
+__thread int mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only;
 __thread int mysql_thread___monitor_galera_healthcheck_interval;
 __thread int mysql_thread___monitor_galera_healthcheck_timeout;
 __thread int mysql_thread___monitor_galera_healthcheck_max_timeout_count;
@@ -903,6 +908,7 @@ extern __thread int mysql_thread___ping_interval_server_msec;
 extern __thread int mysql_thread___ping_timeout_server;
 extern __thread int mysql_thread___shun_on_failures;
 extern __thread int mysql_thread___shun_recovery_time_sec;
+extern __thread int mysql_thread___unshun_algorithm;
 extern __thread int mysql_thread___query_retries_on_failure;
 extern __thread bool mysql_thread___client_multi_statements;
 extern __thread int mysql_thread___connect_retries_on_failure;
@@ -951,10 +957,13 @@ extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
 extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
 extern __thread int mysql_thread___query_digests_grouping_limit;
+extern __thread int mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
 extern __thread bool mysql_thread___log_mysql_warnings_enabled;
 extern __thread bool mysql_thread___enable_load_data_local_infile;
+extern __thread int mysql_thread___client_host_cache_size;
+extern __thread int mysql_thread___client_host_error_counts;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
@@ -997,6 +1006,7 @@ extern __thread int mysql_thread___monitor_replication_lag_count;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+extern __thread int mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only;
 extern __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 extern __thread int mysql_thread___monitor_galera_healthcheck_interval;
 extern __thread int mysql_thread___monitor_galera_healthcheck_timeout;
@@ -1046,6 +1056,9 @@ typedef struct {
 	char * default_value;       // default value
 	bool is_global_variable;	// is it a global variable?
 } mysql_variable_st;
+
+TODO: 'SQL_CHARACTER_SET_DATABASE' is a variable that shouldn't be set, or tracked on our side, since it's meant to be only updated by the server:
+ - https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_character_set_database
 */
 mysql_variable_st mysql_tracked_variables[] {
     { SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true, false,  false, false, (char *)"charset", (char *)"charset", (char *)"utf8" , true} , // should be before SQL_CHARACTER_SET_RESULTS

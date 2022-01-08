@@ -20,6 +20,8 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
+std::string proxysql_session_type_str(enum proxysql_session_type session_type);
+
 // these structs will be used for various regex hardcoded
 // their initial use will be for sql_log_bin , sql_mode and time_zone
 // issues #509 , #815 and #816
@@ -90,11 +92,25 @@ class MySQL_Session
 	 *   But since it was change for handling 'USE' statements which are preceded by
 	 *   comments, it's called after 'QueryProcessor' has processed the query.
 	 */
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt, const char* query_digest);
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
-
+	/**
+	 * @brief Handles the command 'COM_RESET_CONNECTION'.
+	 * @param pkt Pointer to packet received holding the 'COM_RESET_CONNECTION'.
+	 * @details 'COM_RESET_CONNECTION' command is currently supported only for 'sesssion_types':
+	 *   - 'PROXYSQL_SESSION_MYSQL'.
+	 *   - 'PROXYSQL_SESSION_SQLITE'.
+	 *  If the command is received for other sessions, the an error packet with error '1047' is sent to the
+	 *  client. If the session is supported, it performs the following operations over the current session:
+	 *   1. Store the current relevent session variables to be recovered after the 'RESET'.
+	 *   2. Perform a reset and initialization of current session.
+	 *   3. Recover the relevant session variables and other initial state associated with the current session
+	 *      user.
+	 *   4. Respond to client with 'OK' packet.
+	 */
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
@@ -106,6 +122,11 @@ class MySQL_Session
 	bool handler_special_queries(PtrSize_t *);
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
+	/**
+	 * @brief Performs the cleanup of current session state, and the required operations to the supplied
+	 *   'MySQL_Data_Stream' required for processing further queries.
+	 * @param The 'MySQL_Data_Stream' which executed the previous query and which status should be updated.
+	 */
 	void RequestEnd(MySQL_Data_Stream *);
 	void LogQuery(MySQL_Data_Stream *);
 
@@ -209,6 +230,12 @@ class MySQL_Session
 	int user_max_connections;
 	int current_hostgroup;
 	int default_hostgroup;
+	/**
+	 * @brief Charset directly specified by the client. Supplied and updated via 'HandshakeResponse'
+	 *   and 'COM_CHANGE_USER' packets.
+	 * @details Used when session needs to be restored via 'COM_RESET_CONNECTION'.
+	 */
+	int default_charset;
 	int locked_on_hostgroup;
 	int next_query_flagIN;
 	int mirror_hostgroup;
@@ -282,6 +309,18 @@ class MySQL_Session
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
+	/**
+	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
+	 *  'transaction_persistent_hostgroup', and updates the 'MySQL_Data_Stream' and 'MySQL_Connection' before
+	 *  returning the connection back to the connection pool. After this operation the session should be ready
+	 *  for handling new client connections.
+	 *
+	 * @param myds The 'MySQL_Data_Stream' which status should be updated.
+	 * @param myconn The 'MySQL_Connection' which status should be updated, and which should be returned to
+	 *   the connection pool.
+	 * @param prepared_stmt_with_no_params specifies if the processed query was a prepared statement with no
+	 *   params.
+	 */
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);

@@ -1896,7 +1896,7 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
+		qp->digest_text=mysql_query_digest_and_first_comment_2(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
 		// the hash is computed only up to query_digests_max_digest_length bytes
 		int digest_text_length=strnlen(qp->digest_text, mysql_thread___query_digests_max_digest_length);
 		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);

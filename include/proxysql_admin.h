@@ -84,6 +84,7 @@ struct p_admin_gauge {
 		stmt_server_active_unique,
 		stmt_max_stmt_id,
 		stmt_cached,
+		fds_in_use,
 		__size
 	};
 };
@@ -359,6 +360,7 @@ class ProxySQL_Admin {
 	void stats___proxysql_servers_metrics();
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
+	void stats___mysql_client_host_cache(bool reset);
 
 	// Update prometheus metrics
 	void p_stats___memory_metrics();
@@ -436,8 +438,10 @@ class ProxySQL_Admin {
 	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual);
 	void ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
+#ifdef DEBUG
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
-
+	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
+#endif
 	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */
