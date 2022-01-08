@@ -2388,10 +2388,12 @@ char* mysql_query_digest_first_stage(const char* const q, int q_len, char** cons
 	get_options(&opts);
 
 	// state shared between all the parsing states
-	struct shared_st shared_st = { 0 };
+	struct shared_st shared_st;
+	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
 
 	struct stage_1_st stage_1_st = { 0 };
+	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
 	init_stage_1_st(&stage_1_st);
 
     // perform just the first stage parsing
@@ -2422,12 +2424,15 @@ char* mysql_query_digest_second_stage(const char* const q, int q_len, char** con
 	get_options(&opts);
 
 	// state shared between all the parsing states
-	struct shared_st shared_st = { 0 };
+	struct shared_st shared_st;
+	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
 
-	struct stage_1_st stage_1_st = { 0 };
+	struct stage_1_st stage_1_st;
+	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
 	init_stage_1_st(&stage_1_st);
-	struct stage_2_st stage_2_st = { 0 };
+	struct stage_2_st stage_2_st;
+	memset(&stage_2_st, 0, sizeof(struct stage_2_st));
 
     // perform just the first stage parsing
 	stage_1_parsing(&shared_st, &stage_1_st, &opts, fst_cmnt);
@@ -2474,15 +2479,20 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 	get_options(&opts);
 
 	// state shared between all the parsing states
-	struct shared_st shared_st = { 0 };
+	struct shared_st shared_st;
+	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
 
 	// individual states for stages
-	struct stage_1_st stage_1_st = { 0 };
+	struct stage_1_st stage_1_st;
+	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
 	init_stage_1_st(&stage_1_st);
-	struct stage_2_st stage_2_st = { 0 };
-	struct stage_3_st stage_3_st = { 0 };
-	struct stage_4_st stage_4_st = { 0 };
+	struct stage_2_st stage_2_st;
+	struct stage_3_st stage_3_st;
+	struct stage_4_st stage_4_st;
+	memset(&stage_2_st, 0, sizeof(struct stage_2_st));
+	memset(&stage_3_st, 0, sizeof(struct stage_3_st));
+	memset(&stage_4_st, 0, sizeof(struct stage_4_st));
 
 	char min_digest_size = 0;
 
@@ -2766,7 +2776,8 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	get_options(&opts);
 
 	// state shared between all the parsing states
-	struct shared_st shared_st = { 0 };
+	struct shared_st shared_st;
+	memset(&shared_st, 0, sizeof(struct shared_st));
 	shared_st.q = q;
 	shared_st.q_len = q_len;
 	shared_st.d_max_len = d_max_len;
@@ -2776,9 +2787,12 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 	shared_st.res_pre_pos = res;
 
 	// state required between different iterations of special parsing states
-	struct cmnt_type_1_st c_t_1_st = { 0 };
-	struct literal_string_st literal_str_st = { 0 };
-	struct literal_digit_st literal_digit_st = { 0 };
+	struct cmnt_type_1_st c_t_1_st;
+	struct literal_string_st literal_str_st;
+	struct literal_digit_st literal_digit_st;
+	memset(&c_t_1_st, 0, sizeof(struct cmnt_type_1_st));
+	memset(&literal_str_st, 0, sizeof(struct literal_string_st));
+	memset(&literal_digit_st, 0, sizeof(struct literal_digit_st));
 
 	enum p_st cur_st = st_no_mark_found;
 
