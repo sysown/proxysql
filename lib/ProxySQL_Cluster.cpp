@@ -1194,7 +1194,6 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
-				GloAdmin->mysql_servers_wrlock();
 				std::vector<MYSQL_RES*> results {};
 
 				// Server query messages
@@ -1306,6 +1305,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 						proxy_info("Cluster: Fetching checksum for MySQL Servers from peer %s:%d successful. Checksum: %s\n", hostname, port, checks);
 						// sync mysql_servers
 						proxy_info("Cluster: Writing mysql_servers table\n");
+						GloAdmin->mysql_servers_wrlock();
 						GloAdmin->admindb->execute("DELETE FROM mysql_servers");
 						MYSQL_ROW row;
 						char *q=(char *)"INSERT INTO mysql_servers (hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) VALUES (%s, \"%s\", %s, %s, %s, \"%s\", %s, %s, %s, %s, %s, '%s')";
@@ -1481,6 +1481,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 						} else {
 							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d failed.\n", hostname, port);
 						}
+						GloAdmin->mysql_servers_wrunlock();
 					}
 
 					// free results
@@ -1490,7 +1491,6 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 
 					metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_success]->Increment();
 				}
-				GloAdmin->mysql_servers_wrunlock();
 			} else {
 				proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment();
