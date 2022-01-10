@@ -1,5 +1,20 @@
 version: "2.0"
 services:
+  centos6_build:
+    image: proxysql/packaging:build-centos6
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - APPLY_PATCH=rhel6
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=centos67
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
   centos67_build:
     image: proxysql/packaging:build-centos6.7v2
     volumes:
