@@ -601,9 +601,6 @@ bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string
 	}
 	if (only_digit_chars) {
 		// see https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_max_join_size
-		if (value1 == "default") {
-			value1 = "18446744073709551615" ;
-		}
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 		if (mysql_variables.client_get_hash(sess, idx) != var_value_int) {
@@ -612,7 +609,11 @@ bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 			if (idx == SQL_MAX_JOIN_SIZE) {
 				// see https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_max_join_size
-				if (value1 == "18446744073709551615") {
+				if (
+					(value1 == "18446744073709551615")
+					||
+					(strcasecmp(v,"default")==0)
+				) {
 					mysql_variables.client_set_value(sess, SQL_SQL_BIG_SELECTS, "ON");
 				} else {
 					mysql_variables.client_set_value(sess, SQL_SQL_BIG_SELECTS, "OFF");
