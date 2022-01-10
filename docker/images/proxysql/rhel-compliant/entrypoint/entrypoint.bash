@@ -17,20 +17,21 @@ rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/p
 echo "==> Building"
 cd /opt/proxysql
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
-  deps_target="build_deps"
-  build_target=""
+	deps_target="build_deps"
+	build_target=""
 else
-  deps_target="build_deps_$PROXYSQL_BUILD_TYPE"
-  build_target="$PROXYSQL_BUILD_TYPE"
+	deps_target="build_deps_$PROXYSQL_BUILD_TYPE"
+	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 ${MAKE} cleanbuild
 ${MAKE} ${MAKEOPT} "${deps_target}"
 
 if [[ -z ${build_target} ]] ; then
-  ${MAKE} ${MAKEOPT}
+	${MAKE} ${MAKEOPT}
 else
-  ${MAKE} ${MAKEOPT} "${build_target}"
+	${MAKE} ${MAKEOPT} "${build_target}"
 fi
+touch /opt/proxysql/src/proxysql
 
 # Prepare package files and build RPM
 echo "==> Packaging"
