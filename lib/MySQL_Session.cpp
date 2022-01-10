@@ -69,6 +69,38 @@ static inline char is_normal_char(char c) {
 	return 0;
 }
 
+static const std::set<std::string> mysql_variables_boolean = {
+	"foreign_key_checks",
+	"innodb_strict_mode",
+	"innodb_table_locks",
+	"sql_auto_is_null",
+	"sql_big_selects",
+	"sql_log_bin",
+	"sql_safe_updates",
+	"unique_checks",
+};
+
+static const std::set<std::string> mysql_variables_numeric = {
+	"auto_increment_increment",
+	"auto_increment_offset",
+	"group_concat_max_len",
+	"innodb_lock_wait_timeout",
+	"join_buffer_size",
+	"lock_wait_timeout",
+	"long_query_time",
+	"max_execution_time",
+	"max_heap_table_size",
+	"max_join_size",
+	"max_sort_length",
+	"optimizer_prune_level",
+	"optimizer_search_depth",
+	"sort_buffer_size",
+	"sql_select_limit",
+	"timestamp",
+	"tmp_table_size",
+	"wsrep_sync_wait"
+};
+
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
@@ -1006,9 +1038,16 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
 	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
-	for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
+	for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
 		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
 	}
+	{
+		MySQL_Connection *c = client_myds->myconn;
+		for (std::vector<uint32_t>::const_iterator it_c = c->dynamic_variables_idx.begin(); it_c != c->dynamic_variables_idx.end(); it_c++) {
+			c->variables[*it_c].fill_client_internal_session(j, *it_c);
+		}
+	}
+
 	j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
 	j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
 	j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
@@ -1041,8 +1080,11 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["backends"][i]["stream"]["DSS"] = _myds->DSS;
 			if (_myds->myconn) {
 				MySQL_Connection * _myconn = _myds->myconn;
-				for (auto idx = 0; idx < SQL_NAME_LAST; idx++) {
+				for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
 					_myconn->variables[idx].fill_server_internal_session(j, i, idx);
+				}
+				for (std::vector<uint32_t>::const_iterator it_c = _myconn->dynamic_variables_idx.begin(); it_c != _myconn->dynamic_variables_idx.end(); it_c++) {
+					_myconn->variables[*it_c].fill_server_internal_session(j, i, *it_c);
 				}
 				sprintf(buff,"%p",_myconn);
 				j["backends"][i]["conn"]["address"] = buff;
@@ -2151,7 +2193,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 	if (myconn->async_state_machine==ASYNC_IDLE) {
 		char *q=(char *)"SET SQL_LOG_BIN=%s";
 		query=(char *)malloc(strlen(q)+8);
-		sprintf(query,q,mysql_variables.client_get_value(this, SQL_LOG_BIN));
+		sprintf(query,q,mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN));
 		query_length=strlen(query);
 	}
 	int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
@@ -2160,12 +2202,12 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 		query=NULL;
 	}
 	if (rc==0) {
-		if (!strcmp("0", mysql_variables.client_get_value(this, SQL_LOG_BIN)) || !strcasecmp("OFF",  mysql_variables.client_get_value(this, SQL_LOG_BIN))) {
+		if (!strcmp("0", mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN)) || !strcasecmp("OFF",  mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN))) {
 			// Pay attention here. STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0 sets sql_log_bin to ZERO:
 			//   - sql_log_bin=0 => true
 			//   - sql_log_bin=1 => false
 			myconn->set_status(true, STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0);
-		} else if (!strcmp("1", mysql_variables.client_get_value(this, SQL_LOG_BIN)) || !strcasecmp("ON",  mysql_variables.client_get_value(this, SQL_LOG_BIN))) {
+		} else if (!strcmp("1", mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN)) || !strcasecmp("ON",  mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN))) {
 			myconn->set_status(false, STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0);
 		}
 		myds->revents|=POLLOUT; // we also set again POLLOUT to send a query immediately!
@@ -2389,14 +2431,17 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			} else {
 				proxy_warning("Error while setting %s to \"%s\" on %s:%d hg %d :  %d, %s\n", var_name, var_value, myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
 				if (myerr == 1193) { // variable is not found
-					int idx = SQL_NAME_LAST;
-					for (int i=0; i<SQL_NAME_LAST; i++) {
+					// FIXME: here we work on absent variables
+					// FIXME: currently we use SQL_NAME_LAST_LOW_WM here
+					// FIXME: but we need to switch to SQL_NAME_LAST_HIGH_WM
+					int idx = SQL_NAME_LAST_LOW_WM; // FIXME: here we work on absent variables
+					for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 						if (strcasecmp(mysql_tracked_variables[i].set_variable_name, var_name) == 0) {
 							idx = i;
 							break;
 						}
 					}
-					if (idx != SQL_NAME_LAST) {
+					if (idx != SQL_NAME_LAST_LOW_WM) {
 						myconn->var_absent[idx] = true;
 
 						myds->myconn->async_free_result();
@@ -4454,7 +4499,7 @@ handler_again:
 									goto handler_again;
 								}
 
-								for (auto i = 0; i < SQL_NAME_LAST; i++) {
+								for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 									auto client_hash = client_myds->myconn->var_hash[i];
 #ifdef DEBUG
 									if (GloVars.global.gdbg) {
@@ -4477,6 +4522,21 @@ handler_again:
 											if(!myconn->var_absent[i] && mysql_variables.verify_variable(this, i)) {
 												goto handler_again;
 											}
+										}
+									}
+								}
+								MySQL_Connection *c_con = client_myds->myconn;
+								vector<uint32_t>::const_iterator it_c = c_con->dynamic_variables_idx.begin();  // client connection iterator
+								for ( ; it_c != c_con->dynamic_variables_idx.end() ; it_c++) {
+									auto i = *it_c;
+									auto client_hash = c_con->var_hash[i];
+									auto server_hash = myconn->var_hash[i];
+									if (client_hash != server_hash) {
+										if(
+											//!myconn->var_absent[i] &&    // we currently ignore this because we assume all variables exist
+											mysql_variables.verify_variable(this, i)
+										) {
+											goto handler_again;
 										}
 									}
 								}
@@ -5377,7 +5437,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-
+/*
 // this function as inline in handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo
 // returned values:
 // 0 : no action
@@ -5395,11 +5455,11 @@ int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool
 	if (rc && ( i==0 || i==1) ) {
 		//fprintf(stderr,"sql_log_bin=%d\n", i);
 		if (i == 1) {
-			if (!mysql_variables.client_set_value(this, SQL_LOG_BIN, "1"))
+			if (!mysql_variables.client_set_value(this, SQL_SQL_LOG_BIN, "1"))
 				return 1;
 		}
 		else if (i == 0) {
-			if (!mysql_variables.client_set_value(this, SQL_LOG_BIN, "0"))
+			if (!mysql_variables.client_set_value(this, SQL_SQL_LOG_BIN, "0"))
 				return 1;
 		}
 
@@ -5453,6 +5513,7 @@ int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool
 	}
 	return 0;
 }
+*/
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, bool prepared) {
 /*
@@ -5517,12 +5578,15 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 			RE2::GlobalReplace(&nq,(char *)"^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/",(char *)"SET\\1");
 			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
+/*
+			// we do not threat SET SQL_LOG_BIN as a special case
 			if (match_regexes && match_regexes[0]->match(dig)) {
 				int rc = handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(pkt, lock_hostgroup, nTrx, nq);
 				if (rc == 1) return false;
 				if (rc == 2) return true;
 				// if rc == 0 , continue as normal
 			}
+*/
 			if (
 				(
 					match_regexes && (match_regexes[1]->match(dig))
@@ -5596,10 +5660,41 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
-					// the following two blocks of code will be simplified later
-					} else if ((var == "sql_auto_is_null") || (var == "sql_safe_updates")) {
-						int idx = SQL_NAME_LAST;
-						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
+					} else if (
+						   (var == "default_storage_engine")
+						|| (var == "default_tmp_storage_engine")
+						|| (var == "lc_messages")
+						|| (var == "lc_time_names")
+						|| (var == "optimizer_switch")
+					) {
+						std::string value1 = *values;
+						std::size_t found_at = value1.find("@");
+						if (found_at != std::string::npos) {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+						int idx = SQL_NAME_LAST_HIGH_WM;
+						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
+							if (mysql_tracked_variables[i].is_number == false && mysql_tracked_variables[i].is_bool == false) {
+								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
+									idx = mysql_tracked_variables[i].idx;
+									break;
+								}
+							}
+						}
+						if (idx != SQL_NAME_LAST_HIGH_WM) {
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
+							uint32_t var_hash_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+							if (mysql_variables.client_get_hash(this, mysql_tracked_variables[idx].idx) != var_hash_int) {
+								if (!mysql_variables.client_set_value(this, mysql_tracked_variables[idx].idx, value1.c_str())) {
+									return false;
+								}
+							}
+						}
+					//} else if (
+					} else if (mysql_variables_boolean.find(var) != mysql_variables_boolean.end()) {
+						int idx = SQL_NAME_LAST_HIGH_WM;
+						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
 							if (mysql_tracked_variables[i].is_bool) {
 								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
 									idx = mysql_tracked_variables[i].idx;
@@ -5607,14 +5702,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								}
 							}
 						}
-						if (idx != SQL_NAME_LAST) {
+						if (idx != SQL_NAME_LAST_HIGH_WM) {
 							if (mysql_variables.parse_variable_boolean(this,idx, *values, lock_hostgroup)==false) {
 								return false;
 							}
 						}
-					} else if ( (var == "sql_select_limit") || (var == "net_write_timeout") || (var == "max_join_size") || (var == "wsrep_sync_wait") || (var == "group_concat_max_len") ) {
-						int idx = SQL_NAME_LAST;
-						for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
+					} else if (mysql_variables_numeric.find(var) != mysql_variables_numeric.end()) {
+						int idx = SQL_NAME_LAST_HIGH_WM;
+						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
 							if (mysql_tracked_variables[i].is_number) {
 								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
 									idx = mysql_tracked_variables[i].idx;
@@ -5622,7 +5717,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								}
 							}
 						}
-						if (idx != SQL_NAME_LAST) {
+						if (idx != SQL_NAME_LAST_HIGH_WM) {
 							if (mysql_variables.parse_variable_number(this,idx, *values, lock_hostgroup)==false) {
 								return false;
 							}
@@ -5693,6 +5788,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							return false;
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET Time Zone value %s\n", value1.c_str());
+						{
+							// reformat +1:23 to +01:23
+							if (value1.length() == 5) {
+								if (value1[0]=='+' || value1[0]=='-') {
+									if (value1[2]==':') {
+										std::string s = std::string(value1,0,1);
+										s += "0";
+										s += std::string(value1,1,4);
+										value1 = s;
+									}
+								}
+							}
+						}
 						uint32_t time_zone_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 						if (mysql_variables.client_get_hash(this, SQL_TIME_ZONE) != time_zone_int) {
 							if (!mysql_variables.client_set_value(this, SQL_TIME_ZONE, value1.c_str()))
@@ -5742,14 +5850,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if (only_normal_chars) {
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", var.c_str(), value1.c_str());
 							uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-							int idx = SQL_NAME_LAST;
-							for (int i = 0 ; i < SQL_NAME_LAST ; i++) {
+							int idx = SQL_NAME_LAST_HIGH_WM;
+							for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
 								if (!strcasecmp(var.c_str(), mysql_tracked_variables[i].set_variable_name)) {
 									idx = mysql_tracked_variables[i].idx;
 									break;
 								}
 							}
-							if (idx == SQL_NAME_LAST) {
+							if (idx == SQL_NAME_LAST_HIGH_WM) {
 								proxy_error("Variable %s not found in mysql_tracked_variables[]\n", var.c_str());
 								unable_to_parse_set_statement(lock_hostgroup);
 								return false;

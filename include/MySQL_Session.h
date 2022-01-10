@@ -188,7 +188,7 @@ class MySQL_Session
 	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt);
 	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt);
 	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt);
-	int handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq);
+//	int handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq);
 
 	public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
@@ -279,7 +279,7 @@ class MySQL_Session
 	bool use_ldap_auth;
 
 	// this variable is relevant only if status == SETTING_VARIABLE
-	enum variable_name changing_variable_idx;
+	enum mysql_variable_name changing_variable_idx;
 
 	MySQL_Session();
 	~MySQL_Session();
