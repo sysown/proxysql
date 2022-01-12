@@ -41,5 +41,6 @@ sed -i "s/PKG_ARCH/${ARCH}/g" /opt/proxysql/proxysql.ctl
 cp /opt/proxysql/src/proxysql /opt/proxysql/
 equivs-build proxysql.ctl
 mv "/opt/proxysql/proxysql_${CURVER}_$ARCH.deb" "./binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.deb"
+cp "/opt/proxysql/src/proxysql.sha1" "/opt/proxysql/binaries/proxysql-${CURVER}-${PKG_RELEASE}.$ARCH.id-hash"
 # Cleanup current build
 rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql
