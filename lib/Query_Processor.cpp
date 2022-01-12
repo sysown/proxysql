@@ -247,7 +247,9 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 		if (it != digest_text_umap->end()) {
 			pta[4] = it->second;
 		} else {
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 	}
 
@@ -1060,7 +1062,9 @@ unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &purge_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1105,7 +1109,9 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_total_size_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1176,7 +1182,9 @@ SQLite3_result * Query_Processor::get_query_digests() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1251,7 +1259,9 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1779,8 +1789,10 @@ __exit_process_mysql_query:
 			}
 		}
 		if (check_run == false) {
+			// LCOV_EXCL_START
 			proxy_error("Firewall problem: unknown user\n");
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 	} else {
 		ret->firewall_whitelist_mode = WUS_NOT_FOUND;
@@ -1876,7 +1888,7 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
+		qp->digest_text=mysql_query_digest_and_first_comment_2(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
 		// the hash is computed only up to query_digests_max_digest_length bytes
 		int digest_text_length=strnlen(qp->digest_text, mysql_thread___query_digests_max_digest_length);
 		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);

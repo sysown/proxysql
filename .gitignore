@@ -49,6 +49,7 @@ src/*pem
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
+src/proxysql-save.cfg
 
 proxysql-2.0.0/
 docker/images/proxysql/rhel-compliant/rpmmacros
@@ -146,7 +147,6 @@ deps/sqlite3/sqlite-amalgamation-3150000/
 deps/sqlite3/sqlite-amalgamation-3190200/
 deps/sqlite3/sqlite-amalgamation-3270200/
 
-deps/clickhouse-cpp
 deps/cityhash/cityhash/
 deps/lz4/lz4-1.7.5/
 
@@ -159,6 +159,7 @@ deps/libssl/openssl-1.1.1b/
 deps/libssl/openssl-1.1.1d/
 deps/libssl/openssl-1.1.1g/
 deps/libssl/openssl-1.1.1j/
+deps/libssl/openssl-openssl-3.0.0/
 
 #google coredumper
 deps/google-coredumper/google-coredumper/
@@ -188,3 +189,6 @@ heaptrack.*
 test/tap/tests/galera_1_timeout_count
 test/tap/tests/galera_2_timeout_no_count
 test/tap/tests/setparser_test
+test/tap/tests/generate_set_session_csv
+test/tap/tests/set_testing-240.csv
+local_testing_datadir/

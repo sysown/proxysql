@@ -41,9 +41,9 @@ class PtrArray {
 		size=new_size;
 	}
 	public:
-	void **pdata;
 	unsigned int len;
 	unsigned int size;
+	void **pdata;
 	PtrArray(unsigned int __size=0) {
 		len=0;
 		pdata=NULL;
@@ -128,9 +128,9 @@ class PtrSizeArray {
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
-	PtrSize_t *pdata;
 	unsigned int len;
 	unsigned int size;
+	PtrSize_t *pdata;
 	PtrSizeArray(unsigned int __size=0);
 	~PtrSizeArray();
 
@@ -229,6 +229,7 @@ inline unsigned long long realtime_time() {
   clock_gettime(CLOCK_REALTIME, &ts);
   return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
+
 #endif /* __GEN_FUNCTIONS */
 
 bool Proxy_file_exists(const char *);

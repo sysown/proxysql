@@ -95,7 +95,6 @@ class GTID_Server_Data {
 
 class MySrvConnList {
 	private:
-	PtrArray *conns;
 	MySrvC *mysrvc;
 	int find_idx(MySQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
@@ -109,6 +108,7 @@ class MySrvConnList {
 		return -1;
 	}
 	public:
+	PtrArray *conns;
 	MySrvConnList(MySrvC *);
 	~MySrvConnList();
 	void add(MySQL_Connection *);
@@ -160,7 +160,7 @@ class MySrvC {	// MySQL Server Container
 	MySrvConnList *ConnectionsFree;
 	MySrvC(char *, uint16_t, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment);
 	~MySrvC();
-	void connect_error(int);
+	void connect_error(int, bool get_mutex=true);
 	void shun_and_killall();
 	/**
 	 * Update the maximum number of used connections
@@ -417,6 +417,8 @@ class MySQL_HostGroups_Manager {
 	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
 	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
 
+	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
+
 	public:
 	std::mutex galera_set_writer_mutex;
 	pthread_rwlock_t gtid_rwlock;
@@ -558,7 +560,30 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
 	void converge_group_replication_config(int _writer_hostgroup);
-
+	/**
+	 * @brief Set the supplied server as SHUNNED, this function shall be called
+	 *   to 'SHUNNED' those servers which replication lag is bigger than:
+	 *     - `mysql_thread___monitor_groupreplication_max_transactions_behind_count`
+	 *
+	 * @details The function automatically handles the appropriate operation to
+	 *   perform on the supplied server, based on the supplied 'enable' flag and
+	 *   in 'monitor_groupreplication_max_transaction_behind_for_read_only'
+	 *   variable. In case the value of the variable is:
+	 *
+	 *     * '0' or '2': It's required to search the writer hostgroup for
+	 *       finding the supplied server.
+	 *     * '1' or '2': It's required to search the reader hostgroup for
+	 *       finding the supplied server.
+	 *
+	 * @param _hid The writer hostgroup.
+	 * @param address The server address.
+	 * @param port The server port.
+	 * @param lag_counts The computed lag for the sever.
+	 * @param read_only Boolean specifying the read_only flag value of the server.
+	 * @param enable Boolean specifying if the server needs to be disabled / enabled,
+	 *   'true' for enabling the server if it's 'SHUNNED', 'false' for disabling it.
+	 */
+	void group_replication_lag_action(int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable);
 	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
 	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup);
@@ -584,6 +609,8 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *get_mysql_errors(bool);
 
 	void shutdown();
+	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);
+	MySrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

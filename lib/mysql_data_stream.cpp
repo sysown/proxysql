@@ -167,26 +167,43 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	int n = SSL_do_handshake(ssl);
 	if (n == 1) {
 		//proxy_info("SSL handshake completed\n");
-		long rc = SSL_get_verify_result(ssl);
-		if (rc != X509_V_OK && rc != X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN && rc != X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE) {
-			proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%d:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
-			return SSLSTATUS_FAIL;
-		} else {
-			X509 *cert;
-			cert = SSL_get_peer_certificate(ssl);
-			if (cert) {
-				ASN1_STRING *str;
-				GENERAL_NAME *sanName;
-				STACK_OF(GENERAL_NAME) *san_names = NULL;
-				san_names = (stack_st_GENERAL_NAME *)X509_get_ext_d2i((X509 *) cert, NID_subject_alt_name, NULL, NULL);
-				if (san_names) {
-					sanName = sk_GENERAL_NAME_value(san_names, 0);
-					str = sanName->d.dNSName;
-					proxy_info("%s\n" , str->data);
-					x509_subject_alt_name = strdup((const char*)str->data);
+		X509 *cert;
+		cert = SSL_get_peer_certificate(ssl);
+		if (cert) {
+			GENERAL_NAMES *alt_names = (stack_st_GENERAL_NAME *)X509_get_ext_d2i((X509*)cert, NID_subject_alt_name, 0, 0);
+			int alt_name_count = sk_GENERAL_NAME_num(alt_names);
+
+			// Iterate all the SAN names, looking for SPIFFE identifier
+			for (int i = 0; i < alt_name_count; i++) {
+				GENERAL_NAME *san = sk_GENERAL_NAME_value(alt_names, i);
+
+				// We only care about URI names
+				if (san->type == GEN_URI) {
+					if (san->d.uniformResourceIdentifier->data) {
+						const char* resource_data =
+							reinterpret_cast<const char*>(san->d.uniformResourceIdentifier->data);
+						const char* spiffe_loc = strstr(resource_data, "spiffe");
+
+						// First name starting with 'spiffe' is considered the match.
+						if (spiffe_loc == resource_data) {
+							x509_subject_alt_name = strdup(resource_data);
+						}
+					}
 				}
-			} else {
-				proxy_error("X509 error: no required certificate sent by client\n");
+			}
+		} else {
+			// we currently disable this annoying error
+			// in future we can configure this as per user level, specifying if the certificate is mandatory or not
+			// see issue #3424
+			//proxy_error("X509 error: no required certificate sent by client\n");
+		}
+		// In case the supplied certificate has a 'SAN'-'URI' identifier
+		// starting with 'spiffe', client certificate verification is performed.
+		if (x509_subject_alt_name != NULL) {
+			long rc = SSL_get_verify_result(ssl);
+			if (rc != X509_V_OK) {
+				proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%d:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
+				return SSLSTATUS_FAIL;
 			}
 		}
 	}
@@ -349,6 +366,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	}
 	if ( (myconn) && (myds_type==MYDS_FRONTEND) ) { delete myconn; myconn=NULL; }
 	if (encrypted) {
+		if (ssl) {
+			// NOTE: SSL standard requires a final 'close_notify' alert on socket
+			// shutdown. But for avoiding any kind of locking IO waiting for the
+			// other part, we perform a 'quiet' shutdown. For more context see
+			// MYSQL #29579.
+			SSL_set_quiet_shutdown(ssl, 1);
+			SSL_shutdown(ssl);
+		}
 		if (ssl) SSL_free(ssl);
 /*
 		SSL_free() should also take care of these
@@ -428,7 +453,12 @@ void MySQL_Data_Stream::shut_hard() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown hard fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
 	set_net_failure();
 	if (encrypted) {
+		// NOTE: SSL standard requires a final 'close_notify' alert on socket
+		// shutdown. But for avoiding any kind of locking IO waiting for the
+		// other part, we perform a 'quiet' shutdown. For more context see
+		// MYSQL #29579.
 		SSL_set_quiet_shutdown(ssl, 1);
+		SSL_shutdown(ssl);
 	}
 	if (fd >= 0) {
 		shutdown(fd, SHUT_RDWR);
@@ -866,8 +896,9 @@ int MySQL_Data_Stream::read_pkts() {
 int MySQL_Data_Stream::buffer2array() {
 	int ret=0;
 	bool fast_mode=sess->session_fast_forward;
-	if (queue_data(queueIN)==0) return ret;
-	if ((queueIN.pkt.size==0) && queue_data(queueIN)<sizeof(mysql_hdr)) {
+	int s = queue_data(queueIN);
+	if (s==0) return ret;
+	if ((queueIN.pkt.size==0) && s<sizeof(mysql_hdr)) {
 		queue_zero(queueIN);
 	}
 
@@ -1352,9 +1383,16 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	unsigned long long intv = mysql_thread___connection_max_age_ms;
 	intv *= 1000;
 	if (
-		( (intv) && (mc->last_time_used > mc->creation_time + intv) )
+		(( (intv) && (mc->last_time_used > mc->creation_time + intv) )
 		||
-		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection )
+		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection ))
+		&&
+		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
+		// no need to reset the session. The destruction and creation of a new
+		// session in case this session has exceeded the time specified by
+		// 'connection_max_age_ms' will be deferred to the next time the session
+		// is used outside 'PINGING_SERVER' operation. For more context see #3502.
+		sess->status != PINGING_SERVER
 	) {
 		if (mysql_thread___reset_connection_algorithm == 2) {
 			sess->create_new_session_and_reset_connection(this);

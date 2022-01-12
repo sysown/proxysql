@@ -84,6 +84,7 @@ struct p_admin_gauge {
 		stmt_server_active_unique,
 		stmt_max_stmt_id,
 		stmt_cached,
+		fds_in_use,
 		__size
 	};
 };
@@ -209,9 +210,9 @@ class ProxySQL_Admin {
 	void flush_debug_filters_database_to_runtime(SQLite3DB *db);
 #endif /* DEBUG */
 
-	void __insert_or_ignore_maintable_select_disktable();
+//	void __insert_or_ignore_maintable_select_disktable(); // commented in 2.3
 	void __insert_or_replace_maintable_select_disktable();
-	void __delete_disktable();
+//	void __delete_disktable(); // commented in 2.3 , unused
 	void __insert_or_replace_disktable_select_maintable();
 	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
@@ -316,12 +317,12 @@ class ProxySQL_Admin {
 	void flush_mysql_query_rules__from_disk_to_memory();
 	void flush_mysql_firewall__from_memory_to_disk();
 	void flush_mysql_firewall__from_disk_to_memory();
-	void flush_mysql_variables__from_disk_to_memory();
+
+//	void flush_mysql_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_mysql_variables__from_memory_to_disk();
-	void flush_admin_variables__from_disk_to_memory();
+//	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
-
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
 	char * load_mysql_query_rules_to_runtime();
@@ -361,6 +362,7 @@ class ProxySQL_Admin {
 	void stats___proxysql_servers_metrics();
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
+	void stats___mysql_client_host_cache(bool reset);
 
 	// Update prometheus metrics
 	void p_stats___memory_metrics();
@@ -438,8 +440,10 @@ class ProxySQL_Admin {
 	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual);
 	void ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
+#ifdef DEBUG
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
-
+	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
+#endif
 	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

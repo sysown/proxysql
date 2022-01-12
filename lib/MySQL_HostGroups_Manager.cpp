@@ -16,6 +16,7 @@
 #include <prometheus/gauge.h>
 
 #include "prometheus_helpers.h"
+#include "proxysql_utils.h"
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
@@ -867,7 +868,7 @@ MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum My
 	ConnectionsFree=new MySrvConnList(this);
 }
 
-void MySrvC::connect_error(int err_num) {
+void MySrvC::connect_error(int err_num, bool get_mutex) {
 	// NOTE: this function operates without any mutex
 	// although, it is not extremely important if any counter is lost
 	// as a single connection failure won't make a significant difference
@@ -900,6 +901,7 @@ void MySrvC::connect_error(int err_num) {
 		case 1120:
 		case 1203: // User %s already has more than 'max_user_connections' active connections
 		case 1226: // User '%s' has exceeded the '%s' resource (current value: %ld)
+		case 3118: // Access denied for user '%s'. Account is locked..
 			return;
 			break;
 		default:
@@ -919,7 +921,8 @@ void MySrvC::connect_error(int err_num) {
 		int max_failures = ( mysql_thread___shun_on_failures > mysql_thread___connect_retries_on_failure ? mysql_thread___connect_retries_on_failure : mysql_thread___shun_on_failures) ;
 		if (__sync_add_and_fetch(&connect_ERR_at_time_last_detected_error,1) >= (unsigned int)max_failures) {
 			bool _shu=false;
-			MyHGM->wrlock(); // to prevent race conditions, lock here. See #627
+			if (get_mutex==true)
+				MyHGM->wrlock(); // to prevent race conditions, lock here. See #627
 			if (status==MYSQL_SERVER_STATUS_ONLINE) {
 				status=MYSQL_SERVER_STATUS_SHUNNED;
 				shunned_automatic=true;
@@ -927,7 +930,8 @@ void MySrvC::connect_error(int err_num) {
 			} else {
 				_shu=false;
 			}
-			MyHGM->wrunlock();
+			if (get_mutex==true)
+				MyHGM->wrunlock();
 			if (_shu) {
 			proxy_error("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
 			}
@@ -2812,6 +2816,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								mysrvc->shunned_and_kill_all_connections=false;
 								mysrvc->connect_ERR_at_time_last_detected_error=0;
 								mysrvc->time_last_detected_error=0;
+								// note: the following function scans all the hostgroups.
+								// This is ok for now because we only have a global mutex.
+								// If one day we implement a mutex per hostgroup (unlikely,
+								// but possible), this must be taken into consideration
+								if (mysql_thread___unshun_algorithm == 1) {
+									MyHGM->unshun_server_all_hostgroups(mysrvc->address, mysrvc->port, t, max_wait_sec, &mysrvc->myhgc->hid);
+								}
 								// if a server is taken back online, consider it immediately
 								if ( mysrvc->current_latency_us < ( mysrvc->max_latency_us ? mysrvc->max_latency_us : mysql_thread___default_max_latency_ms*1000 ) ) { // consider the host only if not too far
 									if (gtid_trxid) {
@@ -2843,7 +2854,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				}
 			}
 		}
-		if (max_lag_ms) { // we are using AWS Aurora, as this logic is implemented only here
+		if (max_lag_ms > 0) { // we are using AWS Aurora, as this logic is implemented only here
 			unsigned int min_num_replicas = sess->thread->variables.aurora_max_lag_ms_only_read_from_replicas;
 			if (min_num_replicas) {
 				if (num_candidates >= min_num_replicas) { // there are at least N replicas
@@ -2934,9 +2945,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			return NULL; // if we reach here, we couldn't find any target
 		}
 
+/*
 		unsigned int New_sum=0;
 		unsigned int New_TotalUsedConn=0;
-
 		// we will now scan again to ignore overloaded servers
 		for (j=0; j<num_candidates; j++) {
 			mysrvc = mysrvcCandidates[j];
@@ -2954,7 +2965,9 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				num_candidates--;
 			}
 		}
+*/
 
+		unsigned int New_sum=sum;
 
 		if (New_sum==0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL because no backend ONLINE or with weight\n");
@@ -2968,7 +2981,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 		}
 
 		// latency awareness algorithm is enabled only when compiled with USE_MYSRVC_ARRAY
-		if (sess->thread->variables.min_num_servers_lantency_awareness) {
+		if (sess && sess->thread->variables.min_num_servers_lantency_awareness) {
 			if ((int) num_candidates >= sess->thread->variables.min_num_servers_lantency_awareness) {
 				unsigned int servers_with_latency = 0;
 				unsigned int total_latency_us = 0;
@@ -3188,8 +3201,10 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 					conn=(MySQL_Connection *)conns->remove_index_fast(conn_found_idx);
 					break;
 				default: // this should never happen
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 		} else {
 			conn=(MySQL_Connection *)conns->remove_index_fast(i);
@@ -3217,6 +3232,47 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		}
 	}
 	return NULL; // never reach here
+}
+
+void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid) {
+	// we scan all hostgroups looking for a specific server to unshun
+	// if skip_hid is not NULL , the specific hostgroup is skipped
+	int i, j;
+	for (i=0; i<(int)MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		if (skip_hid != NULL && myhgc->hid == *skip_hid) {
+			// if skip_hid is not NULL, we skip that specific hostgroup
+			continue;
+		}
+		bool found = false; // was this server already found in this hostgroup?
+		for (j=0; found==false && j<(int)myhgc->mysrvs->cnt(); j++) {
+			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+			if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+				// we only care for SHUNNED nodes
+				// Note that we check for address and port only for status==MYSQL_SERVER_STATUS_SHUNNED ,
+				// that means that potentially we will pass by the matching node and still looping .
+				// This is potentially an optimization because we only check status and do not perform any strcmp()
+				if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+					// we found the server in this hostgroup
+					// no need to process more servers in the same hostgroup
+					found = true;
+					if (t > mysrvc->time_last_detected_error && (t - mysrvc->time_last_detected_error) > max_wait_sec) {
+						if (
+							(mysrvc->shunned_and_kill_all_connections==false) // it is safe to bring it back online
+							||
+							(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
+						) {
+							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+							mysrvc->shunned_automatic=false;
+							mysrvc->shunned_and_kill_all_connections=false;
+							mysrvc->connect_ERR_at_time_last_detected_error=0;
+							mysrvc->time_last_detected_error=0;
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
@@ -3284,8 +3340,10 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 						pthread_attr_setstacksize (&attr, 256*1024);
 						pthread_t pt;
 						if (pthread_create(&pt, &attr, &kill_query_thread, ka) != 0) {
+							// LCOV_EXCL_START
 							proxy_error("Thread creation\n");
 							assert(0);
+							// LCOV_EXCL_STOP
 						}
 					}
 						break;
@@ -3317,10 +3375,9 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
-	int i,j;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
+	int j;
+	MyHGC *myhgc = MyHGC_find(_hid);
+	if (myhgc) {
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
@@ -3367,6 +3424,114 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
 		}
 	}
 __exit_replication_lag_action:
+	wrunlock();
+	GloAdmin->mysql_servers_wrunlock();
+}
+
+/**
+ * @brief Finds the supplied server in the provided 'MyHGC' and sets the status
+ *   either to 'MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG' if 'enable' is
+ *   'false' or 'MYSQL_SERVER_STATUS_ONLINE' if 'true'. If either of the
+ *   'myhgc' or 'address' params are 'NULL' the function performs no action,
+ *   and returns immediately.
+ *
+ * @param myhgc The MySQL Hostgroup Container in which to perform the server
+ *   search.
+ * @param address The server address.
+ * @param port The server port.
+ * @param lag_count The lag count, computed by 'get_lag_behind_count'.
+ * @param enable Boolean specifying if the server should be enabled or not.
+ */
+void MySQL_HostGroups_Manager::group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable) {
+	if (myhgc == NULL || address == NULL) return;
+
+	for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+
+			if (enable == true) {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG || mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+					mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+					proxy_info("Re-enabling server %u:%s:%d from replication lag\n", myhgc->hid, address, port);
+				}
+			} else {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
+					proxy_warning("Shunning 'soft' server %u:%s:%d with replication lag, count number: %d\n", myhgc->hid, address, port, lag_count);
+					mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED;
+				} else {
+					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
+						if (lag_count >= ( mysql_thread___monitor_groupreplication_max_transactions_behind_count * 2 )) {
+							proxy_warning("Shunning 'hard' server %u:%s:%d with replication lag, count number: %d\n", myhgc->hid, address, port, lag_count);
+							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+void MySQL_HostGroups_Manager::group_replication_lag_action(
+	int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable
+) {
+	GloAdmin->mysql_servers_wrlock();
+	wrlock();
+
+	int reader_hostgroup = 0;
+	bool writer_is_also_reader = false;
+
+	// Get the reader_hostgroup for the supplied writter hostgroup
+	std::string t_reader_hostgroup_query {
+		"SELECT reader_hostgroup,writer_is_also_reader FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+	};
+	std::string reader_hostgroup_query {};
+	string_format(t_reader_hostgroup_query, reader_hostgroup_query, _hid);
+
+	int cols=0;
+	char *error=NULL;
+	int affected_rows=0;
+	SQLite3_result* rhid_res=NULL;
+	SQLite3_row* rhid_row=nullptr;
+
+	mydb->execute_statement(
+		reader_hostgroup_query.c_str(), &error , &cols , &affected_rows , &rhid_res
+	);
+
+	// If the server isn't present in the supplied hostgroup, there is nothing to do.
+	if (rhid_res->rows.empty() || rhid_res->rows[0]->get_size() == 0) {
+		goto __exit_replication_lag_action;
+	}
+
+	rhid_row = rhid_res->rows[0];
+	reader_hostgroup = atoi(rhid_row->fields[0]);
+	writer_is_also_reader = atoi(rhid_row->fields[1]);
+
+	{
+		MyHGC* myhgc = nullptr;
+
+		if (
+			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 0 ||
+			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 2 ||
+			enable
+		) {
+			if (read_only == false) {
+				myhgc = MyHGM->MyHGC_find(_hid);
+				group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
+			}
+		}
+
+		if (
+			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 1 ||
+			mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 2 ||
+			enable
+		) {
+			myhgc = MyHGM->MyHGC_find(reader_hostgroup);
+			group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
+		}
+	}
+
+__exit_replication_lag_action:
+
 	wrunlock();
 	GloAdmin->mysql_servers_wrunlock();
 }
@@ -3435,9 +3600,22 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	wrlock();
 	drop_all_idle_connections();
 	int num_conn_current=0;
-	int i,j, k;
-	for (i=0; i<(int)MyHostGroups->len; i++) {
-		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+	int j,k;
+	MyHGC* myhgc = NULL;
+	for (int i=0; i<(int)MyHostGroups->len; i++) {
+		if (_hid == -1) {
+			// all hostgroups must be examined
+			// as of version 2.3.2 , this is always the case
+			myhgc=(MyHGC *)MyHostGroups->index(i);
+		} else {
+			// only one hostgroup is examined
+			// as of version 2.3.2 , this never happen
+			// but the code support this functionality
+			myhgc = MyHGC_find(_hid);
+			i = (int)MyHostGroups->len; // to exit from this "for" loop
+			if (myhgc == NULL)
+				continue; // immediately exit
+		}
 		if (_hid >= 0 && _hid!=(int)myhgc->hid) continue;
 		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
@@ -3815,8 +3993,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 					pta[3]=strdup("SHUNNED_REPLICATION_LAG");
 					break;
 				default:
+					// LCOV_EXCL_START
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 			sprintf(buf,"%u", mysrvc->ConnectionsUsed->conns_length());
 			pta[4]=strdup(buf);
@@ -4202,8 +4382,10 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			}
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 
 __exit_read_only_action:
@@ -4523,19 +4705,31 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			// NOTE: Only updated the servers that have belong to the same cluster.
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
+				" SELECT %d UNION ALL"
+				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
+				" SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+			")";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
+			mydb->execute(query);
+			// NOTE: Only delete the servers that have belong to the same cluster.
+			q=(char*)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
+				" SELECT %d UNION ALL"
+				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
+				" SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+			")";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
-			mydb->execute(query);
-			//free(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			// q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			// sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=(CASE "
+				" (SELECT status FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND"
+					" hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)) WHEN 2 THEN 2 ELSE 0 END)"
+				" WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			converge_group_replication_config(_writer_hostgroup);
@@ -4599,19 +4793,30 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			// NOTE: Only updated the servers that have belong to the same cluster.
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d) WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
+				" SELECT %d UNION ALL"
+				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
+				" SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+			")";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
+			mydb->execute(query);
+			// NOTE: Only delete the servers that have belong to the same cluster.
+			q=(char*)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id IN ("
+				" SELECT %d UNION ALL"
+				" SELECT backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d UNION ALL"
+				" SELECT offline_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+			")";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup,_writer_hostgroup,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
-			mydb->execute(query);
-			//free(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			// NOTE: In case of the server being 'OFFLINE_SOFT' we preserve this status. Otherwise we set the server as 'ONLINE'.
+			q=(char *)"UPDATE mysql_servers_incoming SET status=(CASE "
+				" (SELECT status FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND"
+					" hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)) WHEN 2 THEN 2 ELSE 0 END)"
+				" WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
+			sprintf(query,q,_hostname,_port,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			converge_group_replication_config(_writer_hostgroup);
@@ -4674,7 +4879,12 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	bool found_writer=false;
 	bool found_reader=false;
 	int read_HG=-1;
+	int offline_HG=-1;
+	int backup_writer_HG=-1;
 	bool need_converge=false;
+	int status=0;
+	bool offline_soft_found=false;
+
 	if (resultset) {
 		// let's get info about this cluster
 		pthread_mutex_lock(&Group_Replication_Info_mutex);
@@ -4685,6 +4895,8 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			info=it2->second;
 			writer_is_also_reader=info->writer_is_also_reader;
 			read_HG=info->reader_hostgroup;
+			offline_HG=info->offline_hostgroup;
+			backup_writer_HG=info->backup_writer_hostgroup;
 			need_converge=info->need_converge;
 			info->need_converge=false;
 		}
@@ -4694,9 +4906,11 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
 				int hostgroup=atoi(r->fields[0]);
+				offline_soft_found = atoi(r->fields[1]) == 2 ? true : false;
+
 				if (hostgroup==_writer_hostgroup) {
-					int status = atoi(r->fields[1]);
-					if (status == 0) {
+					status = atoi(r->fields[1]);
+					if (status == 0 || status == 2) {
 						found_writer=true;
 					}
 				}
@@ -4705,6 +4919,13 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 						found_reader=true;
 					}
 				}
+			}
+		}
+		// NOTE: In case of a writer not being found but a 'OFFLINE_SOFT' status
+		// is found in a hostgroup, 'OFFLINE_SOFT' status should be preserved.
+		if (found_writer == false) {
+			if (offline_soft_found) {
+				status = 2;
 			}
 		}
 		if (need_converge==false) {
@@ -4729,19 +4950,19 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			mydb->execute("INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers");
-			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
+			// NOTE: Only updated the servers that have belong to the same cluster.
+			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s' AND port=%d AND hostgroup_id IN (%d, %d, %d)";
 			query=(char *)malloc(strlen(q)+strlen(_hostname)+256);
-			sprintf(query,q,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
+			sprintf(query,q,_writer_hostgroup,_hostname,_port,backup_writer_HG,read_HG,offline_HG);
 			mydb->execute(query);
-			//free(query);
-			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id<>%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			// NOTE: Only delete the servers that have belong to the same cluster.
+			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND hostgroup_id IN (%d, %d, %d)";
+			sprintf(query,q,_hostname,_port,backup_writer_HG,read_HG,offline_HG);
 			mydb->execute(query);
-			//free(query);
-			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_hostname,_port,_writer_hostgroup);
+			q=(char *)"UPDATE mysql_servers_incoming SET status=%d WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
+			// NOTE: In case of the server being 'OFFLINE_SOFT' we preserve this status. Otherwise
+			// we set the server as 'ONLINE'.
+			sprintf(query, q, (status == 2 ? 2 : 0 ), _hostname, _port, _writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			if (writer_is_also_reader && read_HG>=0) {
@@ -6824,4 +7045,28 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 	free(domain_name);
 }
 
+MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
+	MySrvC* f_server = nullptr;
+
+	MyHGC* myhgc = nullptr;
+	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
+		myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+
+		if (myhgc->hid == _hid) {
+			break;
+		}
+	}
+
+	if (myhgc != nullptr) {
+		for (uint32_t j = 0; j < myhgc->mysrvs->cnt(); j++) {
+			MySrvC* mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
+
+			if (strcmp(mysrvc->address, addr.c_str()) == 0 && mysrvc->port == port) {
+				f_server = mysrvc;
+			}
+		}
+	}
+
+	return f_server;
+}
 

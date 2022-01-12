@@ -25,8 +25,6 @@ public:
 	char *value = (char*)"";
 	void fill_server_internal_session(json &j, int conn_num, int idx);
 	void fill_client_internal_session(json &j, int idx);
-	static const char set_name[SQL_NAME_LAST][64];
-	static const char proxysql_internal_session_name[SQL_NAME_LAST][64];
 };
 
 enum charset_action {
@@ -78,9 +76,14 @@ class MySQL_Connection {
 		bool no_backslash_escapes;
 	} options;
 
-	Variable variables[SQL_NAME_LAST];
-	uint32_t var_hash[SQL_NAME_LAST];
-	bool var_absent[SQL_NAME_LAST] = {false};
+	Variable variables[SQL_NAME_LAST_HIGH_WM];
+	uint32_t var_hash[SQL_NAME_LAST_HIGH_WM];
+	// for now we store possibly missing variables in the lower range
+	// we may need to fix that, but this will cost performance
+	bool var_absent[SQL_NAME_LAST_LOW_WM] = {false};
+
+	std::vector<uint32_t> dynamic_variables_idx;
+	unsigned int reorder_dynamic_variables_idx();
 
 	struct {
 		unsigned long length;

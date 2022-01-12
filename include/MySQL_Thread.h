@@ -118,6 +118,7 @@ enum MySQL_Thread_status_variable {
 	st_var_aws_aurora_replicas_skipped_during_query,
 	st_var_automatic_detected_sqli,
 	st_var_whitelisted_sqli_fingerprint,
+	st_var_client_host_error_killed_connections,
 	st_var_END
 };
 
@@ -177,6 +178,7 @@ class MySQL_Thread
 	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
+	unsigned long long last_move_to_idle_thread_time;
 	std::atomic<unsigned long long> atomic_curtime;
 	PtrArray *mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions;
@@ -320,6 +322,7 @@ struct p_th_counter {
 		whitelisted_sqli_fingerprint,
 		mysql_killed_backend_connections,
 		mysql_killed_backend_queries,
+		client_host_error_killed_connections,
 		__size
 	};
 };
@@ -359,6 +362,20 @@ struct th_metrics_map_idx {
 	};
 };
 
+/**
+ * @brief Structure holding the data for a Client_Host_Cache entry.
+ */
+typedef struct _MySQL_Client_Host_Cache_Entry {
+	/**
+	 * @brief Last time the entry was updated.
+	 */
+	uint64_t updated_at;
+	/**
+	 * @brief Error count associated with the entry.
+	 */
+	uint32_t error_count;
+} MySQL_Client_Host_Cache_Entry;
+
 class MySQL_Threads_Handler
 {
 	private:
@@ -382,6 +399,22 @@ class MySQL_Threads_Handler
 	//   variable address
 	//   special variable : if true, further input validation is required
 	std::unordered_map<std::string, std::tuple<bool *, bool>> VariablesPointers_bool;
+	/**
+	 * @brief Holds the clients host cache. It keeps track of the number of
+	 *   errors associated to a specific client:
+	 *     - Key: client identifier, based on 'clientaddr'.
+	 *     - Value: Structure of type 'MySQL_Client_Host_Cache_Entry' holding
+	 *       the last time the entry was updated and the error count associated
+	 *       with the client.
+	 */
+	std::unordered_map<std::string, MySQL_Client_Host_Cache_Entry> client_host_cache;
+	/**
+	 * @brief Holds the mutex for accessing 'client_host_cache', since every
+	 *   access can potentially perform 'read/write' operations, a regular mutex
+	 *   is enough.
+	 */
+	pthread_mutex_t mutex_client_host_cache;
+
 	public:
 	struct {
 		int monitor_history;
@@ -410,6 +443,7 @@ class MySQL_Threads_Handler
 		int monitor_groupreplication_healthcheck_timeout;
 		int monitor_groupreplication_healthcheck_max_timeout_count;
 		int monitor_groupreplication_max_transactions_behind_count;
+		int monitor_groupreplication_max_transactions_behind_for_read_only;
 		int monitor_galera_healthcheck_interval;
 		int monitor_galera_healthcheck_timeout;
 		int monitor_galera_healthcheck_max_timeout_count;
@@ -426,9 +460,12 @@ class MySQL_Threads_Handler
 		int ping_timeout_server;
 		int shun_on_failures;
 		int shun_recovery_time_sec;
+		int unshun_algorithm;
 		int query_retries_on_failure;
 		bool client_multi_statements;
 		bool connection_warming;
+		int client_host_cache_size;
+		int client_host_error_counts;
 		int connect_retries_on_failure;
 		int connect_retries_delay;
 		int connection_delay_multiplex_ms;
@@ -458,6 +495,7 @@ class MySQL_Threads_Handler
 		bool query_digests_normalize_digest_text;
 		bool query_digests_track_hostname;
 		int query_digests_grouping_limit;
+		int query_digests_groups_grouping_limit;
 		bool default_reconnect;
 		bool have_compress;
 		bool have_ssl;
@@ -505,7 +543,7 @@ class MySQL_Threads_Handler
 		char *add_ldap_user_comment;
 		char *default_tx_isolation;
 		char *default_session_track_gtids;
-		char *default_variables[SQL_NAME_LAST];
+		char *default_variables[SQL_NAME_LAST_LOW_WM];
 		char *firewall_whitelist_errormsg;
 #ifdef DEBUG
 		bool session_debug;
@@ -522,9 +560,12 @@ class MySQL_Threads_Handler
 		int auditlog_filesize;
 		// SSL related, proxy to server
 		char * ssl_p2s_ca;
+		char * ssl_p2s_capath;
 		char * ssl_p2s_cert;
 		char * ssl_p2s_key;
 		char * ssl_p2s_cipher;
+		char * ssl_p2s_crl;
+		char * ssl_p2s_crlpath;
 		int query_cache_size_MB;
 		int min_num_servers_lantency_awareness;
 		int aurora_max_lag_ms_only_read_from_replicas;
@@ -535,6 +576,7 @@ class MySQL_Threads_Handler
 		bool client_session_track_gtid;
 		bool enable_client_deprecate_eof;
 		bool enable_server_deprecate_eof;
+		bool enable_load_data_local_infile;
 		bool log_mysql_warnings_enabled;
 		char* tls_version;
 	} variables;
@@ -545,6 +587,80 @@ class MySQL_Threads_Handler
 		std::array<prometheus::Counter*, p_th_counter::__size> p_counter_array {};
 		std::array<prometheus::Gauge*, p_th_gauge::__size> p_gauge_array {};
 	} status_variables;
+
+	std::atomic<bool> bootstrapping_listeners;
+
+	/**
+	 * @brief Update the client host cache with the supplied 'client_sockaddr',
+	 *   and the supplied 'error' parameter specifying if there was a connection
+	 *   error or not.
+	 *
+	 *   NOTE: This function is not safe, the supplied 'client_sockaddr' should
+	 *   have been initialized by 'accept' or 'getpeername'. NULL checks are not
+	 *   performed.
+	 *
+	 * @details The 'client_sockaddr' parameter is inspected, and the
+	 *   'client_host_cache' map is only updated in case of:
+	 *    - 'address_family' is either 'AF_INET' or 'AF_INET6'.
+	 *    - The address obtained from it isn't '127.0.0.1'.
+	 *
+	 *   In case 'client_sockaddr' matches the previous description, the update
+	 *   of the client host cache is performed in the following way:
+	 *     1. If the cache is full, the oldest element in the cache is searched.
+	 *     In case the oldest element address doesn't match the supplied
+	 *     address, the oldest element is removed.
+	 *     2. The cache is searched looking for the supplied address, in case of
+	 *     being found, the entry is updated, otherwise the entry is inserted in
+	 *     the cache.
+	 *
+	 * @param client_sockaddr A 'sockaddr' holding the required client information
+	 *   to update the 'client_host_cache_map'.
+	 * @param error 'true' if there was an error in the connection that should be
+	 *   register, 'false' otherwise.
+	 */
+	void update_client_host_cache(struct sockaddr* client_sockaddr, bool error);
+	/**
+	 * @brief Retrieves the entry of the underlying 'client_host_cache' map for
+	 *   the supplied 'client_sockaddr' in case of existing. In case it doesn't
+	 *   exist or the supplied 'client_sockaddr' doesn't met the requirements
+	 *   for being registered in the map, and zeroed 'MySQL_Client_Host_Cache_Entry'
+	 *   is returned.
+	 *
+	 *   NOTE: This function is not safe, the supplied 'client_sockaddr' should
+	 *   have been initialized by 'accept' or 'getpeername'. NULL checks are not
+	 *   performed.
+	 *
+	 * @details The 'client_sockaddr' parameter is inspected, and the
+	 *   'client_host_cache' map is only searched in case of:
+	 *    - 'address_family' is either 'AF_INET' or 'AF_INET6'.
+	 *    - The address obtained from it isn't '127.0.0.1'.
+	 *
+	 * @param client_sockaddr A 'sockaddr' holding the required client information
+	 *   to update the 'client_host_cache_map'.
+	 * @return If found, the corresponding entry for the supplied 'client_sockaddr',
+	 *   a zeroed 'MySQL_Client_Host_Cache_Entry' otherwise.
+	 */
+	MySQL_Client_Host_Cache_Entry find_client_host_cache(struct sockaddr* client_sockaddr);
+	/**
+	 * @brief Delete all the entries in the 'client_host_cache' internal map.
+	 */
+	void flush_client_host_cache();
+	/**
+	 * @brief Returns the current entries of 'client_host_cache' in a
+	 *   'SQLite3_result'. In case the param 'reset' is specified, the structure
+	 *   is cleaned after being queried.
+	 *
+	 * @param reset If 'true' the entries of the internal structure
+	 *   'client_host_cache' will be cleaned after scrapping.
+	 *
+	 * @return SQLite3_result holding the current entries of the
+	 *   'client_host_cache'. In the following format:
+	 *
+	 *    [ 'client_address', 'error_num', 'last_updated' ]
+	 *
+	 *    Where 'last_updated' is the last updated time expressed in 'ns'.
+	 */
+	SQLite3_result* get_client_host_cache(bool reset);
 	/**
 	 * @brief Callback to update the metrics.
 	 */

@@ -36,12 +36,23 @@ class MySQL_ResultSet {
 	//PtrSizeArray *PSarrayOUT;
 	MySQL_ResultSet();
 	void init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt=NULL);
-	void init_with_stmt();
+	void init_with_stmt(MySQL_Connection *myconn);
+	/**
+	 * @brief Simple initialization of resulset of 'MySQL_ResultSet' without a resulset.
+	 * @details This initialization allows to reuse the logic from function 'generate_pkt_row3' for filling
+	 *   the resulset for later extracting the generated 'PtrSizeArray' via 'buffer_to_PSarrayOut' and
+	 *   'get_resultset'.
+	 *
+	 *   IMPORTANT-NOTE: Other member functions are not safe to be used after this initialization.
+	 * @param myproto Used to initialize internal 'MySQL_Protocol' field.
+	 */
+	void buffer_init(MySQL_Protocol* myproto);
 	~MySQL_ResultSet();
 	unsigned int add_row(MYSQL_ROWS *rows);
 	unsigned int add_row(MYSQL_ROW row);
 	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
+	void remove_last_eof();
 	void add_err(MySQL_Data_Stream *_myds);
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	//bool generate_COM_FIELD_LIST_response(PtrSizeArray *PSarrayFinal);
@@ -63,6 +74,22 @@ class MySQL_Prepared_Stmt_info {
 };
 
 uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
+
+/**
+ * @brief ProxySQL replacement function for 'mysql_stmt_close'. Closes a
+ *   MYSQL_STMT avoiding any blocking commands that are sent by default
+ *   'mysql_stmt_close'.
+ *
+ *   NOTE: This function is not safe, caller must check that the supplied
+ *   argument is not NULL.
+ *
+ * @param mysql_stmt An already initialized 'MYSQL_STMT'. Caller must ensure
+ *   that the supplied argument is not NULL.
+ *
+ * @return The result of calling 'mysql_stmt_close' function over the internally
+ *   modified 'MYSQL_STMT'.
+ */
+my_bool proxy_mysql_stmt_close(MYSQL_STMT* mysql_stmt);
 
 class MySQL_Protocol {
 	private:

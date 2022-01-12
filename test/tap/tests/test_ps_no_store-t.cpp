@@ -2,10 +2,6 @@
 #include <cstdio>
 #include <cstring>
 #include <unistd.h>
-#include <random>
-
-#include <fstream>
-#include <sstream>
 
 #include <string>
 #include <mysql.h>
@@ -15,27 +11,6 @@
 #include "utils.h"
 
 const int NUM_ROWS=5;
-
-int select_config_file(MYSQL* mysql, std::string& resultset) {
-	if (mysql_query(mysql, "select config file")) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
-		return exit_status();
-	}
-
-	MYSQL_RES *result;
-	MYSQL_ROW row;
-	result = mysql_store_result(mysql);
-	if (result) {
-		row = mysql_fetch_row(result);
-		resultset = row[0];
-		mysql_free_result(result);
-	} else {
-		fprintf(stderr, "error\n");
-	}
-
-	return 0;
-}
 
 int restore_admin(MYSQL* mysqladmin) {
 	MYSQL_QUERY(mysqladmin, "load mysql query rules from disk");
@@ -52,7 +27,7 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(4);
+	plan(3);
 	diag("Testing PS large resultset");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
@@ -81,42 +56,10 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysqladmin, "delete from mysql_servers where hostgroup_id=1");
 	MYSQL_QUERY(mysqladmin, "load mysql servers to runtime");
 
-	MYSQL_QUERY(mysql, "drop database if exists test");
-	MYSQL_QUERY(mysql, "create database if not exists test");
-	MYSQL_QUERY(mysql, "create table if not exists test.t (i int)");
-	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
-
-	std::random_device rd;
-	std::mt19937 mt(rd());
-	std::uniform_int_distribution<int> dist(0.0, 9.0);
-
-	std::stringstream q;
-	q << "INSERT INTO test.sbtest1 (k, c, pad) values ";
-	bool put_comma = false;
-	for (int i=0; i<NUM_ROWS; ++i) {
-		int k = dist(mt);
-		std::stringstream c;
-		for (int j=0; j<10; j++) {
-			for (int k=0; k<11; k++) {
-				c << dist(mt);
-			}
-			if (j<9)
-				c << "-";
-		}
-		std::stringstream pad;
-		for (int j=0; j<5; j++) {
-			for (int k=0; k<11; k++) {
-				pad << dist(mt);
-			}
-			if (j<4)
-				pad << "-";
-		}
-		if (put_comma) q << ",";
-		if (!put_comma) put_comma=true;
-		q << "(" << k << ",'" << c.str() << "','" << pad.str() << "')";
+	if (create_table_test_sbtest1(NUM_ROWS,mysql)) {
+		fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);
+		return exit_status();
 	}
-	MYSQL_QUERY(mysql, q.str().c_str());
-	ok(true, "%d row inserted.", NUM_ROWS);
 
 	std::string query = "";
 

@@ -67,6 +67,15 @@ ODIR= obj
 #CXX=g++
 #CC=clang
 
+WITHASANVAR := $(shell echo $(WITHASAN))
+ifeq ($(WITHASANVAR),1)
+WASAN=-fsanitize=address
+# Force the disable of JEMALLOC, since ASAN isn't compatible.
+export NOJEMALLOC = 1
+else
+WASAN=
+endif
+
 #CFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall #-lcrypto
 #CXXFLAGS=-std=c++11 $(CFLAGS) $(LDIRS) $(LIBS)
 NOJEMALLOC := $(shell echo $(NOJEMALLOC))
@@ -99,24 +108,27 @@ ifeq ($(UNAME_S),Darwin)
 	IDIRS+= -I/usr/local/opt/openssl/include
 endif
 
+# 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
+# for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
+# internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
+ifeq ($(UNAME_S),Darwin)
+ENABLE_EPOLL=
+else
+ENABLE_EPOLL=-DENABLE_EPOLL
+endif
 
-MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV)
-MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH)
+MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
+MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
 
-_OBJ = c_tokenizer.o
-OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
-_OBJ_CXX = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo set_parser.oo MySQL_Variables.oo
+_OBJ_CXX = ProxySQL_GloVars.oo network.oo debug.oo configfile.oo Query_Cache.oo SpookyV2.oo MySQL_Authentication.oo gen_utils.oo sqlite3db.oo mysql_connection.oo MySQL_HostGroups_Manager.oo mysql_data_stream.oo MySQL_Thread.oo MySQL_Session.oo MySQL_Protocol.oo mysql_backend.oo Query_Processor.oo ProxySQL_Admin.oo ProxySQL_Config.oo ProxySQL_Restapi.oo MySQL_Monitor.oo MySQL_Logger.oo thread.oo MySQL_PreparedStatement.oo ProxySQL_Cluster.oo ClickHouse_Authentication.oo ClickHouse_Server.oo ProxySQL_Statistics.oo Chart_bundle_js.oo ProxySQL_HTTP_Server.oo ProxySQL_RESTAPI_Server.oo font-awesome.min.css.oo main-bundle.min.css.oo set_parser.oo MySQL_Variables.oo c_tokenizer.oo
 OBJ_CXX = $(patsubst %,$(ODIR)/%,$(_OBJ_CXX))
 HEADERS = ../include/*.h ../include/*.hpp
 
 %.ko: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
-
-$(ODIR)/%.o: %.c $(HEADERS)
-	$(CC) -fPIC -c -o $@ $< $(MYCFLAGS) $(CFLAGS)
 
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)

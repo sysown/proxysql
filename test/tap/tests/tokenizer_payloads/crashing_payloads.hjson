@@ -1,0 +1,73 @@
+[
+	{
+		"q_path": "tokenizer_payloads/crashing_payload_1.txt",
+		"mz": [
+			{
+				"digest_max_size": 50,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_digits": 1
+			}
+		]
+	},
+	{
+		"q_path": "tokenizer_payloads/crashing_payload_2.txt",
+		"mz": [
+			{
+				"digest_max_size": 50,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"replace_digits": 1,
+				"lowercase": 1
+			}
+		]
+	},
+	{
+		"q_path": "tokenizer_payloads/crashing_payload_3.txt",
+		"mz": [
+			{
+				"digest_max_size": 100,
+				"grouping_limit": 2,
+				"groups_grouping_limit": 2,
+				"replace_digits": 1,
+				"lowercase": 1
+			}
+		]
+	},
+	{
+		"q_path": "tokenizer_payloads/crashing_payload_4.txt",
+		"mz": [
+			{
+				"digest_max_size": 200,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 3,
+				"replace_digits": 1,
+				"lowercase": 1
+			}
+		]
+	},
+	{
+		"q_path": "tokenizer_payloads/crashing_payload_5.txt",
+		"mz": [
+			{
+				"digest_max_size": 50,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_digits": 1,
+				"lowercase": 1
+			}
+		]
+	},
+	{
+		"q_path": "tokenizer_payloads/crashing_payload_6.txt",
+		"mz": [
+			{
+				"digest_max_size": 50,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"replace_digits": 1,
+				"lowercase": 1
+			}
+		]
+	}
+]

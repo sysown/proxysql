@@ -149,29 +149,59 @@ enum MySQL_DS_type {
 	MYDS_FRONTEND,
 };
 
-
-enum variable_name {
+/* NOTE:
+	make special ATTENTION that the order in mysql_variable_name
+	and mysql_tracked_variables[] is THE SAME
+*/
+enum mysql_variable_name {
 	SQL_CHARACTER_SET,
 	SQL_CHARACTER_ACTION,
 	SQL_SET_NAMES,
-	SQL_SAFE_UPDATES,
-	SQL_SELECT_LIMIT,
-	SQL_SQL_MODE,
-	SQL_TIME_ZONE,
 	SQL_CHARACTER_SET_RESULTS,
 	SQL_CHARACTER_SET_CONNECTION,
 	SQL_CHARACTER_SET_CLIENT,
 	SQL_CHARACTER_SET_DATABASE,
 	SQL_ISOLATION_LEVEL,
 	SQL_TRANSACTION_READ,
-	SQL_SQL_AUTO_IS_NULL,
 	SQL_COLLATION_CONNECTION,
-	SQL_NET_WRITE_TIMEOUT,
-	SQL_MAX_JOIN_SIZE,
-	SQL_LOG_BIN,
 	SQL_WSREP_SYNC_WAIT,
+	SQL_NAME_LAST_LOW_WM,
+	SQL_AUTO_INCREMENT_INCREMENT,
+	SQL_AUTO_INCREMENT_OFFSET,
+	SQL_BIG_TABLES,
+	SQL_DEFAULT_STORAGE_ENGINE,
+	SQL_DEFAULT_TMP_STORAGE_ENGINE,
+	SQL_FOREIGN_KEY_CHECKS,
 	SQL_GROUP_CONCAT_MAX_LEN,
-	SQL_NAME_LAST
+	SQL_GTID_NEXT,
+	SQL_INNODB_LOCK_WAIT_TIMEOUT,
+	SQL_INNODB_STRICT_MODE,
+	SQL_INNODB_TABLE_LOCKS,
+	SQL_JOIN_BUFFER_SIZE,
+	SQL_LC_MESSAGES,
+	SQL_LC_TIME_NAMES,
+	SQL_LOCK_WAIT_TIMEOUT,
+	SQL_LONG_QUERY_TIME,
+	SQL_MAX_EXECUTION_TIME,
+	SQL_MAX_HEAP_TABLE_SIZE,
+	SQL_MAX_JOIN_SIZE,
+	SQL_MAX_SORT_LENGTH,
+	SQL_OPTIMIZER_PRUNE_LEVEL,
+	SQL_OPTIMIZER_SEARCH_DEPTH,
+	SQL_OPTIMIZER_SWITCH,
+	SQL_PROFILING,
+	SQL_SORT_BUFFER_SIZE,
+	SQL_SQL_AUTO_IS_NULL,
+	SQL_SQL_BIG_SELECTS,
+	SQL_SQL_LOG_BIN,
+	SQL_SQL_MODE,
+	SQL_SQL_SAFE_UPDATES,
+	SQL_SQL_SELECT_LIMIT,
+	SQL_TIME_ZONE,
+	SQL_TIMESTAMP,
+	SQL_TMP_TABLE_SIZE,
+	SQL_UNIQUE_CHECKS,
+	SQL_NAME_LAST_HIGH_WM,
 };
 
 enum session_status {
@@ -207,15 +237,16 @@ enum session_status {
 
 #ifdef __cplusplus
 typedef struct {
-	enum variable_name idx;     // index number
+	enum mysql_variable_name idx;     // index number
 	enum session_status status; // what status should be changed after setting this variables
 	bool quote;                 // if the variable needs to be quoted
 	bool set_transaction;       // if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
-	bool special_handling;      // if true, some special handling is required
 	bool is_number;				// if true, the variable is a number. Special cases should be checked
 	bool is_bool;				// if true, the variable is a boolean. Special cases should be checked
 	char * set_variable_name;   // what variable name (or string) will be used when setting it to backend
 	char * internal_variable_name; // variable name as displayed in admin , WITHOUT "default_"
+							// Also used in INTERNAL SESSION
+							// if NULL , MySQL_Variables::MySQL_Variables will set it to set_variable_name during initialization
 	char * default_value;       // default value
 	bool is_global_variable;	// is it a global variable?
 } mysql_variable_st;
@@ -493,8 +524,8 @@ struct __SQP_query_parser_t {
 };
 
 struct _PtrSize_t {
-  void *ptr;
   unsigned int size;
+  void *ptr;
 }; 
 // struct for debugging module
 #ifdef DEBUG
@@ -747,6 +778,7 @@ __thread int mysql_thread___ping_interval_server_msec;
 __thread int mysql_thread___ping_timeout_server;
 __thread int mysql_thread___shun_on_failures;
 __thread int mysql_thread___shun_recovery_time_sec;
+__thread int mysql_thread___unshun_algorithm;
 __thread int mysql_thread___query_retries_on_failure;
 __thread bool mysql_thread___client_multi_statements;
 __thread int mysql_thread___connect_retries_on_failure;
@@ -793,11 +825,15 @@ __thread bool mysql_thread___session_idle_show_processlist;
 __thread bool mysql_thread___sessions_sort;
 __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 __thread bool mysql_thread___client_session_track_gtid;
-__thread char * mysql_thread___default_variables[SQL_NAME_LAST];
+__thread char * mysql_thread___default_variables[SQL_NAME_LAST_LOW_WM];
 __thread int mysql_thread___query_digests_grouping_limit;
+__thread int mysql_thread___query_digests_groups_grouping_limit;
 __thread bool mysql_thread___enable_client_deprecate_eof;
 __thread bool mysql_thread___enable_server_deprecate_eof;
 __thread bool mysql_thread___log_mysql_warnings_enabled;
+__thread bool mysql_thread___enable_load_data_local_infile;
+__thread int mysql_thread___client_host_cache_size;
+__thread int mysql_thread___client_host_error_counts;
 __thread char* mysql_thread___tls_version;
 
 /* variables used for Query Cache */
@@ -805,9 +841,12 @@ __thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 __thread char * mysql_thread___ssl_p2s_ca;
+__thread char * mysql_thread___ssl_p2s_capath;
 __thread char * mysql_thread___ssl_p2s_cert;
 __thread char * mysql_thread___ssl_p2s_key;
 __thread char * mysql_thread___ssl_p2s_cipher;
+__thread char * mysql_thread___ssl_p2s_crl;
+__thread char * mysql_thread___ssl_p2s_crlpath;
 
 /* variables used by events log */
 __thread char * mysql_thread___eventslog_filename;
@@ -839,6 +878,7 @@ __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
 __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
+__thread int mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only;
 __thread int mysql_thread___monitor_galera_healthcheck_interval;
 __thread int mysql_thread___monitor_galera_healthcheck_timeout;
 __thread int mysql_thread___monitor_galera_healthcheck_max_timeout_count;
@@ -899,6 +939,7 @@ extern __thread int mysql_thread___ping_interval_server_msec;
 extern __thread int mysql_thread___ping_timeout_server;
 extern __thread int mysql_thread___shun_on_failures;
 extern __thread int mysql_thread___shun_recovery_time_sec;
+extern __thread int mysql_thread___unshun_algorithm;
 extern __thread int mysql_thread___query_retries_on_failure;
 extern __thread bool mysql_thread___client_multi_statements;
 extern __thread int mysql_thread___connect_retries_on_failure;
@@ -945,11 +986,15 @@ extern __thread bool mysql_thread___session_idle_show_processlist;
 extern __thread bool mysql_thread___sessions_sort;
 extern __thread bool mysql_thread___kill_backend_connection_when_disconnect;
 extern __thread bool mysql_thread___client_session_track_gtid;
-extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST];
+extern __thread char * mysql_thread___default_variables[SQL_NAME_LAST_LOW_WM];
 extern __thread int mysql_thread___query_digests_grouping_limit;
+extern __thread int mysql_thread___query_digests_groups_grouping_limit;
 extern __thread bool mysql_thread___enable_client_deprecate_eof;
 extern __thread bool mysql_thread___enable_server_deprecate_eof;
 extern __thread bool mysql_thread___log_mysql_warnings_enabled;
+extern __thread bool mysql_thread___enable_load_data_local_infile;
+extern __thread int mysql_thread___client_host_cache_size;
+extern __thread int mysql_thread___client_host_error_counts;
 extern __thread char* mysql_thread___tls_version;
 
 /* variables used for Query Cache */
@@ -957,9 +1002,12 @@ extern __thread int mysql_thread___query_cache_size_MB;
 
 /* variables used for SSL , from proxy to server (p2s) */
 extern __thread char * mysql_thread___ssl_p2s_ca;
+extern __thread char * mysql_thread___ssl_p2s_capath;
 extern __thread char * mysql_thread___ssl_p2s_cert;
 extern __thread char * mysql_thread___ssl_p2s_key;
 extern __thread char * mysql_thread___ssl_p2s_cipher;
+extern __thread char * mysql_thread___ssl_p2s_crl;
+extern __thread char * mysql_thread___ssl_p2s_crlpath;
 
 /* variables used by events log */
 extern __thread char * mysql_thread___eventslog_filename;
@@ -990,6 +1038,7 @@ extern __thread int mysql_thread___monitor_replication_lag_count;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_interval;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_timeout;
 extern __thread int mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count;
+extern __thread int mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only;
 extern __thread int mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 extern __thread int mysql_thread___monitor_galera_healthcheck_interval;
 extern __thread int mysql_thread___monitor_galera_healthcheck_timeout;
@@ -1015,52 +1064,96 @@ extern __thread unsigned int g_seed;
 #ifndef MYSQL_TRACKED_VARIABLES
 #define MYSQL_TRACKED_VARIABLES
 #ifdef PROXYSQL_EXTERN
-// field_1: index number
-// field_2: what status should be changed after setting this variables
-// field_3: if the variable needs to be quoted
-// field_4: if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
-// field_5: if true, some special handling is required
-// field_6: if true, the variable is a number. Special cases should be checked
-// field_7: if true, the variable is a boolean. Special cases should be checked
-// field_8: what variable name (or string) will be used when setting it to backend
-// field_9: variable name as displayed in admin , WITHOUT "default_"
-// field_10: default value
 /*
 typedef struct {
-	enum variable_name idx;     // index number
+	enum mysql_variable_name idx;     // index number
 	enum session_status status; // what status should be changed after setting this variables
 	bool quote;                 // if the variable needs to be quoted
 	bool set_transaction;       // if related to SET TRANSACTION statement . if false , it will be execute "SET varname = varvalue" . If true, "SET varname varvalue"
-	bool special_handling;      // if true, some special handling is required
 	bool is_number;				// if true, the variable is a number. Special cases should be checked
 	bool is_bool;				// if true, the variable is a boolean. Special cases should be checked
 	char * set_variable_name;   // what variable name (or string) will be used when setting it to backend
 	char * internal_variable_name; // variable name as displayed in admin , WITHOUT "default_"
+							// Also used in INTERNAL SESSION
+							// if NULL , MySQL_Variables::MySQL_Variables will set it to set_variable_name during initialization
 	char * default_value;       // default value
 	bool is_global_variable;	// is it a global variable?
 } mysql_variable_st;
+
+TODO: 'SQL_CHARACTER_SET_DATABASE' is a variable that shouldn't be set, or tracked on our side, since it's meant to be only updated by the server:
+ - https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_character_set_database
+*/
+/* NOTE:
+	make special ATTENTION that the order in mysql_variable_name
+	and mysql_tracked_variables[] is THE SAME
+   NOTE:
+	MySQL_Variables::MySQL_Variables() has a built-in check to make sure that the order is correct,
+	and that variables are in alphabetical order
 */
 mysql_variable_st mysql_tracked_variables[] {
-    { SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true, false,  false, false, (char *)"charset", (char *)"charset", (char *)"utf8" , true} , // should be before SQL_CHARACTER_SET_RESULTS
-    { SQL_CHARACTER_ACTION,    session_status___NONE,false, false, false, false, false, (char *)"action", (char *)"action", (char *)"1" , false} ,
-    { SQL_SET_NAMES,             SETTING_SET_NAMES,  false, false, false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" , false} ,
-	{ SQL_SAFE_UPDATES,          SETTING_VARIABLE,   true,  false, true,  false, true,  (char *)"sql_safe_updates",  (char *)"sql_safe_updates", (char *)"OFF" , false} ,
-    { SQL_SELECT_LIMIT,          SETTING_VARIABLE,   false, false, true,  true, false, (char *)"sql_select_limit", (char *)"sql_select_limit", (char *)"DEFAULT" , false} ,
-	{ SQL_SQL_MODE,              SETTING_VARIABLE,   true,  false, true,  false, false, (char *)"sql_mode" , (char *)"sql_mode" , (char *)"" , false} ,
-    { SQL_TIME_ZONE,             SETTING_VARIABLE,   true,  false, true,  false, false, (char *)"time_zone", (char *)"time_zone", (char *)"SYSTEM" , false} ,
-	{ SQL_CHARACTER_SET_RESULTS, SETTING_VARIABLE,   false, false, true,  false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"utf8" , false} ,
-	{ SQL_CHARACTER_SET_CONNECTION, SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_connection", (char *)"character_set_connection", (char *)"utf8", false } ,
-	{ SQL_CHARACTER_SET_CLIENT,     SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_client", (char *)"character_set_client", (char *)"utf8" , false} ,
-	{ SQL_CHARACTER_SET_DATABASE,   SETTING_VARIABLE, false, false, true, false, false, (char *)"character_set_database", (char *)"character_set_database", (char *)"utf8" , false} ,
-	{ SQL_ISOLATION_LEVEL,  SETTING_ISOLATION_LEVEL,  false, true,  true, false, false, (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" , false} ,
-	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ, false, true,  true, false, false, (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" , false} ,
-    { SQL_SQL_AUTO_IS_NULL,     SETTING_VARIABLE,     true,  false, true, false, true,  (char *)"sql_auto_is_null", (char *)"sql_auto_is_null", (char *)"OFF" , false} ,
-    { SQL_COLLATION_CONNECTION, SETTING_VARIABLE,     true,  false, true, false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"utf8_general_ci" , true} ,
-    { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" , false} ,
-    { SQL_MAX_JOIN_SIZE,        SETTING_VARIABLE,     false, false, true, true,  false, (char *)"max_join_size", (char *)"max_join_size", (char *)"18446744073709551615" , false} ,
-    { SQL_LOG_BIN,              SETTING_VARIABLE,     false, false, true, false, false, (char *)"sql_log_bin", (char *)"sql_log_bin", (char *)"1" , false} ,
-    { SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" , false} ,
-    { SQL_GROUP_CONCAT_MAX_LEN, SETTING_VARIABLE,     false, false, true, true,  false, (char *)"group_concat_max_len", (char *)"group_concat_max_len", (char *)"1024" , false} ,
+	{ SQL_CHARACTER_SET,         SETTING_CHARSET,    false, true,  false, false, (char *)"charset", (char *)"charset", (char *)"utf8" , true} , // should be before SQL_CHARACTER_SET_RESULTS
+	{ SQL_CHARACTER_ACTION,    session_status___NONE,false, false, false, false, (char *)"action", (char *)"action", (char *)"1" , false} ,
+	{ SQL_SET_NAMES,             SETTING_SET_NAMES,  false, false, false, false, (char *)"names", (char *)"names", (char *)"DEFAULT" , false} ,
+	{ SQL_CHARACTER_SET_RESULTS, SETTING_VARIABLE,   false, false, false, false, (char *)"character_set_results", (char *)"character_set_results", (char *)"utf8" , false} ,
+	{ SQL_CHARACTER_SET_CONNECTION, SETTING_VARIABLE, false, false, false, false, (char *)"character_set_connection", (char *)"character_set_connection", (char *)"utf8", false } ,
+	{ SQL_CHARACTER_SET_CLIENT,     SETTING_VARIABLE, false, false, false, false, (char *)"character_set_client", (char *)"character_set_client", (char *)"utf8" , false} ,
+	{ SQL_CHARACTER_SET_DATABASE,   SETTING_VARIABLE, false, false, false, false, (char *)"character_set_database", (char *)"character_set_database", (char *)"utf8" , false} ,
+	{ SQL_ISOLATION_LEVEL,  SETTING_ISOLATION_LEVEL,  false, true,  false, false, (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" , false} ,
+	// NOTE: we also need support for  transaction_read_only session variable
+	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ, false, true,  false, false, (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" , false} ,
+	{ SQL_COLLATION_CONNECTION, SETTING_VARIABLE,     true,  false, false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"utf8_general_ci" , true} ,
+//    { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" , false} ,
+	{ SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" , false} ,
+	{ SQL_NAME_LAST_LOW_WM,     SETTING_VARIABLE,     false, false, true,  false, (char *)"placeholder", (char *)"placeholder", (char *)"0" , false} , // this is just a placeholder to separate the previous index from the next block
+	{ SQL_AUTO_INCREMENT_INCREMENT,   SETTING_VARIABLE, false, false, true,  false, (char *)"auto_increment_increment",   NULL, (char *)"" , false} ,
+	{ SQL_AUTO_INCREMENT_OFFSET,      SETTING_VARIABLE, false, false, true,  false, (char *)"auto_increment_offset",      NULL, (char *)"" , false} ,
+	{ SQL_BIG_TABLES,                 SETTING_VARIABLE, true,  false, false, true, ( char *)"big_tables",                 NULL, (char *)"" , false} ,
+	{ SQL_DEFAULT_STORAGE_ENGINE,     SETTING_VARIABLE, true,  false, false, false, (char *)"default_storage_engine",     NULL, (char *)"" , false} ,
+	{ SQL_DEFAULT_TMP_STORAGE_ENGINE, SETTING_VARIABLE, true,  false, false, false, (char *)"default_tmp_storage_engine", NULL, (char *)"" , false} ,
+	{ SQL_FOREIGN_KEY_CHECKS,         SETTING_VARIABLE, true,  false, false, true,  (char *)"foreign_key_checks",         NULL, (char *)"" , false} ,
+	{ SQL_GROUP_CONCAT_MAX_LEN,       SETTING_VARIABLE, false, false, true,  false, (char *)"group_concat_max_len",       NULL, (char *)"" , false} ,
+	{ SQL_GTID_NEXT,                  SETTING_VARIABLE, true,  false, false, false, (char *)"gtid_next",                  NULL, (char *)"" , true} ,
+	{ SQL_INNODB_LOCK_WAIT_TIMEOUT,   SETTING_VARIABLE, false, false, true,  false, (char *)"innodb_lock_wait_timeout",   NULL, (char *)"" , false} ,
+	{ SQL_INNODB_STRICT_MODE,         SETTING_VARIABLE, true,  false, false, true, ( char *)"innodb_strict_mode",         NULL, (char *)"" , false} ,
+	{ SQL_INNODB_TABLE_LOCKS,         SETTING_VARIABLE, true,  false, false, true, ( char *)"innodb_table_locks",         NULL, (char *)"" , false} ,
+	{ SQL_JOIN_BUFFER_SIZE,           SETTING_VARIABLE, false, false, true,  false, (char *)"join_buffer_size",           NULL, (char *)"" , false} ,
+	{ SQL_LC_MESSAGES,                SETTING_VARIABLE, true,  false, false, false, (char *)"lc_messages",                NULL, (char *)"" , false} ,
+	{ SQL_LC_TIME_NAMES,              SETTING_VARIABLE, true,  false, false, false, (char *)"lc_time_names",              NULL, (char *)"" , false} ,
+	{ SQL_LOCK_WAIT_TIMEOUT,          SETTING_VARIABLE, false, false, true,  false, (char *)"lock_wait_timeout",          NULL, (char *)"" , false} ,
+	{ SQL_LONG_QUERY_TIME,            SETTING_VARIABLE, false, false, true,  false, (char *)"long_query_time",            NULL, (char *)"" , false} ,
+	{ SQL_MAX_EXECUTION_TIME,         SETTING_VARIABLE, false, false, true,  false, (char *)"max_execution_time",         NULL, (char *)"" , false} ,
+	{ SQL_MAX_HEAP_TABLE_SIZE,        SETTING_VARIABLE, false, false, true,  false, (char *)"max_heap_table_size",        NULL, (char *)"18446744073709547520" , false} ,
+	{ SQL_MAX_JOIN_SIZE,              SETTING_VARIABLE, false, false, true,  false, (char *)"max_join_size",              NULL, (char *)"18446744073709551615" , false} ,
+	{ SQL_MAX_SORT_LENGTH,            SETTING_VARIABLE, false, false, true,  false, (char *)"max_sort_length",            NULL, (char *)"" , false} ,
+	{ SQL_OPTIMIZER_PRUNE_LEVEL,      SETTING_VARIABLE, false, false, true,  false, (char *)"optimizer_prune_level",      NULL, (char *)"" , false} ,
+	{ SQL_OPTIMIZER_SEARCH_DEPTH,     SETTING_VARIABLE, false, false, true,  false, (char *)"optimizer_search_depth",     NULL, (char *)"" , false} ,
+	{ SQL_OPTIMIZER_SWITCH,           SETTING_VARIABLE, true,  false, false, false, (char *)"optimizer_switch",           NULL, (char *)"" , false} ,
+	{ SQL_PROFILING,                  SETTING_VARIABLE, true,  false, false, true, ( char *)"profiling",                  NULL, (char *)"" , false} ,
+	{ SQL_SORT_BUFFER_SIZE,           SETTING_VARIABLE, false, false, true,  false, (char *)"sort_buffer_size",           NULL, (char *)"18446744073709551615" , false} ,
+	{ SQL_SQL_AUTO_IS_NULL,           SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_auto_is_null",           NULL, (char *)"OFF" , false} ,
+	{ SQL_SQL_BIG_SELECTS,            SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_big_selects",            NULL, (char *)"OFF" , true} ,
+	{ SQL_SQL_LOG_BIN,                SETTING_VARIABLE, false, false, false, true,  (char *)"sql_log_bin",                NULL, (char *)"ON"  , false} ,
+	{ SQL_SQL_MODE,                   SETTING_VARIABLE, true,  false, false, false, (char *)"sql_mode" ,                  NULL, (char *)"" , false} ,
+	{ SQL_SQL_SAFE_UPDATES,           SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_safe_updates",           NULL, (char *)"OFF" , false} ,
+	{ SQL_SQL_SELECT_LIMIT,           SETTING_VARIABLE, false, false, true,  false, (char *)"sql_select_limit",           NULL, (char *)"DEFAULT" , false} ,
+	{ SQL_TIME_ZONE,                  SETTING_VARIABLE, true,  false, false, false, (char *)"time_zone",                  NULL, (char *)"SYSTEM" , false} ,
+	{ SQL_TIMESTAMP,                  SETTING_VARIABLE, false, false, true,  false, (char *)"timestamp",                  NULL, (char *)"" , false} ,
+	{ SQL_TMP_TABLE_SIZE,             SETTING_VARIABLE, false, false, true,  false, (char *)"tmp_table_size",             NULL, (char *)"" , false} ,
+	{ SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
+
+	/*
+	variables that will need input validation:
+	binlog_row_image
+
+	variables that needs special handling:
+	max_allowed_packet
+	max_execution_time
+	session_track_state_change
+	session_track_system_variables
+	session_track_transaction_info
+	*/
+
+
 };
 #else
 extern mysql_variable_st mysql_tracked_variables[];
