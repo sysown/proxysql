@@ -1223,6 +1223,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
+	if (mysql_thread___enable_client_deprecate_eof) {
+		mysql_thread___server_capabilities |= CLIENT_DEPRECATE_EOF;
+	} else {
+		mysql_thread___server_capabilities &= ~CLIENT_DEPRECATE_EOF;
+	}
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
   const MARIADB_CHARSET_INFO *ci = NULL;
