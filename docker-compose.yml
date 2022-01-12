@@ -1,5 +1,6 @@
 version: "2.0"
 services:
+
   centos6_build:
     image: proxysql/packaging:build-centos6
     volumes:
@@ -15,6 +16,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos6_dbg_build:
     image: proxysql/packaging:build-centos6
     volumes:
@@ -31,6 +33,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos67_build:
     image: proxysql/packaging:build-centos6.7v2
     volumes:
@@ -46,6 +49,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos67_dbg_build:
     image: proxysql/packaging:build-centos6.7v2
     volumes:
@@ -62,6 +66,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos7_build:
     image: proxysql/packaging:build-centos7
     volumes:
@@ -77,6 +82,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos7_arm64_build:
     image: proxysql/packaging-arm64:build-centos7
     volumes:
@@ -92,6 +98,7 @@ services:
       - PROXYSQL_BUILD_ARCH=aarch64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos7_dbg_build:
     image: proxysql/packaging:build-centos7
     volumes:
@@ -107,6 +114,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos8_build:
     image: proxysql/packaging:build-centos8
     volumes:
@@ -122,6 +130,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos8_arm64_build:
     image: proxysql/packaging-arm64:build-centos8
     volumes:
@@ -137,6 +146,7 @@ services:
       - PROXYSQL_BUILD_ARCH=aarch64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   centos8_dbg_build:
     image: proxysql/packaging:build-centos8
     volumes:
@@ -152,6 +162,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   fedora24_build:
     image: proxysql/packaging:build-fedora24
     volumes:
@@ -167,6 +178,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   fedora24_dbg_build:
     image: proxysql/packaging:build-fedora24
     volumes:
@@ -182,6 +194,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   fedora27_build:
     image: proxysql/packaging:build-fedora27
     volumes:
@@ -197,6 +210,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   fedora27_dbg_build:
     image: proxysql/packaging:build-fedora27
     volumes:
@@ -212,6 +226,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   fedora28_build:
     image: proxysql/packaging:build-fedora28
     volumes:
@@ -227,6 +242,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   fedora28_dbg_build:
     image: proxysql/packaging:build-fedora28
     volumes:
@@ -242,6 +258,23 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
+  fedora32_arm64_build:
+    image: proxysql/packaging-arm64:build-fedora32
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=fedora32
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=aarch64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
   fedora33_build:
     image: proxysql/packaging:build-fedora33
     volumes:
@@ -257,6 +290,23 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
+  fedora33_arm64_build:
+    image: proxysql/packaging-arm64:build-fedora33
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=fedora33
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=aarch64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
   fedora33_dbg_build:
     image: proxysql/packaging:build-fedora33
     volumes:
@@ -288,6 +338,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   fedora34_dbg_build:
     image: proxysql/packaging:build-fedora34
     volumes:
@@ -304,36 +355,6 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
 
-  fedora32_arm64_build:
-    image: proxysql/packaging-arm64:build-fedora32
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=fedora32
-      - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=aarch64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  fedora33_arm64_build:
-    image: proxysql/packaging-arm64:build-fedora33
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=fedora33
-      - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=aarch64
-    command:
-      - /opt/entrypoint/entrypoint.bash
   debian8_build:
     image: proxysql/packaging:build-debian8
     volumes:
@@ -348,6 +369,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian8_dbg_build:
     image: proxysql/packaging:build-debian8
     volumes:
@@ -363,6 +385,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian9_build:
     image: proxysql/packaging:build-debian9
     volumes:
@@ -378,6 +401,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian9_arm64_build:
     image: proxysql/packaging-arm64:build-debian9
     volumes:
@@ -393,6 +417,7 @@ services:
       - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian9_dbg_build:
     image: proxysql/packaging:build-debian9
     volumes:
@@ -408,6 +433,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian9.4_build:
     image: proxysql/packaging:build-debian9.4
     volumes:
@@ -423,6 +449,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian9.4_dbg_build:
     image: proxysql/packaging:build-debian9.4
     volumes:
@@ -438,6 +465,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian10_build:
     image: proxysql/packaging:build-debian10
     volumes:
@@ -453,6 +481,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian10_arm64_build:
     image: proxysql/packaging-arm64:build-debian10
     volumes:
@@ -468,6 +497,7 @@ services:
       - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian10_dbg_build:
     image: proxysql/packaging:build-debian10
     volumes:
@@ -483,6 +513,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian11_build:
     image: proxysql/packaging:build-debian11
     volumes:
@@ -498,6 +529,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian11_arm64_build:
     image: proxysql/packaging-arm64:build-debian11
     volumes:
@@ -513,6 +545,7 @@ services:
       - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   debian11_dbg_build:
     image: proxysql/packaging:build-debian11
     volumes:
@@ -528,6 +561,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu14_build:
     image: proxysql/packaging:build-ubuntu14
     volumes:
@@ -542,6 +576,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu14_dbg_build:
     image: proxysql/packaging:build-ubuntu14
     volumes:
@@ -557,6 +592,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu16_build:
     image: proxysql/packaging:build-ubuntu16
     volumes:
@@ -572,6 +608,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu16_dbg_build:
     image: proxysql/packaging:build-ubuntu16
     volumes:
@@ -587,6 +624,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu18_build:
     image: proxysql/packaging:build-ubuntu18
     volumes:
@@ -602,6 +640,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu18_arm64_build:
     image: proxysql/packaging-arm64:build-ubuntu18
     volumes:
@@ -617,6 +656,7 @@ services:
       - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu18_dbg_build:
     image: proxysql/packaging:build-ubuntu18
     volumes:
@@ -632,6 +672,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu20_build:
     image: proxysql/packaging:build-ubuntu20
     volumes:
@@ -647,6 +688,7 @@ services:
       - PROXYSQL_BUILD_ARCH=amd64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu20_arm64_build:
     image: proxysql/packaging-arm64:build-ubuntu20
     volumes:
@@ -662,6 +704,7 @@ services:
       - PROXYSQL_BUILD_ARCH=arm64
     command:
       - /opt/entrypoint/entrypoint.bash
+
   ubuntu20_dbg_build:
     image: proxysql/packaging:build-ubuntu20
     volumes:
