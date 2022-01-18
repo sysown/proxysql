@@ -131,6 +131,24 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
 
+  centos8_clang_build:
+    image: proxysql/packaging:build-clang-centos8
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - CC=clang
+      - CXX=clang++
+      - PKG_RELEASE=centos8-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
   centos8_arm64_build:
     image: proxysql/packaging-arm64:build-centos8
     volumes:
@@ -339,6 +357,24 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
 
+  fedora34_clang_build:
+    image: proxysql/packaging:build-clang-fedora34
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - CC=clang
+      - CXX=clang++
+      - PKG_RELEASE=fedora34-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
   fedora34_dbg_build:
     image: proxysql/packaging:build-fedora34
     volumes:
@@ -530,6 +566,24 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
 
+  debian11_clang_build:
+    image: proxysql/packaging:build-clang-debian11
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - CC=clang
+      - CXX=clang++
+      - PKG_RELEASE=debian11-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=amd64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
   debian11_arm64_build:
     image: proxysql/packaging-arm64:build-debian11
     volumes:
@@ -684,6 +738,24 @@ services:
       - MAKEOPT
       - CURVER
       - PKG_RELEASE=ubuntu20
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=amd64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  ubuntu20_clang_build:
+    image: proxysql/packaging:build-clang-ubuntu20
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - CC=clang
+      - CXX=clang++
+      - PKG_RELEASE=ubuntu20-clang
       - PROXYSQL_BUILD_TYPE=clickhouse
       - PROXYSQL_BUILD_ARCH=amd64
     command:

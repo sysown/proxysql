@@ -62,7 +62,8 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
 
-GCC_VERSION := $(shell gcc -dumpversion)
+GCC_VERSION :=
+#$(shell gcc -dumpversion)
 MIN_VERSION := 4.9.0
 REQUIRE_PATCH = false
 
@@ -141,6 +142,7 @@ lz4: lz4/lz4/liblz4.a
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp.tar.gz
+	cd clickhouse-cpp/clickhouse-cpp && sed -i 's/"-O2 -pthread -Wall -Wextra -Werror"/"-O2 -pthread -Wall -Wextra -Werror -Wno-deprecated-copy"/' CMakeLists.txt
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/columns/column.h < ../column.h.diff
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}

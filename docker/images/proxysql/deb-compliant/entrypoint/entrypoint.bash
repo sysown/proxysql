@@ -5,11 +5,11 @@ echo "==> Build environment:"
 env
 
 ARCH=$PROXYSQL_BUILD_ARCH
-echo "==> $ARCH architecture detected for package"
+echo "==> ${ARCH} architecture detected for package"
 
 echo "==> Cleaning"
 # Delete package if exists
-rm -f /opt/proxysql/binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.deb || true
+rm -f /opt/proxysql/binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb || true
 # Cleanup relic directories from a previously failed build
 rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql || true
 
@@ -34,13 +34,25 @@ fi
 touch /opt/proxysql/src/proxysql
 
 # Prepare package files and build DEB
-echo "==> Packaging"
-cp /root/ctl/proxysql.ctl /opt/proxysql/proxysql.ctl
-sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" /opt/proxysql/proxysql.ctl
-sed -i "s/PKG_ARCH/${ARCH}/g" /opt/proxysql/proxysql.ctl
-cp /opt/proxysql/src/proxysql /opt/proxysql/
-equivs-build proxysql.ctl
-mv "/opt/proxysql/proxysql_${CURVER}_$ARCH.deb" "./binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.deb"
-cp "/opt/proxysql/src/proxysql.sha1" "/opt/proxysql/binaries/proxysql-${CURVER}-${PKG_RELEASE}.$ARCH.id-hash"
+#echo "==> Packaging"
+#cp /root/ctl/proxysql.ctl /opt/proxysql/proxysql.ctl
+#sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" /opt/proxysql/proxysql.ctl
+#sed -i "s/PKG_ARCH/${ARCH}/g" /opt/proxysql/proxysql.ctl
+#cp /opt/proxysql/src/proxysql /opt/proxysql/
+#equivs-build proxysql.ctl
+#mv "/opt/proxysql/proxysql_${CURVER}_$ARCH.deb" "./binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.deb"
+#cp "/opt/proxysql/src/proxysql.sha1" "/opt/proxysql/binaries/proxysql-${CURVER}-${PKG_RELEASE}.$ARCH.id-hash"
 # Cleanup current build
-rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql
+#rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql
+
+echo "==> Packaging"
+cd /opt/proxysql
+mkdir -p ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN
+cp /root/ctl/proxysql.ctl ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
+sed -i "/^$/d; /^#/d" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
+sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
+sed -i "s/PKG_ARCH/${ARCH}/g" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
+cp /opt/proxysql/src/proxysql ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
+dpkg-deb --build --root-owner-group ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
+mv ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb ./binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
+cp ./src/proxysql.sha1 ./binaries/proxysql-${CURVER}-${PKG_RELEASE}.${ARCH}.id-hash
