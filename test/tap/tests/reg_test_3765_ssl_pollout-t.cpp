@@ -1,8 +1,10 @@
 /**
- * @file reg_test_NNNN_ssl_pollout-t.cpp
- * @brief This tests open multiple connections against ProxySQL with different client flags, and checks that
- *   the CPU usage wasn't significantly increased. The goal of the test is to detect regressions or
- *   incompatibilities in the way ProxySQL polling operations interacts with OpenSSL library.
+ * @file reg_test_3765_ssl_pollout-t.cpp
+ * @brief This test opens multiple connections against ProxySQL with different client flags and checks that
+ *   CPU usage by ProxySQL didn't increase significantly. Tested connections types are: normal, SSL, and
+ *   compression.
+ * @details The goal of the test is to detect regressions or incompatibilities in the way ProxySQL polling
+ *   operations interacts with OpenSSL library.
  */
 
 #include <algorithm>
