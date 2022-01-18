@@ -1190,7 +1190,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
 	variables.log_mysql_warnings_enabled=false;
-	variables.tls_version=strdup("TLSv1,TLSv1.1,TLSv1.2,TLSv1.3");
+	variables.tls_version=strdup("TLSv1.2,TLSv1.3");
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -1619,12 +1619,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
  * @brief List of valid 'TLS' versions supported by ProxySQL for
  *   client connections.
  */
-const std::array<const char*, 4> valid_tls_versions {
-	"TLSv1",
-	"TLSv1.1",
-	"TLSv1.2",
-	"TLSv1.3"
-};
+const std::array<const char*, 4> valid_tls_versions { "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3" };
 
 /**
  * @brief Checks that the supplied 'tls_version' variable value is correct.
@@ -1632,17 +1627,15 @@ const std::array<const char*, 4> valid_tls_versions {
  * @return 'true' if the value was found to be correct, false otherwise.
  */
 bool valid_tls_versions_var(const std::string& tls_version_val) {
-	bool res = true;
+	if (tls_version_val.empty()) { return false; }
 
-	std::vector<std::string> input_tls_versions {
-		str_split(tls_version_val, ',')
-	};
+	bool res = true;
+	std::vector<std::string> input_tls_versions { str_split(tls_version_val, ',') };
 
 	for (const auto& param_tls_ver : input_tls_versions) {
 		bool valid_tls_version =
 			std::find_if(
-				valid_tls_versions.begin(),
-				valid_tls_versions.end(),
+				valid_tls_versions.begin(), valid_tls_versions.end(),
 				[&param_tls_ver] (const std::string& tls_ver) -> bool {
 					return !strcasecmp(param_tls_ver.c_str(), tls_ver.c_str());
 				}
@@ -2101,6 +2094,13 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	}
 	if (!strcasecmp(name,"tls_version")) {
 		if (vallen && valid_tls_versions_var(value)) {
+			std::vector<std::string> tls_versions_allowed { sort_tls_versions(value) };
+			int min_tls_proto_version = string_to_tls_version(tls_versions_allowed.front());
+			// If 'min' TLS version is below 'TLSv1.2' issue a warning for users to notice
+			if (min_tls_proto_version < TLS1_2_VERSION) {
+				proxy_warning("Allowing deprecated TLS versions below TLSv1.2. Using at least TLSv1.2 is recommended\n");
+			}
+
 			if (variables.tls_version) free(variables.tls_version);
 			variables.tls_version = strdup(value);
 
