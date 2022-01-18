@@ -171,11 +171,22 @@ int wait_for_replication(
 	MYSQL* proxy, MYSQL* proxy_admin, const std::string& check, uint32_t timeout, uint32_t reader_hg
 );
 
+#ifndef MYSQLCLIENT_TEST
+
 /**
  * NOTE: This is a duplicate of 'proxysql_find_charset_collate' in 'MySQL_Variables.h'. Including
  * 'MySQL_Variables' is not a easy task due to its interdependeces with other ProxySQL modules.
  */
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
+
+#else
+
+typedef struct ma_charset_info_st {} MARIADB_CHARSET_INFO;
+extern const MARIADB_CHARSET_INFO mariadb_compiled_charsets[];
+#define LIBMARIADB_REQUIRED_DEFINITIONS \
+	const MARIADB_CHARSET_INFO mariadb_compiled_charsets[0];
+
+#endif
 
 /**
  * @brief Creates the new supplied user in ProxySQL with the provided
