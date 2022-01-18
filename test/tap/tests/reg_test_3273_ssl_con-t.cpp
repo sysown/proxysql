@@ -1,5 +1,5 @@
 /**
- * @file test_simple_ssl_con-t.cpp
+ * @file reg_test_3273_ssl_con-t.cpp
  * @brief This test tries to induce a particular timing condition to replicate issue #70138.
  *  For testing the issue against admin, supply to the binary "admin" as parameter, otherwise
  *  the connection will be created as a regular client connection.
@@ -65,7 +65,7 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 }
 
 const uint32_t REPORT_INTV_SEC = 5;
-const double MAX_ALLOWED_CPU_USAGE = 0.02;
+const double MAX_ALLOWED_CPU_USAGE = 0.15;
 
 int main(int argc, char** argv) {
 	CommandLine cl;
