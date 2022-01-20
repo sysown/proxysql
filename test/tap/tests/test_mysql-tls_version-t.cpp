@@ -14,21 +14,37 @@
 #include <mysql.h>
 #include <mysql/errmsg.h>
 
+#include <openssl/conf.h>
+
+#include "command_line.h"
 #include "proxysql_utils.h"
 #include "tap.h"
-#include "command_line.h"
 #include "utils.h"
+
+#ifndef MYSQLCLIENT_TEST
+
+#include "gen_utils.h"
+#include "proxysql_structs.h"
+#include "MySQL_LDAP_Authentication.hpp"
+
+ProxySQL_GlobalVariables GloVars;
+global_variables glovars;
+MySQL_LDAP_Authentication* GloMyLdapAuth;
+
+#endif
 
 using std::string;
 using std::vector;
 using std::array;
 
+#ifdef MYSQLCLIENT_TEST
 /*
  * @brief This test requires to be compiled against 'libmysqlclient'. Because some testing utilities are
  *   bounded to 'libmariadbclient' the following MACRO needs to be included to make definitions and solve
  *   linker issues.
  */
 LIBMARIADB_REQUIRED_DEFINITIONS
+#endif
 
 /**
  * @brief Copy of the supported 'tls_versions' by ProxySQL. But
@@ -38,6 +54,7 @@ LIBMARIADB_REQUIRED_DEFINITIONS
  */
 const array<const char*, 4> valid_tls_versions { "tlSv1", "TlSv1.1", "tLsv1.2", "tlSv1.3" };
 
+#ifdef MYSQLCLIENT_TEST
 /**
  * @brief Duplicated function from 'gen_utils.h'. Header file can't be included itself due to inclusion of
  *   'libmariadb' specific headers. This can be changed in the future.
@@ -53,6 +70,7 @@ vector<string> str_split(const string& s, char delimiter) {
 
 	return tokens;
 }
+#endif
 
 /**
  * @brief Helper function to generate some random invalid TLS values.
@@ -168,41 +186,33 @@ int main(int argc, char** argv) {
 			// Test that the connection is valid for each of the specified versions
 			vector<string> non_present_versions {};
 			copy_if(
-				v_valid_tls_versions.begin(),
-				v_valid_tls_versions.end(),
-				back_inserter(non_present_versions),
+				v_valid_tls_versions.begin(), v_valid_tls_versions.end(), back_inserter(non_present_versions),
 				[&valid_tls_combination] (const string& version) {
-					return find(
-						valid_tls_combination.begin(),
-						valid_tls_combination.end(),
-						version
-					) == end(valid_tls_combination);
+					auto v_pos = find(valid_tls_combination.begin(), valid_tls_combination.end(), version);
+					return v_pos == end(valid_tls_combination);
 				}
 			);
 
 			vector<string> bigger_non_present_versions {};
-			vector<string> all_present_versions(
-				valid_tls_combination.begin(),
-				valid_tls_combination.end()
-			);
+			vector<string> all_present_versions(valid_tls_combination.begin(), valid_tls_combination.end());
+
 			// sort all the present versions in a case-insensitive way
-			sort(
-				all_present_versions.begin(),
-				all_present_versions.end(),
+			std::sort(
+				all_present_versions.begin(), all_present_versions.end(),
 				[](const string& v1, const string& v2) {
 					const auto result =
-						mismatch_(v1.cbegin(), v1.cend(), v2.cbegin(), v2.cend(),
+						mismatch_(
+							v1.cbegin(), v1.cend(), v2.cbegin(), v2.cend(),
 							[](const unsigned char lhs, const unsigned char rhs) {
 								return tolower(lhs) == tolower(rhs);
 							}
 						);
 
-					return
-						result.second != v2.cend() &&
-						(
-							result.first == v1.cend() ||
-							tolower(*result.first) < tolower(*result.second)
-						);
+					const bool not_equal = result.second != v2.cend();
+					const bool fst_shorter = result.first == v1.cend();
+					const bool fst_lesser = std::tolower(*result.first) < std::tolower(*result.second);
+
+					return not_equal && (fst_shorter || fst_lesser);
 				}
 			);
 			string biggest_present_version { all_present_versions.back() };
@@ -221,6 +231,14 @@ int main(int argc, char** argv) {
 				for (const string& c_tls_version : non_formatted_tls_versions) {
 					string tls_version  = c_tls_version;
 					tls_version.replace(0, 4, "TLSv");
+
+#ifndef MYSQLCLIENT_TEST
+					// In libmariadbclient 'TLSv1' is specified as 'TLSv1.0'
+					if (tls_version == "TLSv1") {
+						tls_version = "TLSv1.0";
+					}
+#endif
+
 					formatted_tls_version.push_back(tls_version);
 				}
 
@@ -236,16 +254,20 @@ int main(int argc, char** argv) {
 				mysql_options(proxysql, MYSQL_OPT_TLS_VERSION, final_tls_version.c_str());
 				mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
 
-				proxysql =
-					mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0);
+				bool conn_success = false;
 
-				if (proxysql == NULL) {
-					fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Connection failure");
+#ifdef MYSQLCLIENT_TEST
+				if (mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0) != NULL) {
+					conn_success = true;
 				}
+#else
+				if (mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL) != NULL) {
+					conn_success = true;
+				}
+#endif
 
 				ok(
-					proxysql != NULL,
-					"Connection should be succesfull for the valid 'tls_version:%s' with error_code:'%d'",
+					conn_success, "Connection should be succesfull for the valid 'tls_version:%s' with error_code:'%d'",
 					final_tls_version.c_str(), mysql_errno(proxysql)
 				);
 
@@ -262,8 +284,13 @@ int main(int argc, char** argv) {
 				mysql_options(proxysql, MYSQL_OPT_TLS_VERSION, formatted_tls_version.c_str());
 				mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
 
+#ifdef MYSQLCLIENT_TEST
 				MYSQL* failure =
 					mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0);
+#else
+				MYSQL* failure =
+					mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL);
+#endif
 
 				ok(
 					(failure == NULL) && (mysql_errno(proxysql) == CR_SSL_CONNECTION_ERROR),
@@ -311,9 +338,7 @@ int main(int argc, char** argv) {
 		ok(
 			invalid_tls_version != tls_ver_cur_val,
 			"Setting 'mysql-tls_version' variable to value '%s' should fail: (exp_val:'%s' != cur_val:'%s')",
-			invalid_tls_version.c_str(),
-			invalid_tls_version.c_str(),
-			tls_ver_cur_val.c_str()
+			invalid_tls_version.c_str(), invalid_tls_version.c_str(), tls_ver_cur_val.c_str()
 		);
 	}
 
