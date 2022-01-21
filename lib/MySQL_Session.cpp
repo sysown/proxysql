@@ -6509,7 +6509,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 		}
-		if (session_fast_forward == false || qpo->create_new_conn == false) {
+		if (session_fast_forward == false && qpo->create_new_conn == false) {
 			if (qpo->min_gtid) {
 				gtid_uuid = qpo->min_gtid;
 				with_gtid = true;
