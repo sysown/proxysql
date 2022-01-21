@@ -42,9 +42,9 @@ endif
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-3.10.0 || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
-	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/make_parens.py
-	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse_map.py
-	sed -i -e 's/python/python2/' libinjection/libinjection-3.10.0/src/sqlparse2c.py
+ifneq ($(CENTOSVER),6)
+	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
+endif
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 libinjection: libinjection/libinjection/src/libinjection.a
 
@@ -55,8 +55,9 @@ libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-1.1.0h || true
 	cd libssl && rm -rf openssl-1.1.1g || true
 	cd libssl && rm -rf openssl-1.1.1j || true
-	cd libssl && tar -zxf openssl-1.1.1j.tar.gz
-	cd libssl/openssl  && ./config no-ssl3
+	cd libssl && rm -rf openssl-openssl-3.0.0 || true
+	cd libssl && tar -zxf openssl-3.0.0.tar.gz
+	cd libssl/openssl  && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
@@ -105,7 +106,7 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && rm -rf curl-7.77.0 || true
 	cd curl && tar -zxf curl-7.77.0.tar.gz
 	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
-	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
 curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
@@ -147,7 +148,7 @@ clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 
 
-libdaemon/libdaemon/libdaemon/.libs/libdaemon.a: 
+libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 	cd libdaemon && rm -rf libdaemon-0.14
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
 	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && ./configure --disable-examples
@@ -157,7 +158,7 @@ libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-5.2.0
-	cd jemalloc && tar -jxf jemalloc-5.2.0.tar.bz2
+	cd jemalloc && tar --no-same-owner -jxf jemalloc-5.2.0.tar.bz2
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue823.520.patch
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue2358.patch
 	cd jemalloc/jemalloc && ./configure ${MYJEOPT}
@@ -172,6 +173,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
 	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
@@ -223,6 +225,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-v1.11.tar.gz -C prometheus-cpp/3rdparty/civetweb
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
 	cd prometheus-cpp/prometheus-cpp && patch -p0 < ../registry_counters_reset.patch
+	cd prometheus-cpp/prometheus-cpp && patch -p0 < ../include_limits.patch
 	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -288,6 +291,7 @@ cleanall:
 	cd libssl && rm -rf openssl-1.1.1d || true
 	cd libssl && rm -rf openssl-1.1.1g || true
 	cd libssl && rm -rf openssl-1.1.1j || true
+	cd libssl && rm -rf openssl-openssl-3.0.0 || true
 	cd libconfig && rm -rf libconfig-1.7.2 || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-0.9.0 || true
 .PHONY: cleanall

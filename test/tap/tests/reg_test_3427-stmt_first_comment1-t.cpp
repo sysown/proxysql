@@ -77,7 +77,6 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	MYSQL_STMT* stmt = nullptr;
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
@@ -89,13 +88,6 @@ int main(int argc, char** argv) {
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
-	}
-
-	stmt = mysql_stmt_init(proxysql_mysql);
-	if (!stmt) {
-		diag("mysql_stmt_init(), out of memory");
-		res = EXIT_FAILURE;
-		goto exit;
 	}
 
 	// Insert data in the table to be queried
@@ -156,13 +148,20 @@ int main(int argc, char** argv) {
 			std::string query_t {};
 
 			if (param) {
-				query_t = "SELECT /*+ ;hostgroup=0;%d */ * FROM test.reg_test_3427 WHERE id IN (?)";
+				query_t = "SELECT /* ;hostgroup=0;%d */ * FROM test.reg_test_3427 WHERE id IN (?)";
 			} else {
-				query_t = "SELECT /*+ ;hostgroup=0;%d */ * FROM test.reg_test_3427";
+				query_t = "SELECT /* ;hostgroup=0;%d */ * FROM test.reg_test_3427";
 			}
 
 			std::string query {};
 			string_format(query_t, query, query_id);
+
+			MYSQL_STMT* stmt = mysql_stmt_init(proxysql_mysql);
+			if (!stmt) {
+				diag("mysql_stmt_init(), out of memory");
+				res = EXIT_FAILURE;
+				goto exit;
+			}
 
 			if (mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()))) {
 				diag("mysql_stmt_prepare at line %d failed: %s", __LINE__ , mysql_error(proxysql_mysql));
@@ -261,11 +260,12 @@ int main(int argc, char** argv) {
 				res = EXIT_FAILURE;
 				goto exit;
 			}
+
+			mysql_stmt_close(stmt);
 		}
 	}
 
 exit:
-	if (stmt) { mysql_stmt_close(stmt); }
 	mysql_close(proxysql_mysql);
 	mysql_close(proxysql_admin);
 

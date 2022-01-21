@@ -198,9 +198,6 @@ class Query_Processor_Output {
 		if (comment) { // #643
 			free(comment);
 		}
-		if (comment) { // #643
-			free(comment);
-		}
 	}
 };
 

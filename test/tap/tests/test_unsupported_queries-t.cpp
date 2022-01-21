@@ -284,7 +284,7 @@ void helper_test_load_data_local_infile(
 
 			// Check that the data has actually been loaded to the database
 			// NOTE: Specifically target 'hostgroup=0' to avoid replication lag.
-			int myerr = mysql_query(proxysql, "SELECT * /*+ ;hostgroup=0 */ FROM test.load_data_local");
+			int myerr = mysql_query(proxysql, "SELECT * /* ;hostgroup=0 */ FROM test.load_data_local");
 			if (myerr) {
 				diag(
 					"Query 'SELECT * FROM test.load_data_local' for table preparation failed"

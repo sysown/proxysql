@@ -411,6 +411,7 @@ void MySQL_Listeners_Manager::del(unsigned int idx) {
 static char * mysql_thread_variables_names[]= {
 	(char *)"shun_on_failures",
 	(char *)"shun_recovery_time_sec",
+	(char *)"unshun_algorithm",
 	(char *)"query_retries_on_failure",
 	(char *)"client_multi_statements",
 	(char *)"client_host_cache_size",
@@ -497,6 +498,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_digests_max_digest_length",
 	(char *)"query_digests_max_query_length",
 	(char *)"query_digests_grouping_limit",
+	(char *)"query_digests_groups_grouping_limit",
 	(char *)"wait_timeout",
 	(char *)"throttle_max_bytes_per_second_to_client",
 	(char *)"throttle_ratio_server_to_client",
@@ -594,7 +596,7 @@ using th_gauge_vector = std::vector<th_gauge_tuple>;
  * @note Many metrics in this map, share a common "id name", because
  *  they differ only by label, because of this, HELP is shared between
  *  them. For better visual identification of this groups they are
- *  sepparated using a line separator comment.
+ *  separated using a line separator comment.
  */
 const std::tuple<th_counter_vector, th_gauge_vector>
 th_metrics_map = std::make_tuple(
@@ -820,7 +822,7 @@ th_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_th_counter::mysql_unexpected_frontend_com_quit,
 			"proxysql_mysql_unexpected_frontend_com_quit_total",
-			"Unexpecte 'COM_QUIT' received from the client.",
+			"Unexpected 'COM_QUIT' received from the client.",
 			metric_tags {}
 		),
 		std::make_tuple (
@@ -1027,12 +1029,14 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 #endif // IDLE_THREADS
 	stacksize=0;
 	shutdown_=0;
+	bootstrapping_listeners = true;
 	pthread_rwlock_init(&rwlock,NULL);
 	pthread_attr_init(&attr);
 	// Zero initialize all variables
 	memset(&variables, 0, sizeof(variables));
 	variables.shun_on_failures=5;
 	variables.shun_recovery_time_sec=10;
+	variables.unshun_algorithm=0;
 	variables.query_retries_on_failure=1;
 	variables.client_multi_statements=true;
 	variables.client_host_cache_size=0;
@@ -1114,7 +1118,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.init_connect=NULL;
 	variables.ldap_user_variable=NULL;
 	variables.add_ldap_user_comment=NULL;
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
 	}
 	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
@@ -1175,11 +1179,12 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ssl_p2s_cipher=NULL;
 	variables.ssl_p2s_crl=NULL;
 	variables.ssl_p2s_crlpath=NULL;
-	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,version");
+	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,transaction_isolation,version");
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
 	variables.query_digests_grouping_limit = 3;
+	variables.query_digests_groups_grouping_limit= 0;
 	variables.enable_client_deprecate_eof=true;
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
@@ -1364,7 +1369,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 		}
 	}
 	if (!strncmp(name,"default_",8)) {
-		for (int i=0; i<SQL_NAME_LAST; i++) {
+		for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 			if (mysql_tracked_variables[i].is_global_variable==false)
 				continue;
 			char buf[128];
@@ -1511,7 +1516,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	}
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
-			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
+			for (unsigned int i = 0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 				if (mysql_tracked_variables[i].is_global_variable) {
 					size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
 					if (strlen(name) == (var_len+8)) {
@@ -1847,7 +1852,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 	}
 
 	if (!strncmp(name,"default_",8)) {
-		for (int i=0; i<SQL_NAME_LAST; i++) {
+		for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 			if (mysql_tracked_variables[i].is_global_variable==false)
 				continue;
 			char buf[128];
@@ -2156,6 +2161,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["default_query_delay"]             = make_tuple(&variables.default_query_delay,              0,   3600*1000, false);
 		VariablesPointers_int["default_query_timeout"]           = make_tuple(&variables.default_query_timeout,         1000,20*24*3600*1000, false);
 		VariablesPointers_int["query_digests_grouping_limit"]    = make_tuple(&variables.query_digests_grouping_limit,     1,        2089, false);
+		VariablesPointers_int["query_digests_groups_grouping_limit"] = make_tuple(&variables.query_digests_groups_grouping_limit, 0, 2089, false);
 		VariablesPointers_int["query_digests_max_digest_length"] = make_tuple(&variables.query_digests_max_digest_length, 16, 1*1024*1024, false);
 		VariablesPointers_int["query_digests_max_query_length"]  = make_tuple(&variables.query_digests_max_query_length,  16, 1*1024*1024, false);
 		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
@@ -2176,6 +2182,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["reset_connection_algorithm"]  = make_tuple(&variables.reset_connection_algorithm,  1,               2, false);
 		VariablesPointers_int["shun_on_failures"]            = make_tuple(&variables.shun_on_failures,            0,        10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"]      = make_tuple(&variables.shun_recovery_time_sec,      0,     3600*24*365, false);
+		VariablesPointers_int["unshun_algorithm"]            = make_tuple(&variables.unshun_algorithm,            0,               1, false);
 		VariablesPointers_int["hostgroup_manager_verbose"]   = make_tuple(&variables.hostgroup_manager_verbose,   1,               2, false);
 		VariablesPointers_int["tcp_keepalive_time"]          = make_tuple(&variables.tcp_keepalive_time,          0,            7200, false);
 		VariablesPointers_int["min_num_servers_lantency_awareness"]        = make_tuple(&variables.min_num_servers_lantency_awareness,        0, 10000, false);
@@ -2227,13 +2234,13 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 	const size_t l=sizeof(mysql_thread_variables_names)/sizeof(char *);
 	unsigned int i;
 	size_t ltv = 0;
-	for (i=0; i < SQL_NAME_LAST ; i++) {
+	for (i=0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 		if (mysql_tracked_variables[i].is_global_variable)
 			ltv++;
 	}
 	char **ret=(char **)malloc(sizeof(char *)*(l+ltv)); // not adding + 1 because mysql_thread_variables_names is already NULL terminated
 	size_t fv = 0;
-	for (i=0; i < SQL_NAME_LAST ; i++) {
+	for (i=0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 		if (mysql_tracked_variables[i].is_global_variable) {
 			char * m = (char *)malloc(strlen(mysql_tracked_variables[i].internal_variable_name)+1+strlen((char *)"default_"));
 			sprintf(m,"default_%s", mysql_tracked_variables[i].internal_variable_name);
@@ -2255,7 +2262,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 bool MySQL_Threads_Handler::has_variable(const char *name) {
 	if (strlen(name) > 8) {
 		if (strncmp(name, "default_", 8) == 0) {
-			for (unsigned int i = 0; i < SQL_NAME_LAST ; i++) {
+			for (unsigned int i = 0; i < SQL_NAME_LAST_LOW_WM ; i++) {
 				if (mysql_tracked_variables[i].is_global_variable) {
 					size_t var_len = strlen(mysql_tracked_variables[i].internal_variable_name);
 					if (strlen(name) == (var_len+8)) {
@@ -2365,6 +2372,10 @@ void MySQL_Threads_Handler::shutdown_threads() {
 }
 
 void MySQL_Threads_Handler::start_listeners() {
+	// we set bootstrapping_listeners to true
+	// In this way MySQL_Thread will knows there are more listeners to add
+	// and it will continue looping until all listeners are added
+	bootstrapping_listeners = true;
 	char *_tmp=NULL;
 	_tmp=GloMTH->get_variable((char *)"interfaces");
 	if (strlen(_tmp)==0) {
@@ -2379,6 +2390,8 @@ void MySQL_Threads_Handler::start_listeners() {
 		listener_add((char *)token);
 	}
 	free_tokenizer( &tok );
+	// no more listeners to add
+	bootstrapping_listeners = false;
 }
 
 void MySQL_Threads_Handler::stop_listeners() {
@@ -2482,10 +2495,14 @@ char** client_host_cache_entry_row(
 	char** row =
 		static_cast<char**>(malloc(sizeof(char*)*CLIENT_HOST_CACHE_COLUMNS));
 
+	time_t __now = time(NULL);
+	unsigned long long curtime = monotonic_time();
+	time_t last_updated = __now - curtime/1000000 + entry.updated_at/1000000;
+
 	row[0]=strdup(address.c_str());
 	sprintf(buff, "%u", entry.error_count);
 	row[1]=strdup(buff);
-	sprintf(buff, "%lu", entry.updated_at);
+	sprintf(buff, "%lu", last_updated);
 	row[2]=strdup(buff);
 
 	return row;
@@ -2543,7 +2560,10 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 	if (error) {
 		pthread_mutex_lock(&mutex_client_host_cache);
 		// If the cache is full, find the oldest entry on it, and update/remove it.
-		if (client_host_cache.size() >= static_cast<size_t>(mysql_thread___client_host_cache_size)) {
+		if (
+			mysql_thread___client_host_cache_size &&
+			client_host_cache.size() >= static_cast<size_t>(mysql_thread___client_host_cache_size)
+		) {
 			auto older_elem = std::min_element(
 				client_host_cache.begin(),
 				client_host_cache.end(),
@@ -2553,8 +2573,10 @@ void MySQL_Threads_Handler::update_client_host_cache(struct sockaddr* client_soc
 					return f_entry.second.updated_at < s_entry.second.updated_at;
 				}
 			);
-			if (older_elem->first != client_addr) {
-				client_host_cache.erase(older_elem);
+			if (older_elem != client_host_cache.end()) {
+				if (older_elem->first != client_addr) {
+					client_host_cache.erase(older_elem);
+				}
 			}
 		}
 
@@ -2613,7 +2635,8 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.ssl_p2s_cipher) free(variables.ssl_p2s_cipher);
 	if (variables.ssl_p2s_crl) free(variables.ssl_p2s_crl);
 	if (variables.ssl_p2s_crlpath) free(variables.ssl_p2s_crlpath);
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+
+  for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (variables.default_variables[i]) {
 			free(variables.default_variables[i]);
 			variables.default_variables[i]=NULL;
@@ -2735,7 +2758,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation=NULL; }
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids=NULL; }
 
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_thread___default_variables[i]) {
 			free(mysql_thread___default_variables[i]);
 			mysql_thread___default_variables[i] = NULL;
@@ -2849,8 +2872,9 @@ bool MySQL_Thread::init() {
 	assert(i==0);
 
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
-	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
-
+//	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
+	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
+	
 	std::stringstream ss;
 	ss << "^SET (|SESSION |@@|@@session.)`?(" << mysql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION)`?( *)(:|)=( *)";
 	match_regexes[1]=new Session_Regex((char *)ss.str().c_str());
@@ -2942,13 +2966,22 @@ void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 
 // this function was inline in MySQL_Thread::run()
 void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
+	bool check_if_move_to_idle_thread = false;
+#ifdef IDLE_THREADS
+	if (GloVars.global.idle_threads) {
+		if (curtime > last_move_to_idle_thread_time + (unsigned long long)mysql_thread___session_idle_ms * 1000) {
+			last_move_to_idle_thread_time=curtime;
+			check_if_move_to_idle_thread=true;
+		}
+	}
+#endif
 	for (unsigned int n = 0; n < mypolls.len; n++) {
 		MySQL_Data_Stream *myds=NULL;
 		myds=mypolls.myds[n];
 		mypolls.fds[n].revents=0;
 		if (myds) {
 #ifdef IDLE_THREADS
-			if (GloVars.global.idle_threads) {
+			if (check_if_move_to_idle_thread == true) {
 				// here we try to move it to the maintenance thread
 				if (myds->myds_type==MYDS_FRONTEND && myds->sess) {
 					if (myds->DSS==STATE_SLEEP && myds->sess->status==WAITING_CLIENT_DATA) {
@@ -3096,9 +3129,15 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		pthread_mutex_unlock(&thread_mutex);
-		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_add,0))) {	// spin here
-			poll_listener_add(n);
-			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+		while ( // spin here if ...
+			(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
+			||
+			(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
+		) {
+			if (n) {
+				poll_listener_add(n);
+				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);
@@ -3711,7 +3750,9 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess_time/1000 > (unsigned long long)mysql_thread___connect_timeout_client) {
 				proxy_warning("Closing not established client connection %s:%d after %llums\n",sess->client_myds->addr.addr,sess->client_myds->addr.port, sess_time/1000);
 				sess->healthy = 0;
-				GloMTH->update_client_host_cache(sess->client_myds->client_addr, true);
+				if (mysql_thread___client_host_cache_size) {
+					GloMTH->update_client_host_cache(sess->client_myds->client_addr, true);
+				}
 			}
 		}
 		if (maintenance_loop) {
@@ -3829,6 +3870,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___shun_on_failures=GloMTH->get_variable_int((char *)"shun_on_failures");
 	mysql_thread___shun_recovery_time_sec=GloMTH->get_variable_int((char *)"shun_recovery_time_sec");
+	mysql_thread___unshun_algorithm=GloMTH->get_variable_int((char *)"unshun_algorithm");
 	mysql_thread___query_retries_on_failure=GloMTH->get_variable_int((char *)"query_retries_on_failure");
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
 	mysql_thread___client_multi_statements=(bool)GloMTH->get_variable_int((char *)"client_multi_statements");
@@ -3909,7 +3951,7 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
 	mysql_thread___default_session_track_gtids=GloMTH->get_variable_string((char *)"default_session_track_gtids");
 
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (mysql_thread___default_variables[i]) {
 			free(mysql_thread___default_variables[i]);
 			mysql_thread___default_variables[i] = NULL;
@@ -3959,6 +4001,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_normalize_digest_text=(bool)GloMTH->get_variable_int((char *)"query_digests_normalize_digest_text");
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
 	mysql_thread___query_digests_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_grouping_limit");
+	mysql_thread___query_digests_groups_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_groups_grouping_limit");
 	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas=GloMTH->get_variable_int((char *)"aurora_max_lag_ms_only_read_from_replicas");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");
@@ -4023,6 +4066,7 @@ MySQL_Thread::MySQL_Thread() {
 	mysql_thread___ssl_p2s_crlpath=NULL;
 
 	last_maintenance_time=0;
+	last_move_to_idle_thread_time=0;
 	maintenance_loop=true;
 	retrieve_gtids_required = false;
 
@@ -4042,7 +4086,7 @@ MySQL_Thread::MySQL_Thread() {
 	variables.stats_time_query_processor=false;
 	variables.query_cache_stores_empty_result=true;
 
-	for (int i=0; i<SQL_NAME_LAST; i++) {
+	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		mysql_thread___default_variables[i] = NULL;
 	}
 }
@@ -4734,7 +4778,7 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_Processlist() {
 					case SETTING_VARIABLE:
 						{
 							int idx = sess->changing_variable_idx;
-							if (idx < SQL_NAME_LAST) {
+							if (idx < SQL_NAME_LAST_HIGH_WM) {
 								char buf[128];
 								sprintf(buf, "Setting variable %s", mysql_tracked_variables[idx].set_variable_name);
 								pta[11]=strdup(buf);
