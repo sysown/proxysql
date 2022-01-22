@@ -564,6 +564,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
+	(char *)"tls_version",
 	NULL
 };
 
@@ -1189,6 +1190,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
 	variables.log_mysql_warnings_enabled=false;
+	variables.tls_version=strdup("TLSv1.2,TLSv1.3");
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -1400,6 +1402,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	if (!strcmp(name,"tls_version")) return strdup(variables.tls_version);
 	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
@@ -1606,12 +1609,46 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		sprintf(intbuf,"%d", (int)(stacksize ? stacksize : DEFAULT_STACK_SIZE));
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"tls_version")) return strdup(variables.tls_version);
 
 	return NULL;
 //VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
+/**
+ * @brief List of valid 'TLS' versions supported by ProxySQL for
+ *   client connections.
+ */
+const std::array<const char*, 4> valid_tls_versions { "TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3" };
 
+/**
+ * @brief Checks that the supplied 'tls_version' variable value is correct.
+ * @param tls_version_val The value of 'tls_version' variable to be verified.
+ * @return 'true' if the value was found to be correct, false otherwise.
+ */
+bool valid_tls_versions_var(const std::string& tls_version_val) {
+	if (tls_version_val.empty()) { return false; }
+
+	bool res = true;
+	std::vector<std::string> input_tls_versions { str_split(tls_version_val, ',') };
+
+	for (const auto& param_tls_ver : input_tls_versions) {
+		bool valid_tls_version =
+			std::find_if(
+				valid_tls_versions.begin(), valid_tls_versions.end(),
+				[&param_tls_ver] (const std::string& tls_ver) -> bool {
+					return !strcasecmp(param_tls_ver.c_str(), tls_ver.c_str());
+				}
+			) != std::end(valid_tls_versions);
+
+		if (!valid_tls_version) {
+			res = false;
+			break;
+		}
+	}
+
+	return res;
+}
 
 bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// this is the public function, accessible from admin
 	// IN:
@@ -2055,6 +2092,24 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"tls_version")) {
+		if (vallen && valid_tls_versions_var(value)) {
+			std::vector<std::string> tls_versions_allowed { sort_tls_versions(value) };
+			int min_tls_proto_version = string_to_tls_version(tls_versions_allowed.front());
+			// If 'min' TLS version is below 'TLSv1.2' issue a warning for users to notice
+			if (min_tls_proto_version < TLS1_2_VERSION) {
+				proxy_warning("Allowing deprecated TLS versions below TLSv1.2. Using at least TLSv1.2 is recommended\n");
+			}
+
+			if (variables.tls_version) free(variables.tls_version);
+			variables.tls_version = strdup(value);
+
+			return true;
+		} else {
+			return false;
+		}
+	}
+
 	return false;
 }
 
@@ -2635,6 +2690,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.ssl_p2s_cipher) free(variables.ssl_p2s_cipher);
 	if (variables.ssl_p2s_crl) free(variables.ssl_p2s_crl);
 	if (variables.ssl_p2s_crlpath) free(variables.ssl_p2s_crlpath);
+	if (variables.tls_version) free(variables.tls_version);
 
   for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		if (variables.default_variables[i]) {
@@ -2774,6 +2830,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___ssl_p2s_cipher) { free(mysql_thread___ssl_p2s_cipher); mysql_thread___ssl_p2s_cipher=NULL; }
 	if (mysql_thread___ssl_p2s_crl) { free(mysql_thread___ssl_p2s_crl); mysql_thread___ssl_p2s_crl=NULL; }
 	if (mysql_thread___ssl_p2s_crlpath) { free(mysql_thread___ssl_p2s_crlpath); mysql_thread___ssl_p2s_crlpath=NULL; }
+	if (mysql_thread___tls_version) { free(mysql_thread___tls_version); mysql_thread___tls_version=NULL; }
 
 
 	if (match_regexes) {
@@ -4026,6 +4083,9 @@ void MySQL_Thread::refresh_variables() {
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
+	if (mysql_thread___tls_version) free(mysql_thread___tls_version);
+	mysql_thread___tls_version=GloMTH->get_variable_string((char *)"tls_version");
+
 	GloMTH->wrunlock();
 	pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 }

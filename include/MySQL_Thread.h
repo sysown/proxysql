@@ -578,6 +578,7 @@ class MySQL_Threads_Handler
 		bool enable_server_deprecate_eof;
 		bool enable_load_data_local_infile;
 		bool log_mysql_warnings_enabled;
+		char* tls_version;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

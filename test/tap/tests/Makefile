@@ -129,6 +129,13 @@ test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_mysql_query_digests_stages-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_mysql_query_digests_stages-t -DGITVERSION=\"$(GIT_VERSION)\"
 
+test_mysql-tls_version-t: test_mysql-tls_version-t.cpp $(TAP_LIBDIR)/libtap.a
+	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) -lproxysql $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o $@
+
+# NOTE: Left as an example of how to compile a TAP tests against 'libmysqlclient'
+# test_mysql-tls_version-t: test_mysql-tls_version-t.cpp $(TAP_LIBDIR)/libtap.a
+# 	g++ test_mysql-tls_version-t.cpp -I$(IDIR) -I$(TAP_LIBDIR) $(OPT) -std=c++11 -I/usr/include/mysql/ -L$(TAP_LIBDIR) -L$(LDIR) -L/usr/lib/ -lmysqlclient -ltap -Wl,--no-as-needed -ldl -lpthread -lcurl -o test_mysql-tls_version-t -DGITVERSION=\"$(GIT_VERSION)\" -DMYSQLCLIENT_TEST
+
 sqlite3-t: sqlite3-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o sqlite3-t -DGITVERSION=\"$(GIT_VERSION)\"
 

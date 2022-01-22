@@ -99,6 +99,12 @@ struct admin_metrics_map_idx {
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
 
+/**
+ * @brief List of valid 'TLS' versions supported by ProxySQL for
+ *   client connections.
+ */
+extern const std::array<const char*, 4> valid_tls_versions;
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;

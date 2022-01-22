@@ -2,6 +2,8 @@
 #define UTILS_H
 
 #include <mysql.h>
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 #include <random>
@@ -78,8 +80,6 @@ int execvp(const std::string& file, const std::vector<const char*>& argv, std::s
  * @return int The error code returned by popen.
  */
 int exec(const std::string& cmd, std::string& result);
-
-
 
 // create table test.sbtest1 with num_rows rows
 int create_table_test_sbtest1(int num_rows, MYSQL *mysql);
@@ -171,11 +171,22 @@ int wait_for_replication(
 	MYSQL* proxy, MYSQL* proxy_admin, const std::string& check, uint32_t timeout, uint32_t reader_hg
 );
 
+#ifndef MYSQLCLIENT_TEST
+
 /**
  * NOTE: This is a duplicate of 'proxysql_find_charset_collate' in 'MySQL_Variables.h'. Including
  * 'MySQL_Variables' is not a easy task due to its interdependeces with other ProxySQL modules.
  */
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
+
+#else
+
+typedef struct ma_charset_info_st {} MARIADB_CHARSET_INFO;
+extern const MARIADB_CHARSET_INFO mariadb_compiled_charsets[];
+#define LIBMARIADB_REQUIRED_DEFINITIONS \
+	const MARIADB_CHARSET_INFO mariadb_compiled_charsets[0];
+
+#endif
 
 /**
  * @brief Creates the new supplied user in ProxySQL with the provided
@@ -223,5 +234,55 @@ using user_config = std::tuple<std::string, std::string, std::string>;
 int create_extra_users(
 	MYSQL* proxysql_admin, MYSQL* mysql_server, const std::vector<user_config>& users_config
 );
+
+/**
+ * @brief Returns the 'power set' of a generic 'std::vector<T>'.
+ * @param elem_set The 'std::vector' to be considered the original set from
+ *   which to generate the 'power set'.
+ * @return The 'power set' of the supplied std::vector<T>.
+ */
+template <typename T>
+std::vector<std::vector<T>> get_power_set(const std::vector<T>& elem_set) {
+	std::vector<std::vector<T>> result {};
+	unsigned int pow_set_size = std::pow(2, elem_set.size());
+
+	for(int counter = 0; counter < pow_set_size; counter++) {
+		std::vector<T> subset {};
+
+		for(int j = 0; j < elem_set.size(); j++) {
+			if(counter & (1 << j)) {
+				subset.push_back(elem_set[j]);
+			}
+		}
+
+		result.push_back(subset);
+	}
+
+	return result;
+}
+
+/**
+ * @brief Returns all the possible permutations of the supplied generic 'std::vector<T>'.
+ *   This methods holds as long as the generic <T> holds the type requirements for
+ *   'std::next_permutation'.
+ * @param elem_set An 'std::vector<T>' from which to generate all the possible permutations.
+ * @return All the possible permutations of the supplied vector.
+ */
+template <typename T>
+std::vector<std::vector<T>> get_permutations(const std::vector<T>& elem_set) {
+	std::vector<std::vector<T>> result {};
+
+	std::vector<T> c_elem_set(
+		elem_set.begin(),
+		elem_set.end()
+	);
+	std::sort(c_elem_set.begin(), c_elem_set.end());
+
+	do {
+		result.push_back(c_elem_set);
+	} while (std::next_permutation(c_elem_set.begin(), c_elem_set.end()));
+
+	return result;
+}
 
 #endif // #define UTILS_H

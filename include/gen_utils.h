@@ -240,3 +240,36 @@ int remove_spaces(const char *);
 char *trim_spaces_in_place(char *str);
 char *trim_spaces_and_quotes_in_place(char *str);
 bool mywildcmp(const char *p, const char *str);
+/**
+ * @brief Helper function to split a std::string using a 'char' delimiter.
+ *   If no delimiter is found, returns a vector of just one element containing
+ *   the whole string.
+ * @param s The std::string to be splitted.
+ * @param delimiter The delimiter used to split the std::string.
+ * @return A std::vector containing all the substrings in which the
+ *   supplied string has been splitted.
+ */
+std::vector<std::string> str_split(const std::string& s, char delimiter);
+/**
+ * @brief Returns the OpenSSL identifier for the supplied 'tls_version',
+ *   or '-1' in case of error.
+ *
+ *   NOTE:
+ *   Since an error shouldn't be possible, because 'tls_version'
+ *   should only hold valid string identifiers for the supported 'TLS'
+ *   versions. In case this happens, an error is logged with the offending
+ *   'TLS' version, requesting a bug report.
+ *
+ * @param tls_version The string representation of the 'TLS' version for
+ *   which the OpenSSL identifier is required.
+ * @return In case of success, the OpenSSL identifier for the supplied
+ *   'TLS' version, '-1' otherwise.
+ */
+int string_to_tls_version(const std::string& tls_version);
+/**
+ * @brief Returns a sorted vector of the TLS versions found in the supplied string. Supplied string is
+ *   expected to contain only valid comma separated TLS versions.
+ * @param tls_versions Comma separated string holding several TLS versions.
+ * @return Sorted vector with the found TLS versions, from minor to higher.
+ */
+std::vector<std::string> sort_tls_versions(const std::string& tls_versions);

@@ -834,6 +834,7 @@ __thread bool mysql_thread___log_mysql_warnings_enabled;
 __thread bool mysql_thread___enable_load_data_local_infile;
 __thread int mysql_thread___client_host_cache_size;
 __thread int mysql_thread___client_host_error_counts;
+__thread char* mysql_thread___tls_version;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -994,6 +995,7 @@ extern __thread bool mysql_thread___log_mysql_warnings_enabled;
 extern __thread bool mysql_thread___enable_load_data_local_infile;
 extern __thread int mysql_thread___client_host_cache_size;
 extern __thread int mysql_thread___client_host_error_counts;
+extern __thread char* mysql_thread___tls_version;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

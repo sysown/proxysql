@@ -1,4 +1,9 @@
 #include "gen_utils.h"
+#include "proxysql_utils.h"
+#include <sstream>
+
+using std::vector;
+using std::string;
 
 char *escape_string_single_quotes(char *input, bool free_it) {
 	int i,j,l;
@@ -220,3 +225,59 @@ bool Proxy_file_regular(const char *path) {
 	return false;
 }
 
+std::vector<std::string> str_split(const std::string& s, char delimiter) {
+	std::vector<std::string> tokens {};
+	std::string token {};
+	std::istringstream tokenStream(s);
+
+	while (std::getline(tokenStream, token, delimiter)) {
+		tokens.push_back(token);
+	}
+
+	return tokens;
+}
+
+int string_to_tls_version(const std::string& tls_version) {
+	if (!strcasecmp(tls_version.c_str(), "TLSv1")) {
+		return TLS1_VERSION;
+	} else if (!strcasecmp(tls_version.c_str(), "TLSv1.1")) {
+		return TLS1_1_VERSION;
+	} else if (!strcasecmp(tls_version.c_str(), "TLSv1.2")) {
+		return TLS1_2_VERSION;
+	} else if (!strcasecmp(tls_version.c_str(), "TLSv1.3")) {
+		return TLS1_3_VERSION;
+	} else {
+		proxy_error(
+			"Invalid 'TLS' version: '%s' present in 'mysql-tls_version'. Please report a bug.\n",
+			tls_version.c_str()
+		);
+		return -1;
+	}
+}
+
+vector<string> sort_tls_versions(const string& tls_versions) {
+	// sort the supported 'tls_versions' allowed
+	vector<string> v_tls_versions { str_split(tls_versions, ',') };
+
+	// perform a case insensitive sorting of the allowed versions
+	std::sort(
+		v_tls_versions.begin(), v_tls_versions.end(),
+		[](const string& v1, const string& v2) {
+			const auto result =
+				mismatch_(
+					v1.cbegin(), v1.cend(), v2.cbegin(), v2.cend(),
+					[](const unsigned char lhs, const unsigned char rhs) {
+						return tolower(lhs) == tolower(rhs);
+					}
+				);
+
+			const bool not_equal = result.second != v2.cend();
+			const bool fst_shorter = result.first == v1.cend();
+			const bool fst_lesser = std::tolower(*result.first) < std::tolower(*result.second);
+
+			return not_equal && (fst_shorter || fst_lesser);
+		}
+	);
+
+	return v_tls_versions;
+}

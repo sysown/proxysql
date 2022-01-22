@@ -19,6 +19,7 @@
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
+#include "proxysql_utils.h"
 
 
 #include "libinjection.h"
@@ -4967,6 +4968,20 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->ssl = GloVars.get_SSL_ctx();
+		// get the current 'tls_version' specified in the global variable 'mysql-tls_version'
+		std::string tls_versions_var = mysql_thread___tls_version;
+		// perform a case insensitive sorting of the allowed 'tls_versions'
+		std::vector<std::string> tls_versions_allowed { sort_tls_versions(tls_versions_var) };
+		// get the 'min' and 'max' TLS versions
+		int min_tls_proto_version = string_to_tls_version(tls_versions_allowed.front());
+		int max_tls_proto_version = string_to_tls_version(tls_versions_allowed.back());
+		// set the 'min' and 'max' TLS versions
+		SSL_set_min_proto_version(client_myds->ssl, min_tls_proto_version);
+		SSL_set_max_proto_version(client_myds->ssl, max_tls_proto_version);
+		// If 'min' TLS version is below 'TLSv1.2' security level needs to be reduced
+		if (min_tls_proto_version < TLS1_2_VERSION) {
+			SSL_set_security_level(client_myds->ssl, 0);
+		}
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
