@@ -144,6 +144,9 @@ int test_unshun_algorithm_variable(MYSQL* proxysql_admin) {
 	};
 
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES FROM DISK");
+	diag("%s: Line:%d running admin query to reload variables: LOAD MYSQL VARIABLES FROM DISK", tap_curtime().c_str(), __LINE__);
+	MYSQL_QUERY(proxysql_admin, "SET mysql-hostgroup_manager_verbose=3");
+	diag("%s: Line:%d running admin query: SET mysql-hostgroup_manager_verbose=3", tap_curtime().c_str(), __LINE__);
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	int32_t def_unshun_value = get_current_unshun_algorithm_val(proxysql_admin);
 	ok(def_unshun_value == 0, "Default 'mysql-unshun_algorithm' should be '0', actual: %d", def_unshun_value);
@@ -154,6 +157,7 @@ int test_unshun_algorithm_variable(MYSQL* proxysql_admin) {
 		std::string set_unshun {};
 		string_format(t_set_unshun, set_unshun, i);
 		MYSQL_QUERY(proxysql_admin, set_unshun.c_str());
+		diag("%s: Line:%d running admin query: %s", tap_curtime().c_str(), __LINE__, set_unshun.c_str());
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int32_t cur_unshun_val = get_current_unshun_algorithm_val(proxysql_admin);
@@ -164,6 +168,7 @@ int test_unshun_algorithm_variable(MYSQL* proxysql_admin) {
 		std::string set_unshun {};
 		string_format(t_set_unshun, set_unshun, VALID_RANGE + 1);
 		MYSQL_QUERY(proxysql_admin, set_unshun.c_str());
+		diag("%s: Line:%d running admin query: %s", tap_curtime().c_str(), __LINE__, set_unshun.c_str());
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int32_t cur_unshun_val = get_current_unshun_algorithm_val(proxysql_admin);
@@ -215,6 +220,9 @@ int test_proxysql_simulator_error(MYSQL* proxysql_admin) {
 int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin) {
 	// Configure Admin variables with lower thresholds
 	MYSQL_QUERY(proxysql_admin, "SET mysql-shun_recovery_time_sec=1");
+	diag("%s: Line:%d running admin query: SET mysql-shun_recovery_time_sec=1", tap_curtime().c_str(), __LINE__);
+	MYSQL_QUERY(proxysql_admin, "SET mysql-hostgroup_manager_verbose=3");
+	diag("%s: Line:%d running admin query: SET mysql-hostgroup_manager_verbose=3", tap_curtime().c_str(), __LINE__);
 	// NOTE: The following varible value is set here just as a reminder. This change isn't properly propagated
 	// to the 'error setting operation' since this is performed from 'ProxySQL_Admin' thread when
 	// 'PROXYSQL_SIMULATOR' command is received. Because of this, it's in 'PROXYSQL_SIMULATOR' command impl in
@@ -247,6 +255,7 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 	{
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=0");
+		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=0", tap_curtime().c_str(), __LINE__);
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
@@ -263,21 +272,24 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 	{
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=1");
+		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=1", tap_curtime().c_str(), __LINE__);
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
 		if (shunn_err) { return EXIT_FAILURE; }
-
+		diag(""); // empty line
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
 			wakup_target_server(proxysql_mysql, i);
 
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "ONLINE", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'ONLINE'");
+			diag(""); // empty line
 		}
 	}
 
 	{
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=0");
+		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=0", tap_curtime().c_str(), __LINE__);
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
@@ -286,8 +298,10 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
 			wakup_target_server(proxysql_mysql, i);
 		}
+		diag(""); // empty line
 
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=1");
+		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=1", tap_curtime().c_str(), __LINE__);
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
@@ -295,6 +309,7 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "SHUNNED", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'SHUNNED'");
+			diag(""); // empty line
 		}
 	}
 
