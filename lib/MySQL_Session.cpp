@@ -556,6 +556,7 @@ MySQL_Session::MySQL_Session() {
 	last_insert_id=0; // #1093
 
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
+	proxysql_node_address = NULL;
 	use_ldap_auth = false;
 }
 
@@ -653,6 +654,10 @@ MySQL_Session::~MySQL_Session() {
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+	}
+	if (proxysql_node_address) {
+		delete proxysql_node_address;
+		proxysql_node_address = NULL;
 	}
 }
 

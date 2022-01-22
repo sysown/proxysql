@@ -40,6 +40,8 @@
 
 #include <sys/mman.h>
 
+#include <uuid/uuid.h>
+
 /*
 extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 	return NULL;
@@ -500,14 +502,41 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.errorlog = strdup(errorlog_path.c_str());
 			}
 		}
+		if (root.exists("uuid")==true) {
+			string uuid;
+			bool rc;
+			rc=root.lookupValue("uuid", uuid);
+			if (rc==true) {
+				uuid_t uu;
+				if (uuid_parse(uuid.c_str(), uu)==0) {
+					if (GloVars.uuid == NULL) {
+						// it is not set yet, that means it wasn't specified on the cmdline
+						GloVars.uuid = strdup(uuid.c_str());
+					}
+				} else {
+					proxy_error("The config file is configured with an invalid UUID: %s\n", uuid.c_str());
+				}
+			}
+		}
+		// if cluster_sync_interfaces is true, interfaces variables are synced too
+		if (root.exists("cluster_sync_interfaces")==true) {
+			bool value_bool;
+			bool rc;
+			rc=root.lookupValue("cluster_sync_interfaces", value_bool);
+			if (rc==true) {
+				GloVars.cluster_sync_interfaces=value_bool;
+			} else {
+				proxy_error("The config file is configured with an invalid cluster_sync_interfaces\n");
+			}
+		}
 		if (root.exists("pidfile")==true) {
 			string pidfile_path;
 			bool rc;
 			rc=root.lookupValue("pidfile", pidfile_path);
 			if (rc==true) {
 				GloVars.pid = strdup(pidfile_path.c_str());
-			}
-		}
+      }
+    }
 		if (root.exists("sqlite3_plugin")==true) {
 			string sqlite3_plugin;
 			bool rc;
