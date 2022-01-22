@@ -786,6 +786,16 @@ int create_extra_users(
 	return EXIT_SUCCESS;
 }
 
+std::string tap_curtime() {
+	time_t __timer;
+	char lut[30];
+	struct tm __tm_info;
+	time(&__timer);
+	localtime_r(&__timer, &__tm_info);
+	strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+	std::string s = std::string(lut);
+	return s;
+
 int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage) {
 	// check if proxysql process is consuming higher cpu than it should
 	MYSQL* proxysql_admin = mysql_init(NULL);

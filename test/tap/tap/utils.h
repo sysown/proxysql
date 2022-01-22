@@ -226,6 +226,7 @@ int create_extra_users(
 	MYSQL* proxysql_admin, MYSQL* mysql_server, const std::vector<user_config>& users_config
 );
 
+std::string tap_curtime();
 /**
  * @brief Returns ProxySQL cpu usage in ms.
  * @param intv The interval in which the CPU usage of ProxySQL is going

@@ -192,3 +192,8 @@ test/tap/tests/setparser_test
 test/tap/tests/generate_set_session_csv
 test/tap/tests/set_testing-240.csv
 local_testing_datadir/
+
+#files generated during CI run
+proxysql-save.cfg
+test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
+test/tap/tests/test_cluster_sync_config/proxysql*.pem
