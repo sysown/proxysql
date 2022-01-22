@@ -766,7 +766,6 @@ int main(int argc, char** argv) {
 	}
 
 	// Simple benchmarking for tracking impls overhead. TODO: Refactor and improve, or delete.
-	/*
 	{
 		nlohmann::json tests_defs {};
 
@@ -792,7 +791,7 @@ int main(int argc, char** argv) {
 
 		std::cout << "Size: " << queries.size() << "\n\n";
 
-		uint64_t iterations = 100000;
+		uint64_t iterations = 1000;
 		duration = benchmark_parsing(queries, 0, iterations, len);
 		std::cout << "Current:       " << duration << "\n";
 		duration = benchmark_parsing(queries, 1, iterations, len);
@@ -817,7 +816,6 @@ int main(int argc, char** argv) {
 		duration = benchmark_parsing(queries, 0, iterations, len);
 		std::cout << "Current:       " << duration << "\n";
 	}
-	*/
 
 	return exit_status();
 }
