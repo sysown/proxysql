@@ -264,6 +264,16 @@ class MySQL_Session
 	bool session_fast_forward;
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
+	/**
+	 * @brief This status variable tracks whether the session is performing an
+	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
+	 * @details It becomes 'true' when the packet is detected and processed by:
+	 *    - 'MySQL_Protocol::process_pkt_COM_CHANGE_USER'
+	 *   It's reset before sending the final response for 'Auth Switch' to the client by:
+	 *   -  'MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE'
+	 *   This flag was introduced for issue #3504.
+	 */
+	bool change_user_auth_switch;
 
 	bool with_gtid;
 

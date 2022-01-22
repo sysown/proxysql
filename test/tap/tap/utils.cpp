@@ -795,6 +795,7 @@ std::string tap_curtime() {
 	strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
 	std::string s = std::string(lut);
 	return s;
+}
 
 int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage) {
 	// check if proxysql process is consuming higher cpu than it should

@@ -543,6 +543,7 @@ MySQL_Session::MySQL_Session() {
 
 	with_gtid = false;
 	use_ssl = false;
+	change_user_auth_switch = false;
 
 	//gtid_trxid = 0;
 	gtid_hid = -1;
@@ -1034,6 +1035,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 		}
 	}
 	j["client"]["DSS"] = client_myds->DSS;
+	j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
@@ -5150,6 +5152,15 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					uint8_t _pid = 2;
 					if (client_myds->switching_auth_stage) _pid+=2;
 					if (is_encrypted) _pid++;
+					// If this condition is met, it means that the
+					// 'STATE_SERVER_HANDSHAKE' being performed isn't from the start of a
+					// connection, but as a consequence of a 'COM_USER_CHANGE' which
+					// requires an 'Auth Switch'. Thus, we impose a 'pid' of '3' for the
+					// response 'OK' packet. See #3504 for more context.
+					if (change_user_auth_switch) {
+						_pid = 3;
+						change_user_auth_switch = 0;
+					}
 					if (use_ssl == true && is_encrypted == false) {
 						*wrong_pass=true;
 						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_ERR, this, NULL);
@@ -6401,6 +6412,15 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// FIXME: max_connections is not handled for CHANGE_USER
 		} else {
 			l_free(pkt->size,pkt->ptr);
+			// 'COM_CHANGE_USER' didn't supply a password, and an 'Auth Switch Response' is
+			// required, going back to 'STATE_SERVER_HANDSHAKE' to perform the regular
+			// 'Auth Switch Response' for a connection is required. See #3504 for more context.
+			if (change_user_auth_switch) {
+				client_myds->DSS = STATE_SERVER_HANDSHAKE;
+				status = CONNECTING_CLIENT;
+				return;
+			}
+
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Wrong credentials for frontend: disconnecting\n");
 			*wrong_pass=true;
 		// FIXME: this should become close connection
@@ -6430,7 +6450,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}
 			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
 			sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+			proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)\n", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
 			free(_s);
 			__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);

@@ -101,7 +101,7 @@ OPT=-O2 $(WGCOV) -Wl,--no-as-needed
 debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
-tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test set_testing-240.csv
+tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper set_testing-240.csv
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -143,3 +143,9 @@ create_connection_annotation: test_connection_annotation-t.cpp
 
 setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR)
 	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc ../../../src/obj/proxysql_global.o $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
+
+reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp
+	$(CXX) -DDEBUG reg_test_3504-change_user_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"
+
+reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
+	$(CXX) -DLIBMYSQL_HELPER -DDEBUG reg_test_3504-change_user_helper.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"

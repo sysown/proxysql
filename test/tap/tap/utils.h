@@ -177,8 +177,11 @@ int wait_for_replication(
  * NOTE: This is a duplicate of 'proxysql_find_charset_collate' in 'MySQL_Variables.h'. Including
  * 'MySQL_Variables' is not a easy task due to its interdependeces with other ProxySQL modules.
  */
+#ifdef LIBMYSQL_HELPER
+MY_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
+#else
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
-
+#endif
 /**
  * @brief Creates the new supplied user in ProxySQL with the provided
  *   attributes.
