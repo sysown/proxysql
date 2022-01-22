@@ -35,11 +35,18 @@ struct bio_st {
 
 typedef int CRYPTO_REF_COUNT;
 
-// in libssl 1.1.1
+/**
+ * @brief This is the 'bio_st' struct definition from libssl 3.0.0. NOTE: This is an internal struct from
+ *   OpenSSL library, currently it's used for performing checks on the reads/writes performed on the BIO objects.
+ *   It's extremely important to keep this struct up to date with each OpenSSL dependency update.
+ */
 struct bio_st {
+    OSSL_LIB_CTX *libctx;
     const BIO_METHOD *method;
     /* bio, mode, argp, argi, argl, ret */
+#ifndef OPENSSL_NO_DEPRECATED_3_0
     BIO_callback_fn callback;
+#endif
     BIO_callback_fn_ex callback_ex;
     char *cb_arg;               /* first argument for the callback */
     int init;
