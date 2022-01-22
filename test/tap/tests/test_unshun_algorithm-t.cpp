@@ -40,6 +40,7 @@ int shunn_server(MYSQL* proxysql_admin, uint32_t i, uint32_t j) {
 	std::string t_simulator_error_query { "PROXYSQL_SIMULATOR mysql_error %d 127.0.0.1:330%d 1234" };
 	std::string simulator_error_q_i {};
 	string_format(t_simulator_error_query, simulator_error_q_i, i, j);
+	diag("%s: running query: %s", tap_curtime().c_str(), simulator_error_q_i.c_str());
 	MYSQL_QUERY(proxysql_admin, simulator_error_q_i.c_str());
 
 	return EXIT_SUCCESS;
@@ -63,18 +64,21 @@ int wakup_target_server(MYSQL* proxysql_mysql, uint32_t i) {
 	string_format(t_simple_do_query, simple_do_query, i);
 
 	mysql_query(proxysql_mysql, simple_do_query.c_str());
+	diag("%s: running query: %s", tap_curtime().c_str(), simple_do_query.c_str());
 	sleep(SHUN_RECOVERY_TIME * 2);
 	mysql_query(proxysql_mysql, simple_do_query.c_str());
+	diag("%s: running query: %s", tap_curtime().c_str(), simple_do_query.c_str());
 
 	return EXIT_SUCCESS;
 }
 
 int server_status_checker(MYSQL* admin, const string& f_st, const string& n_st, uint32_t i) {
 	std::string t_server_status_query {
-		"SELECT status FROM runtime_mysql_servers WHERE port=330%d order by hostgroup_id"
+		"SELECT status,hostgroup_id FROM runtime_mysql_servers WHERE port=330%d order by hostgroup_id"
 	};
 	std::string server_status_query {};
 	string_format(t_server_status_query, server_status_query, i);
+	diag("%s: running query: %s", tap_curtime().c_str(), server_status_query.c_str());
 	MYSQL_QUERY(admin, server_status_query.c_str());
 
 	MYSQL_RES* status_res = mysql_store_result(admin);
@@ -89,7 +93,8 @@ int server_status_checker(MYSQL* admin, const string& f_st, const string& n_st, 
 
 		while (( row = mysql_fetch_row(status_res) )) {
 			std::string status { row[0] };
-			diag("Status found for server '127.0.0.1:330%d' was '%s'", i, status.c_str());
+			std::string hgid { row[1] };
+			diag("Status found for server '%s:127.0.0.1:330%d' was '%s'", hgid.c_str(), i, status.c_str());
 			if (row_num == 0) {
 				if (status != f_st) {
 					unexp_row_value = true;

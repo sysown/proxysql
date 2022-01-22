@@ -25,8 +25,8 @@ bool verify_set_names(MySQL_Session* session);
 bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc);
 
 class MySQL_Variables {
-	static verify_var verifiers[SQL_NAME_LAST];
-	static update_var updaters[SQL_NAME_LAST];
+	static verify_var verifiers[SQL_NAME_LAST_HIGH_WM];
+	static update_var updaters[SQL_NAME_LAST_HIGH_WM];
 
 public:
 	std::string variables_regexp;

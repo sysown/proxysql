@@ -1,3 +1,13 @@
+/**
+ * @file set_testing-t.cpp
+ * @brief This file tests multiple settings combinations for MySQL variables, and checks that they are
+ *  actually being tracked correctly.
+ * @details The test input is a 'csv' file with name 'set_testing-t.csv'. The file format consists in
+ *  two primary columns which specifies the variables to set (first) and the expected result of setting
+ *  those variables (second), and an optional third column which hold variables that shouldn't be checked
+ *  anymore after the 'SET STATEMENTS' from the same line are executed.
+ */
+
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -21,7 +31,8 @@
 #include "utils.h"
 #include "command_line.h"
 
-std::string bn = "";
+
+
 int queries_per_connections=1;
 unsigned int num_threads=1;
 int count=0;
@@ -37,7 +48,6 @@ int local=0;
 int queries=0;
 int uniquequeries=0;
 int histograms=-1;
-int multi_users=0;
 
 bool is_mariadb = false;
 bool is_cluster = false;
@@ -55,9 +65,16 @@ unsigned int query_phase_completed = 0;
 
 __thread int g_seed;
 std::mutex mtx_;
+
 std::vector<std::string> forgotten_vars {};
 
 #include "set_testing.h"
+
+
+/* TODO
+	add support for variables with values out of range,
+	for example setting auto_increment_increment to 100000
+*/
 
 void * my_conn_thread(void *arg) {
 	g_seed = time(NULL) ^ getpid() ^ pthread_self();
@@ -81,16 +98,7 @@ void * my_conn_thread(void *arg) {
 		if (mysql==NULL) {
 			exit(EXIT_FAILURE);
 		}
-		MYSQL *rc = NULL;
-		if (multi_users==0) {
-			rc = mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
-		} else {
-			int i = rand()%multi_users;
-			i++;
-			std::string u = "sbtest" + std::to_string(i);
-			std::string p = "sbtest" + std::to_string(i);
-			rc = mysql_real_connect(mysql, host, u.c_str(), p.c_str(), schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);	
-		}
+		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
 		if (rc==NULL) {
 			if (silent==0) {
 				fprintf(stderr,"%s\n", mysql_error(mysql));
@@ -110,31 +118,28 @@ void * my_conn_thread(void *arg) {
 	for (j=0; j<queries; j++) {
 		int fr = fastrand();
 		int r1=fr%count;
+		//int r2=fastrand()%testCases.size();
 		int r2=rand()%testCases.size();
 
 		if (j%queries_per_connections==0) {
 			mysql=mysqlconns[r1];
 			vars = varsperconn[r1];
 		}
-		if (multi_users || strcmp(username,(char *)"root")) {
+		if (strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
 				std::lock_guard<std::mutex> lock(mtx_);
-				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
+				skip(1, "connections mysql[%p] proxysql[%s], command [%s]", mysql, paddress.c_str(), testCases[r2].command.c_str());
 				continue;
 			}
 			if (strstr(testCases[r2].command.c_str(),"sql_log_bin")) {
 				std::lock_guard<std::mutex> lock(mtx_);
-				skip(1, "mysql connection [%p], command [%s]", mysql, testCases[r2].command.c_str());
+				skip(1, "connections: mysql[%p] proxysql[%s], command [%s]", mysql, paddress.c_str(), testCases[r2].command.c_str());
 				continue;
 			}
 		}
+		diag("Thread_id: %lu, random number: %d . Query/ies: %s", mysql->thread_id, r2, testCases[r2].command.c_str());
 		std::vector<std::string> commands = split(testCases[r2].command.c_str(), ';');
 		for (auto c : commands) {
-			if (multi_users) {
-				if (c == " ") {
-					c = "DO 1";
-				}
-			}
 			if (mysql_query(mysql, c.c_str())) {
 				if (silent==0) {
 					fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", c.c_str(), mysql_errno(mysql), mysql_error(mysql));
@@ -182,7 +187,7 @@ void * my_conn_thread(void *arg) {
 		usleep(sleepDelay * 1000);
 
 		char query[128];
-		sprintf(query, "SELECT /* %p */ %d;", mysql, sleepDelay);
+		sprintf(query, "SELECT /* %p %s */ %d;", mysql, paddress.c_str(), sleepDelay);
 		if (mysql_query(mysql,query)) {
 			select_ERR++;
 			__sync_fetch_and_add(&g_select_ERR,1);
@@ -199,6 +204,16 @@ void * my_conn_thread(void *arg) {
 		json proxysql_vars;
 		queryInternalStatus(mysql, proxysql_vars, paddress);
 
+		//diag("MySQL vars: %lu , ProxySQL vars: %lu" , mysql_vars.size(), proxysql_vars.size());
+		//diag("ProxySQL internals: %s" , proxysql_vars.dump(2).c_str());
+		{
+			int lhg = proxysql_vars["locked_on_hostgroup"];
+			if (lhg != -1) {
+				diag("ProxySQL locked_on_hostgroup %d", lhg);
+				diag("FAILED FOR: connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+				exit(EXIT_FAILURE);
+			}
+		}
 		if (!testCases[r2].reset_vars.empty()) {
 			for (const auto& var : testCases[r2].reset_vars) {
 				if (std::find(forgotten_vars.begin(), forgotten_vars.end(), var) == forgotten_vars.end()) {
@@ -218,15 +233,55 @@ void * my_conn_thread(void *arg) {
 			}
 
 			if (k == mysql_vars.end())
-				fprintf(stderr, "Variable %s->%s in mysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
+				diag("Variable %s->%s in mysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 
 			if (s == proxysql_vars["conn"].end())
-				fprintf(stderr, "Variable %s->%s in proxysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
+				diag("Variable %s->%s in proxysql resultset was not found.\nmysql data : %s\nproxysql data: %s\ncsv data %s\n",
 						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
 
 			bool verified_special_sqlmode = false;
 			bool special_sqlmode = false;
+
+			bool parsing_optimizer_switch = false;
+			bool optimizer_switch_matches = false;
+
+			if (el.key() == "long_query_time") {
+				// we remove the decimals
+				std::string tsnd = mysql_vars["long_query_time"];
+				if (tsnd.find(".") != std::string::npos) {
+					tsnd = tsnd.substr(0, tsnd.find("."));
+					mysql_vars["long_query_time"]=tsnd;
+				}
+			}
+
+			if (el.key() == "timestamp") {
+				// we remove the decimals
+				std::string tsnd = mysql_vars["timestamp"];
+				if (tsnd.find(".") != std::string::npos) {
+					tsnd = tsnd.substr(0, tsnd.find("."));
+					mysql_vars["timestamp"]=tsnd;
+				}
+			}
+			if (el.key() == "max_join_size") {
+				if (el.value() == "DEFAULT") {
+					if (mysql_vars["max_join_size"] == "18446744073709551615") {
+						mysql_vars["max_join_size"] = "DEFAULT";
+					}
+				}
+			}
+
+			if (el.key() == "optimizer_switch") {
+				parsing_optimizer_switch = true;
+				std::string e_val { el.value() };
+				std::string k_val { k.value() };
+				std::string s_val { s.value() };
+				if (e_val == s_val) { // it matches in proxysql
+					if (strstr(k_val.c_str(), e_val.c_str()) != NULL) {
+						optimizer_switch_matches = true;
+					}
+				}
+			}
 
 			if (el.key() == "sql_mode") {
 				if (!el.value().is_string()) {
@@ -234,54 +289,85 @@ void * my_conn_thread(void *arg) {
 					exit(EXIT_FAILURE);
 				}
 
-				std::string str_val { el.value() };
+				if (k.value() != el.value()) { // different in mysql
+					std::string e_val { el.value() };
+					std::string k_val { k.value() };
+					std::string s_val { s.value() };
+					if (el.value() == s.value()) { // but same in proxysql
+						std::string str_val { el.value() };
+						if (strcasecmp(str_val.c_str(), "TRADITIONAL")==0) {
+							if (k.value() == "STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION") {
+								special_sqlmode = true;
+								verified_special_sqlmode = true;
+							}
+						} else {
+							if (strcasestr(e_val.c_str(), "sql_mode") != NULL) {
+								// simplified
+								special_sqlmode = true;
+								verified_special_sqlmode = true;
+							}
+/*
+							re2::RE2::Options options(RE2::Quiet);
+							options.set_case_sensitive(false);
+							options.set_longest_match(false);
+							re2::RE2 concat_re("^CONCAT\\((|@@|@@session\\.)SQL_MODE,\"(.*)\"\\)", options);
+							re2::StringPiece sp_input(str_val);
 
-				re2::RE2::Options options(RE2::Quiet);
-				options.set_case_sensitive(false);
-				options.set_longest_match(false);
-				re2::RE2 concat_re("^CONCAT\\((|@@|@@session\\.)SQL_MODE,\"(.*)\"\\)", options);
-				re2::StringPiece sp_input(str_val);
+							std::string f_match {};
+							std::string s_match {};
 
-				std::string f_match {};
-				std::string s_match {};
+							re2::RE2::Consume(&sp_input, concat_re, &f_match, &s_match);
 
-				re2::RE2::Consume(&sp_input, concat_re, &f_match, &s_match);
+							if (!s_match.empty()) {
+								special_sqlmode = true;
 
-				if (!s_match.empty()) {
-					special_sqlmode = true;
+								// remove the initial 'comma' if exists
+								if (s_match[0] == ',') {
+									s_match = s_match.substr(1, std::string::npos);
+								}
 
-					// remove the initial 'comma' if exists
-					if (s_match[0] == ',') {
-						s_match = s_match.substr(1, std::string::npos);
+								std::string k_str_val { k.value() };
+								verified_special_sqlmode =
+									strcasestr(k_str_val.c_str(), s_match.c_str()) != NULL;
+							}
+*/
+						}
 					}
-
-					std::string k_str_val { k.value() };
-					verified_special_sqlmode =
-						strcasestr(k_str_val.c_str(), s_match.c_str()) != NULL;
 				}
 			}
 
 			if (
 				(special_sqlmode == true && verified_special_sqlmode == false) ||
-				(special_sqlmode == false &&
+				(k == mysql_vars.end()) ||
+				(s == proxysql_vars["conn"].end()) ||
+				( (parsing_optimizer_switch == true) && (optimizer_switch_matches == false) ) ||
+				(special_sqlmode == false && parsing_optimizer_switch == false &&
 					(el.key() != "session_track_gtids" && (k.value() != el.value() || s.value() != el.value())) ||
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
 				)
 			) {
-				__sync_fetch_and_add(&g_failed, 1);
-				testPassed = false;
-				fprintf(stderr, "Test failed for this case %s->%s.\n\nmysql data %s\n\n proxysql data %s\n\n csv data %s\n\n\n",
-						el.value().dump().c_str(), el.key().c_str(), mysql_vars.dump().c_str(), proxysql_vars.dump().c_str(), vars.dump().c_str());
-				ok(testPassed, "mysql connection [%p], thread_id [%lu], command [%s]", mysql, mysql->thread_id, testCases[r2].command.c_str());
-				// In case of failing test, exit completely.
-				exit(EXIT_FAILURE);
+				if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
+					variables_tested++;
+				} else {
+					__sync_fetch_and_add(&g_failed, 1);
+					testPassed = false;
+					diag("Test failed for this case %s->%s.\n\nmysql data [%lu]: %s\n\n proxysql data [%lu]: %s\n\n csv data %s\n\n\n",
+							el.value().dump(2).c_str(), el.key().c_str(),
+							mysql_vars.size(), mysql_vars.dump(2).c_str(),
+							proxysql_vars["conn"].size(), proxysql_vars["conn"].dump(2).c_str(),
+							vars.dump(2).c_str());
+					diag("FAILED FOR: connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+					//ok(testPassed, "connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+					// In case of failing test, exit completely.
+					//exit(EXIT_FAILURE);
+				}
 			} else {
 				variables_tested++;
 			}
 		}
 		{
 			std::lock_guard<std::mutex> lock(mtx_);
-			ok(testPassed, "mysql connection [%p], thread_id [%lu], variables_tested [%d], command [%s]", mysql, mysql->thread_id, variables_tested, testCases[r2].command.c_str());
+			ok(testPassed, "connections mysql[%p] proxysql[%s], thread_id [%lu], variables_tested [%d], command [%s]", mysql, paddress.c_str(), mysql->thread_id, variables_tested, testCases[r2].command.c_str());
 		}
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);
@@ -293,66 +379,19 @@ void * my_conn_thread(void *arg) {
 int main(int argc, char *argv[]) {
 	CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
-
-	{
-		bn = basename(argv[0]);
-		std::string bn = basename(argv[0]);
-		std::cerr << "Filename: " << bn << std::endl;
-		if (bn == "set_testing-multi-t") {
-			multi_users=4;
-		}
-	}
-
-	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
-
-	MYSQL* mysqladmin = mysql_init(NULL);
-	if (!mysqladmin)
-		return exit_status();
-
-	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysqladmin));
+	if(cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
 		return exit_status();
 	}
-/*
-	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' where variable_name='mysql-default_sql_mode'");
-	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='OFF' where variable_name='mysql-default_sql_safe_update'");
-	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='UTF8' where variable_name='mysql-default_character_set_results'");
-	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='REPEATABLE READ' where variable_name='mysql-default_isolation_level'");
-	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='REPEATABLE READ' where variable_name='mysql-default_tx_isolation'");
-	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='utf8_general_ci' where variable_name='mysql-default_collation_connection'");
-	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='true' where variable_name='mysql-enforce_autocommit_on_reads'");
-	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
-*/
-	if (multi_users) {
-		for (int i=1; i<=multi_users; i++) {
-			std::string q = "INSERT OR IGNORE INTO mysql_users (username,password) VALUES ('sbtest" + std::to_string(i) + "','sbtest" + std::to_string(i) + "')";
-			std::cerr << bn << ": " << q << std::endl;
-			MYSQL_QUERY(mysqladmin, q.c_str());
-		}
-		std::string q = "LOAD MYSQL USERS TO RUNTIME";
-		std::cerr << bn << ": " << q << std::endl;
-		MYSQL_QUERY(mysqladmin, q.c_str());
-		q = "UPDATE mysql_servers SET max_connections=3 WHERE hostgroup_id=0;";
-		std::cerr << bn << ": " << q << std::endl;
-		MYSQL_QUERY(mysqladmin, q.c_str());
-		q = "LOAD MYSQL SERVERS TO RUNTIME";
-		std::cerr << bn << ": " << q << std::endl;
-		MYSQL_QUERY(mysqladmin, q.c_str());
-	}
+	std::string fileName2(std::string(cl.workdir) + "/set_testing-240.csv");
 
 	if (detect_version(cl, is_mariadb, is_cluster) != 0) {
 		diag("Cannot detect MySQL version");
 		return exit_status();
 	}
 
-
-
 	num_threads = 10;
-	queries = 1000;
 	queries_per_connections = 10;
 	count = 10;
 	username = cl.username;
@@ -360,11 +399,13 @@ int main(int argc, char *argv[]) {
 	host = cl.host;
 	port = cl.port;
 
-	plan(queries * num_threads);
-	if (!readTestCases(fileName)) {
-		fprintf(stderr, "Cannot read %s\n", fileName.c_str());
+	if (!readTestCasesJSON(fileName2)) {
+		fprintf(stderr, "Cannot read %s\n", fileName2.c_str());
 		return exit_status();
 	}
+	queries = 2500;
+	//queries = testCases.size();
+	plan(queries * num_threads);
 
 	if (strcmp(host,"localhost")==0) {
 		local = 1;

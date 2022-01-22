@@ -159,12 +159,13 @@ OBJ = $(patsubst %,$(ODIR)/%,$(_OBJ))
 $(ODIR)/%.o: %.cpp
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
-proxysql: $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
+$(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_DIR)/clickhouse/libclickhouse-cpp-lib.a $(CITYHASH_DIR)/libcityhash.a $(LZ4_DIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 else
 	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 endif
+	sha1sum $(EXECUTABLE) > $(EXECUTABLE).sha1
 
 $(ODIR):
 	mkdir $(ODIR)
@@ -175,5 +176,5 @@ $(LIBPROXYSQLAR):
 default: $(EXECUTABLE)
 
 clean:
-	rm -f *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE)
+	rm -f *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1
 
