@@ -785,3 +785,43 @@ int create_extra_users(
 
 	return EXIT_SUCCESS;
 }
+
+int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage) {
+	// check if proxysql process is consuming higher cpu than it should
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return -1;
+	}
+
+	// recover admin variables
+	std::string set_stats_query { "SET admin-stats_system_cpu=" + std::to_string(intv) };
+	MYSQL_QUERY(proxysql_admin, set_stats_query.c_str());
+	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
+	// sleep during the required interval + safe threshold
+	sleep(intv + 2);
+
+	MYSQL_QUERY(proxysql_admin, "SELECT * FROM system_cpu ORDER BY timestamp DESC LIMIT 1");
+	MYSQL_RES* admin_res = mysql_store_result(proxysql_admin);
+	MYSQL_ROW row = mysql_fetch_row(admin_res);
+
+	double s_clk = (1.0 / sysconf(_SC_CLK_TCK)) * 1000;
+	int utime_ms = atoi(row[1]) * s_clk;
+	int stime_ms = atoi(row[2]) * s_clk;
+	int t_ms = utime_ms + stime_ms;
+
+	// return the cpu usage
+	cpu_usage = t_ms;
+
+	// free the result
+	mysql_free_result(admin_res);
+
+	// recover admin variables
+	MYSQL_QUERY(proxysql_admin, "SET admin-stats_system_cpu=60");
+	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
+	mysql_close(proxysql_admin);
+
+	return 0;
+}
