@@ -492,8 +492,8 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define STATS_SQLITE_TABLE_MYSQL_ERRORS "CREATE TABLE stats_mysql_errors (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , errno INT NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, schemaname, errno) )"
 #define STATS_SQLITE_TABLE_MYSQL_ERRORS_RESET "CREATE TABLE stats_mysql_errors_reset (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , errno INT NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, schemaname, errno) )"
 
-#define STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE "CREATE TABLE stats_mysql_client_host_cache (client_address VARCHAR NOT NULL, error_count INT NOT NULL, last_updated BIGINT NOT NULL)"
-#define STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET "CREATE TABLE stats_mysql_client_host_cache_reset (client_address VARCHAR NOT NULL, error_count INT NOT NULL, last_updated BIGINT NOT NULL)"
+#define STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE "CREATE TABLE stats_mysql_client_host_cache (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
+#define STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET "CREATE TABLE stats_mysql_client_host_cache_reset (client_address VARCHAR NOT NULL , error_count INT NOT NULL , last_updated BIGINT NOT NULL)"
 
 #ifdef DEBUG
 #define ADMIN_SQLITE_TABLE_DEBUG_LEVELS "CREATE TABLE debug_levels (module VARCHAR NOT NULL PRIMARY KEY , verbosity INT NOT NULL DEFAULT 0)"
@@ -4219,6 +4219,33 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		query_length = strlen(q) + strlen(PROXYSQL_VERSION) + 1;
 		query = static_cast<char*>(l_alloc(query_length));
 		sprintf(query, q, PROXYSQL_VERSION);
+		goto __run_query;
+	}
+
+	// add support for SELECT current_user() and SELECT user()
+	// see https://github.com/sysown/proxysql/issues/1105#issuecomment-990940585
+	if (
+		(strcasecmp("SELECT current_user()", query_no_space) == 0)
+		||
+		(strcasecmp("SELECT user()", query_no_space) == 0)
+	) {
+		bool current = false;
+		if (strcasestr(query_no_space, "current") != NULL)
+			current = true;
+		l_free(query_length,query);
+		std::string s = "SELECT '";
+		s += sess->client_myds->myconn->userinfo->username ;
+		if (strlen(sess->client_myds->addr.addr) > 0) {
+			s += "@";
+			s += sess->client_myds->addr.addr;
+		}
+		s += "' AS '";
+		if (current == true) {
+			s+= "current_";
+		}
+		s += "user()'";
+		query=l_strdup(s.c_str());
+		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 

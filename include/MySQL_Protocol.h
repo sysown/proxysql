@@ -141,6 +141,31 @@ class MySQL_Protocol {
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);
+	/**
+	 * @brief Verifies the supplied 'user' and 'password' in order to authenticate an user. For
+	 *  doing so, it takes into account:
+	 *     * Current session type.
+	 *     * Current 'sha1' password for the user, reported by 'GloMyAuth' or 'GloClickHouseAuth'.
+	 *     * Current 'auth_plugin' being used for the session.
+	 *     * Username received sent by the client.
+	 *     * Password received sent by the client.
+	 *
+	 * @param session_type The session type inn which the authentication is taking place.
+	 * @param password Pointer to the stored password for the supplied user.
+	 * @param user Pointer to the user supplied by the client.
+	 * @param pass Pointer to the password supplied by the client.
+	 * @param pass_len Length of the supplied password received from the client.
+	 * @param sha1_pass Pointer to sha1_pass returned by auth cache.
+	 * @param auth_plugin Auth plugin supplied by client in the COM_CHANGE_USER packet. If
+	 *   the packet doesn't hold any, 'mysql_native_password' should be supplied
+	 *   as default.
+	 *
+	 * @details TODO: This function holds the same authentication block that can be seen in
+	 *   "MySQL_Protocol::process_pkt_handshake_response". That portion of the function should be
+	 *   refactored into using this very same function.
+	 * @return Returns 'true' if the user password was correctly verified, 'false' otherwise.
+	 */
+	bool verify_user_pass(enum proxysql_session_type session_type, const char* password, const char* user, const char* pass, int pass_len, const char* sha1_pass, const char* auth_plugin);
 
 	// prepared statements
 	bool generate_STMT_PREPARE_RESPONSE(uint8_t sequence_id, MySQL_STMT_Global_info *stmt_info, uint32_t _stmt_id=0);

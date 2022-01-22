@@ -33,7 +33,8 @@ using var_val = std::pair<std::string, std::string>;
 
 const std::vector<std::string> tracked_variables {
 	"sql_log_bin", "sql_mode", "time_zone", "sql_auto_is_null",  "sql_safe_updates", "session_track_gtids",
-	"max_join_size", "net_write_timeout", "sql_select_limit",  "sql_select_limit", "character_set_results",
+	//"max_join_size", "net_write_timeout", "sql_select_limit",  "sql_select_limit", "character_set_results",
+	"max_join_size", "sql_select_limit",  "sql_select_limit", "character_set_results",
 	"transaction_isolation", "transaction_read_only", "sql_auto_is_null", "collation_connection",
 	"character_set_connection", "character_set_client", /*"character_set_database",*/ "group_concat_max_len",
 	"wsrep_sync_wait"
@@ -103,7 +104,7 @@ std::vector<track_variable_spec> tracked_vars {
 	{ "SQL_TRANSACTION_READ",         "transaction_read_only",    "SESSION TRANSACTION READ",            "ONLY"},
 	{ "SQL_SQL_AUTO_IS_NULL",         "sql_auto_is_null",         "SQL_AUTO_IS_NULL",                    "'ON'"},
 	{ "SQL_COLLATION_CONNECTION",     "collation_connection",     "COLLATION_CONNECTION",                "'latin5_turkish_ci'" },
-	{ "SQL_NET_WRITE_TIMEOUT",        "net_write_timeout",        "NET_WRITE_TIMEOUT",                   "60" },
+//	{ "SQL_NET_WRITE_TIMEOUT",        "net_write_timeout",        "NET_WRITE_TIMEOUT",                   "60" },
 	{ "SQL_MAX_JOIN_SIZE",            "max_join_size",            "MAX_JOIN_SIZE",                       "10000" },
 	{ "SQL_LOG_BIN",                  "sql_log_bin",              "SQL_LOG_BIN",                         "0" },
 	{ "SQL_GROUP_CONCAT_MAX_LEN",     "group_concat_max_len",     "GROUP_CONCAT_MAX_LEN",                "4096" },
@@ -160,6 +161,7 @@ int query_internal_session(MYSQL *mysql, nlohmann::json& j) {
 		if (el.key() == "conn") {
 			std::string sql_log_bin_value;
 
+//			diag("DUMP 1:\n%s: ", j["conn"].dump(1).c_str());
 			// sql_log_bin {0|1}
 			if (el.value()["sql_log_bin"] == 1) {
 				el.value().erase("sql_log_bin");
@@ -263,6 +265,7 @@ int query_internal_session(MYSQL *mysql, nlohmann::json& j) {
 					j["conn"]["session_track_gtids"] = "ALL_GTIDS";
 				}
 			}
+//			diag("DUMP 2:\n%s: ", j["conn"].dump(1).c_str());
 		}
 	}
 
@@ -334,12 +337,21 @@ int get_tracked_proxy_vars(MYSQL* proxysql, const std::vector<std::string>& vars
 			[] (unsigned char c) { return std::tolower(c); }
 		);
 
+		//diag("%s: ", conn_object.dump(1).c_str());
 		const auto var_key = conn_object.find(lower_var_id);
 		if (var_key == conn_object.end()) {
 			diag("Failed to find key '%s' in the keys reported by 'PROXYSQL INTERNAL SESSION'", lower_var_id.c_str());
-			return EXIT_FAILURE;
+			vars_vals.push_back({ lower_var_id, "null" });
 		} else {
-			vars_vals.push_back({ var_id, var_key.value() });
+			std::string vs;
+			auto v = var_key.value();
+			if (v.is_null() == false) {
+				vs = std::string(v);
+			} else {
+				vs = "null";
+			}
+			diag("%s: %s", lower_var_id.c_str(), vs.c_str());
+			vars_vals.push_back({ var_id, vs });
 		}
 	}
 

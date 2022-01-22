@@ -189,5 +189,13 @@ heaptrack.*
 test/tap/tests/galera_1_timeout_count
 test/tap/tests/galera_2_timeout_no_count
 test/tap/tests/setparser_test
-
+test/tap/tests/reg_test_3504-change_user_libmariadb_helper
+test/tap/tests/reg_test_3504-change_user_libmysql_helper
+test/tap/tests/generate_set_session_csv
+test/tap/tests/set_testing-240.csv
 local_testing_datadir/
+
+#files generated during CI run
+proxysql-save.cfg
+test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
+test/tap/tests/test_cluster_sync_config/proxysql*.pem
