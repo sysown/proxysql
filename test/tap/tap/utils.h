@@ -224,4 +224,6 @@ int create_extra_users(
 	MYSQL* proxysql_admin, MYSQL* mysql_server, const std::vector<user_config>& users_config
 );
 
+std::string tap_curtime();
+
 #endif // #define UTILS_H

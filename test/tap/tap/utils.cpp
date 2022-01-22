@@ -785,3 +785,15 @@ int create_extra_users(
 
 	return EXIT_SUCCESS;
 }
+
+
+std::string tap_curtime() {
+	time_t __timer;
+	char lut[30];
+	struct tm __tm_info;
+	time(&__timer);
+	localtime_r(&__timer, &__tm_info);
+	strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+	std::string s = std::string(lut);
+	return s;
+}
