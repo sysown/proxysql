@@ -10,6 +10,8 @@
 
 #include <curl/curl.h>
 
+#include "command_line.h"
+
 #define MYSQL_QUERY(mysql, query) \
 	do { \
 		if (mysql_query(mysql, query)) { \
@@ -225,5 +227,14 @@ int create_extra_users(
 );
 
 std::string tap_curtime();
+/**
+ * @brief Returns ProxySQL cpu usage in ms.
+ * @param intv The interval in which the CPU usage of ProxySQL is going
+ *  to be measured.
+ * @param cpu_usage Output parameter with the cpu usage by ProxySQL in
+ *  'ms' in the specified interval.
+ * @return 0 if success, -1 in case of error.
+ */
+int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage);
 
 #endif // #define UTILS_H
