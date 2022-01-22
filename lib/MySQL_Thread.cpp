@@ -3022,7 +3022,8 @@ void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
 			continue;
 		}
 		if (mypolls.fds[n].revents==0) {
-			if (poll_timeout_bool) {
+			// If there are currently delayed sessions we can't be assumed they haven't timeout
+			if (poll_timeout_bool || handling_delayed_sessions) {
 				check_timing_out_session(n);
 			}
 		} else {
@@ -3044,6 +3045,10 @@ void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
 			}
 		}
 	}
+
+	// Reset the delayed sessions flag, it will be set again during the processing of all sessions if any of the
+	// sessions has been delayed.
+	this->handling_delayed_sessions = false;
 }
 
 
@@ -3154,7 +3159,8 @@ __run_skip_1a:
 		GloMyLogger->flush();
 
 		pre_poll_time=curtime;
-		int ttw = ( mypolls.poll_timeout ? ( mypolls.poll_timeout/1000 < (unsigned int) mysql_thread___poll_timeout ? mypolls.poll_timeout/1000 : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout );
+		uint64_t new_poll_timeout = ceil(mypolls.poll_timeout/1000.0);
+		int ttw = ( mypolls.poll_timeout ? ( new_poll_timeout < (unsigned int) mysql_thread___poll_timeout ? new_poll_timeout : mysql_thread___poll_timeout ) : mysql_thread___poll_timeout );
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads && idle_maintenance_thread) {
 			memset(events,0,sizeof(struct epoll_event)*MY_EPOLL_THREAD_MAXEVENTS); // let's make valgrind happy. It also seems that needs to be zeroed anyway
@@ -3490,12 +3496,12 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					assert(myds->sess->status!=session_status___NONE);
 				} else {
 					// no events
-					if (myds->wait_until && curtime > myds->wait_until) {
+					if (myds->wait_until && curtime >= myds->wait_until) {
 						// timeout
 						myds->sess->to_process=1;
 						assert(myds->sess->status!=session_status___NONE);
 					} else {
-						if (myds->sess->pause_until && curtime > myds->sess->pause_until) {
+						if (myds->sess->pause_until && curtime >= myds->sess->pause_until) {
 							// timeout
 							myds->sess->to_process=1;
 						}
@@ -3804,6 +3810,14 @@ void MySQL_Thread::process_all_sessions() {
 						unregister_session(n);
 						n--;
 						delete sess;
+					} else {
+						if (sess->pause_until != 0) {
+							this->handling_delayed_sessions = true;
+						}
+					}
+				} else {
+					if (sess->pause_until != 0) {
+						this->handling_delayed_sessions = true;
 					}
 				}
 			} else {
@@ -3818,6 +3832,10 @@ void MySQL_Thread::process_all_sessions() {
 					unregister_session(n);
 					n--;
 					delete sess;
+				} else {
+					if (sess->pause_until != 0) {
+						this->handling_delayed_sessions = true;
+					}
 				}
 			}
 		}
@@ -5497,11 +5515,11 @@ void MySQL_Thread::check_timing_out_session(unsigned int n) {
 	// no events. This section is copied from process_data_on_data_stream()
 	MySQL_Data_Stream *_myds=mypolls.myds[n];
 	if (_myds && _myds->sess) {
-		if (_myds->wait_until && curtime > _myds->wait_until) {
+		if (_myds->wait_until && curtime >= _myds->wait_until) {
 			// timeout
 			_myds->sess->to_process=1;
 		} else {
-			if (_myds->sess->pause_until && curtime > _myds->sess->pause_until) {
+			if (_myds->sess->pause_until && curtime >= _myds->sess->pause_until) {
 				// timeout
 				_myds->sess->to_process=1;
 			}
@@ -5550,15 +5568,31 @@ void MySQL_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds) {
 	if (myds->wait_until > curtime) {
 		if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
 			mypolls.poll_timeout= myds->wait_until - curtime;
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , wait_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->wait_until, curtime);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , wait_until=%llu , curtime=%llu\n", myds->sess, mypolls.poll_timeout, myds->wait_until, curtime);
 		}
 	}
 }
 
 void MySQL_Thread::tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds) {
-	if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
-		mypolls.poll_timeout= myds->sess->pause_until - curtime;
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , pause_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->sess->pause_until, curtime);
+	// Verify that pause until is actually bigger that current time as for 'wait_until', otherwise
+	// we could be unnecessarily setting 'poll_timeout' to a negative value (two complement),
+	// for later imposing 'mysql_thread___poll_timeout'. Or even worse, if 'poll_timeout' was already set, and
+	// 'pause_until' matches 'curtime', we could be resetting the already set 'poll_timeout' to '0', causing
+	// to be later defaulted to 'mysql_thread___poll_timeout'.
+	if (myds->sess->pause_until > curtime) {
+		if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout)) {
+			// In case of 'poll_timeout' already set, pick the lowest value
+			uint64_t new_poll_timeout = myds->sess->pause_until - curtime;
+			if (mypolls.poll_timeout != 0) {
+				 if (new_poll_timeout < mypolls.poll_timeout) {
+					 mypolls.poll_timeout = new_poll_timeout;
+				 }
+			} else {
+				mypolls.poll_timeout = new_poll_timeout;
+			}
+			mypolls.poll_timeout= myds->sess->pause_until - curtime;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , pause_until=%llu , curtime=%llu\n", myds->sess, mypolls.poll_timeout, myds->sess->pause_until, curtime);
+		}
 	}
 }
 

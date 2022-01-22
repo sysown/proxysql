@@ -286,7 +286,7 @@ static const double __ac_HASH_UPPER = 0.77;
 							__ac_set_isdel_true(h->flags, i); /* mark it as deleted in the old hash table */ \
 						} else { /* write the element and jump out of the loop */ \
 							h->keys[i] = key;							\
-							if (kh_is_map) h->vals[i] = val;			\
+							if (kh_is_map) new (&h->vals[i]) khval_t(val); \
 							break;										\
 						}												\
 					}													\
