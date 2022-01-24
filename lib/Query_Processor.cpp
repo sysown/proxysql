@@ -840,6 +840,14 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	return result;
 }
 
+int Query_Processor::get_current_query_rules_fast_routing_count() {
+	int result = 0;
+	pthread_rwlock_rdlock(&rwlock);
+	result = fast_routing_resultset->rows_count;
+	pthread_rwlock_unlock(&rwlock);
+	return result;
+}
+
 SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules fast_routing, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(5);

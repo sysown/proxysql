@@ -123,6 +123,7 @@ int main(int argc, char** argv) {
 				diag("Running: %s", s.c_str());
 				MYSQL_QUERY(mysql, s.c_str());
 			}
+			sleep(1);
 		} else {
 			int rc = run_q(mysql, "DO 1");
 			ok(rc != 0, "Connection killed");
