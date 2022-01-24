@@ -62,7 +62,8 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
 
-GCC_VERSION := $(shell gcc -dumpversion)
+GCC_VERSION :=
+#$(shell gcc -dumpversion)
 MIN_VERSION := 4.9.0
 REQUIRE_PATCH = false
 
