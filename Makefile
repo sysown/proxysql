@@ -624,6 +624,7 @@ cleanall:
 	cd test/tap && ${MAKE} clean
 	rm binaries/*deb || true
 	rm binaries/*rpm || true
+	rm binaries/*id-hash || true
 
 .PHONY: cleanbuild
 cleanbuild:
