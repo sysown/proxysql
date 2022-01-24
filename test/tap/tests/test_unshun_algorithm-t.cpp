@@ -267,6 +267,9 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 			// Check that only server from first hostgroup is 'SHUNNED'
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "SHUNNED", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'SHUNNED'");
+			if (tests_failed()) {
+				return exit_status();
+			}
 		}
 	}
 
@@ -284,6 +287,9 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "ONLINE", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'ONLINE'");
 			diag(""); // empty line
+			if (tests_failed()) {
+				return exit_status();
+			}
 		}
 	}
 
@@ -310,6 +316,9 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "SHUNNED", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'SHUNNED'");
 			diag(""); // empty line
+			if (tests_failed()) {
+				return exit_status();
+			}
 		}
 	}
 
