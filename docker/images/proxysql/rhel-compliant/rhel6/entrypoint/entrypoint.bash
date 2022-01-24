@@ -4,9 +4,12 @@ set -eu
 echo "==> Build environment:"
 env
 
+ARCH=$PROXYSQL_BUILD_ARCH
+echo "==> $ARCH architecture detected for package"
+
 echo "==> Cleaning"
 # Delete package if exists
-rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.x86_64.rpm || true
+rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm || true
 # Cleanup relic directories from a previously failed build
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} || true
 
@@ -14,20 +17,21 @@ rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/p
 echo "==> Building"
 cd /opt/proxysql
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
-  deps_target="build_deps"
-  build_target=""
+	deps_target="build_deps"
+	build_target=""
 else
-  deps_target="build_deps_$PROXYSQL_BUILD_TYPE"
-  build_target="$PROXYSQL_BUILD_TYPE"
+	deps_target="build_deps_$PROXYSQL_BUILD_TYPE"
+	build_target="$PROXYSQL_BUILD_TYPE"
 fi
 ${MAKE} cleanbuild
 ${MAKE} ${MAKEOPT} "${deps_target}"
 
 if [[ -z ${build_target} ]] ; then
-  ${MAKE} ${MAKEOPT}
+	${MAKE} ${MAKEOPT}
 else
-  ${MAKE} ${MAKEOPT} "${build_target}"
+	${MAKE} ${MAKEOPT} "${build_target}"
 fi
+touch /opt/proxysql/src/proxysql
 
 # Prepare package files and build RPM
 echo "==> Packaging"
@@ -41,6 +45,7 @@ tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
 mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" /root/rpmbuild/SOURCES
 cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec --define "version ${CURVER}"
-mv "/root/rpmbuild/RPMS/x86_64/proxysql-${CURVER}-1.x86_64.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.x86_64.rpm"
+mv "/root/rpmbuild/RPMS/$ARCH/proxysql-${CURVER}-1.$ARCH.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm"
+cp "/opt/proxysql/src/proxysql.sha1" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.id-hash"
 # Cleanup current build
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql "/opt/proxysql/proxysql-${CURVER}"

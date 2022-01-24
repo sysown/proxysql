@@ -3237,6 +3237,15 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid) {
 	// we scan all hostgroups looking for a specific server to unshun
 	// if skip_hid is not NULL , the specific hostgroup is skipped
+	if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
+		char buf[64];
+		if (skip_hid == NULL) {
+			sprintf(buf,"NULL");
+		} else {
+			sprintf(buf,"%u", *skip_hid);
+		}
+		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %llu , %d , %s\n" , address, port, t, max_wait_sec, buf);
+	}
 	int i, j;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
@@ -3262,6 +3271,9 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 							||
 							(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
 						) {
+							if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
+								proxy_info("Unshunning server %d:%s:%d . time_last_detected_error=%llu\n", mysrvc->myhgc->hid, address, port, mysrvc->time_last_detected_error);
+							}
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 							mysrvc->shunned_automatic=false;
 							mysrvc->shunned_and_kill_all_connections=false;

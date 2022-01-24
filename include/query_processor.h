@@ -222,9 +222,6 @@ class Query_Processor_Output {
 		if (comment) { // #643
 			free(comment);
 		}
-		if (comment) { // #643
-			free(comment);
-		}
 	}
 };
 
@@ -363,13 +360,14 @@ class Query_Processor {
 	SQLite3_result * fast_routing_resultset;
 	void load_fast_routing(SQLite3_result *resultset);
 	SQLite3_result * get_current_query_rules_fast_routing();
-	// QPS limit rules
+	int get_current_query_rules_fast_routing_count();
+	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
+	int testing___find_HG_in_mysql_query_rules_fast_routing_dual(char *username, char *schemaname, int flagIN);
+
+  // QPS limit rules
 	SQLite3_result* qps_limit_resultset;
 	void load_qps_limits(SQLite3_result* resultset);
 	SQLite3_result* get_current_qps_limit_rules();
-
-	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
-	int testing___find_HG_in_mysql_query_rules_fast_routing_dual(char *username, char *schemaname, int flagIN);
 
 	// firewall
 	void load_mysql_firewall(SQLite3_result *u, SQLite3_result *r, SQLite3_result *sf);

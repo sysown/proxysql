@@ -1093,6 +1093,11 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 		myhdr.pkt_id++;
 	}
 
+	// Check if a 'COM_CHANGE_USER' Auth Switch is being performed in session
+	if ((*myds)->sess->change_user_auth_switch) {
+		myhdr.pkt_id=1;
+	}
+
 	switch((*myds)->switching_auth_type) {
 		case 1:
 			myhdr.pkt_length=1 // fe
@@ -1223,6 +1228,11 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
+	if (mysql_thread___enable_client_deprecate_eof) {
+		mysql_thread___server_capabilities |= CLIENT_DEPRECATE_EOF;
+	} else {
+		mysql_thread___server_capabilities &= ~CLIENT_DEPRECATE_EOF;
+	}
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
   const MARIADB_CHARSET_INFO *ci = NULL;
@@ -1340,6 +1350,84 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 	return ret;
 }
 
+bool MySQL_Protocol::verify_user_pass(
+	enum proxysql_session_type session_type,
+	const char* password,
+	const char* user,
+	const char* pass,
+	int pass_len,
+	const char* sha1_pass,
+	const char* auth_plugin
+) {
+	bool ret = false;
+
+	char reply[SHA_DIGEST_LENGTH+1];
+	reply[SHA_DIGEST_LENGTH]='\0';
+	int auth_plugin_id = 0;
+
+	if (strncmp((char *)auth_plugin,(char *)"mysql_native_password",strlen((char *)"mysql_native_password"))==0) {
+		auth_plugin_id = 1;
+	}
+	if (strncmp((char *)auth_plugin,(char *)"mysql_clear_password",strlen((char *)"mysql_clear_password"))==0) {
+		auth_plugin_id = 2;
+	}
+
+	if (password[0]!='*') { // clear text password
+		if (auth_plugin_id == 1) { // mysql_native_password
+			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+				ret=true;
+			}
+		} else { // mysql_clear_password
+			if (strncmp(password,(char *)pass,strlen(password))==0) {
+				ret=true;
+			}
+		}
+	} else {
+		if (auth_plugin_id == 1) {
+			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+				if (ret) {
+					if (sha1_pass==NULL) {
+						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+					}
+					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+					userinfo->sha1_pass=sha1_pass_hex(reply);
+				}
+			}
+		} else {
+			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
+				uint8_t hash_stage1[SHA_DIGEST_LENGTH];
+				uint8_t hash_stage2[SHA_DIGEST_LENGTH];
+				SHA_CTX sha1_context;
+				SHA1_Init(&sha1_context);
+				SHA1_Update(&sha1_context, pass, pass_len);
+				SHA1_Final(hash_stage1, &sha1_context);
+				SHA1_Init(&sha1_context);
+				SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
+				SHA1_Final(hash_stage2, &sha1_context);
+				// note that sha1_pass_hex() returns a new buffer
+				char *double_hashed_password = sha1_pass_hex((char *)hash_stage2);
+
+				if (strcasecmp(double_hashed_password,password)==0) {
+					ret = true;
+					if (sha1_pass==NULL) {
+						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,hash_stage1);
+					}
+					if (userinfo->sha1_pass)
+						free(userinfo->sha1_pass);
+					userinfo->sha1_pass=sha1_pass_hex((char *)hash_stage1);
+				} else {
+					ret = false;
+				}
+				free(double_hashed_password);
+			}
+		}
+	}
+
+	return ret;
+}
 
 bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
@@ -1363,10 +1451,30 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	memset(pass,0,128);
 	//pkt+=sizeof(mysql_hdr);
 	memcpy(pass, pkt+cur, pass_len);
-	char reply[SHA_DIGEST_LENGTH+1];
-	reply[SHA_DIGEST_LENGTH]='\0';
 	cur+=pass_len;
 	db=(char *)pkt+cur;
+	// Move to field after 'database'
+	cur += strlen(db) + 1;
+	// Skipt field 'character-set' (size 2)
+	cur += 2;
+	// Check and get 'Client Auth Plugin' if capability is supported
+	char* client_auth_plugin = nullptr;
+	if (pkt + len > pkt + cur) {
+		int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
+		if (capabilities & CLIENT_PLUGIN_AUTH) {
+			client_auth_plugin = reinterpret_cast<char*>(pkt + cur);
+		}
+	}
+	// Default to 'mysql_native_password' in case 'auth_plugin' is not found.
+	if (client_auth_plugin == nullptr) {
+		client_auth_plugin = const_cast<char*>("mysql_native_password");
+	}
+	if (pass_len) {
+		if (pass[pass_len-1] == 0) {
+			pass_len--; // remove the extra 0 if present
+		}
+	}
+
 	void *sha1_pass=NULL;
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
@@ -1386,23 +1494,24 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
-			if (password[0]!='*') { // clear text password
-				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-					ret=true;
-				}
+			// If pass not sent within 'COM_CHANGE_USER' packet, an 'Auth Switch Request'
+			// is required. We default to 'mysql_native_password'. See #3504 for more context.
+			if (pass_len == 0) {
+				// mysql_native_password
+				(*myds)->switching_auth_type = 1;
+				// started 'Auth Switch Request' for 'CHANGE_USER' in MySQL_Session.
+				(*myds)->sess->change_user_auth_switch = true;
+
+				generate_pkt_auth_switch_request(true, NULL, NULL);
+				(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
+				ret = false;
 			} else {
-				if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
-					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
-					if (ret) {
-						if (sha1_pass==NULL) {
-							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
-						}
-						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-						userinfo->sha1_pass=sha1_pass_hex(reply);
-					}
-				}
+				// If pass is sent with 'COM_CHANGE_USER', we proceed trying to use
+				// it to authenticate the user. See #3504 for more context.
+				ret = verify_user_pass(
+					session_type, password, reinterpret_cast<char*>(user), reinterpret_cast<char*>(pass),
+					pass_len, static_cast<char*>(sha1_pass), client_auth_plugin
+				);
 			}
 		}
 		//if (_ret_use_ssl==true) {

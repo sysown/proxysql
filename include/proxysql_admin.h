@@ -129,6 +129,8 @@ class ProxySQL_Admin {
 
 	prometheus::SerialExposer serial_exposer;
 
+	std::mutex proxysql_servers_mutex;
+
 	void wrlock();
 	void wrunlock();
 
@@ -335,6 +337,8 @@ class ProxySQL_Admin {
 
 	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
+
+	void load_or_update_global_settings(SQLite3DB *);
 
 	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }

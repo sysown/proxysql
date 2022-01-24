@@ -178,6 +178,7 @@ class MySQL_Thread
 	unsigned long long curtime;
 	unsigned long long pre_poll_time;
 	unsigned long long last_maintenance_time;
+	unsigned long long last_move_to_idle_thread_time;
 	std::atomic<unsigned long long> atomic_curtime;
 	PtrArray *mysql_sessions;
 	PtrArray *mirror_queue_mysql_sessions;
@@ -500,6 +501,7 @@ class MySQL_Threads_Handler
 		bool query_digests_normalize_digest_text;
 		bool query_digests_track_hostname;
 		int query_digests_grouping_limit;
+		int query_digests_groups_grouping_limit;
 		bool default_reconnect;
 		bool have_compress;
 		bool have_ssl;
@@ -547,7 +549,7 @@ class MySQL_Threads_Handler
 		char *add_ldap_user_comment;
 		char *default_tx_isolation;
 		char *default_session_track_gtids;
-		char *default_variables[SQL_NAME_LAST];
+		char *default_variables[SQL_NAME_LAST_LOW_WM];
 		char *firewall_whitelist_errormsg;
 #ifdef DEBUG
 		bool session_debug;

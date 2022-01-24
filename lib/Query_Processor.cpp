@@ -863,6 +863,14 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	return result;
 }
 
+int Query_Processor::get_current_query_rules_fast_routing_count() {
+	int result = 0;
+	pthread_rwlock_rdlock(&rwlock);
+	result = fast_routing_resultset->rows_count;
+	pthread_rwlock_unlock(&rwlock);
+	return result;
+}
+
 SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules fast_routing, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(5);
@@ -2031,7 +2039,7 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
+		qp->digest_text=mysql_query_digest_and_first_comment_2(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
 		// the hash is computed only up to query_digests_max_digest_length bytes
 		int digest_text_length=strnlen(qp->digest_text, mysql_thread___query_digests_max_digest_length);
 		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);

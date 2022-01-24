@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
 		rc = run_q(proxysql_admin, s.c_str());
 		ok(rc == 0 , "%s" , s.c_str());
 	}
-	
+	sleep(1);
 	for (int i = 0; i < NUM_CONNS ; i++) {
 		MYSQL * mysql = conns[i];
 		int rc = run_q(mysql, "DO 1");
