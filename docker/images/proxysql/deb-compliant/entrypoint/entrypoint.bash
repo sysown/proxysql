@@ -45,14 +45,21 @@ touch /opt/proxysql/src/proxysql
 # Cleanup current build
 #rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql
 
+# Prepare package files and build DEB
 echo "==> Packaging"
+# prepare build root
 cd /opt/proxysql
+rm -rf ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
 mkdir -p ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN
+# prepare files
 cp /root/ctl/proxysql.ctl ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
 sed -i "/^$/d; /^#/d" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
 sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
 sed -i "s/PKG_ARCH/${ARCH}/g" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
-cp /opt/proxysql/src/proxysql ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
+cp ./src/proxysql ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
+# build package
 dpkg-deb --build --root-owner-group ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
 mv ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb ./binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
 cp ./src/proxysql.sha1 ./binaries/proxysql-${CURVER}-${PKG_RELEASE}.${ARCH}.id-hash
+# cleanup
+rm -rf ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
