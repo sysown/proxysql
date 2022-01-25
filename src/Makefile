@@ -109,11 +109,11 @@ else
 WASAN=
 endif
 
+MYCXXFLAGS=-std=c++11
 ifeq ($(CXX),clang++)
-	MYCXXFLAGS=-std=c++11 -fuse-ld=lld $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
-else
-	MYCXXFLAGS=-std=c++11 $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
+	MYCXXFLAGS+= -fuse-ld=lld
 endif
+MYCXXFLAGS+= $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
 
 ifeq ($(WITHGCOVVAR),1)
 LDFLAGS+= -lgcov --coverage
