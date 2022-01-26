@@ -141,6 +141,9 @@ lz4: lz4/lz4/liblz4.a
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp.tar.gz
+ifeq ($(CXX),clang++)
+	cd clickhouse-cpp/clickhouse-cpp && sed -i 's/"-O2 -pthread -Wall -Wextra -Werror"/"-O2 -pthread -Wall -Wextra -Werror -Wno-deprecated-copy"/' CMakeLists.txt
+endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/columns/column.h < ../column.h.diff
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
