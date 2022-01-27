@@ -141,8 +141,6 @@ services:
       - MAKE
       - MAKEOPT
       - CURVER
-      - CC=clang
-      - CXX=clang++
       - PKG_RELEASE=centos8-clang
       - PROXYSQL_BUILD_TYPE=clickhouse
       - PROXYSQL_BUILD_ARCH=x86_64
@@ -367,8 +365,6 @@ services:
       - MAKE
       - MAKEOPT
       - CURVER
-      - CC=clang
-      - CXX=clang++
       - PKG_RELEASE=fedora34-clang
       - PROXYSQL_BUILD_TYPE=clickhouse
       - PROXYSQL_BUILD_ARCH=x86_64
@@ -576,8 +572,6 @@ services:
       - MAKE
       - MAKEOPT
       - CURVER
-      - CC=clang
-      - CXX=clang++
       - PKG_RELEASE=debian11-clang
       - PROXYSQL_BUILD_TYPE=clickhouse
       - PROXYSQL_BUILD_ARCH=amd64
@@ -753,8 +747,6 @@ services:
       - MAKE
       - MAKEOPT
       - CURVER
-      - CC=clang
-      - CXX=clang++
       - PKG_RELEASE=ubuntu20-clang
       - PROXYSQL_BUILD_TYPE=clickhouse
       - PROXYSQL_BUILD_ARCH=amd64
@@ -790,5 +782,53 @@ services:
       - PKG_RELEASE=dbg-ubuntu20
       - PROXYSQL_BUILD_TYPE=debug
       - PROXYSQL_BUILD_ARCH=amd64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  opensuse15_build:
+    image: proxysql/packaging:build-opensuse15
+    volumes:
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=opensuse15
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  opensuse15_clang_build:
+    image: proxysql/packaging:build-clang-opensuse15
+    volumes:
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=opensuse15-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  opensuse15_dbg_build:
+    image: proxysql/packaging:build-opensuse15
+    volumes:
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=dbg-opensuse15
+      - PROXYSQL_BUILD_TYPE=debug
+      - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
