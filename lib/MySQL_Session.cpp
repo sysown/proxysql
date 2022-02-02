@@ -2698,6 +2698,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}		
 	}
 
+	// NOTE-connect_retries_delay: This check alone is not enough for imposing
+	// 'mysql_thread___connect_retries_delay'. In case of 'async_connect' failing, 'pause_until' should also
+	// be set to 'mysql_thread___connect_retries_delay'. Complementary NOTE below.
 	if (mybe->server_myds->myconn==NULL) {
 		pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
 		*_rc=1;
@@ -2768,6 +2771,14 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 						PROXY_TRACE();
 					}			
 					myds->destroy_MySQL_Connection_From_Pool(false);
+					// NOTE-connect_retries_delay: In case of failure to connect, if
+					// 'mysql_thread___connect_retries_delay' is set, we impose a delay in the session
+					// processing via 'pause_until'. Complementary NOTE above.
+					if (mysql_thread___connect_retries_delay) {
+						pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
+						set_status(CONNECTING_SERVER);
+						return false;
+					}
 					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 				} else {
 __exit_handler_again___status_CONNECTING_SERVER_with_err:
