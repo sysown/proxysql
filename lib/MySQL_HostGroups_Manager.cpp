@@ -907,10 +907,22 @@ void MySrvC::connect_error(int err_num, bool get_mutex) {
 		default:
 			break;
 	}
+
+#ifdef DEBUG
+	if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
+		proxy_info(
+			"{ MySrvC: %p, connect_ERR: %d, connect_ERR_at_time_last_detected_error: %d }\n",
+			this, connect_ERR, connect_ERR_at_time_last_detected_error
+		);
+	}
+#endif
+
 	time_t t=time(NULL);
 	if (t > time_last_detected_error) {
 		time_last_detected_error=t;
 		connect_ERR_at_time_last_detected_error=1;
+		proxy_error("Connection error for server %s:%d\n", address, port);
+		print_backtrace();
 	} else {
 		if (t < time_last_detected_error) {
 			// time_last_detected_error is in the future
@@ -934,6 +946,7 @@ void MySrvC::connect_error(int err_num, bool get_mutex) {
 				MyHGM->wrunlock();
 			if (_shu) {
 			proxy_error("Shunning server %s:%d with %u errors/sec. Shunning for %u seconds\n", address, port, connect_ERR_at_time_last_detected_error , mysql_thread___shun_recovery_time_sec);
+			print_backtrace();
 			}
 		}
 	}
@@ -2811,6 +2824,12 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								||
 								(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
 							) {
+#ifdef DEBUG
+								if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
+									proxy_info("Unshunning server %s:%d.\n", mysrvc->address, mysrvc->port);
+									print_backtrace();
+								}
+#endif
 								mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 								mysrvc->shunned_automatic=false;
 								mysrvc->shunned_and_kill_all_connections=false;
