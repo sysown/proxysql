@@ -398,7 +398,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE mysql_query_rules_fast_routing (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, schemaname, flagIN) )"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_QPS_LIMIT_RULES "CREATE TABLE mysql_qps_limit_rules (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , qps_limit INT NOT NULL DEFAULT 0 , bucket_size INT NOT NULL DEFAULT 0 , PRIMARY KEY (username, schemaname, flagIN) )"
+#define ADMIN_SQLITE_TABLE_MYSQL_QPS_LIMIT_RULES "CREATE TABLE mysql_qps_limit_rules (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , qps_limit INT CHECK (qps_limit > 0) NOT NULL , bucket_size INT NOT NULL DEFAULT 0 , PRIMARY KEY (username, schemaname, flagIN) )"
 
 #define ADMIN_SQLITE_TABLE_GLOBAL_SETTINGS "CREATE TABLE global_settings (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
@@ -473,7 +473,7 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE runtime_mysql_query_rules_fast_routing (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, schemaname, flagIN) )"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QPS_LIMIT_RULES "CREATE TABLE runtime_mysql_qps_limit_rules (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , qps_limit INT NOT NULL DEFAULT 0 , bucket_size INT NOT NULL DEFAULT 0 , PRIMARY KEY (username, schemaname, flagIN) )"
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QPS_LIMIT_RULES "CREATE TABLE runtime_mysql_qps_limit_rules (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , qps_limit INT CHECK (qps_limit > 0) NOT NULL , bucket_size INT NOT NULL DEFAULT 0 , PRIMARY KEY (username, schemaname, flagIN) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_SCHEDULER "CREATE TABLE runtime_scheduler (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , interval_ms INTEGER CHECK (interval_ms>=100 AND interval_ms<=100000000) NOT NULL , filename VARCHAR NOT NULL , arg1 VARCHAR , arg2 VARCHAR , arg3 VARCHAR , arg4 VARCHAR , arg5 VARCHAR , comment VARCHAR NOT NULL DEFAULT '')" 
 
