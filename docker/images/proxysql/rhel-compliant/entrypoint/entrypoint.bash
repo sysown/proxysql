@@ -43,6 +43,7 @@ cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/
 mv proxysql "proxysql-${CURVER}"
 tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
 mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
+chown -R root:root /root/rpmbuild/SPECS
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" /root/rpmbuild/SOURCES
 cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec --define "version ${CURVER}"
 mv "/root/rpmbuild/RPMS/$ARCH/proxysql-${CURVER}-1.$ARCH.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm"
