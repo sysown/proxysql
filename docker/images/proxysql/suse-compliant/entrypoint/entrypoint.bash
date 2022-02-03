@@ -43,6 +43,7 @@ echo "==> Packaging"
 cd /opt/proxysql
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} ./proxysql-${CURVER}
 mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
+chown -R root:root /root/rpmbuild/SPECS
 mkdir -p proxysql-${CURVER}/usr/bin proxysql-${CURVER}/etc proxysql-${CURVER}/usr/share/proxysql/tools
 # prepare files
 cp src/proxysql proxysql-${CURVER}/usr/bin/
