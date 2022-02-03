@@ -45,6 +45,7 @@ libinjection/libinjection/src/libinjection.a:
 ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
 endif
+	sed -i 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 libinjection: libinjection/libinjection/src/libinjection.a
 
