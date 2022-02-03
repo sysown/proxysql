@@ -821,6 +821,15 @@ admin_metrics_map = std::make_tuple(
 			"proxysql_fds_in_use",
 			"The number of file descriptors currently in use by ProxySQL.",
 			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::version_info,
+			"proxysql_version_info",
+			"ProxySQL version.",
+			metric_tags {
+				{ "version", PROXYSQL_VERSION },
+				{ "version_comment", std::string { "ProxySQL version " } + PROXYSQL_VERSION + ", codename " + PROXYSQL_CODENAME }
+			}
 		)
 	}
 );
@@ -5604,6 +5613,9 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	// Initialize prometheus metrics
 	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
 	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
+
+	// NOTE: Imposing fixed value to 'version_info' matching 'mysqld_exporter'
+	this->metrics.p_gauge_array[p_admin_gauge::version_info]->Set(1);
 };
 
 void ProxySQL_Admin::wrlock() {
