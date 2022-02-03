@@ -70,6 +70,7 @@ static inline char is_normal_char(char c) {
 }
 
 static const std::set<std::string> mysql_variables_boolean = {
+	"aurora_read_replica_read_committed",
 	"foreign_key_checks",
 	"innodb_strict_mode",
 	"innodb_table_locks",
@@ -94,11 +95,20 @@ static const std::set<std::string> mysql_variables_numeric = {
 	"max_sort_length",
 	"optimizer_prune_level",
 	"optimizer_search_depth",
+	"query_cache_type",
 	"sort_buffer_size",
 	"sql_select_limit",
 	"timestamp",
 	"tmp_table_size",
 	"wsrep_sync_wait"
+};
+static const std::set<std::string> mysql_variables_strings = {
+	"default_storage_engine",
+	"default_tmp_storage_engine",
+	"group_replication_consistency",
+	"lc_messages",
+	"lc_time_names",
+	"optimizer_switch",
 };
 
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);
@@ -2430,12 +2440,15 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 				return ret;
 			} else {
 				proxy_warning("Error while setting %s to \"%s\" on %s:%d hg %d :  %d, %s\n", var_name, var_value, myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-				if (myerr == 1193) { // variable is not found
-					// FIXME: here we work on absent variables
-					// FIXME: currently we use SQL_NAME_LAST_LOW_WM here
-					// FIXME: but we need to switch to SQL_NAME_LAST_HIGH_WM
-					int idx = SQL_NAME_LAST_LOW_WM; // FIXME: here we work on absent variables
-					for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
+				if (
+					(myerr == 1064) // You have an error in your SQL syntax
+					||
+					(myerr == 1193) // variable is not found
+					||
+					(myerr == 1651) // Query cache is disabled
+				) {
+					int idx = SQL_NAME_LAST_HIGH_WM;
+					for (int i=0; i<SQL_NAME_LAST_HIGH_WM; i++) {
 						if (strcasecmp(mysql_tracked_variables[i].set_variable_name, var_name) == 0) {
 							idx = i;
 							break;
@@ -5660,13 +5673,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
-					} else if (
-						   (var == "default_storage_engine")
-						|| (var == "default_tmp_storage_engine")
-						|| (var == "lc_messages")
-						|| (var == "lc_time_names")
-						|| (var == "optimizer_switch")
-					) {
+					} else if (mysql_variables_strings.find(var) != mysql_variables_strings.end()) {
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");
 						if (found_at != std::string::npos) {
@@ -5691,7 +5698,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								}
 							}
 						}
-					//} else if (
 					} else if (mysql_variables_boolean.find(var) != mysql_variables_boolean.end()) {
 						int idx = SQL_NAME_LAST_HIGH_WM;
 						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
@@ -5718,8 +5724,24 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (idx != SQL_NAME_LAST_HIGH_WM) {
-							if (mysql_variables.parse_variable_number(this,idx, *values, lock_hostgroup)==false) {
-								return false;
+							if (var == "query_cache_type") {
+								// note that query_cache_type variable can act both as boolean AND a number , but also accept "DEMAND"
+								// See https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_query_cache_type
+								std::string value1 = *values;
+								if (strcasecmp(value1.c_str(),"off")==0 || strcasecmp(value1.c_str(),"false")==0) {
+									value1 = "0";
+								} else if (strcasecmp(value1.c_str(),"on")==0 || strcasecmp(value1.c_str(),"true")==0) {
+									value1 = "1";
+								} else if (strcasecmp(value1.c_str(),"demand")==0 || strcasecmp(value1.c_str(),"true")==0) {
+									value1 = "2";
+								}
+								if (mysql_variables.parse_variable_number(this,idx, value1, lock_hostgroup)==false) {
+									return false;
+								}
+							} else {
+								if (mysql_variables.parse_variable_number(this,idx, *values, lock_hostgroup)==false) {
+									return false;
+								}
 							}
 						}
 					} else if (var == "autocommit") {
