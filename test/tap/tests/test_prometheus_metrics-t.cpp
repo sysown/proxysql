@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <string>
@@ -52,8 +53,16 @@ std::map<std::string, double> get_metric_values(std::string metrics_output) {
 	for (const std::string line : output_lines) {
 		const std::vector<std::string> line_values { split(line, ' ') };
 
-		if (line_values.size() == 2) {
-			metrics_map.insert({line_values.front(), std::stod(line_values.back())});
+		if (line.empty() == false && line[0] != '#') {
+			if (line_values.size() > 2) {
+				size_t delim_pos_st = line.rfind("} ");
+				string metric_key = line.substr(0, delim_pos_st);
+				string metric_val = line.substr(delim_pos_st + 2);
+
+				metrics_map.insert({metric_key, std::stod(metric_val)});
+			} else {
+				metrics_map.insert({line_values.front(), std::stod(line_values.back())});
+			}
 		}
 	}
 
@@ -204,6 +213,63 @@ void check_transaction_rollback_total(
 	}
 }
 
+string PROXYSQL_VERSION {};
+
+bool get_proxysql_version_info(MYSQL*, MYSQL* admin, const CommandLine&) {
+	int v_err = mysql_query(admin, "SELECT @@version");
+	if (v_err) {
+		diag(
+			"'mysql_query' failed for 'SELECT @@version' with {Line: %d, Err: '%s'}",
+			__LINE__, mysql_error(admin)
+		);
+		return false;
+	}
+
+	MYSQL_RES* v_res = mysql_store_result(admin);
+	vector<mysql_res_row> res_rows = extract_mysql_rows(v_res);
+
+	if (res_rows.size() != 1 && res_rows[0].size() != 1) {
+		diag("Invalid resulset received for 'SELECT @@version' at Line: %d", __LINE__);
+		return false;
+	} else {
+		PROXYSQL_VERSION = res_rows[0][0];
+		return true;
+	}
+}
+
+void check_proxysql_version_info(const map<string, double>& prev_metrics, const map<string, double>& after_metrics) {
+	map<string,double>::const_iterator after_metric_it { after_metrics.end() };
+
+	for (auto metric_key = after_metrics.begin(); metric_key != after_metrics.end(); metric_key++) {
+		if (metric_key->first.rfind("proxysql_version_info") == 0) {
+			after_metric_it = metric_key;
+		}
+	}
+
+	bool metric_found = after_metric_it != after_metrics.end();
+	ok(metric_found, "Metric was present in output from 'SHOW PROMETHEUS METRICS'");
+
+	if (metric_found) {
+		string after_metric_key = after_metric_it->first;
+		double after_metric_val = after_metric_it->second;
+
+		size_t v_id_len = strlen("version=\"");
+		size_t v_pos_st = after_metric_key.find("version=\"", 0);
+		size_t v_id_pos_st = v_pos_st + v_id_len;
+		size_t v_id_pos_end = after_metric_key.find_first_of("\"", v_id_pos_st);
+
+		string v_proxysql_metric = after_metric_key.substr(v_id_pos_st, v_id_pos_end - v_id_pos_st);
+
+		ok(
+			v_proxysql_metric == PROXYSQL_VERSION,
+			"Metric expected key and value match: {act_key:'%s', exp_key:'%s', act_val:'%lf', exp_val:'%lf'}",
+			v_proxysql_metric.c_str(), PROXYSQL_VERSION.c_str(), after_metric_val, 1.0
+		);
+	} else {
+		ok(false, "Metric has a properly updated value.");
+	}
+}
+
 /**
  * @brief Map of test identifier and pair functions holding the metrics tests:
  *   - First function of the pair uses an open connection to ProxySQL and to ProxySQL Admin to perform
@@ -220,7 +286,8 @@ const map<
 > metric_tests {
 	{ "proxysql_myhgm_auto_increment_multiplex_total", { trigger_auto_increment_delay_multiplex_metric, check_auto_increment_delay_multiplex_metric } },
 	{ "proxysql_access_denied_wrong_password_total", { trigger_access_denied_wrong_password_total, check_access_denied_wrong_password_total } },
-	{ "proxysql_com_rollback_total", { trigger_transaction_rollback_total, check_transaction_rollback_total } }
+	{ "proxysql_com_rollback_total", { trigger_transaction_rollback_total, check_transaction_rollback_total } },
+	{ "proxysql_version_info", { get_proxysql_version_info, check_proxysql_version_info } }
 };
 
 int main(int argc, char** argv) {
