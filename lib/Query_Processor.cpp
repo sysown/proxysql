@@ -1485,11 +1485,12 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 
 			while (ptr < _thr___qps_limit_rules___keys_values + qps_limit_rules_values_size) {
 				char* entry_values_ptr = ptr + strlen(ptr) + 1;
-				// NOTE: Each thread token bucket is the total number divided by the number of threads.
-				// We make sure to set at least '1' for thread QPS limit when global limit isn't '0'.
-				int qps_limit = ceil(atoi(entry_values_ptr) / static_cast<double>(GloMTH->num_threads));
+				// NOTE: Each thread 'qps limit' and 'bucket size' is the total number divided by the number
+				// of threads. Also, we take the 'floor' from the value, to never overshoot the limit.
+				int qps_limit = floor(atoi(entry_values_ptr) / static_cast<double>(GloMTH->num_threads));
+				if (qps_limit == 0) { qps_limit = 1; }
 				entry_values_ptr = entry_values_ptr + strlen(entry_values_ptr) + 1;
-				int bucket_size = atoi(entry_values_ptr);
+				int bucket_size = floor(atoi(entry_values_ptr) / static_cast<double>(GloMTH->num_threads));
 
 				int ret = 0;
 				khiter_t k = kh_put(khQPSLimitBucket, _thr_qps_limit_rules, ptr, &ret); // add the key
@@ -2946,10 +2947,11 @@ void Query_Processor::load_qps_limits(SQLite3_result *resultset) {
 		for (SQLite3_row* r : resultset->rows) {
 			sprintf(ptr,"%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
 			int ret = 0;
-			// NOTE: Each thread token bucket is the total number divided by the number of threads.
-			// We make sure to set at least '1' for thread QPS limit when global limit isn't '0'.
-			int qps_limit = ceil(atoi(r->fields[3]) / static_cast<double>(GloMTH->num_threads));
-			int bucket_size = atoi(r->fields[4]);
+			// NOTE: Each thread 'qps limit' and 'bucket size' is the total number divided by the number
+			// of threads. Also, we take the 'floor' from the value, to never overshoot the limit.
+			int qps_limit = floor(atoi(r->fields[3]) / static_cast<double>(GloMTH->num_threads));
+			if (qps_limit == 0) { qps_limit = 1; }
+			int bucket_size = floor(atoi(r->fields[4]) / static_cast<double>(GloMTH->num_threads));
 
 			khiter_t elem_it = kh_get(khQPSLimitBucket, qps_limit_rules, ptr);
 			if (elem_it != kh_end(qps_limit_rules)) {
