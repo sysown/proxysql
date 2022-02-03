@@ -444,6 +444,7 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1,11,21,31)");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	diag("Changing read traffic to hostgroup 101: UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
+	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	queries = 2500;
