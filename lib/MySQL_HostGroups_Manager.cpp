@@ -2811,6 +2811,11 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								||
 								(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
 							) {
+#ifdef DEBUG
+								if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
+									proxy_info("Unshunning server %s:%d.\n", mysrvc->address, mysrvc->port);
+								}
+#endif
 								mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 								mysrvc->shunned_automatic=false;
 								mysrvc->shunned_and_kill_all_connections=false;

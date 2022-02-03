@@ -14,6 +14,47 @@
  *   3. All the servers are 'SHUNNED' using 'PROXYSQL_SIMULATOR' command.
  *   4. Each of the servers placed in the individual hostgroups is 'UNSHUNNED', checking the proper behavior
  *      related to the other servers depending on 'mysql-unshun_algorithm'.
+ *
+ *  CI-FAILURES-NOTES:
+ *  This test received some changes after being detected that was provoking some failures in the CI.
+ *  The circumstances of these failures are summarized here together with the issue resolution as a reminder
+ *  of the design.
+ *
+ *  PREVIOUS-DESIGN:
+ *  In the previous design the test set the following variables:
+ *
+ *  ```
+ *  "SET mysql-shun_on_failures=5"
+ *  "SET mysql-connect_retries_on_failure=0"
+ *  ```
+ *
+ *  These values were chosen to avoid connection retrying when the connection error takes place.
+ *  For making sure that the server was properly UNSHUNNED, two queries were issued, with a two second delay
+ *  between them. The second query should only produce one error, thus not going over the threshold of at
+ *  least '2' errors within the same second to set the server as SHUNNED again.
+ *
+ *  FLAW:
+ *  The assumption that the second query cannot produce a second error is FALSE. The second query can produce
+ *  two errors under certain timing conditions. If the call to 'mysql_real_connect_start' doesn't immediately
+ *  return, because the underlying socket haven't been yet signaled, then 'MySQL_Session::handler' will
+ *  return, this will result into:
+ *
+ *  1. 'MySQL_Data_Stream' receiving the socket event in next poll, the event will be processed, but because the
+ *     server isn't present a error will be generated.
+ *  2. The session will later be processed, and due to the server still not being present, a second error will
+ *     be generated, resulting into the server being SHUNNED.
+ *
+ *  SOLUTION:
+ *  Test now uses the following values for the variables:
+ *
+ *  ```
+ *  "SET mysql-shun_on_failures=3"
+ *  "SET mysql-connect_retries_on_failure=3"
+ *  "SET mysql-connect_retries_delay=1000"
+ *  ```
+ *
+ *  This will avoid any accidental SHUNNING due to the previously described situation, and due to
+ *  'connect_retries_delay' will prevent more than one connection attempt per second.
  */
 
 #include <cstring>
@@ -58,14 +99,19 @@ int shunn_all_servers(MYSQL* proxysql_admin) {
 	return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Issues a simple 'DO 1' query to the target hostgroup with the intention of UNSHUNNING the server
+ *   present in that hostgroup.
+ * @param proxysql_mysql An already opened connection to ProxySQL.
+ * @param i The hostgroup to which the query should be issued.
+ * @return Since query errors are ignored, because the query is supposed to fail, EXIT_SUCCESS is always
+ *   returned.
+ */
 int wakup_target_server(MYSQL* proxysql_mysql, uint32_t i) {
 	std::string t_simple_do_query { "DO /* ;hostgroup=%d */ 1" };
 	std::string simple_do_query {};
 	string_format(t_simple_do_query, simple_do_query, i);
 
-	mysql_query(proxysql_mysql, simple_do_query.c_str());
-	diag("%s: running query: %s", tap_curtime().c_str(), simple_do_query.c_str());
-	sleep(SHUN_RECOVERY_TIME * 2);
 	mysql_query(proxysql_mysql, simple_do_query.c_str());
 	diag("%s: running query: %s", tap_curtime().c_str(), simple_do_query.c_str());
 
@@ -217,18 +263,41 @@ int test_proxysql_simulator_error(MYSQL* proxysql_admin) {
 	return EXIT_SUCCESS;
 }
 
+/**
+ * @brief Configures the relevant 'mysql' variables for achieving the test desired UNSHUNNING behavior.
+ * @details The values set for these variables prevent the target server to be SHUNNED after being UNSHUNNED
+ *   by the query issued by 'wakup_target_server', in case the query produces two simultaneous errors instead
+ *   of just one. Why this is a possibility is described on the details sections in the file DOC.
+ * @param proxysql_admin An already opened connection to ProxySQL Admin.
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise.
+ */
+int configure_mysql_shunning_variables(MYSQL* proxysql_admin) {
+	MYSQL_QUERY(proxysql_admin, "SET mysql-shun_on_failures=3");
+	diag("%s: Line:%d running admin query: SET mysql-shun_on_failures=3", tap_curtime().c_str(), __LINE__);
+
+	MYSQL_QUERY(proxysql_admin, "SET mysql-connect_retries_on_failure=3");
+	diag("%s: Line:%d running admin query: SET mysql-connect_retries_on_failure=3", tap_curtime().c_str(), __LINE__);
+
+	MYSQL_QUERY(proxysql_admin, "SET mysql-connect_retries_delay=1000");
+	diag("%s: Line:%d running admin query: SET mysql-connect_retries_delay=1000", tap_curtime().c_str(), __LINE__);
+
+	return EXIT_SUCCESS;
+}
+
 int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin) {
 	// Configure Admin variables with lower thresholds
 	MYSQL_QUERY(proxysql_admin, "SET mysql-shun_recovery_time_sec=1");
 	diag("%s: Line:%d running admin query: SET mysql-shun_recovery_time_sec=1", tap_curtime().c_str(), __LINE__);
+
+	// Set verbosity up for extra information in ProxySQL log
 	MYSQL_QUERY(proxysql_admin, "SET mysql-hostgroup_manager_verbose=3");
 	diag("%s: Line:%d running admin query: SET mysql-hostgroup_manager_verbose=3", tap_curtime().c_str(), __LINE__);
-	// NOTE: The following varible value is set here just as a reminder. This change isn't properly propagated
-	// to the 'error setting operation' since this is performed from 'ProxySQL_Admin' thread when
-	// 'PROXYSQL_SIMULATOR' command is received. Because of this, it's in 'PROXYSQL_SIMULATOR' command impl in
-	// 'ProxySQL_Admin' where this variable value is updated before setting the error.
-	MYSQL_QUERY(proxysql_admin, "SET mysql-shun_on_failures=5");
-	MYSQL_QUERY(proxysql_admin, "SET mysql-connect_retries_on_failure=0");
+
+	// Configure the relevant variables for the desired UNSHUNNING behavior
+	if (configure_mysql_shunning_variables(proxysql_admin)) {
+		return EXIT_FAILURE;
+	}
+
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	// Cleanup the servers and create a good number of hostgroups
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers");
@@ -267,6 +336,9 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 			// Check that only server from first hostgroup is 'SHUNNED'
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "SHUNNED", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'SHUNNED'");
+			if (tests_failed()) {
+				return exit_status();
+			}
 		}
 	}
 
@@ -284,6 +356,9 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "ONLINE", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'ONLINE'");
 			diag(""); // empty line
+			if (tests_failed()) {
+				return exit_status();
+			}
 		}
 	}
 
@@ -310,6 +385,9 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "SHUNNED", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'SHUNNED'");
 			diag(""); // empty line
+			if (tests_failed()) {
+				return exit_status();
+			}
 		}
 	}
 
@@ -338,7 +416,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
 
