@@ -58,8 +58,8 @@ sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" ./proxysql_${CURVER}-${PKG_RELEASE}_${
 sed -i "s/PKG_ARCH/${ARCH}/g" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
 cp ./src/proxysql ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
 # build package
-dpkg-deb --build --root-owner-group ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
+dpkg-deb --build ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
 mv ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb ./binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
-cp ./src/proxysql.sha1 ./binaries/proxysql-${CURVER}-${PKG_RELEASE}.${ARCH}.id-hash
+cp ./src/proxysql.sha1 ./binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-hash
 # cleanup
 rm -rf ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
