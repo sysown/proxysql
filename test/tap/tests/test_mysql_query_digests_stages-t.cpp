@@ -46,6 +46,7 @@ __thread int mysql_thread___query_digests_max_query_length = 65000;
 __thread bool mysql_thread___query_digests_lowercase = false;
 __thread bool mysql_thread___query_digests_replace_null = true;
 __thread bool mysql_thread___query_digests_no_digits = false;
+__thread bool mysql_thread___query_digests_keep_comment = false;
 __thread int mysql_thread___query_digests_grouping_limit = 3;
 __thread int mysql_thread___query_digests_groups_grouping_limit = 1;
 
@@ -203,14 +204,25 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 		}
 
 		for (const nlohmann::json& mz_test_def : mz_tests_defs) {
-			int digest_max_size = mz_test_def.at("digest_max_size");
-			int grouping_limit = mz_test_def.at("grouping_limit");
-			int groups_grouping_limit = mz_test_def.at("groups_grouping_limit");
-			int replace_digits = 0;
 			string exp_digest {};
+
+			int digest_max_size = 2048;
+			int grouping_limit = 3;
+			int groups_grouping_limit = 0;
+			int replace_digits = 0;
 			bool no_digest = true;
 			int lowercase = 0;
+			bool keep_comment = false;
 
+			if (mz_test_def.contains("digest_max_size")) {
+				digest_max_size = mz_test_def.at("digest_max_size");
+			}
+			if (mz_test_def.contains("grouping_limit")) {
+				grouping_limit = mz_test_def.at("grouping_limit");
+			}
+			if (mz_test_def.contains("groups_grouping_limit")) {
+				groups_grouping_limit = mz_test_def.at("groups_grouping_limit");
+			}
 			if (mz_test_def.contains("replace_digits")) {
 				replace_digits = mz_test_def.at("replace_digits");
 			}
@@ -220,6 +232,9 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			}
 			if (mz_test_def.contains("lowercase")) {
 				lowercase = mz_test_def.at("lowercase");
+			}
+			if (mz_test_def.contains("keep_comment")) {
+				keep_comment = mz_test_def.at("keep_comment");
 			}
 
 			int backup_digest_max_length = mysql_thread___query_digests_max_query_length;
@@ -232,6 +247,8 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			mysql_thread___query_digests_no_digits = replace_digits;
 			int lowercase_backup = mysql_thread___query_digests_lowercase;
 			mysql_thread___query_digests_lowercase = lowercase_backup;
+			int keep_comment_backup = mysql_thread___query_digests_keep_comment;
+			mysql_thread___query_digests_keep_comment = keep_comment;
 
 			char* c_res = mysql_query_digest_and_first_comment_2(c_query, query.size(), &first_comment,
 					((query.size() < QUERY_DIGEST_BUF) ? buf : NULL));
@@ -250,6 +267,16 @@ void process_mz_test_def(const nlohmann::json& test_def, const char* c_query, co
 			mysql_thread___query_digests_groups_grouping_limit = backup_groups_grouping_limit;
 			mysql_thread___query_digests_no_digits = no_digits_backup;
 			mysql_thread___query_digests_lowercase = lowercase_backup;
+			mysql_thread___query_digests_keep_comment = keep_comment_backup;
+
+			if (query.size() >= QUERY_DIGEST_BUF) {
+				free(c_res);
+			}
+
+			if (first_comment != NULL) {
+				free(first_comment);
+				first_comment = NULL;
+			}
 		}
 	}
 }
@@ -272,6 +299,11 @@ int process_digest_test(const nlohmann::json& test_def) {
 			"Digest should be equal to exp result for 'STAGE 1' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
 			query.c_str(), stage_1_res.c_str(), digest_stage_1.c_str()
 		);
+
+		if (first_comment != NULL) {
+			free(first_comment);
+			first_comment = NULL;
+		}
 	}
 	if (test_def.contains("s2")) {
 		std::string digest_stage_2 { test_def.at("s2") };
@@ -285,6 +317,11 @@ int process_digest_test(const nlohmann::json& test_def) {
 				"Digest should be equal to exp result for 'STAGE 2' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
 				query.c_str(), stage_2_res.c_str(), digest_stage_2.c_str()
 			);
+
+			if (first_comment != NULL) {
+				free(first_comment);
+				first_comment = NULL;
+			}
 		}
 	}
 	if (test_def.contains("s3")) {
@@ -303,6 +340,11 @@ int process_digest_test(const nlohmann::json& test_def) {
 			);
 
 			mysql_thread___query_digests_groups_grouping_limit = backup_groups_grouping_limit;
+
+			if (first_comment != NULL) {
+				free(first_comment);
+				first_comment = NULL;
+			}
 		}
 	}
 	if (test_def.contains("s4")) {
@@ -317,6 +359,11 @@ int process_digest_test(const nlohmann::json& test_def) {
 				"Digest should be equal to exp result for 'STAGE 4' parsing:\n * Query: `%s`,\n * Act: `%s`,\n * Exp: `%s`",
 				query.c_str(), stage_4_res.c_str(), digest_stage_4.c_str()
 			);
+
+			if (first_comment != NULL) {
+				free(first_comment);
+				first_comment = NULL;
+			}
 		}
 	}
 	if (test_def.contains("dr")) {
@@ -335,6 +382,11 @@ int process_digest_test(const nlohmann::json& test_def) {
 			);
 
 			mysql_thread___query_digests_no_digits = no_digits_backup;
+
+			if (first_comment != NULL) {
+				free(first_comment);
+				first_comment = NULL;
+			}
 		}
 	}
 	if (test_def.contains("mz")) {
@@ -364,6 +416,8 @@ void process_crashing_tests(CommandLine& cl, const nlohmann::json& test_defs) {
 
 		process_mz_test_def(test_def, c_query, query);
 		ok(true, "Crashing test execution finished without a crash");
+
+		free(c_query);
 	}
 }
 
@@ -650,6 +704,10 @@ void process_grouping_tests(uint32_t max_groups) {
 
 					if (parsing_res != exp_result) {
 						failed_cases.push_back({query, parsing_res, exp_result, m, n});
+					}
+
+					if (query.size() >= QUERY_DIGEST_BUF) {
+						free(c_res);
 					}
 
 					free(c_query);
