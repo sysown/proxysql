@@ -1443,7 +1443,6 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 	enum p_st next_state = st_literal_number;
 
 	// process the first digit
-	// if (digit_st->first_digit == 1 && is_token_char(*(shared_st->q-1)) && is_digit_char(*shared_st->q)) {
 	if (digit_st->first_digit == 1 && is_token_char(shared_st->prev_char) && is_digit_char(*shared_st->q)) {
 		// store the start position of digit literal in the result buffer for later iterations
 		digit_st->start_pos = shared_st->res_pre_pos;
