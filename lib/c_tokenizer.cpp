@@ -16,6 +16,7 @@ extern __thread bool mysql_thread___query_digests_replace_null;
 extern __thread bool mysql_thread___query_digests_no_digits;
 extern __thread bool mysql_thread___query_digests_grouping_limit;
 extern __thread bool mysql_thread___query_digests_groups_grouping_limit;
+extern __thread bool mysql_thread___query_digests_keep_comment;
 
 void tokenizer(tokenizer_t *result, const char* s, const char* delimiters, int empties )
 {
@@ -825,6 +826,7 @@ typedef struct options {
 	bool lowercase;
 	bool replace_null;
 	bool replace_number;
+	bool keep_comment;
 	int grouping_limit;
 	int groups_grouping_limit;
 } options;
@@ -841,6 +843,7 @@ static inline void get_options(struct options* opts) {
 	opts->replace_number = mysql_thread___query_digests_no_digits;
 	opts->grouping_limit = mysql_thread___query_digests_grouping_limit;
 	opts->groups_grouping_limit = mysql_thread___query_digests_groups_grouping_limit;
+	opts->keep_comment = mysql_thread___query_digests_keep_comment;
 }
 
 /**
@@ -1116,8 +1119,9 @@ char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
  *   - 'st_no_mark_found' if the comment has completed to be parsed.
  */
 static __attribute__((always_inline)) inline
-enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
+enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_st* c_t_1_st, char** fst_cmnt) {
 	enum p_st next_st = st_cmnt_type_1;
+	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
 	// initial mark "/*|/*!" detection
 	if (*shared_st->q == '/' && *(shared_st->q+1) == '*') {
@@ -1126,6 +1130,14 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 		// check length before accessing beyond 'q_cur_pos + 1'
 		if (shared_st->q_cur_pos != (shared_st->q_len-2) && *(shared_st->q+2) == '!') {
 			c_t_1_st->is_cmd = 1;
+		}
+
+		// copy the initial mark "/*" if comment preserving is enabled
+		if (opts->keep_comment) {
+			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q);
+			c_t_1_st->cur_cmd_cmnt_len++;
+			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *(shared_st->q + 1);
+			c_t_1_st->cur_cmd_cmnt_len++;
 		}
 
 		// discard processed "/*" or "/*!"
@@ -1139,7 +1151,7 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 //  {
 
 	// we are parsing a "/*!" comment
-	if (c_t_1_st->is_cmd) {
+	if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
 		// copy the char into 'cur_cmd_cmnt'
 		if (c_t_1_st->cur_cmd_cmnt_len < FIRST_COMMENT_MAX_LENGTH-1) {
 			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = *shared_st->q;
@@ -1178,12 +1190,14 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 
 	// comment type 1 - /* .. */
 	if (shared_st->prev_char == '*' && *shared_st->q == '/') {
-		if (c_t_1_st->is_cmd) {
+		if (c_t_1_st->is_cmd || (c_t_1_st->is_cmd == false && opts->keep_comment)) {
 			cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len]=0;
 
 			if (c_t_1_st->cur_cmd_cmnt_len >= 2) {
 				// we are not interested into copying the final '*/' for the comment
-				c_t_1_st->cur_cmd_cmnt_len -= 2;
+				if (opts->keep_comment == false) {
+					c_t_1_st->cur_cmd_cmnt_len -= 2;
+				}
 
 				cur_cmd_cmnt[c_t_1_st->cur_cmd_cmnt_len] = 0;
 				// counter for the lenght of the cmd comment annotation, with format `/*!12345 ... */`.
@@ -1208,12 +1222,23 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 				// copy the cmd comment minus the annotation and the marks
 				if (end) {
 					// check if the comment to be copied is going to fit in the target buffer
-					const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len - 1;
 					int res_free_space = res_final_pos - shared_st->res_cur_pos;
-					int comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
+					int comment_size = 0;
+
+					if (opts->keep_comment) {
+						comment_size = c_t_1_st->cur_cmd_cmnt_len;
+					} else {
+						comment_size = c_t_1_st->cur_cmd_cmnt_len - cmnt_annot_len;
+					}
+
 					int copy_length = res_free_space > comment_size ? comment_size : res_free_space;
 
-					memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
+					if (opts->keep_comment) {
+						memcpy(shared_st->res_cur_pos, cur_cmd_cmnt, copy_length);
+					} else {
+						memcpy(shared_st->res_cur_pos, cur_cmd_cmnt + cmnt_annot_len, copy_length);
+					}
+
 					shared_st->res_cur_pos += copy_length;
 
 					// TODO: Check if the copy can be prevented as in the outer check for non-cmd comments
@@ -1233,11 +1258,14 @@ enum p_st process_cmnt_type_1(shared_st* shared_st, cmnt_type_1_st* c_t_1_st, ch
 		// TODO: Related to previous TODO. Remember this is a relatively new change in the current code
 		// not at the beginning and previous char is not ' '
 		if (
-			shared_st->res_init_pos != shared_st->res_cur_pos &&
+			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
 			*shared_st->res_cur_pos != ' ' && *(shared_st->res_cur_pos-1) != ' '
 		) {
 			*shared_st->res_cur_pos++ = ' ';
-		} else if (shared_st->res_init_pos != shared_st->res_cur_pos && *shared_st->res_cur_pos == ' ') {
+		} else if (
+			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
+			*shared_st->res_cur_pos == ' '
+		) {
 			shared_st->res_cur_pos++;
 		}
 
@@ -1743,7 +1771,7 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts
 			if (cur_st == st_cmnt_type_1) {
 				// by default, we don't copy the next char for comments
 				shared_st->copy_next_char = 0;
-				cur_st = process_cmnt_type_1(shared_st, cmnt_type_1_st, fst_cmnt);
+				cur_st = process_cmnt_type_1(opts, shared_st, cmnt_type_1_st, fst_cmnt);
 				if (cur_st == st_no_mark_found) {
 					shared_st->copy_next_char = 1;
 					continue;
@@ -1862,7 +1890,13 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 			if (lc == '(' || rc == ')') {
 				shared_st->res_cur_pos++;
 			} else if ((is_arithmetic_op(lc) && rc == '?') || lc == ',' || rc == ',') {
-				shared_st->res_cur_pos++;
+				char llc = *(shared_st->res_cur_pos-2);
+
+				if (opts->keep_comment && (llc == '*' && lc == '/')) {
+					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
+				} else {
+					shared_st->res_cur_pos++;
+				}
 			} else if (is_arithmetic_op(rc) && lc == '?' && is_token_char(lc)) {
 				shared_st->res_cur_pos++;
 			} else {
@@ -2898,7 +2932,7 @@ char* mysql_query_digest_and_first_comment_one_it(char* q, int q_len, char** fst
 			if (cur_st == st_cmnt_type_1) {
 				// by default, we don't copy the next char for comments
 				shared_st.copy_next_char = 0;
-				cur_st = process_cmnt_type_1(&shared_st, &c_t_1_st, fst_cmnt);
+				cur_st = process_cmnt_type_1(&opts, &shared_st, &c_t_1_st, fst_cmnt);
 				if (cur_st == st_no_mark_found) {
 					shared_st.copy_next_char = 1;
 					continue;
