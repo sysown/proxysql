@@ -2507,6 +2507,10 @@ char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, cha
 	int d_max_len = get_digest_max_len(q_len);
 	char* res = get_result_buffer(d_max_len, buf);
 
+#ifdef DEBUG
+	res[d_max_len] = 0;
+#endif
+
 	// global options
 	struct options opts;
 	get_options(&opts);
