@@ -1,6 +1,7 @@
 version: "2.0"
 services:
 
+
   centos6_build:
     image: proxysql/packaging:build-centos6
     volumes:
@@ -178,6 +179,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
 
   fedora24_build:
     image: proxysql/packaging:build-fedora24
@@ -386,6 +388,7 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
 
   debian8_build:
     image: proxysql/packaging:build-debian8
@@ -610,6 +613,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
 
+
   ubuntu14_build:
     image: proxysql/packaging:build-ubuntu14
     volumes:
@@ -785,6 +789,7 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
 
+
   opensuse15_build:
     image: proxysql/packaging:build-opensuse15
     volumes:
@@ -832,3 +837,53 @@ services:
       - PROXYSQL_BUILD_ARCH=x86_64
     command:
       - /opt/entrypoint/entrypoint.bash
+
+
+  almalinux8_build:
+    image: proxysql/packaging:build-almalinux8
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=almalinux8
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  almalinux8_clang_build:
+    image: proxysql/packaging:build-clang-almalinux8
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=almalinux8-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  almalinux8_dbg_build:
+    image: proxysql/packaging:build-almalinux8
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=dbg-almalinux8
+      - PROXYSQL_BUILD_TYPE=debug
+      - PROXYSQL_BUILD_ARCH=x86_64
+    command:
+      - /opt/entrypoint/entrypoint.bash
+

@@ -187,11 +187,32 @@ clean:
 packages: amd64-packages arm64-packages
 .PHONY: packages
 
-amd64-packages: centos6 centos6-dbg centos6.7 centos6.7-dbg centos7 centos7-dbg centos8 centos8-clang centos8-dbg ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg fedora24 fedora24-dbg fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg opensuse15 opensuse15-clang opensuse15-dbg
+amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
 .PHONY: amd64-packages
+
+amd64-centos: centos6 centos6-dbg centos7 centos7-dbg centos8 centos8-clang centos8-dbg
+.PHONY: amd64-centos
+
+amd64-ubuntu: ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg
+.PHONY: amd64-ubuntu
+
+amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg
+.PHONY: amd64-debian
+
+amd64-fedora:  fedora24 fedora24-dbg fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg
+.PHONY: amd64-fedora
+
+amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
+.PHONY: amd64-opensuse
+
+amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg
+.PHONY: amd64-almalinux
+
+
 
 arm64-packages: centos7-arm64 centos8-arm64 debian9-arm64 debian10-arm64 debian11-arm64 ubuntu18-arm64 ubuntu20-arm64 fedora32-arm64 fedora33-arm64
 .PHONY: arm64-packages
+
 
 
 centos5: binaries/proxysql-${CURVER}-1-centos5.x86_64.rpm
@@ -382,6 +403,16 @@ opensuse15-clang: binaries/proxysql-${CURVER}-1-opensuse15-clang.x86_64.rpm
 
 opensuse15-dbg: binaries/proxysql-${CURVER}-1-opensuse15-dbg.x86_64.rpm
 .PHONY: opensuse15-dbg
+
+
+almalinux8: binaries/proxysql-${CURVER}-1-almalinux8.x86_64.rpm
+.PHONY: almalinux8
+
+almalinux8-clang: binaries/proxysql-${CURVER}-1-almalinux8-clang.x86_64.rpm
+.PHONY: almalinux8-clang
+
+almalinux8-dbg: binaries/proxysql-${CURVER}-1-almalinux8-dbg.x86_64.rpm
+.PHONY: almalinux8-dbg
 
 
 
@@ -635,6 +666,19 @@ binaries/proxysql-${CURVER}-1-opensuse15-clang.x86_64.rpm:
 
 binaries/proxysql-${CURVER}-1-opensuse15-dbg.x86_64.rpm:
 	docker-compose up opensuse15_dbg_build
+	docker-compose rm -f
+
+
+binaries/proxysql-${CURVER}-1-almalinux8.x86_64.rpm:
+	docker-compose up almalinux8_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-almalinux8-clang.x86_64.rpm:
+	docker-compose up almalinux8_clang_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-almalinux8-dbg.x86_64.rpm:
+	docker-compose up almalinux8_dbg_build
 	docker-compose rm -f
 
 
