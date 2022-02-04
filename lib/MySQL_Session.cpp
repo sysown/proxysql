@@ -4546,7 +4546,8 @@ handler_again:
 									auto server_hash = myconn->var_hash[i];
 									if (client_hash != server_hash) {
 										if(
-											//!myconn->var_absent[i] &&    // we currently ignore this because we assume all variables exist
+											!myconn->var_absent[i]
+											&&
 											mysql_variables.verify_variable(this, i)
 										) {
 											goto handler_again;
