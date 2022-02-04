@@ -2096,7 +2096,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["query_digests_no_digits"]         = make_tuple(&variables.query_digests_no_digits,         false);
 		VariablesPointers_bool["query_digests_normalize_digest_text"] = make_tuple(&variables.query_digests_normalize_digest_text, false);
 		VariablesPointers_bool["query_digests_track_hostname"]    = make_tuple(&variables.query_digests_track_hostname,    false);
-		VariablesPointers_bool["query_digests_keep_comment"]  = make_tuple(&variables.query_digests_keep_comment,  false);
+		VariablesPointers_bool["query_digests_keep_comment"]      = make_tuple(&variables.query_digests_keep_comment,      false);
 		VariablesPointers_bool["servers_stats"]                   = make_tuple(&variables.servers_stats,                   false);
 		VariablesPointers_bool["sessions_sort"]                   = make_tuple(&variables.sessions_sort,                   false);
 		VariablesPointers_bool["stats_time_backend_query"]        = make_tuple(&variables.stats_time_backend_query,        false);
