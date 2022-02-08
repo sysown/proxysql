@@ -16,6 +16,7 @@ rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql || true
 # Clean and build dependancies and source
 echo "==> Building"
 cd /opt/proxysql
+export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
 	deps_target="build_deps"
 	build_target=""
@@ -35,6 +36,28 @@ touch /opt/proxysql/src/proxysql
 
 # Prepare package files and build DEB
 echo "==> Packaging"
+mkdir -p /opt/proxysql/pkgroot/tmp || true
+pushd /opt/proxysql/pkgroot
+cp /root/ctl/proxysql.ctl ./proxysql.ctl
+sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" ./proxysql.ctl
+sed -i "s/PKG_ARCH/${ARCH}/g" ./proxysql.ctl
+cp ../src/proxysql ./
+cp -r ../etc ./etc
+cp -r ../tools ./tools
+cp -r ../systemd ./systemd
+equivs-build proxysql.ctl
+cp ./proxysql_${CURVER}_${ARCH}.deb ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
+# get SHA1 of the packaged executable
+ar -p proxysql_${CURVER}_${ARCH}.deb data.tar.xz | unxz -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
+sha1sum tmp/proxysql | sed 's|tmp/||' | tee tmp/proxysql.sha1
+cp tmp/proxysql.sha1 ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-hash
+popd
+# Cleanup current build
+rm -rf /opt/proxysql/pkgroot
+exit 0
+
+# Prepare package files and build DEB
+echo "==> Packaging"
 cp /root/ctl/proxysql.ctl /opt/proxysql/proxysql.ctl
 sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" /opt/proxysql/proxysql.ctl
 sed -i "s/PKG_ARCH/${ARCH}/g" /opt/proxysql/proxysql.ctl
@@ -43,41 +66,5 @@ equivs-build proxysql.ctl
 mv "/opt/proxysql/proxysql_${CURVER}_$ARCH.deb" "./binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.deb"
 cp "/opt/proxysql/src/proxysql.sha1" "/opt/proxysql/binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.id-hash"
 # Cleanup current build
-#rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql
+rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql
 exit 0
-
-
-# Prepare package files and build DEB
-echo "==> Packaging"
-# prepare build root
-cd /opt/proxysql
-rm -rf ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
-mkdir -p ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN
-mkdir -p ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/etc
-mkdir -p ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/lib/systemd
-mkdir -p ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/usr/bin
-mkdir -p ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/usr/share/proxysql/tools
-mkdir -p ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/usr/share/doc/proxysql
-# prepare files
-cp /root/ctl/proxysql.ctl ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
-sed -i "/^$/d; /^#/d" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
-sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
-sed -i "s/PKG_ARCH/${ARCH}/g" ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/DEBIAN/control
-cp ./src/proxysql ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/usr/bin
-cp -r ./etc/proxysql.cnf ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/etc
-cp -r ./etc/logrotate.d ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/etc
-cp -r ./systemd ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/lib
-cp -r ./tools/proxysql_galera_* ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}/usr/share/proxysql/tools
-chown -R root:root ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
-echo '==================================='
-find ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH} -ls
-echo '==================================='
-# build package
-#fakeroot dpkg-buildpackage  -uc -us -d -b
-#dpkg-deb --build ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
-dpkg-deb --build --root-owner-group ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
-#fakeroot dpkg-deb --build ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
-mv ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb ./binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
-cp ./src/proxysql.sha1 ./binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-hash
-# cleanup
-rm -rf ./proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}
