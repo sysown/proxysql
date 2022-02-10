@@ -13,6 +13,7 @@
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
 #include "proxysql_utils.h"
+#include "prometheus_helpers.h"
 #include "cpp.h"
 
 #include "MySQL_Data_Stream.h"
@@ -632,8 +633,26 @@ using admin_gauge_tuple =
 		metric_tags
 	>;
 
+using admin_dyn_counter_tuple =
+	std::tuple<
+		p_admin_dyn_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using admin_dyn_gauge_tuple =
+	std::tuple<
+		p_admin_dyn_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
 using admin_counter_vector = std::vector<admin_counter_tuple>;
 using admin_gauge_vector = std::vector<admin_gauge_tuple>;
+using admin_dyn_counter_vector = std::vector<admin_dyn_counter_tuple>;
+using admin_dyn_gauge_vector = std::vector<admin_dyn_gauge_tuple>;
 
 /**
  * @brief Metrics map holding the metrics for the 'ProxySQL_Admin' module.
@@ -643,7 +662,7 @@ using admin_gauge_vector = std::vector<admin_gauge_tuple>;
  *  them. For better visual identification of this groups they are
  *  sepparated using a line separator comment.
  */
-const std::tuple<admin_counter_vector, admin_gauge_vector>
+const std::tuple<admin_counter_vector, admin_gauge_vector, admin_dyn_counter_vector, admin_dyn_gauge_vector>
 admin_metrics_map = std::make_tuple(
 	admin_counter_vector {
 		std::make_tuple (
@@ -830,6 +849,15 @@ admin_metrics_map = std::make_tuple(
 				{ "version", PROXYSQL_VERSION },
 				{ "version_comment", std::string { "ProxySQL version " } + PROXYSQL_VERSION + ", codename " + PROXYSQL_CODENAME }
 			}
+		)
+	},
+	admin_dyn_counter_vector {},
+	admin_dyn_gauge_vector {
+		std::make_tuple (
+			p_admin_dyn_gauge::proxysql_servers_clients_status_last_seen_at,
+			"proxysql_servers_clients_status_last_seen_at",
+			"Last time a query was executed in the local Admin interface by the remote ProxySQL instance.",
+			metric_tags {}
 		)
 	}
 );
@@ -5006,18 +5034,52 @@ __end_show_commands:
 __run_query:
 	if (sess->proxysql_node_address) {
 		if (sess->client_myds->active) {
+			const string uuid { sess->proxysql_node_address->uuid };
+			const string hostname { sess->proxysql_node_address->hostname };
+			const string port { std::to_string(sess->proxysql_node_address->port) };
+			const string mysql_ifaces { sess->proxysql_node_address->admin_mysql_ifaces };
+
 			time_t now = time(NULL);
 			string q = "INSERT OR REPLACE INTO stats_proxysql_servers_clients_status (uuid, hostname, port, admin_mysql_ifaces, last_seen_at) VALUES (\"";
-			q += sess->proxysql_node_address->uuid;
+			q += uuid;
 			q += "\",\"";
-			q += sess->proxysql_node_address->hostname;
+			q += hostname;
 			q += "\",";
-			q += std::to_string(sess->proxysql_node_address->port);
+			q += port;
 			q += ",\"";
-			q += sess->proxysql_node_address->admin_mysql_ifaces;
+			q += mysql_ifaces;
 			q += "\",";
 			q += std::to_string(now) + ")";
 			SPA->statsdb->execute(q.c_str());
+
+			std::map<string, string> m_labels {
+				{ "uuid", uuid }, { "hostname", hostname }, { "port", port }, { "admin_mysql_ifaces", mysql_ifaces }
+			};
+			const string m_id { uuid + ":" + hostname + ":" + port };
+			auto& m_client_status_map = SPA->metrics.p_proxysql_servers_clients_status_map;
+			auto* gauge_family = SPA->metrics.p_dyn_gauge_array[p_admin_dyn_gauge::proxysql_servers_clients_status_last_seen_at];
+
+			// NOTE: Since 'admin_mysql_ifaces' is part of the metric labels, we need to delete the metric in
+			// case it doesn't match the current value, in order to match table behavior.
+			// TODO: Check if 'admin_mysql_ifaces' should be removed as label, as it's not really part of the
+			// metric definition and it's a dynamic configuration.
+			auto entry_it = m_client_status_map.find(m_id);
+			if (entry_it != m_client_status_map.end()) {
+				if (entry_it->second.first != mysql_ifaces) {
+					gauge_family->Remove(entry_it->second.second);
+					m_client_status_map.erase(entry_it);
+				}
+			}
+
+			const auto& id_val = m_client_status_map.find(m_id);
+			if (id_val != m_client_status_map.end()) {
+				id_val->second.second->Set(now);
+			} else {
+				prometheus::Gauge* new_counter = std::addressof(gauge_family->Add(m_labels));
+				m_client_status_map.insert({m_id, { mysql_ifaces, new_counter }});
+
+				new_counter->Set(now);
+			}
 		}
 	}
 	if (run_query) {
@@ -5482,6 +5544,11 @@ void update_modules_metrics() {
 	if (GloQC) {
 		GloQC->p_update_metrics();
 	}
+	// Update cluster metrics
+	if (GloProxyCluster) {
+		GloProxyCluster->p_update_metrics();
+	}
+
 	// Update admin metrics
 	GloAdmin->p_update_metrics();
 }
@@ -5613,6 +5680,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	// Initialize prometheus metrics
 	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
 	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
+	init_prometheus_dyn_gauge_array<admin_metrics_map_idx, p_admin_dyn_gauge>(admin_metrics_map, this->metrics.p_dyn_gauge_array);
 
 	// NOTE: Imposing fixed value to 'version_info' matching 'mysqld_exporter'
 	this->metrics.p_gauge_array[p_admin_gauge::version_info]->Set(1);
