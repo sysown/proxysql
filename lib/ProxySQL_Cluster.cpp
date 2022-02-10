@@ -35,6 +35,9 @@
         } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
+using std::vector;
+using std::string;
+
 static char *NODE_COMPUTE_DELIMITER=(char *)"-gtyw23a-"; // a random string used for hashing
 
 extern ProxySQL_Cluster * GloProxyCluster;
@@ -1813,8 +1816,143 @@ void ProxySQL_Node_Entry::set_metrics(MYSQL_RES *_r, unsigned long long _respons
 	}
 }
 
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+using cluster_nodes_counter_tuple =
+	std::tuple<
+		p_cluster_nodes_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using cluster_nodes_gauge_tuple =
+	std::tuple<
+		p_cluster_nodes_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using cluster_nodes_dyn_counter_tuple =
+	std::tuple<
+		p_cluster_nodes_dyn_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using cluster_nodes_dyn_gauge_tuple =
+	std::tuple<
+		p_cluster_nodes_dyn_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using cluster_nodes_counter_vector = std::vector<cluster_nodes_counter_tuple>;
+using cluster_nodes_gauge_vector = std::vector<cluster_nodes_gauge_tuple>;
+using cluster_nodes_dyn_counter_vector = std::vector<cluster_nodes_dyn_counter_tuple>;
+using cluster_nodes_dyn_gauge_vector = std::vector<cluster_nodes_dyn_gauge_tuple>;
+
+const std::tuple<
+	cluster_nodes_counter_vector,
+	cluster_nodes_gauge_vector,
+	cluster_nodes_dyn_counter_vector,
+	cluster_nodes_dyn_gauge_vector
+>
+cluster_nodes_metrics_map = std::make_tuple(
+	cluster_nodes_counter_vector{},
+	cluster_nodes_gauge_vector {},
+	cluster_nodes_dyn_counter_vector {
+		std::make_tuple (
+			p_cluster_nodes_dyn_counter::proxysql_servers_checksums_version_total,
+			"proxysql_servers_checksums_version_total",
+			"Number of times the configuration has been loaded locally.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_counter::proxysql_servers_metrics_uptime_s,
+			"proxysql_servers_metrics_uptime_s_total",
+			"Current uptime of the Cluster node, in seconds.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_counter::proxysql_servers_metrics_queries,
+			"proxysql_servers_metrics_queries_total",
+			"Number of queries the Cluster node has processed.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_counter::proxysql_servers_metrics_client_conns_created,
+			"proxysql_servers_metrics_client_conns_created_total",
+			"Number of frontend client connections created over time on the Cluster node.",
+			metric_tags {}
+		),
+	},
+	cluster_nodes_dyn_gauge_vector {
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_checksums_epoch,
+			"proxysql_servers_checksums_epoch",
+			"Time at which this configuration was created (locally or imported).",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_checksums_changed_at,
+			"proxysql_servers_checksums_changed_at",
+			"Time at which this configuration was loaded locally.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_checksums_updated_at,
+			"proxysql_servers_checksums_updated_at",
+			"Last time local ProxySQL checked the checksum of a remote instance.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_checksums_diff_check,
+			"proxysql_servers_checksums_diff_check",
+			"Number of checks in a row in which it was detected that remote conf is different than local one.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_metrics_weight,
+			"proxysql_servers_metrics_weight",
+			"Weight of the Cluster node, defined in the proxysql_servers table",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_metrics_response_time_ms,
+			"proxysql_servers_metrics_response_time_ms",
+			"Latest time to respond to Cluster checks, in milliseconds.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_metrics_last_check_ms,
+			"proxysql_servers_metrics_last_check_ms",
+			"Latest time to process Cluster checks, in milliseconds",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_cluster_nodes_dyn_gauge::proxysql_servers_metrics_client_conns_connected,
+			"proxysql_servers_metrics_client_conns_connected_total",
+			"Number of frontend client connections currently open on the Cluster node.",
+			metric_tags {}
+		),
+	}
+);
+
 ProxySQL_Cluster_Nodes::ProxySQL_Cluster_Nodes() {
 	pthread_mutex_init(&mutex,NULL);
+
+	init_prometheus_dyn_counter_array<cluster_nodes_metrics_map_idx, p_cluster_nodes_dyn_counter>(
+		cluster_nodes_metrics_map, this->metrics.p_dyn_counter_array
+	);
+	init_prometheus_dyn_gauge_array<cluster_nodes_metrics_map_idx, p_cluster_nodes_dyn_gauge>(
+		cluster_nodes_metrics_map, this->metrics.p_dyn_gauge_array
+	);
 }
 
 void ProxySQL_Cluster_Nodes::set_all_inactive() {
@@ -2434,9 +2572,181 @@ SQLite3_result * ProxySQL_Cluster_Nodes::dump_table_proxysql_servers() {
 	return result;
 }
 
-using metric_name = std::string;
-using metric_help = std::string;
-using metric_tags = std::map<std::string, std::string>;
+vector<pair<string, ProxySQL_Checksum_Value_2*>> get_module_checksums(ProxySQL_Node_Entry* entry) {
+	if (entry == nullptr) { return {}; }
+
+	vector<pair<string, ProxySQL_Checksum_Value_2*>> res {};
+	res.push_back({"admin_variables", &entry->checksums_values.admin_variables});
+	res.push_back({"mysql_query_rules", &entry->checksums_values.mysql_query_rules});
+	res.push_back({"mysql_servers", &entry->checksums_values.mysql_servers});
+	res.push_back({"mysql_users", &entry->checksums_values.mysql_users});
+	res.push_back({"mysql_variables", &entry->checksums_values.mysql_variables});
+	res.push_back({"proxysql_servers", &entry->checksums_values.proxysql_servers});
+
+	return res;
+}
+
+void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
+	using dyn_gauge = p_cluster_nodes_dyn_gauge;
+	using dyn_counter = p_cluster_nodes_dyn_counter;
+
+	pthread_mutex_lock(&mutex);
+
+	vector<string> cur_node_metrics {};
+	vector<string> cur_node_checksums {};
+
+	// Update metrics for both 'servers_checksums' and 'servers_metrics'
+	for (const auto& node_entry : umap_proxy_nodes) {
+		const string hostname { node_entry.second->get_hostname() };
+		const string port { std::to_string(node_entry.second->get_port()) };
+		const auto modules_name_checksum { get_module_checksums(node_entry.second) };
+
+		const string m_node_metrics_id { hostname + ":" + port };
+		const std::map<string, string> m_common_labels { { "hostname", hostname }, { "port", port } };
+
+		// Update the current nodes metric list
+		cur_node_metrics.push_back(m_node_metrics_id);
+
+		for (const auto& module_name_checksum : modules_name_checksum) {
+			const string module_name { module_name_checksum.first };
+			const ProxySQL_Checksum_Value_2* module_checksum { module_name_checksum.second };
+
+			std::map<string, string> m_module_labels { m_common_labels.begin(), m_common_labels.end() };
+			m_module_labels.insert({ "name", module_name });
+
+			// Update the current nodes checksum list
+			const string m_node_checksum_id { hostname + ":" + port + ":" + module_name_checksum.first };
+			cur_node_checksums.push_back(m_node_checksum_id);
+
+			// proxysql_servers_checksum
+			p_update_map_counter(
+				this->metrics.p_proxysql_servers_checksum_version,
+				this->metrics.p_dyn_counter_array[p_cluster_nodes_dyn_counter::proxysql_servers_checksums_version_total],
+				m_node_checksum_id, m_module_labels, module_name_checksum.second->version
+			);
+
+			vector<tuple<map<string,prometheus::Gauge*>&,p_cluster_nodes_dyn_gauge::metric,double>> checksum_gauges {
+				{ this->metrics.p_proxysql_servers_checksums_epoch, dyn_gauge::proxysql_servers_checksums_epoch, module_checksum->epoch },
+				{ this->metrics.p_proxysql_servers_checksums_updated_at, dyn_gauge::proxysql_servers_checksums_updated_at, module_checksum->last_updated },
+				{ this->metrics.p_proxysql_servers_checksums_changed_at, dyn_gauge::proxysql_servers_checksums_changed_at, module_checksum->last_changed },
+				{ this->metrics.p_proxysql_servers_checksums_diff_check, dyn_gauge::proxysql_servers_checksums_diff_check, module_checksum->diff_check }
+			};
+
+			for (const auto& checksum_gauge : checksum_gauges) {
+				p_update_map_gauge(
+					std::get<0>(checksum_gauge), this->metrics.p_dyn_gauge_array[std::get<1>(checksum_gauge)],
+					m_node_checksum_id, m_module_labels, std::get<2>(checksum_gauge)
+				);
+			}
+		}
+
+		const ProxySQL_Node_Metrics* node_metrics = node_entry.second->get_metrics_curr();
+		const double conns_created = node_metrics->Client_Connections_created;
+
+		vector<tuple<map<string,prometheus::Counter*>&, p_cluster_nodes_dyn_counter::metric, double>> metric_counters {
+			{ this->metrics.p_proxysql_servers_metrics_queries, dyn_counter::proxysql_servers_metrics_queries, node_metrics->Questions },
+			{ this->metrics.p_proxysql_servers_metrics_client_conns_created, dyn_counter::proxysql_servers_metrics_client_conns_created, conns_created },
+			{ this->metrics.p_proxysql_servers_metrics_uptime_s, dyn_counter::proxysql_servers_metrics_uptime_s, node_metrics->ProxySQL_Uptime }
+		};
+
+		const uint64_t curtime = monotonic_time();
+		const uint64_t read_time_us = node_entry.second->get_metrics_curr()->read_time_us;
+		const double last_check_ms = (curtime - read_time_us) / 1000.0;
+		const double response_time_ms = node_metrics->response_time_us / 1000.0;
+		const double conns_connected = node_metrics->Client_Connections_connected;
+
+		vector<tuple<map<string,prometheus::Gauge*>&, dyn_gauge::metric, double>> metric_gauges {
+			{ this->metrics.p_proxysql_servers_metrics_last_check_ms, dyn_gauge::proxysql_servers_metrics_last_check_ms, last_check_ms },
+			{ this->metrics.p_proxysql_servers_metrics_response_time_ms, dyn_gauge::proxysql_servers_metrics_response_time_ms, response_time_ms },
+			{ this->metrics.p_proxysql_servers_metrics_client_conns_connected, dyn_gauge::proxysql_servers_metrics_client_conns_connected, conns_connected },
+		};
+
+		for (const auto& metric_gauge : metric_gauges) {
+			p_update_map_gauge(
+				std::get<0>(metric_gauge), this->metrics.p_dyn_gauge_array[std::get<1>(metric_gauge)],
+				m_node_metrics_id, m_common_labels, std::get<2>(metric_gauge)
+			);
+		}
+
+		for (const auto& metric_counter : metric_counters) {
+			p_update_map_counter(
+				std::get<0>(metric_counter), this->metrics.p_dyn_counter_array[std::get<1>(metric_counter)],
+				m_node_metrics_id, m_common_labels, std::get<2>(metric_counter)
+			);
+		}
+	}
+
+	// Remove no longer present nodes
+	vector<string> missing_server_metrics_keys {};
+	vector<string> missing_server_checksums_keys {};
+
+	for (const auto& key : metrics.p_proxysql_servers_metrics_uptime_s) {
+		if (std::find(cur_node_metrics.begin(), cur_node_metrics.end(), key.first) == cur_node_metrics.end()) {
+			missing_server_metrics_keys.push_back(key.first);
+		}
+	}
+	for (const auto& key : metrics.p_proxysql_servers_checksum_version) {
+		if (std::find(cur_node_checksums.begin(), cur_node_checksums.end(), key.first) == cur_node_checksums.end()) {
+			missing_server_checksums_keys.push_back(key.first);
+		}
+	}
+
+	vector<pair<map<string, prometheus::Counter*>&, p_cluster_nodes_dyn_counter::metric>> counter_maps {
+		{ metrics.p_proxysql_servers_metrics_uptime_s, dyn_counter::proxysql_servers_metrics_uptime_s },
+		{ metrics.p_proxysql_servers_metrics_queries, dyn_counter::proxysql_servers_metrics_queries },
+		{ metrics.p_proxysql_servers_metrics_client_conns_created, dyn_counter::proxysql_servers_metrics_client_conns_created },
+
+		{ metrics.p_proxysql_servers_checksum_version, dyn_counter::proxysql_servers_checksums_version_total },
+	};
+	vector<pair<map<string, prometheus::Gauge*>&, p_cluster_nodes_dyn_gauge::metric>> gauge_maps {
+		{ metrics.p_proxysql_servers_metrics_weight, dyn_gauge::proxysql_servers_metrics_weight },
+		{ metrics.p_proxysql_servers_metrics_response_time_ms, dyn_gauge::proxysql_servers_metrics_response_time_ms },
+		{ metrics.p_proxysql_servers_metrics_last_check_ms, dyn_gauge::proxysql_servers_metrics_last_check_ms },
+		{ metrics.p_proxysql_servers_metrics_client_conns_connected, dyn_gauge::proxysql_servers_metrics_client_conns_connected },
+
+		{ metrics.p_proxysql_servers_checksums_epoch, dyn_gauge::proxysql_servers_checksums_epoch },
+		{ metrics.p_proxysql_servers_checksums_updated_at, dyn_gauge::proxysql_servers_checksums_updated_at },
+		{ metrics.p_proxysql_servers_checksums_changed_at, dyn_gauge::proxysql_servers_checksums_changed_at },
+		{ metrics.p_proxysql_servers_checksums_diff_check, dyn_gauge::proxysql_servers_checksums_diff_check },
+	};
+
+	const auto delete_metric_counter =
+		[this](const string& key, map<string, prometheus::Counter*>& m_map, dyn_counter::metric m_val) {
+			auto counter = m_map.find(key);
+			if (counter != m_map.end()) {
+				metrics.p_dyn_counter_array[m_val]->Remove(counter->second);
+				m_map.erase(counter);
+			}
+		};
+	const auto delete_metric_gauge =
+		[this](const string& key, map<string, prometheus::Gauge*>& m_map, dyn_gauge::metric m_val) {
+			auto counter = m_map.find(key);
+			if (counter != m_map.end()) {
+				metrics.p_dyn_gauge_array[m_val]->Remove(counter->second);
+				m_map.erase(counter);
+			}
+		};
+
+	for (const auto& key : missing_server_metrics_keys) {
+		for (const auto& counter_map : counter_maps) {
+			delete_metric_counter(key, counter_map.first, counter_map.second);
+		}
+		for (const auto& gauge_map : gauge_maps) {
+			delete_metric_gauge(key, gauge_map.first, gauge_map.second);
+		}
+	}
+
+	for (const auto& key : missing_server_checksums_keys) {
+		for (const auto& counter_map : counter_maps) {
+			delete_metric_counter(key, counter_map.first, counter_map.second);
+		}
+		for (const auto& gauge_map : gauge_maps) {
+			delete_metric_gauge(key, gauge_map.first, gauge_map.second);
+		}
+	}
+
+	pthread_mutex_unlock(&mutex);
+}
 
 using cluster_counter_tuple =
 	std::tuple<
@@ -2920,6 +3230,10 @@ ProxySQL_Cluster::~ProxySQL_Cluster() {
 		admin_mysql_ifaces = NULL;
 	}
 }
+
+void ProxySQL_Cluster::p_update_metrics() {
+	this->nodes.update_prometheus_nodes_metrics();
+};
 
 // this function returns credentials to the caller, used by monitoring threads
 void ProxySQL_Cluster::get_credentials(char **username, char **password) {
