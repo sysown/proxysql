@@ -3916,20 +3916,15 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	}
 
 	// Remove the non-present servers for the gauge metrics
-	vector<string> keys {};
-	vector<string> f_keys {};
+	vector<string> missing_server_keys {};
 
 	for (const auto& key : status.p_connection_pool_status_map) {
-		keys.push_back(key.first);
-	}
-
-	for (const auto& key : keys) {
-		if (std::find(cur_servers_ids.begin(), cur_servers_ids.end(), key) == cur_servers_ids.end()) {
-			f_keys.push_back(key);
+		if (std::find(cur_servers_ids.begin(), cur_servers_ids.end(), key.first) == cur_servers_ids.end()) {
+			missing_server_keys.push_back(key.first);
 		}
 	}
 
-	for (const auto& key : f_keys) {
+	for (const auto& key : missing_server_keys) {
 		auto gauge = status.p_connection_pool_status_map[key];
 		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_status]->Remove(gauge);
 		status.p_connection_pool_status_map.erase(key);
