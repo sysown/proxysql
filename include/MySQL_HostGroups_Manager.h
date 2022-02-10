@@ -414,8 +414,14 @@ class MySQL_HostGroups_Manager {
 	 */
 	void p_update_mysql_gtid_executed();
 
-	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
-	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
+	void p_update_connection_pool_update_counter(
+		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
+		std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx
+	);
+	void p_update_connection_pool_update_gauge(
+		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
+		std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx
+	);
 
 	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
 
