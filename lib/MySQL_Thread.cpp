@@ -441,7 +441,6 @@ static char * mysql_thread_variables_names[]= {
 #endif // IDLE_THREADS
 	(char *)"have_ssl",
 	(char *)"have_compress",
-	(char *)"client_found_rows",
 	(char *)"interfaces",
 	(char *)"log_mysql_warnings_enabled",
 	(char *)"monitor_enabled",
@@ -1142,7 +1141,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
 	variables.have_ssl = false; // disable by default for performance reason
-	variables.client_found_rows=true;
 	variables.commands_stats=true;
 	variables.multiplexing=true;
 	variables.log_unhealthy_connections=true;
@@ -2069,7 +2067,6 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["autocommit_false_is_transaction"] = make_tuple(&variables.autocommit_false_is_transaction, false);
 		VariablesPointers_bool["autocommit_false_not_reusable"]   = make_tuple(&variables.autocommit_false_not_reusable,   false);
 		VariablesPointers_bool["automatic_detect_sqli"]           = make_tuple(&variables.automatic_detect_sqli,           false);
-		VariablesPointers_bool["client_found_rows"]               = make_tuple(&variables.client_found_rows,               false);
 		VariablesPointers_bool["client_multi_statements"]         = make_tuple(&variables.client_multi_statements,         false);
 		VariablesPointers_bool["client_session_track_gtid"]       = make_tuple(&variables.client_session_track_gtid,       false);
 		VariablesPointers_bool["commands_stats"]                  = make_tuple(&variables.commands_stats,                  false);
@@ -3985,7 +3982,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___have_ssl=(bool)GloMTH->get_variable_int((char *)"have_ssl");
-	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
 	mysql_thread___log_unhealthy_connections=(bool)GloMTH->get_variable_int((char *)"log_unhealthy_connections");
 	mysql_thread___connection_warming=(bool)GloMTH->get_variable_int((char*)"connection_warming");

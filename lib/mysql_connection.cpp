@@ -751,8 +751,6 @@ void MySQL_Connection::connect_start() {
 	//mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	mysql->charset = c;
 	unsigned long client_flags = 0;
-	//if (mysql_thread___client_found_rows)
-	//	client_flags += CLIENT_FOUND_ROWS;
 	if (parent->compression)
 		client_flags |= CLIENT_COMPRESS;
 	//if (mysql_thread___client_multi_statements)
