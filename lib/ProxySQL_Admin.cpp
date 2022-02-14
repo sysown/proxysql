@@ -5052,34 +5052,14 @@ __run_query:
 			q += std::to_string(now) + ")";
 			SPA->statsdb->execute(q.c_str());
 
-			std::map<string, string> m_labels {
-				{ "uuid", uuid }, { "hostname", hostname }, { "port", port }, { "admin_mysql_ifaces", mysql_ifaces }
-			};
+			std::map<string, string> m_labels { { "uuid", uuid }, { "hostname", hostname }, { "port", port } };
 			const string m_id { uuid + ":" + hostname + ":" + port };
-			auto& m_client_status_map = SPA->metrics.p_proxysql_servers_clients_status_map;
-			auto* gauge_family = SPA->metrics.p_dyn_gauge_array[p_admin_dyn_gauge::proxysql_servers_clients_status_last_seen_at];
 
-			// NOTE: Since 'admin_mysql_ifaces' is part of the metric labels, we need to delete the metric in
-			// case it doesn't match the current value, in order to match table behavior.
-			// TODO: Check if 'admin_mysql_ifaces' should be removed as label, as it's not really part of the
-			// metric definition and it's a dynamic configuration.
-			auto entry_it = m_client_status_map.find(m_id);
-			if (entry_it != m_client_status_map.end()) {
-				if (entry_it->second.first != mysql_ifaces) {
-					gauge_family->Remove(entry_it->second.second);
-					m_client_status_map.erase(entry_it);
-				}
-			}
-
-			const auto& id_val = m_client_status_map.find(m_id);
-			if (id_val != m_client_status_map.end()) {
-				id_val->second.second->Set(now);
-			} else {
-				prometheus::Gauge* new_counter = std::addressof(gauge_family->Add(m_labels));
-				m_client_status_map.insert({m_id, { mysql_ifaces, new_counter }});
-
-				new_counter->Set(now);
-			}
+			p_update_map_gauge(
+				SPA->metrics.p_proxysql_servers_clients_status_map,
+				SPA->metrics.p_dyn_gauge_array[p_admin_dyn_gauge::proxysql_servers_clients_status_last_seen_at],
+				m_id, m_labels, now
+			);
 		}
 	}
 	if (run_query) {

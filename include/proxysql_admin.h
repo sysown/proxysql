@@ -208,7 +208,7 @@ class ProxySQL_Admin {
 		std::array<prometheus::Gauge*, p_admin_gauge::__size> p_gauge_array {};
 		std::array<prometheus::Family<prometheus::Gauge>*, p_admin_dyn_gauge::__size> p_dyn_gauge_array {};
 
-		std::map<std::string, std::pair<std::string, prometheus::Gauge*>> p_proxysql_servers_clients_status_map {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_clients_status_map {};
 	} metrics;
 
 	ProxySQL_External_Scheduler *scheduler;
