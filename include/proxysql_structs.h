@@ -204,6 +204,7 @@ enum mysql_variable_name {
 	SQL_TIMESTAMP,
 	SQL_TMP_TABLE_SIZE,
 	SQL_UNIQUE_CHECKS,
+	SQL_WSREP_OSU_METHOD,
 	SQL_NAME_LAST_HIGH_WM,
 };
 
@@ -1144,6 +1145,7 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_TIMESTAMP,                  SETTING_VARIABLE, false, false, true,  false, (char *)"timestamp",                  NULL, (char *)"" , false} ,
 	{ SQL_TMP_TABLE_SIZE,             SETTING_VARIABLE, false, false, true,  false, (char *)"tmp_table_size",             NULL, (char *)"" , false} ,
 	{ SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
+	{ SQL_WSREP_OSU_METHOD,           SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_osu_method",           NULL, (char *)"" , false} ,
 
 	/*
 	variables that will need input validation:

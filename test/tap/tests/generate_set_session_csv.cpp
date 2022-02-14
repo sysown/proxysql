@@ -268,6 +268,8 @@ int main() {
 	vars["group_replication_consistency"] = new variable("group_replication_consistency", true, false, false);
 	add_values_and_quotes("group_replication_consistency", {"EVENTUAL", "BEFORE_ON_PRIMARY_FAILOVER", "BEFORE", "AFTER", "BEFORE_AND_AFTER"});
 
+	vars["wsrep_OSU_method"] = new variable("wsrep_OSU_method", true, false, false);
+	add_values_and_quotes("wsrep_OSU_method", {"TOI","RSU"});
 /*
 example:
 "SET sql_mode='NO_ENGINE_SUBSTITUTION', sql_select_limit=3030, session_track_gtids=OWN_GTID; SET max_join_size=10000; ", "{'sql_mode':'NO_ENGINE_SUBSTITUTION','sql_select_limit':'3030', 'max_join_size':'10000', 'session_track_gtids':'OWN_GTID'}"
@@ -281,7 +283,7 @@ example:
 			i++;
 		}
 	}
-	for (int i=0; i<20000; i++) {
+	for (int i=0; i<40000; i++) {
 		int ne = rand()%4+1;
 		variable * va[ne];
 		for (int ine = 0; ine < ne; ) {

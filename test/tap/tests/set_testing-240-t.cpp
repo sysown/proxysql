@@ -447,7 +447,7 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-	queries = 2500;
+	queries = 3000;
 	//queries = testCases.size();
 	plan(queries * num_threads);
 

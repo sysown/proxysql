@@ -109,6 +109,7 @@ static const std::set<std::string> mysql_variables_strings = {
 	"lc_messages",
 	"lc_time_names",
 	"optimizer_switch",
+	"wsrep_osu_method",
 };
 
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);

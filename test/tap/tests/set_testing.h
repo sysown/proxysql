@@ -24,7 +24,12 @@ std::vector<TestCase> testCases;
 
 #define UNKNOWNVAR	"proxysql_unknown"
 
-const std::vector<std::string> possible_unknown_variables = {"aurora_read_replica_read_committed", "group_replication_consistency", "query_cache_type"};
+const std::vector<std::string> possible_unknown_variables = {
+	"aurora_read_replica_read_committed",
+	"group_replication_consistency",
+	"query_cache_type",
+	"wsrep_OSU_method",
+	};
 
 int readTestCases(const std::string& fileName) {
 	FILE* fp = fopen(fileName.c_str(), "r");
