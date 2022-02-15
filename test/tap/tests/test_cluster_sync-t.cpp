@@ -951,7 +951,6 @@ int main(int, char**) {
 			std::make_tuple("mysql-connection_warming"                                     , "true"                       ), // false
 			std::make_tuple("mysql-session_idle_ms"                                        , "1001"                       ),
 			std::make_tuple("mysql-have_ssl"                                               , "false"                      ),
-			std::make_tuple("mysql-client_found_rows"                                      , "true"                       ),
 			std::make_tuple("mysql-monitor_enabled"                                        , "true"                       ),
 			std::make_tuple("mysql-monitor_ping_max_failures"                              , "4"                          ),
 			std::make_tuple("mysql-monitor_ping_timeout"                                   , "1001"                       ),
