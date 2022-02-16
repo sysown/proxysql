@@ -462,7 +462,6 @@ class MySQL_Threads_Handler
 		int shun_recovery_time_sec;
 		int unshun_algorithm;
 		int query_retries_on_failure;
-		bool client_multi_statements;
 		bool connection_warming;
 		int client_host_cache_size;
 		int client_host_error_counts;

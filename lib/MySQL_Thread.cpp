@@ -413,7 +413,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"shun_recovery_time_sec",
 	(char *)"unshun_algorithm",
 	(char *)"query_retries_on_failure",
-	(char *)"client_multi_statements",
 	(char *)"client_host_cache_size",
 	(char *)"client_host_error_counts",
 	(char *)"connect_retries_on_failure",
@@ -1037,7 +1036,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.shun_recovery_time_sec=10;
 	variables.unshun_algorithm=0;
 	variables.query_retries_on_failure=1;
-	variables.client_multi_statements=true;
 	variables.client_host_cache_size=0;
 	variables.client_host_error_counts=0;
 	variables.connect_retries_on_failure=10;
@@ -2067,7 +2065,6 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["autocommit_false_is_transaction"] = make_tuple(&variables.autocommit_false_is_transaction, false);
 		VariablesPointers_bool["autocommit_false_not_reusable"]   = make_tuple(&variables.autocommit_false_not_reusable,   false);
 		VariablesPointers_bool["automatic_detect_sqli"]           = make_tuple(&variables.automatic_detect_sqli,           false);
-		VariablesPointers_bool["client_multi_statements"]         = make_tuple(&variables.client_multi_statements,         false);
 		VariablesPointers_bool["client_session_track_gtid"]       = make_tuple(&variables.client_session_track_gtid,       false);
 		VariablesPointers_bool["commands_stats"]                  = make_tuple(&variables.commands_stats,                  false);
 		VariablesPointers_bool["connection_warming"]              = make_tuple(&variables.connection_warming,              false);
@@ -3870,7 +3867,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___unshun_algorithm=GloMTH->get_variable_int((char *)"unshun_algorithm");
 	mysql_thread___query_retries_on_failure=GloMTH->get_variable_int((char *)"query_retries_on_failure");
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
-	mysql_thread___client_multi_statements=(bool)GloMTH->get_variable_int((char *)"client_multi_statements");
 	mysql_thread___connection_delay_multiplex_ms=GloMTH->get_variable_int((char *)"connection_delay_multiplex_ms");
 	mysql_thread___connection_max_age_ms=GloMTH->get_variable_int((char *)"connection_max_age_ms");
 	mysql_thread___connect_timeout_client=GloMTH->get_variable_int((char *)"connect_timeout_client");

@@ -753,8 +753,6 @@ void MySQL_Connection::connect_start() {
 	unsigned long client_flags = 0;
 	if (parent->compression)
 		client_flags |= CLIENT_COMPRESS;
-	//if (mysql_thread___client_multi_statements)
-	//	client_flags += CLIENT_MULTI_STATEMENTS;
 
 	if (myds) {
 		if (myds->sess) {
