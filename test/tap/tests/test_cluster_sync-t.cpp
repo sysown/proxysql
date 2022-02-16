@@ -935,7 +935,6 @@ int main(int, char**) {
 			std::make_tuple("mysql-shun_on_failures"                                       , "6"                          ),
 			std::make_tuple("mysql-shun_recovery_time_sec"                                 , "11"                         ),
 			std::make_tuple("mysql-query_retries_on_failure"                               , "2"                          ),
-			std::make_tuple("mysql-client_multi_statements"                                , "true"                       ),
 			std::make_tuple("mysql-connect_retries_delay"                                  , "2"                          ),
 			std::make_tuple("mysql-connection_delay_multiplex_ms"                          , "1"                          ),
 			std::make_tuple("mysql-connection_max_age_ms"                                  , "1"                          ),
