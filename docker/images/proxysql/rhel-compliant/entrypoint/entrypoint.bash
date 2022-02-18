@@ -16,6 +16,7 @@ rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/p
 # Clean and build dependancies and source
 echo "==> Building"
 cd /opt/proxysql
+export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
 	deps_target="build_deps"
 	build_target=""
@@ -46,7 +47,13 @@ mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
 chown -R root:root /root/rpmbuild/SPECS
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" /root/rpmbuild/SOURCES
 cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec --define "version ${CURVER}"
-mv "/root/rpmbuild/RPMS/$ARCH/proxysql-${CURVER}-1.$ARCH.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm"
-cp "/opt/proxysql/src/proxysql.sha1" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.id-hash"
+cp "/root/rpmbuild/RPMS/$ARCH/proxysql-${CURVER}-1.$ARCH.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm"
+# get SHA1 of the packaged executable
+mkdir -p /opt/proxysql/pkgroot/tmp
+pushd /opt/proxysql/pkgroot
+rpm2cpio /root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm | cpio -iu --to-stdout ./usr/bin/proxysql > tmp/proxysql
+sha1sum tmp/proxysql | sed 's|tmp/||' | tee tmp/proxysql.sha1
+cp tmp/proxysql.sha1 ../binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.id-hash
+popd
 # Cleanup current build
-rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql "/opt/proxysql/proxysql-${CURVER}"
+rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} /opt/proxysql/pkgroot
