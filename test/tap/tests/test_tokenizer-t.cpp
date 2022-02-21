@@ -18,6 +18,7 @@ __thread int mysql_thread___query_digests_max_query_length = 65000;
 __thread bool mysql_thread___query_digests_lowercase = false;
 __thread bool mysql_thread___query_digests_replace_null = false;
 __thread bool mysql_thread___query_digests_no_digits = false;
+__thread bool mysql_thread___query_digests_keep_comment = false;
 __thread int mysql_thread___query_digests_grouping_limit = 3;
 __thread int mysql_thread___query_digests_groups_grouping_limit = 1;
 
