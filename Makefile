@@ -220,7 +220,7 @@ arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensu
 arm64-centos: centos7-arm64 centos8-arm64
 .PHONY: arm64-centos
 
-arm64-debian: debian8-arm64 debian9-arm64 debian10-arm64 debian11-arm64
+arm64-debian: debian9-arm64 debian10-arm64 debian11-arm64
 .PHONY: arm64-debian
 
 arm64-ubuntu: ubuntu16-arm64 ubuntu18-arm64 ubuntu20-arm64
@@ -296,6 +296,9 @@ fedora33-dbg: binaries/proxysql-${CURVER}-1-dbg-fedora33.x86_64.rpm
 fedora34: binaries/proxysql-${CURVER}-1-fedora34.x86_64.rpm
 .PHONY: fedora34
 
+fedora34-arm64: binaries/proxysql-${CURVER}-1-fedora34.aarch64.rpm
+.PHONY: fedora34-arm64
+
 fedora34-clang: binaries/proxysql-${CURVER}-1-fedora34-clang.x86_64.rpm
 .PHONY: fedora34-clang
 
@@ -313,6 +316,9 @@ ubuntu14-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu14_amd64.deb
 ubuntu16: binaries/proxysql_${CURVER}-ubuntu16_amd64.deb
 .PHONY: ubuntu16
 
+ubuntu16-arm64: binaries/proxysql_${CURVER}-ubuntu16_arm64.deb
+.PHONY: ubuntu16-arm64
+
 ubuntu16-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb
 .PHONY: ubuntu16-dbg
 
@@ -320,7 +326,7 @@ ubuntu16-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb
 ubuntu18: binaries/proxysql_${CURVER}-ubuntu18_amd64.deb
 .PHONY: ubuntu18
 
-ubuntu18-arm64: binaries/proxysql_${CURVER}-ubuntu18_aarch64.deb
+ubuntu18-arm64: binaries/proxysql_${CURVER}-ubuntu18_arm64.deb
 .PHONY: ubuntu18-arm64
 
 ubuntu18-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu18_amd64.deb
@@ -333,7 +339,7 @@ ubuntu20: binaries/proxysql_${CURVER}-ubuntu20_amd64.deb
 ubuntu20-clang: binaries/proxysql_${CURVER}-ubuntu20-clang_amd64.deb
 .PHONY: ubuntu20-clang
 
-ubuntu20-arm64: binaries/proxysql_${CURVER}-ubuntu20_aarch64.deb
+ubuntu20-arm64: binaries/proxysql_${CURVER}-ubuntu20_arm64.deb
 .PHONY: ubuntu20-arm64
 
 ubuntu20-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu20_amd64.deb
@@ -350,7 +356,7 @@ debian8-dbg: binaries/proxysql_${CURVER}-dbg-debian8_amd64.deb
 debian9: binaries/proxysql_${CURVER}-debian9_amd64.deb
 .PHONY: debian9
 
-debian9-arm64: binaries/proxysql_${CURVER}-debian9_aarch64.deb
+debian9-arm64: binaries/proxysql_${CURVER}-debian9_arm64.deb
 .PHONY: debian9-arm64
 
 debian9-dbg: binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb
@@ -360,7 +366,7 @@ debian9-dbg: binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb
 debian10: binaries/proxysql_${CURVER}-debian10_amd64.deb
 .PHONY: debian10
 
-debian10-arm64: binaries/proxysql_${CURVER}-debian10_aarch64.deb
+debian10-arm64: binaries/proxysql_${CURVER}-debian10_arm64.deb
 .PHONY: debian10-arm64
 
 debian10-dbg: binaries/proxysql_${CURVER}-dbg-debian10_amd64.deb
@@ -373,7 +379,7 @@ debian11: binaries/proxysql_${CURVER}-debian11_amd64.deb
 debian11-clang: binaries/proxysql_${CURVER}-debian11-clang_amd64.deb
 .PHONY: debian11-clang
 
-debian11-arm64: binaries/proxysql_${CURVER}-debian11_aarch64.deb
+debian11-arm64: binaries/proxysql_${CURVER}-debian11_arm64.deb
 .PHONY: debian11-arm64
 
 debian11-dbg: binaries/proxysql_${CURVER}-dbg-debian11_amd64.deb
@@ -382,6 +388,9 @@ debian11-dbg: binaries/proxysql_${CURVER}-dbg-debian11_amd64.deb
 
 opensuse15: binaries/proxysql-${CURVER}-1-opensuse15.x86_64.rpm
 .PHONY: opensuse15
+
+opensuse15-arm64: binaries/proxysql-${CURVER}-1-opensuse15.aarch64.rpm
+.PHONY: opensuse15-arm64
 
 opensuse15-clang: binaries/proxysql-${CURVER}-1-opensuse15-clang.x86_64.rpm
 .PHONY: opensuse15-clang
@@ -392,6 +401,9 @@ opensuse15-dbg: binaries/proxysql-${CURVER}-1-opensuse15-dbg.x86_64.rpm
 
 almalinux8: binaries/proxysql-${CURVER}-1-almalinux8.x86_64.rpm
 .PHONY: almalinux8
+
+almalinux8-arm64: binaries/proxysql-${CURVER}-1-almalinux8.aarch64.rpm
+.PHONY: almalinux8-arm64
 
 almalinux8-clang: binaries/proxysql-${CURVER}-1-almalinux8-clang.x86_64.rpm
 .PHONY: almalinux8-clang
@@ -466,13 +478,16 @@ binaries/proxysql-${CURVER}-1-dbg-fedora33.x86_64.rpm:
 	docker-compose up fedora33_dbg_build
 	docker-compose rm -f
 
-
 binaries/proxysql-${CURVER}-1-fedora33.aarch64.rpm:
 	docker-compose up fedora33_build
 	docker-compose rm -f
 
 
 binaries/proxysql-${CURVER}-1-fedora34.x86_64.rpm:
+	docker-compose up fedora34_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-fedora34.aarch64.rpm:
 	docker-compose up fedora34_build
 	docker-compose rm -f
 
@@ -498,6 +513,10 @@ binaries/proxysql_${CURVER}-ubuntu16_amd64.deb:
 	docker-compose up ubuntu16_build
 	docker-compose rm -f
 
+binaries/proxysql_${CURVER}-ubuntu16_arm64.deb:
+	docker-compose up ubuntu16_build
+	docker-compose rm -f
+
 binaries/proxysql_${CURVER}-dbg-ubuntu16_amd64.deb:
 	docker-compose up ubuntu16_dbg_build
 	docker-compose rm -f
@@ -511,7 +530,7 @@ binaries/proxysql_${CURVER}-dbg-ubuntu18_amd64.deb:
 	docker-compose up ubuntu18_dbg_build
 	docker-compose rm -f
 
-binaries/proxysql_${CURVER}-ubuntu18_aarch64.deb:
+binaries/proxysql_${CURVER}-ubuntu18_arm64.deb:
 	docker-compose up ubuntu18_build
 	docker-compose rm -f
 
@@ -528,7 +547,7 @@ binaries/proxysql_${CURVER}-ubuntu20-clang_amd64.deb:
 	docker-compose up ubuntu20_clang_build
 	docker-compose rm -f
 
-binaries/proxysql_${CURVER}-ubuntu20_aarch64.deb:
+binaries/proxysql_${CURVER}-ubuntu20_arm64.deb:
 	docker-compose up ubuntu20_build
 	docker-compose rm -f
 
@@ -550,7 +569,7 @@ binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb:
 	docker-compose up debian9_dbg_build
 	docker-compose rm -f
 
-binaries/proxysql_${CURVER}-debian9_aarch64.deb:
+binaries/proxysql_${CURVER}-debian9_arm64.deb:
 	docker-compose up debian9_build
 	docker-compose rm -f
 
@@ -559,7 +578,7 @@ binaries/proxysql_${CURVER}-debian10_amd64.deb:
 	docker-compose up debian10_build
 	docker-compose rm -f
 
-binaries/proxysql_${CURVER}-debian10_aarch64.deb:
+binaries/proxysql_${CURVER}-debian10_arm64.deb:
 	docker-compose up debian10_build
 	docker-compose rm -f
 
@@ -576,7 +595,7 @@ binaries/proxysql_${CURVER}-debian11-clang_amd64.deb:
 	docker-compose up debian11_clang_build
 	docker-compose rm -f
 
-binaries/proxysql_${CURVER}-debian11_aarch64.deb:
+binaries/proxysql_${CURVER}-debian11_arm64.deb:
 	docker-compose up debian11_build
 	docker-compose rm -f
 
@@ -586,6 +605,10 @@ binaries/proxysql_${CURVER}-dbg-debian11_amd64.deb:
 
 
 binaries/proxysql-${CURVER}-1-opensuse15.x86_64.rpm:
+	docker-compose up opensuse15_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-opensuse15.aarch64.rpm:
 	docker-compose up opensuse15_build
 	docker-compose rm -f
 
@@ -599,6 +622,10 @@ binaries/proxysql-${CURVER}-1-opensuse15-dbg.x86_64.rpm:
 
 
 binaries/proxysql-${CURVER}-1-almalinux8.x86_64.rpm:
+	docker-compose up almalinux8_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-almalinux8.aarch64.rpm:
 	docker-compose up almalinux8_build
 	docker-compose rm -f
 

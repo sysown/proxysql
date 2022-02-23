@@ -5,7 +5,7 @@ echo "==> Build environment:"
 env
 
 ARCH=$(rpm --eval '%{_arch}')
-echo "==> ${ARCH} architecture detected for package"
+echo "==> '${ARCH}' architecture detected for package"
 
 DIST=$(source /etc/os-release; echo ${ID%%[-._ ]*}${VERSION%%[-._ ]*})
 echo "==> '${DIST}' distro detected for package"
