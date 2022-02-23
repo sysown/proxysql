@@ -1,7 +1,10 @@
+#!/bin/make -f
+
+
 ifndef GIT_VERSION
-GIT_VERSION := $(shell git describe --long --abbrev=7)
+	GIT_VERSION := $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-$(error GIT_VERSION is not set)
+	$(error GIT_VERSION is not set)
 endif
 endif
 
@@ -448,7 +451,7 @@ binaries/proxysql-${CURVER}-1-centos7.x86_64.rpm:
 	docker-compose rm -f
 
 binaries/proxysql-${CURVER}-1-centos7.aarch64.rpm:
-	docker-compose up centos7_arm64_build
+	docker-compose up centos7_build
 	docker-compose rm -f
 
 binaries/proxysql-${CURVER}-1-dbg-centos7.x86_64.rpm:
@@ -465,7 +468,7 @@ binaries/proxysql-${CURVER}-1-centos8-clang.x86_64.rpm:
 	docker-compose rm -f
 
 binaries/proxysql-${CURVER}-1-centos8.aarch64.rpm:
-	docker-compose up centos8_arm64_build
+	docker-compose up centos8_build
 	docker-compose rm -f
 
 binaries/proxysql-${CURVER}-1-dbg-centos8.x86_64.rpm:
@@ -501,7 +504,7 @@ binaries/proxysql-${CURVER}-1-dbg-fedora28.x86_64.rpm:
 
 
 binaries/proxysql-${CURVER}-1-fedora32.aarch64.rpm:
-	docker-compose up fedora32_arm64_build
+	docker-compose up fedora32_build
 	docker-compose rm -f
 
 
@@ -515,7 +518,7 @@ binaries/proxysql-${CURVER}-1-dbg-fedora33.x86_64.rpm:
 
 
 binaries/proxysql-${CURVER}-1-fedora33.aarch64.rpm:
-	docker-compose up fedora33_arm64_build
+	docker-compose up fedora33_build
 	docker-compose rm -f
 
 
@@ -565,7 +568,7 @@ binaries/proxysql_${CURVER}-dbg-ubuntu18_amd64.deb:
 
 
 binaries/proxysql_${CURVER}-ubuntu18_aarch64.deb:
-	docker-compose up ubuntu18_arm64_build
+	docker-compose up ubuntu18_build
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-dbg-ubuntu20_amd64.deb:
@@ -582,7 +585,7 @@ binaries/proxysql_${CURVER}-ubuntu20-clang_amd64.deb:
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-ubuntu20_aarch64.deb:
-	docker-compose up ubuntu20_arm64_build
+	docker-compose up ubuntu20_build
 	docker-compose rm -f
 
 
@@ -613,7 +616,7 @@ binaries/proxysql_${CURVER}-dbg-debian9_amd64.deb:
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-debian9_aarch64.deb:
-	docker-compose up debian9_arm64_build
+	docker-compose up debian9_build
 	docker-compose rm -f
 
 
@@ -631,7 +634,7 @@ binaries/proxysql_${CURVER}-debian10_amd64.deb:
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-debian10_aarch64.deb:
-	docker-compose up debian10_arm64_build
+	docker-compose up debian10_build
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-dbg-debian10_amd64.deb:
@@ -648,7 +651,7 @@ binaries/proxysql_${CURVER}-debian11-clang_amd64.deb:
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-debian11_aarch64.deb:
-	docker-compose up debian11_arm64_build
+	docker-compose up debian11_build
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-dbg-debian11_amd64.deb:
