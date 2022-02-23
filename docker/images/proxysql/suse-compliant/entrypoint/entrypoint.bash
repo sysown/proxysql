@@ -4,8 +4,8 @@ set -eu
 echo "==> Build environment:"
 env
 
-ARCH=$PROXYSQL_BUILD_ARCH
-echo "==> $ARCH architecture detected for package"
+ARCH=$(rpm --eval '%{_arch}')
+echo "==> ${ARCH} architecture detected for package"
 
 echo -e "==> C compiler: ${CC} -> $(readlink -e $(which ${CC}))\n$(${CC} --version)"
 echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(which ${CXX}))\n$(${CXX} --version)"
@@ -13,7 +13,7 @@ echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(which ${CXX}))\n$(${CXX} --
 
 echo "==> Cleaning"
 # Delete package if exists
-rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm || true
+rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.rpm || true
 # Cleanup relic directories from a previously failed build
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} || true
 
