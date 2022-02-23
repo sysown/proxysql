@@ -5,7 +5,10 @@ echo "==> Build environment:"
 env
 
 ARCH=$(dpkg --print-architecture)
-echo "==> ${ARCH} architecture detected for package"
+echo "==> '${ARCH}' architecture detected for package"
+
+DIST=$(source /etc/os-release; echo ${ID%%[-._ ]*}${VERSION%%[-._ ]*})
+echo "==> '${DIST}' distro detected for package"
 
 echo -e "==> C compiler: ${CC} -> $(readlink -e $(which ${CC}))\n$(${CC} --version)"
 echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(which ${CXX}))\n$(${CXX} --version)"
