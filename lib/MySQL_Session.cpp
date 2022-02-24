@@ -19,6 +19,7 @@
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
+#include "ProxySQL_Cluster.hpp"
 
 
 #include "libinjection.h"
