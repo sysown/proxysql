@@ -719,6 +719,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_check_status", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_CHECK_STATUS);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_failovers", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_FAILOVERS);
+	insert_into_tables_defs(tables_defs_monitor,"mysql_servers", MONITOR_SQLITE_TABLE_MYSQL_SERVERS);
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start_us)");
@@ -840,6 +841,70 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 	}
 	db->execute("PRAGMA foreign_keys = ON");
 };
+
+void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
+	pthread_mutex_lock(&this->mysql_servers_mutex);
+
+	if (resultset != nullptr) {
+		int rc = 0;
+
+		monitordb->execute("DELETE FROM mysql_servers");
+
+		sqlite3_stmt *statement1=NULL;
+		sqlite3_stmt *statement32=NULL;
+
+		char* query1 = const_cast<char*>("INSERT INTO mysql_servers VALUES (?1,?2,?3,?4)");
+		char* query32 = const_cast<char*>(
+			"INSERT INTO mysql_servers VALUES (?1,?2,?3,?4),(?5,?6,?7,?8),(?9,?10,?11,?12),(?13,?14,?15,?16),(?17,?18,?19,?20),(?21,?22,?23,?24),"
+				"(?25,?26,?27,?28),(?29,?30,?31,?32),(?33,?34,?35,?36),(?37,?38,?39,?40),(?41,?42,?43,?44),(?45,?46,?47,?48),(?49,?50,?51,?52),"
+				"(?53,?54,?55,?56),(?57,?58,?59,?60),(?61,?62,?63,?64),(?65,?66,?67,?68),(?69,?70,?71,?72),(?73,?74,?75,?76),(?77,?78,?79,?80),"
+				"(?81,?82,?83,?84),(?85,?86,?87,?88),(?89,?90,?91,?92),(?93,?94,?95,?96),(?97,?98,?99,?100),(?101,?102,?103,?104),(?105,?106,?107,?108),"
+				"(?109,?110,?111,?112),(?113,?114,?115,?116),(?117,?118,?119,?120),(?121,?122,?123,?124),(?125,?126,?127,?128)"
+		);
+
+		rc = monitordb->prepare_v2(query1, &statement1);
+		ASSERT_SQLITE_OK(rc, monitordb);
+		rc = monitordb->prepare_v2(query32, &statement32);
+		ASSERT_SQLITE_OK(rc, monitordb);
+
+		int row_idx=0;
+		int max_bulk_row_idx=resultset->rows_count/32;
+		max_bulk_row_idx=max_bulk_row_idx*32;
+
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row *r1=*it;
+			int idx=row_idx%32;
+
+			if (row_idx < max_bulk_row_idx) { // bulk
+				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*4)+1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*4)+2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*4)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*4)+4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, monitordb);
+
+				if (idx==31) {
+					SAFE_SQLITE3_STEP2(statement32);
+					rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, monitordb);
+					rc=(*proxy_sqlite3_reset)(statement32); ASSERT_SQLITE_OK(rc, monitordb);
+				}
+			} else { // single row
+				rc=(*proxy_sqlite3_bind_text)(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, monitordb);
+
+				SAFE_SQLITE3_STEP2(statement1);
+				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+			}
+			row_idx++;
+		}
+
+		(*proxy_sqlite3_finalize)(statement1);
+		(*proxy_sqlite3_finalize)(statement32);
+	}
+
+	pthread_mutex_unlock(&this->mysql_servers_mutex);
+}
 
 void * monitor_connect_thread(void *arg) {
 	mysql_close(mysql_init(NULL));
@@ -2403,13 +2468,18 @@ void * MySQL_Monitor::monitor_connect() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
+		// update the 'monitor.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
+		{
+			std::lock_guard<std::mutex> mysql_servers_guard(MyHGM->mysql_servers_to_monitor_mutex);
+			update_monitor_mysql_servers(MyHGM->mysql_servers_to_monitor);
+		}
 
 		char *error=NULL;
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor.mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -2527,13 +2597,18 @@ void * MySQL_Monitor::monitor_ping() {
 	unsigned long long next_loop_at=0;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
+		// update the 'monitor.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
+		{
+			std::lock_guard<std::mutex> mysql_servers_guard(MyHGM->mysql_servers_to_monitor_mutex);
+			update_monitor_mysql_servers(MyHGM->mysql_servers_to_monitor);
+		}
 
 		unsigned int glover;
 		char *error=NULL;
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port ORDER BY RANDOM()";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor.mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -2611,7 +2686,7 @@ __end_monitor_ping_loop:
 		}
 
 		// now it is time to shun all problematic hosts
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NOT NULL AND b.ping_error NOT LIKE 'Access denied for user\%'";
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM monitor.mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE b.ping_error IS NOT NULL AND b.ping_error NOT LIKE 'Access denied for user\%'";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 // we disable valgrind here. Probably a bug in SQLite3
 VALGRIND_DISABLE_ERROR_REPORTING;
@@ -2672,7 +2747,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 
 		// now it is time to update current_lantency_ms
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NULL";
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM monitor.mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE b.ping_error IS NULL";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 VALGRIND_DISABLE_ERROR_REPORTING;
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
