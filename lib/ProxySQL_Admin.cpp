@@ -3983,7 +3983,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							char msg[256];
 							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
 							sprintf(msg, "Tested in %llums\n", d);
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -3993,7 +3993,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							char msg[256];
 							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 							sprintf(msg, "Tested in %llums\n", d);
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -4015,7 +4015,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							SPA->admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id=5211");
 							SPA->load_mysql_servers_to_runtime();
 							SPA->mysql_servers_wrunlock();
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -13014,7 +13014,7 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Bala
 	}
 	unsigned int NL = 1000;
 	for (unsigned int i=0; i<NL; i++) {
-		MySrvC * mysrvc = myhgc->get_random_MySrvC(NULL, NULL, -1, NULL);
+		MySrvC * mysrvc = myhgc->get_random_MySrvC(NULL, 0, -1, NULL);
 		assert(mysrvc);
 		for (unsigned int k=0; k<NS; k++) {
 			MySrvC * m = (MySrvC *)myhgc->mysrvs->servers->index(k);
