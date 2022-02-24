@@ -10474,13 +10474,18 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *
 					} else { // we must hash it
 						uint8 hash_stage1[SHA_DIGEST_LENGTH];
 						uint8 hash_stage2[SHA_DIGEST_LENGTH];
-						SHA_CTX sha1_context;
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context, r->fields[1], strlen(r->fields[1]));
-						SHA1_Final(hash_stage1, &sha1_context);
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
-						SHA1_Final(hash_stage2, &sha1_context);
+
+						EVP_MD_CTX* context = EVP_MD_CTX_new();
+						EVP_MD_CTX_init(context);
+						EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+						EVP_DigestUpdate(context, r->fields[1], strlen(r->fields[1]));
+						EVP_DigestFinal_ex(context, hash_stage1, nullptr);
+						EVP_MD_CTX_reset(context);
+						EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+						EVP_DigestUpdate(context, hash_stage1, SHA_DIGEST_LENGTH);
+						EVP_DigestFinal_ex(context, hash_stage2, nullptr);
+						EVP_MD_CTX_free(context);
+
 						password=sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
 					}
 				} else {

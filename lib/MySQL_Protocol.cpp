@@ -1,4 +1,6 @@
 #include <openssl/rand.h>
+#include <openssl/evp.h>
+#include <openssl/crypto.h>
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -135,22 +137,32 @@ static inline int write_encoded_length_and_string(unsigned char *p, uint64_t val
 }
 
 void proxy_compute_sha1_hash_multi(uint8_t *digest, const char *buf1, int len1, const char *buf2, int len2) {
-  PROXY_TRACE();
-  
-  SHA_CTX sha1_context;
-  SHA1_Init(&sha1_context);
-  SHA1_Update(&sha1_context, buf1, len1);
-  SHA1_Update(&sha1_context, buf2, len2);
-  SHA1_Final(digest, &sha1_context);
+	PROXY_TRACE();
+	assert(digest != nullptr);
+	assert((buf1 != nullptr) && (buf2 != nullptr));
+	assert((len1 >= 0) && (len2 >= 0));
+
+	EVP_MD_CTX* context = EVP_MD_CTX_new();
+	EVP_MD_CTX_init(context);
+	EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+	EVP_DigestUpdate(context, buf1, len1);
+	EVP_DigestUpdate(context, buf2, len2);
+	EVP_DigestFinal_ex(context, digest, nullptr);
+	EVP_MD_CTX_free(context);
 }
 
 void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
-  PROXY_TRACE();
-  
-  SHA_CTX sha1_context;
-  SHA1_Init(&sha1_context);
-  SHA1_Update(&sha1_context, buf, len);
-  SHA1_Final(digest, &sha1_context);
+	PROXY_TRACE();
+	assert(digest != nullptr);
+	assert(buf != nullptr);
+	assert(len >= 0);
+
+	EVP_MD_CTX* context = EVP_MD_CTX_new();
+	EVP_MD_CTX_init(context);
+	EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+	EVP_DigestUpdate(context, buf, len);
+	EVP_DigestFinal_ex(context, digest, nullptr);
+	EVP_MD_CTX_free(context);
 }
 
 void proxy_compute_two_stage_sha1_hash(const char *password, size_t pass_len, uint8_t *hash_stage1, uint8_t *hash_stage2) {
@@ -1400,13 +1412,18 @@ bool MySQL_Protocol::verify_user_pass(
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
 				uint8_t hash_stage1[SHA_DIGEST_LENGTH];
 				uint8_t hash_stage2[SHA_DIGEST_LENGTH];
-				SHA_CTX sha1_context;
-				SHA1_Init(&sha1_context);
-				SHA1_Update(&sha1_context, pass, pass_len);
-				SHA1_Final(hash_stage1, &sha1_context);
-				SHA1_Init(&sha1_context);
-				SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
-				SHA1_Final(hash_stage2, &sha1_context);
+
+				EVP_MD_CTX* context = EVP_MD_CTX_new();
+				EVP_MD_CTX_init(context);
+				EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+				EVP_DigestUpdate(context, pass, pass_len);
+				EVP_DigestFinal_ex(context, hash_stage1, nullptr);
+				EVP_MD_CTX_reset(context);
+				EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+				EVP_DigestUpdate(context, hash_stage1, SHA_DIGEST_LENGTH);
+				EVP_DigestFinal_ex(context, hash_stage2, nullptr);
+				EVP_MD_CTX_free(context);
+
 				// note that sha1_pass_hex() returns a new buffer
 				char *double_hashed_password = sha1_pass_hex((char *)hash_stage2);
 
@@ -2095,13 +2112,19 @@ __do_auth:
 						proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
 						uint8_t hash_stage1[SHA_DIGEST_LENGTH];
 						uint8_t hash_stage2[SHA_DIGEST_LENGTH];
-						SHA_CTX sha1_context;
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context, pass, pass_len);
-						SHA1_Final(hash_stage1, &sha1_context);
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
-						SHA1_Final(hash_stage2, &sha1_context);
+
+
+						EVP_MD_CTX* context = EVP_MD_CTX_new();
+						EVP_MD_CTX_init(context);
+						EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+						EVP_DigestUpdate(context, pass, pass_len);
+						EVP_DigestFinal_ex(context, hash_stage1, nullptr);
+						EVP_MD_CTX_reset(context);
+						EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+						EVP_DigestUpdate(context, hash_stage1, SHA_DIGEST_LENGTH);
+						EVP_DigestFinal_ex(context, hash_stage2, nullptr);
+						EVP_MD_CTX_free(context);
+
 						char *double_hashed_password = sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
 
 						if (strcasecmp(double_hashed_password,password)==0) {
