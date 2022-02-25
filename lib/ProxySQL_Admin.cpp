@@ -46,8 +46,6 @@
 #include <fcntl.h>
 #include <sys/utsname.h>
 
-#include "platform.h"
-#include "microhttpd.h"
 
 #include <uuid/uuid.h>
 
@@ -928,7 +926,7 @@ const std::vector<std::string> SAVE_MYSQL_VARIABLES_TO_MEMORY = {
 	"SAVE MYSQL VARIABLES FROM RUN" };
 
 
-bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length) {
+bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, uint64_t query_no_space_length) {
 	for (std::vector<std::string>::const_iterator it=cmds.begin(); it!=cmds.end(); ++it) {
 		if (query_no_space_length==it->length() && !strncasecmp(it->c_str(), query_no_space, query_no_space_length)) {
 			proxy_info("Received %s command\n", query_no_space);
@@ -1378,16 +1376,16 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  * 	returns false if the command is a valid one and is processed
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
  */
-bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+bool admin_handler_command_proxysql(char *query_no_space, size_t query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
 	if (!(strncasecmp("PROXYSQL CLUSTER_NODE_UUID ", query_no_space, strlen("PROXYSQL CLUSTER_NODE_UUID ")))) {
-		int l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
+		size_t l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
 		if (sess->client_myds->addr.port == 0) {
 			proxy_warning("Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket. Exiting client\n");
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket");
 			sess->client_myds->shut_soft();
 			return false;
 		}
-		if (query_no_space_length >= l+36+2) {
+		if (query_no_space_length >= l + ((size_t)36 + 2)) {
 			uuid_t uu;
 			char *A_uuid = NULL;
 			char *B_interface = NULL;
@@ -13004,7 +13002,6 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Bala
 	unsigned long long t1 = monotonic_time();
 	const unsigned int NS = 4;
 	unsigned int cu[NS] = { 50, 10, 10, 0 };
-	unsigned int hid = 0;
 	MyHGC * myhgc = NULL;
 	myhgc = MyHGM->MyHGC_lookup(5211);
 	assert(myhgc);

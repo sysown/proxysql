@@ -79,7 +79,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
+			// unsigned int timeout_long = 60;
 			if (conn == NULL) {
 				conn = mysql_init(NULL);
 				if (conn==NULL) {
@@ -833,10 +833,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer() {
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
@@ -998,10 +995,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer() {
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started\n", hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
@@ -1186,10 +1180,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer() {
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
@@ -1559,10 +1550,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const std::string& var_ty
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching %s variables from peer %s:%d started\n", vars_type_str, hostname, port);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
@@ -1683,10 +1671,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const char *expected_chec
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
-			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
-			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum);
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
