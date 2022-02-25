@@ -1,26 +1,9 @@
-//#include <iostream>
-//#include <thread>
 #include "proxysql.h"
-
-//#include <sys/types.h>
-//#include <sys/stat.h>
-
 #include "cpp.h"
 
-//#include "ProxySQL_Statistics.hpp"
-//#include "MySQL_PreparedStatement.h"
-//#include "ProxySQL_Cluster.hpp"
-//#include "MySQL_Logger.hpp"
-//#include "SQLite3_Server.h"
-//#include "query_processor.h"
-//#include "MySQL_Authentication.hpp"
-//#include "MySQL_LDAP_Authentication.hpp"
-//#include "proxysql_restapi.h"
-//#include "Web_Interface.hpp"
-
-
-
 #include <openssl/x509v3.h>
+#include <openssl/encoder.h>
+#include <openssl/evp.h>
 
 static long
 get_file_size (const char *filename) {
@@ -60,32 +43,15 @@ static char * load_file (const char *filename) {
 	return buffer;
 }
 
-// absolute path of ssl files
-static char *ssl_key_fp = NULL;
-static char *ssl_cert_fp = NULL;
-static char *ssl_ca_fp = NULL;
+inline char * load_file(const std::string& filename) {
+	return load_file(filename.c_str());
+}
 
-struct dh_st {
-	int pad;
-	int version;
-	BIGNUM *p;
-	BIGNUM *g;
-	long length;
-	BIGNUM *pub_key;
-	BIGNUM *priv_key;
-	int flags;
-	BN_MONT_CTX *method_mont_p;
-	BIGNUM *q;
-	BIGNUM *j;
-	unsigned char *seed;
-	int seedlen;
-	BIGNUM *counter;
-	int references;
-	CRYPTO_EX_DATA ex_data;
-	const DH_METHOD *meth;
-	ENGINE *engine;
-	CRYPTO_RWLOCK *lock;
-};
+
+// absolute path of ssl files
+static std::string ssl_key_fp;
+static std::string ssl_cert_fp;
+static std::string ssl_ca_fp;
 
 int callback_ssl_verify_peer(int ok, X509_STORE_CTX* ctx) {
 	// for now only return 1
@@ -150,54 +116,56 @@ X509 * generate_x509(EVP_PKEY *pkey, const unsigned char *cn, uint32_t serial, i
 	return x;
 }
 
-void write_x509(const char *filen, X509 *x) {
+void write_x509(const std::string& filename, X509 *x) {
 	BIO * x509file = NULL;
-	x509file = BIO_new_file(filen, "w" );
+	x509file = BIO_new_file(filename.c_str(), "w" );
 	if (!x509file ) {
 		proxy_error("Error on BIO_new_file\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
 	if (!PEM_write_bio_X509( x509file, x)) {
-		proxy_error("Error on PEM_write_bio_X509 for %s\n", filen);
+		proxy_error("Error on PEM_write_bio_X509 for %s\n", filename.c_str());
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
 	BIO_free_all( x509file );
 }
 
-void write_rsa_key(const char *filen, RSA *rsa) {
-	BIO* pOut = BIO_new_file(filen, "w");
+void write_rsa_key(const std::string& filename, EVP_PKEY* pkey) {
+	BIO* pOut = BIO_new_file(filename.c_str(), "w");
 	if (!pOut) {
 		proxy_error("Error on BIO_new_file\n");
 		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 	}
-	if (!PEM_write_bio_RSAPrivateKey( pOut, rsa, NULL, NULL, 0, NULL, NULL)) {
-		proxy_error("Error on PEM_write_bio_RSAPrivateKey for %s\n", filen);
-		exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+	if (!PEM_write_bio_PrivateKey(pOut, pkey, nullptr, nullptr, 0, nullptr, nullptr)) {
+		proxy_error("Error during PEM_write_bio_PrivateKey for %s\n", filename.c_str());
+		exit(EXIT_SUCCESS);
 	}
+
 	BIO_free_all( pOut );
 }
 
 
-EVP_PKEY * proxy_key_read(const char *filen, bool bootstrap, std::string& msg) {
+EVP_PKEY * proxy_key_read(const std::string& filename, bool bootstrap, std::string& msg) {
 	EVP_PKEY * pkey = NULL;
 
-	BIO * pIn = BIO_new_file(filen,"r");
+	BIO * pIn = BIO_new_file(filename.c_str(),"r");
 	if (!pIn) {
-		proxy_error("Error on BIO_new_file() while reading %s\n", filen);
+		proxy_error("Error on BIO_new_file() while reading %s\n", filename.c_str());
 		if (bootstrap == true) {
 			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 		} else {
-			msg = "Error on BIO_new_file() while reading " + std::string(filen);
+			msg = "Error on BIO_new_file() while reading " + filename;
 			return pkey;
 		}
 	}
 	pkey = PEM_read_bio_PrivateKey( pIn , NULL, NULL,  NULL);
+
 	if (pkey == NULL) {
-		proxy_error("Error on PEM_read_bio_PrivateKey for %s\n", filen);
+		proxy_error("Error on PEM_read_bio_PrivateKey for %s\n", filename.c_str());
 		if (bootstrap == true) {
 			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 		} else {
-			msg = "Error on PEM_read_bio_PrivateKey() for " + std::string(filen);
+			msg = "Error on PEM_read_bio_PrivateKey() for " + filename;
 			BIO_free(pIn);
 			return pkey;
 		}
@@ -206,26 +174,26 @@ EVP_PKEY * proxy_key_read(const char *filen, bool bootstrap, std::string& msg) {
 	return pkey;
 }
 
-X509 * proxy_read_x509(const char *filen, bool bootstrap, std::string& msg) {
+X509 * proxy_read_x509(const std::string& filename, bool bootstrap, std::string& msg) {
 	X509 * x = NULL;
 	BIO * x509file = NULL;
-	x509file = BIO_new_file(filen, "r" );
+	x509file = BIO_new_file(filename.c_str(), "r" );
 	if (!x509file ) {
-		proxy_error("Error on BIO_new_file() while reading %s\n", filen);
+		proxy_error("Error on BIO_new_file() while reading %s\n", filename.c_str());
 		if (bootstrap == true) {
 			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 		} else {
-			msg = "Error on BIO_new_file() while reading " + std::string(filen);
+			msg = "Error on BIO_new_file() while reading " + filename;
 			return x;
 		}
 	}
 	x = PEM_read_bio_X509( x509file, NULL, NULL, NULL);
 	if (x == NULL) {
-		proxy_error("Error on PEM_read_bio_X509 for %s\n", filen);
+		proxy_error("Error on PEM_read_bio_X509 for %s\n", filename.c_str());
 		if (bootstrap == true) {
 			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
 		} else {
-			msg = "Error on PEM_read_bio_X509() for " + std::string(filen);
+			msg = "Error on PEM_read_bio_X509() for " + filename;
 			BIO_free_all(x509file);
 			return x;
 		}
@@ -235,117 +203,115 @@ X509 * proxy_read_x509(const char *filen, bool bootstrap, std::string& msg) {
 }
 
 // return 0 un success
-int ssl_mkit(X509 **x509ca, X509 **x509p, EVP_PKEY **pkeyp, int bits, int serial, int days, bool bootstrap, std::string& msg) {
-	X509 *x1;
-	X509 *x2;
-	EVP_PKEY *pk;
-	RSA *rsa;
+int ssl_mkit(X509 **x509ca, X509 **x509p, EVP_PKEY **pkeyp, unsigned int bits, int serial, int days, bool bootstrap, std::string& msg) {
+	X509 *x1 = nullptr;
+	X509 *x2 = nullptr;
+	EVP_PKEY *pk = nullptr;
+
+	assert(x509ca && x509p && pkeyp); // No null pointer paramters allowed.	These are dereferenced later
 
 	// relative path to datadir of ssl files
-	const char * ssl_key_rp = (const char *)"proxysql-key.pem";
-	const char * ssl_cert_rp = (const char *)"proxysql-cert.pem";
-	const char * ssl_ca_rp = (const char *)"proxysql-ca.pem";
+	const char * ssl_key_rp = "proxysql-key.pem";
+	const char * ssl_cert_rp = "proxysql-cert.pem";
+	const char * ssl_ca_rp = "proxysql-ca.pem";
 
-	// how many files exists ?
-	int nfiles = 0;
-	bool ssl_key_exists = true;
-	bool ssl_cert_exists = true;
-	bool ssl_ca_exists = true;
+	uint16_t ssl_file_count = 0;
 
-	// check if files exists
+	// Until proven
+	bool ssl_key_present = false;
+	bool ssl_cert_present = false;
+	bool ssl_ca_present = false;
+	// Construct filepaths
 	if (bootstrap == true) {
-		ssl_key_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_key_rp)+8);
-		sprintf(ssl_key_fp,"%s/%s",GloVars.datadir,ssl_key_rp);
+		ssl_key_fp = std::string(GloVars.datadir) + ssl_key_rp;
+		ssl_cert_fp = std::string(GloVars.datadir) + ssl_cert_rp;
+		ssl_ca_fp = std::string(GloVars.datadir) + ssl_ca_rp;
 	}
-	if (access(ssl_key_fp, R_OK)) {
-		ssl_key_exists = false;
+	// check if files are present
+	if (access(ssl_key_fp.c_str(), R_OK) == 0) {
+		ssl_key_present = true;
+		ssl_file_count++;
 	}
-
-	if (bootstrap == true) {
-		ssl_cert_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_cert_rp)+8);
-		sprintf(ssl_cert_fp,"%s/%s",GloVars.datadir,ssl_cert_rp);
+	if (access(ssl_cert_fp.c_str(), R_OK) == 0) {
+		ssl_cert_present = true;
+		ssl_file_count++;
 	}
-	if (access(ssl_cert_fp, R_OK)) {
-		ssl_cert_exists = false;
+	if (access(ssl_ca_fp.c_str(), R_OK) == 0) {
+		ssl_ca_present = true;
+		ssl_file_count++;
 	}
-
-	if (bootstrap == true) {
-		ssl_ca_fp = (char *)malloc(strlen(GloVars.datadir)+strlen(ssl_ca_rp)+8);
-		sprintf(ssl_ca_fp,"%s/%s",GloVars.datadir,ssl_ca_rp);
-	}
-	if (access(ssl_ca_fp, R_OK)) {
-		ssl_ca_exists = false;
-	}
-
-	nfiles += (ssl_key_exists ? 1 : 0);
-	nfiles += (ssl_cert_exists ? 1 : 0);
-	nfiles += (ssl_ca_exists ? 1 : 0);
 
 	if (
-		(bootstrap == true && (nfiles != 0 && nfiles != 3))
+		(bootstrap == true && (ssl_file_count != 0 && ssl_file_count != 3))
 		||
-		(bootstrap == false && (nfiles != 3))
+		(bootstrap == false && (ssl_file_count != 3))
 	) {
 		if (bootstrap == true) {
 			proxy_error("Only some SSL files are present. Either all files are present, or none. Exiting.\n");
 		} else {
 			proxy_error("Aborting PROXYSQL RELOAD TLS because not all SSL files are present\n");
 		}
-		proxy_error("%s : %s\n" , ssl_key_rp, (ssl_key_exists ? (char *)"YES" : (char *)"NO"));
-		proxy_error("%s : %s\n" , ssl_cert_rp, (ssl_cert_exists ? (char *)"YES" : (char *)"NO"));
-		proxy_error("%s : %s\n" , ssl_ca_rp, (ssl_ca_exists ? (char *)"YES" : (char *)"NO"));
+		proxy_error("%s : %s\n" , ssl_key_rp, (ssl_key_present ? (char *)"YES" : (char *)"NO"));
+		proxy_error("%s : %s\n" , ssl_cert_rp, (ssl_cert_present ? (char *)"YES" : (char *)"NO"));
+		proxy_error("%s : %s\n" , ssl_ca_rp, (ssl_ca_present ? (char *)"YES" : (char *)"NO"));
 
 		if (bootstrap == true) {
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+			exit(EXIT_SUCCESS); 
 		} else {
-			msg = "RELOAD TLS failed: " + std::to_string(nfiles) + " TLS files are present. Expected: 3";
+			msg = "RELOAD TLS failed: " + std::to_string(ssl_file_count) + " TLS files are present. Expected: 3";
 			return 1;
 		}
 	}
 
-	if (bootstrap == true && nfiles == 0) {
+	if (bootstrap == true && ssl_file_count == 0) {
 		proxy_info("No SSL keys/certificates found in datadir (%s). Generating new keys/certificates.\n", GloVars.datadir);
-		if ((pkeyp == NULL) || (*pkeyp == NULL)) {
-			if ((pk = EVP_PKEY_new()) == NULL) {
-				proxy_error("Unable to run EVP_PKEY_new()\n");
-				exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-			}
-		} else
-			pk = *pkeyp;
 
-		rsa = RSA_new();
-
-		if (!rsa) {
-			proxy_error("Unable to run RSA_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+		if (*pkeyp != nullptr) {
+			EVP_PKEY_free(*pkeyp);
+			*pkeyp = nullptr;
 		}
-		BIGNUM *e= BN_new();
-		if (!e) {
-			proxy_error("Unable to run BN_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
-		if (!BN_set_word(e, RSA_F4) || !RSA_generate_key_ex(rsa, bits, e, NULL)) {
-			RSA_free(rsa);
-			BN_free(e);
-			proxy_error("Unable to run BN_new()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
-		}
-		BN_free(e);
+		/* @note: Based off of OpenSSL3.0 manual implementation details here: https://www.openssl.org/docs/man3.0/man7/EVP_PKEY-RSA.html */
+		OSSL_PARAM params[3];
+		unsigned int primes = 2;
+		EVP_PKEY_CTX* pk_ctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
 
-
-		write_rsa_key(ssl_key_fp, rsa);
-
-		if (!EVP_PKEY_assign_RSA(pk, rsa)) {
-			proxy_error("Unable to run EVP_PKEY_assign_RSA()\n");
-			exit(EXIT_SUCCESS); // we exit gracefully to avoid being restarted
+		if (!pk_ctx) {
+			proxy_error("Could not initialize RSA PKEY Context:  EVP_PKEY_CTX_new_from_name() for 'RSA'\n");
+			exit(EXIT_SUCCESS);
 		}
+
+		int rc = EVP_PKEY_keygen_init(pk_ctx);
+
+		if (rc != 1) {
+			proxy_error("Could not initialize RSA Keygen: EVP_PKEY_keygen_init()\n");
+			exit(EXIT_SUCCESS);
+		}
+
+		params[0] = OSSL_PARAM_construct_uint("bits", &bits);
+		params[1] = OSSL_PARAM_construct_uint("primes", &primes);
+		params[2] = OSSL_PARAM_construct_end();
+		rc = EVP_PKEY_CTX_set_params(pk_ctx, params);
+
+		if (rc != 1) {
+			proxy_error("Could not set Keygen Parameters: EVP_PKEY_CTX_set_params()\n");
+			exit(EXIT_SUCCESS);
+		}
+
+		rc = EVP_PKEY_generate(pk_ctx, &pk);
+
+		if (rc != 1) {
+			proxy_error("Could not generate key: EVP_PKEY_generate()\n");
+			exit(EXIT_SUCCESS);
+		}
+		EVP_PKEY_CTX_free(pk_ctx);
+
+		write_rsa_key(ssl_key_fp, pk);
+
 		time_t t = time(NULL);
 		x1 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_CA_Certificate", t, 3650, NULL, NULL);
 		write_x509(ssl_ca_fp, x1);
 		x2 = generate_x509(pk, (const unsigned char *)"ProxySQL_Auto_Generated_Server_Certificate", t, 3650, x1, pk);
 		write_x509(ssl_cert_fp, x2);
-
-		rsa = NULL;
 	} else {
 		proxy_info("SSL keys/certificates found in datadir (%s): loading them.\n", GloVars.datadir);
 		if (bootstrap == true) {
@@ -435,7 +401,7 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 
 		// We set the locations for the certificates to be used for
 		// verifications purposes.
-		if (!SSL_CTX_load_verify_locations(GloVars.global.ssl_ctx, ssl_ca_fp, ssl_ca_fp)) {
+		if (!SSL_CTX_load_verify_locations(GloVars.global.ssl_ctx, ssl_ca_fp.c_str(), ssl_ca_fp.c_str())) {
 			proxy_error("Unable to load CA certificates location for verification. Shutting down\n");
 			exit(EXIT_SUCCESS); // we exit gracefully to not be restarted
 		}
@@ -447,7 +413,7 @@ int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg) {
 				if (SSL_CTX_add_extra_chain_cert(GloVars.global.tmp_ssl_ctx, x509ca) == 1) { // 1 on success
 					if (SSL_CTX_use_PrivateKey(GloVars.global.tmp_ssl_ctx, pkey) == 1) { // 1 on success
 						if (SSL_CTX_check_private_key(GloVars.global.tmp_ssl_ctx) == 1) { // 1 on success
-							if (SSL_CTX_load_verify_locations(GloVars.global.tmp_ssl_ctx, ssl_ca_fp, ssl_ca_fp) == 1) { // 1 on success
+							if (SSL_CTX_load_verify_locations(GloVars.global.tmp_ssl_ctx, ssl_ca_fp.c_str(), ssl_ca_fp.c_str()) == 1) { // 1 on success
 
 							// take the mutex
 							std::lock_guard<std::mutex> lock(GloVars.global.ssl_mutex);
