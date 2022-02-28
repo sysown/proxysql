@@ -2607,6 +2607,7 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
 		proxy_error("Error on read from mysql_servers : %s\n", error);
 	} else {
 		if (resultset != nullptr) {
+			delete this->mysql_servers_to_monitor;
 			this->mysql_servers_to_monitor = resultset;
 		}
 	}
