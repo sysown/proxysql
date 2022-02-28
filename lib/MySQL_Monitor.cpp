@@ -844,7 +844,7 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 };
 
 void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
-	pthread_mutex_lock(&this->mysql_servers_mutex);
+	pthread_mutex_lock(&GloMyMon->mysql_servers_mutex);
 
 	if (resultset != nullptr) {
 		int rc = 0;
@@ -904,7 +904,7 @@ void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
 		(*proxy_sqlite3_finalize)(statement32);
 	}
 
-	pthread_mutex_unlock(&this->mysql_servers_mutex);
+	pthread_mutex_unlock(&GloMyMon->mysql_servers_mutex);
 }
 
 void * monitor_connect_thread(void *arg) {
