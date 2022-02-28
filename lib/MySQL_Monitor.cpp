@@ -695,6 +695,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	Galera_Hosts_resultset=NULL;
 
 	pthread_mutex_init(&aws_aurora_mutex,NULL);
+	pthread_mutex_init(&mysql_servers_mutex,NULL);
 	AWS_Aurora_Hosts_resultset=NULL;
 	AWS_Aurora_Hosts_resultset_checksum = 0;
 	shutdown=false;
