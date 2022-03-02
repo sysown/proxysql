@@ -3135,12 +3135,13 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
 		if (stmt_global_id == 0) {
-			proxy_error("Could not execute statement, global id not found. Client statement id is %d", client_stmt_id);
+			proxy_error("Could not execute statement, global id not found. Client statement id is %d. Client will be disconnected.", client_stmt_id);
 			l_free(pkt.size,pkt.ptr);
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			client_myds->myprot.generate_pkt_ERR(true, nullptr, nullptr, 1, 1243, (char*)"28000", (char*)"Prepared statement not found", true);
 			client_myds->DSS=STATE_SLEEP;
 			status=WAITING_CLIENT_DATA;
+			client_myds->destroy_MySQL_Connection_From_Pool(true);
 			return;
 		}
 		CurrentQuery.stmt_global_id=stmt_global_id;
