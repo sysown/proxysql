@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
 
 		// Wait long enough for monitor connect/ping, then check the status
 		sleep(wait_sec);
-		string select_server_query = "SELECT status FROM runtime_mysql_servers WHERE hostgroup_id" + to_string(prev_hostgroup_id);
+		string select_server_query = "SELECT status FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(prev_hostgroup_id);
 		select_server_query += " AND hostname='" + invalid_hostname + "' AND port=" + to_string(prev_port);
 		MYSQL_QUERY(proxysql_admin, select_server_query.c_str());
 		result = mysql_store_result(proxysql_admin);
@@ -149,7 +149,7 @@ int main(int argc, char** argv) {
 		// @TODO: Should this check the ping log, error should be like 'Access denied for user%'?
 
 		// Check server status, it should still be ONLINE
-		string select_server_query = "SELECT status FROM runtime_mysql_servers WHERE hostgroup_id" + to_string(prev_hostgroup_id);
+		string select_server_query = "SELECT status FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(prev_hostgroup_id);
 		select_server_query += " AND hostname='" + prev_hostname + "' AND port=" + to_string(prev_port);
 		MYSQL_QUERY(proxysql_admin, select_server_query.c_str());
 		result = mysql_store_result(proxysql_admin);
@@ -206,7 +206,7 @@ int main(int argc, char** argv) {
 		// @TODO: Should log be checked? A 'Your password has expired' error should have occurred
 
 		// Check server status, should still be ONLINE
-		string select_server_query = "SELECT status FROM runtime_mysql_servers WHERE hostgroup_id" + to_string(prev_hostgroup_id);
+		string select_server_query = "SELECT status FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(prev_hostgroup_id);
 		select_server_query += " AND hostname='" + prev_hostname + "' AND port=" + to_string(prev_port);
 		MYSQL_QUERY(proxysql_admin, select_server_query.c_str());
 		result = mysql_store_result(proxysql_admin);
@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
 		// @TODO: Should log be checked? A "User ... has exceeded ... 'max_user_connections'" error should have occurred.
 
 		// @TODO: Check the status of the server, it should still be ONLINE
-		string select_server_query = "SELECT status FROM runtime_mysql_servers WHERE hostgroup_id" + to_string(prev_hostgroup_id);
+		string select_server_query = "SELECT status FROM runtime_mysql_servers WHERE hostgroup_id=" + to_string(prev_hostgroup_id);
 		select_server_query += " AND hostname='" + prev_hostname + "' AND port=" + to_string(prev_port);
 		MYSQL_QUERY(proxysql_admin, select_server_query.c_str());
 		result = mysql_store_result(proxysql_admin);
