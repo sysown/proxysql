@@ -4,8 +4,15 @@ set -eu
 echo "==> Build environment:"
 env
 
-ARCH=$PROXYSQL_BUILD_ARCH
-echo "==> ${ARCH} architecture detected for package"
+ARCH=$(dpkg --print-architecture)
+echo "==> '${ARCH}' architecture detected for package"
+
+DIST=$(source /etc/os-release; echo ${ID%%[-._ ]*}${VERSION%%[-._ ]*})
+echo "==> '${DIST}' distro detected for package"
+
+echo -e "==> C compiler: ${CC} -> $(readlink -e $(which ${CC}))\n$(${CC} --version)"
+echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(which ${CXX}))\n$(${CXX} --version)"
+#echo -e "==> linker version:\n$ ${LD} -> $(readlink -e $(which ${LD}))\n$(${LD} --version)"
 
 echo "==> Cleaning"
 # Delete package if exists
@@ -63,8 +70,8 @@ sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" /opt/proxysql/proxysql.ctl
 sed -i "s/PKG_ARCH/${ARCH}/g" /opt/proxysql/proxysql.ctl
 cp /opt/proxysql/src/proxysql /opt/proxysql/
 equivs-build proxysql.ctl
-mv "/opt/proxysql/proxysql_${CURVER}_$ARCH.deb" "./binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.deb"
-cp "/opt/proxysql/src/proxysql.sha1" "/opt/proxysql/binaries/proxysql_${CURVER}-${PKG_RELEASE}_$ARCH.id-hash"
+mv "/opt/proxysql/proxysql_${CURVER}_${ARCH}.deb" "./binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb"
+cp "/opt/proxysql/src/proxysql.sha1" "/opt/proxysql/binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-hash"
 # Cleanup current build
 rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql
 exit 0
