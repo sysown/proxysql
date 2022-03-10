@@ -4,12 +4,19 @@ set -eu
 echo "==> Build environment:"
 env
 
-ARCH=$PROXYSQL_BUILD_ARCH
-echo "==> $ARCH architecture detected for package"
+ARCH=$(rpm --eval '%{_arch}')
+echo "==> '${ARCH}' architecture detected for package"
+
+DIST=$(source /etc/os-release; echo ${ID%%[-._ ]*}${VERSION%%[-._ ]*})
+echo "==> '${DIST}' distro detected for package"
+
+#echo -e "==> C compiler: ${CC} -> $(readlink -e $(which ${CC}))\n$(${CC} --version)"
+#echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(which ${CXX}))\n$(${CXX} --version)"
+#echo -e "==> linker version:\n$ ${LD} -> $(readlink -e $(which ${LD}))\n$(${LD} --version)"
 
 echo "==> Cleaning"
 # Delete package if exists
-rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm || true
+rm -f /opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.rpm || true
 # Cleanup relic directories from a previously failed build
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} || true
 
@@ -48,8 +55,9 @@ tar czvf "proxysql-${CURVER}.tar.gz" proxysql-${CURVER}
 mkdir -p /root/rpmbuild/{RPMS,SRPMS,BUILD,SOURCES,SPECS,tmp}
 chown -R root:root /root/rpmbuild/SPECS
 mv "/opt/proxysql/proxysql-${CURVER}.tar.gz" /root/rpmbuild/SOURCES
+# build package
 cd /root/rpmbuild && rpmbuild -ba SPECS/proxysql.spec --define "version ${CURVER}"
-cp "/root/rpmbuild/RPMS/$ARCH/proxysql-${CURVER}-1.$ARCH.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.$ARCH.rpm"
+cp "/root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm" "/opt/proxysql/binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.rpm"
 # get SHA1 of the packaged executable
 mkdir -p /opt/proxysql/pkgroot/tmp
 pushd /opt/proxysql/pkgroot
@@ -57,5 +65,5 @@ rpm2cpio /root/rpmbuild/RPMS/${ARCH}/proxysql-${CURVER}-1.${ARCH}.rpm | cpio -iu
 sha1sum tmp/proxysql | sed 's|tmp/||' | tee tmp/proxysql.sha1
 cp tmp/proxysql.sha1 ../binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.id-hash
 popd
-# Cleanup current build
+# cleanup
 rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} ./pkgroot
