@@ -1,0 +1,16 @@
+@@ -3999,13 +3999,13 @@
+         (val->x.time_value.neg ? -1 : 1);
+       break;
+     case DYN_COL_DATE:
+-      *ll= (val->x.time_value.year * 10000 +
++      *ll= ((long) val->x.time_value.year * 10000 +
+             val->x.time_value.month * 100 +
+             val->x.time_value.day) *
+         (val->x.time_value.neg ? -1 : 1);
+       break;
+     case DYN_COL_TIME:
+-      *ll= (val->x.time_value.hour * 10000 +
++      *ll= ((long) val->x.time_value.hour * 10000 +
+             val->x.time_value.minute * 100 +
+             val->x.time_value.second) *
+         (val->x.time_value.neg ? -1 : 1);
