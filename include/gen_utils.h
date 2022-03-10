@@ -88,7 +88,7 @@ class PtrArray {
 	void * remove_index(unsigned int i) {
 		void *r=pdata[i];
 		if (i != (len-1)) {
-			memmove(pdata+(i)*sizeof(void *),pdata+(i+1)*sizeof(void *),(len-i-1)*sizeof(void *));
+			memmove((void **)pdata+i,(void **)pdata+i+1,(len-i-1)*sizeof(void *));
 		}
 		len--;
 		if ( ( len>MIN_ARRAY_LEN ) && ( size > len*MIN_ARRAY_DELETE_RATIO ) ) {
