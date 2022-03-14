@@ -6380,7 +6380,8 @@ __exit_set_destination_hostgroup:
 			if (current_hostgroup != locked_on_hostgroup) {
 				client_myds->DSS=STATE_QUERY_SENT_NET;
 				char buf[140];
-				sprintf(buf,"ProxySQL Error: connection is locked to hostgroup %d but trying to reach hostgroup %d", locked_on_hostgroup, current_hostgroup);
+				sprintf(buf, "ProxySQL Error: connection (session_id: %u) is locked to hostgroup %d but trying to reach hostgroup %d",
+					thread_session_id, locked_on_hostgroup, current_hostgroup);
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,9006,(char *)"Y0000",buf);
 				thread->status_variables.stvar[st_var_hostgroup_locked_queries]++;
 				RequestEnd(NULL);
@@ -7358,7 +7359,8 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 				proxy_info("Setting lock_hostgroup for SET query: %s\n", nqn.c_str());
 			} else {
 				if (client_myds && client_myds->addr.addr) {
-					proxy_warning("Unable to parse unknown SET query from client %s:%d. Setting lock_hostgroup. Please report a bug for future enhancements:%s\n", client_myds->addr.addr, client_myds->addr.port, nqn.c_str());
+					proxy_warning("Unable to parse unknown SET query from client %s:%d in session %d. Setting lock_hostgroup. Please report a bug for future enhancements:%s\n",
+						client_myds->addr.addr, client_myds->addr.port, thread_session_id, nqn.c_str());
 				} else {
 					proxy_warning("Unable to parse unknown SET query. Setting lock_hostgroup. Please report a bug for future enhancements:%s\n", nqn.c_str());
 				}
