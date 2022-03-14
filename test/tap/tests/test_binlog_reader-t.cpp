@@ -91,7 +91,7 @@ int perform_update(MYSQL* proxysql_mysql, uint32_t rows) {
 	return EXIT_SUCCESS;
 }
 
-const double MAX_FAILURE_PCT = 5.0;
+const double MAX_FAILURE_PCT = 15.0;
 const uint32_t NUM_ROWS = 3000;
 const uint32_t NUM_CHECKS = 500;
 
