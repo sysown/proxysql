@@ -2137,7 +2137,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 				}
 				if (gtid_is) {
 					gtid_is->active = true;
-				} else {
+				} else if (mysrvc->status != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 					// we didn't find it. Create it
 					/*
 					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
