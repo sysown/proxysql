@@ -572,7 +572,10 @@ std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 			gtid_set = gtid_set + s2;
 		}
 	}
-	gtid_set.pop_back();
+	// Extract latest comma only in case 'gtid_executed' isn't empty
+	if (gtid_set.empty() == false) {
+		gtid_set.pop_back();
+	}
 	return gtid_set;
 }
 
