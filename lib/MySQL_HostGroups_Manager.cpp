@@ -2740,6 +2740,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	unsigned int sum=0;
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
+	static time_t last_hg_log = 0;
 #ifdef TEST_AURORA
 	unsigned long long a1 = array_mysrvc_total/10000;
 	array_mysrvc_total += l;
@@ -2889,7 +2890,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
-			static time_t last_hg_log = 0;
 			time_t t;
 			t=time(NULL);
 			int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
@@ -3049,6 +3049,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #endif // TEST_AURORA
 				return mysrvc;
 			}
+		}
+	} else {
+		time_t t = time(NULL);
+
+		if (t - last_hg_log > 1) {
+			last_hg_log = time(NULL);
+			proxy_error("Hostgroup %u has no servers available!\n", hid);
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
