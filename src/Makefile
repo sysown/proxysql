@@ -1,8 +1,7 @@
 ifndef GIT_VERSION
-GIT_VERSION := $(shell git describe --long --abbrev=7)
+	GIT_VERSION := $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-#$(error GIT_VERSION is not set)
-GIT_VERSION := 2.2.0
+	$(error GIT_VERSION is not set)
 endif
 endif
 
