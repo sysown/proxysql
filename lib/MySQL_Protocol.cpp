@@ -1,6 +1,8 @@
 #include <openssl/rand.h>
 #include "proxysql.h"
 #include "cpp.h"
+#include "re2/re2.h"
+#include "re2/regexp.h"
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
