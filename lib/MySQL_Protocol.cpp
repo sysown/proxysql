@@ -2233,7 +2233,13 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 				ret = false;
 				std::string spiffe_val = j["spiffe_id"].get<std::string>();
 				if ((*myds)->x509_subject_alt_name) {
-					if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
+					if (spiffe_val.rfind("!", 0) == 0 && spiffe_val.size() > 1) {
+						string str_spiffe_regex { spiffe_val.substr(1) };
+						re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
+						re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
+
+						ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name, subject_alt_regex);
+					} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
 						if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
 							ret = true;
 						}
