@@ -112,10 +112,16 @@ endif
 MYCXXFLAGS=-std=c++11
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS+= -fuse-ld=lld
+	# Enabled over-aligned new support for MySQL_Thread
+	MYCXXFLAGS+= -faligned-new
+else
+GCCVERSION=$(shell echo "7\n$$(gcc -dumpversion)" | sort -V | head -1)
+ifeq ($(GCCVERSION),7)
+	# Enabled over-aligned new support for MySQL_Thread for GCC > v7
+	MYCXXFLAGS+= -faligned-new
+endif
 endif
 
-# Enabled over-aligned new support for MySQL_Thread
-MYCXXFLAGS+= -faligned-new
 MYCXXFLAGS+= $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
 
 ifeq ($(WITHGCOVVAR),1)

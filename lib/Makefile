@@ -118,7 +118,19 @@ ENABLE_EPOLL=-DENABLE_EPOLL
 endif
 
 MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS=-std=c++11 -faligned-new $(MYCFLAGS) $(PSQLCH) $(ENABLE_EPOLL)
+
+MYCXXFLAGS=-std=c++11
+ifeq ($(CXX),clang++)
+	# Enabled over-aligned new support for MySQL_Thread for CLANG
+	MYCXXFLAGS+= -faligned-new
+else
+GCCVERSION=$(shell echo "7\n$$(gcc -dumpversion)" | sort -V | head -1)
+ifeq ($(GCCVERSION),7)
+	# Enabled over-aligned new support for MySQL_Thread for GCC > v7
+	MYCXXFLAGS+= -faligned-new
+endif
+endif
+MYCXXFLAGS+= $(MYCFLAGS) $(PSQLCH) $(ENABLE_EPOLL)
 
 default: libproxysql.a
 .PHONY: default
