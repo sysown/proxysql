@@ -262,7 +262,7 @@ static uint8_t mysql_encode_length(uint64_t len, char *hd) {
 
 #ifdef DEBUG
 void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
-	if (strlen(attributes)) {
+	if (attributes!=NULL && strlen(attributes)) {
 		json j = nlohmann::json::parse(attributes);
 		auto spiffe_id = j.find("spiffe_id");
 		if (spiffe_id != j.end()) {
