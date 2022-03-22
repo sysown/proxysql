@@ -6,6 +6,11 @@
  *   This file is an extension of ../../set_parser_test/setparsertest.cpp
  */
 
+// NOTE: Avoids the definition of 'global_variables glovars' in 'proxysql_structs.h'
+#define PROXYSQL_EXTERN
+// NOTE: Avoids definition of 'proxy_sqlite3_*' functions as 'extern'
+#define MAIN_PROXY_SQLITE3
+
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "util/test.h"
@@ -30,6 +35,7 @@
  */
 #include "openssl/ssl.h"
 #include "proxysql_structs.h"
+#include "sqlite3db.h"
 #include "MySQL_LDAP_Authentication.hpp"
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
