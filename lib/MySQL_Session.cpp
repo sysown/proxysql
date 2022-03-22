@@ -5639,7 +5639,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					if (it->second.size() < 1 || it->second.size() > 2) {
 						// error not enough arguments
 						string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-						proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+						// PMC-10002: A query has failed to be parsed. This can be due a incorrect query or
+						// due to ProxySQL not being able to properly parse it. In case the query is correct a
+						// bug report should be filed including the offending query.
+						proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
 						unable_to_parse_set_statement(lock_hostgroup);
 						return false;
@@ -5655,7 +5658,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							( strcasecmp(value1.c_str(),(char *)"IFNULL") == 0 )
 						) {
 							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-							proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+							proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
@@ -6087,7 +6090,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */" , CurrentQuery.QueryLength);
 							if (kq != 0) {
 								string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-								proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+								proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 								return false;
 							}
 						}
