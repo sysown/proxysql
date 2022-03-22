@@ -100,7 +100,7 @@ int pkt_end(unsigned char *, unsigned int);
 int pkt_com_query(unsigned char *, unsigned int);
 enum MySQL_response_type mysql_response(unsigned char *, unsigned int);
 
-void proxy_error_func(const char *, ...);
+void proxy_error_func(int errcode, const char *, ...);
 void print_backtrace(void);
 void proxy_info_(const char* msg, ...);
 
