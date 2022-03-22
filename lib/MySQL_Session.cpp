@@ -3447,7 +3447,7 @@ void MySQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
 			return;
 		}
 	}
-	proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+	proxy_error2(10001, "Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
 	if (thread) {
 		thread->status_variables.stvar[st_var_unexpected_packet]++;
 	}
@@ -3476,7 +3476,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 				sprintf(buf, "localhost");
 				break;
 		}
-		proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+		// PMC-10001: A unexpected packet has been received from client. This error has two potential causes:
+		//  * Bug: ProxySQL state machine wasn't in the correct state when a legitimate client packet was received.
+		//  * Client error: The client incorrectly sent a packet breaking MySQL protocol.
+		proxy_error2(10001, "Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
 	}
 }
 
