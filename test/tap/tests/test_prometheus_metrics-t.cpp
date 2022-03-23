@@ -18,6 +18,7 @@
 #include <mysql.h>
 #include <mysql/mysqld_error.h>
 
+#include "json.hpp"
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
@@ -270,6 +271,133 @@ void check_proxysql_version_info(const map<string, double>& prev_metrics, const 
 	}
 }
 
+pair<pair<string,string>,string::size_type> extract_next_tag(const string metric_id, string::size_type st_pos) {
+	string::size_type tag_eq_pos = metric_id.find("=\"", st_pos);
+	if (tag_eq_pos == string::npos) {
+		return { {}, string::npos };
+	}
+
+	string key { metric_id.substr(st_pos, tag_eq_pos - st_pos) };
+	string::size_type tag_val_st = tag_eq_pos + 2;
+	string::size_type tag_val_end = metric_id.find_first_of("\"", tag_val_st);
+	string val { metric_id.substr(tag_val_st, tag_val_end - tag_val_st) };
+
+	return { { key, val }, tag_val_end + 2 };
+}
+
+map<string,string> extract_metric_tags(const string metric_id) {
+	string::size_type tags_init_pos = metric_id.find('{');
+	if (tags_init_pos == std::string::npos) {
+		return {};
+	}
+
+	string::size_type tags_final_pos = metric_id.find_first_of('}', tags_init_pos);
+	if (tags_final_pos == std::string::npos) {
+		return {};
+	}
+
+	string metric_tags = metric_id.substr(tags_init_pos + 1, tags_final_pos - tags_init_pos - 1);
+	auto next_tag { extract_next_tag(metric_tags, 0) };
+	map<string,string> result {};
+
+	while (next_tag.second != string::npos) {
+		result.insert(next_tag.first);
+		next_tag = extract_next_tag(metric_tags, next_tag.second);
+	}
+
+	return result;
+}
+
+bool trigger_message_count_parse_failure(MYSQL*, MYSQL*, const CommandLine& cl) {
+	// Initialize ProxySQL connection
+	MYSQL* proxysql = mysql_init(NULL);
+	if (!proxysql) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+		return false;
+	}
+	// Connect to ProxySQL
+	if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+		return false;
+	}
+
+	int res = false;
+
+	int rc = mysql_query(proxysql, "SET NAMES");
+	if (rc != EXIT_FAILURE) {
+		diag(
+			"Invalid query 'SET NAMES' should have failed - ErrCode: %d, ErrMsg: %s",
+			mysql_errno(proxysql), mysql_error(proxysql)
+		);
+		res = false;
+	} else {
+		res = true;
+	}
+
+	mysql_close(proxysql);
+
+	return res;
+}
+
+#include <iostream>
+
+void check_message_count_parse_failure(const map<string, double>& prev_metrics, const map<string, double>& after_metrics) {
+	map<string,double>::const_iterator after_metric_it { after_metrics.end() };
+	map<string,double>::const_iterator prev_metric_it { prev_metrics.end() };
+
+	for (auto metric_key = after_metrics.begin(); metric_key != after_metrics.end(); metric_key++) {
+		if (metric_key->first.rfind("proxysql_message_count_total") == 0) {
+			after_metric_it = metric_key;
+		}
+	}
+	for (auto metric_key = prev_metrics.begin(); metric_key != prev_metrics.end(); metric_key++) {
+		if (metric_key->first.rfind("proxysql_message_count_total") == 0) {
+			prev_metric_it = metric_key;
+		}
+	}
+
+	// NOTE: Because this metric is dynamic, we can only be sure that is present after the operation.
+	bool metric_found = after_metric_it != after_metrics.end();
+	ok(metric_found, "Metric was present in output from 'SHOW PROMETHEUS METRICS'");
+
+	if (metric_found) {
+		// NOTE: Fallback to zero in case of first time being triggered
+		double prev_metric_val = 0;
+		if (prev_metric_it != prev_metrics.end()) {
+			prev_metric_val = prev_metric_it->second;
+		}
+		double after_metric_val = after_metric_it->second;
+		bool is_updated = fabs(prev_metric_val + 1 - after_metric_val) < 0.1;
+
+		// Check metric tags
+		auto metric_tags = extract_metric_tags(after_metric_it->first);
+		auto message_id_it = metric_tags.find("message_id");
+		auto filename_it = metric_tags.find("filename");
+		auto line_it = metric_tags.find("line");
+		auto func_it = metric_tags.find("func");
+
+		bool all_tags_present =
+			message_id_it != metric_tags.end() && filename_it != metric_tags.end() &&
+			line_it != metric_tags.end() && func_it != metric_tags.end();
+		bool correct_tag_values = false;
+
+		if (all_tags_present == true) {
+			correct_tag_values =
+				message_id_it->second == string {"10002"} && line_it->second != "0" &&
+				filename_it->second == "MySQL_Session.cpp" &&
+				func_it->second == "handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo";
+		}
+
+		ok(
+			is_updated && all_tags_present && correct_tag_values,
+			"Metric has a proper tag values and updated value: { old_value: '%lf', new_value: '%lf', tags: '%s' }",
+			prev_metric_val, after_metric_val, nlohmann::json(metric_tags).dump().c_str()
+		);
+	} else {
+		ok(false, "Metric has a properly updated value.");
+	}
+}
+
 /**
  * @brief Map of test identifier and pair functions holding the metrics tests:
  *   - First function of the pair uses an open connection to ProxySQL and to ProxySQL Admin to perform
@@ -277,17 +405,21 @@ void check_proxysql_version_info(const map<string, double>& prev_metrics, const 
  *   - Second function performs the check to verify that the metric have been incremented properly.
  *     This function should execute **one** 'ok(...)' inside when the values have been properly checked.
  */
-const map<
+const vector<pair<
 	string,
 	pair<
 		function<bool(MYSQL*, MYSQL*, const CommandLine&)>,
 		function<void(const map<string, double>&, const map<string, double>&)>
 	>
-> metric_tests {
+>> metric_tests {
 	{ "proxysql_myhgm_auto_increment_multiplex_total", { trigger_auto_increment_delay_multiplex_metric, check_auto_increment_delay_multiplex_metric } },
 	{ "proxysql_access_denied_wrong_password_total", { trigger_access_denied_wrong_password_total, check_access_denied_wrong_password_total } },
 	{ "proxysql_com_rollback_total", { trigger_transaction_rollback_total, check_transaction_rollback_total } },
-	{ "proxysql_version_info", { get_proxysql_version_info, check_proxysql_version_info } }
+	{ "proxysql_version_info", { get_proxysql_version_info, check_proxysql_version_info } },
+	// Checks metric creation and initial value
+	{ "proxysql_message_count_parse_failure_init", { trigger_message_count_parse_failure, check_message_count_parse_failure } },
+	// Checks metric increment
+	{ "proxysql_message_count_parse_failure_inc", { trigger_message_count_parse_failure, check_message_count_parse_failure } },
 };
 
 int main(int argc, char** argv) {
