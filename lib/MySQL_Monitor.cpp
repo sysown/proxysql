@@ -2513,6 +2513,7 @@ __sleep_monitor_connect_loop:
 
 
 void * MySQL_Monitor::monitor_ping() {
+	using std::string;
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
@@ -2571,8 +2572,7 @@ void * MySQL_Monitor::monitor_ping() {
 					usleep(us);
 				}
 			}
-			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-				SQLite3_row *r=*it;
+			for (auto* r : resultset->rows) {
 				MySQL_Monitor_State_Data *mmsd = new MySQL_Monitor_State_Data(r->fields[0],atoi(r->fields[1]), NULL, atoi(r->fields[2]));
 				mmsd->mondb=monitordb;
 				WorkItem* item;
@@ -2609,24 +2609,32 @@ __end_monitor_ping_loop:
 			delete resultset;
 			resultset=NULL;
 		}
+		{
+		// The following ping errors should not be shunned
+		const std::vector<string> acceptable_ping_errors { "Access denied for user%", "ProxySQL Error: Access denied for user%", "Your password has expired%",  "User % has exceeded the%max_user_connections%" };
+		string ping_error_where_clauses;
+
+		for (auto& ping_error : acceptable_ping_errors)
+			ping_error_where_clauses += " AND b.ping_error NOT LIKE '" + ping_error + "'";
 
 		// now it is time to shun all problematic hosts
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NOT NULL AND b.ping_error NOT LIKE 'Access denied for user\%'";
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		string server_ping_join_query = "SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NOT NULL";
+		server_ping_join_query += ping_error_where_clauses;
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", server_ping_join_query.c_str());
 // we disable valgrind here. Probably a bug in SQLite3
 VALGRIND_DISABLE_ERROR_REPORTING;
-		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+		admindb->execute_statement(server_ping_join_query.c_str(), &error , &cols , &affected_rows , &resultset);
 VALGRIND_ENABLE_ERROR_REPORTING;
 		if (error) {
-			proxy_error("Error on %s : %s\n", query, error);
+			proxy_error("Error on %s : %s\n", server_ping_join_query.c_str(), error);
 		} else {
 			// get all addresses and ports
 			int i=0;
 			int j=0;
 			char **addresses=(char **)malloc(resultset->rows_count * sizeof(char *));
 			char **ports=(char **)malloc(resultset->rows_count * sizeof(char *));
-			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-				SQLite3_row *r=*it;
+
+			for (auto* r : resultset->rows) {
 				addresses[i]=strdup(r->fields[0]);
 				ports[i]=strdup(r->fields[1]);
 				i++;
@@ -2635,13 +2643,17 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 				delete resultset;
 				resultset=NULL;
 			}
-			char *new_query=NULL;
-			new_query=(char *)"SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='%s' AND port='%s' ORDER BY time_start_us DESC LIMIT %d) a WHERE ping_error IS NOT NULL AND ping_error NOT LIKE 'Access denied for user%%' AND ping_error NOT LIKE 'ProxySQL Error: Access denied for user%%' AND ping_error NOT LIKE 'Your password has expired.%%' GROUP BY hostname,port HAVING COUNT(*)=%d";
+
+			ping_error_where_clauses.clear();
+			for (auto& ping_error : acceptable_ping_errors)
+				ping_error_where_clauses += " AND ping_error NOT LIKE '" + ping_error + "'";
+
 			for (j=0;j<i;j++) {
-				char *buff=(char *)malloc(strlen(new_query)+strlen(addresses[j])+strlen(ports[j])+16);
 				int max_failures=mysql_thread___monitor_ping_max_failures;
-				sprintf(buff,new_query,addresses[j],ports[j],max_failures,max_failures);
-				monitordb->execute_statement(buff, &error , &cols , &affected_rows , &resultset);
+				string ping_log_query="SELECT 1 FROM (SELECT hostname,port,ping_error FROM mysql_server_ping_log WHERE hostname='" + string(addresses[j]) + "' and port='" + ports[j] + "'  ORDER BY time_start_us DESC LIMIT " + std::to_string(max_failures) + ") a WHERE ping_error IS NOT NULL";
+				ping_log_query += ping_error_where_clauses;
+				ping_log_query += " GROUP BY hostname,port HAVING COUNT(*)=" + std::to_string(max_failures);
+				monitordb->execute_statement(ping_log_query.c_str(), &error , &cols , &affected_rows , &resultset);
 				if (!error) {
 					if (resultset) {
 						if (resultset->rows_count) {
@@ -2656,9 +2668,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 						resultset=NULL;
 					}
 				} else {
-					proxy_error("Error on %s : %s\n", query, error);
+					proxy_error("Error on %s : %s\n", ping_log_query.c_str(), error);
 				}
-				free(buff);
 			}
 
 			while (i) { // now free all the addresses/ports
@@ -2669,7 +2680,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			free(addresses);
 			free(ports);
 		}
-
+		}
 
 		// now it is time to update current_lantency_ms
 		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE status NOT LIKE 'OFFLINE\%' AND b.ping_error IS NULL";
