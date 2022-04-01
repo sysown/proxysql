@@ -3818,7 +3818,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 	return result;
 }
 
-void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(
+	const std::string& endpoint_id, const std::map<std::string, std::string>& labels, std::map<std::string,
+	prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx
+) {
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		const auto& cur_val = counter_id->second->Value();
@@ -3834,7 +3837,10 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::stri
 	}
 }
 
-void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(
+	const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
+	std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx
+) {
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		counter_id->second->Set(value);
@@ -3917,20 +3923,15 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	}
 
 	// Remove the non-present servers for the gauge metrics
-	vector<string> keys {};
-	vector<string> f_keys {};
+	vector<string> missing_server_keys {};
 
 	for (const auto& key : status.p_connection_pool_status_map) {
-		keys.push_back(key.first);
-	}
-
-	for (const auto& key : keys) {
-		if (std::find(cur_servers_ids.begin(), cur_servers_ids.end(), key) == cur_servers_ids.end()) {
-			f_keys.push_back(key);
+		if (std::find(cur_servers_ids.begin(), cur_servers_ids.end(), key.first) == cur_servers_ids.end()) {
+			missing_server_keys.push_back(key.first);
 		}
 	}
 
-	for (const auto& key : f_keys) {
+	for (const auto& key : missing_server_keys) {
 		auto gauge = status.p_connection_pool_status_map[key];
 		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_status]->Remove(gauge);
 		status.p_connection_pool_status_map.erase(key);
