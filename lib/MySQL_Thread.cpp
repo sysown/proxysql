@@ -3892,7 +3892,7 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___ssl_p2s_ca) free(mysql_thread___ssl_p2s_ca);
 	mysql_thread___ssl_p2s_ca=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
 	if (mysql_thread___ssl_p2s_capath) free(mysql_thread___ssl_p2s_capath);
-	mysql_thread___ssl_p2s_capath=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
+	mysql_thread___ssl_p2s_capath=GloMTH->get_variable_string((char *)"ssl_p2s_capath");
 	if (mysql_thread___ssl_p2s_cert) free(mysql_thread___ssl_p2s_cert);
 	mysql_thread___ssl_p2s_cert=GloMTH->get_variable_string((char *)"ssl_p2s_cert");
 	if (mysql_thread___ssl_p2s_key) free(mysql_thread___ssl_p2s_key);
