@@ -52,7 +52,7 @@ cp ../src/proxysql ./
 cp -r ../etc ./etc
 cp -r ../tools ./tools
 cp -r ../systemd ./systemd
-equivs-build proxysql.ctl
+DEB_BUILD_OPTIONS=nostrip equivs-build proxysql.ctl
 cp ./proxysql_${CURVER}_${ARCH}.deb ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
 # get SHA1 of the packaged executable
 ar -p proxysql_${CURVER}_${ARCH}.deb data.tar.xz | unxz -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
