@@ -19,9 +19,7 @@
 #include <utility>
 #include <iostream>
 
-#include <curses.h>
 #include <unistd.h>
-#include <poll.h>
 #include <string.h>
 #include <sys/resource.h>
 
