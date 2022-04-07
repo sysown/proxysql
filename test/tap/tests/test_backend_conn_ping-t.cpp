@@ -430,7 +430,7 @@ int main(int, char**) {
 
 	diag("Configure 'MYSQL' infra servers...");
 	{
-		MYSQL_QUERY(proxy_admin, "SELECT hostgroup_id,hostname,port from mysql_servers");
+		MYSQL_QUERY(proxy_admin, "SELECT DISTINCT hostname, port FROM mysql_servers WHERE hostgroup_id IN (0,1)");
 		MYSQL_RES* my_servers_res = mysql_store_result(proxy_admin);
 		vector<mysql_res_row> servers_rows = extract_mysql_rows(my_servers_res);
 		mysql_free_result(my_servers_res);
@@ -444,7 +444,7 @@ int main(int, char**) {
 
 		for (const mysql_res_row& srv_row : servers_rows) {
 			srv_cfg old_srv_cfg {};
-			int cfg_res = change_mysql_cfg(cl, srv_row[1], srv_row[2], new_srv_cfg, old_srv_cfg);
+			int cfg_res = change_mysql_cfg(cl, srv_row[0], srv_row[1], new_srv_cfg, old_srv_cfg);
 
 			if (cfg_res != EXIT_SUCCESS) {
 				return EXIT_FAILURE;
@@ -502,7 +502,7 @@ int main(int, char**) {
 			const srv_cfg& old_srv_config = server_old_config.second;
 
 			srv_cfg _tmp_conf {};
-			int cfg_res = change_mysql_cfg(cl, res_row[1], res_row[2], old_srv_config, _tmp_conf);
+			int cfg_res = change_mysql_cfg(cl, res_row[0], res_row[1], old_srv_config, _tmp_conf);
 			if (cfg_res != EXIT_SUCCESS) {
 				return EXIT_FAILURE;
 			}
