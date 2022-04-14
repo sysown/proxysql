@@ -572,7 +572,10 @@ std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 			gtid_set = gtid_set + s2;
 		}
 	}
-	gtid_set.pop_back();
+	// Extract latest comma only in case 'gtid_executed' isn't empty
+	if (gtid_set.empty() == false) {
+		gtid_set.pop_back();
+	}
 	return gtid_set;
 }
 
@@ -2134,7 +2137,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 				}
 				if (gtid_is) {
 					gtid_is->active = true;
-				} else {
+				} else if (mysrvc->status != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 					// we didn't find it. Create it
 					/*
 					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
@@ -2898,9 +2901,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 			if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
 				last_hg_log = time(NULL);
-				proxy_error("Hostgroup %u has no servers available%s! Checking servers shunned for more than %u second%s\n", hid,
-				(max_connections_reached ? " or max_connections reached for all servers" : ""),
-				max_wait_sec, max_wait_sec == 1 ? "" : "s");
+
+				if (gtid_trxid) {
+					proxy_error("Hostgroup %u has no servers ready for GTID '%s:%d'. Waiting for replication...\n", hid, gtid_uuid, gtid_trxid);
+				} else {
+					proxy_error("Hostgroup %u has no servers available%s! Checking servers shunned for more than %u second%s\n", hid,
+						(max_connections_reached ? " or max_connections reached for all servers" : ""), max_wait_sec, max_wait_sec == 1 ? "" : "s");
+				}
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
