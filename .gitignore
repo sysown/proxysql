@@ -136,8 +136,7 @@ deps/pcre/pcre/
 
 # curl
 deps/curl/curl/
-deps/curl/curl-7.57.0/
-deps/curl/curl-7.77.0/
+deps/curl/curl-*/
 
 deps/libev/libev-4.24/
 
