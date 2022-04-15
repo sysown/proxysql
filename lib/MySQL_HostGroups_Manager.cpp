@@ -1419,6 +1419,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	gtid_ev_loop=NULL;
 	gtid_ev_timer=NULL;
 	gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
+	mysql_servers_to_monitor = NULL;
 
 	{
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -2070,6 +2071,11 @@ bool MySQL_HostGroups_Manager::commit() {
 	this->status.p_counter_array[p_hg_counter::servers_table_version]->Increment();
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
+
+	// NOTE: In order to guarantee the latest generated version, this should be kept after all the
+	// calls to 'generate_mysql_servers'.
+	update_table_mysql_servers_for_monitor(false);
+
 	wrunlock();
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
@@ -2582,6 +2588,36 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
 	return resultset;
+}
+
+void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock) {
+	if (lock) {
+		wrlock();
+	}
+
+	std::lock_guard<std::mutex> mysql_servers_lock(this->mysql_servers_to_monitor_mutex);
+
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	char* query = const_cast<char*>("SELECT hostname, port, status, use_ssl FROM mysql_servers WHERE status != 3 GROUP BY hostname, port");
+
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+
+	if (error != nullptr) {
+		proxy_error("Error on read from mysql_servers : %s\n", error);
+	} else {
+		if (resultset != nullptr) {
+			delete this->mysql_servers_to_monitor;
+			this->mysql_servers_to_monitor = resultset;
+		}
+	}
+
+	if (lock) {
+		wrunlock();
+	}
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_replication_hostgroups() {
@@ -7045,6 +7081,9 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 				generate_mysql_servers_table(&_rhid);
 				free(query);
 			}
+			// NOTE: Because 'commit' isn't called, we are required to update 'mysql_servers_for_monitor'.
+			// Also note that 'generate_mysql_servers' is previously called.
+			update_table_mysql_servers_for_monitor(false);
 			wrunlock();
 			// it is now time to build a new structure in Monitor
 			pthread_mutex_lock(&AWS_Aurora_Info_mutex);
