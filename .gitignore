@@ -160,6 +160,7 @@ deps/libssl/openssl-1.1.1d/
 deps/libssl/openssl-1.1.1g/
 deps/libssl/openssl-1.1.1j/
 deps/libssl/openssl-openssl-3.0.0/
+deps/libssl/openssl-openssl-3.0.2/
 
 #google coredumper
 deps/google-coredumper/google-coredumper/
