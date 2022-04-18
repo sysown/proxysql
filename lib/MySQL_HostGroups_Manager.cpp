@@ -3652,10 +3652,15 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				MySQL_Connection *mc=mscl->index(k);
 				// If the connection is idle ...
 				if (mc->last_time_used && mc->last_time_used < _max_last_time_used) {
-					oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
+					if (oldest_idle_connections.size() < num_conn) {
+						oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
+					} else if (num_conn != 0) {
+						auto last_elem_it = std::prev(oldest_idle_connections.end());
 
-					if (oldest_idle_connections.size() > num_conn && num_conn != 0) {
-						oldest_idle_connections.erase(std::prev(oldest_idle_connections.end()));
+						if (mc->last_time_used < last_elem_it->first) {
+							oldest_idle_connections.erase(last_elem_it);
+							oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
+						}
 					}
 				}
 			}
