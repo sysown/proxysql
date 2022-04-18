@@ -6727,7 +6727,6 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 		MYSQL *mysql=stmt->mysql;
 		// no result set
 		int myerrno=mysql_stmt_errno(stmt);
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerrno);
 		if (myerrno==0) {
 			unsigned int num_rows = mysql_affected_rows(stmt->mysql);
 			unsigned int nTrx=NumActiveTransactions();
@@ -6810,11 +6809,6 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			//client_myds->pkt_sid++;
 		} else {
 			// error
-			if (_myds) {
-				if (_myds->myconn) {
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, myerrno);
-				}
-			}
 			char sqlstate[10];
 			sprintf(sqlstate,"%s",mysql_sqlstate(mysql));
 			if (_myds && _myds->killed_at) { // see case #750
