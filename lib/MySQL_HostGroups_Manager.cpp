@@ -3669,6 +3669,9 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	int num_conn_current=0;
 	int j,k;
 	MyHGC* myhgc = NULL;
+	// Multimap holding the required info for accesing the oldest idle connections found.
+	std::multimap<uint64_t,std::pair<MySrvC*,int32_t>> oldest_idle_connections {};
+
 	for (int i=0; i<(int)MyHostGroups->len; i++) {
 		if (_hid == -1) {
 			// all hostgroups must be examined
@@ -3692,17 +3695,71 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				MySQL_Connection *mc=mscl->index(k);
 				// If the connection is idle ...
 				if (mc->last_time_used && mc->last_time_used < _max_last_time_used) {
-					//mc=(MySQL_Connection *)pa->remove_index_fast(k);
-					mc=mscl->remove(k);
-					mysrvc->ConnectionsUsed->add(mc);
-					k--;
-					conn_list[num_conn_current]=mc;
-					num_conn_current++;
-					if (num_conn_current>=num_conn) goto __exit_get_multiple_idle_connections;
+					if (oldest_idle_connections.size() < num_conn) {
+						oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
+					} else if (num_conn != 0) {
+						auto last_elem_it = std::prev(oldest_idle_connections.end());
+
+						if (mc->last_time_used < last_elem_it->first) {
+							oldest_idle_connections.erase(last_elem_it);
+							oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
+						}
+					}
 				}
 			}
 		}
 	}
+
+	// In order to extract the found connections, the following actions must be performed:
+	//
+	// 1. Filter the found connections by 'MySrvC'.
+	// 2. Order by indexes on 'ConnectionsFree' in desc order.
+	// 3. Move the conns from 'ConnectionsFree' into 'ConnectionsUsed'.
+	std::unordered_map<MySrvC*,vector<int>> mysrvcs_conns_idxs {};
+
+	// 1. Filter the connections by 'MySrvC'.
+	//
+	// We extract this for being able to later iterate through the obtained 'MySrvC' using the conn indexes.
+	for (const auto& conn_info : oldest_idle_connections) {
+		MySrvC* mysrvc = conn_info.second.first;
+		int32_t mc_idx = conn_info.second.second;
+		auto mysrcv_it = mysrvcs_conns_idxs.find(mysrvc);
+
+		if (mysrcv_it == mysrvcs_conns_idxs.end()) {
+			mysrvcs_conns_idxs.insert({ mysrvc, { mc_idx }});
+		} else {
+			mysrcv_it->second.push_back(mc_idx);
+		}
+	}
+
+	// 2. Order by indexes on FreeConns in desc order.
+	//
+	// Since the conns are stored in 'ConnectionsFree', which holds the conns in a 'PtrArray', and we plan
+	// to remove multiple connections using the pre-stored indexes. We need to reorder the indexes in 'desc'
+	// order, otherwise we could be trashing the array while consuming it. See 'PtrArray::remove_index_fast'.
+	for (auto& mysrvc_conns_idxs : mysrvcs_conns_idxs) {
+		std::sort(std::begin(mysrvc_conns_idxs.second), std::end(mysrvc_conns_idxs.second),  std::greater<int>());
+	}
+
+	// 3. Move the conns from 'ConnectionsFree' into 'ConnectionsUsed'.
+	for (auto& conn_info : mysrvcs_conns_idxs) {
+		MySrvC* mysrvc = conn_info.first;
+
+		for (const int conn_idx : conn_info.second) {
+			MySrvConnList* mscl = mysrvc->ConnectionsFree;
+			MySQL_Connection* mc = mscl->remove(conn_idx);
+			mysrvc->ConnectionsUsed->add(mc);
+
+			conn_list[num_conn_current] = mc;
+			num_conn_current++;
+
+			// Left here as a safeguard
+			if (num_conn_current >= num_conn) {
+				goto __exit_get_multiple_idle_connections;
+			}
+		}
+	}
+
 __exit_get_multiple_idle_connections:
 	status.myconnpoll_get_ping+=num_conn_current;
 	wrunlock();
