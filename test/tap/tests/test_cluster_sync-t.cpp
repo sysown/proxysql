@@ -30,6 +30,61 @@
 		} \
 	} while(0)
 
+using std::string;
+using std::vector;
+
+/**
+ * @brief Helper function to verify that the sync of a table (or variable) have been performed.
+ *
+ * @param r_proxy_admin An already opened connection to ProxySQL.
+ * @param queries Queries to be executed that should return a **non-zero** value after the sync has taken place.
+ * @param sync_timeout Timeout for the sync to happen.
+ *
+ * @return EXIT_SUCCESS in case of success, otherwise:
+ *  - '-1' if a query against Admin fails to be performed (failure is logged).
+ *  - '-2' if timeout expired without sync being completed.
+ */
+int sync_checker(MYSQL* r_proxy_admin, const vector<string>& queries, uint32_t sync_timeout) {
+	bool not_synced_query = false;
+	uint waited = 0;
+
+	while (waited < sync_timeout) {
+		not_synced_query = false;
+
+		// Check that all the entries have been synced
+		for (const auto& query : queries) {
+			int q_res = mysql_query(r_proxy_admin, query.c_str());
+			if (q_res != EXIT_SUCCESS) {
+				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(r_proxy_admin));
+				return -1;
+			}
+
+			MYSQL_RES* proxysql_servers_res = mysql_store_result(r_proxy_admin);
+			MYSQL_ROW row = mysql_fetch_row(proxysql_servers_res);
+			int row_value = atoi(row[0]);
+			mysql_free_result(proxysql_servers_res);
+
+			if (row_value == 0) {
+				not_synced_query = true;
+				break;
+			}
+		}
+
+		if (not_synced_query) {
+			waited += 1;
+			sleep(1);
+		} else {
+			break;
+		}
+	}
+
+	if (not_synced_query) {
+		return -2;
+	} else {
+		return EXIT_SUCCESS;
+	}
+}
+
 const uint32_t SYNC_TIMEOUT = 10;
 const uint32_t CONNECT_TIMEOUT = 60;
 
@@ -118,19 +173,16 @@ int main(int, char**) {
 		return -1;
 	}
 
+	plan(12);
+
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 	const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	MYSQL* proxysql_replica = mysql_init(NULL);
 
 	// Initialize connections
 	if (!proxysql_admin) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		return -1;
-	}
-	if (!proxysql_replica) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_replica));
 		return -1;
 	}
 
@@ -141,9 +193,8 @@ int main(int, char**) {
 	}
 
 	const std::string t_update_proxysql_servers =
-		"INSERT INTO proxysql_servers (hostname, port, weight, comment) "
-		"VALUES ('%s', %d, 0, 'proxysql130'), "
-		"('%s', %d, 0, 'proxysql131')";
+		"INSERT INTO proxysql_servers (hostname, port, weight, comment)"
+		" VALUES ('%s', %d, 0, 'proxysql130'), ('%s', %d, 0, 'proxysql131')";
 
 	std::string bridge_addr = "";
 	int bridge_res = exec("ip -4 addr show docker0 | grep -oP '(?<=inet\\s)\\d+(\\.\\d+){3}'", bridge_addr);
@@ -174,28 +225,26 @@ int main(int, char**) {
 			std::string("> ") + cluster_sync_node_stderr + " 2>&1";
 
 		int exec_res = system(docker_command.c_str());
-		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. 'wexecvp' result was: %d", exec_res);
+		ok(exec_res == 0, "proxysql cluster node should execute and shutdown nicely. 'wexecvp' result was: %d", WEXITSTATUS(exec_res));
 
 		remove(proxysql_db.c_str());
 		remove(stats_db.c_str());
 	});
 
 	// Waiting for proxysql to be ready
-	uint con_waited = 0;
-	while (!mysql_real_connect(proxysql_replica, cl.host, "radmin", "radmin", NULL, 16032, NULL, 0) && con_waited < CONNECT_TIMEOUT) {
-		mysql_close(proxysql_replica);
-		proxysql_replica = mysql_init(NULL);
+	conn_opts_t conn_opts {};
+	conn_opts.host = cl.host;
+	conn_opts.user = "radmin";
+	conn_opts.pass = "radmin";
+	conn_opts.port = 16032;
 
-		con_waited += 1;
-		sleep(1);
-	}
+	MYSQL* r_proxy_admin = wait_for_proxysql(conn_opts, CONNECT_TIMEOUT);
 
 	// Once the thread is spanwed we should always go to cleanup to wait
-	bool con_err = mysql_errno(proxysql_replica) != 0;
-	ok(con_err == 0, "New instance of proxysql with cluster config should be properly spawned.");
+	ok(r_proxy_admin != nullptr, "New instance of proxysql with cluster config should be properly spawned.");
 
-	if (con_err) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_replica));
+	if (r_proxy_admin == nullptr) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(r_proxy_admin));
 		res = -1;
 		goto cleanup;
 	}
@@ -287,8 +336,8 @@ int main(int, char**) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
 			for (const auto& query : select_mysql_galera_hostgroup_queries) {
-				MYSQL_QUERY__(proxysql_replica, query.c_str());
-				MYSQL_RES* galera_res = mysql_store_result(proxysql_replica);
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* galera_res = mysql_store_result(r_proxy_admin);
 				MYSQL_ROW row = mysql_fetch_row(galera_res);
 				int row_value = atoi(row[0]);
 				mysql_free_result(galera_res);
@@ -402,8 +451,8 @@ int main(int, char**) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
 			for (const auto& query : select_mysql_galera_hostgroup_queries) {
-				MYSQL_QUERY__(proxysql_replica, query.c_str());
-				MYSQL_RES* galera_res = mysql_store_result(proxysql_replica);
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* galera_res = mysql_store_result(r_proxy_admin);
 				MYSQL_ROW row = mysql_fetch_row(galera_res);
 				int row_value = atoi(row[0]);
 				mysql_free_result(galera_res);
@@ -519,8 +568,8 @@ int main(int, char**) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
 			for (const auto& query : select_mysql_group_replication_hostgroup_queries) {
-				MYSQL_QUERY__(proxysql_replica, query.c_str());
-				MYSQL_RES* group_replication_res = mysql_store_result(proxysql_replica);
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* group_replication_res = mysql_store_result(r_proxy_admin);
 				MYSQL_ROW row = mysql_fetch_row(group_replication_res);
 				int row_value = atoi(row[0]);
 				mysql_free_result(group_replication_res);
@@ -636,8 +685,8 @@ int main(int, char**) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
 			for (const auto& query : select_mysql_group_replication_hostgroup_queries) {
-				MYSQL_QUERY__(proxysql_replica, query.c_str());
-				MYSQL_RES* group_replication_res = mysql_store_result(proxysql_replica);
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* group_replication_res = mysql_store_result(r_proxy_admin);
 				MYSQL_ROW row = mysql_fetch_row(group_replication_res);
 				int row_value = atoi(row[0]);
 				mysql_free_result(group_replication_res);
@@ -665,6 +714,151 @@ int main(int, char**) {
 		MYSQL_QUERY__(proxysql_admin, "INSERT INTO mysql_group_replication_hostgroups SELECT * FROM mysql_group_replication_hostgroups_sync_test_2687");
 		MYSQL_QUERY__(proxysql_admin, "DROP TABLE mysql_group_replication_hostgroups_sync_test_2687");
 		MYSQL_QUERY__(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	}
+
+	sleep(2);
+
+	// Check 'proxysql_servers' synchronization with random values
+	{
+		std::string print_master_proxysql_servers = "";
+		string_format(
+			t_debug_query, print_master_proxysql_servers, cl.admin_username, cl.admin_password, cl.host,
+			cl.admin_port, "SELECT * FROM runtime_proxysql_servers"
+		);
+		std::string print_replica_proxysql_servers = "";
+		string_format(
+			t_debug_query, print_replica_proxysql_servers, "radmin", "radmin", cl.host, 16032,
+			"SELECT * FROM runtime_proxysql_servers"
+		);
+
+		// Configure 'proxysql_servers' and check sync
+		const char* t_insert_proxysql_servers =
+			"INSERT INTO proxysql_servers (hostname, port, weight, comment) VALUES ('%s', %d, %d, '%s')";
+
+		std::string invalid_server_01_comment {};
+		std::string invalid_server_02_comment {};
+		std::string invalid_server_03_comment {};
+		std::string invalid_server_04_comment {};
+
+		std::vector<std::tuple<const char*,int,int,std::string>> insert_proxysql_servers_values {};
+
+		std::string s_host = "127.0.0.1";
+		uint32_t s_port = 26091;
+		std::string s_base_comment { "invalid_server_" };
+
+		for (uint32_t i = 0; i < 5; i++) {
+			uint32_t weight = rand() % 10;
+			std::string s_comment { "invalid_server_" + std::to_string(i) + "_" + std::to_string(rand() % 40) };
+
+			insert_proxysql_servers_values.push_back(std::make_tuple(s_host.c_str(), s_port + i, 1, s_comment.c_str()));
+		}
+
+		std::vector<std::string> insert_proxysql_servers_queries {};
+
+		for (auto const& values : insert_proxysql_servers_values) {
+			std::string insert_proxysql_servers_query {};
+			string_format(
+				t_insert_proxysql_servers,
+				insert_proxysql_servers_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values).c_str()
+			);
+			insert_proxysql_servers_queries.push_back(insert_proxysql_servers_query);
+		}
+
+		const char* t_select_proxysql_servers_inserted_entries =
+			"SELECT COUNT(*) FROM proxysql_servers WHERE hostname='%s' AND port=%d AND weight=%d AND comment='%s'";
+		std::vector<std::string> select_proxysql_servers_queries {};
+
+		for (auto const& values : insert_proxysql_servers_values) {
+			std::string select_proxysql_servers_query = "";
+			string_format(
+				t_select_proxysql_servers_inserted_entries,
+				select_proxysql_servers_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values).c_str()
+			);
+			select_proxysql_servers_queries.push_back(select_proxysql_servers_query);
+		}
+
+		// SETUP CONFIG
+
+		// Backup current table
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE IF EXISTS proxysql_servers_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "CREATE TABLE proxysql_servers_sync_test_2687 AS SELECT * FROM proxysql_servers");
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM proxysql_servers WHERE comment LIKE '%invalid_server_%'");
+
+		// Insert the new proxysql_servers values
+		for (const auto& query : insert_proxysql_servers_queries) {
+			MYSQL_QUERY__(proxysql_admin, query.c_str());
+		}
+		MYSQL_QUERY__(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+
+		std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
+		system(print_master_proxysql_servers.c_str());
+
+		int not_synced_query = sync_checker(r_proxy_admin, select_proxysql_servers_queries, SYNC_TIMEOUT);
+
+		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
+		system(print_replica_proxysql_servers.c_str());
+
+		ok(not_synced_query == false, "'proxysql_servers' with NULL comments should be synced: '%d'", not_synced_query);
+
+		// TEARDOWN CONFIG
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM proxysql_servers");
+		MYSQL_QUERY__(proxysql_admin, "INSERT INTO proxysql_servers SELECT * FROM proxysql_servers_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE proxysql_servers_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+	}
+
+	// Check 'proxysql_servers' synchronization with no servers (forcing '0x00' checksum)
+	{
+		std::string print_master_proxysql_servers = "";
+		string_format(
+			t_debug_query, print_master_proxysql_servers, cl.admin_username, cl.admin_password, cl.host,
+			cl.admin_port, "SELECT * FROM runtime_proxysql_servers"
+		);
+		std::string print_replica_proxysql_servers = "";
+		string_format(
+			t_debug_query, print_replica_proxysql_servers, "radmin", "radmin", cl.host, 16032,
+			"SELECT * FROM runtime_proxysql_servers"
+		);
+
+		// 1. Backup and delete ProxySQL servers from main ProxySQL
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE IF EXISTS proxysql_servers_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "CREATE TABLE proxysql_servers_sync_test_2687 AS SELECT * FROM proxysql_servers");
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM proxysql_servers");
+		MYSQL_QUERY__(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+
+		// 2. Backup ProxySQL servers config in replica
+		MYSQL_QUERY__(r_proxy_admin, "SAVE PROXYSQL SERVERS TO DISK");
+
+		std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
+		system(print_master_proxysql_servers.c_str());
+
+		// 3. Check that the servers have been synced in the replica
+		int not_synced =
+			sync_checker(
+				proxysql_admin, { "SELECT CASE count(*) WHEN 0 THEN 1 ELSE 0 END from proxysql_servers" }, SYNC_TIMEOUT
+			);
+
+		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
+		system(print_replica_proxysql_servers.c_str());
+
+		// 3. Recover ProxySQL servers in the primary ProxySQL and the replica
+		MYSQL_QUERY__(proxysql_admin, "DELETE FROM proxysql_servers");
+		MYSQL_QUERY__(proxysql_admin, "INSERT INTO proxysql_servers SELECT * FROM proxysql_servers_sync_test_2687");
+		MYSQL_QUERY__(proxysql_admin, "DROP TABLE proxysql_servers_sync_test_2687");
+
+		// 4. Recover ProxySQL servers in replica
+		MYSQL_QUERY__(r_proxy_admin, "LOAD PROXYSQL SERVERS FROM DISK");
+		MYSQL_QUERY__(r_proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+
+		ok(not_synced == false, "'proxysql_servers' with NULL comments should be synced: '%d'", not_synced);
 	}
 
 	sleep(2);
@@ -763,8 +957,8 @@ int main(int, char**) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
 			for (const auto& query : select_mysql_aws_aurora_hostgroup_queries) {
-				MYSQL_QUERY__(proxysql_replica, query.c_str());
-				MYSQL_RES* aws_aurora_res = mysql_store_result(proxysql_replica);
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* aws_aurora_res = mysql_store_result(r_proxy_admin);
 				MYSQL_ROW row = mysql_fetch_row(aws_aurora_res);
 				int row_value = atoi(row[0]);
 				mysql_free_result(aws_aurora_res);
@@ -888,8 +1082,8 @@ int main(int, char**) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
 			for (const auto& query : select_mysql_aws_aurora_hostgroup_queries) {
-				MYSQL_QUERY__(proxysql_replica, query.c_str());
-				MYSQL_RES* aws_aurora_res = mysql_store_result(proxysql_replica);
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* aws_aurora_res = mysql_store_result(r_proxy_admin);
 				MYSQL_ROW row = mysql_fetch_row(aws_aurora_res);
 				int row_value = atoi(row[0]);
 				mysql_free_result(aws_aurora_res);
@@ -1089,8 +1283,8 @@ int main(int, char**) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
 			for (const auto& query : select_mysql_variables_queries) {
-				MYSQL_QUERY__(proxysql_replica, query.c_str());
-				MYSQL_RES* mysql_vars_res = mysql_store_result(proxysql_replica);
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* mysql_vars_res = mysql_store_result(r_proxy_admin);
 				MYSQL_ROW row = mysql_fetch_row(mysql_vars_res);
 				int row_value = atoi(row[0]);
 				mysql_free_result(mysql_vars_res);
@@ -1219,8 +1413,8 @@ int main(int, char**) {
 			not_synced_query = false;
 			// Check that all the entries have been synced
 			for (const auto& query : select_admin_variables_queries) {
-				MYSQL_QUERY__(proxysql_replica, query.c_str());
-				MYSQL_RES* admin_vars_res = mysql_store_result(proxysql_replica);
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* admin_vars_res = mysql_store_result(r_proxy_admin);
 				MYSQL_ROW row = mysql_fetch_row(admin_vars_res);
 				int row_value = atoi(row[0]);
 				mysql_free_result(admin_vars_res);
@@ -1261,12 +1455,12 @@ cleanup:
 		save_proxy_stderr.store(true);
 	}
 	int mysql_timeout = 2;
-	mysql_options(proxysql_replica, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
-	mysql_options(proxysql_replica, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
-	mysql_options(proxysql_replica, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
-	mysql_query(proxysql_replica, "PROXYSQL SHUTDOWN");
+	mysql_options(r_proxy_admin, MYSQL_OPT_CONNECT_TIMEOUT, &mysql_timeout);
+	mysql_options(r_proxy_admin, MYSQL_OPT_READ_TIMEOUT, &mysql_timeout);
+	mysql_options(r_proxy_admin, MYSQL_OPT_WRITE_TIMEOUT, &mysql_timeout);
+	mysql_query(r_proxy_admin, "PROXYSQL SHUTDOWN");
 	proxy_replica_th.join();
-	mysql_close(proxysql_replica);
+	mysql_close(r_proxy_admin);
 
 	remove(fmt_config_file.c_str());
 
