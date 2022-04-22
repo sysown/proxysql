@@ -299,13 +299,13 @@ loop_exit:
 
 		if (pipe_err == 0) {
 			waitpid(child_pid, &err, 0);
-		}
-
-		if (pipe_err == 0) {
-			s_stdout = stdout_;
-			s_stderr = stderr_;
 		} else {
 			err = pipe_err;
+		}
+
+		if (pipe_err == 0 || pipe_err == ETIME) {
+			s_stdout = stdout_;
+			s_stderr = stderr_;
 		}
 	}
 
