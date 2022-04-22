@@ -641,3 +641,27 @@ int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_u
 
 	return 0;
 }
+
+MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
+	uint con_waited = 0;
+	MYSQL* admin = mysql_init(NULL);
+
+	const char* user = opts.user.c_str();
+	const char* pass = opts.pass.c_str();
+	const char* host = opts.host.c_str();
+	const int port = opts.port;
+
+	while (!mysql_real_connect(admin, host, user, pass, NULL, port, NULL, 0) && con_waited < timeout) {
+		mysql_close(admin);
+		admin = mysql_init(NULL);
+
+		con_waited += 1;
+		sleep(1);
+	}
+
+	if (con_waited >= timeout) {
+		return nullptr;
+	} else {
+		return admin;
+	}
+}

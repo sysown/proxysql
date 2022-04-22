@@ -216,4 +216,26 @@ std::string tap_curtime();
  */
 int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage);
 
+/**
+ * @brief Helper struct holding connection options for helper functions creating MySQL connections.
+ */
+struct conn_opts_t {
+	std::string host;
+	std::string user;
+	std::string pass;
+	int port;
+	uint64_t client_flags;
+};
+
+/**
+ * @brief Helper function for waiting until ProxySQL is replying to client connections.
+ *
+ * @param opts The options to be used for performing the MySQL connection.
+ * @param timeout Timeout for the wait.
+ *
+ * @return An opened MySQL* connection in case a connection could be created before timeout expired,
+ *  'nullptr' otherwise.
+ */
+MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout);
+
 #endif // #define UTILS_H
