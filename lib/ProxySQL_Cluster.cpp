@@ -1713,9 +1713,10 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const char *expected_chec
 					free(pta);
 					uint64_t hash1 = result3->raw_checksum();
 					uint32_t d32[2];
-					char buf[20];
+					char buf[20] = { 0 };
 					memcpy(&d32, &hash1, sizeof(hash1));
 					sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+					replace_checksum_zeros(buf);
 					delete result3;
 					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d completed. Computed checksum: %s\n", hostname, port, buf);
 					if (strcmp(buf, expected_checksum)==0) {
