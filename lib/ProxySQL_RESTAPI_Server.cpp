@@ -3,10 +3,7 @@
 #include "httpserver.hpp"
 
 #include <functional>
-#include <fcntl.h>
 #include <sstream>
-#include <sys/time.h>
-
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 #include "proxysql_utils.h"
