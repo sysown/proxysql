@@ -512,6 +512,51 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
 
+  ubuntu22_build:
+    image: proxysql/packaging:build-ubuntu22
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=ubuntu22
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  ubuntu22_clang_build:
+    image: proxysql/packaging:build-clang-ubuntu22
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=ubuntu22-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  ubuntu22_dbg_build:
+    image: proxysql/packaging:build-ubuntu22
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=dbg-ubuntu22
+      - PROXYSQL_BUILD_TYPE=debug
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
 
   opensuse15_build:
     image: proxysql/packaging:build-opensuse15

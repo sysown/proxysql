@@ -196,7 +196,7 @@ amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensu
 amd64-centos: centos6 centos6-dbg centos7 centos7-dbg centos8 centos8-clang centos8-dbg
 .PHONY: amd64-centos
 
-amd64-ubuntu: ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg
+amd64-ubuntu: ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
 .PHONY: amd64-ubuntu
 
 amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg
@@ -223,7 +223,7 @@ arm64-centos: centos7-arm64 centos8-arm64
 arm64-debian: debian9-arm64 debian10-arm64 debian11-arm64
 .PHONY: arm64-debian
 
-arm64-ubuntu: ubuntu16-arm64 ubuntu18-arm64 ubuntu20-arm64
+arm64-ubuntu: ubuntu16-arm64 ubuntu18-arm64 ubuntu20-arm64 ubuntu22-arm64
 .PHONY: arm64-ubuntu
 
 arm64-fedora: fedora33-arm64 fedora34-arm64
@@ -344,6 +344,19 @@ ubuntu20-arm64: binaries/proxysql_${CURVER}-ubuntu20_arm64.deb
 
 ubuntu20-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu20_amd64.deb
 .PHONY: ubuntu20-dbg
+
+
+ubuntu22: binaries/proxysql_${CURVER}-ubuntu22_amd64.deb
+.PHONY: ubuntu22
+
+ubuntu22-clang: binaries/proxysql_${CURVER}-ubuntu22-clang_amd64.deb
+.PHONY: ubuntu22-clang
+
+ubuntu22-arm64: binaries/proxysql_${CURVER}-ubuntu22_arm64.deb
+.PHONY: ubuntu22-arm64
+
+ubuntu22-dbg: binaries/proxysql_${CURVER}-dbg-ubuntu22_amd64.deb
+.PHONY: ubuntu22-dbg
 
 
 debian8: binaries/proxysql_${CURVER}-debian8_amd64.deb
@@ -549,6 +562,23 @@ binaries/proxysql_${CURVER}-ubuntu20-clang_amd64.deb:
 
 binaries/proxysql_${CURVER}-ubuntu20_arm64.deb:
 	docker-compose up ubuntu20_build
+	docker-compose rm -f
+
+
+binaries/proxysql_${CURVER}-dbg-ubuntu22_amd64.deb:
+	docker-compose up ubuntu22_dbg_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-ubuntu22_amd64.deb:
+	docker-compose up ubuntu22_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-ubuntu22-clang_amd64.deb:
+	docker-compose up ubuntu22_clang_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-ubuntu22_arm64.deb:
+	docker-compose up ubuntu22_build
 	docker-compose rm -f
 
 
