@@ -2537,6 +2537,17 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
 		}
 	}
+	if (mysql) {
+		if (myds && myds->sess) {
+			if (myds->sess->client_myds && myds->sess->client_myds->myconn) {
+				// if SERVER_STATUS_NO_BACKSLASH_ESCAPES is changed it is likely
+				// because of sql_mode was changed
+				// we set the same on the client connection
+				unsigned int ss = mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				myds->sess->client_myds->myconn->set_no_backslash_escapes(ss);
+			}
+		}
+	}
 }
 
 void MySQL_Connection::optimize() {
