@@ -6,6 +6,21 @@
 
 #include "MySQL_Protocol.h"
 
+#ifndef uchar
+typedef unsigned char uchar;
+#endif
+
+#include "ma_pvio.h"
+// here we define P_MARIADB_TLS as a copy of MARIADB_TLS
+// copied from ma_tls.h
+// note that ma_pvio.h defines it as void
+typedef struct P_st_ma_pvio_tls {
+  void *data;
+  MARIADB_PVIO *pvio;
+  void *ssl;
+} P_MARIADB_TLS;
+
+
 #define QUEUE_T_DEFAULT_SIZE	32768
 #define MY_SSL_BUFFER	8192
 
@@ -192,6 +207,26 @@ class MySQL_Data_Stream
 		myconn=mc;
 		myconn->statuses.myconnpoll_get++;
 		mc->myds=this;
+		// we handle encryption for backend
+		//
+		// we have a similar code in MySQL_Connection
+		// in case of ASYNC_CONNECT_SUCCESSFUL
+		encrypted = false;
+		if (sess != NULL && sess->session_fast_forward == true) {
+			if (myconn->mysql && myconn->ret_mysql) {
+				if (myconn->mysql->options.use_ssl == 1) {
+					encrypted = true;
+					if (ssl == NULL) {
+						// check the definition of P_MARIADB_TLS
+						P_MARIADB_TLS * matls = (P_MARIADB_TLS *)myconn->mysql->net.pvio->ctls;
+						ssl = (SSL *)matls->ssl;
+						rbio_ssl = BIO_new(BIO_s_mem());
+						wbio_ssl = BIO_new(BIO_s_mem());
+						SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
+					}
+				}
+			}
+		}
 	}
 
 	// safe way to detach a MySQL Connection
