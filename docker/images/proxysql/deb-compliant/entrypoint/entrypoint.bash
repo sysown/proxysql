@@ -55,7 +55,11 @@ cp -r ../systemd ./systemd
 DEB_BUILD_OPTIONS=nostrip equivs-build proxysql.ctl
 cp ./proxysql_${CURVER}_${ARCH}.deb ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.deb
 # get SHA1 of the packaged executable
-ar -p proxysql_${CURVER}_${ARCH}.deb data.tar.xz | unxz -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
+if [[ -x $(command -v unzstd) ]]; then
+	ar -p proxysql_${CURVER}_${ARCH}.deb $(ar t proxysql_${CURVER}_${ARCH}.deb | grep data.tar) | unzstd -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
+else
+	ar -p proxysql_${CURVER}_${ARCH}.deb $(ar t proxysql_${CURVER}_${ARCH}.deb | grep data.tar) | unxz -c - | tar xvf - ./usr/bin/proxysql -O > tmp/proxysql
+fi
 sha1sum tmp/proxysql | sed 's|tmp/||' | tee tmp/proxysql.sha1
 cp tmp/proxysql.sha1 ../binaries/proxysql_${CURVER}-${PKG_RELEASE}_${ARCH}.id-hash
 popd
