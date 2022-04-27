@@ -1745,6 +1745,16 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const char *expected_chec
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
+
+						proxy_info("Dumping fetched 'proxysql_servers'\n");
+						char *error = NULL;
+						int cols = 0;
+						int affected_rows = 0;
+						SQLite3_result *resultset = NULL;
+						GloAdmin->admindb->execute_statement((char *)"SELECT * FROM proxysql_servers", &error, &cols, &affected_rows, &resultset);
+						resultset->dump_to_stderr();
+						delete resultset;
+
 						proxy_info("Cluster: Loading to runtime ProxySQL Servers from peer %s:%d\n", hostname, port);
 						GloAdmin->load_proxysql_servers_to_runtime(false);
 						if (GloProxyCluster->cluster_proxysql_servers_save_to_disk == true) {
