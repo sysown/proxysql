@@ -686,6 +686,7 @@ MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
 	}
 
 	if (con_waited >= timeout) {
+		mysql_close(admin);
 		return nullptr;
 	} else {
 		return admin;
