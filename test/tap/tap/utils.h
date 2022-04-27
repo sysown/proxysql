@@ -43,30 +43,6 @@ int select_config_file(MYSQL* mysql, std::string& resultset);
 }
 #endif
 
-/**
- * @brief Simple struct that holds the 'timeout options' for 'wexecvp'.
- */
-struct to_opts {
-	uint timeout_us;
-	uint it_delay_us;
-	uint select_to_us;
-};
-
-/**
- * @brief Execute the given comand, and stores it's output.
- *
- * @param file File to be executed.
- * @param argv Arguments to be given to the executable.
- * @param result The output of the file execution. If the execution succeed it contains `stdout` output,
- *  in case of failure `stderr` contents are returned.
- * @param opts In case of pipe readin error, this timeout options are used for trying to terminate
- *  the child process nicely, before seding a SIGKILL to it:
- *    - timeout_us: Member specifies the total timeout to wait for the child to exit.
- *    - it_delay_us: Member specifies the waiting delay between checks.
- * @return int Zero in case of success, or the errno returned by `execvp` in case of failure.
- */
-int wexecvp(const std::string& file, const std::vector<const char*>& argv, const to_opts* opts, std::string& s_stdout, std::string& s_stderr);
-
 /*
  * @return int Zero in case of success, or the errno returned by `execvp` in case of failure.
  */
@@ -239,5 +215,27 @@ std::string tap_curtime();
  * @return 0 if success, -1 in case of error.
  */
 int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage);
+
+/**
+ * @brief Helper struct holding connection options for helper functions creating MySQL connections.
+ */
+struct conn_opts_t {
+	std::string host;
+	std::string user;
+	std::string pass;
+	int port;
+	uint64_t client_flags;
+};
+
+/**
+ * @brief Helper function for waiting until ProxySQL is replying to client connections.
+ *
+ * @param opts The options to be used for performing the MySQL connection.
+ * @param timeout Timeout for the wait.
+ *
+ * @return An opened MySQL* connection in case a connection could be created before timeout expired,
+ *  'nullptr' otherwise.
+ */
+MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout);
 
 #endif // #define UTILS_H

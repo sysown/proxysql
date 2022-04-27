@@ -6702,10 +6702,13 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		free(previous_default_charset);
 		free(previous_default_collation_connection);
 		GloMTH->commit();
+		GloMTH->wrunlock();
 		if (checksum_variables.checksum_mysql_variables) {
+			// NOTE: 'GloMTH->wrunlock()' should have been called before this point to avoid possible
+			// deadlocks. See issue #3847.
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
-			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, false);
+			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
 			char *error=NULL;
 			int cols=0;
 			int affected_rows=0;
@@ -6732,7 +6735,6 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			delete resultset;
 		}
-		GloMTH->wrunlock();
 	}
 	if (resultset) delete resultset;
 }

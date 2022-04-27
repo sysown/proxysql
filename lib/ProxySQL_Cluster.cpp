@@ -683,41 +683,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			}
 		}
 	}
-	if (diff_ps) {
-		v = &checksums_values.proxysql_servers;
-		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.version,0);
-		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.epoch,0);
-		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.checksum,0);
-		if (v->version > 1) {
-			if (
-				(own_version == 1) // we just booted
-				||
-				(v->epoch > own_epoch) // epoch is newer
-			) {
-				if (v->diff_check >= diff_ps) {
-					proxy_info("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-					// v->checksum will be destroyed when calling pull_proxysql_servers_from_peer()
-					// thus we need to copy it now
-					char *expected_checksum = strdup(v->checksum);
-					GloProxyCluster->pull_proxysql_servers_from_peer((const char *)expected_checksum);
-					if (strncmp(expected_checksum, GloVars.checksums_values.proxysql_servers.checksum, 20)==0) {
-						// we copied from the remote server, let's also copy the same epoch
-						GloVars.checksums_values.proxysql_servers.epoch = v->epoch;
-					}
-					free(expected_checksum);
-				}
-			}
-			if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ps*10)) == 0)) {
-				proxy_error("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ps*10));
-				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_proxysql_servers_share_epoch]->Increment();
-			}
-		} else {
-			if (v->diff_check && (v->diff_check % (diff_ps*10)) == 0) {
-					proxy_warning("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps*10));
-				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_proxysql_servers_version_one]->Increment();
-			}
-		}
-	}
 	if (diff_mv) {
 		v = &checksums_values.mysql_variables;
 		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.mysql_variables.version, 0);
@@ -811,6 +776,48 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			if (v->diff_check && (v->diff_check % (diff_lv*10)) == 0) {
 				proxy_warning("Cluster: detected a peer %s:%d with ldap_variables version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD LDAP VARIABLES TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_lv*10));
 				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_ldap_variables_version_one]->Increment();
+			}
+		}
+	}
+	// IMPORTANT-NOTE: This action should ALWAYS be performed the last, since the 'checksums_values' gets
+	// invalidated by 'pull_proxysql_servers_from_peer' and further memory accesses would be invalid.
+	if (diff_ps) {
+		v = &checksums_values.proxysql_servers;
+		unsigned long long own_version = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.version,0);
+		unsigned long long own_epoch = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.epoch,0);
+		char* own_checksum = __sync_fetch_and_add(&GloVars.checksums_values.proxysql_servers.checksum,0);
+		if (v->version > 1) {
+			// NOTE: Backup values: 'v' gets invalidated by 'pull_proxysql_servers_from_peer()'
+			unsigned long long v_epoch = v->epoch;
+			unsigned long long v_version = v->version;
+			unsigned int v_diff_check = v->diff_check;
+			char* v_exp_checksum = strdup(v->checksum);
+
+			if (
+				(own_version == 1) // we just booted
+				||
+				(v->epoch > own_epoch) // epoch is newer
+			) {
+				if (v->diff_check >= diff_ps) {
+					proxy_info("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
+					// thus we need to copy it now
+					GloProxyCluster->pull_proxysql_servers_from_peer((const char *)v_exp_checksum);
+					if (strncmp(v_exp_checksum, GloVars.checksums_values.proxysql_servers.checksum, 20)==0) {
+						// we copied from the remote server, let's also copy the same epoch
+						GloVars.checksums_values.proxysql_servers.epoch = v_epoch;
+					}
+				}
+			}
+			if ((v_epoch == own_epoch) && v_diff_check && ((v_diff_check % (diff_ps*10)) == 0)) {
+				proxy_error("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %llu checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v_version, v_epoch, v_diff_check, v_exp_checksum, own_version, own_epoch, own_checksum, (diff_ps*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_proxysql_servers_share_epoch]->Increment();
+			}
+
+			free(v_exp_checksum);
+		} else {
+			if (v->diff_check && (v->diff_check % (diff_ps*10)) == 0) {
+					proxy_warning("Cluster: detected a peer %s:%d with proxysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %llu checks until LOAD PROXYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ps*10));
+				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_delayed_proxysql_servers_version_one]->Increment();
 			}
 		}
 	}
@@ -1713,9 +1720,10 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const char *expected_chec
 					free(pta);
 					uint64_t hash1 = result3->raw_checksum();
 					uint32_t d32[2];
-					char buf[20];
+					char buf[20] = { 0 };
 					memcpy(&d32, &hash1, sizeof(hash1));
 					sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+					replace_checksum_zeros(buf);
 					delete result3;
 					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d completed. Computed checksum: %s\n", hostname, port, buf);
 					if (strcmp(buf, expected_checksum)==0) {
@@ -1737,6 +1745,16 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const char *expected_chec
 							GloAdmin->admindb->execute(query);
 							free(query);
 						}
+
+						proxy_info("Dumping fetched 'proxysql_servers'\n");
+						char *error = NULL;
+						int cols = 0;
+						int affected_rows = 0;
+						SQLite3_result *resultset = NULL;
+						GloAdmin->admindb->execute_statement((char *)"SELECT * FROM proxysql_servers", &error, &cols, &affected_rows, &resultset);
+						resultset->dump_to_stderr();
+						delete resultset;
+
 						proxy_info("Cluster: Loading to runtime ProxySQL Servers from peer %s:%d\n", hostname, port);
 						GloAdmin->load_proxysql_servers_to_runtime(false);
 						if (GloProxyCluster->cluster_proxysql_servers_save_to_disk == true) {

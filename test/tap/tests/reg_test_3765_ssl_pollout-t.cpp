@@ -26,14 +26,6 @@
 using std::string;
 using std::vector;
 
-struct conn_opts_t {
-	string host;
-	string user;
-	string pass;
-	int port;
-	uint64_t client_flags;
-};
-
 /**
  * @brief TODO: Refactor this into utils, also used in another PR.
  */
