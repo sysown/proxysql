@@ -33,11 +33,6 @@
 
 #include <openssl/x509v3.h>
 
-// Minimal headers for exporting metrics using prometheus
-#include <prometheus/counter.h>
-#include <prometheus/exposer.h>
-#include <prometheus/registry.h>
-
 #include <sys/mman.h>
 
 #include <uuid/uuid.h>
