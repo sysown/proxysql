@@ -6,6 +6,7 @@
 #include <memory>
 #include <functional>
 
+#include "mhd_options.h"
 #include "httpserver.hpp"
 
 class ProxySQL_RESTAPI_Server {

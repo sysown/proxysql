@@ -903,7 +903,7 @@ int MySQL_Data_Stream::read_pkts() {
 int MySQL_Data_Stream::buffer2array() {
 	int ret=0;
 	bool fast_mode=sess->session_fast_forward;
-	int s = queue_data(queueIN);
+	unsigned int s = queue_data(queueIN);
 	if (s==0) return ret;
 	if ((queueIN.pkt.size==0) && s<sizeof(mysql_hdr)) {
 		queue_zero(queueIN);

@@ -19,6 +19,7 @@
 #include "MySQL_Protocol.h"
 #include "SQLite3_Server.h"
 #include "MySQL_Variables.h"
+#include "ProxySQL_Cluster.hpp"
 
 
 #include "libinjection.h"
@@ -6040,7 +6041,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					// try case listed in #1373
 					// SET  @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO'),  @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 2147483
 					// this is not a complete solution. A right solution involves true parsing
-					int query_no_space_length = nq.length();
+					size_t query_no_space_length = nq.length();
 					char *query_no_space=(char *)malloc(query_no_space_length+1);
 					memcpy(query_no_space,nq.c_str(),query_no_space_length);
 					query_no_space[query_no_space_length]='\0';
@@ -6734,7 +6735,6 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 */
 	if (MyRS) {
 		assert(MyRS->result);
-		bool transfer_started=MyRS->transfer_started;
 		MyRS->init_with_stmt(myconn);
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = MyRS->num_rows;

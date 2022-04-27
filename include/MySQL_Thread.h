@@ -122,7 +122,7 @@ enum MySQL_Thread_status_variable {
 	st_var_END
 };
 
-class MySQL_Thread
+class __attribute__((aligned(64))) MySQL_Thread
 {
 	private:
 	unsigned int servers_table_version_previous;

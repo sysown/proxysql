@@ -47,8 +47,6 @@
 #include <fcntl.h>
 #include <sys/utsname.h>
 
-#include "platform.h"
-#include "microhttpd.h"
 
 #include <uuid/uuid.h>
 
@@ -960,7 +958,7 @@ const std::vector<std::string> SAVE_MYSQL_VARIABLES_TO_MEMORY = {
 	"SAVE MYSQL VARIABLES FROM RUN" };
 
 
-bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length) {
+bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, uint64_t query_no_space_length) {
 	for (std::vector<std::string>::const_iterator it=cmds.begin(); it!=cmds.end(); ++it) {
 		if (query_no_space_length==it->length() && !strncasecmp(it->c_str(), query_no_space, query_no_space_length)) {
 			proxy_info("Received %s command\n", query_no_space);
@@ -1410,16 +1408,16 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  * 	returns false if the command is a valid one and is processed
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
  */
-bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+bool admin_handler_command_proxysql(char *query_no_space, size_t query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
 	if (!(strncasecmp("PROXYSQL CLUSTER_NODE_UUID ", query_no_space, strlen("PROXYSQL CLUSTER_NODE_UUID ")))) {
-		int l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
+		size_t l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
 		if (sess->client_myds->addr.port == 0) {
 			proxy_warning("Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket. Exiting client\n");
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket");
 			sess->client_myds->shut_soft();
 			return false;
 		}
-		if (query_no_space_length >= l+36+2) {
+		if (query_no_space_length >= l + ((size_t)36 + 2)) {
 			uuid_t uu;
 			char *A_uuid = NULL;
 			char *B_interface = NULL;
@@ -4031,7 +4029,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							char msg[256];
 							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
 							sprintf(msg, "Tested in %llums\n", d);
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -4041,7 +4039,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							char msg[256];
 							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 							sprintf(msg, "Tested in %llums\n", d);
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -4063,7 +4061,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							SPA->admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id=5211");
 							SPA->load_mysql_servers_to_runtime();
 							SPA->mysql_servers_wrunlock();
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -10620,13 +10618,18 @@ void ProxySQL_Admin::__add_active_users(enum cred_username_type usertype, char *
 					} else { // we must hash it
 						uint8 hash_stage1[SHA_DIGEST_LENGTH];
 						uint8 hash_stage2[SHA_DIGEST_LENGTH];
-						SHA_CTX sha1_context;
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context, r->fields[1], strlen(r->fields[1]));
-						SHA1_Final(hash_stage1, &sha1_context);
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
-						SHA1_Final(hash_stage2, &sha1_context);
+
+						EVP_MD_CTX* context = EVP_MD_CTX_new();
+						EVP_MD_CTX_init(context);
+						EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+						EVP_DigestUpdate(context, r->fields[1], strlen(r->fields[1]));
+						EVP_DigestFinal_ex(context, hash_stage1, nullptr);
+						EVP_MD_CTX_reset(context);
+						EVP_DigestInit_ex(context, EVP_sha1(), nullptr);
+						EVP_DigestUpdate(context, hash_stage1, SHA_DIGEST_LENGTH);
+						EVP_DigestFinal_ex(context, hash_stage2, nullptr);
+						EVP_MD_CTX_free(context);
+
 						password=sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
 					}
 				} else {
@@ -13145,7 +13148,6 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Bala
 	unsigned long long t1 = monotonic_time();
 	const unsigned int NS = 4;
 	unsigned int cu[NS] = { 50, 10, 10, 0 };
-	unsigned int hid = 0;
 	MyHGC * myhgc = NULL;
 	myhgc = MyHGM->MyHGC_lookup(5211);
 	assert(myhgc);
@@ -13160,7 +13162,7 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Bala
 	}
 	unsigned int NL = 1000;
 	for (unsigned int i=0; i<NL; i++) {
-		MySrvC * mysrvc = myhgc->get_random_MySrvC(NULL, NULL, -1, NULL);
+		MySrvC * mysrvc = myhgc->get_random_MySrvC(NULL, 0, -1, NULL);
 		assert(mysrvc);
 		for (unsigned int k=0; k<NS; k++) {
 			MySrvC * m = (MySrvC *)myhgc->mysrvs->servers->index(k);

@@ -5,6 +5,7 @@
 #include "re2/regexp.h"
 #include "proxysql.h"
 #include "cpp.h"
+#include "microhttpd.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #include "ProxySQL_Statistics.hpp"
 #include "SQLite3_Server.h"
@@ -27,8 +28,7 @@
 #include <fcntl.h>
 #include <sys/utsname.h>
 
-#include "platform.h"
-#include "microhttpd.h"
+
 #include "curl/curl.h"
 
 #ifdef DEBUG

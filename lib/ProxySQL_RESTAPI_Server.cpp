@@ -1,7 +1,7 @@
 #include "proxysql.h"
 #include "cpp.h"
+#include "mhd_options.h"
 #include "httpserver.hpp"
-
 #include <functional>
 #include <sstream>
 
@@ -11,11 +11,6 @@
 using namespace httpserver;
 
 
-#ifdef DEBUG
-#define DEB "_DEBUG"
-#else
-#define DEB ""
-#endif /* DEBUG */
 #define PROXYSQL_RESTAPI_SERVER_VERSION "2.0.1121" DEB
 
 extern ProxySQL_Admin *GloAdmin;

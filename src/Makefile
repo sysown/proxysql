@@ -57,9 +57,9 @@ LIBHTTPSERVER_DIR=$(DEPS_PATH)/libhttpserver/libhttpserver
 LIBHTTPSERVER_IDIR=$(LIBHTTPSERVER_DIR)/src
 LIBHTTPSERVER_LDIR=$(LIBHTTPSERVER_DIR)/build/src/.libs/
 
-MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
-MICROHTTPD_IDIR=$(MICROHTTPD_DIR)/include
-MICROHTTPD_LDIR=$(MICROHTTPD_DIR)/microhttpd/.libs
+MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd
+MICROHTTPD_IDIR=$(MICROHTTPD_DIR) -I$(MICROHTTPD_DIR)/src/include
+MICROHTTPD_LDIR=$(MICROHTTPD_DIR)/src/microhttpd/.libs
 
 CURL_DIR=$(DEPS_PATH)/curl/curl
 CURL_IDIR=$(CURL_DIR)/include
@@ -112,7 +112,16 @@ endif
 MYCXXFLAGS=-std=c++11
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS+= -fuse-ld=lld
+	# Enabled over-aligned new support for MySQL_Thread
+	MYCXXFLAGS+= -faligned-new
+else
+GCCVERSION=$(shell echo "7\n$$(gcc -dumpversion)" | sort -V | head -1)
+ifeq ($(GCCVERSION),7)
+	# Enabled over-aligned new support for MySQL_Thread for GCC > v7
+	MYCXXFLAGS+= -faligned-new
 endif
+endif
+
 MYCXXFLAGS+= $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
 
 ifeq ($(WITHGCOVVAR),1)

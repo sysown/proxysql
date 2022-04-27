@@ -526,7 +526,7 @@ void MySQL_Logger::events_open_log_unlocked() {
 		events.logfile->open(filen , std::ios::out | std::ios::binary);
 		proxy_info("Starting new mysql event log file %s\n", filen);
 	}
-	catch (std::ofstream::failure e) {
+	catch (const std::ofstream::failure& e) {
 		proxy_error("Error creating new mysql event log file %s\n", filen);
 		delete events.logfile;
 		events.logfile=NULL;
@@ -555,7 +555,7 @@ void MySQL_Logger::audit_open_log_unlocked() {
 		audit.logfile->open(filen , std::ios::out | std::ios::binary);
 		proxy_info("Starting new audit log file %s\n", filen);
 	}
-	catch (std::ofstream::failure e) {
+	catch (const std::ofstream::failure& e) {
 		proxy_error("Error creating new audit log file %s\n", filen);
 		delete audit.logfile;
 		audit.logfile=NULL;
