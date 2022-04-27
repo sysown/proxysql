@@ -918,7 +918,7 @@ void ProxySQL_Main_init() {
 	glovars.has_debug=false;
 #endif /* DEBUG */
 //	__thr_sfp=l_mem_init();
-
+	proxysql_init_debug_prometheus_metrics();
 }
 
 
