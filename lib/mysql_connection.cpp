@@ -274,7 +274,6 @@ void MySQL_Connection::compute_unknown_transaction_status() {
 			unknown_transaction_status = false; // no error
 			return;
 		}
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, _myerrno);
 		if (_myerrno >= 2000 && _myerrno < 3000) { // client error
 			// do not change it
 			return;
