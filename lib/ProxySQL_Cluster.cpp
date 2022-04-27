@@ -1,3 +1,5 @@
+#include <utility>
+
 #include "proxysql.h"
 #include "proxysql_utils.h"
 #include "cpp.h"
@@ -36,6 +38,7 @@
 } while (0)
 
 using std::vector;
+using std::pair;
 using std::string;
 
 static char *NODE_COMPUTE_DELIMITER=(char *)"-gtyw23a-"; // a random string used for hashing
@@ -2599,7 +2602,7 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 	for (const auto& node_entry : umap_proxy_nodes) {
 		const string hostname { node_entry.second->get_hostname() };
 		const string port { std::to_string(node_entry.second->get_port()) };
-		const auto modules_name_checksum { get_module_checksums(node_entry.second) };
+		const vector<pair<string,ProxySQL_Checksum_Value_2*>> modules_name_checksum { get_module_checksums(node_entry.second) };
 
 		const string m_node_metrics_id { hostname + ":" + port };
 		const std::map<string, string> m_common_labels { { "hostname", hostname }, { "port", port } };
@@ -2607,7 +2610,7 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 		// Update the current nodes metric list
 		cur_node_metrics.push_back(m_node_metrics_id);
 
-		for (const auto& module_name_checksum : modules_name_checksum) {
+		for (const std::pair<string,ProxySQL_Checksum_Value_2*>& module_name_checksum : modules_name_checksum) {
 			const string module_name { module_name_checksum.first };
 			const ProxySQL_Checksum_Value_2* module_checksum { module_name_checksum.second };
 
@@ -2626,10 +2629,10 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 			);
 
 			vector<tuple<map<string,prometheus::Gauge*>&,p_cluster_nodes_dyn_gauge::metric,double>> checksum_gauges {
-				{ this->metrics.p_proxysql_servers_checksums_epoch, dyn_gauge::proxysql_servers_checksums_epoch, module_checksum->epoch },
-				{ this->metrics.p_proxysql_servers_checksums_updated_at, dyn_gauge::proxysql_servers_checksums_updated_at, module_checksum->last_updated },
-				{ this->metrics.p_proxysql_servers_checksums_changed_at, dyn_gauge::proxysql_servers_checksums_changed_at, module_checksum->last_changed },
-				{ this->metrics.p_proxysql_servers_checksums_diff_check, dyn_gauge::proxysql_servers_checksums_diff_check, module_checksum->diff_check }
+				std::make_tuple(std::ref(this->metrics.p_proxysql_servers_checksums_epoch), dyn_gauge::proxysql_servers_checksums_epoch, module_checksum->epoch),
+				std::make_tuple(std::ref(this->metrics.p_proxysql_servers_checksums_updated_at), dyn_gauge::proxysql_servers_checksums_updated_at, module_checksum->last_updated),
+				std::make_tuple(std::ref(this->metrics.p_proxysql_servers_checksums_changed_at), dyn_gauge::proxysql_servers_checksums_changed_at, module_checksum->last_changed),
+				std::make_tuple(std::ref(this->metrics.p_proxysql_servers_checksums_diff_check), dyn_gauge::proxysql_servers_checksums_diff_check, module_checksum->diff_check)
 			};
 
 			for (const auto& checksum_gauge : checksum_gauges) {
@@ -2644,9 +2647,9 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 		const double conns_created = node_metrics->Client_Connections_created;
 
 		vector<tuple<map<string,prometheus::Counter*>&, p_cluster_nodes_dyn_counter::metric, double>> metric_counters {
-			{ this->metrics.p_proxysql_servers_metrics_queries, dyn_counter::proxysql_servers_metrics_queries, node_metrics->Questions },
-			{ this->metrics.p_proxysql_servers_metrics_client_conns_created, dyn_counter::proxysql_servers_metrics_client_conns_created, conns_created },
-			{ this->metrics.p_proxysql_servers_metrics_uptime_s, dyn_counter::proxysql_servers_metrics_uptime_s, node_metrics->ProxySQL_Uptime }
+			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_queries), dyn_counter::proxysql_servers_metrics_queries, node_metrics->Questions),
+			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_client_conns_created), dyn_counter::proxysql_servers_metrics_client_conns_created, conns_created),
+			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_uptime_s), dyn_counter::proxysql_servers_metrics_uptime_s, node_metrics->ProxySQL_Uptime)
 		};
 
 		const uint64_t curtime = monotonic_time();
@@ -2656,9 +2659,9 @@ void ProxySQL_Cluster_Nodes::update_prometheus_nodes_metrics() {
 		const double conns_connected = node_metrics->Client_Connections_connected;
 
 		vector<tuple<map<string,prometheus::Gauge*>&, dyn_gauge::metric, double>> metric_gauges {
-			{ this->metrics.p_proxysql_servers_metrics_last_check_ms, dyn_gauge::proxysql_servers_metrics_last_check_ms, last_check_ms },
-			{ this->metrics.p_proxysql_servers_metrics_response_time_ms, dyn_gauge::proxysql_servers_metrics_response_time_ms, response_time_ms },
-			{ this->metrics.p_proxysql_servers_metrics_client_conns_connected, dyn_gauge::proxysql_servers_metrics_client_conns_connected, conns_connected },
+			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_last_check_ms), dyn_gauge::proxysql_servers_metrics_last_check_ms, last_check_ms),
+			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_response_time_ms), dyn_gauge::proxysql_servers_metrics_response_time_ms, response_time_ms),
+			std::make_tuple(std::ref(this->metrics.p_proxysql_servers_metrics_client_conns_connected), dyn_gauge::proxysql_servers_metrics_client_conns_connected, conns_connected),
 		};
 
 		for (const auto& metric_gauge : metric_gauges) {
