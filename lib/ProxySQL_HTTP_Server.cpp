@@ -84,6 +84,10 @@ static char * check_latest_version() {
 
 	curl_handle = curl_easy_init();
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 2L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYSTATUS, 1l);
+	curl_easy_setopt(curl_handle, CURLOPT_RANGE, "0-31");
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
 

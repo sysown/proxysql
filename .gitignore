@@ -31,6 +31,7 @@ oldcode/tests/connect_speed
 
 *.swp
 
+*.sha1
 
 # SQLITE files
 *.db
@@ -135,8 +136,7 @@ deps/pcre/pcre/
 
 # curl
 deps/curl/curl/
-deps/curl/curl-7.57.0/
-deps/curl/curl-7.77.0/
+deps/curl/curl-*/
 
 deps/libev/libev-4.24/
 
@@ -154,12 +154,7 @@ deps/lz4/lz4-1.7.5/
 deps/libev/libev-4.24/
 
 #libssl
-deps/libssl/openssl-1.1.0h/
-deps/libssl/openssl-1.1.1b/
-deps/libssl/openssl-1.1.1d/
-deps/libssl/openssl-1.1.1g/
-deps/libssl/openssl-1.1.1j/
-deps/libssl/openssl-openssl-3.0.0/
+deps/libssl/openssl-openssl-*/
 
 #google coredumper
 deps/google-coredumper/google-coredumper/
@@ -194,6 +189,9 @@ test/tap/tests/reg_test_3504-change_user_libmysql_helper
 test/tap/tests/generate_set_session_csv
 test/tap/tests/set_testing-240.csv
 local_testing_datadir/
+
+test/cluster/node??/*
+
 
 #files generated during CI run
 proxysql-save.cfg

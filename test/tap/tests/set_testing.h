@@ -22,6 +22,15 @@ std::vector<TestCase> testCases;
 
 #define MAX_LINE 10240
 
+#define UNKNOWNVAR	"proxysql_unknown"
+
+const std::vector<std::string> possible_unknown_variables = {
+	"aurora_read_replica_read_committed",
+	"group_replication_consistency",
+	"query_cache_type",
+	"wsrep_osu_method",
+	};
+
 int readTestCases(const std::string& fileName) {
 	FILE* fp = fopen(fileName.c_str(), "r");
 	if (!fp) return 0;
@@ -145,7 +154,13 @@ void parseResult(MYSQL_RES *result, json& j) {
 	unsigned long long nr = mysql_num_rows(result);
 	assert(nr > 16);
 	while ((row = mysql_fetch_row(result))) {
-		j[row[0]] = row[1];
+		if (j.find(row[0]) == j.end()) {
+			j[row[0]] = row[1];
+		} else {
+			if (strcmp(row[1],UNKNOWNVAR)!=0) {
+				j[row[0]] = row[1]; // we override only if the new value it is not UNKNOWNVAR
+			}
+		}
 	}
 }
 
@@ -166,6 +181,8 @@ void dumpResult(MYSQL_RES *result) {
 }
 
 void queryVariables(MYSQL *mysql, json& j, std::string& paddress) {
+	// FIXME:
+	// unify the use of wsrep_sync_wait no matter if Galera is used or not
 	std::stringstream query;
 	if (is_mariadb) {
 		query << "SELECT /* mysql " << mysql << " " << paddress << " */ lower(variable_name), variable_value FROM information_schema.session_variables WHERE variable_name IN "
@@ -196,7 +213,16 @@ void queryVariables(MYSQL *mysql, json& j, std::string& paddress) {
 	query << ", 'sort_buffer_size', 'optimizer_switch', 'optimizer_search_depth', 'optimizer_prune_level'";
 	query << ", 'max_execution_time', 'long_query_time', 'tmp_table_size', 'max_heap_table_size'";
 	query << ", 'lc_messages', 'lc_time_names', 'timestamp', 'max_sort_length', 'sql_big_selects'";
+	// the following variables are likely to not exist on all systems
+	for (std::vector<std::string>::const_iterator it = possible_unknown_variables.begin() ; it != possible_unknown_variables.end() ; it++) {
+		query << ", '" << *it << "'";
+	}
 	query << ")";
+	// the following variables are likely to not exist on all systems
+	// so we artificially add them with an UNION and we will eventually filter them
+	for (std::vector<std::string>::const_iterator it = possible_unknown_variables.begin() ; it != possible_unknown_variables.end() ; it++) {
+		query << " UNION SELECT '" << *it << "','" << std::string(UNKNOWNVAR) << "'";
+	}
 	//fprintf(stderr, "TRACE : QUERY 3 : variables %s\n", query.str().c_str());
 	if (mysql_query(mysql, query.str().c_str())) {
 		if (silent==0) {

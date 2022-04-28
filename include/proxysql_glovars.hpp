@@ -1,6 +1,9 @@
 #ifndef __CLASS_PROXYSQL_GLOVARS_H
 #define __CLASS_PROXYSQL_GLOVARS_H
 
+#define CLUSTER_SYNC_INTERFACES_ADMIN "('admin-mysql_ifaces','admin-restapi_port','admin-telnet_admin_ifaces','admin-telnet_stats_ifaces','admin-web_port')"
+#define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
+
 #include <memory>
 #include <prometheus/registry.h>
 
@@ -10,6 +13,18 @@
 namespace ez {
 class ezOptionParser;
 };
+
+/**
+ * @brief Helper function used to replace spaces and zeros by '0' char in the supplied checksum buffer.
+ * @param checksum Input buffer containing the checksum.
+ */
+inline void replace_checksum_zeros(char* checksum) {
+	for (int i=2; i<18; i++) {
+		if (checksum[i]==' ' || checksum[i]==0) {
+			checksum[i]='0';
+		}
+	}
+}
 
 class ProxySQL_Checksum_Value {
 	public:
@@ -25,12 +40,7 @@ class ProxySQL_Checksum_Value {
 	void set_checksum(char *c) {
 		memset(checksum,0,20);
 		strncpy(checksum,c,18);
-		for (int i=2; i<18; i++) {
-			if (checksum[i]==' ' || checksum[i]==0) {
-				checksum[i]='0';
-			}
-		}
-
+		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
 		free(checksum);
@@ -45,14 +55,17 @@ class ProxySQL_GlobalVariables {
 	bool configfile_open;
 	char *__cmd_proxysql_config_file;
 	char *__cmd_proxysql_datadir;
+	char *__cmd_proxysql_uuid;
 	int __cmd_proxysql_nostart;
 	int __cmd_proxysql_foreground;
 	int __cmd_proxysql_gdbg;
 	bool __cmd_proxysql_initial;
 	bool __cmd_proxysql_reload;
+	bool cluster_sync_interfaces; // If true, also mysql-interfaces and admin-mysql_ifaces are synced. false by default
 	char *__cmd_proxysql_admin_socket;
 	char *config_file;
 	char *datadir;
+	char *uuid;
 	char *admindb;
 	char *statsdb_disk;
 	char *sqlite3serverdb;

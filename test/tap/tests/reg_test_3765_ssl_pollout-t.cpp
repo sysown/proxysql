@@ -26,14 +26,6 @@
 using std::string;
 using std::vector;
 
-struct conn_opts_t {
-	string host;
-	string user;
-	string pass;
-	int port;
-	uint64_t client_flags;
-};
-
 /**
  * @brief TODO: Refactor this into utils, also used in another PR.
  */
@@ -67,7 +59,7 @@ int create_connections(const conn_opts_t& conn_opts, uint32_t cons_num, std::vec
 const uint32_t ADMIN_CONN_NUM = 100;
 const uint32_t MYSQL_CONN_NUM = 100;
 const uint32_t REPORT_INTV_SEC = 5;
-const double MAX_ALLOWED_CPU_USAGE = 0.15;
+const double MAX_ALLOWED_CPU_USAGE = 3.0;
 
 int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, uint32_t& idle_cpu_ms, uint32_t& final_cpu_ms) {
 	// get ProxySQL idle cpu usage

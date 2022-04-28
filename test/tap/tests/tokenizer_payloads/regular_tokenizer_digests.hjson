@@ -689,6 +689,70 @@
 		]
 	},
 	{
+		"q": [
+			"SELECT /* keep_comment */ 1",
+			"SELECT /* keep_comment */ +1",
+			"SELECT /* keep_comment */ 1.123",
+			"SELECT /* keep_comment */ 0x100",
+			"SELECT /* keep_comment */ 1.1E-9",
+			"SELECT /* keep_comment */ 1.1E+9",
+			"SELECT /* keep_comment */ 0x100"
+		],
+		"mz": [
+			{
+				"digest_max_size": 100,
+				"keep_comment": true,
+				"digest": "SELECT /* keep_comment */ ?"
+			}
+		]
+	},
+	{
+		"q": [
+			"SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */ 1"
+		],
+		"mz": [
+			{
+				"digest_max_size": 110,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+				// Two chars are lost in this case, but it's nothing critical
+			}
+		]
+	},
+	{
+		"q": [
+			"SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */ 1"
+		],
+		"mz": [
+			{
+				// The final digest size is 135, but 137 chars are placing the final '*/' without issues. This is expected as the final position is never used
+				// for comment copying purposes in the state machine. Thus the '*/' is not copy, but there is room for the number replacement '?'.
+				"digest_max_size": 135,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 *"
+			},
+			{
+				// The final digest size is 135, but 137 chars are placing the final '*/' without issues. This is expected as the final position is never used
+				// for comment copying purposes in the state machine. Because of this, just the '*' is copied in this case.
+				"digest_max_size": 136,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */"
+			},
+			{
+				// The final digest size is 136, but 137 chars are placing the final '*/' without issues. This is expected as the final position is never used
+				// for comment copying purposes in the state machine. Thanks to the extra char in the buffer the digest contains the terminator.
+				"digest_max_size": 137,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */"
+			},
+			{
+				"digest_max_size": 138,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */ ?"
+			}
+		]
+	},
+	{
 		"q": "create /* foo_comment*/table table_10_utf8_4 (\n`pk` int primary key,\n`col_bigint_undef_signed` bigint ,\n`col_bigint_undef_unsigned` bigint unsigned ,\n`col_bigint_key_signed` bigint ,\n`col_bigint_key_unsigned` bigint unsigned ,\n`col_float_undef_signed` float ,\n`col_float_undef_unsigned` float unsigned ,\n`col_float_key_signed` float ,\n`col_float_key_unsigned` float unsigned ,\n`col_double_undef_signed` double ,\n`col_double_undef_unsigned` double unsigned ,\n`col_double_key_signed` double ,\n`col_double_key_unsigned` double unsigned ,\n`col_decimal(40, 20)_undef_signed` decimal(40, 20) ,\n`col_decimal(40, 20)_undef_unsigned` decimal(40, 20) unsigned ,\n`col_decimal(40, 20)_key_signed` decimal(40, 20)  ,\n`col_decimal(40, 20)_key_unsigned` decimal(40, 20) unsigned ,\n`col_char(20)_undef_signed` char(20)  ,\n`col_char(20)_key_signed` char(20) ,\n`col_varchar(20)_undef_signed` varchar(20)  ,\n`col_varchar(20)_key_signed` varchar(20) ,\n`col_enum_undef_signed` enum('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z') ,\n`col_enum_key_signed` enum('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z') ,\nkey (`col_bigint_key_signed`),\nkey (`col_bigint_key_unsigned`),\nkey (`col_float_key_signed`),\nkey (`col_float_key_unsigned`),\nkey (`col_double_key_signed`),\nkey (`col_double_key_unsigned`),\nkey (`col_decimal(40, 20)_key_signed`),\nkey (`col_decimal(40, 20)_key_unsigned`),\nkey (`col_char(20)_key_signed`),\nkey (`col_varchar(20)_key_signed`),\nkey (`col_enum_key_signed`)\n) character set utf8 \npartition by hash(pk)\npartitions 4",
 		"mz": [
 			{

@@ -73,7 +73,7 @@ OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o ../../../src/obj/
 INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR)
 LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK) -lprometheus-cpp-pull -lprometheus-cpp-core
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK) -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 
 .PHONY: all
@@ -142,7 +142,7 @@ create_connection_annotation: test_connection_annotation-t.cpp
 	g++ -DTEST_AURORA -DDEBUG test_connection_annotation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_connection_annotation-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR)
-	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc ../../../src/obj/proxysql_global.o $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
 
 reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp
 	$(CXX) -DDEBUG reg_test_3504-change_user_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"

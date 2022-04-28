@@ -45,6 +45,28 @@ class ProxySQL_Node_Metrics {
 	}
 };
 
+class ProxySQL_Node_Address {
+	public:
+	pthread_t thrid;
+	uint64_t hash; // unused for now
+	char *uuid;
+	char *hostname;
+	char *admin_mysql_ifaces;
+	uint16_t port;
+	ProxySQL_Node_Address(char *h, uint16_t p) {
+		hostname = strdup(h);
+		admin_mysql_ifaces = NULL;
+		port = p;
+		uuid = NULL;
+		hash = 0;
+	}
+	~ProxySQL_Node_Address() {
+		if (hostname) free(hostname);
+		if (uuid) free(uuid);
+		if (admin_mysql_ifaces) free(admin_mysql_ifaces);
+	}
+};
+
 class ProxySQL_Node_Entry {
 	private:
 	uint64_t hash;
@@ -95,6 +117,51 @@ class ProxySQL_Node_Entry {
 	uint64_t global_checksum;
 };
 
+struct p_cluster_nodes_counter {
+	enum metric {
+		__size
+	};
+};
+
+struct p_cluster_nodes_gauge {
+	enum metric {
+		__size
+	};
+};
+
+struct p_cluster_nodes_dyn_counter {
+	enum metric {
+		proxysql_servers_checksums_version_total,
+		proxysql_servers_metrics_uptime_s,
+		proxysql_servers_metrics_queries,
+		proxysql_servers_metrics_client_conns_created,
+		__size
+	};
+};
+
+struct p_cluster_nodes_dyn_gauge {
+	enum metric {
+		proxysql_servers_checksums_epoch,
+		proxysql_servers_checksums_updated_at,
+		proxysql_servers_checksums_changed_at,
+		proxysql_servers_checksums_diff_check,
+		proxysql_servers_metrics_weight,
+		proxysql_servers_metrics_response_time_ms,
+		proxysql_servers_metrics_last_check_ms,
+		proxysql_servers_metrics_client_conns_connected,
+		__size
+	};
+};
+
+struct cluster_nodes_metrics_map_idx {
+	enum index {
+		counters = 0,
+		gauges,
+		dyn_counters,
+		dyn_gauges
+	};
+};
+
 class ProxySQL_Cluster_Nodes {
 	private:
 	pthread_mutex_t mutex;
@@ -102,6 +169,27 @@ class ProxySQL_Cluster_Nodes {
 	void set_all_inactive();
 	void remove_inactives();
 	uint64_t generate_hash(char *_hostname, uint16_t _port);
+	struct {
+		std::array<prometheus::Family<prometheus::Counter>*, p_cluster_nodes_dyn_counter::__size> p_dyn_counter_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_cluster_nodes_dyn_gauge::__size> p_dyn_gauge_array {};
+
+		// proxysql_servers_checksum
+		std::map<std::string, prometheus::Counter*> p_proxysql_servers_checksum_version {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_checksums_epoch {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_checksums_changed_at {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_checksums_updated_at {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_checksums_diff_check {};
+
+		// proxysql_servers_metrics
+		std::map<std::string, prometheus::Counter*> p_proxysql_servers_metrics_queries {};
+		std::map<std::string, prometheus::Counter*> p_proxysql_servers_metrics_client_conns_created {};
+		std::map<std::string, prometheus::Counter*> p_proxysql_servers_metrics_uptime_s {};
+
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_weight {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_response_time_ms {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_last_check_ms {};
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_metrics_client_conns_connected {};
+	} metrics;
 	public:
 	ProxySQL_Cluster_Nodes();
 	~ProxySQL_Cluster_Nodes();
@@ -109,6 +197,7 @@ class ProxySQL_Cluster_Nodes {
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time);
 	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r);
 	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r);
+	void update_prometheus_nodes_metrics();
 	SQLite3_result * dump_table_proxysql_servers();
 	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
@@ -228,6 +317,9 @@ class ProxySQL_Cluster {
 	pthread_mutex_t update_mysql_users_mutex;
 	pthread_mutex_t update_mysql_variables_mutex;
 	pthread_mutex_t update_proxysql_servers_mutex;
+	// this records the interface that Admin is listening to
+	pthread_mutex_t admin_mysql_ifaces_mutex;
+	char *admin_mysql_ifaces;
 	int cluster_check_interval_ms;
 	int cluster_check_status_frequency;
 	int cluster_mysql_query_rules_diffs_before_sync;
@@ -254,6 +346,7 @@ class ProxySQL_Cluster {
 	void get_credentials(char **, char **);
 	void set_username(char *);
 	void set_password(char *);
+	void set_admin_mysql_ifaces(char *);
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time) {
 		return nodes.Update_Node_Metrics(_h, _p, _r, _response_time);
 	}
@@ -272,6 +365,7 @@ class ProxySQL_Cluster {
 	SQLite3_result * get_stats_proxysql_servers_metrics() {
 		return nodes.stats_proxysql_servers_metrics();
 	}
+	void p_update_metrics();
 	void thread_ending(pthread_t);
 	void join_term_thread();
 	void pull_mysql_query_rules_from_peer();
@@ -285,6 +379,6 @@ class ProxySQL_Cluster {
      *    - 'admin'.
 	 */
 	void pull_global_variables_from_peer(const std::string& type);
-	void pull_proxysql_servers_from_peer();
+	void pull_proxysql_servers_from_peer(const char *expected_checksum);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */

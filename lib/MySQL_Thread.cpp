@@ -413,7 +413,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"shun_recovery_time_sec",
 	(char *)"unshun_algorithm",
 	(char *)"query_retries_on_failure",
-	(char *)"client_multi_statements",
 	(char *)"client_host_cache_size",
 	(char *)"client_host_error_counts",
 	(char *)"connect_retries_on_failure",
@@ -441,7 +440,6 @@ static char * mysql_thread_variables_names[]= {
 #endif // IDLE_THREADS
 	(char *)"have_ssl",
 	(char *)"have_compress",
-	(char *)"client_found_rows",
 	(char *)"interfaces",
 	(char *)"log_mysql_warnings_enabled",
 	(char *)"monitor_enabled",
@@ -515,6 +513,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"set_query_lock_on_hostgroup",
 	(char *)"reset_connection_algorithm",
 	(char *)"auto_increment_delay_multiplex",
+	(char *)"auto_increment_delay_multiplex_timeout_ms",
 	(char *)"long_query_time",
 	(char *)"query_cache_size_MB",
 	(char *)"ping_interval_server_msec",
@@ -539,6 +538,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_digests_no_digits",
 	(char *)"query_digests_normalize_digest_text",
 	(char *)"query_digests_track_hostname",
+	(char *)"query_digests_keep_comment",
 	(char *)"servers_stats",
 	(char *)"default_reconnect",
 #ifdef DEBUG
@@ -1038,7 +1038,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.shun_recovery_time_sec=10;
 	variables.unshun_algorithm=0;
 	variables.query_retries_on_failure=1;
-	variables.client_multi_statements=true;
 	variables.client_host_cache_size=0;
 	variables.client_host_error_counts=0;
 	variables.connect_retries_on_failure=10;
@@ -1113,6 +1112,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.set_query_lock_on_hostgroup=1;
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
+	variables.auto_increment_delay_multiplex_timeout_ms=10000;
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
@@ -1142,7 +1142,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
 	variables.have_ssl = false; // disable by default for performance reason
-	variables.client_found_rows=true;
 	variables.commands_stats=true;
 	variables.multiplexing=true;
 	variables.log_unhealthy_connections=true;
@@ -1156,6 +1155,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_digests_no_digits=false;
 	variables.query_digests_normalize_digest_text=false;
 	variables.query_digests_track_hostname=false;
+	variables.query_digests_keep_comment=false;
 	variables.connpoll_reset_queue_length = 50;
 	variables.min_num_servers_lantency_awareness = 1000;
 	variables.aurora_max_lag_ms_only_read_from_replicas = 2;
@@ -2069,8 +2069,6 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["autocommit_false_is_transaction"] = make_tuple(&variables.autocommit_false_is_transaction, false);
 		VariablesPointers_bool["autocommit_false_not_reusable"]   = make_tuple(&variables.autocommit_false_not_reusable,   false);
 		VariablesPointers_bool["automatic_detect_sqli"]           = make_tuple(&variables.automatic_detect_sqli,           false);
-		VariablesPointers_bool["client_found_rows"]               = make_tuple(&variables.client_found_rows,               false);
-		VariablesPointers_bool["client_multi_statements"]         = make_tuple(&variables.client_multi_statements,         false);
 		VariablesPointers_bool["client_session_track_gtid"]       = make_tuple(&variables.client_session_track_gtid,       false);
 		VariablesPointers_bool["commands_stats"]                  = make_tuple(&variables.commands_stats,                  false);
 		VariablesPointers_bool["connection_warming"]              = make_tuple(&variables.connection_warming,              false);
@@ -2094,6 +2092,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["query_digests_no_digits"]         = make_tuple(&variables.query_digests_no_digits,         false);
 		VariablesPointers_bool["query_digests_normalize_digest_text"] = make_tuple(&variables.query_digests_normalize_digest_text, false);
 		VariablesPointers_bool["query_digests_track_hostname"]    = make_tuple(&variables.query_digests_track_hostname,    false);
+		VariablesPointers_bool["query_digests_keep_comment"]      = make_tuple(&variables.query_digests_keep_comment,      false);
 		VariablesPointers_bool["servers_stats"]                   = make_tuple(&variables.servers_stats,                   false);
 		VariablesPointers_bool["sessions_sort"]                   = make_tuple(&variables.sessions_sort,                   false);
 		VariablesPointers_bool["stats_time_backend_query"]        = make_tuple(&variables.stats_time_backend_query,        false);
@@ -2158,6 +2157,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["mirror_max_queue_length"] = make_tuple(&variables.mirror_max_queue_length, 0, 1024*1024, false);
 		// query processor and query digest
 		VariablesPointers_int["auto_increment_delay_multiplex"]  = make_tuple(&variables.auto_increment_delay_multiplex,   0,     1000000, false);
+		VariablesPointers_int["auto_increment_delay_multiplex_timeout_ms"]  = make_tuple(&variables.auto_increment_delay_multiplex_timeout_ms,   0, 3600*1000, false);
 		VariablesPointers_int["default_query_delay"]             = make_tuple(&variables.default_query_delay,              0,   3600*1000, false);
 		VariablesPointers_int["default_query_timeout"]           = make_tuple(&variables.default_query_timeout,         1000,20*24*3600*1000, false);
 		VariablesPointers_int["query_digests_grouping_limit"]    = make_tuple(&variables.query_digests_grouping_limit,     1,        2089, false);
@@ -2183,7 +2183,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["shun_on_failures"]            = make_tuple(&variables.shun_on_failures,            0,        10000000, false);
 		VariablesPointers_int["shun_recovery_time_sec"]      = make_tuple(&variables.shun_recovery_time_sec,      0,     3600*24*365, false);
 		VariablesPointers_int["unshun_algorithm"]            = make_tuple(&variables.unshun_algorithm,            0,               1, false);
-		VariablesPointers_int["hostgroup_manager_verbose"]   = make_tuple(&variables.hostgroup_manager_verbose,   1,               2, false);
+		VariablesPointers_int["hostgroup_manager_verbose"]   = make_tuple(&variables.hostgroup_manager_verbose,   0,               3, false);
 		VariablesPointers_int["tcp_keepalive_time"]          = make_tuple(&variables.tcp_keepalive_time,          0,            7200, false);
 		VariablesPointers_int["min_num_servers_lantency_awareness"]        = make_tuple(&variables.min_num_servers_lantency_awareness,        0, 10000, false);
 		VariablesPointers_int["aurora_max_lag_ms_only_read_from_replicas"] = make_tuple(&variables.aurora_max_lag_ms_only_read_from_replicas, 0,   100, false);
@@ -3222,7 +3222,14 @@ __run_skip_1a:
 		mypolls.loops++;
 		mypolls.loop_counters->incr(curtime/1000000);
 
-		if (maintenance_loop) {
+		if (maintenance_loop == true
+#ifdef IDLE_THREADS
+		// in case of idle thread
+		// do not run any mirror cleanup and do not
+		// update query processor stats
+		&& idle_maintenance_thread == false
+#endif // IDLE_THREADS
+		) {
 			// house keeping
 			run___cleanup_mirror_queue();
 			GloQPro->update_query_processor_stats();
@@ -3714,6 +3721,14 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 			}
 		}
 	}
+
+	if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
+		MySQL_Connection* myconn = sess->mybe->server_myds->myconn;
+
+		if (mysql_thread___auto_increment_delay_multiplex_timeout_ms != 0 && (sess_time/1000 > mysql_thread___auto_increment_delay_multiplex_timeout_ms)) {
+			myconn->auto_increment_delay_token = 0;
+		}
+	}
 }
 
 void MySQL_Thread::process_all_sessions() {
@@ -3863,6 +3878,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___set_query_lock_on_hostgroup=GloMTH->get_variable_int((char *)"set_query_lock_on_hostgroup");
 	mysql_thread___reset_connection_algorithm=GloMTH->get_variable_int((char *)"reset_connection_algorithm");
 	mysql_thread___auto_increment_delay_multiplex=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex");
+	mysql_thread___auto_increment_delay_multiplex_timeout_ms=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex_timeout_ms");
 	mysql_thread___default_max_latency_ms=GloMTH->get_variable_int((char *)"default_max_latency_ms");
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");
@@ -3873,7 +3889,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___unshun_algorithm=GloMTH->get_variable_int((char *)"unshun_algorithm");
 	mysql_thread___query_retries_on_failure=GloMTH->get_variable_int((char *)"query_retries_on_failure");
 	mysql_thread___connect_retries_on_failure=GloMTH->get_variable_int((char *)"connect_retries_on_failure");
-	mysql_thread___client_multi_statements=(bool)GloMTH->get_variable_int((char *)"client_multi_statements");
 	mysql_thread___connection_delay_multiplex_ms=GloMTH->get_variable_int((char *)"connection_delay_multiplex_ms");
 	mysql_thread___connection_max_age_ms=GloMTH->get_variable_int((char *)"connection_max_age_ms");
 	mysql_thread___connect_timeout_client=GloMTH->get_variable_int((char *)"connect_timeout_client");
@@ -3896,7 +3911,7 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___ssl_p2s_ca) free(mysql_thread___ssl_p2s_ca);
 	mysql_thread___ssl_p2s_ca=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
 	if (mysql_thread___ssl_p2s_capath) free(mysql_thread___ssl_p2s_capath);
-	mysql_thread___ssl_p2s_capath=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
+	mysql_thread___ssl_p2s_capath=GloMTH->get_variable_string((char *)"ssl_p2s_capath");
 	if (mysql_thread___ssl_p2s_cert) free(mysql_thread___ssl_p2s_cert);
 	mysql_thread___ssl_p2s_cert=GloMTH->get_variable_string((char *)"ssl_p2s_cert");
 	if (mysql_thread___ssl_p2s_key) free(mysql_thread___ssl_p2s_key);
@@ -3985,7 +4000,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___poll_timeout_on_failure=GloMTH->get_variable_int((char *)"poll_timeout_on_failure");
 	mysql_thread___have_compress=(bool)GloMTH->get_variable_int((char *)"have_compress");
 	mysql_thread___have_ssl=(bool)GloMTH->get_variable_int((char *)"have_ssl");
-	mysql_thread___client_found_rows=(bool)GloMTH->get_variable_int((char *)"client_found_rows");
 	mysql_thread___multiplexing=(bool)GloMTH->get_variable_int((char *)"multiplexing");
 	mysql_thread___log_unhealthy_connections=(bool)GloMTH->get_variable_int((char *)"log_unhealthy_connections");
 	mysql_thread___connection_warming=(bool)GloMTH->get_variable_int((char*)"connection_warming");
@@ -4002,6 +4016,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_digests_track_hostname=(bool)GloMTH->get_variable_int((char *)"query_digests_track_hostname");
 	mysql_thread___query_digests_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_grouping_limit");
 	mysql_thread___query_digests_groups_grouping_limit=(int)GloMTH->get_variable_int((char *)"query_digests_groups_grouping_limit");
+	mysql_thread___query_digests_keep_comment=(bool)GloMTH->get_variable_int((char *)"query_digests_keep_comment");
 	variables.min_num_servers_lantency_awareness=GloMTH->get_variable_int((char *)"min_num_servers_lantency_awareness");
 	variables.aurora_max_lag_ms_only_read_from_replicas=GloMTH->get_variable_int((char *)"aurora_max_lag_ms_only_read_from_replicas");
 	variables.stats_time_backend_query=(bool)GloMTH->get_variable_int((char *)"stats_time_backend_query");

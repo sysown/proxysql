@@ -70,6 +70,7 @@ static inline char is_normal_char(char c) {
 }
 
 static const std::set<std::string> mysql_variables_boolean = {
+	"aurora_read_replica_read_committed",
 	"foreign_key_checks",
 	"innodb_strict_mode",
 	"innodb_table_locks",
@@ -94,11 +95,21 @@ static const std::set<std::string> mysql_variables_numeric = {
 	"max_sort_length",
 	"optimizer_prune_level",
 	"optimizer_search_depth",
+	"query_cache_type",
 	"sort_buffer_size",
 	"sql_select_limit",
 	"timestamp",
 	"tmp_table_size",
 	"wsrep_sync_wait"
+};
+static const std::set<std::string> mysql_variables_strings = {
+	"default_storage_engine",
+	"default_tmp_storage_engine",
+	"group_replication_consistency",
+	"lc_messages",
+	"lc_time_names",
+	"optimizer_switch",
+	"wsrep_osu_method",
 };
 
 extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);
@@ -618,6 +629,7 @@ MySQL_Session::MySQL_Session() {
 	last_insert_id=0; // #1093
 
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
+	proxysql_node_address = NULL;
 	use_ldap_auth = false;
 }
 
@@ -715,6 +727,10 @@ MySQL_Session::~MySQL_Session() {
 	if (mirror) {
 		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
 		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+	}
+	if (proxysql_node_address) {
+		delete proxysql_node_address;
+		proxysql_node_address = NULL;
 	}
 }
 
@@ -1258,7 +1274,8 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		}
 	}
 
-	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
+	//handle 2564
+	if (pkt->size==SELECT_VERSION_COMMENT_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncmp((char *)SELECT_VERSION_COMMENT,(char *)pkt->ptr+5,pkt->size-5)==0) {
 		// FIXME: this doesn't return AUTOCOMMIT or IN_TRANS
 		PtrSize_t pkt_2;
 		if (deprecate_eof_active) {
@@ -2494,12 +2511,15 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 				return ret;
 			} else {
 				proxy_warning("Error while setting %s to \"%s\" on %s:%d hg %d :  %d, %s\n", var_name, var_value, myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
-				if (myerr == 1193) { // variable is not found
-					// FIXME: here we work on absent variables
-					// FIXME: currently we use SQL_NAME_LAST_LOW_WM here
-					// FIXME: but we need to switch to SQL_NAME_LAST_HIGH_WM
-					int idx = SQL_NAME_LAST_LOW_WM; // FIXME: here we work on absent variables
-					for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
+				if (
+					(myerr == 1064) // You have an error in your SQL syntax
+					||
+					(myerr == 1193) // variable is not found
+					||
+					(myerr == 1651) // Query cache is disabled
+				) {
+					int idx = SQL_NAME_LAST_HIGH_WM;
+					for (int i=0; i<SQL_NAME_LAST_HIGH_WM; i++) {
 						if (strcasecmp(mysql_tracked_variables[i].set_variable_name, var_name) == 0) {
 							idx = i;
 							break;
@@ -2755,6 +2775,9 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		}		
 	}
 
+	// NOTE-connect_retries_delay: This check alone is not enough for imposing
+	// 'mysql_thread___connect_retries_delay'. In case of 'async_connect' failing, 'pause_until' should also
+	// be set to 'mysql_thread___connect_retries_delay'. Complementary NOTE below.
 	if (mybe->server_myds->myconn==NULL) {
 		pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
 		*_rc=1;
@@ -2825,6 +2848,14 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 						PROXY_TRACE();
 					}			
 					myds->destroy_MySQL_Connection_From_Pool(false);
+					// NOTE-connect_retries_delay: In case of failure to connect, if
+					// 'mysql_thread___connect_retries_delay' is set, we impose a delay in the session
+					// processing via 'pause_until'. Complementary NOTE above.
+					if (mysql_thread___connect_retries_delay) {
+						pause_until=thread->curtime+mysql_thread___connect_retries_delay*1000;
+						set_status(CONNECTING_SERVER);
+						return false;
+					}
 					NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
 				} else {
 __exit_handler_again___status_CONNECTING_SERVER_with_err:
@@ -3493,7 +3524,7 @@ void MySQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
 			return;
 		}
 	}
-	proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+	proxy_error2(10001, "Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
 	if (thread) {
 		thread->status_variables.stvar[st_var_unexpected_packet]++;
 	}
@@ -3522,7 +3553,10 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 				sprintf(buf, "localhost");
 				break;
 		}
-		proxy_error("Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
+		// PMC-10001: A unexpected packet has been received from client. This error has two potential causes:
+		//  * Bug: ProxySQL state machine wasn't in the correct state when a legitimate client packet was received.
+		//  * Client error: The client incorrectly sent a packet breaking MySQL protocol.
+		proxy_error2(10001, "Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
 	}
 }
 
@@ -4600,7 +4634,8 @@ handler_again:
 									auto server_hash = myconn->var_hash[i];
 									if (client_hash != server_hash) {
 										if(
-											//!myconn->var_absent[i] &&    // we currently ignore this because we assume all variables exist
+											!myconn->var_absent[i]
+											&&
 											mysql_variables.verify_variable(this, i)
 										) {
 											goto handler_again;
@@ -5234,7 +5269,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 						char *_s=(char *)malloc(strlen(_a)+strlen(client_myds->myconn->userinfo->username)+32);
 						sprintf(_s, _a, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL, _pid, 1045,(char *)"28000", _s, true);
-						proxy_error("ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
+						proxy_error("ProxySQL Error: Access denied for user '%s' (using password: %s). SSL is required\n", client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Access denied for user '%s' (using password: %s). SSL is required\n", this, client_myds, client_myds->myconn->userinfo->username, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
 						__sync_add_and_fetch(&MyHGM->status.client_connections_aborted,1);
 						free(_s);
@@ -5685,7 +5720,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					if (it->second.size() < 1 || it->second.size() > 2) {
 						// error not enough arguments
 						string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-						proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+						// PMC-10002: A query has failed to be parsed. This can be due a incorrect query or
+						// due to ProxySQL not being able to properly parse it. In case the query is correct a
+						// bug report should be filed including the offending query.
+						proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
 						unable_to_parse_set_statement(lock_hostgroup);
 						return false;
@@ -5693,6 +5731,16 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					auto values = std::begin(it->second);
 					if (var == "sql_mode") {
 						std::string value1 = *values;
+						if (strcasecmp(value1.c_str(),"NO_BACKSLASH_ESCAPE") != 0) {
+							// client is setting NO_BACKSLASH_ESCAPE in sql_mode
+							// Because we will reply with an OK packet without
+							// first setting sql_mode to the backend (this is
+							// by design) we need to set no_backslash_escapes
+							// in the client connection
+							if (client_myds && client_myds->myconn) { // some extra sanity check
+								client_myds->myconn->set_no_backslash_escapes(true);
+							}
+						}
 						if (
 							( strcasecmp(value1.c_str(),(char *)"CONCAT") == 0 )
 							||
@@ -5701,7 +5749,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							( strcasecmp(value1.c_str(),(char *)"IFNULL") == 0 )
 						) {
 							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-							proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+							proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
@@ -5736,13 +5784,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
 						}
-					} else if (
-						   (var == "default_storage_engine")
-						|| (var == "default_tmp_storage_engine")
-						|| (var == "lc_messages")
-						|| (var == "lc_time_names")
-						|| (var == "optimizer_switch")
-					) {
+					} else if (mysql_variables_strings.find(var) != mysql_variables_strings.end()) {
 						std::string value1 = *values;
 						std::size_t found_at = value1.find("@");
 						if (found_at != std::string::npos) {
@@ -5767,7 +5809,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								}
 							}
 						}
-					//} else if (
 					} else if (mysql_variables_boolean.find(var) != mysql_variables_boolean.end()) {
 						int idx = SQL_NAME_LAST_HIGH_WM;
 						for (int i = 0 ; i < SQL_NAME_LAST_HIGH_WM ; i++) {
@@ -5794,8 +5835,24 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							}
 						}
 						if (idx != SQL_NAME_LAST_HIGH_WM) {
-							if (mysql_variables.parse_variable_number(this,idx, *values, lock_hostgroup)==false) {
-								return false;
+							if (var == "query_cache_type") {
+								// note that query_cache_type variable can act both as boolean AND a number , but also accept "DEMAND"
+								// See https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_query_cache_type
+								std::string value1 = *values;
+								if (strcasecmp(value1.c_str(),"off")==0 || strcasecmp(value1.c_str(),"false")==0) {
+									value1 = "0";
+								} else if (strcasecmp(value1.c_str(),"on")==0 || strcasecmp(value1.c_str(),"true")==0) {
+									value1 = "1";
+								} else if (strcasecmp(value1.c_str(),"demand")==0 || strcasecmp(value1.c_str(),"true")==0) {
+									value1 = "2";
+								}
+								if (mysql_variables.parse_variable_number(this,idx, value1, lock_hostgroup)==false) {
+									return false;
+								}
+							} else {
+								if (mysql_variables.parse_variable_number(this,idx, *values, lock_hostgroup)==false) {
+									return false;
+								}
 							}
 						}
 					} else if (var == "autocommit") {
@@ -6133,7 +6190,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */" , CurrentQuery.QueryLength);
 							if (kq != 0) {
 								string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-								proxy_error("Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+								proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 								return false;
 							}
 						}
@@ -6249,7 +6306,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 
 	// handle case #1797
-	if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
+	// handle case #2564
+       if ((pkt->size==SELECT_CONNECTION_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_CONNECTION_ID,(char *)pkt->ptr+5,pkt->size-5)==0)) {
 		char buf[32];
 		char buf2[32];
 		sprintf(buf,"%u",thread_session_id);
@@ -6316,15 +6374,15 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// if we reached here, we don't know the right backend
 			// we try to determine if it is a simple "SELECT LAST_INSERT_ID()" or "SELECT @@IDENTITY" and we return mysql->last_insert_id
 
-
+			//handle 2564
 			if (
-				(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
+				(pkt->size==SELECT_LAST_INSERT_ID_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID,(char *)pkt->ptr+5,pkt->size-5)==0)
 				||
-				(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
+				(pkt->size==SELECT_LAST_INSERT_ID_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_LAST_INSERT_ID_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
                 ||
-                (pkt->size==SELECT_VARIABLE_IDENTITY_LEN+5 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY,(char *)pkt->ptr+5,pkt->size-5)==0)
+                (pkt->size==SELECT_VARIABLE_IDENTITY_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY,(char *)pkt->ptr+5,pkt->size-5)==0)
                 ||
-                (pkt->size==SELECT_VARIABLE_IDENTITY_LIMIT1_LEN+5 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
+                (pkt->size==SELECT_VARIABLE_IDENTITY_LIMIT1_LEN+5 && *((char *)(pkt->ptr)+4)==(char)0x03 && strncasecmp((char *)SELECT_VARIABLE_IDENTITY_LIMIT1,(char *)pkt->ptr+5,pkt->size-5)==0)
 			) {
 				char buf[32];
 				sprintf(buf,"%llu",last_insert_id);
@@ -6776,7 +6834,6 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 		MYSQL *mysql=stmt->mysql;
 		// no result set
 		int myerrno=mysql_stmt_errno(stmt);
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myerrno);
 		if (myerrno==0) {
 			unsigned int num_rows = mysql_affected_rows(stmt->mysql);
 			unsigned int nTrx=NumActiveTransactions();
@@ -6859,11 +6916,6 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			//client_myds->pkt_sid++;
 		} else {
 			// error
-			if (_myds) {
-				if (_myds->myconn) {
-					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, myerrno);
-				}
-			}
 			char sqlstate[10];
 			sprintf(sqlstate,"%s",mysql_sqlstate(mysql));
 			if (_myds && _myds->killed_at) { // see case #750

@@ -13,6 +13,7 @@
 #include "proxysql_config.h"
 #include "proxysql_restapi.h"
 #include "proxysql_utils.h"
+#include "prometheus_helpers.h"
 #include "cpp.h"
 
 #include "MySQL_Data_Stream.h"
@@ -49,11 +50,13 @@
 #include "platform.h"
 #include "microhttpd.h"
 
+#include <uuid/uuid.h>
 
 #ifdef WITHGCOV
 extern "C" void __gcov_dump();
 extern "C" void __gcov_reset();
 #endif
+
 //#define MYSQL_THREAD_IMPLEMENTATION
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -305,7 +308,7 @@ extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
 pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t admin_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t users_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 pthread_mutex_t test_mysql_firewall_whitelist_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -395,6 +398,8 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 
 #define ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING  "CREATE TABLE mysql_query_rules_fast_routing (username VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , flagIN INT NOT NULL DEFAULT 0 , destination_hostgroup INT CHECK (destination_hostgroup >= 0) NOT NULL , comment VARCHAR NOT NULL , PRIMARY KEY (username, schemaname, flagIN) )"
+
+#define ADMIN_SQLITE_TABLE_GLOBAL_SETTINGS "CREATE TABLE global_settings (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
 #define ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES "CREATE TABLE global_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
 
@@ -534,11 +539,17 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_PROXYSQL_SERVERS "CREATE TABLE runtime_proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
 
+#define STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS "CREATE TABLE stats_proxysql_servers_clients_status (uuid VARCHAR NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , admin_mysql_ifaces VARCHAR NOT NULL , last_seen_at INT NOT NULL , PRIMARY KEY (uuid, hostname, port) )"
+
 #define STATS_SQLITE_TABLE_PROXYSQL_SERVERS_STATUS "CREATE TABLE stats_proxysql_servers_status (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , master VARCHAR NOT NULL , global_version INT NOT NULL , check_age_us INT NOT NULL , ping_time_us INT NOT NULL, checks_OK INT NOT NULL , checks_ERR INT NOT NULL , PRIMARY KEY (hostname, port) )"
 
 #define STATS_SQLITE_TABLE_PROXYSQL_SERVERS_METRICS "CREATE TABLE stats_proxysql_servers_metrics (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , response_time_ms INT NOT NULL , Uptime_s INT NOT NULL , last_check_ms INT NOT NULL , Queries INT NOT NULL , Client_Connections_connected INT NOT NULL , Client_Connections_created INT NOT NULL , PRIMARY KEY (hostname, port) )"
 
 #define STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CHECKSUMS "CREATE TABLE stats_proxysql_servers_checksums (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , name VARCHAR NOT NULL , version INT NOT NULL , epoch INT NOT NULL , checksum VARCHAR NOT NULL , changed_at INT NOT NULL , updated_at INT NOT NULL , diff_check INT NOT NULL , PRIMARY KEY (hostname, port, name) )"
+
+#define STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS "CREATE TABLE stats_proxysql_message_metrics (message_id VARCHAR NOT NULL , filename VARCHAR NOT NULL , line INT CHECK (line >= 0) NOT NULL DEFAULT 0 , func VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , PRIMARY KEY (filename, line, func) )"
+
+#define STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET "CREATE TABLE stats_proxysql_message_metrics_reset (message_id VARCHAR NOT NULL , filename VARCHAR NOT NULL , line INT CHECK (line >= 0) NOT NULL DEFAULT 0 , func VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , PRIMARY KEY (filename, line, func) )"
 
 #ifdef PROXYSQLCLICKHOUSE
 // ClickHouse Tables
@@ -630,8 +641,26 @@ using admin_gauge_tuple =
 		metric_tags
 	>;
 
+using admin_dyn_counter_tuple =
+	std::tuple<
+		p_admin_dyn_counter::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
+using admin_dyn_gauge_tuple =
+	std::tuple<
+		p_admin_dyn_gauge::metric,
+		metric_name,
+		metric_help,
+		metric_tags
+	>;
+
 using admin_counter_vector = std::vector<admin_counter_tuple>;
 using admin_gauge_vector = std::vector<admin_gauge_tuple>;
+using admin_dyn_counter_vector = std::vector<admin_dyn_counter_tuple>;
+using admin_dyn_gauge_vector = std::vector<admin_dyn_gauge_tuple>;
 
 /**
  * @brief Metrics map holding the metrics for the 'ProxySQL_Admin' module.
@@ -641,7 +670,7 @@ using admin_gauge_vector = std::vector<admin_gauge_tuple>;
  *  them. For better visual identification of this groups they are
  *  sepparated using a line separator comment.
  */
-const std::tuple<admin_counter_vector, admin_gauge_vector>
+const std::tuple<admin_counter_vector, admin_gauge_vector, admin_dyn_counter_vector, admin_dyn_gauge_vector>
 admin_metrics_map = std::make_tuple(
 	admin_counter_vector {
 		std::make_tuple (
@@ -818,6 +847,24 @@ admin_metrics_map = std::make_tuple(
 			p_admin_gauge::fds_in_use,
 			"proxysql_fds_in_use",
 			"The number of file descriptors currently in use by ProxySQL.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_admin_gauge::version_info,
+			"proxysql_version_info",
+			"ProxySQL version.",
+			metric_tags {
+				{ "version", PROXYSQL_VERSION },
+				{ "version_comment", std::string { "ProxySQL version " } + PROXYSQL_VERSION + ", codename " + PROXYSQL_CODENAME }
+			}
+		)
+	},
+	admin_dyn_counter_vector {},
+	admin_dyn_gauge_vector {
+		std::make_tuple (
+			p_admin_dyn_gauge::proxysql_servers_clients_status_last_seen_at,
+			"proxysql_servers_clients_status_last_seen_at",
+			"Last time a query was executed in the local Admin interface by the remote ProxySQL instance.",
 			metric_tags {}
 		)
 	}
@@ -1368,6 +1415,65 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
  */
 bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+	if (!(strncasecmp("PROXYSQL CLUSTER_NODE_UUID ", query_no_space, strlen("PROXYSQL CLUSTER_NODE_UUID ")))) {
+		int l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
+		if (sess->client_myds->addr.port == 0) {
+			proxy_warning("Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket. Exiting client\n");
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Received PROXYSQL CLUSTER_NODE_UUID not from TCP socket");
+			sess->client_myds->shut_soft();
+			return false;
+		}
+		if (query_no_space_length >= l+36+2) {
+			uuid_t uu;
+			char *A_uuid = NULL;
+			char *B_interface = NULL;
+			c_split_2(query_no_space+l, " ", &A_uuid, &B_interface); // we split the value
+			if (uuid_parse(A_uuid, uu)==0 && B_interface && strlen(B_interface)) {
+				proxy_info("Received PROXYSQL CLUSTER_NODE_UUID from %s:%d : %s\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, query_no_space+l);
+				if (sess->proxysql_node_address==NULL) {
+					sess->proxysql_node_address = new ProxySQL_Node_Address(sess->client_myds->addr.addr, sess->client_myds->addr.port);
+					sess->proxysql_node_address->uuid = strdup(A_uuid);
+					if (sess->proxysql_node_address->admin_mysql_ifaces) {
+						free(sess->proxysql_node_address->admin_mysql_ifaces);
+					}
+					sess->proxysql_node_address->admin_mysql_ifaces = strdup(B_interface);
+					proxy_info("Created new link with Cluster node %s:%d : %s at interface %s\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, A_uuid, B_interface);
+					SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+					free(A_uuid);
+					free(B_interface);
+					return false;
+				} else {
+					if (strcmp(A_uuid, sess->proxysql_node_address->uuid)) {
+						proxy_error("Cluster node %s:%d is sending a new UUID : %s . Former UUID : %s . Exiting client\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, A_uuid, sess->proxysql_node_address->uuid);
+						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Received PROXYSQL CLUSTER_NODE_UUID with a new UUID not matching the previous one");
+						sess->client_myds->shut_soft();
+						free(A_uuid);
+						free(B_interface);
+						return false;
+					} else {
+						proxy_info("Cluster node %s:%d is sending again its UUID : %s\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, A_uuid);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+						free(A_uuid);
+						free(B_interface);
+						return false;
+					}
+				}
+				free(A_uuid);
+				free(B_interface);
+				return false;
+			} else {
+				proxy_warning("Received PROXYSQL CLUSTER_NODE_UUID from %s:%d with invalid format: %s . Exiting client\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, query_no_space+l);
+				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Received PROXYSQL CLUSTER_NODE_UUID with invalid format");
+				sess->client_myds->shut_soft();
+				return false;
+			}
+		} else {
+			proxy_warning("Received PROXYSQL CLUSTER_NODE_UUID from %s:%d with invalid format: %s . Exiting client\n", sess->client_myds->addr.addr, sess->client_myds->addr.port, query_no_space+l);
+			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Received PROXYSQL CLUSTER_NODE_UUID with invalid format");
+			sess->client_myds->shut_soft();
+			return false;
+		}
+	}
 	if (query_no_space_length==strlen("PROXYSQL READONLY") && !strncasecmp("PROXYSQL READONLY",query_no_space, query_no_space_length)) {
 		// this command enables admin_read_only , so the admin module is in read_only mode
 		proxy_info("Received PROXYSQL READONLY command\n");
@@ -2546,9 +2652,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->mysql_servers_wrlock();
-			SPA->load_proxysql_servers_to_runtime();
-			SPA->mysql_servers_wrunlock();
+			//SPA->mysql_servers_wrlock();
+			// before calling load_proxysql_servers_to_runtime() we release
+			// sql_query_global_mutex to prevent a possible deadlock due to
+			// a race condition
+			// load_proxysql_servers_to_runtime() calls ProxySQL_Cluster::load_servers_list()
+			// that then calls ProxySQL_Cluster_Nodes::load_servers_list(), holding a mutex
+			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
+			SPA->load_proxysql_servers_to_runtime(true);
+			// we re-acquired the mutex because it will be released by the calling function
+			pthread_mutex_lock(&SPA->sql_query_global_mutex);
+			//SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers to RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
@@ -2564,9 +2678,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 		) {
 			proxy_info("Received %s command\n", query_no_space);
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->mysql_servers_wrlock();
+			//SPA->mysql_servers_wrlock();
+			// before save_proxysql_servers_runtime_to_database() we release
+			// sql_query_global_mutex to prevent a possible deadlock due to
+			// a race condition
+			// save_proxysql_servers_runtime_to_database() calls ProxySQL_Cluster::dump_table_proxysql_servers()
+			// that then holds a mutex
+			pthread_mutex_unlock(&SPA->sql_query_global_mutex);
 			SPA->save_proxysql_servers_runtime_to_database(false);
-			SPA->mysql_servers_wrunlock();
+			// we re-acquired the mutex because it will be released by the calling function
+			pthread_mutex_lock(&SPA->sql_query_global_mutex);
+			//SPA->mysql_servers_wrunlock();
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved ProxySQL servers from RUNTIME\n");
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
@@ -2982,6 +3104,9 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	bool stats_proxysql_servers_checksums = false;
 	bool stats_proxysql_servers_metrics = false;
+	bool stats_proxysql_message_metrics = false;
+	bool stats_proxysql_message_metrics_reset = false;
+
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
 	if (strcasestr(query_no_space,"processlist"))
@@ -3056,6 +3181,11 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_proxysql_servers_checksums = true; refresh = true; }
 	if (strstr(query_no_space,"stats_proxysql_servers_metrics"))
 		{ stats_proxysql_servers_metrics = true; refresh = true; }
+	if (strstr(query_no_space,"stats_proxysql_message_metrics"))
+		{ stats_proxysql_message_metrics=true; refresh=true; }
+	if (strstr(query_no_space,"stats_proxysql_message_metrics_reset"))
+		{ stats_proxysql_message_metrics_reset=true; refresh=true; }
+
 	// temporary disabled because not implemented
 /*
 	if (strstr(query_no_space,"stats_proxysql_servers_status"))
@@ -3139,7 +3269,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	}
 //	if (stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_query_digest || stats_mysql_query_digest_reset) {
 	if (refresh==true) {
-		pthread_mutex_lock(&admin_mutex);
+		//pthread_mutex_lock(&admin_mutex);
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
@@ -3183,6 +3313,14 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_proxysql_servers_checksums) {
 			stats___proxysql_servers_checksums();
 		}
+		if (stats_proxysql_message_metrics_reset) {
+			stats___proxysql_message_metrics(true);
+		} else {
+			if (stats_proxysql_message_metrics) {
+				stats___proxysql_message_metrics(false);
+			}
+		}
+
 		// temporary disabled because not implemented
 //		if (stats_proxysql_servers_status) {
 //			stats___proxysql_servers_status();
@@ -3227,9 +3365,15 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				mysql_thread___hostgroup_manager_verbose = old_hostgroup_manager_verbose;
 			}
 			if (runtime_proxysql_servers) {
-				mysql_servers_wrlock();
+				//mysql_servers_wrlock();
+				// before save_proxysql_servers_runtime_to_database() we release
+				// sql_query_global_mutex to prevent a possible deadlock due to
+				// a race condition
+				// save_proxysql_servers_runtime_to_database() calls ProxySQL_Cluster::dump_table_proxysql_servers()
+				pthread_mutex_unlock(&SPA->sql_query_global_mutex);
 				save_proxysql_servers_runtime_to_database(true);
-				mysql_servers_wrunlock();
+				pthread_mutex_lock(&SPA->sql_query_global_mutex);
+				//mysql_servers_wrunlock();
 			}
 			if (runtime_mysql_users) {
 				save_mysql_users_runtime_to_database(true);
@@ -3282,7 +3426,7 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				GloMyMon->populate_monitor_mysql_server_aws_aurora_check_status();
 			}
 		}
-		pthread_mutex_unlock(&admin_mutex);
+		//pthread_mutex_unlock(&admin_mutex);
 	}
 	if (
 		stats_mysql_processlist || stats_mysql_connection_pool || stats_mysql_connection_pool_reset ||
@@ -3587,6 +3731,20 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			}
 		}
 	}
+
+	// if the client simply executes:
+	// SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing
+	// we just return the count
+	if (strcmp("SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing", query_no_space)==0) {
+		int cnt = GloQPro->get_current_query_rules_fast_routing_count();
+		l_free(query_length,query);
+		char buf[256];
+		sprintf(buf,"SELECT %d AS 'COUNT(*)'", cnt);
+		query=l_strdup(buf);
+		query_length=strlen(query)+1;
+		goto __run_query;
+	}
+
 	if (!strncasecmp("TRUNCATE ", query_no_space, strlen("TRUNCATE "))) {
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 			if (strstr(query_no_space,"stats_mysql_query_digest")) {
@@ -4056,9 +4214,9 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 		if ((query_no_space_length>8) && (!strncasecmp("PROXYSQL ", query_no_space, 8))) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received PROXYSQL command\n");
-			pthread_mutex_lock(&admin_mutex);
+			//pthread_mutex_lock(&admin_mutex);
 			run_query=admin_handler_command_proxysql(query_no_space, query_no_space_length, sess, pa);
-			pthread_mutex_unlock(&admin_mutex);
+			//pthread_mutex_unlock(&admin_mutex);
 			goto __run_query;
 		}
 		if ((query_no_space_length>5) && ( (!strncasecmp("SAVE ", query_no_space, 5)) || (!strncasecmp("LOAD ", query_no_space, 5))) ) {
@@ -4914,6 +5072,36 @@ __end_show_commands:
 	}
 
 __run_query:
+	if (sess->proxysql_node_address) {
+		if (sess->client_myds->active) {
+			const string uuid { sess->proxysql_node_address->uuid };
+			const string hostname { sess->proxysql_node_address->hostname };
+			const string port { std::to_string(sess->proxysql_node_address->port) };
+			const string mysql_ifaces { sess->proxysql_node_address->admin_mysql_ifaces };
+
+			time_t now = time(NULL);
+			string q = "INSERT OR REPLACE INTO stats_proxysql_servers_clients_status (uuid, hostname, port, admin_mysql_ifaces, last_seen_at) VALUES (\"";
+			q += uuid;
+			q += "\",\"";
+			q += hostname;
+			q += "\",";
+			q += port;
+			q += ",\"";
+			q += mysql_ifaces;
+			q += "\",";
+			q += std::to_string(now) + ")";
+			SPA->statsdb->execute(q.c_str());
+
+			std::map<string, string> m_labels { { "uuid", uuid }, { "hostname", hostname }, { "port", port } };
+			const string m_id { uuid + ":" + hostname + ":" + port };
+
+			p_update_map_gauge(
+				SPA->metrics.p_proxysql_servers_clients_status_map,
+				SPA->metrics.p_dyn_gauge_array[p_admin_dyn_gauge::proxysql_servers_clients_status_last_seen_at],
+				m_id, m_labels, now
+			);
+		}
+	}
 	if (run_query) {
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
@@ -5376,6 +5564,11 @@ void update_modules_metrics() {
 	if (GloQC) {
 		GloQC->p_update_metrics();
 	}
+	// Update cluster metrics
+	if (GloProxyCluster) {
+		GloProxyCluster->p_update_metrics();
+	}
+
 	// Update admin metrics
 	GloAdmin->p_update_metrics();
 }
@@ -5507,6 +5700,10 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	// Initialize prometheus metrics
 	init_prometheus_counter_array<admin_metrics_map_idx, p_admin_counter>(admin_metrics_map, this->metrics.p_counter_array);
 	init_prometheus_gauge_array<admin_metrics_map_idx, p_admin_gauge>(admin_metrics_map, this->metrics.p_gauge_array);
+	init_prometheus_dyn_gauge_array<admin_metrics_map_idx, p_admin_dyn_gauge>(admin_metrics_map, this->metrics.p_dyn_gauge_array);
+
+	// NOTE: Imposing fixed value to 'version_info' matching 'mysqld_exporter'
+	this->metrics.p_gauge_array[p_admin_gauge::version_info]->Set(1);
 };
 
 void ProxySQL_Admin::wrlock() {
@@ -5680,6 +5877,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
+	insert_into_tables_defs(tables_defs_config,"global_settings", ADMIN_SQLITE_TABLE_GLOBAL_SETTINGS);
 	// the table is not required to be present on disk. Removing it due to #1055
 	insert_into_tables_defs(tables_defs_config,"mysql_collations", ADMIN_SQLITE_TABLE_MYSQL_COLLATIONS);
 	insert_into_tables_defs(tables_defs_config,"scheduler", ADMIN_SQLITE_TABLE_SCHEDULER);
@@ -5726,6 +5924,9 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_checksums", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CHECKSUMS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_metrics", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_STATUS);
+	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_servers_clients_status", STATS_SQLITE_TABLE_PROXYSQL_SERVERS_CLIENTS_STATUS);
+	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
+	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
 
 	// upgrade mysql_servers if needed (upgrade from previous version)
 	disk_upgrade_mysql_servers();
@@ -5769,6 +5970,8 @@ bool ProxySQL_Admin::init() {
 
 	flush_admin_variables___runtime_to_database(configdb, false, false, false);
 	flush_admin_variables___runtime_to_database(admindb, false, true, false);
+
+	load_or_update_global_settings(configdb);
 
 	__insert_or_replace_maintable_select_disktable();
 
@@ -6066,6 +6269,79 @@ int check_port_availability(int port_num, bool* port_free) {
 	return ecode;
 }
 
+void ProxySQL_Admin::load_or_update_global_settings(SQLite3DB *db) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	char *q=(char *)"SELECT variable_name, variable_value FROM global_settings ORDER BY variable_name";
+	db->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+	if (error) {
+		proxy_error("Error on %s : %s\n", q, error);
+	} else {
+		// note: we don't lock, this is done only during bootstrap
+		{
+			char *uuid = NULL;
+			bool write_uuid = true;
+			// search for uuid
+			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+				SQLite3_row *r=*it;
+				if (strcasecmp(r->fields[0],"uuid")==0) {
+					uuid = strdup(r->fields[1]);
+					uuid_t uu;
+					if (uuid) {
+						if (uuid_parse(uuid,uu)==0) {
+							// we successful read an UUID
+						} else {
+							proxy_error("Ignoring invalid UUID format in global_settings: %s\n", uuid);
+							free(uuid);
+							uuid = NULL;
+						}
+					}
+				}
+			}
+			if (uuid) { // we found an UUID in the DB
+				if (GloVars.uuid) { // an UUID is already defined
+					if (strcmp(uuid, GloVars.uuid)==0) { // the match
+						proxy_info("Using UUID: %s\n", uuid);
+						write_uuid = false;
+					} else {
+						// they do not match. The one on DB will be replaced
+						proxy_info("Using UUID: %s . Replacing UUID from database: %s\n", GloVars.uuid, uuid);
+					}
+				} else {
+					// the UUID already defined, so the one in the DB will be used
+					proxy_info("Using UUID from database: %s\n", uuid);
+					GloVars.uuid=strdup(uuid);
+				}
+			} else {
+				if (GloVars.uuid) {
+					// we will write the UUID in the DB
+					proxy_info("Using UUID: %s . Writing it to database\n", GloVars.uuid);
+				} else {
+					// UUID not defined anywhere, we will create a new one
+					uuid_t uu;
+					uuid_generate(uu);
+					char buf[40];
+					uuid_unparse(uu, buf);
+					GloVars.uuid=strdup(buf);
+					proxy_info("Using UUID: %s , randomly generated. Writing it to database\n", GloVars.uuid);
+				}
+			}
+			if (write_uuid) {
+				std::string s = "INSERT OR REPLACE INTO global_settings VALUES (\"uuid\", \"";
+				s += GloVars.uuid;
+				s += "\")";
+				db->execute(s.c_str());
+			}
+			if (uuid) {
+				free(uuid);
+				uuid=NULL;
+			}
+		}
+	}
+}
+
 void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
 	char *error=NULL;
@@ -6118,8 +6394,13 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 			int cols=0;
 			int affected_rows=0;
 			SQLite3_result *resultset=NULL;
-			char *q=(char *)"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name";
-			admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+			std::string q;
+			if (GloVars.cluster_sync_interfaces) {
+				q="SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'admin-\%' ORDER BY variable_name";
+			} else {
+				q="SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'admin-\%' AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_ADMIN) + " ORDER BY variable_name";
+			}
+			admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
 			uint64_t hash1 = resultset->raw_checksum();
 			uint32_t d32[2];
 			char buf[20];
@@ -6443,16 +6724,24 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		free(previous_default_charset);
 		free(previous_default_collation_connection);
 		GloMTH->commit();
+		GloMTH->wrunlock();
 		if (checksum_variables.checksum_mysql_variables) {
+			// NOTE: 'GloMTH->wrunlock()' should have been called before this point to avoid possible
+			// deadlocks. See issue #3847.
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
-			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, false);
+			flush_mysql_variables___runtime_to_database(admindb, false, false, false, true, true);
 			char *error=NULL;
 			int cols=0;
 			int affected_rows=0;
 			SQLite3_result *resultset=NULL;
-			char *q=(char *)"SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-%' ORDER BY variable_name";
-			admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+			std::string q;
+			q = "SELECT variable_name, variable_value FROM runtime_global_variables WHERE variable_name LIKE 'mysql-\%' AND variable_name NOT IN ('mysql-threads')";
+			if (GloVars.cluster_sync_interfaces == false) {
+				q += " AND variable_name NOT IN " + string(CLUSTER_SYNC_INTERFACES_MYSQL);
+			}
+			q += " ORDER BY variable_name";
+			admindb->execute_statement(q.c_str(), &error , &cols , &affected_rows , &resultset);
 			uint64_t hash1 = resultset->raw_checksum();
 			uint32_t d32[2];
 			char buf[20];
@@ -6468,7 +6757,6 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			delete resultset;
 		}
-		GloMTH->wrunlock();
 	}
 	if (resultset) delete resultset;
 }
@@ -7549,6 +7837,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			if (update_creds && variables.mysql_ifaces) {
 				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
 			}
+			GloProxyCluster->set_admin_mysql_ifaces(value);
 			return true;
 		} else {
 			return false;
@@ -8910,6 +9199,80 @@ void ProxySQL_Admin::stats___proxysql_servers_metrics() {
 		}
 		(*proxy_sqlite3_finalize)(statement1);
 	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
+void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
+	SQLite3_result* resultset = proxysql_get_message_stats(reset);
+	if (resultset == NULL) return;
+
+	statsdb->execute("BEGIN");
+	if (reset) {
+		statsdb->execute("DELETE FROM stats_proxysql_message_metrics_reset");
+	} else {
+		statsdb->execute("DELETE FROM stats_proxysql_message_metrics");
+	}
+
+	char* query1 = nullptr;
+	char* query32 = nullptr;
+
+	if (reset) {
+		query1=(char*)"INSERT INTO stats_proxysql_message_metrics_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+		query32=(char*)"INSERT INTO stats_proxysql_message_metrics_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7), (?8, ?9, ?10, ?11, ?12, ?13, ?14), (?15, ?16, ?17, ?18, ?19, ?20, ?21), (?22, ?23, ?24, ?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32, ?33, ?34, ?35), (?36, ?37, ?38, ?39, ?40, ?41, ?42), (?43, ?44, ?45, ?46, ?47, ?48, ?49), (?50, ?51, ?52, ?53, ?54, ?55, ?56), (?57, ?58, ?59, ?60, ?61, ?62, ?63), (?64, ?65, ?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75, ?76, ?77), (?78, ?79, ?80, ?81, ?82, ?83, ?84), (?85, ?86, ?87, ?88, ?89, ?90, ?91), (?92, ?93, ?94, ?95, ?96, ?97, ?98), (?99, ?100, ?101, ?102, ?103, ?104, ?105), (?106, ?107, ?108, ?109, ?110, ?111, ?112), (?113, ?114, ?115, ?116, ?117, ?118, ?119), (?120, ?121, ?122, ?123, ?124, ?125, ?126), (?127, ?128, ?129, ?130, ?131, ?132, ?133), (?134, ?135, ?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145, ?146, ?147), (?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161), (?162, ?163, ?164, ?165, ?166, ?167, ?168), (?169, ?170, ?171, ?172, ?173, ?174, ?175), (?176, ?177, ?178, ?179, ?180, ?181, ?182), (?183, ?184, ?185, ?186, ?187, ?188, ?189), (?190, ?191, ?192, ?193, ?194, ?195, ?196), (?197, ?198, ?199, ?200, ?201, ?202, ?203), (?204, ?205, ?206, ?207, ?208, ?209, ?210), (?211, ?212, ?213, ?214, ?215, ?216, ?217), (?218, ?219, ?220, ?221, ?222, ?223, ?224)";
+	} else {
+		query1=(char*)"INSERT INTO stats_proxysql_message_metrics VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)";
+		query32=(char*)"INSERT INTO stats_proxysql_message_metrics VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7), (?8, ?9, ?10, ?11, ?12, ?13, ?14), (?15, ?16, ?17, ?18, ?19, ?20, ?21), (?22, ?23, ?24, ?25, ?26, ?27, ?28), (?29, ?30, ?31, ?32, ?33, ?34, ?35), (?36, ?37, ?38, ?39, ?40, ?41, ?42), (?43, ?44, ?45, ?46, ?47, ?48, ?49), (?50, ?51, ?52, ?53, ?54, ?55, ?56), (?57, ?58, ?59, ?60, ?61, ?62, ?63), (?64, ?65, ?66, ?67, ?68, ?69, ?70), (?71, ?72, ?73, ?74, ?75, ?76, ?77), (?78, ?79, ?80, ?81, ?82, ?83, ?84), (?85, ?86, ?87, ?88, ?89, ?90, ?91), (?92, ?93, ?94, ?95, ?96, ?97, ?98), (?99, ?100, ?101, ?102, ?103, ?104, ?105), (?106, ?107, ?108, ?109, ?110, ?111, ?112), (?113, ?114, ?115, ?116, ?117, ?118, ?119), (?120, ?121, ?122, ?123, ?124, ?125, ?126), (?127, ?128, ?129, ?130, ?131, ?132, ?133), (?134, ?135, ?136, ?137, ?138, ?139, ?140), (?141, ?142, ?143, ?144, ?145, ?146, ?147), (?148, ?149, ?150, ?151, ?152, ?153, ?154), (?155, ?156, ?157, ?158, ?159, ?160, ?161), (?162, ?163, ?164, ?165, ?166, ?167, ?168), (?169, ?170, ?171, ?172, ?173, ?174, ?175), (?176, ?177, ?178, ?179, ?180, ?181, ?182), (?183, ?184, ?185, ?186, ?187, ?188, ?189), (?190, ?191, ?192, ?193, ?194, ?195, ?196), (?197, ?198, ?199, ?200, ?201, ?202, ?203), (?204, ?205, ?206, ?207, ?208, ?209, ?210), (?211, ?212, ?213, ?214, ?215, ?216, ?217), (?218, ?219, ?220, ?221, ?222, ?223, ?224)";
+	}
+
+	sqlite3_stmt* statement1 = nullptr;
+	sqlite3_stmt* statement32 = nullptr;
+	int rc = 0;
+
+	rc = statsdb->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = statsdb->prepare_v2(query32, &statement32);
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	int row_idx = 0;
+	int max_bulk_row_idx = resultset->rows_count/32;
+	max_bulk_row_idx = max_bulk_row_idx*32;
+
+	for (SQLite3_row* r1 : resultset->rows) {
+		int idx=row_idx%32;
+
+		if (row_idx<max_bulk_row_idx) { // bulk
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*7)+1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // message_id
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*7)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // filename
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*7)+3, atoll(r1->fields[2])); ASSERT_SQLITE_OK(rc, statsdb); // line
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*7)+4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // func
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*7)+5, atoll(r1->fields[4])); ASSERT_SQLITE_OK(rc, statsdb); // count_star
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*7)+6, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb); // first_seen
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*7)+7, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb); // last_seen
+
+			if (idx==31) {
+				SAFE_SQLITE3_STEP2(statement32);
+				rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=(*proxy_sqlite3_reset)(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+		} else { // single row
+			rc=(*proxy_sqlite3_bind_text)(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // message_id
+			rc=(*proxy_sqlite3_bind_text)(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // filename
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoll(r1->fields[2])); ASSERT_SQLITE_OK(rc, statsdb); // line
+			rc=(*proxy_sqlite3_bind_text)(statement1, 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb); // func
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 5, atoll(r1->fields[4])); ASSERT_SQLITE_OK(rc, statsdb); // count_star
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb); // first_seen
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb); // last_seen
+
+			SAFE_SQLITE3_STEP2(statement1);
+			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+		}
+		row_idx++;
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	(*proxy_sqlite3_finalize)(statement32);
+
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
@@ -12354,6 +12717,7 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 					newargs[i]=sr->args[i-1];
 				}
 				newargs[0]=sr->filename;
+				proxy_info("Scheduler starting id: %u , filename: %s\n", sr->id, sr->filename);
 				pid_t cpid;
 				cpid = fork();
 				if (cpid == -1) {
@@ -12460,6 +12824,7 @@ void ProxySQL_Admin::flush_proxysql_servers__from_disk_to_memory() {
 }
 
 void ProxySQL_Admin::save_proxysql_servers_runtime_to_database(bool _runtime) {
+	std::lock_guard<std::mutex> lock(proxysql_servers_mutex);
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *query=NULL;
 	SQLite3_result *resultset=NULL;

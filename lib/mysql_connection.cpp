@@ -274,7 +274,6 @@ void MySQL_Connection::compute_unknown_transaction_status() {
 			unknown_transaction_status = false; // no error
 			return;
 		}
-		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, _myerrno);
 		if (_myerrno >= 2000 && _myerrno < 3000) { // client error
 			// do not change it
 			return;
@@ -751,12 +750,8 @@ void MySQL_Connection::connect_start() {
 	//mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	mysql->charset = c;
 	unsigned long client_flags = 0;
-	//if (mysql_thread___client_found_rows)
-	//	client_flags += CLIENT_FOUND_ROWS;
 	if (parent->compression)
 		client_flags |= CLIENT_COMPRESS;
-	//if (mysql_thread___client_multi_statements)
-	//	client_flags += CLIENT_MULTI_STATEMENTS;
 
 	if (myds) {
 		if (myds->sess) {
@@ -2318,7 +2313,7 @@ bool MySQL_Connection::MultiplexDisabled() {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES|STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) ) {
 		ret=true;
 	}
 	if (auto_increment_delay_token) return true;
@@ -2539,6 +2534,17 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			!strcasecmp(query_digest_text,"ROLLBACK")
 		) {
 			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+		}
+	}
+	if (mysql) {
+		if (myds && myds->sess) {
+			if (myds->sess->client_myds && myds->sess->client_myds->myconn) {
+				// if SERVER_STATUS_NO_BACKSLASH_ESCAPES is changed it is likely
+				// because of sql_mode was changed
+				// we set the same on the client connection
+				unsigned int ss = mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES;
+				myds->sess->client_myds->myconn->set_no_backslash_escapes(ss);
+			}
 		}
 	}
 }

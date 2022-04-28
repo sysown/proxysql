@@ -33,12 +33,9 @@
 
 #include <openssl/x509v3.h>
 
-// Minimal headers for exporting metrics using prometheus
-#include <prometheus/counter.h>
-#include <prometheus/exposer.h>
-#include <prometheus/registry.h>
-
 #include <sys/mman.h>
+
+#include <uuid/uuid.h>
 
 /*
 extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
@@ -111,6 +108,10 @@ static char * main_check_latest_version() {
 	curl_global_init(CURL_GLOBAL_ALL);
 	curl_handle = curl_easy_init();
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 2L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYSTATUS, 1l);
+	curl_easy_setopt(curl_handle, CURLOPT_RANGE, "0-31");
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
 
@@ -500,14 +501,41 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.errorlog = strdup(errorlog_path.c_str());
 			}
 		}
+		if (root.exists("uuid")==true) {
+			string uuid;
+			bool rc;
+			rc=root.lookupValue("uuid", uuid);
+			if (rc==true) {
+				uuid_t uu;
+				if (uuid_parse(uuid.c_str(), uu)==0) {
+					if (GloVars.uuid == NULL) {
+						// it is not set yet, that means it wasn't specified on the cmdline
+						GloVars.uuid = strdup(uuid.c_str());
+					}
+				} else {
+					proxy_error("The config file is configured with an invalid UUID: %s\n", uuid.c_str());
+				}
+			}
+		}
+		// if cluster_sync_interfaces is true, interfaces variables are synced too
+		if (root.exists("cluster_sync_interfaces")==true) {
+			bool value_bool;
+			bool rc;
+			rc=root.lookupValue("cluster_sync_interfaces", value_bool);
+			if (rc==true) {
+				GloVars.cluster_sync_interfaces=value_bool;
+			} else {
+				proxy_error("The config file is configured with an invalid cluster_sync_interfaces\n");
+			}
+		}
 		if (root.exists("pidfile")==true) {
 			string pidfile_path;
 			bool rc;
 			rc=root.lookupValue("pidfile", pidfile_path);
 			if (rc==true) {
 				GloVars.pid = strdup(pidfile_path.c_str());
-			}
-		}
+      }
+    }
 		if (root.exists("sqlite3_plugin")==true) {
 			string sqlite3_plugin;
 			bool rc;
@@ -885,7 +913,7 @@ void ProxySQL_Main_init() {
 	glovars.has_debug=false;
 #endif /* DEBUG */
 //	__thr_sfp=l_mem_init();
-
+	proxysql_init_debug_prometheus_metrics();
 }
 
 

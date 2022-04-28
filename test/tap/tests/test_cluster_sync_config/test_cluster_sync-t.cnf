@@ -1,9 +1,9 @@
-datadir="/tmp/proxysql/test/tap/tests/test_cluster_sync_config"
+datadir=""
 
 admin_variables=
 {
     admin_credentials="admin:admin;radmin:radmin"
-    mysql_ifaces="0.0.0.0:6032"
+    mysql_ifaces=""
     cluster_username="radmin"
     cluster_password="radmin"
     cluster_check_interval_ms=200
@@ -57,11 +57,5 @@ proxysql_servers =
 		port=0
 		weight=0
 		comment="proxysql130"
-	},
-	{
-		hostname=""
-		port=0
-		weight=0
-		comment="proxysql131"
 	}
 )

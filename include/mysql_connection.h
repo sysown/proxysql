@@ -17,7 +17,7 @@ using json = nlohmann::json;
 #define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX         0x00000080
 #define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
-#define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
+//#define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 
 class Variable {
@@ -80,7 +80,7 @@ class MySQL_Connection {
 	uint32_t var_hash[SQL_NAME_LAST_HIGH_WM];
 	// for now we store possibly missing variables in the lower range
 	// we may need to fix that, but this will cost performance
-	bool var_absent[SQL_NAME_LAST_LOW_WM] = {false};
+	bool var_absent[SQL_NAME_LAST_HIGH_WM] = {false};
 
 	std::vector<uint32_t> dynamic_variables_idx;
 	unsigned int reorder_dynamic_variables_idx();
