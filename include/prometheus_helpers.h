@@ -253,6 +253,36 @@ inline void p_update_counter(prometheus::Counter* const counter, const double ne
 }
 
 /**
+ * @brief Updates the supplied gauge map gauge corresponding with the supplied identifier.
+ *  In case the identifier doesn't exist in the map, a new gauge is created used the supplied
+ *  metric labels and 'gauge family'.
+ *
+ * @param gauge_map The gauge map to be updated.
+ * @param gauge_family The 'gauge family' required to create a new gauge if not present.
+ * @param m_id The target gauge identifier.
+ * @param m_labels The labels for creating the new gauge if not present.
+ * @param new_val The new value to be set in the gauge.
+ */
+inline void p_update_map_gauge(
+	std::map<std::string, prometheus::Gauge*>& gauge_map,
+	prometheus::Family<prometheus::Gauge>* const gauge_family,
+	const std::string& m_id,
+	const std::map<std::string, std::string>& m_labels,
+	const double& new_val
+) {
+
+	const auto& id_val = gauge_map.find(m_id);
+	if (id_val != gauge_map.end()) {
+		id_val->second->Set(new_val);
+	} else {
+		prometheus::Gauge* new_counter = std::addressof(gauge_family->Add(m_labels));
+		gauge_map.insert({m_id, new_counter});
+
+		new_counter->Set(new_val);
+	}
+}
+
+/**
  * @brief Updates the supplied counter map counter which correspond with the supplied identifier.
  *  In case the identifier doesn't exist in the map, a new counter is created used the supplied
  *  metric labels and 'counter family'.
@@ -264,20 +294,17 @@ inline void p_update_counter(prometheus::Counter* const counter, const double ne
  * @param new_val The new value to be set in the counter.
  */
 inline void p_update_map_counter(
-	std::map<std::string, prometheus::Counter*> counter_map,
+	std::map<std::string, prometheus::Counter*>& counter_map,
 	prometheus::Family<prometheus::Counter>* const counter_family,
-	const std::string m_id,
-	const std::map<std::string, std::string> m_labels,
-	const double new_val
+	const std::string& m_id,
+	const std::map<std::string, std::string>& m_labels,
+	const double& new_val
 ) {
 	const auto& id_val = counter_map.find(m_id);
 	if (id_val != counter_map.end()) {
 		p_update_counter(id_val->second, new_val);
 	} else {
-		prometheus::Counter* new_counter =
-			std::addressof(
-				counter_family->Add(m_labels)
-			);
+		prometheus::Counter* new_counter = std::addressof(counter_family->Add(m_labels));
 		counter_map.insert({m_id, new_counter});
 
 		p_update_counter(new_counter, new_val);
@@ -294,19 +321,16 @@ inline void p_update_map_counter(
  * @param m_labels The labels for creating a new counter if not present.
  */
 inline void p_inc_map_counter(
-	std::map<std::string, prometheus::Counter*> counter_map,
+	std::map<std::string, prometheus::Counter*>& counter_map,
 	prometheus::Family<prometheus::Counter>* const counter_family,
-	const std::string m_id,
-	const std::map<std::string, std::string> m_labels
+	const std::string& m_id,
+	const std::map<std::string, std::string>& m_labels
 ) {
 	const auto& id_val = counter_map.find(m_id);
 	if (id_val != counter_map.end()) {
 		id_val->second->Increment();
 	} else {
-		prometheus::Counter* new_counter =
-			std::addressof(
-				counter_family->Add(m_labels)
-			);
+		prometheus::Counter* new_counter = std::addressof(counter_family->Add(m_labels));
 		counter_map.insert({m_id, new_counter});
 
 		new_counter->Increment();

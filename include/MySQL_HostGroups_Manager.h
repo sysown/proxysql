@@ -414,13 +414,30 @@ class MySQL_HostGroups_Manager {
 	 */
 	void p_update_mysql_gtid_executed();
 
-	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
-	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
+	void p_update_connection_pool_update_counter(
+		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
+		std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx
+	);
+	void p_update_connection_pool_update_gauge(
+		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
+		std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx
+	);
 
 	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
 
 	public:
 	std::mutex galera_set_writer_mutex;
+	/**
+	 * @brief Mutex used to guard 'mysql_servers_to_monitor' resulset.
+	 */
+	std::mutex mysql_servers_to_monitor_mutex;
+	/**
+	 * @brief Resulset containing the latest 'mysql_servers' present in 'mydb'.
+	 * @details This resulset should be updated via 'update_table_mysql_servers_for_monitor' each time actions
+	 *   that modify the 'mysql_servers' table are performed.
+	 */
+	SQLite3_result* mysql_servers_to_monitor;
+
 	pthread_rwlock_t gtid_rwlock;
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;
 	struct ev_async * gtid_ev_async;
@@ -533,6 +550,19 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *dump_table_mysql_group_replication_hostgroups();
 	SQLite3_result *dump_table_mysql_galera_hostgroups();
 	SQLite3_result *dump_table_mysql_aws_aurora_hostgroups();
+	/**
+	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
+	 *   'mysql_servers' present in 'MySQL_HostGroups_Manager' db, which are not 'OFFLINE_HARD'. The resulset
+	 *   fields match the definition of 'monitor.mysql_servers' table.
+	 * @details Several details:
+	 *   - Function assumes that 'mysql_servers' table from 'MySQL_HostGroups_Manager' db is ready
+	 *     to be consumed, because of this it doesn't perform any of the following operations:
+	 *       - Purging 'mysql_servers' table.
+	 *       - Regenerating 'mysql_servers' table.
+	 *   - Function locks on 'mysql_servers_to_monitor_mutex'.
+	 * @param lock When supplied the function calls 'wrlock()' and 'wrunlock()' functions for accessing the db.
+	 */
+	void update_table_mysql_servers_for_monitor(bool lock=false);
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);

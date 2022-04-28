@@ -572,7 +572,10 @@ std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 			gtid_set = gtid_set + s2;
 		}
 	}
-	gtid_set.pop_back();
+	// Extract latest comma only in case 'gtid_executed' isn't empty
+	if (gtid_set.empty() == false) {
+		gtid_set.pop_back();
+	}
 	return gtid_set;
 }
 
@@ -1416,6 +1419,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	gtid_ev_loop=NULL;
 	gtid_ev_timer=NULL;
 	gtid_ev_async = (struct ev_async *)malloc(sizeof(struct ev_async));
+	mysql_servers_to_monitor = NULL;
 
 	{
 		static const char alphanum[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -2067,6 +2071,11 @@ bool MySQL_HostGroups_Manager::commit() {
 	this->status.p_counter_array[p_hg_counter::servers_table_version]->Increment();
 	pthread_cond_broadcast(&status.servers_table_version_cond);
 	pthread_mutex_unlock(&status.servers_table_version_lock);
+
+	// NOTE: In order to guarantee the latest generated version, this should be kept after all the
+	// calls to 'generate_mysql_servers'.
+	update_table_mysql_servers_for_monitor(false);
+
 	wrunlock();
 	unsigned long long curtime2=monotonic_time();
 	curtime1 = curtime1/1000;
@@ -2134,7 +2143,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 				}
 				if (gtid_is) {
 					gtid_is->active = true;
-				} else {
+				} else if (mysrvc->status != MYSQL_SERVER_STATUS_OFFLINE_HARD) {
 					// we didn't find it. Create it
 					/*
 					struct ev_io *watcher = (struct ev_io *)malloc(sizeof(struct ev_io));
@@ -2581,6 +2590,36 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	return resultset;
 }
 
+void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock) {
+	if (lock) {
+		wrlock();
+	}
+
+	std::lock_guard<std::mutex> mysql_servers_lock(this->mysql_servers_to_monitor_mutex);
+
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+	char* query = const_cast<char*>("SELECT hostname, port, status, use_ssl FROM mysql_servers WHERE status != 3 GROUP BY hostname, port");
+
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+
+	if (error != nullptr) {
+		proxy_error("Error on read from mysql_servers : %s\n", error);
+	} else {
+		if (resultset != nullptr) {
+			delete this->mysql_servers_to_monitor;
+			this->mysql_servers_to_monitor = resultset;
+		}
+	}
+
+	if (lock) {
+		wrunlock();
+	}
+}
+
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_replication_hostgroups() {
 	wrlock();
 	char *error=NULL;
@@ -2740,6 +2779,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 	unsigned int sum=0;
 	unsigned int TotalUsedConn=0;
 	unsigned int l=mysrvs->cnt();
+	static time_t last_hg_log = 0;
 #ifdef TEST_AURORA
 	unsigned long long a1 = array_mysrvc_total/10000;
 	array_mysrvc_total += l;
@@ -2889,7 +2929,6 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			// per issue #531 , we try a desperate attempt to bring back online any shunned server
 			// we do this lowering the maximum wait time to 10%
 			// most of the follow code is copied from few lines above
-			static time_t last_hg_log = 0;
 			time_t t;
 			t=time(NULL);
 			int max_wait_sec = ( mysql_thread___shun_recovery_time_sec * 1000 >= mysql_thread___connect_timeout_server_max ? mysql_thread___connect_timeout_server_max/10000 - 1 : mysql_thread___shun_recovery_time_sec/10 );
@@ -2898,9 +2937,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 			}
 			if (t - last_hg_log > 1) { // log this at most once per second to avoid spamming the logs
 				last_hg_log = time(NULL);
-				proxy_error("Hostgroup %u has no servers available%s! Checking servers shunned for more than %u second%s\n", hid,
-				(max_connections_reached ? " or max_connections reached for all servers" : ""),
-				max_wait_sec, max_wait_sec == 1 ? "" : "s");
+
+				if (gtid_trxid) {
+					proxy_error("Hostgroup %u has no servers ready for GTID '%s:%d'. Waiting for replication...\n", hid, gtid_uuid, gtid_trxid);
+				} else {
+					proxy_error("Hostgroup %u has no servers available%s! Checking servers shunned for more than %u second%s\n", hid,
+						(max_connections_reached ? " or max_connections reached for all servers" : ""), max_wait_sec, max_wait_sec == 1 ? "" : "s");
+				}
 			}
 			for (j=0; j<l; j++) {
 				mysrvc=mysrvs->idx(j);
@@ -3049,6 +3092,13 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 #endif // TEST_AURORA
 				return mysrvc;
 			}
+		}
+	} else {
+		time_t t = time(NULL);
+
+		if (t - last_hg_log > 1) {
+			last_hg_log = time(NULL);
+			proxy_error("Hostgroup %u has no servers available!\n", hid);
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySrvC NULL\n");
@@ -3619,6 +3669,9 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 	int num_conn_current=0;
 	int j,k;
 	MyHGC* myhgc = NULL;
+	// Multimap holding the required info for accesing the oldest idle connections found.
+	std::multimap<uint64_t,std::pair<MySrvC*,int32_t>> oldest_idle_connections {};
+
 	for (int i=0; i<(int)MyHostGroups->len; i++) {
 		if (_hid == -1) {
 			// all hostgroups must be examined
@@ -3642,17 +3695,71 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				MySQL_Connection *mc=mscl->index(k);
 				// If the connection is idle ...
 				if (mc->last_time_used && mc->last_time_used < _max_last_time_used) {
-					//mc=(MySQL_Connection *)pa->remove_index_fast(k);
-					mc=mscl->remove(k);
-					mysrvc->ConnectionsUsed->add(mc);
-					k--;
-					conn_list[num_conn_current]=mc;
-					num_conn_current++;
-					if (num_conn_current>=num_conn) goto __exit_get_multiple_idle_connections;
+					if (oldest_idle_connections.size() < num_conn) {
+						oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
+					} else if (num_conn != 0) {
+						auto last_elem_it = std::prev(oldest_idle_connections.end());
+
+						if (mc->last_time_used < last_elem_it->first) {
+							oldest_idle_connections.erase(last_elem_it);
+							oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
+						}
+					}
 				}
 			}
 		}
 	}
+
+	// In order to extract the found connections, the following actions must be performed:
+	//
+	// 1. Filter the found connections by 'MySrvC'.
+	// 2. Order by indexes on 'ConnectionsFree' in desc order.
+	// 3. Move the conns from 'ConnectionsFree' into 'ConnectionsUsed'.
+	std::unordered_map<MySrvC*,vector<int>> mysrvcs_conns_idxs {};
+
+	// 1. Filter the connections by 'MySrvC'.
+	//
+	// We extract this for being able to later iterate through the obtained 'MySrvC' using the conn indexes.
+	for (const auto& conn_info : oldest_idle_connections) {
+		MySrvC* mysrvc = conn_info.second.first;
+		int32_t mc_idx = conn_info.second.second;
+		auto mysrcv_it = mysrvcs_conns_idxs.find(mysrvc);
+
+		if (mysrcv_it == mysrvcs_conns_idxs.end()) {
+			mysrvcs_conns_idxs.insert({ mysrvc, { mc_idx }});
+		} else {
+			mysrcv_it->second.push_back(mc_idx);
+		}
+	}
+
+	// 2. Order by indexes on FreeConns in desc order.
+	//
+	// Since the conns are stored in 'ConnectionsFree', which holds the conns in a 'PtrArray', and we plan
+	// to remove multiple connections using the pre-stored indexes. We need to reorder the indexes in 'desc'
+	// order, otherwise we could be trashing the array while consuming it. See 'PtrArray::remove_index_fast'.
+	for (auto& mysrvc_conns_idxs : mysrvcs_conns_idxs) {
+		std::sort(std::begin(mysrvc_conns_idxs.second), std::end(mysrvc_conns_idxs.second),  std::greater<int>());
+	}
+
+	// 3. Move the conns from 'ConnectionsFree' into 'ConnectionsUsed'.
+	for (auto& conn_info : mysrvcs_conns_idxs) {
+		MySrvC* mysrvc = conn_info.first;
+
+		for (const int conn_idx : conn_info.second) {
+			MySrvConnList* mscl = mysrvc->ConnectionsFree;
+			MySQL_Connection* mc = mscl->remove(conn_idx);
+			mysrvc->ConnectionsUsed->add(mc);
+
+			conn_list[num_conn_current] = mc;
+			num_conn_current++;
+
+			// Left here as a safeguard
+			if (num_conn_current >= num_conn) {
+				goto __exit_get_multiple_idle_connections;
+			}
+		}
+	}
+
 __exit_get_multiple_idle_connections:
 	status.myconnpoll_get_ping+=num_conn_current;
 	wrunlock();
@@ -3811,7 +3918,10 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 	return result;
 }
 
-void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx) {
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(
+	const std::string& endpoint_id, const std::map<std::string, std::string>& labels, std::map<std::string,
+	prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx
+) {
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		const auto& cur_val = counter_id->second->Value();
@@ -3827,7 +3937,10 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(std::stri
 	}
 }
 
-void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx) {
+void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(
+	const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
+	std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx
+) {
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		counter_id->second->Set(value);
@@ -3910,20 +4023,15 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	}
 
 	// Remove the non-present servers for the gauge metrics
-	vector<string> keys {};
-	vector<string> f_keys {};
+	vector<string> missing_server_keys {};
 
 	for (const auto& key : status.p_connection_pool_status_map) {
-		keys.push_back(key.first);
-	}
-
-	for (const auto& key : keys) {
-		if (std::find(cur_servers_ids.begin(), cur_servers_ids.end(), key) == cur_servers_ids.end()) {
-			f_keys.push_back(key);
+		if (std::find(cur_servers_ids.begin(), cur_servers_ids.end(), key.first) == cur_servers_ids.end()) {
+			missing_server_keys.push_back(key.first);
 		}
 	}
 
-	for (const auto& key : f_keys) {
+	for (const auto& key : missing_server_keys) {
 		auto gauge = status.p_connection_pool_status_map[key];
 		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_status]->Remove(gauge);
 		status.p_connection_pool_status_map.erase(key);
@@ -7030,6 +7138,9 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 				generate_mysql_servers_table(&_rhid);
 				free(query);
 			}
+			// NOTE: Because 'commit' isn't called, we are required to update 'mysql_servers_for_monitor'.
+			// Also note that 'generate_mysql_servers' is previously called.
+			update_table_mysql_servers_for_monitor(false);
 			wrunlock();
 			// it is now time to build a new structure in Monitor
 			pthread_mutex_lock(&AWS_Aurora_Info_mutex);

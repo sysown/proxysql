@@ -534,6 +534,7 @@ class MySQL_Threads_Handler
 		int set_query_lock_on_hostgroup;
 		int reset_connection_algorithm;
 		int auto_increment_delay_multiplex;
+		int auto_increment_delay_multiplex_timeout_ms;
 		int long_query_time;
 		int hostgroup_manager_verbose;
 		int binlog_reader_connect_retry_msec;

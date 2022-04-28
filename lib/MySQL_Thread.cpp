@@ -513,6 +513,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"set_query_lock_on_hostgroup",
 	(char *)"reset_connection_algorithm",
 	(char *)"auto_increment_delay_multiplex",
+	(char *)"auto_increment_delay_multiplex_timeout_ms",
 	(char *)"long_query_time",
 	(char *)"query_cache_size_MB",
 	(char *)"ping_interval_server_msec",
@@ -1111,6 +1112,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.set_query_lock_on_hostgroup=1;
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
+	variables.auto_increment_delay_multiplex_timeout_ms=10000;
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.init_connect=NULL;
@@ -2155,6 +2157,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["mirror_max_queue_length"] = make_tuple(&variables.mirror_max_queue_length, 0, 1024*1024, false);
 		// query processor and query digest
 		VariablesPointers_int["auto_increment_delay_multiplex"]  = make_tuple(&variables.auto_increment_delay_multiplex,   0,     1000000, false);
+		VariablesPointers_int["auto_increment_delay_multiplex_timeout_ms"]  = make_tuple(&variables.auto_increment_delay_multiplex_timeout_ms,   0, 3600*1000, false);
 		VariablesPointers_int["default_query_delay"]             = make_tuple(&variables.default_query_delay,              0,   3600*1000, false);
 		VariablesPointers_int["default_query_timeout"]           = make_tuple(&variables.default_query_timeout,         1000,20*24*3600*1000, false);
 		VariablesPointers_int["query_digests_grouping_limit"]    = make_tuple(&variables.query_digests_grouping_limit,     1,        2089, false);
@@ -3711,6 +3714,14 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 			}
 		}
 	}
+
+	if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
+		MySQL_Connection* myconn = sess->mybe->server_myds->myconn;
+
+		if (mysql_thread___auto_increment_delay_multiplex_timeout_ms != 0 && (sess_time/1000 > mysql_thread___auto_increment_delay_multiplex_timeout_ms)) {
+			myconn->auto_increment_delay_token = 0;
+		}
+	}
 }
 
 void MySQL_Thread::process_all_sessions() {
@@ -3860,6 +3871,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___set_query_lock_on_hostgroup=GloMTH->get_variable_int((char *)"set_query_lock_on_hostgroup");
 	mysql_thread___reset_connection_algorithm=GloMTH->get_variable_int((char *)"reset_connection_algorithm");
 	mysql_thread___auto_increment_delay_multiplex=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex");
+	mysql_thread___auto_increment_delay_multiplex_timeout_ms=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex_timeout_ms");
 	mysql_thread___default_max_latency_ms=GloMTH->get_variable_int((char *)"default_max_latency_ms");
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");
@@ -3892,7 +3904,7 @@ void MySQL_Thread::refresh_variables() {
 	if (mysql_thread___ssl_p2s_ca) free(mysql_thread___ssl_p2s_ca);
 	mysql_thread___ssl_p2s_ca=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
 	if (mysql_thread___ssl_p2s_capath) free(mysql_thread___ssl_p2s_capath);
-	mysql_thread___ssl_p2s_capath=GloMTH->get_variable_string((char *)"ssl_p2s_ca");
+	mysql_thread___ssl_p2s_capath=GloMTH->get_variable_string((char *)"ssl_p2s_capath");
 	if (mysql_thread___ssl_p2s_cert) free(mysql_thread___ssl_p2s_cert);
 	mysql_thread___ssl_p2s_cert=GloMTH->get_variable_string((char *)"ssl_p2s_cert");
 	if (mysql_thread___ssl_p2s_key) free(mysql_thread___ssl_p2s_key);

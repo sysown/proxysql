@@ -50,15 +50,9 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 libssl/openssl/libssl.a:
-#	cd libssl && rm -rf openssl-1.1.0h || true
-#	cd libssl && tar -zxf openssl-1.1.0h.tar.gz
-	cd libssl && rm -rf openssl-1.1.1d || true
-	cd libssl && rm -rf openssl-1.1.0h || true
-	cd libssl && rm -rf openssl-1.1.1g || true
-	cd libssl && rm -rf openssl-1.1.1j || true
-	cd libssl && rm -rf openssl-openssl-3.0.0 || true
-	cd libssl && tar -zxf openssl-3.0.0.tar.gz
-	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
+	cd libssl && rm -rf openssl-openssl-*/ || true
+	cd libssl && tar -zxf openssl-*.tar.gz
+ 	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
 	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
@@ -106,9 +100,8 @@ libev/libev/.libs/libev.a:
 ev: libev/libev/.libs/libev.a
 
 curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
-	cd curl && rm -rf curl-7.57.0 || true
-	cd curl && rm -rf curl-7.77.0 || true
-	cd curl && tar -zxf curl-7.77.0.tar.gz
+	cd curl && rm -rf curl-*/ || true
+	cd curl && tar -zxf curl-*.tar.gz
 	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
 	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
 curl: curl/curl/lib/.libs/libcurl.a

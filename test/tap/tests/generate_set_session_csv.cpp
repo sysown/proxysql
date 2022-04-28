@@ -108,6 +108,19 @@ void add_value_j(std::string& j, const std::string& s, variable *v) {
 }
 
 
+void add_values_and_quotes(const std::string& name, const std::vector<std::string>& values) {
+	for (std::vector<std::string>::const_iterator it = values.begin(); it != values.end(); it++) {
+		vars[name]->add(*it);
+		std::string s;
+		s = "\"" + *it + "\"";
+		vars[name]->add(s);
+		s = "'" + *it + "'";
+		vars[name]->add(s);
+		s = "`" + *it + "`";
+		vars[name]->add(s);
+	}
+}
+
 int main() {
 
 	srand(1);
@@ -132,6 +145,8 @@ int main() {
 	vars["innodb_strict_mode"]->add(bool_values);
 	vars["innodb_table_locks"] = new variable("innodb_table_locks", true, false, true);
 	vars["innodb_table_locks"]->add(bool_values);
+	vars["aurora_read_replica_read_committed"] = new variable("aurora_read_replica_read_committed", true, false, true);
+	vars["aurora_read_replica_read_committed"]->add(bool_values);
 
 	//vars[""] = new variable("");
 	//vars[""]->add(bool_values);
@@ -158,6 +173,12 @@ int main() {
 			*it = std::to_string(a);
 		}
 	}
+
+	vars["query_cache_type"] = new variable("query_cache_type", true, true, false);
+	vars["query_cache_type"]->add(bool_values);
+	vars["query_cache_type"]->add("2");
+	add_values_and_quotes("query_cache_type", {"DeMaNd"});
+
 	vars["lock_wait_timeout"] = new variable("lock_wait_timeout", true, true, false);
 	vars["lock_wait_timeout"]->add(int_values_small, 321);
 	vars["max_join_size"] = new variable("max_join_size", true, true, false);
@@ -240,22 +261,15 @@ int main() {
 
 
 	vars["default_storage_engine"] = new variable("default_storage_engine", true, false, false);
-	{
-		std::vector<std::string> engines = {"InnoDB", "MEMORY", "MyISAM", "BLACKHOLE"};
-		for (std::vector<std::string>::iterator it = engines.begin(); it != engines.end(); it++) {
-			vars["default_storage_engine"]->add(*it);
-			std::string s;
-			s = "\"" + *it + "\"";
-			vars["default_storage_engine"]->add(s);
-			s = "'" + *it + "'";
-			vars["default_storage_engine"]->add(s);
-			s = "`" + *it + "`";
-			vars["default_storage_engine"]->add(s);
-		}
-	}
+	add_values_and_quotes("default_storage_engine", {"InnoDB", "MEMORY", "MyISAM", "BLACKHOLE"});
 	vars["default_tmp_storage_engine"] = new variable("default_tmp_storage_engine", true, false, false);
 	vars["default_tmp_storage_engine"]->add(vars["default_storage_engine"]->values);
 
+	vars["group_replication_consistency"] = new variable("group_replication_consistency", true, false, false);
+	add_values_and_quotes("group_replication_consistency", {"EVENTUAL", "BEFORE_ON_PRIMARY_FAILOVER", "BEFORE", "AFTER", "BEFORE_AND_AFTER"});
+
+	vars["wsrep_osu_method"] = new variable("wsrep_osu_method", true, false, false);
+	add_values_and_quotes("wsrep_osu_method", {"TOI","RSU"});
 /*
 example:
 "SET sql_mode='NO_ENGINE_SUBSTITUTION', sql_select_limit=3030, session_track_gtids=OWN_GTID; SET max_join_size=10000; ", "{'sql_mode':'NO_ENGINE_SUBSTITUTION','sql_select_limit':'3030', 'max_join_size':'10000', 'session_track_gtids':'OWN_GTID'}"
@@ -269,7 +283,7 @@ example:
 			i++;
 		}
 	}
-	for (int i=0; i<20000; i++) {
+	for (int i=0; i<40000; i++) {
 		int ne = rand()%4+1;
 		variable * va[ne];
 		for (int ine = 0; ine < ne; ) {

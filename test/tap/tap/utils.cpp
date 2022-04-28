@@ -22,6 +22,8 @@
 
 #include "proxysql_utils.h"
 
+using std::string;
+
 int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value) {
 	char query[128];
 
@@ -122,51 +124,6 @@ int get_server_version(MYSQL *mysql, std::string& version) {
 	return 0;
 }
 
-int kill_child_proc(pid_t child_pid, const uint timeout_us, const uint it_sleep_us) {
-	uint err = 0;
-	uint waited = 0;
-	int child_status = 0;
-
-	err = kill(child_pid, SIGTERM);
-
-	while (waitpid(child_pid, &child_status, WNOHANG) == 0) {
-		if (waited >= timeout_us) {
-			kill(child_pid, SIGKILL);
-			waited = 0;
-		} else {
-			waited += it_sleep_us;
-		}
-
-		usleep(it_sleep_us);
-	}
-
-	return err;
-}
-
-int read_pipe(int pipe_fd, std::string& sbuffer) {
-	char buffer[128];
-	ssize_t count = 0;
-	int res = 1;
-
-	for (;;) {
-		count = read(pipe_fd, (void*)buffer, sizeof(buffer) - 1);
-		if (count > 0) {
-			buffer[count] = 0;
-			sbuffer += buffer;
-		} else if (count == 0){
-			res = 0;
-			break;
-		} else {
-			if (errno != EWOULDBLOCK && errno != EINTR) {
-				res = -1;
-			}
-			break;
-		}
-	}
-
-	return res;
-}
-
 int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
 	std::random_device rd;
 	std::mt19937 mt(rd());
@@ -216,156 +173,6 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
 
 	return add_more_rows_test_sbtest1(num_rows, mysql);
-}
-
-int wexecvp(const std::string& file, const std::vector<const char*>& argv, const to_opts* opts, std::string& s_stdout, std::string& s_stderr) {
-	// Pipes definition
-	constexpr uint8_t NUM_PIPES = 3;
-	constexpr uint8_t PARENT_WRITE_PIPE = 0;
-	constexpr uint8_t PARENT_READ_PIPE  = 1;
-	constexpr uint8_t PARENT_ERR_PIPE   = 2;
-	int pipes[NUM_PIPES][2];
-	// Pipe selection
-	constexpr uint8_t READ_FD  = 0;
-	constexpr uint8_t WRITE_FD = 1;
-	// Parent pipes
-	const auto& PARENT_READ_FD  = pipes[PARENT_READ_PIPE][READ_FD];
-	const auto& PARENT_READ_ERR = pipes[PARENT_ERR_PIPE][READ_FD];
-	const auto& PARENT_WRITE_FD = pipes[PARENT_WRITE_PIPE][WRITE_FD];
-	// Child pipes
-	const auto& CHILD_READ_FD   = pipes[PARENT_WRITE_PIPE][READ_FD];
-	const auto& CHILD_WRITE_FD  = pipes[PARENT_READ_PIPE][WRITE_FD];
-	const auto& CHILD_WRITE_ERR = pipes[PARENT_ERR_PIPE][WRITE_FD];
-
-	int err = 0;
-	to_opts to_opts { 1000*1000, 100*1000, 500*1000 };
-
-	// Pipes for parent to write and read
-	pipe(pipes[PARENT_READ_PIPE]);
-	pipe(pipes[PARENT_WRITE_PIPE]);
-	pipe(pipes[PARENT_ERR_PIPE]);
-
-	pid_t child_pid = fork();
-	if(child_pid == 0) {
-		std::vector<const char*> _argv = argv;
-
-		// Append null to end of _argv for extra safety
-		_argv.push_back(nullptr);
-		// Duplicate file argument to avoid manual duplication
-		_argv.insert(_argv.begin(), file.c_str());
-
-		if (opts) {
-			to_opts.timeout_us = opts->timeout_us;
-			to_opts.it_delay_us = opts->it_delay_us;
-		}
-
-		// Copy the pipe descriptors
-		dup2(CHILD_READ_FD, STDIN_FILENO);
-		dup2(CHILD_WRITE_FD, STDOUT_FILENO);
-		dup2(CHILD_WRITE_ERR, STDERR_FILENO);
-
-		// Close no longer needed pipes
-		close(CHILD_READ_FD);
-		close(CHILD_WRITE_FD);
-		close(CHILD_WRITE_ERR);
-
-		close(PARENT_READ_FD);
-		close(PARENT_READ_ERR);
-		close(PARENT_WRITE_FD);
-
-		char** args = const_cast<char**>(_argv.data());
-		err = execvp(file.c_str(), args);
-
-		if (err) {
-			exit(errno);
-		} else {
-			exit(0);
-		}
-	} else {
-		int errno_cpy = 0;
-		int pipe_err = 0;
-
-		std::string stdout_ = "";
-		std::string stderr_ = "";
-
-		// Close no longer needed pipes
-		close(CHILD_READ_FD);
-		close(CHILD_WRITE_FD);
-		close(CHILD_WRITE_ERR);
-
-		// Set the pipes in non-blocking mode
-		fcntl(PARENT_READ_FD, F_SETFL, fcntl(PARENT_READ_FD, F_GETFL) | O_NONBLOCK);
-		fcntl(PARENT_READ_ERR, F_SETFL, fcntl(PARENT_READ_ERR, F_GETFL) | O_NONBLOCK);
-
-		fd_set read_fds;
-		int maxfd = PARENT_READ_FD > PARENT_READ_ERR ? PARENT_READ_FD : PARENT_READ_ERR;
-
-		bool stdout_eof = false;
-		bool stderr_eof = false;
-
-		while (!stdout_eof || !stderr_eof) {
-			FD_ZERO(&read_fds);
-			FD_SET(PARENT_READ_FD, &read_fds);
-			FD_SET(PARENT_READ_ERR, &read_fds);
-
-			// Wait for the pipes to be ready
-			timeval select_to = { 0, to_opts.select_to_us };
-			select(maxfd + 1, &read_fds, NULL, NULL, &select_to);
-
-			if (FD_ISSET(PARENT_READ_FD, &read_fds) && stdout_eof == false) {
-				int read_res = read_pipe(PARENT_READ_FD, stdout_);
-
-				if (read_res == 0) {
-					stdout_eof = true;
-				}
-				// Unexpected error while reading pipe
-				if (read_res < 0) {
-					pipe_err = -1;
-					// Backup read errno
-					errno_cpy = errno;
-					// Kill child and return error
-					kill_child_proc(child_pid, to_opts.timeout_us, to_opts.it_delay_us);
-					// Recover errno before return
-					errno = errno_cpy;
-					// Exit the loop
-					break;
-				}
-			}
-
-			if(FD_ISSET(PARENT_READ_ERR, &read_fds) && stderr_eof == false) {
-				int read_res = read_pipe(PARENT_READ_ERR, stderr_);
-
-				if (read_res == 0) {
-					stderr_eof = true;
-				}
-				// Unexpected error while reading pipe
-				if (read_res < 0) {
-					pipe_err = -1;
-					// Backup read errno
-					errno_cpy = errno;
-					// Kill child and return error
-					kill_child_proc(child_pid, to_opts.timeout_us, to_opts.it_delay_us);
-					// Recover errno before return
-					errno = errno_cpy;
-					// Exit the loop
-					break;
-				}
-			}
-		}
-
-		if (pipe_err == 0) {
-			waitpid(child_pid, &err, 0);
-		}
-
-		if (pipe_err == 0) {
-			s_stdout = stdout_;
-			s_stderr = stderr_;
-		} else {
-			err = pipe_err;
-		}
-	}
-
-	return err;
 }
 
 int execvp(const std::string& cmd, const std::vector<const char*>& argv, std::string& result) {
@@ -508,8 +315,26 @@ std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res) {
 	return result;
 };
 
-size_t my_dummy_write(char*, size_t size, size_t nmemb, void*) {
-	return size * nmemb;
+struct memory {
+	char* data;
+	size_t size;
+};
+
+static size_t write_callback(void *data, size_t size, size_t nmemb, void *userp) {
+	size_t realsize = size * nmemb;
+	struct memory *mem = (struct memory *)userp;
+
+	char* ptr = static_cast<char*>(realloc(mem->data, mem->size + realsize + 1));
+	if(ptr == NULL) {
+		return 0;
+	}
+
+	mem->data = ptr;
+	memcpy(&(mem->data[mem->size]), data, realsize);
+	mem->size += realsize;
+	mem->data[mem->size] = 0;
+
+	return realsize;
 }
 
 CURLcode perform_simple_post(
@@ -525,7 +350,9 @@ CURLcode perform_simple_post(
 	if(curl) {
 		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_params.c_str());
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &my_dummy_write);
+		struct memory response = { 0 };
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
 
 		res = curl_easy_perform(curl);
 
@@ -533,6 +360,10 @@ CURLcode perform_simple_post(
 			curl_out_err = std::string { curl_easy_strerror(res) };
 		} else {
 			curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &curl_res_code);
+
+			if (curl_res_code != 200) {
+				curl_out_err = string(response.data, response.size);
+			}
 		}
 
 		curl_easy_cleanup(curl);
@@ -835,4 +666,29 @@ int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_u
 	mysql_close(proxysql_admin);
 
 	return 0;
+}
+
+MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
+	uint con_waited = 0;
+	MYSQL* admin = mysql_init(NULL);
+
+	const char* user = opts.user.c_str();
+	const char* pass = opts.pass.c_str();
+	const char* host = opts.host.c_str();
+	const int port = opts.port;
+
+	while (!mysql_real_connect(admin, host, user, pass, NULL, port, NULL, 0) && con_waited < timeout) {
+		mysql_close(admin);
+		admin = mysql_init(NULL);
+
+		con_waited += 1;
+		sleep(1);
+	}
+
+	if (con_waited >= timeout) {
+		mysql_close(admin);
+		return nullptr;
+	} else {
+		return admin;
+	}
 }

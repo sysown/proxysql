@@ -33,11 +33,6 @@
 
 #include <openssl/x509v3.h>
 
-// Minimal headers for exporting metrics using prometheus
-#include <prometheus/counter.h>
-#include <prometheus/exposer.h>
-#include <prometheus/registry.h>
-
 #include <sys/mman.h>
 
 #include <uuid/uuid.h>
@@ -113,6 +108,10 @@ static char * main_check_latest_version() {
 	curl_global_init(CURL_GLOBAL_ALL);
 	curl_handle = curl_easy_init();
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 1L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 2L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYSTATUS, 1l);
+	curl_easy_setopt(curl_handle, CURLOPT_RANGE, "0-31");
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
 
@@ -914,7 +913,7 @@ void ProxySQL_Main_init() {
 	glovars.has_debug=false;
 #endif /* DEBUG */
 //	__thr_sfp=l_mem_init();
-
+	proxysql_init_debug_prometheus_metrics();
 }
 
 

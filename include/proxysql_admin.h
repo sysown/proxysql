@@ -90,10 +90,25 @@ struct p_admin_gauge {
 	};
 };
 
+struct p_admin_dyn_counter {
+	enum metric {
+		__size
+	};
+};
+
+struct p_admin_dyn_gauge {
+	enum metric {
+		proxysql_servers_clients_status_last_seen_at = 0,
+		__size
+	};
+};
+
 struct admin_metrics_map_idx {
 	enum index {
 		counters = 0,
-		gauges
+		gauges,
+		dyn_counters,
+		dyn_gauges
 	};
 };
 
@@ -191,6 +206,9 @@ class ProxySQL_Admin {
 	struct {
 		std::array<prometheus::Counter*, p_admin_counter::__size> p_counter_array {};
 		std::array<prometheus::Gauge*, p_admin_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Family<prometheus::Gauge>*, p_admin_dyn_gauge::__size> p_dyn_gauge_array {};
+
+		std::map<std::string, prometheus::Gauge*> p_proxysql_servers_clients_status_map {};
 	} metrics;
 
 	ProxySQL_External_Scheduler *scheduler;
@@ -359,6 +377,7 @@ class ProxySQL_Admin {
 
 	void stats___proxysql_servers_checksums();
 	void stats___proxysql_servers_metrics();
+	void stats___proxysql_message_metrics(bool reset);
 	void stats___mysql_prepared_statements_info();
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);

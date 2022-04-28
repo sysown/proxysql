@@ -14,6 +14,18 @@ namespace ez {
 class ezOptionParser;
 };
 
+/**
+ * @brief Helper function used to replace spaces and zeros by '0' char in the supplied checksum buffer.
+ * @param checksum Input buffer containing the checksum.
+ */
+inline void replace_checksum_zeros(char* checksum) {
+	for (int i=2; i<18; i++) {
+		if (checksum[i]==' ' || checksum[i]==0) {
+			checksum[i]='0';
+		}
+	}
+}
+
 class ProxySQL_Checksum_Value {
 	public:
 	char *checksum;
@@ -28,12 +40,7 @@ class ProxySQL_Checksum_Value {
 	void set_checksum(char *c) {
 		memset(checksum,0,20);
 		strncpy(checksum,c,18);
-		for (int i=2; i<18; i++) {
-			if (checksum[i]==' ' || checksum[i]==0) {
-				checksum[i]='0';
-			}
-		}
-
+		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
 		free(checksum);
