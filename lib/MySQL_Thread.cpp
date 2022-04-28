@@ -3222,7 +3222,14 @@ __run_skip_1a:
 		mypolls.loops++;
 		mypolls.loop_counters->incr(curtime/1000000);
 
-		if (maintenance_loop) {
+		if (maintenance_loop == true
+#ifdef IDLE_THREADS
+		// in case of idle thread
+		// do not run any mirror cleanup and do not
+		// update query processor stats
+		&& idle_maintenance_thread == false
+#endif // IDLE_THREADS
+		) {
 			// house keeping
 			run___cleanup_mirror_queue();
 			GloQPro->update_query_processor_stats();
