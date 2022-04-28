@@ -166,6 +166,7 @@ enum mysql_variable_name {
 	SQL_COLLATION_CONNECTION,
 	SQL_WSREP_SYNC_WAIT,
 	SQL_NAME_LAST_LOW_WM,
+	SQL_AURORA_READ_REPLICA_READ_COMMITTED,
 	SQL_AUTO_INCREMENT_INCREMENT,
 	SQL_AUTO_INCREMENT_OFFSET,
 	SQL_BIG_TABLES,
@@ -173,6 +174,7 @@ enum mysql_variable_name {
 	SQL_DEFAULT_TMP_STORAGE_ENGINE,
 	SQL_FOREIGN_KEY_CHECKS,
 	SQL_GROUP_CONCAT_MAX_LEN,
+	SQL_GROUP_REPLICATION_CONSISTENCY,
 	SQL_GTID_NEXT,
 	SQL_INNODB_LOCK_WAIT_TIMEOUT,
 	SQL_INNODB_STRICT_MODE,
@@ -190,6 +192,7 @@ enum mysql_variable_name {
 	SQL_OPTIMIZER_SEARCH_DEPTH,
 	SQL_OPTIMIZER_SWITCH,
 	SQL_PROFILING,
+	SQL_QUERY_CACHE_TYPE,
 	SQL_SORT_BUFFER_SIZE,
 	SQL_SQL_AUTO_IS_NULL,
 	SQL_SQL_BIG_SELECTS,
@@ -201,6 +204,7 @@ enum mysql_variable_name {
 	SQL_TIMESTAMP,
 	SQL_TMP_TABLE_SIZE,
 	SQL_UNIQUE_CHECKS,
+	SQL_WSREP_OSU_METHOD,
 	SQL_NAME_LAST_HIGH_WM,
 };
 
@@ -1104,6 +1108,7 @@ mysql_variable_st mysql_tracked_variables[] {
 //    { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" , false} ,
 	{ SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" , false} ,
 	{ SQL_NAME_LAST_LOW_WM,     SETTING_VARIABLE,     false, false, true,  false, (char *)"placeholder", (char *)"placeholder", (char *)"0" , false} , // this is just a placeholder to separate the previous index from the next block
+	{ SQL_AURORA_READ_REPLICA_READ_COMMITTED, SETTING_VARIABLE, false, false, false, true, ( char *)"aurora_read_replica_read_committed", NULL, (char *)"" , false} ,
 	{ SQL_AUTO_INCREMENT_INCREMENT,   SETTING_VARIABLE, false, false, true,  false, (char *)"auto_increment_increment",   NULL, (char *)"" , false} ,
 	{ SQL_AUTO_INCREMENT_OFFSET,      SETTING_VARIABLE, false, false, true,  false, (char *)"auto_increment_offset",      NULL, (char *)"" , false} ,
 	{ SQL_BIG_TABLES,                 SETTING_VARIABLE, true,  false, false, true, ( char *)"big_tables",                 NULL, (char *)"" , false} ,
@@ -1111,6 +1116,7 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_DEFAULT_TMP_STORAGE_ENGINE, SETTING_VARIABLE, true,  false, false, false, (char *)"default_tmp_storage_engine", NULL, (char *)"" , false} ,
 	{ SQL_FOREIGN_KEY_CHECKS,         SETTING_VARIABLE, true,  false, false, true,  (char *)"foreign_key_checks",         NULL, (char *)"" , false} ,
 	{ SQL_GROUP_CONCAT_MAX_LEN,       SETTING_VARIABLE, false, false, true,  false, (char *)"group_concat_max_len",       NULL, (char *)"" , false} ,
+	{ SQL_GROUP_REPLICATION_CONSISTENCY, SETTING_VARIABLE, true, false, false, false, (char *)"group_replication_consistency", NULL, (char *)"" , false} ,
 	{ SQL_GTID_NEXT,                  SETTING_VARIABLE, true,  false, false, false, (char *)"gtid_next",                  NULL, (char *)"" , true} ,
 	{ SQL_INNODB_LOCK_WAIT_TIMEOUT,   SETTING_VARIABLE, false, false, true,  false, (char *)"innodb_lock_wait_timeout",   NULL, (char *)"" , false} ,
 	{ SQL_INNODB_STRICT_MODE,         SETTING_VARIABLE, true,  false, false, true, ( char *)"innodb_strict_mode",         NULL, (char *)"" , false} ,
@@ -1128,6 +1134,7 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_OPTIMIZER_SEARCH_DEPTH,     SETTING_VARIABLE, false, false, true,  false, (char *)"optimizer_search_depth",     NULL, (char *)"" , false} ,
 	{ SQL_OPTIMIZER_SWITCH,           SETTING_VARIABLE, true,  false, false, false, (char *)"optimizer_switch",           NULL, (char *)"" , false} ,
 	{ SQL_PROFILING,                  SETTING_VARIABLE, true,  false, false, true, ( char *)"profiling",                  NULL, (char *)"" , false} ,
+	{ SQL_QUERY_CACHE_TYPE,           SETTING_VARIABLE, false, false, true,  true, ( char *)"query_cache_type",           NULL, (char *)"" , false} , // note that this variable can act both as boolean AND a number. See https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_query_cache_type
 	{ SQL_SORT_BUFFER_SIZE,           SETTING_VARIABLE, false, false, true,  false, (char *)"sort_buffer_size",           NULL, (char *)"18446744073709551615" , false} ,
 	{ SQL_SQL_AUTO_IS_NULL,           SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_auto_is_null",           NULL, (char *)"OFF" , false} ,
 	{ SQL_SQL_BIG_SELECTS,            SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_big_selects",            NULL, (char *)"OFF" , true} ,
@@ -1139,6 +1146,7 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_TIMESTAMP,                  SETTING_VARIABLE, false, false, true,  false, (char *)"timestamp",                  NULL, (char *)"" , false} ,
 	{ SQL_TMP_TABLE_SIZE,             SETTING_VARIABLE, false, false, true,  false, (char *)"tmp_table_size",             NULL, (char *)"" , false} ,
 	{ SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
+	{ SQL_WSREP_OSU_METHOD,           SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_osu_method",           NULL, (char *)"" , false} ,
 
 	/*
 	variables that will need input validation:

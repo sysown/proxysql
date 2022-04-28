@@ -70,6 +70,19 @@ std::vector<std::string> forgotten_vars {};
 
 #include "set_testing.h"
 
+class var_counter {
+	public:
+	int count;
+	int unknown;
+	var_counter() {
+		count=0;
+		unknown=0;
+	}
+};
+
+//std::unordered_map<std::string,int> unknown_var_counters;
+
+std::unordered_map<std::string,var_counter> vars_counters;
 
 /* TODO
 	add support for variables with values out of range,
@@ -335,7 +348,9 @@ void * my_conn_thread(void *arg) {
 					}
 				}
 			}
-
+			if (std::find(possible_unknown_variables.begin(), possible_unknown_variables.end(), el.key()) != possible_unknown_variables.end()) {
+				vars_counters[el.key()].count++;
+			}
 			if (
 				(special_sqlmode == true && verified_special_sqlmode == false) ||
 				(k == mysql_vars.end()) ||
@@ -346,7 +361,14 @@ void * my_conn_thread(void *arg) {
 					(el.key() == "session_track_gtids" && !check_session_track_gtids(el.value(), s.value(), k.value()))
 				)
 			) {
-				if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
+				if ( k != mysql_vars.end() && s != proxysql_vars["conn"].end()) {
+					if (k.value() == UNKNOWNVAR) { // mysql doesn't recognize the variable
+						if (s.value() == el.value()) { // but proxysql and CSV are the same
+							variables_tested++;
+							vars_counters[el.key()].unknown++;
+						}
+					}
+				} else if (el.key() == "wsrep_sync_wait" && k == mysql_vars.end() && (s.value() == el.value())) {
 					variables_tested++;
 				} else {
 					__sync_fetch_and_add(&g_failed, 1);
@@ -399,11 +421,33 @@ int main(int argc, char *argv[]) {
 	host = cl.host;
 	port = cl.port;
 
+	diag("Loading test cases from file. This will take some time...");
 	if (!readTestCasesJSON(fileName2)) {
 		fprintf(stderr, "Cannot read %s\n", fileName2.c_str());
 		return exit_status();
 	}
-	queries = 2500;
+
+	MYSQL* proxysql_admin = mysql_init(NULL);
+
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return EXIT_FAILURE;
+	}
+	diag("Disabling admin-hash_passwords to be able to run test on MySQL 8");
+	MYSQL_QUERY(proxysql_admin, "SET admin-hash_passwords='false'");
+	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
+
+	diag("Creating new hostgroup 101: DELETE FROM mysql_servers WHERE hostgroup_id = 101");
+	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
+	diag("Creating new hostgroup 101: INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1,11,21,31)");
+	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1,11,21,31)");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	diag("Changing read traffic to hostgroup 101: UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
+	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+
+	queries = 3000;
 	//queries = testCases.size();
 	plan(queries * num_threads);
 
@@ -427,6 +471,9 @@ int main(int argc, char *argv[]) {
 	}
 	for (unsigned int i=0; i<num_threads; i++) {
 		pthread_join(thi[i], NULL);
+	}
+	for (std::unordered_map<std::string,var_counter>::iterator it = vars_counters.begin(); it!=vars_counters.end(); it++) {
+		diag("Unknown variable %s:\t Count: %d , unknown: %d", it->first.c_str(), it->second.count, it->second.unknown);
 	}
 	return exit_status();
 }
