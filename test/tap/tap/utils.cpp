@@ -22,6 +22,8 @@
 
 #include "proxysql_utils.h"
 
+using std::string;
+
 int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value) {
 	char query[128];
 
@@ -313,8 +315,26 @@ std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res) {
 	return result;
 };
 
-size_t my_dummy_write(char*, size_t size, size_t nmemb, void*) {
-	return size * nmemb;
+struct memory {
+	char* data;
+	size_t size;
+};
+
+static size_t write_callback(void *data, size_t size, size_t nmemb, void *userp) {
+	size_t realsize = size * nmemb;
+	struct memory *mem = (struct memory *)userp;
+
+	char* ptr = static_cast<char*>(realloc(mem->data, mem->size + realsize + 1));
+	if(ptr == NULL) {
+		return 0;
+	}
+
+	mem->data = ptr;
+	memcpy(&(mem->data[mem->size]), data, realsize);
+	mem->size += realsize;
+	mem->data[mem->size] = 0;
+
+	return realsize;
 }
 
 CURLcode perform_simple_post(
@@ -330,7 +350,9 @@ CURLcode perform_simple_post(
 	if(curl) {
 		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
 		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_params.c_str());
-		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &my_dummy_write);
+		struct memory response = { 0 };
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
 
 		res = curl_easy_perform(curl);
 
@@ -338,6 +360,10 @@ CURLcode perform_simple_post(
 			curl_out_err = std::string { curl_easy_strerror(res) };
 		} else {
 			curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &curl_res_code);
+
+			if (curl_res_code != 200) {
+				curl_out_err = string(response.data, response.size);
+			}
 		}
 
 		curl_easy_cleanup(curl);
@@ -660,6 +686,7 @@ MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
 	}
 
 	if (con_waited >= timeout) {
+		mysql_close(admin);
 		return nullptr;
 	} else {
 		return admin;
