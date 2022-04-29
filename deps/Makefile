@@ -52,7 +52,9 @@ libinjection: libinjection/libinjection/src/libinjection.a
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
-	cd libssl/openssl  && ./config no-ssl3 no-tests
+	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
+	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
+	cd libssl/openssl && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
@@ -92,6 +94,7 @@ libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
 libev/libev/.libs/libev.a:
 	cd libev && rm -rf libev-4.24 || true
 	cd libev && tar -zxf libev-4.24.tar.gz
+	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
 	cd libev/libev  && ./configure
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
 ev: libev/libev/.libs/libev.a
@@ -117,6 +120,7 @@ endif
 ifeq ($(OS),Darwin)
 	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
 endif
+	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
@@ -193,6 +197,9 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 ifeq ($(WITHASAN),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_asan.patch
 endif
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_dyncol.c < ../mariadb_dyncol.c-multiplication-overflow.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_array.c < ../ma_array.c-multiplication-overflow.patch
+	cd mariadb-client-library/mariadb_client && patch zlib/zutil.c < ../zutil.c-multiplication-overflow.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 # cd mariadb-client-library/mariadb_client/include && make my_config.h
 
@@ -203,6 +210,7 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-3190200
 	cd sqlite3 && tar -zxf sqlite-amalgamation-3190200.tar.gz
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../from_unixtime.patch
+	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
 
@@ -234,7 +242,8 @@ re2/re2/obj/libre2.a:
 #	cd re2 && tar -zxf re2-20140304.tgz
 	cd re2 && tar -zxf re2.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
-#	cd re2 && patch re2/util/mutex.h < mutex.h.patch
+#	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
+	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
 	cd re2/re2 && sed -i -e 's/-O3 /-O3 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
@@ -245,6 +254,7 @@ pcre/pcre/.libs/libpcre.a:
 	cd pcre && rm -rf pcre-8.39
 	cd pcre && rm -rf pcre-8.44
 	cd pcre && tar -zxf pcre-8.44.tar.gz
+	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
 	cd pcre/pcre && ./configure
 	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
 pcre: pcre/pcre/.libs/libpcre.a

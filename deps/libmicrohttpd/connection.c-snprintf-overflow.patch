@@ -1,0 +1,20 @@
+@@ -1582,11 +1582,18 @@
+                                                 MHD_HTTP_HEADER_CONNECTION))) &&
+               (MHD_str_equal_caseless_ (pos->value,
+                                         "Keep-Alive")) ) ) )
+-      off += MHD_snprintf_ (&data[off],
++    {
++      int n = MHD_snprintf_ (&data[off],
+                             size - off,
+                             "%s: %s\r\n",
+                             pos->header,
+                             pos->value);
++      if (n < 0 || n >= size - off)
++      {
++        break;
++      }
++      off += n;
++    }
+   }
+   if (MHD_CONNECTION_FOOTERS_RECEIVED == connection->state)
+   {

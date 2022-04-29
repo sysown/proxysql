@@ -2315,7 +2315,7 @@ void stage_4_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_4_st* s
 
 			// count found forward patterns
 			if (found_group_patterns > opts->groups_grouping_limit) {
-				memmove(shared_st->res_pre_pos, pattern_start, group_pattern_size * opts->groups_grouping_limit);
+				memmove(shared_st->res_pre_pos, pattern_start, (long) group_pattern_size * opts->groups_grouping_limit);
 				shared_st->res_pre_pos += group_pattern_size * opts->groups_grouping_limit;
 				*shared_st->res_pre_pos++ = '.';
 				*shared_st->res_pre_pos++ = '.';

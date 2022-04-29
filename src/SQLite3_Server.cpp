@@ -318,7 +318,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	SQLite3_result *resultset=NULL;
 	char *strA=NULL;
 	char *strB=NULL;
-	int strAl, strBl;
+	size_t strAl, strBl;
 	char *query=NULL;
 	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
 	query=(char *)l_alloc(query_length);
@@ -515,9 +515,9 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
 		strBl=strlen(strB);
 		char *tn=NULL; // tablename
-		tn=(char *)malloc(strlen(strA));
+		tn=(char *)malloc(strAl+1);
 		unsigned int i=0, j=0;
-		while (i<strlen(strA)) {
+		while (i<strAl) {
 			if (strA[i]!='\\' && strA[i]!='`' && strA[i]!='\'') {
 				tn[j]=strA[i];
 				j++;

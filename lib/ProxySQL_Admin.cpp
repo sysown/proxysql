@@ -3507,7 +3507,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	pta[0]=NULL;
 	char *tn=NULL; // tablename
 	// note that tablename is passed with a trailing '
-	tn=(char *)malloc(strlen(tablename));
+	tn=(char *)malloc(strlen(tablename)+1);
 	unsigned int i=0, j=0;
 	while (i<strlen(tablename)) {
 		if (tablename[i]!='\\' && tablename[i]!='`' && tablename[i]!='\'') {
@@ -4877,9 +4877,9 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
 		strBl=strlen(strB);
 		char *tn=NULL; // tablename
-		tn=(char *)malloc(strlen(strA));
+		tn=(char *)malloc(strAl+1);
 		unsigned int i=0, j=0;
-		while (i<strlen(strA)) {
+		while (i<strAl) {
 			if (strA[i]!='\\' && strA[i]!='`' && strA[i]!='\'') {
 				tn[j]=strA[i];
 				j++;

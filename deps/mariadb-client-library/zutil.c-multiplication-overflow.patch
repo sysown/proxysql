@@ -1,0 +1,9 @@
+@@ -303,7 +303,7 @@
+     unsigned size;
+ {
+     if (opaque) items += size - size; /* make compiler happy */
+-    return sizeof(uInt) > 2 ? (voidpf)malloc(items * size) :
++    return sizeof(uInt) > 2 ? (voidpf)malloc((long) items * size) :
+                               (voidpf)calloc(items, size);
+ }
+ 

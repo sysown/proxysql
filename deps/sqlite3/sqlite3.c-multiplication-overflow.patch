@@ -1,0 +1,18 @@
+@@ -103301,7 +103301,7 @@
+   int n = *pnEntry;
+   if( (n & (n-1))==0 ){
+     int sz = (n==0) ? 1 : 2*n;
+-    void *pNew = sqlite3DbRealloc(db, pArray, sz*szEntry);
++    void *pNew = sqlite3DbRealloc(db, pArray, (long) sz*szEntry);
+     if( pNew==0 ){
+       *pIdx = -1;
+       return pArray;
+@@ -141183,7 +141183,7 @@
+     pStart = 0;
+   }else if( pBuf==0 ){
+     sqlite3BeginBenignMalloc();
+-    pStart = sqlite3Malloc( sz*cnt );  /* IMP: R-61949-35727 */
++    pStart = sqlite3Malloc( (long) sz*cnt );  /* IMP: R-61949-35727 */
+     sqlite3EndBenignMalloc();
+     if( pStart ) cnt = sqlite3MallocSize(pStart)/sz;
+   }else{

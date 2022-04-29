@@ -1,0 +1,9 @@
+@@ -588,7 +588,7 @@
+             assert(position >= 0);
+             if (odd & (1 << (table_bits + 1)))
+                 delta -= (1 << (table_bits + 1));
+-            current -= delta * (1 << pos);
++            current -= (long) delta * (1 << pos);
+             control[position].power = pos + 16 * (w - 1);
+             control[position].addend = delta;
+             position--;

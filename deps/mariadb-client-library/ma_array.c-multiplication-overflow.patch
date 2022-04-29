@@ -1,0 +1,53 @@
+@@ -46,7 +46,7 @@
+   array->max_element=init_alloc;
+   array->alloc_increment=alloc_increment;
+   array->size_of_element=element_size;
+-  if (!(array->buffer=(char*) malloc(element_size*init_alloc)))
++  if (!(array->buffer=(char*) malloc((long) element_size*init_alloc)))
+   {
+     array->max_element=0;
+     return(TRUE);
+@@ -80,7 +80,7 @@
+   if (array->elements == array->max_element)
+   {
+     char *new_ptr;
+-    if (!(new_ptr=(char*) realloc(array->buffer,(array->max_element+
++    if (!(new_ptr=(char*) realloc(array->buffer,(long) (array->max_element+
+ 			          array->alloc_increment)*
+ 				   array->size_of_element)))
+       return 0;
+@@ -111,14 +111,14 @@
+       char *new_ptr;
+       size=(idx+array->alloc_increment)/array->alloc_increment;
+       size*= array->alloc_increment;
+-      if (!(new_ptr=(char*) realloc(array->buffer,size*
++      if (!(new_ptr=(char*) realloc(array->buffer,(long) size*
+ 			            array->size_of_element)))
+ 	return TRUE;
+       array->buffer=new_ptr;
+       array->max_element=size;
+     }
+     memset((array->buffer+array->elements*array->size_of_element), 0,
+-	  (idx - array->elements)*array->size_of_element);
++	  (long) (idx - array->elements)*array->size_of_element);
+     array->elements=idx+1;
+   }
+   memcpy(array->buffer+(idx * array->size_of_element),element,
+@@ -155,7 +155,7 @@
+   char *ptr=array->buffer+array->size_of_element*idx;
+   array->elements--;
+   memmove(ptr,ptr+array->size_of_element,
+-	  (array->elements-idx)*array->size_of_element);
++	  (long) (array->elements-idx)*array->size_of_element);
+ }
+ 
+ 
+@@ -166,7 +166,7 @@
+   if (array->buffer && array->max_element != elements)
+   {
+     array->buffer=(char*) realloc(array->buffer,
+-			          elements*array->size_of_element);
++			          (long) elements*array->size_of_element);
+     array->max_element=elements;
+   }
+ }
