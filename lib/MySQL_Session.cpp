@@ -7501,7 +7501,7 @@ void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 			json j; // one json for each row
 			for (int i=0; i<resultset->columns; i++) {
 				// using the format j["name"] == "value"
-				j[resultset->column_definition[i]->name] = ( r->fields[i] ? r->fields[i] : "(null)" );
+				j[resultset->column_definition[i]->name] = ( r->fields[i] ? std::string(r->fields[i]) : std::string("(null)") );
 			}
 			j_res.push_back(j); // the row json is added to the final json
 		}

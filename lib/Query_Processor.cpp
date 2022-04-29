@@ -236,6 +236,8 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	assert(client_address);
 	pta[2]=client_address;
 
+	assert(qdsp != NULL);
+	assert(qdsp->digest);
 	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
 	pta[3]=qdsp->digest;
 
