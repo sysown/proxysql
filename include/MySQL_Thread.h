@@ -196,6 +196,12 @@ class MySQL_Thread
 
 	bool epoll_thread;
 	bool poll_timeout_bool;
+	/**
+	 * @brief Flag that indicates if there are sessions being processed that have been delayed.
+	 * @details Flag set after sessions processing, whenever a imposed delay is found after processing a
+	 *  session. When 'true', we can't assume that it's safe not to check for sessions that have timed out.
+	 */
+	bool handling_delayed_sessions;
 
 	// status variables are per thread only
 	// in this way, there is no need for atomic operation and there is no cache miss

@@ -622,6 +622,13 @@ void MySQL_Session::reset() {
 			client_myds->myconn->reset();
 		}
 	}
+
+	if (this->qps_queue != NULL) {
+		this->qps_queue->session_queue -= 1;
+
+		this->qps_queue.reset();
+		this->qps_queue = nullptr;
+	}
 }
 
 MySQL_Session::~MySQL_Session() {
@@ -3040,6 +3047,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
 		qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+		if (qpo->qps_queue != nullptr) this->qps_queue = qpo->qps_queue;
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 			thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
@@ -3177,6 +3185,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
 		qpo=GloQPro->process_mysql_query(this,NULL,0,&CurrentQuery);
+		if (qpo->qps_queue != nullptr) this->qps_queue = qpo->qps_queue;
 		if (qpo->max_lag_ms >= 0) {
 			thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 		}
@@ -3637,6 +3646,7 @@ __get_pkts_from_client:
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									if (qpo->qps_queue != nullptr) this->qps_queue = qpo->qps_queue;
 									// This block was moved from 'handler_special_queries' to support
 									// handling of 'USE' statements which are preceded by a comment.
 									// For more context check issue: #3493.
@@ -4433,6 +4443,27 @@ handler_again:
 			if (pause_until > thread->curtime) {
 				handler_ret = 0;
 				return handler_ret;
+			}
+			if (this->qps_queue != NULL) {
+				const int64_t qps_limit = this->qps_queue->qps_limit;
+
+				if (qps_limit != -1 && this->qps_queue->token_bucket.consume(1) == false) {
+					uint64_t cur_queue = this->qps_queue->session_queue;
+					uint64_t time_per_token = 0;
+
+					if (qps_limit != 0) {
+						time_per_token = 1000000 / qps_limit;
+						this->pause_until = thread->curtime + cur_queue*time_per_token;
+					}
+
+					handler_ret = 0;
+					return handler_ret;
+				} else {
+					this->qps_queue->session_queue -= 1;
+
+					this->qps_queue.reset();
+					this->qps_queue = nullptr;
+				}
 			}
 			if (mysql_thread___connect_timeout_server_max) {
 				if (mybe->server_myds->max_connect_time==0)
