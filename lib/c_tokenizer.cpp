@@ -1124,7 +1124,7 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
 	// initial mark "/*|/*!" detection
-	if (*shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	if (shared_st->res_cur_pos < (res_final_pos - 2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 
 		// check length before accessing beyond 'q_cur_pos + 1'
