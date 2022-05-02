@@ -3138,6 +3138,9 @@ __run_skip_1a:
 				poll_listener_add(n);
 				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
 			}
+#ifdef DEBUG
+			usleep(5+rand()%10);
+#endif
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);

@@ -1075,7 +1075,11 @@ void ProxySQL_Main_init_phase3___start_all() {
 #endif
 	}
 
-	do { /* nothing */ } while (load_ != 1);
+	do { /* nothing */
+#ifdef DEBUG
+		usleep(5+rand()%10);
+#endif
+	} while (load_ != 1);
 	load_ = 0;
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 
@@ -1584,11 +1588,15 @@ __start_label:
 					proxy_error("Watchdog: %u threads missed a heartbeat\n", threads_missing_heartbeat);
 					missed_heartbeats++;
 					if (missed_heartbeats >= (unsigned int)GloVars.restart_on_missing_heartbeats) {
+#ifdef RUNNING_ON_VALGRIND
+						proxy_error("Watchdog: reached %u missed heartbeats. Not aborting because running under Valgrind\n", missed_heartbeats);
+#else
 						if (GloVars.restart_on_missing_heartbeats) {
 							proxy_error("Watchdog: reached %u missed heartbeats. Aborting!\n", missed_heartbeats);
 							proxy_error("Watchdog: see details at https://github.com/sysown/proxysql/wiki/Watchdog\n");
 							assert(0);
 						}
+#endif
 					}
 				} else {
 					missed_heartbeats = 0;
