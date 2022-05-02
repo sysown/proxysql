@@ -2410,7 +2410,7 @@ char* mysql_query_digest_first_stage(const char* const q, int q_len, char** cons
 	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
 
-	struct stage_1_st stage_1_st = { 0 };
+	struct stage_1_st stage_1_st;
 	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
 	init_stage_1_st(&stage_1_st);
 
