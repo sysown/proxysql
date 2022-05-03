@@ -1241,6 +1241,7 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 
 					shared_st->res_cur_pos += copy_length;
 
+					// TODO: Check if the copy can be prevented as in the outer check for non-cmd comments
 					// The extra space is due to the removal of '*/', this is relevant because the
 					// comment can be in the middle of the query.
 					if (*(shared_st->res_cur_pos - 1 ) != ' ' && shared_st->res_cur_pos != res_final_pos) {
@@ -1252,6 +1253,20 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 			// Re-initialize the comment state
 			c_t_1_st->is_cmd = 0;
 			c_t_1_st->cur_cmd_cmnt_len = 0;
+		}
+
+		// TODO: Related to previous TODO. Remember this is a relatively new change in the current code
+		// not at the beginning and previous char is not ' '
+		if (
+			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
+			*shared_st->res_cur_pos != ' ' && *(shared_st->res_cur_pos-1) != ' '
+		) {
+			*shared_st->res_cur_pos++ = ' ';
+		} else if (
+			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
+			*shared_st->res_cur_pos == ' '
+		) {
+			shared_st->res_cur_pos++;
 		}
 
 		// if there were no space we have imposed it
