@@ -11895,8 +11895,8 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		}
 		GloQPro->sort(false);
 		GloQPro->load_fast_routing(resultset2);
-		GloQPro->wrunlock();
 		GloQPro->commit();
+		GloQPro->wrunlock();
 	}
 	if (resultset) delete resultset;
 	// if (resultset2) delete resultset2; // never delete it. GloQPro saves it
