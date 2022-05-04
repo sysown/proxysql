@@ -293,7 +293,6 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		} else {
 			ad->num_connections_used=ado->num_connections_used;
 			ad->password=strdup(ado->password);
-			ad->default_schema=strdup(ado->default_schema);
 			ad->sha1_pass=NULL;
 			ad->use_ssl=ado->use_ssl;
 			ad->default_schema=strdup(ado->default_schema);
