@@ -812,6 +812,9 @@ static void *child_mysql(void *arg) {
 			}
 		}
 		myds->revents=fds[0].revents;
+		// FIXME: CI test test_sqlite3_server-t or test_sqlite3_server_and_fast_routing-t
+		// seems to result in fds->fd = -1
+		// it needs investigation
 		myds->read_from_net();
 		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
@@ -829,7 +832,7 @@ static void *child_mysql(void *arg) {
 		sess->client_myds->client_addr=addr;
 		int g_rc = getpeername(sess->client_myds->fd, addr, &addrlen);
 		if (g_rc == -1) {
-			proxy_error("'getpeername' failed with error: %d\n", rc);
+			proxy_error("'getpeername' failed with error: %d\n", g_rc);
 		}
 
 		int rc=sess->handler();
@@ -908,8 +911,10 @@ __end_while_pool:
 			for (i=0; i<nfds; i++) {
 				char *add=NULL; char *port=NULL;
 				close(fds[i].fd);
-				c_split_2(socket_names[i], ":" , &add, &port);
-				if (atoi(port)==0) { unlink(socket_names[i]); }
+				if (socket_names[i] != NULL) { // this should skip socket_names[0] , because it is a pipe
+					c_split_2(socket_names[i], ":" , &add, &port);
+					if (atoi(port)==0) { unlink(socket_names[i]); }
+				}
 			}
 			nfds=0;
 			fds[nfds].fd=GloAdmin->pipefd[0];

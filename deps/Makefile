@@ -11,6 +11,11 @@ endif
 IS_ARM = $(if $(findstring aarch64, $(arch)),true,false)
 IS_CENTOS = $(if $(findstring Unknown, $(CENTOSVER)),false,true)
 
+# to compile libmariadb_client with support for valgrind enabled, run:
+# export USEVALGRIND=1
+#
+USEVALGRIND := $(shell echo $(USEVALGRIND))
+
 PROXYDEBUG := $(shell echo $(PROXYDEBUG))
 ifeq ($(PROXYDEBUG),1)
 MYCFLAGS=-O0
@@ -173,6 +178,11 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
 	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
+ifeq ($(PROXYDEBUG),1)
+	cd mariadb-client-library/mariadb_client && patch include/ma_context.h < ../ma_context.h.patch
+else ifeq ($(USEVALGRIND),1)
+	cd mariadb-client-library/mariadb_client && patch include/ma_context.h < ../ma_context.h.patch
+endif
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.collation.patch # make sure this path is applied after mariadb_lib.c.patch

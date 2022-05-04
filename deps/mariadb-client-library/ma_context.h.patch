@@ -1,0 +1,9 @@
+@@ -25,6 +25,8 @@
+   (This particular implementation uses Posix ucontext swapcontext().)
+ */
+ 
++#define HAVE_VALGRIND
++
+ #ifdef _WIN32
+ #define MY_CONTEXT_USE_WIN32_FIBERS 1
+ #elif defined(__GNUC__) && __GNUC__ >= 3 && defined(__x86_64__) && !defined(__ILP32__)
