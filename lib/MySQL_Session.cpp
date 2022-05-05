@@ -1189,6 +1189,7 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
+		l_free(pkt->size,pkt->ptr);
 		return;
 	}
 	// default
