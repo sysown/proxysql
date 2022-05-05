@@ -885,6 +885,9 @@ void ProxySQL_Main_shutdown_all_modules() {
 	}
 
 	{
+#ifdef TEST_WITHASAN
+		pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+#endif
 		cpu_timer t;
 		delete GloAdmin;
 #ifdef DEBUG
