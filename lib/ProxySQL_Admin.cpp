@@ -5936,6 +5936,7 @@ bool ProxySQL_Admin::init() {
 
 #ifdef DEBUG
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
+	admindb->execute("ATTACH DATABASE 'file:mem_monitor_internal_db?mode=memory&cache=shared' AS 'monitor_internal'");
 #endif /* DEBUG */
 
 #ifdef DEBUG
