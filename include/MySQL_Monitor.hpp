@@ -266,6 +266,7 @@ struct mon_metrics_map_idx {
 class MySQL_Monitor {
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
+	std::vector<table_def_t *> *tables_defs_monitor_internal;
 	void insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
@@ -307,6 +308,7 @@ class MySQL_Monitor {
 	bool monitor_enabled;
 	SQLite3DB *admindb;	// internal database
 	SQLite3DB *monitordb;	// internal database
+	SQLite3DB *monitor_internal_db;	// internal database
 	MySQL_Monitor();
 	~MySQL_Monitor();
 	void print_version();
@@ -323,10 +325,10 @@ class MySQL_Monitor {
 	void populate_monitor_mysql_server_aws_aurora_log();
 	void populate_monitor_mysql_server_aws_aurora_check_status();
 	/**
-	 * @brief Helper function that uses the provided resulset for updating the table 'monitor.mysql_servers'.
+	 * @brief Helper function that uses the provided resulset for updating the table 'monitor_internal.mysql_servers'.
 	 * @details When supplying 'MySQL_HostGroups_Manager::mysql_servers_to_monitor' resulset as parameter, the
 	 *   mutex 'MySQL_HostGroups_Manager::mysql_servers_to_monitor_mutex' needs to be previously taken.
-	 * @param SQLite3_result The resulset to be used for updating 'monitor.mysql_servers'.
+	 * @param SQLite3_result The resulset to be used for updating 'monitor_internal.mysql_servers'.
 	 */
 	void update_monitor_mysql_servers(SQLite3_result*);
 	char * galera_find_last_node(int);

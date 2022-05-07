@@ -553,7 +553,7 @@ class MySQL_HostGroups_Manager {
 	/**
 	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
 	 *   'mysql_servers' present in 'MySQL_HostGroups_Manager' db, which are not 'OFFLINE_HARD'. The resulset
-	 *   fields match the definition of 'monitor.mysql_servers' table.
+	 *   fields match the definition of 'monitor_internal.mysql_servers' table.
 	 * @details Several details:
 	 *   - Function assumes that 'mysql_servers' table from 'MySQL_HostGroups_Manager' db is ready
 	 *     to be consumed, because of this it doesn't perform any of the following operations:
