@@ -200,10 +200,22 @@ public:
 		std::lock_guard<std::mutex> lock(mutex);
 		MYSQL *my = mmsd->mysql;
 		pthread_mutex_lock(&m2);
+__conn_register_label:
 		for (unsigned int i=0; i<conns->len; i++) {
 			MYSQL *my1 = (MYSQL *)conns->index(i);
 			assert(my!=my1);
-			assert(my->net.fd!=my1->net.fd);
+			//assert(my->net.fd!=my1->net.fd); // FIXME: we changed this with the next section of code
+			if (my->net.fd == my1->net.fd) {
+				// FIXME: we need to identify still why a connection with error 2013 is here
+				if (my1->net.last_errno == 2013) {
+					// we remove the connection
+					conns->remove_index_fast(i);
+					goto __conn_register_label; // we return to the loop
+				} else {
+					// we crash again, as in the old logic
+					assert(my->net.fd!=my1->net.fd);
+				}
+			}
 		}
 		//proxy_info("Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, mmsd->mysql);
 		conns->add(my);

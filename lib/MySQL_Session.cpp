@@ -1027,55 +1027,61 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["qpo"]["timeout"] = qpo->timeout;
 	j["qpo"]["retries"] = qpo->retries;
 	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
-	j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
-	j["client"]["userinfo"]["schemaname"] = ( client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "" );
-#ifdef DEBUG
-	j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
-#endif
-	j["client"]["stream"]["pkts_recv"] = client_myds->pkts_recv;
-	j["client"]["stream"]["pkts_sent"] = client_myds->pkts_sent;
-	j["client"]["stream"]["bytes_recv"] = client_myds->bytes_info.bytes_recv;
-	j["client"]["stream"]["bytes_sent"] = client_myds->bytes_info.bytes_sent;
-	j["client"]["client_addr"]["address"] = ( client_myds->addr.addr ? client_myds->addr.addr : "" );
-	j["client"]["client_addr"]["port"] = client_myds->addr.port;
-	j["client"]["proxy_addr"]["address"] = ( client_myds->proxy_addr.addr ? client_myds->proxy_addr.addr : "" );
-	j["client"]["proxy_addr"]["port"] = client_myds->proxy_addr.port;
-	j["client"]["encrypted"] = client_myds->encrypted;
-	if (client_myds->encrypted) {
-		const SSL_CIPHER *cipher = SSL_get_current_cipher(client_myds->ssl);
-		if (cipher) {
-			const char * name = SSL_CIPHER_get_name(cipher);
-			if (name) {
-				j["client"]["ssl_cipher"] = name;
-			}
-		}
-	}
-	j["client"]["DSS"] = client_myds->DSS;
-	j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
-	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
-	for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
-		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
-	}
-	{
-		MySQL_Connection *c = client_myds->myconn;
-		for (std::vector<uint32_t>::const_iterator it_c = c->dynamic_variables_idx.begin(); it_c != c->dynamic_variables_idx.end(); it_c++) {
-			c->variables[*it_c].fill_client_internal_session(j, *it_c);
+	if (client_myds != NULL) { // only if client_myds is defined
+		j["client"]["stream"]["pkts_recv"] = client_myds->pkts_recv;
+		j["client"]["stream"]["pkts_sent"] = client_myds->pkts_sent;
+		j["client"]["stream"]["bytes_recv"] = client_myds->bytes_info.bytes_recv;
+		j["client"]["stream"]["bytes_sent"] = client_myds->bytes_info.bytes_sent;
+		j["client"]["client_addr"]["address"] = ( client_myds->addr.addr ? client_myds->addr.addr : "" );
+		j["client"]["client_addr"]["port"] = client_myds->addr.port;
+		j["client"]["proxy_addr"]["address"] = ( client_myds->proxy_addr.addr ? client_myds->proxy_addr.addr : "" );
+		j["client"]["proxy_addr"]["port"] = client_myds->proxy_addr.port;
+		j["client"]["encrypted"] = client_myds->encrypted;
+		if (client_myds->encrypted) {
+			const SSL_CIPHER *cipher = SSL_get_current_cipher(client_myds->ssl);
+			if (cipher) {
+				const char * name = SSL_CIPHER_get_name(cipher);
+				if (name) {
+					j["client"]["ssl_cipher"] = name;
+				}
+			}
+		}
+		j["client"]["DSS"] = client_myds->DSS;
+		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
+		if (client_myds->myconn != NULL) { // only if myconn is defined
+			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
+				j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
+				j["client"]["userinfo"]["schemaname"] = ( client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "" );
+#ifdef DEBUG
+				j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
+#endif
+			}
+			j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
+			for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
+				client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
+			}
+			{
+				MySQL_Connection *c = client_myds->myconn;
+				for (std::vector<uint32_t>::const_iterator it_c = c->dynamic_variables_idx.begin(); it_c != c->dynamic_variables_idx.end(); it_c++) {
+					c->variables[*it_c].fill_client_internal_session(j, *it_c);
+				}
+			}
+
+			j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
+			j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
+			j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+			j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
+			j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
+			j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
+			j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
+			j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+			j["conn"]["status"]["transaction"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_TRANSACTION);
+			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 		}
 	}
-
-	j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
-	j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
-	j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-	j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-	j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
-	j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
-	j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
-	j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_TRANSACTION);
-	j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 	for (unsigned int k=0; k<mybes->len; k++) {
 		MySQL_Backend *_mybe = NULL;
 		_mybe=(MySQL_Backend *)mybes->index(k);
@@ -1183,6 +1189,7 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
+		l_free(pkt->size,pkt->ptr);
 		return;
 	}
 	// default

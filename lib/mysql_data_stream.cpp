@@ -198,6 +198,9 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 					}
 				}
 			}
+
+			sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
+			X509_free(cert);
 		} else {
 			// we currently disable this annoying error
 			// in future we can configure this as per user level, specifying if the certificate is mandatory or not

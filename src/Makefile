@@ -109,6 +109,11 @@ else
 WASAN=
 endif
 
+TEST_WITHASANVAR := $(shell echo $(TEST_WITHASAN))
+ifeq ($(TEST_WITHASANVAR),1)
+WASAN+= -DTEST_WITHASAN
+endif
+
 MYCXXFLAGS=-std=c++11
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS+= -fuse-ld=lld

@@ -88,10 +88,12 @@ int main(int argc, char** argv) {
 
 	// Check that the second ProxySQL is up and responsive
 	conn_opts_t conn_opts { "127.0.0.1", "radmin", "radmin", 26081 };
-	MYSQL* s_proxy_admin = wait_for_proxysql(conn_opts, 5);
+	// Wait at max the child process timeout plus 5 seconds
+	MYSQL* s_proxy_admin = wait_for_proxysql(conn_opts, 25);
 
 	if (s_proxy_admin == nullptr) {
 		fprintf(stderr, "Error: %s\n", "Waiting for ProxySQL replica timedout");
+		launch_sec_proxy.detach();
 		return EXIT_FAILURE;
 	}
 

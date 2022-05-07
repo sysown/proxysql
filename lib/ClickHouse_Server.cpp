@@ -1464,6 +1464,7 @@ ClickHouse_Server::ClickHouse_Server() {
 	variables.mysql_ifaces=strdup("0.0.0.0:6090");
 	variables.hostname = strdup("127.0.0.1");
 	variables.port = 9000;
+	variables.read_only=false;
 };
 
 void ClickHouse_Server::wrlock() {

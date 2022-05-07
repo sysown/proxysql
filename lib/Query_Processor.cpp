@@ -739,10 +739,8 @@ void Query_Processor::sort(bool lock) {
 // when commit is called, the version number is increased and the this will trigger the mysql threads to get a new Query Processor Table
 // The operation is asynchronous
 void Query_Processor::commit() {
-		pthread_rwlock_wrlock(&rwlock);
 	__sync_add_and_fetch(&version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Increasing version number to %d - all threads will notice this and refresh their rules\n", version);
-		pthread_rwlock_unlock(&rwlock);
 };
 
 SQLite3_result * Query_Processor::get_stats_commands_counters() {

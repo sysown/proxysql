@@ -1124,7 +1124,7 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
 	// initial mark "/*|/*!" detection
-	if (*shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	if (shared_st->res_cur_pos < (res_final_pos - 2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 
 		// check length before accessing beyond 'q_cur_pos + 1'
@@ -1241,7 +1241,6 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 
 					shared_st->res_cur_pos += copy_length;
 
-					// TODO: Check if the copy can be prevented as in the outer check for non-cmd comments
 					// The extra space is due to the removal of '*/', this is relevant because the
 					// comment can be in the middle of the query.
 					if (*(shared_st->res_cur_pos - 1 ) != ' ' && shared_st->res_cur_pos != res_final_pos) {
@@ -1255,18 +1254,18 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 			c_t_1_st->cur_cmd_cmnt_len = 0;
 		}
 
-		// TODO: Related to previous TODO. Remember this is a relatively new change in the current code
-		// not at the beginning and previous char is not ' '
 		if (
+			// not at the beginning or at the end of the query
 			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
-			*shared_st->res_cur_pos != ' ' && *(shared_st->res_cur_pos-1) != ' '
+			// if the prev copied char isn't a space comment wasn't space separated in the query:
+			// ```
+			// Q: `SELECT/*FOO*/1`
+			//          ^ no space char
+			// ```
+			// thus we impose an extra space in replace for the ommited comment
+			*(shared_st->res_cur_pos-1) != ' '
 		) {
 			*shared_st->res_cur_pos++ = ' ';
-		} else if (
-			shared_st->res_init_pos != shared_st->res_cur_pos && shared_st->res_cur_pos != res_final_pos &&
-			*shared_st->res_cur_pos == ' '
-		) {
-			shared_st->res_cur_pos++;
 		}
 
 		// if there were no space we have imposed it
@@ -2425,7 +2424,7 @@ char* mysql_query_digest_first_stage(const char* const q, int q_len, char** cons
 	memset(&shared_st, 0, sizeof(struct shared_st));
 	init_shared_st(&shared_st, q, q_len, d_max_len, res);
 
-	struct stage_1_st stage_1_st = { 0 };
+	struct stage_1_st stage_1_st;
 	memset(&stage_1_st, 0, sizeof(struct stage_1_st));
 	init_stage_1_st(&stage_1_st);
 
