@@ -24,7 +24,11 @@ rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql || true
 echo "==> Building"
 git config --global --add safe.directory '/opt/proxysql'
 cd /opt/proxysql
+echo "==> ProxySQL '$(git describe --long --abbrev=7)'"
 export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+echo "==> Setting SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"
+find /opt/proxysql -exec touch --date=@${SOURCE_DATE_EPOCH} {} \;
+
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
 	deps_target="build_deps"
 	build_target=""
