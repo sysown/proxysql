@@ -22,6 +22,7 @@ rm -f /opt/proxysql/proxysql.ctl /opt/proxysql/proxysql || true
 
 # Clean and build dependancies and source
 echo "==> Building"
+git config --global --add safe.directory '/opt/proxysql'
 cd /opt/proxysql
 export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
