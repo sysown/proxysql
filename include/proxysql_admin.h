@@ -10,6 +10,7 @@
 #include "cpp.h"
 #include <tuple>
 #include <vector>
+#include <array>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
 
