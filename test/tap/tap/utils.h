@@ -75,12 +75,6 @@ using mysql_res_row = std::vector<std::string>;
 std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res);
 
 /**
- * @brief Dummy write function to avoid CURL to write received output to stdout.
- * @return Returns the size presented.
- */
-size_t my_dummy_write(char*, size_t size, size_t nmemb, void*);
-
-/**
  * @brief Waits until the provided endpoint is ready to be used or the
  *   timeout period expired. For this checks the return code of
  *   'perform_simple_post' which only fails in case the 'CURL' request couldn't
