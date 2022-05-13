@@ -675,9 +675,9 @@ cleanall:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
-	rm binaries/*deb || true
-	rm binaries/*rpm || true
-	rm binaries/*id-hash || true
+	rm -f binaries/*deb || true
+	rm -f binaries/*rpm || true
+	rm -f binaries/*id-hash || true
 
 .PHONY: cleanbuild
 cleanbuild:

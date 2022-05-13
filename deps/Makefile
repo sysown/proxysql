@@ -45,7 +45,7 @@ endif
 
 
 libinjection/libinjection/src/libinjection.a:
-	cd libinjection && rm -rf libinjection-3.10.0 || true
+	cd libinjection && rm -rf libinjection-*/ || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
 ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
@@ -73,8 +73,7 @@ ifeq ($(MIN_VERSION),$(lastword $(sort $(GCC_VERSION) $(MIN_VERSION))))
 endif
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
-	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
-	cd libhttpserver && rm -rf libhttpserver-0.18.1 || true
+	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
 ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch src/httpserver/basic_auth_fail_response.hpp < ../basic_auth_fail_response.hpp.patch
@@ -98,7 +97,7 @@ endif
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
 
 libev/libev/.libs/libev.a:
-	cd libev && rm -rf libev-4.24 || true
+	cd libev && rm -rf libev-*/ || true
 	cd libev && tar -zxf libev-4.24.tar.gz
 	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
 	cd libev/libev  && ./configure
@@ -113,8 +112,7 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
-	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
-	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
+	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd libmicrohttpd && rm -f libmicrohttpd || true
 ifeq ($(CENTOSVER),6)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
@@ -131,19 +129,19 @@ endif
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
 cityhash/cityhash/src/.libs/libcityhash.a:
-	cd cityhash && rm -rf cityhash || true
+	cd cityhash && rm -rf cityhash/ || true
 	cd cityhash && tar -zxf cityhash.tar.gz
 	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
 lz4/lz4/liblz4.a:
-	cd lz4 && rm -rf lz4-1.7.5 || true
+	cd lz4 && rm -rf lz4-*/ || true
 	cd lz4 && tar -zxf lz4-1.7.5.tar.gz
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
 lz4: lz4/lz4/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
-	cd clickhouse-cpp && rm -rf clickhouse-cpp || true
+	cd clickhouse-cpp && rm -rf clickhouse-cpp/ || true
 	cd clickhouse-cpp && tar -zxf clickhouse-cpp.tar.gz
 ifeq ($(CXX),clang++)
 	cd clickhouse-cpp/clickhouse-cpp && sed -i 's/"-O2 -pthread -Wall -Wextra -Werror"/"-O2 -pthread -Wall -Wextra -Werror -Wno-deprecated-copy"/' CMakeLists.txt
@@ -156,7 +154,7 @@ clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
 
 
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
-	cd libdaemon && rm -rf libdaemon-0.14
+	cd libdaemon && rm -rf libdaemon-*/ || true
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
 	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && ./configure --disable-examples
 	cd libdaemon/libdaemon && CC=${CC} CXX=${CXX} ${MAKE}
@@ -164,7 +162,7 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
 jemalloc/jemalloc/lib/libjemalloc.a:
-	cd jemalloc && rm -rf jemalloc-5.2.0
+	cd jemalloc && rm -rf jemalloc-*/ || true
 	cd jemalloc && tar --no-same-owner -jxf jemalloc-5.2.0.tar.bz2
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue823.520.patch
 	cd jemalloc/jemalloc && patch src/jemalloc.c < ../issue2358.patch
@@ -177,7 +175,7 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 WITHASAN := $(shell echo $(WITHASAN))
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
+	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
@@ -218,7 +216,7 @@ mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclien
 
 
 sqlite3/sqlite3/sqlite3.o:
-	cd sqlite3 && rm -rf sqlite-amalgamation-3190200
+	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd sqlite3 && tar -zxf sqlite-amalgamation-3190200.tar.gz
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../from_unixtime.patch
 	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
@@ -228,7 +226,7 @@ sqlite3/sqlite3/sqlite3.o:
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
 libconfig/libconfig/lib/.libs/libconfig++.a:
-	cd libconfig && rm -rf libconfig-1.7.2
+	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-1.7.2.tar.gz
 	cd libconfig/libconfig && ./configure --disable-examples
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
@@ -236,7 +234,7 @@ libconfig/libconfig/lib/.libs/libconfig++.a:
 libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
 
 prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
-	cd prometheus-cpp && rm -rf prometheus-cpp-0.9.0
+	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
 	cd prometheus-cpp && tar -zxf v0.9.0.tar.gz
 	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-v1.11.tar.gz -C prometheus-cpp/3rdparty/civetweb
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
@@ -248,9 +246,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
 
 re2/re2/obj/libre2.a:
-	cd re2 && rm -rf re2-2018-07-01 || true
-	cd re2 && rm -rf re2-2020-07-06 || true
-#	cd re2 && tar -zxf re2-20140304.tgz
+	cd re2 && rm -rf re2-*/ || true
 	cd re2 && tar -zxf re2.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
@@ -262,8 +258,7 @@ re2/re2/obj/libre2.a:
 re2: re2/re2/obj/libre2.a
 
 pcre/pcre/.libs/libpcre.a:
-	cd pcre && rm -rf pcre-8.39
-	cd pcre && rm -rf pcre-8.44
+	cd pcre && rm -rf pcre-*/ || true
 	cd pcre && tar -zxf pcre-8.44.tar.gz
 	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
 	cd pcre/pcre && ./configure
@@ -271,46 +266,30 @@ pcre/pcre/.libs/libpcre.a:
 pcre: pcre/pcre/.libs/libpcre.a
 
 cleanpart:
-	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
-	cd jemalloc && rm -rf jemalloc-4.2.1
-	cd sqlite3/sqlite3 && rm -rf *
+	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
+	cd jemalloc && rm -rf jemalloc-*/ || true
+	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 .PHONY: cleanpart
 
 cleanall:
-	cd libinjection && rm -rf libinjection-3.10.0 || true
-	cd libhttpserver && rm -rf libhttpserver-master_20191121 || true
-	cd libhttpserver && rm -rf libhttpserver-0.18.1 || true
-	cd libdaemon && rm -rf libdaemon-0.14
-	cd jemalloc && rm -rf jemalloc-4.3.1 || true
-	cd jemalloc && rm -rf jemalloc-5.2.0 || true
-	cd mariadb-client-library && rm -rf mariadb-connector-c-2.3.1
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.0.2-src
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
-	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.9-src
-	cd libconfig && rm -rf libconfig-1.4.9
-	cd re2 && rm -rf re2-2018-07-01 || true
-	cd re2 && rm -rf re2-2020-07-06 || true
-	cd pcre && rm -rf pcre-8.39 || true
-	cd pcre && rm -rf pcre-8.44 || true
-	cd sqlite3/sqlite3 && rm -rf * || true
-	cd clickhouse-cpp/clickhouse-cpp && rm -rf * || true
-	cd lz4 && rm -rf lz4-1.7.5 || true
+	cd libinjection && rm -rf libinjection-*/ || true
+	cd libhttpserver && rm -rf libhttpserver-*/ || true
+	cd libdaemon && rm -rf libdaemon-*/ || true
+	cd jemalloc && rm -rf jemalloc-*/ || true
+	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
+	cd libconfig && rm -rf libconfig-*/ || true
+	cd re2 && rm -rf re2-*/ || true
+	cd pcre && rm -rf pcre-*/ || true
+	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
+	cd clickhouse-cpp/ && rm -rf clickhouse-cpp/ || true
+	cd lz4 && rm -rf lz4-*/ || true
+	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd libmicrohttpd && rm -f libmicrohttpd || true
-	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.55 || true
-	cd libmicrohttpd && rm -rf libmicrohttpd-0.9.68 || true
-	cd curl && rm -rf curl-7.57.0 || true
-	cd curl && rm -rf curl-7.77.0 || true
-	cd libev && rm -rf libev-4.24 || true
-	cd libssl && rm -rf openssl-1.1.0h || true
-	cd libssl && rm -rf openssl-1.1.1b || true
-	cd libssl && rm -rf openssl-1.1.1d || true
-	cd libssl && rm -rf openssl-1.1.1g || true
-	cd libssl && rm -rf openssl-1.1.1j || true
-	cd libssl && rm -rf openssl-openssl-3.0.0 || true
-	cd libconfig && rm -rf libconfig-1.7.2 || true
-	cd prometheus-cpp && rm -rf prometheus-cpp-0.9.0 || true
+	cd curl && rm -rf curl-*/ || true
+	cd libev && rm -rf libev-*/ || true
+	cd libssl && rm -rf openssl-openssl-*/ || true
+	cd libconfig && rm -rf libconfig-*/ || true
+	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
+	cd cityhash && rm -rf cityhash/ || true
 .PHONY: cleanall
 
