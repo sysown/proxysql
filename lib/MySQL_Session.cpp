@@ -2773,7 +2773,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->myconn->send_quit = false;
 					myds->myconn->reusable = false;
 				}
-				mysql_variables.on_connect_to_backend(myds->myconn);
 				NEXT_IMMEDIATE_NEW(st);
 				break;
 			case -1:
@@ -6765,7 +6764,6 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 */
 	if (MyRS) {
 		assert(MyRS->result);
-		bool transfer_started=MyRS->transfer_started;
 		MyRS->init_with_stmt(myconn);
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = MyRS->num_rows;
@@ -7188,7 +7186,6 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 	mc->async_state_machine = ASYNC_IDLE; // may not be true, but is used to correctly perform error handling
 	new_myds->DSS = STATE_MARIADB_QUERY;
 	thread->register_session_connection_handler(new_sess,true);
-	mysql_variables.on_connect_to_backend(mc);
 	if (new_myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, new_myds->fd, new_myds, thread->curtime);
 	}

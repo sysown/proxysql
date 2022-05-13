@@ -3452,7 +3452,7 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, char *
 				) {
 					// always increase the counter
 					mysrvc->cur_replication_lag_count += 1;
-					if (mysrvc->cur_replication_lag_count >= mysql_thread___monitor_replication_lag_count) {
+					if (mysrvc->cur_replication_lag_count >= (unsigned int)mysql_thread___monitor_replication_lag_count) {
 						proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
 						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
 					} else {
@@ -3706,7 +3706,7 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				MySQL_Connection *mc=mscl->index(k);
 				// If the connection is idle ...
 				if (mc->last_time_used && mc->last_time_used < _max_last_time_used) {
-					if (oldest_idle_connections.size() < num_conn) {
+					if ((int)oldest_idle_connections.size() < num_conn) {
 						oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
 					} else if (num_conn != 0) {
 						auto last_elem_it = std::prev(oldest_idle_connections.end());
@@ -4524,7 +4524,6 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			// LCOV_EXCL_STOP
 	}
 
-__exit_read_only_action:
 	pthread_mutex_unlock(&readonly_mutex);
 	if (resultset) {
 		delete resultset;

@@ -3332,7 +3332,7 @@ __run_skip_2:
 // end of ::run()
 
 unsigned int MySQL_Thread::find_session_idx_in_mysql_sessions(MySQL_Session *sess) {
-	int i=0;
+	unsigned int i=0;
 	for (i=0;i<mysql_sessions->len;i++) {
 		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
 		if (mysess==sess) {
@@ -3668,7 +3668,6 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 	unsigned int numTrx=0;
 	sess->active_transactions=sess->NumActiveTransactions();
 	{
-		unsigned long long sess_active_transactions = sess->active_transactions;
 		sess->active_transactions=sess->NumActiveTransactions();
 		// in case we detected a new transaction just now
 		if (sess->active_transactions == 0) {
@@ -3737,7 +3736,7 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 	if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
 		MySQL_Connection* myconn = sess->mybe->server_myds->myconn;
 
-		if (mysql_thread___auto_increment_delay_multiplex_timeout_ms != 0 && (sess_time/1000 > mysql_thread___auto_increment_delay_multiplex_timeout_ms)) {
+		if (mysql_thread___auto_increment_delay_multiplex_timeout_ms != 0 && (sess_time/1000 > (unsigned long long)mysql_thread___auto_increment_delay_multiplex_timeout_ms)) {
 			myconn->auto_increment_delay_token = 0;
 		}
 	}
