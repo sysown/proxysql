@@ -218,7 +218,7 @@ bool ProxySQL_Statistics::MySQL_Query_Cache_timetoget(unsigned long long curtime
 }
 
 bool ProxySQL_Statistics::mysql_query_digest_to_disk_timetoget(unsigned long long curtime) {
-	unsigned int i = (unsigned int)variables.stats_mysql_query_digest_to_disk;
+	unsigned long i = (unsigned long)variables.stats_mysql_query_digest_to_disk;
 	if (i) {
 		if (
 			( curtime > next_timer_mysql_query_digest_to_disk )
