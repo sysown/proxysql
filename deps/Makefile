@@ -87,6 +87,7 @@ ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch src/httpserver/http_response.hpp < ../http_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/string_response.hpp < ../string_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../re2_regex.patch
+	cd libhttpserver/libhttpserver && patch -p0 < ../final_val_post_process.patch
 endif
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
