@@ -7,7 +7,7 @@ env
 ARCH=$(rpm --eval '%{_arch}')
 echo "==> '${ARCH}' architecture detected for package"
 
-DIST=$(source /etc/os-release; echo ${ID%%[-._ ]*}${VERSION%%[-._ ]*})
+DIST=$(cat /etc/redhat-release| sed 's/ .*//')
 echo "==> '${DIST}' distro detected for package"
 
 #echo -e "==> C compiler: ${CC} -> $(readlink -e $(which ${CC}))\n$(${CC} --version)"
@@ -22,12 +22,12 @@ rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/p
 
 # Clean and build dependancies and source
 echo "==> Building"
-git config --global --add safe.directory '/opt/proxysql'
+git config --system --add safe.directory '/opt/proxysql'
 cd /opt/proxysql
 echo "==> ProxySQL '$(git describe --long --abbrev=7)'"
 export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 echo "==> Setting SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"
-find /opt/proxysql -exec touch --date=@${SOURCE_DATE_EPOCH} {} \;
+find /opt/proxysql -not -path "/opt/proxysql/binaries/*" -exec touch -h --date=@${SOURCE_DATE_EPOCH} {} \;
 
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
 	deps_target="build_deps"
