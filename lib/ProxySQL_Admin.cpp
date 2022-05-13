@@ -7773,7 +7773,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		if (!strcasecmp(name,"stats_mysql_query_digest_to_disk")) {
 			int intv=atoi(value);
-			if (intv >= 0 && intv < 24*3600) {
+			if (intv >= 0 && intv <= 24*3600) {
 				variables.stats_mysql_query_digest_to_disk=intv;
 				GloProxyStats->variables.stats_mysql_query_digest_to_disk=intv;
 				return true;
