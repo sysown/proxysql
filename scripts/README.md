@@ -30,11 +30,11 @@ cd $RESTAPI_EXAMPLES_DIR/requirements
 2. Change host status:
     - Assuming local ProxySQL:
       ```
-      curl -i -X POST -d '{ "hostgroup_id": "", "hostname": "sbtest1", "port": 3306, "status": "OFFLINE_HARD" }' http://localhost:6070/sync/change_host_status
+      curl -i -X POST -d '{ "hostgroup_id": "0", "hostname": "127.0.0.1", "port": 13306, "status": "OFFLINE_HARD" }' http://localhost:6070/sync/change_host_status
       ```
     - Specifying server:
       ```
-      curl -i -X POST -d '{ "admin_host": "127.0.0.1", "admin_port": "6032", "admin_user": "radmin", "admin_pass": "radmin", "hostgroup_id": "0", "hostname": "sbtest1", "port": 3306, "status": "ONLINE_HARD" }' http://localhost:6070/sync/change_host_status
+      curl -i -X POST -d '{ "admin_host": "127.0.0.1", "admin_port": "6032", "admin_user": "radmin", "admin_pass": "radmin", "hostgroup_id": "0", "hostname": "127.0.0.1", "port": 13306, "status": "OFFLINE_HARD" }' http://localhost:6070/sync/change_host_status
       ```
 2. Add or replace MySQL user:
     - Assuming local ProxySQL:
