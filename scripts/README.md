@@ -7,7 +7,7 @@ This is a set of example scripts to show the capabilities of the RESTAPI interfa
 1. Launch ProxySQL:
 
 ```
-./src/proxysql -M --sqlite3-server --idle-threads -f -c $PATH/restapi_examples/datadir/proxysql.cnf -D $PATH/restapi_examples/datadir
+./proxysql -M --sqlite3-server --idle-threads -f -c $PROXYSQL_PATH/scripts/datadir/proxysql.cnf -D $PROXYSQL_PATH/scripts/datadir
 ```
 
 2. Configure ProxySQL:
@@ -67,8 +67,13 @@ cd $RESTAPI_EXAMPLES_DIR/requirements
       ```
       curl -i -X POST -d '{ "admin_host": "127.0.0.1", "admin_port": 6032, "admin_user": "radmin", "admin_pass": "radmin", "table": "stats_mysql_users" }' http://localhost:6070/sync/scrap_stats
       ```
+    - Provoke script failure (non-existing table):
+      ```
+      curl -i -X POST -d '{ "admin_host": "127.0.0.1", "admin_port": 6032, "admin_user": "radmin", "admin_pass": "radmin", "table": "stats_mysql_servers" }' http://localhost:6070/sync/scrap_stats
+      ```
 
 ### Scripts doc
 
 - All scripts allows to perform the target operations on a local or remote ProxySQL instance.
 - Notice how the unique 'GET' request is for 'QUERY CACHE' flushing, since it doesn't require any parameters.
+- Script 'stats_scrapper.py' fails when a table that isn't present in 'stats' schema is queried. This is left as an example of the behavior of a failing script and ProxySQL log output.

@@ -114,7 +114,12 @@ if __name__ == "__main__":
                     print(json.dumps({"err_code": 1, "res": "Invalid resulset received for query `" + s_free_query + "`"}))
                     exit(0)
                 else:
-                    free_conns = int(my_rows[0]['SUM(ConnFree)'])
+                    conn_free_field = my_rows[0]['SUM(ConnFree)']
+
+                    if conn_free_field is not None:
+                        free_conns = int(conn_free_field)
+                    else:
+                        free_conns = 0
 
                 time.sleep(1)
 
