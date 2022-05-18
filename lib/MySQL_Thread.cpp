@@ -5021,7 +5021,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		double final_val = 0;
 
 		if (conv != 0) {
-			final_val = (q - (cur_val / conv)) * conv;
+			final_val = (q - (cur_val * conv)) / conv;
 		} else {
 			final_val = q - cur_val;
 		}
@@ -5051,7 +5051,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		double final_val = 0;
 
 		if (conv != 0) {
-			final_val = q / conv;
+			final_val = q / static_cast<double>(conv);
 		} else {
 			final_val = q;
 		}
