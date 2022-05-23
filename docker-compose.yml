@@ -649,3 +649,48 @@ services:
     command:
       - /opt/entrypoint/entrypoint.bash
 
+  almalinux9_build:
+    image: proxysql/packaging:build-almalinux9
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=almalinux9
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  almalinux9_clang_build:
+    image: proxysql/packaging:build-clang-almalinux9
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=almalinux9-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
+  almalinux9_dbg_build:
+    image: proxysql/packaging:build-almalinux9
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=dbg-almalinux9
+      - PROXYSQL_BUILD_TYPE=debug
+    command:
+      - /opt/entrypoint/entrypoint.bash
+
