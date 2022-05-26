@@ -121,7 +121,7 @@ deps/libhttpserver/libhttpserver-master_20191121/
 deps/libhttpserver/libhttpserver-0.18.1/
 
 #clickhouse
-deps/clickhouse-cpp/clickhouse-cpp/
+deps/clickhouse-cpp/clickhouse-cpp-*
 deps/cityhash/cityhash/
 deps/lz4/lz4-1.7.5/
 deps/lz4/lz4/
