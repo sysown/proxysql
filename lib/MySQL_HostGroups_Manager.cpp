@@ -3561,7 +3561,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 	bool writer_is_also_reader = false;
 
 	// Get the reader_hostgroup for the supplied writter hostgroup
-	std::string t_reader_hostgroup_query {
+	const std::string t_reader_hostgroup_query {
 		"SELECT reader_hostgroup,writer_is_also_reader FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
 	};
 	std::string reader_hostgroup_query {};

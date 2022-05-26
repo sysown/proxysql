@@ -64,6 +64,7 @@
 	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
+#include <optional>
 #include "clickhouse/client.h"
 
 using namespace clickhouse;
@@ -177,9 +178,9 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 					{
 						auto s_t = block[i]->As<ColumnNullable>();
 						if (s_t->IsNull(r)) {
-							s = "\\N";
+							s = "NULL";
 						} else {
-							clickhouse::Type::Code cnc = block[i]->Type()->GetNestedType()->GetCode();
+							clickhouse::Type::Code cnc = block[i]->Type()->GetCode();
 							switch (cnc) {
 								case clickhouse::Type::Code::Int8:
 									s=std::to_string(s_t->Nested()->As<ColumnInt8>()->At(r));

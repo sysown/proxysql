@@ -1,9 +1,0 @@
-@@ -4,6 +4,8 @@
- #include "../base/coded.h"
- #include "../types/types.h"
- 
-+#include <stdexcept>
-+
- namespace clickhouse {
- 
- using ColumnRef = std::shared_ptr<class Column>;

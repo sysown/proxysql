@@ -7,10 +7,10 @@
 #include <vector>
 
 template<class...> struct conjunction : std::true_type { };
-template<class B1> struct conjunction<B1> : B1 { };
+template<class B1> struct std::conjunction<B1> : B1 { };
 template<class B1, class... Bn>
-struct conjunction<B1, Bn...> 
-    : std::conditional<bool(B1::value), conjunction<Bn...>, B1>::type {};
+struct std::conjunction<B1, Bn...> 
+    : std::conditional<bool(B1::value), std::conjunction<Bn...>, B1>::type {};
 
 /**
  * @brief Stores the result of formatting the first parameter with the provided
@@ -24,7 +24,7 @@ struct conjunction<B1, Bn...>
  */
 template<
 	typename... Args,
-	typename std::enable_if<conjunction<std::is_trivial<Args>...>::value,int>::type = 0
+	typename std::enable_if<std::conjunction<std::is_trivial<Args>...>::value,int>::type = 0
 >
 int string_format(const std::string& str, std::string& result, Args... args) {
 	int err = 0;
