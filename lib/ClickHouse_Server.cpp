@@ -71,7 +71,6 @@ using namespace clickhouse;
 
 __thread MySQL_Session * clickhouse_thread___mysql_sess;
 
-//static void ClickHouse_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
 inline void ClickHouse_to_MySQL(const Block& block) {
 	MySQL_Session *sess = clickhouse_thread___mysql_sess;
 	MySQL_Protocol *myprot=NULL;
@@ -110,6 +109,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 	for (int r=0; r<rows; r++) {
 		for (int i=0; i<columns; i++) {
 			clickhouse::Type::Code cc = block[i]->Type()->GetCode();
+			bool is_null = false;
 			string s;
 			switch (cc) {
 				case clickhouse::Type::Code::Int8:
@@ -178,7 +178,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 					{
 						auto s_t = block[i]->As<ColumnNullable>();
 						if (s_t->IsNull(r)) {
-							s = "NULL";
+							is_null = true;
 						} else {
 							clickhouse::Type::Code cnc = block[i]->Type()->GetCode();
 							switch (cnc) {
@@ -247,8 +247,12 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 				default:
 					break;
 			}
-      l[i]=s.length();
-      p[i]=strdup((char *)s.c_str());
+			if (is_null == false) {
+				l[i]=s.length();
+				p[i]=strdup((char *)s.c_str());
+			} else {
+				p[i]=NULL;
+			}
     }
     myprot->generate_pkt_row(true,NULL,NULL,sid,columns,l,p); sid++;
 		for (int i=0; i<columns; i++) {
