@@ -962,7 +962,7 @@ const std::vector<std::string> SAVE_MYSQL_VARIABLES_TO_MEMORY = {
 
 bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length) {
 	for (std::vector<std::string>::const_iterator it=cmds.begin(); it!=cmds.end(); ++it) {
-		if (query_no_space_length==it->length() && !strncasecmp(it->c_str(), query_no_space, query_no_space_length)) {
+		if ((unsigned int)query_no_space_length==it->length() && !strncasecmp(it->c_str(), query_no_space, query_no_space_length)) {
 			proxy_info("Received %s command\n", query_no_space);
 			return true;
 		}
@@ -1421,7 +1421,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			sess->client_myds->shut_soft();
 			return false;
 		}
-		if (query_no_space_length >= l+36+2) {
+		if (query_no_space_length >= (unsigned int)l+36+2) {
 			uuid_t uu;
 			char *A_uuid = NULL;
 			char *B_interface = NULL;
@@ -3509,7 +3509,7 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 	pta[0]=NULL;
 	char *tn=NULL; // tablename
 	// note that tablename is passed with a trailing '
-	tn=(char *)malloc(strlen(tablename));
+	tn=(char *)malloc(strlen(tablename)+1);
 	unsigned int i=0, j=0;
 	while (i<strlen(tablename)) {
 		if (tablename[i]!='\\' && tablename[i]!='`' && tablename[i]!='\'') {
@@ -4033,7 +4033,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							char msg[256];
 							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_read_only_action();
 							sprintf(msg, "Tested in %llums\n", d);
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -4043,7 +4043,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							char msg[256];
 							unsigned long long d = SPA->ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 							sprintf(msg, "Tested in %llums\n", d);
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -4065,7 +4065,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							SPA->admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id=5211");
 							SPA->load_mysql_servers_to_runtime();
 							SPA->mysql_servers_wrunlock();
-							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg, NULL);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 							run_query=false;
 						}
 						break;
@@ -4879,9 +4879,9 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
 		strBl=strlen(strB);
 		char *tn=NULL; // tablename
-		tn=(char *)malloc(strlen(strA));
+		tn=(char *)malloc(strAl+1);
 		unsigned int i=0, j=0;
-		while (i<strlen(strA)) {
+		while (i<(unsigned int)strAl) {
 			if (strA[i]!='\\' && strA[i]!='`' && strA[i]!='\'') {
 				tn[j]=strA[i];
 				j++;
@@ -5938,6 +5938,7 @@ bool ProxySQL_Admin::init() {
 
 #ifdef DEBUG
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
+	admindb->execute("ATTACH DATABASE 'file:mem_monitor_internal_db?mode=memory&cache=shared' AS 'monitor_internal'");
 #endif /* DEBUG */
 
 #ifdef DEBUG
@@ -7774,7 +7775,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		}
 		if (!strcasecmp(name,"stats_mysql_query_digest_to_disk")) {
 			int intv=atoi(value);
-			if (intv >= 0 && intv < 24*3600) {
+			if (intv >= 0 && intv <= 24*3600) {
 				variables.stats_mysql_query_digest_to_disk=intv;
 				GloProxyStats->variables.stats_mysql_query_digest_to_disk=intv;
 				return true;
@@ -11922,8 +11923,8 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 		}
 		GloQPro->sort(false);
 		GloQPro->load_fast_routing(resultset2);
-		GloQPro->wrunlock();
 		GloQPro->commit();
+		GloQPro->wrunlock();
 	}
 	if (resultset) delete resultset;
 	// if (resultset2) delete resultset2; // never delete it. GloQPro saves it
@@ -13177,7 +13178,6 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Bala
 	unsigned long long t1 = monotonic_time();
 	const unsigned int NS = 4;
 	unsigned int cu[NS] = { 50, 10, 10, 0 };
-	unsigned int hid = 0;
 	MyHGC * myhgc = NULL;
 	myhgc = MyHGM->MyHGC_lookup(5211);
 	assert(myhgc);
@@ -13192,7 +13192,7 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Bala
 	}
 	unsigned int NL = 1000;
 	for (unsigned int i=0; i<NL; i++) {
-		MySrvC * mysrvc = myhgc->get_random_MySrvC(NULL, NULL, -1, NULL);
+		MySrvC * mysrvc = myhgc->get_random_MySrvC(NULL, 0, -1, NULL);
 		assert(mysrvc);
 		for (unsigned int k=0; k<NS; k++) {
 			MySrvC * m = (MySrvC *)myhgc->mysrvs->servers->index(k);

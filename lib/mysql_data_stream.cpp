@@ -198,6 +198,9 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 					}
 				}
 			}
+
+			sk_GENERAL_NAME_pop_free(alt_names, GENERAL_NAME_free);
+			X509_free(cert);
 		} else {
 			// we currently disable this annoying error
 			// in future we can configure this as per user level, specifying if the certificate is mandatory or not
@@ -903,10 +906,12 @@ int MySQL_Data_Stream::read_pkts() {
 int MySQL_Data_Stream::buffer2array() {
 	int ret=0;
 	bool fast_mode=sess->session_fast_forward;
-	int s = queue_data(queueIN);
-	if (s==0) return ret;
-	if ((queueIN.pkt.size==0) && s<sizeof(mysql_hdr)) {
-		queue_zero(queueIN);
+	{
+		unsigned long s = queue_data(queueIN);
+		if (s==0) return ret;
+		if ((queueIN.pkt.size==0) && s<sizeof(mysql_hdr)) {
+			queue_zero(queueIN);
+		}
 	}
 
 	if (fast_mode) {

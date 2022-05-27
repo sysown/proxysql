@@ -3441,58 +3441,69 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	myhgc->mysrvs->add(mysrvc);
 }
 
+void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, char *address, unsigned int port, int current_replication_lag) {
+	int j;
+	for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
+		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
+				if (
+//					(current_replication_lag==-1 )
+//					||
+					(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
+				) {
+					// always increase the counter
+					mysrvc->cur_replication_lag_count += 1;
+					if (mysrvc->cur_replication_lag_count >= (unsigned int)mysql_thread___monitor_replication_lag_count) {
+						proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
+						mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+					} else {
+						proxy_info(
+							"Not shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d' < replication_lag_count: '%d'\n",
+							address,
+							port,
+							myhgc->hid,
+							current_replication_lag,
+							mysrvc->cur_replication_lag_count,
+							mysql_thread___monitor_replication_lag_count
+						);
+					}
+				} else {
+					mysrvc->cur_replication_lag_count = 0;
+				}
+			} else {
+				if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+					if (
+						(current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag))
+						||
+						(current_replication_lag==-2) // see issue 959
+					) {
+						mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
+						proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
+						mysrvc->cur_replication_lag_count = 0;
+					}
+				}
+			}
+			return;
+		}
+	}
+}
+
 void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
-	int j;
-	MyHGC *myhgc = MyHGC_find(_hid);
-	if (myhgc) {
-		for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
-			MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
-			if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
-				if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
-					if (
-//						(current_replication_lag==-1 )
-//						||
-						(current_replication_lag>=0 && ((unsigned int)current_replication_lag > mysrvc->max_replication_lag))
-					) {
-						// always increase the counter
-						mysrvc->cur_replication_lag_count += 1;
-						if (mysrvc->cur_replication_lag_count >= mysql_thread___monitor_replication_lag_count) {
-							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d'\n", address, port, myhgc->hid, current_replication_lag, mysrvc->cur_replication_lag_count);
-							mysrvc->status=MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
-						} else {
-							proxy_info(
-								"Not shunning server %s:%d from HG %u with replication lag of %d second, count number: '%d' < replication_lag_count: '%d'\n",
-								address,
-								port,
-								myhgc->hid,
-								current_replication_lag,
-								mysrvc->cur_replication_lag_count,
-								mysql_thread___monitor_replication_lag_count
-							);
-						}
-					} else {
-						mysrvc->cur_replication_lag_count = 0;
-					}
-				} else {
-					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
-						if (
-							(current_replication_lag>=0 && ((unsigned int)current_replication_lag <= mysrvc->max_replication_lag))
-							||
-							(current_replication_lag==-2) // see issue 959
-						) {
-							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
-							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %d second\n", address, port, myhgc->hid, current_replication_lag);
-							mysrvc->cur_replication_lag_count = 0;
-						}
-					}
-				}
-				goto __exit_replication_lag_action;
-			}
+	if (mysql_thread___monitor_replication_lag_group_by_host == false) {
+		// legacy check. 1 check per server per hostgroup
+		MyHGC *myhgc = MyHGC_find(_hid);
+		replication_lag_action_inner(myhgc,address,port,current_replication_lag);
+	} else {
+		// only 1 check per server, no matter the hostgroup
+		// all hostgroups must be searched
+		for (unsigned int i=0; i<MyHostGroups->len; i++) {
+			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+			replication_lag_action_inner(myhgc,address,port,current_replication_lag);
 		}
 	}
-__exit_replication_lag_action:
 	wrunlock();
 	GloAdmin->mysql_servers_wrunlock();
 }
@@ -3697,7 +3708,7 @@ int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned l
 				MySQL_Connection *mc=mscl->index(k);
 				// If the connection is idle ...
 				if (mc->last_time_used && mc->last_time_used < _max_last_time_used) {
-					if (oldest_idle_connections.size() < num_conn) {
+					if ((int)oldest_idle_connections.size() < num_conn) {
 						oldest_idle_connections.insert({mc->last_time_used, { mysrvc, k }});
 					} else if (num_conn != 0) {
 						auto last_elem_it = std::prev(oldest_idle_connections.end());
@@ -4515,7 +4526,6 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			// LCOV_EXCL_STOP
 	}
 
-__exit_read_only_action:
 	pthread_mutex_unlock(&readonly_mutex);
 	if (resultset) {
 		delete resultset;

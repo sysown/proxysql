@@ -318,7 +318,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	SQLite3_result *resultset=NULL;
 	char *strA=NULL;
 	char *strB=NULL;
-	int strAl, strBl;
+	size_t strAl, strBl;
 	char *query=NULL;
 	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
 	query=(char *)l_alloc(query_length);
@@ -515,9 +515,9 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
 		strBl=strlen(strB);
 		char *tn=NULL; // tablename
-		tn=(char *)malloc(strlen(strA));
+		tn=(char *)malloc(strAl+1);
 		unsigned int i=0, j=0;
-		while (i<strlen(strA)) {
+		while (i<strAl) {
 			if (strA[i]!='\\' && strA[i]!='`' && strA[i]!='\'') {
 				tn[j]=strA[i];
 				j++;
@@ -812,6 +812,9 @@ static void *child_mysql(void *arg) {
 			}
 		}
 		myds->revents=fds[0].revents;
+		// FIXME: CI test test_sqlite3_server-t or test_sqlite3_server_and_fast_routing-t
+		// seems to result in fds->fd = -1
+		// it needs investigation
 		myds->read_from_net();
 		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
@@ -829,7 +832,7 @@ static void *child_mysql(void *arg) {
 		sess->client_myds->client_addr=addr;
 		int g_rc = getpeername(sess->client_myds->fd, addr, &addrlen);
 		if (g_rc == -1) {
-			proxy_error("'getpeername' failed with error: %d\n", rc);
+			proxy_error("'getpeername' failed with error: %d\n", g_rc);
 		}
 
 		int rc=sess->handler();
@@ -908,8 +911,10 @@ __end_while_pool:
 			for (i=0; i<nfds; i++) {
 				char *add=NULL; char *port=NULL;
 				close(fds[i].fd);
-				c_split_2(socket_names[i], ":" , &add, &port);
-				if (atoi(port)==0) { unlink(socket_names[i]); }
+				if (socket_names[i] != NULL) { // this should skip socket_names[0] , because it is a pipe
+					c_split_2(socket_names[i], ":" , &add, &port);
+					if (atoi(port)==0) { unlink(socket_names[i]); }
+				}
 			}
 			nfds=0;
 			fds[nfds].fd=GloAdmin->pipefd[0];

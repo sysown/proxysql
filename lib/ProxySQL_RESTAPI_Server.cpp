@@ -136,7 +136,7 @@ private:
 					+ "\"}";
 
 				proxy_error("Request to execute script '%s' timed out.\n", script.c_str());
-			} else {
+			} else if (script_err < 0) {
 				// there was an internal error unrelated to script execution
 				internal_error = true;
 
@@ -170,6 +170,13 @@ private:
 					script.c_str(),
 					failed_syscall.c_str(),
 					script_errno
+				);
+			} else {
+				str_response_err =
+					"{\"type\":\"out\", \"error\":\"Terminated without exit code. Child exit status reported in"
+						" 'error_code'\", \"error_code\":\"" + std::to_string(script_err) + "\"}";
+				proxy_error(
+					"Error while executing script '%s'. Child exit status: '%d'.\n", script.c_str(), script_err
 				);
 			}
 		}

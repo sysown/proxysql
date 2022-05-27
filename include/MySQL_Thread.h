@@ -348,6 +348,7 @@ struct p_th_gauge {
 		mysql_monitor_read_only_interval,
 		mysql_monitor_read_only_timeout,
 		mysql_monitor_writer_is_also_reader,
+		mysql_monitor_replication_lag_group_by_host,
 		mysql_monitor_replication_lag_interval,
 		mysql_monitor_replication_lag_timeout,
 		mysql_monitor_history,
@@ -434,6 +435,7 @@ class MySQL_Threads_Handler
 		//! ProxySQL session wait timeout. Unit: 'ms'.
 		bool monitor_wait_timeout;
 		bool monitor_writer_is_also_reader;
+		bool monitor_replication_lag_group_by_host;
 		//! How frequently a replication lag check is performed. Unit: 'ms'.
 		int monitor_replication_lag_interval;
 		//! Read only check timeout. Unit: 'ms'.

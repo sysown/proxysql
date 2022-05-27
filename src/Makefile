@@ -1,7 +1,7 @@
 ifndef GIT_VERSION
-GIT_VERSION := $(shell git describe --long --abbrev=7)
+	GIT_VERSION := $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-$(error GIT_VERSION is not set)
+	$(error GIT_VERSION is not set)
 endif
 endif
 
@@ -109,6 +109,11 @@ else
 WASAN=
 endif
 
+TEST_WITHASANVAR := $(shell echo $(TEST_WITHASAN))
+ifeq ($(TEST_WITHASANVAR),1)
+WASAN+= -DTEST_WITHASAN
+endif
+
 MYCXXFLAGS=-std=c++11
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS+= -fuse-ld=lld
@@ -180,5 +185,5 @@ $(LIBPROXYSQLAR):
 default: $(EXECUTABLE)
 
 clean:
-	rm -f *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1
+	rm -rf *.pid $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *~ core perf.data* heaptrack.proxysql.* $(EXECUTABLE) $(EXECUTABLE).sha1 $(ODIR)
 

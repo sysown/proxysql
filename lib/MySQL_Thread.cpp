@@ -452,6 +452,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_read_only_interval",
 	(char *)"monitor_read_only_timeout",
 	(char *)"monitor_read_only_max_timeout_count",
+	(char *)"monitor_replication_lag_group_by_host",
 	(char *)"monitor_replication_lag_interval",
 	(char *)"monitor_replication_lag_timeout",
 	(char *)"monitor_replication_lag_count",
@@ -991,6 +992,12 @@ th_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
+			p_th_gauge::mysql_monitor_replication_lag_group_by_host,
+			"proxysql_monitor_replication_lag_group_by_host",
+			"Encodes different replication lag check if the same server is in multiple hostgroups.",
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_th_gauge::mysql_monitor_replication_lag_interval,
 			"proxysql_mysql_monitor_replication_lag_interval_seconds",
 			"How frequently a replication lag check is performed, in seconds.",
@@ -1058,6 +1065,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_read_only_interval=1000;
 	variables.monitor_read_only_timeout=800;
 	variables.monitor_read_only_max_timeout_count=3;
+	variables.monitor_replication_lag_group_by_host=false;
 	variables.monitor_replication_lag_interval=10000;
 	variables.monitor_replication_lag_timeout=1000;
 	variables.monitor_replication_lag_count=1;
@@ -2082,6 +2090,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["log_mysql_warnings_enabled"]      = make_tuple(&variables.log_mysql_warnings_enabled,      false);
 		VariablesPointers_bool["log_unhealthy_connections"]       = make_tuple(&variables.log_unhealthy_connections,       false);
 		VariablesPointers_bool["monitor_enabled"]                 = make_tuple(&variables.monitor_enabled,                 false);
+		VariablesPointers_bool["monitor_replication_lag_group_by_host"] = make_tuple(&variables.monitor_replication_lag_group_by_host, false);
 		VariablesPointers_bool["monitor_wait_timeout"]            = make_tuple(&variables.monitor_wait_timeout,            false);
 		VariablesPointers_bool["monitor_writer_is_also_reader"]   = make_tuple(&variables.monitor_writer_is_also_reader,   false);
 		VariablesPointers_bool["multiplexing"]                    = make_tuple(&variables.multiplexing,                    false);
@@ -3138,6 +3147,9 @@ __run_skip_1a:
 				poll_listener_add(n);
 				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
 			}
+#ifdef DEBUG
+			usleep(5+rand()%10);
+#endif
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);
@@ -3222,7 +3234,14 @@ __run_skip_1a:
 		mypolls.loops++;
 		mypolls.loop_counters->incr(curtime/1000000);
 
-		if (maintenance_loop) {
+		if (maintenance_loop == true
+#ifdef IDLE_THREADS
+		// in case of idle thread
+		// do not run any mirror cleanup and do not
+		// update query processor stats
+		&& idle_maintenance_thread == false
+#endif // IDLE_THREADS
+		) {
 			// house keeping
 			run___cleanup_mirror_queue();
 			GloQPro->update_query_processor_stats();
@@ -3313,7 +3332,7 @@ __run_skip_2:
 // end of ::run()
 
 unsigned int MySQL_Thread::find_session_idx_in_mysql_sessions(MySQL_Session *sess) {
-	int i=0;
+	unsigned int i=0;
 	for (i=0;i<mysql_sessions->len;i++) {
 		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
 		if (mysess==sess) {
@@ -3649,7 +3668,6 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 	unsigned int numTrx=0;
 	sess->active_transactions=sess->NumActiveTransactions();
 	{
-		unsigned long long sess_active_transactions = sess->active_transactions;
 		sess->active_transactions=sess->NumActiveTransactions();
 		// in case we detected a new transaction just now
 		if (sess->active_transactions == 0) {
@@ -3718,7 +3736,7 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 	if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
 		MySQL_Connection* myconn = sess->mybe->server_myds->myconn;
 
-		if (mysql_thread___auto_increment_delay_multiplex_timeout_ms != 0 && (sess_time/1000 > mysql_thread___auto_increment_delay_multiplex_timeout_ms)) {
+		if (mysql_thread___auto_increment_delay_multiplex_timeout_ms != 0 && (sess_time/1000 > (unsigned long long)mysql_thread___auto_increment_delay_multiplex_timeout_ms)) {
 			myconn->auto_increment_delay_token = 0;
 		}
 	}
@@ -3928,6 +3946,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_read_only_interval=GloMTH->get_variable_int((char *)"monitor_read_only_interval");
 	mysql_thread___monitor_read_only_timeout=GloMTH->get_variable_int((char *)"monitor_read_only_timeout");
 	mysql_thread___monitor_read_only_max_timeout_count=GloMTH->get_variable_int((char *)"monitor_read_only_max_timeout_count");
+	mysql_thread___monitor_replication_lag_group_by_host=(bool)GloMTH->get_variable_int((char *)"monitor_replication_lag_group_by_host");
 	mysql_thread___monitor_replication_lag_interval=GloMTH->get_variable_int((char *)"monitor_replication_lag_interval");
 	mysql_thread___monitor_replication_lag_timeout=GloMTH->get_variable_int((char *)"monitor_replication_lag_timeout");
 	mysql_thread___monitor_replication_lag_count=GloMTH->get_variable_int((char *)"monitor_replication_lag_count");
@@ -5002,7 +5021,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		double final_val = 0;
 
 		if (conv != 0) {
-			final_val = (q - (cur_val / conv)) * conv;
+			final_val = (q - (cur_val * conv)) / conv;
 		} else {
 			final_val = q - cur_val;
 		}
@@ -5032,7 +5051,7 @@ unsigned long long MySQL_Threads_Handler::get_status_variable(
 		double final_val = 0;
 
 		if (conv != 0) {
-			final_val = q / conv;
+			final_val = q / static_cast<double>(conv);
 		} else {
 			final_val = q;
 		}
@@ -5181,6 +5200,7 @@ void MySQL_Threads_Handler::p_update_metrics() {
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_interval]->Set(this->variables.monitor_read_only_interval/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_read_only_timeout]->Set(this->variables.monitor_read_only_timeout/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_writer_is_also_reader]->Set(this->variables.monitor_writer_is_also_reader);
+	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_group_by_host]->Set(this->variables.monitor_replication_lag_group_by_host);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_interval]->Set(this->variables.monitor_replication_lag_interval/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_replication_lag_timeout]->Set(this->variables.monitor_replication_lag_timeout/1000.0);
 	this->status_variables.p_gauge_array[p_th_gauge::mysql_monitor_history]->Set(this->variables.monitor_history/1000.0);

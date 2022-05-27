@@ -553,7 +553,7 @@ class MySQL_HostGroups_Manager {
 	/**
 	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
 	 *   'mysql_servers' present in 'MySQL_HostGroups_Manager' db, which are not 'OFFLINE_HARD'. The resulset
-	 *   fields match the definition of 'monitor.mysql_servers' table.
+	 *   fields match the definition of 'monitor_internal.mysql_servers' table.
 	 * @details Several details:
 	 *   - Function assumes that 'mysql_servers' table from 'MySQL_HostGroups_Manager' db is ready
 	 *     to be consumed, because of this it doesn't perform any of the following operations:
@@ -578,6 +578,7 @@ class MySQL_HostGroups_Manager {
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
+	void replication_lag_action_inner(MyHGC *, char*, unsigned int, int);
 	void replication_lag_action(int, char*, unsigned int, int);
 	void read_only_action(char *hostname, int port, int read_only);
 	unsigned int get_servers_table_version();

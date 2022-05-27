@@ -1027,55 +1027,61 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["qpo"]["timeout"] = qpo->timeout;
 	j["qpo"]["retries"] = qpo->retries;
 	j["qpo"]["max_lag_ms"] = qpo->max_lag_ms;
-	j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
-	j["client"]["userinfo"]["schemaname"] = ( client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "" );
-#ifdef DEBUG
-	j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
-#endif
-	j["client"]["stream"]["pkts_recv"] = client_myds->pkts_recv;
-	j["client"]["stream"]["pkts_sent"] = client_myds->pkts_sent;
-	j["client"]["stream"]["bytes_recv"] = client_myds->bytes_info.bytes_recv;
-	j["client"]["stream"]["bytes_sent"] = client_myds->bytes_info.bytes_sent;
-	j["client"]["client_addr"]["address"] = ( client_myds->addr.addr ? client_myds->addr.addr : "" );
-	j["client"]["client_addr"]["port"] = client_myds->addr.port;
-	j["client"]["proxy_addr"]["address"] = ( client_myds->proxy_addr.addr ? client_myds->proxy_addr.addr : "" );
-	j["client"]["proxy_addr"]["port"] = client_myds->proxy_addr.port;
-	j["client"]["encrypted"] = client_myds->encrypted;
-	if (client_myds->encrypted) {
-		const SSL_CIPHER *cipher = SSL_get_current_cipher(client_myds->ssl);
-		if (cipher) {
-			const char * name = SSL_CIPHER_get_name(cipher);
-			if (name) {
-				j["client"]["ssl_cipher"] = name;
-			}
-		}
-	}
-	j["client"]["DSS"] = client_myds->DSS;
-	j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
 	j["default_schema"] = ( default_schema ? default_schema : "" );
 	j["user_attributes"] = ( user_attributes ? user_attributes : "" );
 	j["transaction_persistent"] = transaction_persistent;
-	j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
-	for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
-		client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
-	}
-	{
-		MySQL_Connection *c = client_myds->myconn;
-		for (std::vector<uint32_t>::const_iterator it_c = c->dynamic_variables_idx.begin(); it_c != c->dynamic_variables_idx.end(); it_c++) {
-			c->variables[*it_c].fill_client_internal_session(j, *it_c);
+	if (client_myds != NULL) { // only if client_myds is defined
+		j["client"]["stream"]["pkts_recv"] = client_myds->pkts_recv;
+		j["client"]["stream"]["pkts_sent"] = client_myds->pkts_sent;
+		j["client"]["stream"]["bytes_recv"] = client_myds->bytes_info.bytes_recv;
+		j["client"]["stream"]["bytes_sent"] = client_myds->bytes_info.bytes_sent;
+		j["client"]["client_addr"]["address"] = ( client_myds->addr.addr ? client_myds->addr.addr : "" );
+		j["client"]["client_addr"]["port"] = client_myds->addr.port;
+		j["client"]["proxy_addr"]["address"] = ( client_myds->proxy_addr.addr ? client_myds->proxy_addr.addr : "" );
+		j["client"]["proxy_addr"]["port"] = client_myds->proxy_addr.port;
+		j["client"]["encrypted"] = client_myds->encrypted;
+		if (client_myds->encrypted) {
+			const SSL_CIPHER *cipher = SSL_get_current_cipher(client_myds->ssl);
+			if (cipher) {
+				const char * name = SSL_CIPHER_get_name(cipher);
+				if (name) {
+					j["client"]["ssl_cipher"] = name;
+				}
+			}
+		}
+		j["client"]["DSS"] = client_myds->DSS;
+		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
+		if (client_myds->myconn != NULL) { // only if myconn is defined
+			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
+				j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
+				j["client"]["userinfo"]["schemaname"] = ( client_myds->myconn->userinfo->schemaname ? client_myds->myconn->userinfo->schemaname : "" );
+#ifdef DEBUG
+				j["client"]["userinfo"]["password"] = ( client_myds->myconn->userinfo->password ? client_myds->myconn->userinfo->password : "" );
+#endif
+			}
+			j["conn"]["session_track_gtids"] = ( client_myds->myconn->options.session_track_gtids ? client_myds->myconn->options.session_track_gtids : "") ;
+			for (auto idx = 0; idx < SQL_NAME_LAST_LOW_WM; idx++) {
+				client_myds->myconn->variables[idx].fill_client_internal_session(j, idx);
+			}
+			{
+				MySQL_Connection *c = client_myds->myconn;
+				for (std::vector<uint32_t>::const_iterator it_c = c->dynamic_variables_idx.begin(); it_c != c->dynamic_variables_idx.end(); it_c++) {
+					c->variables[*it_c].fill_client_internal_session(j, *it_c);
+				}
+			}
+
+			j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
+			j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
+			j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
+			j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
+			j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
+			j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
+			j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
+			j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
+			j["conn"]["status"]["transaction"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_TRANSACTION);
+			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 		}
 	}
-
-	j["conn"]["autocommit"] = ( client_myds->myconn->options.autocommit ? "ON" : "OFF" );
-	j["conn"]["client_flag"]["value"] = client_myds->myconn->options.client_flag;
-	j["conn"]["client_flag"]["client_found_rows"] = (client_myds->myconn->options.client_flag & CLIENT_FOUND_ROWS ? 1 : 0);
-	j["conn"]["client_flag"]["client_multi_statements"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS ? 1 : 0);
-	j["conn"]["client_flag"]["client_multi_results"] = (client_myds->myconn->options.client_flag & CLIENT_MULTI_RESULTS ? 1 : 0);
-	j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
-	j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
-	j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-	j["conn"]["status"]["transaction"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_TRANSACTION);
-	j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 	for (unsigned int k=0; k<mybes->len; k++) {
 		MySQL_Backend *_mybe = NULL;
 		_mybe=(MySQL_Backend *)mybes->index(k);
@@ -1183,6 +1189,7 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
+		l_free(pkt->size,pkt->ptr);
 		return;
 	}
 	// default
@@ -2766,7 +2773,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->myconn->send_quit = false;
 					myds->myconn->reusable = false;
 				}
-				mysql_variables.on_connect_to_backend(myds->myconn);
 				NEXT_IMMEDIATE_NEW(st);
 				break;
 			case -1:
@@ -6758,7 +6764,6 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 */
 	if (MyRS) {
 		assert(MyRS->result);
-		bool transfer_started=MyRS->transfer_started;
 		MyRS->init_with_stmt(myconn);
 		bool resultset_completed=MyRS->get_resultset(client_myds->PSarrayOUT);
 		CurrentQuery.rows_sent = MyRS->num_rows;
@@ -7181,7 +7186,6 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 	mc->async_state_machine = ASYNC_IDLE; // may not be true, but is used to correctly perform error handling
 	new_myds->DSS = STATE_MARIADB_QUERY;
 	thread->register_session_connection_handler(new_sess,true);
-	mysql_variables.on_connect_to_backend(mc);
 	if (new_myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, new_myds->fd, new_myds, thread->curtime);
 	}
@@ -7501,7 +7505,7 @@ void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 			json j; // one json for each row
 			for (int i=0; i<resultset->columns; i++) {
 				// using the format j["name"] == "value"
-				j[resultset->column_definition[i]->name] = ( r->fields[i] ? r->fields[i] : "(null)" );
+				j[resultset->column_definition[i]->name] = ( r->fields[i] ? std::string(r->fields[i]) : std::string("(null)") );
 			}
 			j_res.push_back(j); // the row json is added to the final json
 		}

@@ -92,7 +92,7 @@ endif
 
 WITHASANVAR := $(shell echo $(WITHASAN))
 ifeq ($(WITHASANVAR),1)
-WASAN=-fsanitize=address
+WASAN=-fsanitize=address -DTEST_WITHASAN
 else
 WASAN=
 endif

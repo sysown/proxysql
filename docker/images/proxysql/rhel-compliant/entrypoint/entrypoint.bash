@@ -22,8 +22,13 @@ rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/p
 
 # Clean and build dependancies and source
 echo "==> Building"
+git config --system --add safe.directory '/opt/proxysql'
 cd /opt/proxysql
+echo "==> ProxySQL '$(git describe --long --abbrev=7)'"
 export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+echo "==> Setting SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}"
+find /opt/proxysql -not -path "/opt/proxysql/binaries/*" -exec touch -h --date=@${SOURCE_DATE_EPOCH} {} \;
+
 if [[ -z ${PROXYSQL_BUILD_TYPE:-} ]] ; then
 	deps_target="build_deps"
 	build_target=""

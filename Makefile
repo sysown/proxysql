@@ -31,7 +31,7 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.2.0
+export CURVER?=2.4.1
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 else
@@ -675,9 +675,9 @@ cleanall:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
-	rm binaries/*deb || true
-	rm binaries/*rpm || true
-	rm binaries/*id-hash || true
+	rm -f binaries/*deb || true
+	rm -f binaries/*rpm || true
+	rm -f binaries/*id-hash || true
 
 .PHONY: cleanbuild
 cleanbuild:

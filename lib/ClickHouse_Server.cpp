@@ -263,33 +263,6 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 }
 
 
-
-
-
-
-
-static void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
-	unsigned char ch;
-	size_t i, j;
-
-	for (i=0, j=0; i<l; i++, j+=2) {
-		ch=string[i];
-		ch = ch >> 4;
-		if (ch <= 9) {
-			hexstring[j]= '0' + ch;
-		} else {
-			hexstring[j]= 'A' + ch - 10;
-		}
-		ch = string[i];
-		ch = ch & 0x0F;
-		if (ch <= 9) {
-			hexstring[j+1]= '0' + ch;
-		} else {
-			hexstring[j+1]= 'A' + ch - 10;
-		}
-	}
-}
-
 struct cpu_timer
 {
 	cpu_timer() {
@@ -314,17 +287,6 @@ static char *s_strdup(char *s) {
 	return ret;
 }
 
-
-static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
-	if (sha1_pass==NULL) return NULL;
-	char *buff1=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
-	buff1[0]='*';
-	buff1[SHA_DIGEST_LENGTH*2+1]='\0';
-	StringToHex((unsigned char *)sha1_pass,(unsigned char *)buff1+1,SHA_DIGEST_LENGTH);
-//	assert(strcmp(buff,buff1)==0);
-//	free(buff);
-	return buff1;
-}
 
 static int __ClickHouse_Server_refresh_interval=1000;
 extern Query_Cache *GloQC;
@@ -473,8 +435,6 @@ class sqlite3server_main_loop_listeners {
 static sqlite3server_main_loop_listeners S_amll;
 
 void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
-
-	ClickHouse_Server *s3s=(ClickHouse_Server *)_pa;
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -1464,6 +1424,7 @@ ClickHouse_Server::ClickHouse_Server() {
 	variables.mysql_ifaces=strdup("0.0.0.0:6090");
 	variables.hostname = strdup("127.0.0.1");
 	variables.port = 9000;
+	variables.read_only=false;
 };
 
 void ClickHouse_Server::wrlock() {
@@ -1575,10 +1536,10 @@ bool ClickHouse_Server::set_variable(char *name, char *value) {  // this is the 
 			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
 			if (variables.mysql_ifaces)
 				free(variables.mysql_ifaces);
-				variables.mysql_ifaces=strdup(value);
-				if (update_creds && variables.mysql_ifaces) {
-					S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
-				}
+			variables.mysql_ifaces=strdup(value);
+			if (update_creds && variables.mysql_ifaces) {
+				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
+			}
 			return true;
 		} else {
 			return false;

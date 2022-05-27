@@ -201,10 +201,22 @@ public:
 		std::lock_guard<std::mutex> lock(mutex);
 		MYSQL *my = mmsd->mysql;
 		pthread_mutex_lock(&m2);
+__conn_register_label:
 		for (unsigned int i=0; i<conns->len; i++) {
 			MYSQL *my1 = (MYSQL *)conns->index(i);
 			assert(my!=my1);
-			assert(my->net.fd!=my1->net.fd);
+			//assert(my->net.fd!=my1->net.fd); // FIXME: we changed this with the next section of code
+			if (my->net.fd == my1->net.fd) {
+				// FIXME: we need to identify still why a connection with error 2013 is here
+				if (my1->net.last_errno == 2013) {
+					// we remove the connection
+					conns->remove_index_fast(i);
+					goto __conn_register_label; // we return to the loop
+				} else {
+					// we crash again, as in the old logic
+					assert(my->net.fd!=my1->net.fd);
+				}
+			}
 		}
 		//proxy_info("Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, mmsd->mysql);
 		conns->add(my);
@@ -704,12 +716,18 @@ MySQL_Monitor::MySQL_Monitor() {
 	// create new SQLite datatabase
 	monitordb = new SQLite3DB();
 	monitordb->open((char *)"file:mem_monitordb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
-
+	// create 'monitor_internal_db' database and attach it to 'monitor'
+	monitor_internal_db = new SQLite3DB();
+	monitor_internal_db->open((char *)"file:mem_monitor_internal_db?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	monitordb->execute("ATTACH DATABASE 'file:mem_monitor_internal_db?mode=memory&cache=shared' AS 'monitor_internal'");
+	// create 'admindb' and attach both 'monitor' and 'monitor_internal'
 	admindb=new SQLite3DB();
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	admindb->execute("ATTACH DATABASE 'file:mem_monitordb?mode=memory&cache=shared' AS 'monitor'");
+	admindb->execute("ATTACH DATABASE 'file:mem_monitor_internal_db?mode=memory&cache=shared' AS 'monitor_internal'");
 	// define monitoring tables
 	tables_defs_monitor=new std::vector<table_def_t *>;
+	tables_defs_monitor_internal=new std::vector<table_def_t *>;
 	//insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_connect_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_CONNECT_LOG);
 	//insert_into_tables_defs(tables_defs_monitor,"mysql_server_ping", MONITOR_SQLITE_TABLE_MYSQL_SERVER_PING);
@@ -721,9 +739,10 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_log", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_LOG);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_check_status", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_CHECK_STATUS);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_failovers", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_FAILOVERS);
-	insert_into_tables_defs(tables_defs_monitor,"mysql_servers", MONITOR_SQLITE_TABLE_MYSQL_SERVERS);
+	insert_into_tables_defs(tables_defs_monitor_internal,"mysql_servers", MONITOR_SQLITE_TABLE_MYSQL_SERVERS);
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
+	check_and_build_standard_tables(monitor_internal_db, tables_defs_monitor_internal);
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_connect_log_time_start ON mysql_server_connect_log (time_start_us)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_ping_log_time_start ON mysql_server_ping_log (time_start_us)");
 	monitordb->execute("CREATE INDEX IF NOT EXISTS idx_read_only_log_time_start ON mysql_server_read_only_log (time_start_us)");
@@ -766,7 +785,10 @@ MySQL_Monitor::MySQL_Monitor() {
 MySQL_Monitor::~MySQL_Monitor() {
 	drop_tables_defs(tables_defs_monitor);
 	delete tables_defs_monitor;
+	drop_tables_defs(tables_defs_monitor_internal);
+	delete tables_defs_monitor_internal;
 	delete monitordb;
+	delete monitor_internal_db;
 	delete admindb;
 	delete My_Conn_Pool;
 	if (Group_Replication_Hosts_resultset) {
@@ -850,13 +872,13 @@ void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
 	if (resultset != nullptr) {
 		int rc = 0;
 
-		monitordb->execute("DELETE FROM mysql_servers");
+		monitordb->execute("DELETE FROM monitor_internal.mysql_servers");
 
 		sqlite3_stmt *statement1=NULL;
 		sqlite3_stmt *statement32=NULL;
 
-		std::string query32s = "INSERT INTO mysql_servers VALUES " + generate_multi_rows_query(32,4);
-		char* query1 = const_cast<char*>("INSERT INTO mysql_servers VALUES (?1,?2,?3,?4)");
+		std::string query32s = "INSERT INTO monitor_internal.mysql_servers VALUES " + generate_multi_rows_query(32,4);
+		char* query1 = const_cast<char*>("INSERT INTO monitor_internal.mysql_servers VALUES (?1,?2,?3,?4)");
 		char* query32 = (char *)query32s.c_str();
 
 		rc = monitordb->prepare_v2(query1, &statement1);
@@ -2465,7 +2487,7 @@ void * MySQL_Monitor::monitor_connect() {
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
-		// update the 'monitor.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
+		// update the 'monitor_internal.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
 		{
 			std::lock_guard<std::mutex> mysql_servers_guard(MyHGM->mysql_servers_to_monitor_mutex);
 			update_monitor_mysql_servers(MyHGM->mysql_servers_to_monitor);
@@ -2476,7 +2498,7 @@ void * MySQL_Monitor::monitor_connect() {
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor.mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -2594,7 +2616,7 @@ void * MySQL_Monitor::monitor_ping() {
 	unsigned long long next_loop_at=0;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
-		// update the 'monitor.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
+		// update the 'monitor_internal.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
 		{
 			std::lock_guard<std::mutex> mysql_servers_guard(MyHGM->mysql_servers_to_monitor_mutex);
 			update_monitor_mysql_servers(MyHGM->mysql_servers_to_monitor);
@@ -2605,7 +2627,7 @@ void * MySQL_Monitor::monitor_ping() {
 		int cols=0;
 		int affected_rows=0;
 		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor.mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
+		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -2683,7 +2705,7 @@ __end_monitor_ping_loop:
 		}
 
 		// now it is time to shun all problematic hosts
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM monitor.mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE b.ping_error IS NOT NULL AND b.ping_error NOT LIKE 'Access denied for user\%'";
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM monitor_internal.mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE b.ping_error IS NOT NULL AND b.ping_error NOT LIKE 'Access denied for user\%'";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 // we disable valgrind here. Probably a bug in SQLite3
 VALGRIND_DISABLE_ERROR_REPORTING;
@@ -2744,7 +2766,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 
 		// now it is time to update current_lantency_ms
-		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM monitor.mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE b.ping_error IS NULL";
+		query=(char *)"SELECT DISTINCT a.hostname, a.port FROM monitor_internal.mysql_servers a JOIN monitor.mysql_server_ping_log b ON a.hostname=b.hostname WHERE b.ping_error IS NULL";
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 VALGRIND_DISABLE_ERROR_REPORTING;
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -3229,7 +3251,12 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		char *error=NULL;
 		SQLite3_result *resultset=NULL;
 		// add support for SSL
-		char *query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag, use_ssl FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT IN (2,3)";
+		char *query= NULL;
+		if (mysql_thread___monitor_replication_lag_group_by_host==true) {
+			query = (char *)"SELECT MIN(hostgroup_id), hostname, port, MIN(max_replication_lag), MAX(use_ssl) FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT IN (2,3) GROUP BY hostname, port";
+		} else {
+			query=(char *)"SELECT hostgroup_id, hostname, port, max_replication_lag, use_ssl FROM mysql_servers WHERE max_replication_lag > 0 AND status NOT IN (2,3)";
+		}
 		t1=monotonic_time();
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart

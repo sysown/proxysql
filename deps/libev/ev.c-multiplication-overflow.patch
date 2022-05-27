@@ -1,0 +1,18 @@
+@@ -1937,7 +1937,7 @@
+   while (cnt > ncur);
+ 
+   /* if size is large, round to MALLOC_ROUND - 4 * longs to accommodate malloc overhead */
+-  if (elem * ncur > MALLOC_ROUND - sizeof (void *) * 4)
++  if ((long) elem * ncur > MALLOC_ROUND - sizeof (void *) * 4)
+     {
+       ncur *= elem;
+       ncur = (ncur + elem + (MALLOC_ROUND - 1) + sizeof (void *) * 4) & ~(MALLOC_ROUND - 1);
+@@ -1953,7 +1953,7 @@
+ array_realloc (int elem, void *base, int *cur, int cnt)
+ {
+   *cur = array_nextsize (elem, *cur, cnt);
+-  return ev_realloc (base, elem * *cur);
++  return ev_realloc (base, (long) elem * *cur);
+ }
+ 
+ #define array_init_zero(base,count)	\

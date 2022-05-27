@@ -108,9 +108,9 @@ static char * main_check_latest_version() {
 	curl_global_init(CURL_GLOBAL_ALL);
 	curl_handle = curl_easy_init();
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 1L);
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 2L);
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYSTATUS, 1l);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYSTATUS, 0L);
 	curl_easy_setopt(curl_handle, CURLOPT_RANGE, "0-31");
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
@@ -885,6 +885,9 @@ void ProxySQL_Main_shutdown_all_modules() {
 	}
 
 	{
+#ifdef TEST_WITHASAN
+		pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+#endif
 		cpu_timer t;
 		delete GloAdmin;
 #ifdef DEBUG
@@ -1075,7 +1078,11 @@ void ProxySQL_Main_init_phase3___start_all() {
 #endif
 	}
 
-	do { /* nothing */ } while (load_ != 1);
+	do { /* nothing */
+#ifdef DEBUG
+		usleep(5+rand()%10);
+#endif
+	} while (load_ != 1);
 	load_ = 0;
 	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
 
@@ -1584,11 +1591,15 @@ __start_label:
 					proxy_error("Watchdog: %u threads missed a heartbeat\n", threads_missing_heartbeat);
 					missed_heartbeats++;
 					if (missed_heartbeats >= (unsigned int)GloVars.restart_on_missing_heartbeats) {
+#ifdef RUNNING_ON_VALGRIND
+						proxy_error("Watchdog: reached %u missed heartbeats. Not aborting because running under Valgrind\n", missed_heartbeats);
+#else
 						if (GloVars.restart_on_missing_heartbeats) {
 							proxy_error("Watchdog: reached %u missed heartbeats. Aborting!\n", missed_heartbeats);
 							proxy_error("Watchdog: see details at https://github.com/sysown/proxysql/wiki/Watchdog\n");
 							assert(0);
 						}
+#endif
 					}
 				} else {
 					missed_heartbeats = 0;

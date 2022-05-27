@@ -222,7 +222,7 @@ int wexecvp(
 			int select_err = select(maxfd + 1, &read_fds, NULL, NULL, &select_to);
 
 			// Unexpected error while executing 'select'
-			if (select_err < 0) {
+			if (select_err < 0 && errno != EINTR) {
 				pipe_err = -5;
 				// Backup read errno
 				errno_cpy = errno;

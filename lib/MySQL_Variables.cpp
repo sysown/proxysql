@@ -76,26 +76,6 @@ MySQL_Variables::MySQL_Variables() {
 
 MySQL_Variables::~MySQL_Variables() {}
 
-bool MySQL_Variables::on_connect_to_backend(MySQL_Connection *myconn) {
-	assert(myconn);
-	auto be_version = myconn->mysql->server_version;
-
-/*
-	// completely remove this part, see suggestion in issue #3723
-	// because in MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE()
-	// we handle error 1193 (variable is not found), this optimization here seems
-	// unnecessary, especially because the assumption used here is wrong
-	// verify this is not galera cluster
-	// assume galera cluster has two dashes in a version
-	char* first_dash = strstr(be_version, "-");
-	if (!first_dash || !strstr(first_dash+1, "-")) {
-		myconn->var_absent[SQL_WSREP_SYNC_WAIT] = true;
-	}
-*/
-	return true;
-}
-
-
 bool MySQL_Variables::client_set_hash_and_value(MySQL_Session* session, int idx, const std::string& value, uint32_t hash) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");

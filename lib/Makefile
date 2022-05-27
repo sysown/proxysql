@@ -1,7 +1,7 @@
 ifndef GIT_VERSION
-GIT_VERSION := $(shell git describe --long --abbrev=7)
+	GIT_VERSION := $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-$(error GIT_VERSION is not set)
+	$(error GIT_VERSION is not set)
 endif
 endif
 
@@ -143,7 +143,7 @@ $(ODIR):
 
 
 clean:
-	rm -f *.pid $(ODIR)/*.oo $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *.ko *.so *~ core libproxysql.a
+	rm -rf *.pid $(ODIR)/*.oo $(ODIR)/*.o $(ODIR)/*.gcno $(ODIR)/*.gcda *.ko *.so *~ core libproxysql.a $(ODIR)
 
 
 ## self note

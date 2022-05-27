@@ -65,7 +65,11 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 }
 
 const uint32_t REPORT_INTV_SEC = 5;
+#ifdef TEST_WITHASAN
+const double MAX_ALLOWED_CPU_USAGE = 5.00;
+#else
 const double MAX_ALLOWED_CPU_USAGE = 0.15;
+#endif
 
 int main(int argc, char** argv) {
 	CommandLine cl;
