@@ -114,4 +114,6 @@ uint64_t get_timestamp_us();
  */
 std::string replace_str(const std::string& str, const std::string& match, const std::string& repl);
 
+
+std::string generate_multi_rows_query(int rows, int params);
 #endif

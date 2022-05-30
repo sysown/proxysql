@@ -328,3 +328,23 @@ std::string replace_str(const std::string& str, const std::string& match, const 
 
 	return result;
 }
+
+std::string generate_multi_rows_query(int rows, int params) {
+	std::string s = "";
+	int v = 1;
+	for (int r = 0; r < rows; r++) {
+		s += "(";
+		for (int p = 0; p < params; p++) {
+			s+= "?" + std::to_string(v);
+			v++;
+			if (p != (params-1)) {
+				s+= ", ";
+			}
+		}
+		s += ")";
+		if (r != (rows -1) ) {
+			s+= ", ";
+		}
+	}
+	return s;
+}
