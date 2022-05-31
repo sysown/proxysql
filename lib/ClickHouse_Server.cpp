@@ -64,7 +64,7 @@
 	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
-#include <optional>
+//#include <optional>
 #include "clickhouse/client.h"
 
 using namespace clickhouse;
