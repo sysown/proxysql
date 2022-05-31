@@ -173,11 +173,7 @@ else
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz
 endif
-#ifeq ($(CXX),clang++)
-#	cd clickhouse-cpp/clickhouse-cpp && sed -i 's/"-O2 -pthread -Wall -Wextra -Werror"/"-O2 -pthread -Wall -Wextra -Werror -Wno-deprecated-copy"/' CMakeLists.txt
-#endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
-#	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/columns/column.h < ../column.h.diff
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a
