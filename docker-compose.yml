@@ -6,6 +6,7 @@ services:
     image: proxysql/packaging:build-centos6
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -19,6 +20,7 @@ services:
     image: proxysql/packaging:build-centos6
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -33,6 +35,7 @@ services:
     image: proxysql/packaging:build-centos7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -47,6 +50,7 @@ services:
     image: proxysql/packaging:build-centos7
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -61,6 +65,7 @@ services:
     image: proxysql/packaging:build-centos8
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -75,6 +80,7 @@ services:
     image: proxysql/packaging:build-clang-centos8
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -89,6 +95,7 @@ services:
     image: proxysql/packaging:build-centos8
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -103,7 +110,8 @@ services:
   fedora27_build:
     image: proxysql/packaging:build-fedora27
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -117,7 +125,8 @@ services:
   fedora27_dbg_build:
     image: proxysql/packaging:build-fedora27
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -131,7 +140,8 @@ services:
   fedora28_build:
     image: proxysql/packaging:build-fedora28
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -145,7 +155,8 @@ services:
   fedora28_dbg_build:
     image: proxysql/packaging:build-fedora28
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -159,7 +170,8 @@ services:
   fedora33_build:
     image: proxysql/packaging:build-fedora33
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -173,7 +185,8 @@ services:
   fedora33_dbg_build:
     image: proxysql/packaging:build-fedora33
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -187,7 +200,8 @@ services:
   fedora34_build:
     image: proxysql/packaging:build-fedora34
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -201,7 +215,8 @@ services:
   fedora34_clang_build:
     image: proxysql/packaging:build-clang-fedora34
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -215,7 +230,8 @@ services:
   fedora34_dbg_build:
     image: proxysql/packaging:build-fedora34
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -524,7 +540,8 @@ services:
   opensuse15_build:
     image: proxysql/packaging:build-opensuse15
     volumes:
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -538,7 +555,8 @@ services:
   opensuse15_clang_build:
     image: proxysql/packaging:build-clang-opensuse15
     volumes:
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -552,7 +570,8 @@ services:
   opensuse15_dbg_build:
     image: proxysql/packaging:build-opensuse15
     volumes:
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -567,7 +586,8 @@ services:
   almalinux8_build:
     image: proxysql/packaging:build-almalinux8
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -581,7 +601,8 @@ services:
   almalinux8_clang_build:
     image: proxysql/packaging:build-clang-almalinux8
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -595,7 +616,8 @@ services:
   almalinux8_dbg_build:
     image: proxysql/packaging:build-almalinux8
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -609,7 +631,8 @@ services:
   almalinux9_build:
     image: proxysql/packaging:build-almalinux9
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -618,13 +641,13 @@ services:
       - CURVER
       - PKG_RELEASE=almalinux9
       - PROXYSQL_BUILD_TYPE=clickhouse
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
 
   almalinux9_clang_build:
     image: proxysql/packaging:build-clang-almalinux9
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -633,13 +656,13 @@ services:
       - CURVER
       - PKG_RELEASE=almalinux9-clang
       - PROXYSQL_BUILD_TYPE=clickhouse
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
 
   almalinux9_dbg_build:
     image: proxysql/packaging:build-almalinux9
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -648,6 +671,5 @@ services:
       - CURVER
       - PKG_RELEASE=dbg-almalinux9
       - PROXYSQL_BUILD_TYPE=debug
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
 
