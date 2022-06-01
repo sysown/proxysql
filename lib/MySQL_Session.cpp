@@ -3863,7 +3863,7 @@ __get_pkts_from_client:
 		}
 		// If there is more than one packet and status is already 'PROCESSING_QUERY'. Multiple packets have
 		// been recevied, but we should only process the first and postpone the rest.
-		if (client_myds->PSarrayIN->len > 0 && status == PROCESSING_QUERY) {
+		if (client_myds->PSarrayIN && client_myds->PSarrayIN->len > 0 && status == PROCESSING_QUERY) {
 			break;
 		}
 	}
@@ -4399,7 +4399,7 @@ int MySQL_Session::handler() {
 		// special case of unexpected 'COM_QUIT' received
 		bool is_COM_QUIT = false;
 
-		if (client_myds->PSarrayIN->len > 0) {
+		if (client_myds->PSarrayIN && client_myds->PSarrayIN->len > 0) {
 			PtrSize_t* f_packet = client_myds->PSarrayIN->index(0);
 			unsigned char c = *((unsigned char *)f_packet->ptr+sizeof(mysql_hdr));
 

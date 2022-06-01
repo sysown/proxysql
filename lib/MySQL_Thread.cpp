@@ -3823,9 +3823,14 @@ void MySQL_Thread::process_all_sessions() {
 
 					while (keep_sess_proc) {
 						rc=sess->handler();
-						keep_sess_proc =
-							sess->status == WAITING_CLIENT_DATA && sess->client_myds->DSS == STATE_SLEEP &&
-							sess->client_myds->PSarrayIN->len > 0;
+
+						if (sess->client_myds) {
+							keep_sess_proc =
+								sess->status == WAITING_CLIENT_DATA && sess->client_myds->DSS == STATE_SLEEP &&
+								sess->client_myds->PSarrayIN && sess->client_myds->PSarrayIN->len > 0;
+						} else {
+							keep_sess_proc = false;
+						}
 					}
 
 					//total_active_transactions_+=sess->active_transactions;
