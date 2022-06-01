@@ -244,7 +244,6 @@ class MySQL_Session
 	int autocommit_on_hostgroup;
 	int transaction_persistent_hostgroup;
 	int to_process;
-	bool queued_pkts = false;
 	int pending_connect;
 	enum proxysql_session_type session_type;
 

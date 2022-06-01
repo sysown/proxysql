@@ -3501,10 +3501,6 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 		//  * Bug: ProxySQL state machine wasn't in the correct state when a legitimate client packet was received.
 		//  * Client error: The client incorrectly sent a packet breaking MySQL protocol.
 		proxy_error2(10001, "Unexpected packet from client %s . Session_status: %d , client_status: %d Disconnecting it\n", buf, status, client_myds->status);
-		// Completely remove the packet queue from the session
-		if (this->queued_pkts) {
-			this->queued_pkts = false;
-		}
 	}
 }
 
@@ -3866,12 +3862,9 @@ __get_pkts_from_client:
 				break;
 		}
 		// If there is more than one packet and status is already 'PROCESSING_QUERY'. Multiple packets have
-		// been recevied and we only process the first one, flaging the session and delaying the laters.
+		// been recevied, but we should only process the first and postpone the rest.
 		if (client_myds->PSarrayIN->len > 0 && status == PROCESSING_QUERY) {
-			this->queued_pkts = true;
 			break;
-		} else {
-			this->queued_pkts = false;
 		}
 	}
 	return handler_ret;
@@ -4401,21 +4394,33 @@ int MySQL_Session::handler() {
 	}
 
 	{
-		bool ff_conn_server_check = previous_status.empty() == false && previous_status.top() == FAST_FORWARD;
-		bool allowed_st =
+		// special case for 'CONNECTING_SERVER' status and 'FAST_FORWARD'
+		bool FF_check = previous_status.empty() == false && previous_status.top() == FAST_FORWARD;
+		// special case of unexpected 'COM_QUIT' received
+		bool is_COM_QUIT = false;
+
+		if (client_myds->PSarrayIN->len > 0) {
+			PtrSize_t* f_packet = client_myds->PSarrayIN->index(0);
+			unsigned char c = *((unsigned char *)f_packet->ptr+sizeof(mysql_hdr));
+
+			if (c == _MYSQL_COM_QUIT) {
+				is_COM_QUIT = true;
+			}
+		}
+
+		bool extra_pkts_states =
 			this->status == CONNECTING_CLIENT ||
 			this->status == WAITING_CLIENT_DATA ||
 			this->status == FAST_FORWARD ||
-			(this->status == CONNECTING_SERVER && ff_conn_server_check);
+			(this->status == CONNECTING_SERVER && FF_check) ||
+			is_COM_QUIT;
 
-		if (allowed_st) {
+		if (extra_pkts_states) {
 			handler_ret = get_pkts_from_client(wrong_pass, pkt);
 			if (handler_ret != 0) {
-				this->queued_pkts = false;
 				return handler_ret;
 			}
 		} else {
-			this->queued_pkts = true;
 			handler_ret = 0;
 			goto handler_again;
 		}
