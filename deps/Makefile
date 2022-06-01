@@ -172,6 +172,7 @@ else
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz
+	cd clickhouse-cpp && sed -i 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
 endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
