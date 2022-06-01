@@ -3014,6 +3014,11 @@ void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
 			if (myds->myds_type!=MYDS_LISTENER) {
 				configure_pollout(myds, n);
 			}
+			if (myds->sess && myds->sess->queued_pkts) {
+				myds->sess->to_process = 1;
+				myds->sess->pause_until = 0;
+				mypolls.poll_timeout = 1;
+			}
 		}
 		proxy_debug(PROXY_DEBUG_NET,1,"Poll for DataStream=%p will be called with FD=%d and events=%d\n", mypolls.myds[n], mypolls.fds[n].fd, mypolls.fds[n].events);
 	}
@@ -3817,6 +3822,10 @@ void MySQL_Thread::process_all_sessions() {
 			n--;
 			delete sess;
 		} else {
+			// force the processing if session holds queued packets
+			if (sess->queued_pkts) {
+				sess->to_process = 1;
+			}
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
 					rc=sess->handler();
