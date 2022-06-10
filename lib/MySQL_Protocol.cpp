@@ -2038,7 +2038,8 @@ __do_auth:
 									proxy_error("Unable to load credentials for backend user %s , associated to LDAP user %s\n", backend_username, user);
 								}
 							} else {
-								ret=true;
+								proxy_error("Unable to find backend user associated to LDAP user '%s'\n", user);
+								ret=false;
 							}
 						}
 					}
