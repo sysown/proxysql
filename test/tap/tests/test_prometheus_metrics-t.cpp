@@ -385,7 +385,7 @@ void check_message_count_parse_failure(const map<string, double>& prev_metrics, 
 			correct_tag_values =
 				message_id_it->second == string {"10002"} && line_it->second != "0" &&
 				filename_it->second == "MySQL_Session.cpp" &&
-				func_it->second == "handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo";
+				func_it->second == "handler_WCDSS_MYSQL_COM_QUERY_qpo";
 		}
 
 		ok(
