@@ -79,8 +79,8 @@ class MySQL_Session
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
 
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t *);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *);
+	void handler_WCDSS_MYSQL_COM_FIELD_LIST(PtrSize_t *);
+	void handler_WCDSS_MYSQL_COM_INIT_DB(PtrSize_t *);
 	/**
 	 * @brief Handles 'COM_QUERIES' holding 'USE DB' statements.
 	 *
@@ -92,10 +92,10 @@ class MySQL_Session
 	 *   But since it was change for handling 'USE' statements which are preceded by
 	 *   comments, it's called after 'QueryProcessor' has processed the query.
 	 */
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PING(PtrSize_t *);
+	void handler_WCDSS_MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
+	void handler_WCDSS_MYSQL_COM_PING(PtrSize_t *);
 
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
+	void handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
 	/**
 	 * @brief Handles the command 'COM_RESET_CONNECTION'.
 	 * @param pkt Pointer to packet received holding the 'COM_RESET_CONNECTION'.
@@ -110,11 +110,11 @@ class MySQL_Session
 	 *      user.
 	 *   4. Respond to client with 'OK' packet.
 	 */
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
+	void handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt);
+	void handler_WCDSS_MYSQL_COM_SET_OPTION(PtrSize_t *);
+	void handler_WCDSS_MYSQL_COM_STATISTICS(PtrSize_t *);
+	void handler_WCDSS_MYSQL_COM_PROCESS_KILL(PtrSize_t *);
+	bool handler_WCDSS_MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_mysql_connection();	
 
@@ -130,7 +130,7 @@ class MySQL_Session
 	void RequestEnd_mysql(MySQL_Data_Stream *);
 	void LogQuery(MySQL_Data_Stream *);
 
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
+	void handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
 	void handler_again___new_thread_to_kill_connection();
@@ -157,11 +157,11 @@ class MySQL_Session
 	void add_ldap_comment_to_pkt(PtrSize_t *);
 
 	int get_pkts_from_client(bool&, PtrSize_t&);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt);
+	void handler_WCDSS_MYSQL_COM_STMT_RESET(PtrSize_t&);
+	void handler_WCDSS_MYSQL_COM_STMT_CLOSE(PtrSize_t&);
+	void handler_WCDSS_MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
+	void handler_WCDSS_MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt);
+	void handler_WCDSS_MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt);
 
 	// these functions have code that used to be inline, and split into functions for readibility
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds);
@@ -176,15 +176,15 @@ class MySQL_Session
 	int RunQuery_mysql(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_detect_SQLi();
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP_MULTI_PACKET(PtrSize_t& pkt);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
+	void handler_WCDSS_MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
+	void handler_WCDSS_MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
+	bool handler_WCDSS_MYSQL_COM_QUERY_detect_SQLi();
+	bool handler_WCDSS_MULTI_PACKET(PtrSize_t& pkt);
+	bool handler_WCDSS_MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
 	void handler___status_WAITING_CLIENT_DATA___default();
 	void handler___status_NONE_or_default(PtrSize_t& pkt);
 
-	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_inner1(PtrSize_t&);
+	void handler_WCDSS_MYSQL_COM_QUERY_inner1(PtrSize_t&);
 
 	void handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt);
 	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt);
