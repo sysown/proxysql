@@ -19,7 +19,7 @@
 
 using namespace std;
 extern ProxySQL_Admin *GloAdmin;
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 
 #define SAFE_SQLITE3_STEP(_stmt) do {\
@@ -55,7 +55,7 @@ ProxySQL_Statistics::ProxySQL_Statistics() {
 //	free(dbname);
 	statsdb_disk->execute("PRAGMA synchronous=0");
 
-	next_timer_MySQL_Threads_Handler = 0;
+	next_timer_ProxyWorker_Threads_Handler = 0;
 	next_timer_mysql_query_digest_to_disk = 0;
 	next_timer_system_cpu = 0;
 #ifndef NOJEM
@@ -185,16 +185,16 @@ void ProxySQL_Statistics::drop_tables_defs(std::vector<table_def_t *> *tables_de
 }
 
 
-bool ProxySQL_Statistics::MySQL_Threads_Handler_timetoget(unsigned long long curtime) {
+bool ProxySQL_Statistics::ProxyWorker_Threads_Handler_timetoget(unsigned long long curtime) {
 	unsigned int i = (unsigned int)variables.stats_mysql_connections;
 	if (i) {
 		if (
-			( curtime > next_timer_MySQL_Threads_Handler )
+			( curtime > next_timer_ProxyWorker_Threads_Handler )
 			||
-			( curtime + i*1000*1000 < next_timer_MySQL_Threads_Handler )
+			( curtime + i*1000*1000 < next_timer_ProxyWorker_Threads_Handler )
 		) {
-			next_timer_MySQL_Threads_Handler = curtime/1000/1000 + i;
-			next_timer_MySQL_Threads_Handler = next_timer_MySQL_Threads_Handler * 1000 * 1000;
+			next_timer_ProxyWorker_Threads_Handler = curtime/1000/1000 + i;
+			next_timer_ProxyWorker_Threads_Handler = next_timer_ProxyWorker_Threads_Handler * 1000 * 1000;
 			return true;
 		}
 	}
@@ -651,7 +651,7 @@ void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset1, SQLite3
 #else
 	if (GloVars.web_interface_plugin && resultset2) {
 #endif
-		MySQL_Threads_Handler_sets_v2(resultset1);
+		ProxyWorker_Threads_Handler_sets_v2(resultset1);
 		MyHGM_Handler_sets_connection_pool(resultset2);
 	}
 }
@@ -793,19 +793,19 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 	}
 }
 
-void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) {
-	MySQL_Threads_Handler_sets_v1(resultset);
+void ProxySQL_Statistics::ProxyWorker_Threads_Handler_sets(SQLite3_result *resultset) {
+	ProxyWorker_Threads_Handler_sets_v1(resultset);
 // In debug, enable metrics features for debugging and testing even if the web interface plugin is not loaded. 
 #ifdef DEBUG
 	if (true) {
 #else
 	if (GloVars.web_interface_plugin) {
 #endif
-		MySQL_Threads_Handler_sets_v2(resultset);
+		ProxyWorker_Threads_Handler_sets_v2(resultset);
 	}
 }
 
-void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultset) {
+void ProxySQL_Statistics::ProxyWorker_Threads_Handler_sets_v2(SQLite3_result *resultset) {
 	int rc;
 	if (resultset == NULL)
 		return;
@@ -845,7 +845,7 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultse
 	(*proxy_sqlite3_finalize)(statement);
 }
 
-void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v1(SQLite3_result *resultset) {
+void ProxySQL_Statistics::ProxyWorker_Threads_Handler_sets_v1(SQLite3_result *resultset) {
 	int rc;
 	if (resultset == NULL)
 		return;

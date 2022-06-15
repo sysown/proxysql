@@ -463,8 +463,8 @@ class MySQL_Connection_userinfo;
 class MySQL_Session;
 class MySQL_Backend;
 class MySQL_Monitor;
-class MySQL_Thread;
-class MySQL_Threads_Handler;
+class ProxyWorker_Thread;
+class ProxyWorker_Threads_Handler;
 class SQLite3DB;
 class SimpleKV;
 class AdvancedKV;
@@ -585,7 +585,7 @@ struct _mysql_hdr {
 };
 
 struct _proxysql_mysql_thread_t {
-	MySQL_Thread *worker;
+	ProxyWorker_Thread *worker;
 	pthread_t thread_id;
 };
 

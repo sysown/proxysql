@@ -210,7 +210,7 @@ class MySQL_Session
 	unsigned long long transaction_started_at;
 
 	// pointers
-	MySQL_Thread *thread;
+	ProxyWorker_Thread *thread;
 	Query_Processor_Output *qpo;
 	StatCounters *command_counters;
 	MySQL_Backend *mybe;
@@ -346,7 +346,7 @@ class MySQL_Session
 
 class KillArgs {
 	public:
-	MySQL_Thread *mt;
+	ProxyWorker_Thread *mt;
 	char *username;
 	char *password;
 	char *hostname;
@@ -354,7 +354,7 @@ class KillArgs {
 	unsigned long id;
 	int kill_type;
 	unsigned int hid;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread *_mt);
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, ProxyWorker_Thread *_mt);
 	~KillArgs();
 };
 

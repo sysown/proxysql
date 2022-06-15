@@ -1,5 +1,5 @@
 #include "MySQL_HostGroups_Manager.h"
-#include "MySQL_Thread.h"
+#include "ProxyWorker_Thread.h"
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_utils.h"
@@ -169,7 +169,7 @@ bool Session_Regex::match(char *m) {
 }
 
 
-KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread *_mt) {
+KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, ProxyWorker_Thread *_mt) {
 	username=strdup(u);
 	password=strdup(p);
 	hostname=strdup(h);
@@ -191,7 +191,7 @@ KillArgs::~KillArgs() {
 void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
 	MYSQL *mysql;
-	MySQL_Thread * thread = ka->mt;
+	ProxyWorker_Thread * thread = ka->mt;
 	mysql=mysql_init(NULL);
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
@@ -259,7 +259,7 @@ __exit_kill_query_thread:
 extern Query_Processor *GloQPro;
 extern Query_Cache *GloQC;
 extern ProxySQL_Admin *GloAdmin;
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 Query_Info::Query_Info() {
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
@@ -663,8 +663,8 @@ MySQL_Session::~MySQL_Session() {
 	delete qpo;
 	match_regexes=NULL;
 	if (mirror) {
-		__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-		GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+		__sync_sub_and_fetch(&GloPWTH->status_variables.mirror_sessions_current,1);
+		GloPWTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 	}
 	if (proxysql_node_address) {
 		delete proxysql_node_address;
@@ -1504,12 +1504,12 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
 		if (thread->mirror_queue_mysql_sessions->len==0) {
 			// there are no sessions in the queue, we try to execute immediately
 			// Only mysql_thread___mirror_max_concurrency mirror session can run in parallel
-			if (__sync_add_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1) > (unsigned int)mysql_thread___mirror_max_concurrency ) {
+			if (__sync_add_and_fetch(&GloPWTH->status_variables.mirror_sessions_current,1) > (unsigned int)mysql_thread___mirror_max_concurrency ) {
 				// if the limit is reached, we queue it instead
-				__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
+				__sync_sub_and_fetch(&GloPWTH->status_variables.mirror_sessions_current,1);
 				thread->mirror_queue_mysql_sessions->add(newsess);
 			}	else {
-				GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
+				GloPWTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
 				thread->register_session(newsess);
 				newsess->handler(); // execute immediately
 				//newsess->to_process=0;
@@ -1525,8 +1525,8 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
 							}
 						}
 						if (to_cache) {
-							__sync_sub_and_fetch(&GloMTH->status_variables.mirror_sessions_current,1);
-							GloMTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
+							__sync_sub_and_fetch(&GloPWTH->status_variables.mirror_sessions_current,1);
+							GloPWTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Decrement();
 							thread->mirror_queue_mysql_sessions_cache->add(newsess);
 						} else {
 							delete newsess;
@@ -4802,8 +4802,8 @@ handler_again:
 
 				// Setting POLLOUT is required just in case this state has been reached when 'RunQuery_mysql' from
 				// 'PROCESSING_QUERY' state has immediately return. This is because in case 'mysql_real_query_start'
-				// immediately returns with '0' the session is never processed again by 'MySQL_Thread', and 'revents' is
-				// never updated with the result of polling through the 'MySQL_Thread::mypolls'.
+				// immediately returns with '0' the session is never processed again by 'ProxyWorker_Thread', and 'revents' is
+				// never updated with the result of polling through the 'ProxyWorker_Thread::mypolls'.
 				myds->revents |= POLLOUT;
 
 				int rc = myconn->async_query(
@@ -5293,7 +5293,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	}
 
 	if (mysql_thread___client_host_cache_size) {
-		GloMTH->update_client_host_cache(client_myds->client_addr, handshake_err);
+		GloPWTH->update_client_host_cache(client_myds->client_addr, handshake_err);
 	}
 }
 
@@ -7231,7 +7231,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 							}
 							if (tki >= 0) {
 								proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 2, "Killing %s %d\n", (tki == 0 ? "CONNECTION" : "QUERY") , id);
-								GloMTH->kill_connection_or_query( id, (tki == 0 ? false : true ),  mc->userinfo->username);
+								GloPWTH->kill_connection_or_query( id, (tki == 0 ? false : true ),  mc->userinfo->username);
 								client_myds->DSS=STATE_QUERY_SENT_NET;
 								unsigned int nTrx=NumActiveTransactions();
 								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );

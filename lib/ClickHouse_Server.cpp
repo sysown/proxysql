@@ -293,7 +293,7 @@ extern Query_Cache *GloQC;
 extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;
 extern ClickHouse_Server *GloClickHouseServer;
@@ -1200,19 +1200,19 @@ static void *child_mysql(void *arg) {
 
 	int client = *(int *)arg;
 
-	GloMTH->wrlock();
+	GloPWTH->wrlock();
 	{
-		char *s=GloMTH->get_variable((char *)"server_capabilities");
+		char *s=GloPWTH->get_variable((char *)"server_capabilities");
 		mysql_thread___server_capabilities=atoi(s);
 		free(s);
 	}
-	GloMTH->wrunlock();
+	GloPWTH->wrunlock();
 
 	struct pollfd fds[1];
 	nfds_t nfds=1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
-	MySQL_Thread *mysql_thr=new MySQL_Thread();
+	ProxyWorker_Thread *mysql_thr=new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 
 	MySQL_Session *sess = NULL;

@@ -33,7 +33,7 @@
 #define QUERY_CACHE_VERSION "1.2.0905" DEB
 #define PROXYSQL_QC_PTHREAD_MUTEX
 
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 typedef btree::btree_map<uint64_t, QC_entry_t *> BtMap_cache;
 
@@ -723,19 +723,19 @@ uint64_t Query_Cache::flush() {
 
 void * Query_Cache::purgeHash_thread(void *) {
 	unsigned int i;
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
 	max_memory_size = (uint64_t) mysql_thread___query_cache_size_MB*1024*1024;
 	while (shutdown==0) {
 		usleep(purge_loop_time);
 		unsigned long long t=monotonic_time()/1000;
 		QCnow_ms=t;
-		unsigned int glover=GloMTH->get_global_version();
-		if (GloMTH) {
-			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		unsigned int glover=GloPWTH->get_global_version();
+		if (GloPWTH) {
+			if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+				MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 				mysql_thr->refresh_variables();
 				max_memory_size = (uint64_t) mysql_thread___query_cache_size_MB*1024*1024;
 			}

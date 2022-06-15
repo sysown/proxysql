@@ -27,7 +27,7 @@
 
 #include <thread>
 #include <future>
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 static int int_cmp(const void *a, const void *b) {
 	const unsigned long long *ia = (const unsigned long long *)a;
@@ -1102,7 +1102,7 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 	ret += sizeof(QP_query_digest_stats)*map_size;
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel search
 /*
-		int n = GloMTH->num_threads;
+		int n = GloPWTH->num_threads;
 		std::future<unsigned long long> results[n];
 */
 		int n=DIGEST_STATS_FAST_THREADS;
@@ -2742,7 +2742,7 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 			row_length += rand_del_size;
 			tot_size += row_length;
 		}
-		int nt = GloMTH->num_threads;
+		int nt = GloPWTH->num_threads;
 		rules_fast_routing___keys_values = (char *)malloc(tot_size);
 		rules_fast_routing___keys_values___size = tot_size;
 		rules_mem_used += rules_fast_routing___keys_values___size; // global

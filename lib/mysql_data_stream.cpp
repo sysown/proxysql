@@ -68,7 +68,7 @@ struct bio_st {
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
 
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -1397,7 +1397,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	if (
 		(( (intv) && (mc->last_time_used > mc->creation_time + intv) )
 		||
-		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection ))
+		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloPWTH->variables.max_stmts_per_connection ))
 		&&
 		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
 		// no need to reset the session. The destruction and creation of a new

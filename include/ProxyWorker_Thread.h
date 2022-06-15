@@ -76,7 +76,7 @@ class ProxySQL_Poll {
 	int find_index(int fd);
 };
 
-enum MySQL_Thread_status_variable {
+enum ProxyWorker_Thread_status_variable {
 	st_var_backend_stmt_prepare,
 	st_var_backend_stmt_execute,
 	st_var_backend_stmt_close,
@@ -122,7 +122,7 @@ enum MySQL_Thread_status_variable {
 	st_var_END
 };
 
-class MySQL_Thread
+class ProxyWorker_Thread
 {
 	private:
 	unsigned int servers_table_version_previous;
@@ -145,11 +145,11 @@ class MySQL_Thread
 	Session_Regex **match_regexes;
 
 #ifdef IDLE_THREADS
-	void worker_thread_assigns_sessions_to_idle_thread(MySQL_Thread *thr);
+	void worker_thread_assigns_sessions_to_idle_thread(ProxyWorker_Thread *thr);
 	void worker_thread_gets_sessions_from_idle_thread();
 	void idle_thread_gets_sessions_from_worker_thread();
-	void idle_thread_assigns_sessions_to_worker_thread(MySQL_Thread *thr);
-	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(MySQL_Thread *thr);
+	void idle_thread_assigns_sessions_to_worker_thread(ProxyWorker_Thread *thr);
+	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(ProxyWorker_Thread *thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();
 	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
@@ -214,8 +214,8 @@ class MySQL_Thread
 	} variables;
 
   pthread_mutex_t thread_mutex;
-  MySQL_Thread();
-  ~MySQL_Thread();
+  ProxyWorker_Thread();
+  ~ProxyWorker_Thread();
   MySQL_Session * create_new_session_and_client_data_stream(int _fd);
   bool init();
 	void run___get_multiple_idle_connections(int& num_idles);
@@ -246,8 +246,8 @@ class MySQL_Thread
 };
 
 
-typedef MySQL_Thread * create_MySQL_Thread_t();
-typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
+typedef ProxyWorker_Thread * create_ProxyWorker_Thread_t();
+typedef void destroy_ProxyWorker_Thread_t(ProxyWorker_Thread *);
 
 class iface_info {
 	public:
@@ -377,7 +377,7 @@ typedef struct _MySQL_Client_Host_Cache_Entry {
 	uint32_t error_count;
 } MySQL_Client_Host_Cache_Entry;
 
-class MySQL_Threads_Handler
+class ProxyWorker_Threads_Handler
 {
 	private:
 	int shutdown_;
@@ -680,8 +680,8 @@ class MySQL_Threads_Handler
 	char **get_variables_list();
 	bool has_variable(const char * name);
 
-	MySQL_Threads_Handler();
-	~MySQL_Threads_Handler();
+	ProxyWorker_Threads_Handler();
+	~ProxyWorker_Threads_Handler();
 	
 	char *get_variable_string(char *name);
 	uint16_t get_variable_uint16(char *name);
@@ -701,8 +701,8 @@ class MySQL_Threads_Handler
 	SQLite3_result * SQL3_GlobalStatus(bool _memory);
 	bool kill_session(uint32_t _thread_session_id);
 	unsigned long long get_total_mirror_queue();
-	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
-	unsigned long long get_status_variable(enum MySQL_Thread_status_variable v_idx, p_th_gauge::metric m_idx, unsigned long long conv = 0);
+	unsigned long long get_status_variable(enum ProxyWorker_Thread_status_variable v_idx, p_th_counter::metric m_idx, unsigned long long conv = 0);
+	unsigned long long get_status_variable(enum ProxyWorker_Thread_status_variable v_idx, p_th_gauge::metric m_idx, unsigned long long conv = 0);
 	unsigned int get_active_transations();
 #ifdef IDLE_THREADS
 	unsigned int get_non_idle_client_connections();

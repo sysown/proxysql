@@ -1,5 +1,5 @@
 #include "gen_utils.h"
-#include "MySQL_Thread.h"
+#include "ProxyWorker_Thread.h"
 #include "MySQL_Session.h"
 #include "mysql_backend.h"
 //#include "MySQL_Data_Stream.h"
