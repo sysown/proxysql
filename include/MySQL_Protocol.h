@@ -49,7 +49,7 @@ class MySQL_ResultSet {
 	void buffer_init(MySQL_Protocol* myproto);
 	~MySQL_ResultSet();
 	unsigned int add_row(MYSQL_ROWS *rows);
-	unsigned int add_row(MYSQL_ROW row);
+	unsigned int add_row(MYSQL_ROW row, unsigned long *lengths);
 	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
 	void remove_last_eof();

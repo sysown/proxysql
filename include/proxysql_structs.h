@@ -256,7 +256,7 @@ typedef struct {
 } mysql_variable_st;
 #endif
 
-enum mysql_data_stream_status {
+enum data_stream_status {
 	STATE_NOT_INITIALIZED,
 	STATE_NOT_CONNECTED,
 	STATE_SERVER_HANDSHAKE,
@@ -290,25 +290,6 @@ enum mysql_data_stream_status {
 	STATE_MARIADB_END,  // dummy state
 
 	STATE_END
-/*
-	STATE_ONE_STRING,
-	STATE_OK,
-	STATE_FIELD_LIST,
-	STATE_SLEEP,
-	STATE_FIELD,
-	STATE_FIELD_BIN,
-	STATE_TXT_RS,
-	STATE_BIN_RS,
-	STATE_END,
-	STATE_ERROR,
-	STATE_TXT_ROW,
-	STATE_BIN_ROW,
-	STATE_NOT_CONNECTED,
-	STATE_CLIENT_HANDSHAKE,
-	STATE_COM_PONG,
-	STATE_STMT_META,
-	STATE_STMT_PARAM
-*/
 };
 
 
@@ -607,6 +588,16 @@ struct _proxysql_mysql_thread_t {
 	MySQL_Thread *worker;
 	pthread_t thread_id;
 };
+
+typedef struct _queue_t {
+	void *buffer;
+	unsigned int size;
+	unsigned int head;
+	unsigned int tail;
+	unsigned int partial;
+	struct _PtrSize_t pkt;
+	mysql_hdr hdr;
+} queue_t;
 
 
 /* Every communication between client and proxysql, and between proxysql and mysql server is

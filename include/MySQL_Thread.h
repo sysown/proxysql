@@ -133,7 +133,7 @@ class MySQL_Thread
 	bool maintenance_loop;
 	bool retrieve_gtids_required; // if any of the servers has gtid_port enabled, this needs to be turned on too
 
-	PtrArray *cached_connections;
+	PtrArray *cached_mysql_connections;
 
 #ifdef IDLE_THREADS
 	struct epoll_event events[MY_EPOLL_THREAD_MAXEVENTS];
@@ -228,7 +228,7 @@ class MySQL_Thread
   void register_session(MySQL_Session*, bool up_start=true);
   void unregister_session(int);
   struct pollfd * get_pollfd(unsigned int i);
-  bool process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n);
+	bool process_data_on_mysql_data_stream(MySQL_Data_Stream *myds, unsigned int n);
 	void ProcessAllSessions_SortingSessions();
 	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess);
 	void ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
@@ -240,7 +240,7 @@ class MySQL_Thread
 	void Get_Memory_Stats();
 	MySQL_Connection * get_MyConn_local(unsigned int, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 	void push_MyConn_local(MySQL_Connection *);
-	void return_local_connections();
+	void return_local_mysql_connections();
 	void Scan_Sessions_to_Kill(PtrArray *mysess);
 	void Scan_Sessions_to_Kill_All();
 };

@@ -1503,7 +1503,7 @@ handler_again:
 					if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS) {
 						proxy_warning("MySQL Warning. Level: [%s], Code: [%s], Message: [%s]\n", mysql_row[0], mysql_row[1], mysql_row[2]);
 					}
-					unsigned int br=MyRS->add_row(mysql_row);
+					unsigned int br=MyRS->add_row(mysql_row, mysql_fetch_lengths(mysql_result));
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
 					myds->bytes_info.bytes_recv += br;

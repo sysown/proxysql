@@ -2881,8 +2881,10 @@ unsigned int MySQL_ResultSet::add_row(MYSQL_ROWS *rows) {
 
 
 // this function is used for text protocol
-unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row) {
-	unsigned long *lengths=mysql_fetch_lengths(result);
+unsigned int MySQL_ResultSet::add_row(MYSQL_ROW row, unsigned long *lengths) {
+	// we used to compute lengths directly in the function.
+	// Now the caller will pass lengths
+	//unsigned long *lengths=mysql_fetch_lengths(result);
 	unsigned int pkt_length=0;
 	if (myprot) {
 		// we call generate_pkt_row3 without passing row_length
@@ -2952,7 +2954,8 @@ void MySQL_ResultSet::add_eof() {
 		unsigned int nTrx=myds->sess->NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-		setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
+		if (mysql)
+			setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 		setStatus = setStatus & ~SERVER_STATUS_CURSOR_EXISTS; // Do not send cursor #1128
 		//myprot->generate_pkt_EOF(false,&pkt.ptr,&pkt.size,sid,0,mysql->server_status|setStatus);
 		//PSarrayOUT->add(pkt.ptr,pkt.size);

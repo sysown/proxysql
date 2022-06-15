@@ -2734,9 +2734,9 @@ MySQL_Thread::~MySQL_Thread() {
 	}
 #endif // IDLE_THREADS
 
-	if (cached_connections) {
-		return_local_connections();
-		delete cached_connections;
+	if (cached_mysql_connections) {
+		return_local_mysql_connections();
+		delete cached_mysql_connections;
 	}
 
 	unsigned int i;
@@ -2850,7 +2850,7 @@ bool MySQL_Thread::init() {
 	mysql_sessions = new PtrArray();
 	mirror_queue_mysql_sessions = new PtrArray();
 	mirror_queue_mysql_sessions_cache = new PtrArray();
-	cached_connections = new PtrArray();
+	cached_mysql_connections = new PtrArray();
 	assert(mysql_sessions);
 
 #ifdef IDLE_THREADS
@@ -2948,7 +2948,7 @@ void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 		MySQL_Data_Stream *myds;
 		MySQL_Connection *mc=my_idle_conns[i];
 		MySQL_Session *sess=new MySQL_Session();
-		sess->mybe=sess->find_or_create_backend(mc->parent->myhgc->hid);
+		sess->mybe=sess->find_or_create_mysql_backend(mc->parent->myhgc->hid);
 
 		myds=sess->mybe->server_myds;
 		myds->attach_connection(mc);
@@ -3047,7 +3047,7 @@ void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
 					break;
 			}
 			// data on exiting connection
-			bool rc=process_data_on_data_stream(myds, n);
+			bool rc=process_data_on_mysql_data_stream(myds, n);
 			if (rc==false) {
 				n--;
 			}
@@ -3323,7 +3323,7 @@ __run_skip_2:
 			// iterate through all sessions and process the session logic
 			process_all_sessions();
 
-			return_local_connections();
+			return_local_mysql_connections();
 #ifdef IDLE_THREADS
 		}
 #endif // IDLE_THREADS
@@ -3482,7 +3482,7 @@ void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 #endif // IDLE_THREADS
 
 
-bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
+bool MySQL_Thread::process_data_on_mysql_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
 				if (mypolls.fds[n].revents) {
 #ifdef IDLE_THREADS
 					if (myds->myds_type==MYDS_FRONTEND) {
@@ -4060,7 +4060,7 @@ void MySQL_Thread::refresh_variables() {
 MySQL_Thread::MySQL_Thread() {
 	pthread_mutex_init(&thread_mutex,NULL);
 	my_idle_conns=NULL;
-	cached_connections=NULL;
+	cached_mysql_connections=NULL;
 	mysql_sessions=NULL;
 	mirror_queue_mysql_sessions=NULL;
 	mirror_queue_mysql_sessions_cache=NULL;
@@ -5240,8 +5240,8 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 	unsigned int i;
 	std::vector<MySrvC *> parents; // this is a vector of srvers that needs to be excluded in case gtid_uuid is used
 	MySQL_Connection *c=NULL;
-	for (i=0; i<cached_connections->len; i++) {
-		c=(MySQL_Connection *)cached_connections->index(i);
+	for (i=0; i<cached_mysql_connections->len; i++) {
+		c=(MySQL_Connection *)cached_mysql_connections->index(i);
 		if (c->parent->myhgc->hid==_hid && sess->client_myds->myconn->match_tracked_options(c)) { // options are all identical
 			if (
 				(gtid_uuid == NULL) || // gtid_uuid is not used
@@ -5264,7 +5264,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 									bool gtid_found = false;
 									gtid_found = MyHGM->gtid_exists(mysrvc, gtid_uuid, gtid_trxid);
 									if (gtid_found) { // this server has the correct GTID
-										c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+										c=(MySQL_Connection *)cached_mysql_connections->remove_index_fast(i);
 										return c;
 									} else {
 										parents.push_back(mysrvc); // stop evaluating this server
@@ -5278,7 +5278,7 @@ MySQL_Connection * MySQL_Thread::get_MyConn_local(unsigned int _hid, MySQL_Sessi
 									}
 								}
 								// return the connection
-								c=(MySQL_Connection *)cached_connections->remove_index_fast(i);
+								c=(MySQL_Connection *)cached_mysql_connections->remove_index_fast(i);
 								return c;
 							}
 						}
@@ -5297,15 +5297,15 @@ void MySQL_Thread::push_MyConn_local(MySQL_Connection *c) {
 	c->mysql->insert_id = 0;
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
-			cached_connections->add(c);
+			cached_mysql_connections->add(c);
 			return; // all went well
 		}
 	}
 	MyHGM->push_MyConn_to_pool(c);
 }
 
-void MySQL_Thread::return_local_connections() {
-	if (cached_connections->len==0) {
+void MySQL_Thread::return_local_mysql_connections() {
+	if (cached_mysql_connections->len==0) {
 		return;
 	}
 /*
@@ -5313,10 +5313,10 @@ void MySQL_Thread::return_local_connections() {
 	unsigned int i=0;
 */
 //	ca[i]=NULL;
-	MyHGM->push_MyConn_to_pool_array((MySQL_Connection **)cached_connections->pdata, cached_connections->len);
+	MyHGM->push_MyConn_to_pool_array((MySQL_Connection **)cached_mysql_connections->pdata, cached_mysql_connections->len);
 //	free(ca);
-	while (cached_connections->len) {
-		cached_connections->remove_index_fast(0);
+	while (cached_mysql_connections->len) {
+		cached_mysql_connections->remove_index_fast(0);
 	}
 }
 

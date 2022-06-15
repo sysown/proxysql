@@ -9,17 +9,6 @@
 #define QUEUE_T_DEFAULT_SIZE	32768
 #define MY_SSL_BUFFER	8192
 
-typedef struct _queue_t {
-	void *buffer;
-	unsigned int size;
-	unsigned int head;
-	unsigned int tail;
-	unsigned int partial;
-	PtrSize_t pkt;
-	mysql_hdr hdr;
-} queue_t;
-
-
 // this class avoid copying data
 class MyDS_real_query {
 	public:
@@ -123,7 +112,7 @@ class MySQL_Data_Stream
 	unsigned int connect_tries;
 	int query_retries_on_failure;
 	int connect_retries_on_failure;
-	enum mysql_data_stream_status DSS;
+	enum data_stream_status DSS;
 	enum MySQL_DS_type myds_type;
 
 	socklen_t client_addrlen;
@@ -171,7 +160,7 @@ class MySQL_Data_Stream
 	void set_net_failure();
 	void setDSS_STATE_QUERY_SENT_NET();
 
-	void setDSS(enum mysql_data_stream_status dss) {
+	void setDSS(enum data_stream_status dss) {
 		DSS=dss;
 	}
 

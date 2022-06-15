@@ -116,7 +116,7 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
 
-	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
+	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_mysql_connection();	
 
 	void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
@@ -127,7 +127,7 @@ class MySQL_Session
 	 *   'MySQL_Data_Stream' required for processing further queries.
 	 * @param The 'MySQL_Data_Stream' which executed the previous query and which status should be updated.
 	 */
-	void RequestEnd(MySQL_Data_Stream *);
+	void RequestEnd_mysql(MySQL_Data_Stream *);
 	void LogQuery(MySQL_Data_Stream *);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session();
@@ -173,7 +173,7 @@ class MySQL_Session
 	bool handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret);
 	void handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass);
 	void handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
-	int RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
+	int RunQuery_mysql(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
@@ -183,6 +183,8 @@ class MySQL_Session
 	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
 	void handler___status_WAITING_CLIENT_DATA___default();
 	void handler___status_NONE_or_default(PtrSize_t& pkt);
+
+	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_inner1(PtrSize_t&);
 
 	void handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt);
 	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt);
@@ -214,7 +216,6 @@ class MySQL_Session
 	MySQL_Backend *mybe;
 	PtrArray *mybes;
 	MySQL_Data_Stream *client_myds;
-	MySQL_Data_Stream *server_myds;
 	char * default_schema;
 	char * user_attributes;
 
@@ -301,9 +302,9 @@ class MySQL_Session
 	int handler();
 
 	void (*handler_function) (MySQL_Session *arg, void *, PtrSize_t *pkt);
-	MySQL_Backend * find_backend(int);
-	MySQL_Backend * create_backend(int, MySQL_Data_Stream *_myds=NULL);
-	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
+	MySQL_Backend * find_mysql_backend(int);
+	MySQL_Backend * create_mysql_backend(int, MySQL_Data_Stream *_myds=NULL);
+	MySQL_Backend * find_or_create_mysql_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds=NULL);
@@ -314,10 +315,10 @@ class MySQL_Session
 	int FindOneActiveTransaction();
 	unsigned long long IdleTime();
 
-	void reset_all_backends();
+	void reset_all_mysql_backends();
 	void writeout();
 	void Memory_Stats();
-	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
+	void create_new_session_and_reset_mysql_connection(MySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
