@@ -1171,7 +1171,7 @@ int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg
 int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	//unsigned long long queries=n;
 	//queries *= 1000;
-	MySQL_Session *sess = new MySQL_Session();
+	Client_Session *sess = new Client_Session();
 
 	sess->client_myds = new MySQL_Data_Stream();
 	sess->client_myds->fd=0;
@@ -1393,7 +1393,7 @@ static admin_main_loop_listeners S_amll;
 
 
 
-bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, Client_Session *sess, ProxySQL_Admin *pa) {
 	uint32_t id=atoi(query_no_space+16);
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
 	bool rc=GloPWTH->kill_session(id);
@@ -1412,7 +1412,7 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  * 	returns false if the command is a valid one and is processed
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
  */
-bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, Client_Session *sess, ProxySQL_Admin *pa) {
 	if (!(strncasecmp("PROXYSQL CLUSTER_NODE_UUID ", query_no_space, strlen("PROXYSQL CLUSTER_NODE_UUID ")))) {
 		int l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
 		if (sess->client_myds->addr.port == 0) {
@@ -1750,7 +1750,7 @@ bool is_valid_global_variable(const char *var_name) {
 // multiple variables at once.
 //
 // It modifies the original query.
-bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
+bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, Client_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	if (!strstr(query_no_space,(char *)"password")) { // issue #599
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
 		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
@@ -1809,7 +1809,7 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 /* Note:
  * This function can modify the original query
  */
-bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
+bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, Client_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 5, "Received command %s\n", query_no_space);
 
 #ifdef DEBUG
@@ -3652,7 +3652,7 @@ std::string timediff_timezone_offset() {
 	return time_zone_offset;
 }
 
-void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
+void admin_session_handler(Client_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	ProxySQL_Admin *pa=(ProxySQL_Admin *)_pa;
 	bool needs_vacuum = false;
@@ -5199,7 +5199,7 @@ void *child_mysql(void *arg) {
 	mysql_thr->curtime=monotonic_time();
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	Client_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
 	sess->handler_function=admin_session_handler;

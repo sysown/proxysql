@@ -460,7 +460,7 @@ typedef struct __SQP_query_parser_t SQP_par_t;
 #define PROXYSQL_CLASSES
 class MySQL_Data_Stream;
 class MySQL_Connection_userinfo;
-class MySQL_Session;
+class Client_Session;
 class MySQL_Backend;
 class MySQL_Monitor;
 class ProxyWorker_Thread;

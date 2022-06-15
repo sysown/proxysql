@@ -94,7 +94,7 @@ my_bool proxy_mysql_stmt_close(MYSQL_STMT* mysql_stmt);
 class MySQL_Protocol {
 	private:
 	MySQL_Connection_userinfo *userinfo;
-	MySQL_Session *sess;
+	Client_Session *sess;
 	public:
 	MySQL_Data_Stream **myds;
 #ifdef DEBUG
@@ -106,7 +106,7 @@ class MySQL_Protocol {
 	MySQL_Protocol() {
 		prot_status=0;
 	}
-	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
+	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, Client_Session *);
 
 	// members get as arguments:
 	// - a data stream (optionally NULL for some)

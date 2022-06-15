@@ -18,7 +18,7 @@
 #include "MySQL_Logger.hpp"
 
 #ifdef DEBUG
-MySQL_Session *sess_stopat;
+Client_Session *sess_stopat;
 #endif
 
 #ifdef epoll_create1
@@ -2456,7 +2456,7 @@ MySQL_Client_Host_Cache_Entry ProxyWorker_Threads_Handler::find_client_host_cach
 	MySQL_Client_Host_Cache_Entry entry { 0, 0 };
 	// Client_sockaddr **shouldn't** ever by 'NULL', no matter the
 	// 'session_type' in from which this function is called. Because
-	// `MySQL_Session::client_myds::client_addr` should **always** be
+	// `Client_Session::client_myds::client_addr` should **always** be
 	// initialized before `handler` is called.
 	assert(client_sockaddr != NULL);
 	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
@@ -2555,7 +2555,7 @@ SQLite3_result* ProxyWorker_Threads_Handler::get_client_host_cache(bool reset) {
 void ProxyWorker_Threads_Handler::update_client_host_cache(struct sockaddr* client_sockaddr, bool error) {
 	// Client_sockaddr **shouldn't** ever by 'NULL', no matter the
 	// 'session_type' in from which this function is called. Because
-	// `MySQL_Session::client_myds::client_addr` should **always** be
+	// `Client_Session::client_myds::client_addr` should **always** be
 	// initialized before `handler` is called.
 	assert(client_sockaddr != NULL);
 	if (client_sockaddr->sa_family != AF_INET && client_sockaddr->sa_family != AF_INET6) {
@@ -2667,7 +2667,7 @@ ProxyWorker_Thread::~ProxyWorker_Thread() {
 
 	if (mysql_sessions) {
 		while(mysql_sessions->len) {
-			MySQL_Session *sess=(MySQL_Session *)mysql_sessions->remove_index_fast(0);
+			Client_Session *sess=(Client_Session *)mysql_sessions->remove_index_fast(0);
 				if (sess->session_type == PROXYSQL_SESSION_ADMIN || sess->session_type == PROXYSQL_SESSION_STATS) {
 					char _buf[1024];
 					sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
@@ -2682,7 +2682,7 @@ ProxyWorker_Thread::~ProxyWorker_Thread() {
 
 	if (mirror_queue_mysql_sessions) {
 		while(mirror_queue_mysql_sessions->len) {
-			MySQL_Session *sess=(MySQL_Session *)mirror_queue_mysql_sessions->remove_index_fast(0);
+			Client_Session *sess=(Client_Session *)mirror_queue_mysql_sessions->remove_index_fast(0);
 				delete sess;
 			}
 		delete mirror_queue_mysql_sessions;
@@ -2691,7 +2691,7 @@ ProxyWorker_Thread::~ProxyWorker_Thread() {
 
 	if (mirror_queue_mysql_sessions_cache) {
 		while(mirror_queue_mysql_sessions_cache->len) {
-			MySQL_Session *sess=(MySQL_Session *)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
+			Client_Session *sess=(Client_Session *)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
 				delete sess;
 			}
 		delete mirror_queue_mysql_sessions_cache;
@@ -2702,7 +2702,7 @@ ProxyWorker_Thread::~ProxyWorker_Thread() {
 	if (GloVars.global.idle_threads) {
 		if (idle_mysql_sessions) {
 			while(idle_mysql_sessions->len) {
-				MySQL_Session *sess=(MySQL_Session *)idle_mysql_sessions->remove_index_fast(0);
+				Client_Session *sess=(Client_Session *)idle_mysql_sessions->remove_index_fast(0);
 					delete sess;
 				}
 			delete idle_mysql_sessions;
@@ -2710,7 +2710,7 @@ ProxyWorker_Thread::~ProxyWorker_Thread() {
 
 		if (resume_mysql_sessions) {
 			while(resume_mysql_sessions->len) {
-				MySQL_Session *sess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
+				Client_Session *sess=(Client_Session *)resume_mysql_sessions->remove_index_fast(0);
 					delete sess;
 				}
 			delete resume_mysql_sessions;
@@ -2718,7 +2718,7 @@ ProxyWorker_Thread::~ProxyWorker_Thread() {
 
 		if (myexchange.idle_mysql_sessions) {
 			while(myexchange.idle_mysql_sessions->len) {
-				MySQL_Session *sess=(MySQL_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
+				Client_Session *sess=(Client_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
 					delete sess;
 				}
 			delete myexchange.idle_mysql_sessions;
@@ -2726,7 +2726,7 @@ ProxyWorker_Thread::~ProxyWorker_Thread() {
 
 		if (myexchange.resume_mysql_sessions) {
 			while(myexchange.resume_mysql_sessions->len) {
-				MySQL_Session *sess=(MySQL_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
+				Client_Session *sess=(Client_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
 					delete sess;
 				}
 			delete myexchange.resume_mysql_sessions;
@@ -2801,9 +2801,9 @@ ProxyWorker_Thread::~ProxyWorker_Thread() {
 
 }
 
-MySQL_Session * ProxyWorker_Thread::create_new_session_and_client_data_stream(int _fd) {
+Client_Session * ProxyWorker_Thread::create_new_session_and_client_data_stream(int _fd) {
 	int arg_on=1;
-	MySQL_Session *sess=new MySQL_Session;
+	Client_Session *sess=new Client_Session;
 	register_session(sess); // register session
 	sess->client_myds = new MySQL_Data_Stream();
 	sess->client_myds->fd=_fd;
@@ -2921,7 +2921,7 @@ void ProxyWorker_Thread::poll_listener_del(int sock) {
 	}
 }
 
-void ProxyWorker_Thread::register_session(MySQL_Session *_sess, bool up_start) {
+void ProxyWorker_Thread::register_session(Client_Session *_sess, bool up_start) {
 	if (mysql_sessions==NULL) {
 		mysql_sessions = new PtrArray();
 	}
@@ -2947,7 +2947,7 @@ void ProxyWorker_Thread::run___get_multiple_idle_connections(int& num_idles) {
 	for (i=0; i<num_idles; i++) {
 		MySQL_Data_Stream *myds;
 		MySQL_Connection *mc=my_idle_conns[i];
-		MySQL_Session *sess=new MySQL_Session();
+		Client_Session *sess=new Client_Session();
 		sess->mybe=sess->find_or_create_mysql_backend(mc->parent->myhgc->hid);
 
 		myds=sess->mybe->server_myds;
@@ -3061,7 +3061,7 @@ void ProxyWorker_Thread::run___cleanup_mirror_queue() {
 	unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
 	if (mirror_queue_mysql_sessions_cache->len > l) {
 		while (mirror_queue_mysql_sessions_cache->len > mirror_queue_mysql_sessions->len && mirror_queue_mysql_sessions_cache->len > l) {
-			MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
+			Client_Session *newsess=(Client_Session *)mirror_queue_mysql_sessions_cache->remove_index_fast(0);
 			__sync_add_and_fetch(&GloPWTH->status_variables.mirror_sessions_current,1);
 			GloPWTH->status_variables.p_gauge_array[p_th_gauge::mirror_concurrency]->Increment();
 			delete newsess;
@@ -3266,7 +3266,7 @@ __run_skip_1a:
 		if (idle_maintenance_thread==false) {
 #endif // IDLE_THREADS
 			for (n=0; n<mysql_sessions->len; n++) {
-				MySQL_Session *_sess=(MySQL_Session *)mysql_sessions->index(n);
+				Client_Session *_sess=(Client_Session *)mysql_sessions->index(n);
 				_sess->to_process=0;
 			}
 #ifdef IDLE_THREADS
@@ -3331,10 +3331,10 @@ __run_skip_2:
 }
 // end of ::run()
 
-unsigned int ProxyWorker_Thread::find_session_idx_in_mysql_sessions(MySQL_Session *sess) {
+unsigned int ProxyWorker_Thread::find_session_idx_in_mysql_sessions(Client_Session *sess) {
 	unsigned int i=0;
 	for (i=0;i<mysql_sessions->len;i++) {
-		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
+		Client_Session *mysess=(Client_Session *)mysql_sessions->index(i);
 		if (mysess==sess) {
 			return i;
 		}
@@ -3355,7 +3355,7 @@ void ProxyWorker_Thread::idle_thread_to_kill_idle_sessions() {
 	}
 	for (i=0;i<SESS_TO_SCAN && mysess_idx < mysql_sessions->len; i++) {
 		uint32_t sess_pos=mysess_idx;
-		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
+		Client_Session *mysess=(Client_Session *)mysql_sessions->index(sess_pos);
 		if (mysess->idle_since < min_idle || mysess->killed==true) {
 			mysess->killed=true;
 			MySQL_Data_Stream *tmp_myds=mysess->client_myds;
@@ -3368,7 +3368,7 @@ void ProxyWorker_Thread::idle_thread_to_kill_idle_sessions() {
 			sessmap.erase(mysess->thread_session_id);
 			if (mysql_sessions->len > 1) {
 			// take the last element and adjust the map
-				MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+				Client_Session *mysess_last=(Client_Session *)mysql_sessions->index(mysql_sessions->len-1);
 				if (mysess->thread_session_id != mysess_last->thread_session_id)
 					sessmap[mysess_last->thread_session_id]=sess_pos;
 			}
@@ -3385,7 +3385,7 @@ void ProxyWorker_Thread::idle_thread_prepares_session_to_send_to_worker_thread(i
 	if (events[i].events) {
 		uint32_t sess_thr_id=events[i].data.u32;
 		uint32_t sess_pos=sessmap[sess_thr_id];
-		MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(sess_pos);
+		Client_Session *mysess=(Client_Session *)mysql_sessions->index(sess_pos);
 		MySQL_Data_Stream *tmp_myds=mysess->client_myds;
 		int dsidx=tmp_myds->poll_fds_idx;
 		//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
@@ -3396,7 +3396,7 @@ void ProxyWorker_Thread::idle_thread_prepares_session_to_send_to_worker_thread(i
 		sessmap.erase(mysess->thread_session_id);
 		if (mysql_sessions->len > 1) {
 			// take the last element and adjust the map
-			MySQL_Session *mysess_last=(MySQL_Session *)mysql_sessions->index(mysql_sessions->len-1);
+			Client_Session *mysess_last=(Client_Session *)mysql_sessions->index(mysql_sessions->len-1);
 			if (mysess->thread_session_id != mysess_last->thread_session_id)
 				sessmap[mysess_last->thread_session_id]=sess_pos;
 		}
@@ -3426,7 +3426,7 @@ void ProxyWorker_Thread::idle_thread_assigns_sessions_to_worker_thread(ProxyWork
 	if (shutdown==0 && thr->shutdown==0)
 	if (resume_mysql_sessions->len) {
 		while (resume_mysql_sessions->len) {
-			MySQL_Session *mysess=(MySQL_Session *)resume_mysql_sessions->remove_index_fast(0);
+			Client_Session *mysess=(Client_Session *)resume_mysql_sessions->remove_index_fast(0);
 			thr->myexchange.resume_mysql_sessions->add(mysess);
 		}
 		send_signal=true; // signal only if there are sessions to resume
@@ -3452,7 +3452,7 @@ void ProxyWorker_Thread::worker_thread_assigns_sessions_to_idle_thread(ProxyWork
 			empty_queue=false;
 		}
 		while (idle_mysql_sessions->len) {
-			MySQL_Session *mysess=(MySQL_Session *)idle_mysql_sessions->remove_index_fast(0);
+			Client_Session *mysess=(Client_Session *)idle_mysql_sessions->remove_index_fast(0);
 			thr->myexchange.idle_mysql_sessions->add(mysess);
 		}
 		pthread_mutex_unlock(&thr->myexchange.mutex_idles);
@@ -3471,7 +3471,7 @@ void ProxyWorker_Thread::worker_thread_gets_sessions_from_idle_thread() {
 				if (myexchange.resume_mysql_sessions->len) {
 					//unsigned int maxsess=GloPWTH->resume_mysql_sessions->len;
 					while (myexchange.resume_mysql_sessions->len) {
-						MySQL_Session *mysess=(MySQL_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
+						Client_Session *mysess=(Client_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
 						register_session(mysess, false);
 						MySQL_Data_Stream *myds=mysess->client_myds;
 						mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
@@ -3491,7 +3491,7 @@ bool ProxyWorker_Thread::process_data_on_mysql_data_stream(MySQL_Data_Stream *my
 							myds->mypolls=NULL;
 							unsigned int i;
 							for (i=0;i<mysql_sessions->len;i++) {
-								MySQL_Session *mysess=(MySQL_Session *)mysql_sessions->index(i);
+								Client_Session *mysess=(Client_Session *)mysql_sessions->index(i);
 								if (mysess==myds->sess) {
 									mysess->thread=NULL;
 									unregister_session(i);
@@ -3620,10 +3620,10 @@ bool ProxyWorker_Thread::process_data_on_mysql_data_stream(MySQL_Data_Stream *my
 void ProxyWorker_Thread::ProcessAllSessions_SortingSessions() {
 	unsigned int a=0;
 	for (unsigned int n=0; n<mysql_sessions->len; n++) {
-		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+		Client_Session *sess=(Client_Session *)mysql_sessions->index(n);
 		if (sess->mybe && sess->mybe->server_myds) {
 			if (sess->mybe->server_myds->max_connect_time) {
-				MySQL_Session *sess2=(MySQL_Session *)mysql_sessions->index(a);
+				Client_Session *sess2=(Client_Session *)mysql_sessions->index(a);
 				if (sess2->mybe && sess2->mybe->server_myds && sess2->mybe->server_myds->max_connect_time && sess2->mybe->server_myds->max_connect_time <= sess->mybe->server_myds->max_connect_time) {
 					// do nothing
 				} else {
@@ -3638,7 +3638,7 @@ void ProxyWorker_Thread::ProcessAllSessions_SortingSessions() {
 }
 
 // this function was inline in ProxyWorker_Thread::process_all_sessions()
-void ProxyWorker_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, MySQL_Session *sess) {
+void ProxyWorker_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, Client_Session *sess) {
 	unregister_session(n);
 	n--;
 	unsigned int l = (unsigned int)mysql_thread___mirror_max_concurrency;
@@ -3664,7 +3664,7 @@ void ProxyWorker_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int&
 
 
 // this function was inline in ProxyWorker_Thread::process_all_sessions()
-void ProxyWorker_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_) {
+void ProxyWorker_Thread::ProcessAllSessions_MaintenanceLoop(Client_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_) {
 	unsigned int numTrx=0;
 	sess->active_transactions=sess->NumActiveTransactions();
 	{
@@ -3759,7 +3759,7 @@ void ProxyWorker_Thread::process_all_sessions() {
 		ProcessAllSessions_SortingSessions();
 	}
 	for (n=0; n<mysql_sessions->len; n++) {
-		MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(n);
+		Client_Session *sess=(Client_Session *)mysql_sessions->index(n);
 #ifdef DEBUG
 		if(sess==sess_stopat) {
 			sess_stopat=sess;
@@ -3800,7 +3800,7 @@ void ProxyWorker_Thread::process_all_sessions() {
 			}
 #endif // IDLE_THREADS
 		} else {
-			// NOTE: we used the special value -1 to inform MySQL_Session::handler() to recompute it
+			// NOTE: we used the special value -1 to inform Client_Session::handler() to recompute it
 			// removing this logic in 2.0.15
 			//sess->active_transactions = -1;
 		}
@@ -4118,7 +4118,7 @@ ProxyWorker_Thread::ProxyWorker_Thread() {
 	}
 }
 
-void ProxyWorker_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
+void ProxyWorker_Thread::register_session_connection_handler(Client_Session *_sess, bool _new) {
 	_sess->thread=this;
 	_sess->connections_handler=true;
 	assert(_new);
@@ -4172,7 +4172,7 @@ void ProxyWorker_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds,
 
 		// create a new client connection
 		mypolls.fds[n].revents=0;
-		MySQL_Session *sess=create_new_session_and_client_data_stream(c);
+		Client_Session *sess=create_new_session_and_client_data_stream(c);
 		__sync_add_and_fetch(&MyHGM->status.client_connections_created,1);
 		if (__sync_add_and_fetch(&MyHGM->status.client_connections,1) > mysql_thread___max_connections) {
 			sess->max_connections_reached=true;
@@ -4621,7 +4621,7 @@ SQLite3_result * ProxyWorker_Threads_Handler::SQL3_Processlist() {
 		pthread_mutex_lock(&thr->thread_mutex);
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
-			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
+			Client_Session *sess=(Client_Session *)thr->mysql_sessions->pdata[j];
 			if (sess->client_myds) {
 				char buf[1024];
 				char **pta=(char **)malloc(sizeof(char *)*colnum);
@@ -4946,7 +4946,7 @@ bool ProxyWorker_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 		ProxyWorker_Thread *thr=(ProxyWorker_Thread *)mysql_threads[i].worker;
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
-			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
+			Client_Session *sess=(Client_Session *)thr->mysql_sessions->pdata[j];
 			if (sess->thread_session_id==_thread_session_id) {
 				sess->killed=true;
 				ret=true;
@@ -4960,7 +4960,7 @@ bool ProxyWorker_Threads_Handler::kill_session(uint32_t _thread_session_id) {
 		ProxyWorker_Thread *thr=(ProxyWorker_Thread *)mysql_threads_idles[i].worker;
 		unsigned int j;
 		for (j=0; j<thr->mysql_sessions->len; j++) {
-			MySQL_Session *sess=(MySQL_Session *)thr->mysql_sessions->pdata[j];
+			Client_Session *sess=(Client_Session *)thr->mysql_sessions->pdata[j];
 			if (sess->thread_session_id==_thread_session_id) {
 				sess->killed=true;
 				ret=true;
@@ -5212,10 +5212,10 @@ void ProxyWorker_Thread::Get_Memory_Stats() {
 	status_variables.stvar[st_var_mysql_frontend_buffers_bytes]=0;
 	status_variables.stvar[st_var_mysql_session_internal_bytes]=sizeof(ProxyWorker_Thread);
 	if (mysql_sessions) {
-		status_variables.stvar[st_var_mysql_session_internal_bytes]+=(mysql_sessions->size)*sizeof(MySQL_Session *);
+		status_variables.stvar[st_var_mysql_session_internal_bytes]+=(mysql_sessions->size)*sizeof(Client_Session *);
 		if (epoll_thread==false) {
 			for (i=0; i<mysql_sessions->len; i++) {
-				MySQL_Session *sess=(MySQL_Session *)mysql_sessions->index(i);
+				Client_Session *sess=(Client_Session *)mysql_sessions->index(i);
 				sess->Memory_Stats();
 			}
 		} else {
@@ -5231,7 +5231,7 @@ void ProxyWorker_Thread::Get_Memory_Stats() {
 }
 
 
-MySQL_Connection * ProxyWorker_Thread::get_MyConn_local(unsigned int _hid, MySQL_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySQL_Connection * ProxyWorker_Thread::get_MyConn_local(unsigned int _hid, Client_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	// some sanity check
 	if (sess == NULL) return NULL;
 	if (sess->client_myds == NULL) return NULL;
@@ -5360,7 +5360,7 @@ void ProxyWorker_Thread::Scan_Sessions_to_Kill_All() {
 
 void ProxyWorker_Thread::Scan_Sessions_to_Kill(PtrArray *mysess) {
 			for (unsigned int n=0; n<mysess->len && ( kq.conn_ids.size() + kq.query_ids.size() ) ; n++) {
-				MySQL_Session *_sess=(MySQL_Session *)mysess->index(n);
+				Client_Session *_sess=(Client_Session *)mysess->index(n);
 				bool cont=true;
 				for (std::vector<thr_id_usr *>::iterator it=kq.conn_ids.begin(); cont && it!=kq.conn_ids.end(); ++it) {
 					thr_id_usr *t = *it;
@@ -5454,7 +5454,7 @@ bool ProxyWorker_Thread::set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Dat
 void ProxyWorker_Thread::idle_thread_gets_sessions_from_worker_thread() {
 	pthread_mutex_lock(&myexchange.mutex_idles);
 	while (myexchange.idle_mysql_sessions->len) {
-		MySQL_Session *mysess=(MySQL_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
+		Client_Session *mysess=(Client_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
 		register_session(mysess, false);
 		MySQL_Data_Stream *myds=mysess->client_myds;
 		mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
@@ -5481,7 +5481,7 @@ void ProxyWorker_Thread::handle_mirror_queue_mysql_sessions() {
 		} else {
 			int idx;
 			idx=fastrand()%(mirror_queue_mysql_sessions->len);
-			MySQL_Session *newsess=(MySQL_Session *)mirror_queue_mysql_sessions->remove_index_fast(idx);
+			Client_Session *newsess=(Client_Session *)mirror_queue_mysql_sessions->remove_index_fast(idx);
 			register_session(newsess);
 			newsess->handler(); // execute immediately
 			if (newsess->status==WAITING_CLIENT_DATA) { // the mirror session has completed

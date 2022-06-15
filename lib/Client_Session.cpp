@@ -481,16 +481,16 @@ bool Query_Info::is_select_NOT_for_update() {
 	return true;
 }
 
-void * MySQL_Session::operator new(size_t size) {
+void * Client_Session::operator new(size_t size) {
 	return l_alloc(size);
 }
 
-void MySQL_Session::operator delete(void *ptr) {
-	l_free(sizeof(MySQL_Session),ptr);
+void Client_Session::operator delete(void *ptr) {
+	l_free(sizeof(Client_Session),ptr);
 }
 
 
-void MySQL_Session::set_status(enum session_status e) {
+void Client_Session::set_status(enum session_status e) {
 	if (e==session_status___NONE) {
 		if (mybe) {
 			if (mybe->server_myds) {
@@ -505,7 +505,7 @@ void MySQL_Session::set_status(enum session_status e) {
 }
 
 
-MySQL_Session::MySQL_Session() {
+Client_Session::Client_Session() {
 	thread_session_id=0;
 	//handler_ret = 0;
 	pause_until=0;
@@ -571,7 +571,7 @@ MySQL_Session::MySQL_Session() {
 	use_ldap_auth = false;
 }
 
-void MySQL_Session::init() {
+void Client_Session::init() {
 	transaction_persistent_hostgroup=-1;
 	transaction_persistent=false;
 	mybes= new PtrArray(4);
@@ -579,7 +579,7 @@ void MySQL_Session::init() {
 	SLDH=new StmtLongDataHandler();
 }
 
-void MySQL_Session::reset() {
+void Client_Session::reset() {
 	autocommit=true;
 	autocommit_handled=false;
 	sending_set_autocommit=false;
@@ -624,7 +624,7 @@ void MySQL_Session::reset() {
 	}
 }
 
-MySQL_Session::~MySQL_Session() {
+Client_Session::~Client_Session() {
 
 	reset(); // we moved this out to allow CHANGE_USER
 
@@ -674,7 +674,7 @@ MySQL_Session::~MySQL_Session() {
 
 
 // scan the pointer array of mysql backends (mybes) looking for a backend for the specified hostgroup_id
-MySQL_Backend * MySQL_Session::find_mysql_backend(int hostgroup_id) {
+MySQL_Backend * Client_Session::find_mysql_backend(int hostgroup_id) {
 	MySQL_Backend *_mybe;
 	unsigned int i;
 	for (i=0; i < mybes->len; i++) {
@@ -687,7 +687,7 @@ MySQL_Backend * MySQL_Session::find_mysql_backend(int hostgroup_id) {
 };
 
 
-MySQL_Backend * MySQL_Session::create_mysql_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
+MySQL_Backend * Client_Session::create_mysql_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=new MySQL_Backend();
 	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
 	_mybe->hostgroup_id=hostgroup_id;
@@ -702,13 +702,13 @@ MySQL_Backend * MySQL_Session::create_mysql_backend(int hostgroup_id, MySQL_Data
 	return _mybe;
 };
 
-MySQL_Backend * MySQL_Session::find_or_create_mysql_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
+MySQL_Backend * Client_Session::find_or_create_mysql_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=find_mysql_backend(hostgroup_id);
 	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
 	return ( _mybe ? _mybe : create_mysql_backend(hostgroup_id, _myds) );
 };
 
-void MySQL_Session::reset_all_mysql_backends() {
+void Client_Session::reset_all_mysql_backends() {
 	MySQL_Backend *mybe;
 	while(mybes->len) {
 		mybe=(MySQL_Backend *)mybes->remove_index_fast(0);
@@ -717,7 +717,7 @@ void MySQL_Session::reset_all_mysql_backends() {
 	}
 };
 
-void MySQL_Session::writeout() {
+void Client_Session::writeout() {
 	int tps = 10; // throttling per second , by default every 100ms
 	int total_written = 0;
 	unsigned long long last_sent_=0;
@@ -807,7 +807,7 @@ void MySQL_Session::writeout() {
 }
 
 // FIXME: This function is currently disabled . See #469
-bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
+bool Client_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	char c=((char *)pkt->ptr)[5];
 	bool ret=false;
 	if (c=='c' || c=='C') {
@@ -854,7 +854,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 }
 
 
-bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
+bool Client_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
 	size_t sal=strlen("set autocommit");
@@ -994,7 +994,7 @@ __ret_autocommit_OK:
 	return false;
 }
 
-void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
+void Client_Session::generate_proxysql_internal_session_json(json &j) {
 	char buff[32];
 	sprintf(buff,"%p",this);
 	j["address"] = buff;
@@ -1174,7 +1174,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	}
 }
 
-void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
+void Client_Session::return_proxysql_internal(PtrSize_t *pkt) {
 	unsigned int l = 0;
 	l = strlen((char *)"PROXYSQL INTERNAL SESSION");
 	if (pkt->size==(5+l) && strncasecmp((char *)"PROXYSQL INTERNAL SESSION", (char *)pkt->ptr+5, l)==0) {
@@ -1203,7 +1203,7 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
+bool Client_Session::handler_special_queries(PtrSize_t *pkt) {
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
 	if (pkt->size>(5+18) && strncasecmp((char *)"PROXYSQL INTERNAL ",(char *)pkt->ptr+5,18)==0) {
@@ -1447,7 +1447,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	return false;
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
+void Client_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
 	if (pktH->size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
 		// check if there are too many mirror sessions in queue
 		if (thread->mirror_queue_mysql_sessions->len >= (unsigned int)mysql_thread___mirror_max_queue_length) {
@@ -1458,9 +1458,9 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
 
 //		int i=0;
 //		for (i=0;i<100;i++) {
-		MySQL_Session *newsess=NULL;
+		Client_Session *newsess=NULL;
 		if (thread->mirror_queue_mysql_sessions_cache->len==0) {
-			newsess=new MySQL_Session();
+			newsess=new Client_Session();
 			newsess->client_myds = new MySQL_Data_Stream();
 			newsess->client_myds->DSS=STATE_SLEEP;
 			newsess->client_myds->sess=newsess;
@@ -1478,7 +1478,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
 			newsess->mirror=true;
 			newsess->client_myds->destroy_queues();
 		} else {
-			newsess=(MySQL_Session *)thread->mirror_queue_mysql_sessions_cache->remove_index_fast(0);
+			newsess=(Client_Session *)thread->mirror_queue_mysql_sessions_cache->remove_index_fast(0);
 		}
 		newsess->client_myds->myconn->userinfo->set(client_myds->myconn->userinfo);
 		newsess->to_process=1;
@@ -1542,7 +1542,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
 	}
 }
 
-int MySQL_Session::handler_again___status_PINGING_SERVER() {
+int Client_Session::handler_again___status_PINGING_SERVER() {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
@@ -1589,7 +1589,7 @@ int MySQL_Session::handler_again___status_PINGING_SERVER() {
 	return 0;
 }
 
-int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
+int Client_Session::handler_again___status_RESETTING_CONNECTION() {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
@@ -1662,7 +1662,7 @@ int MySQL_Session::handler_again___status_RESETTING_CONNECTION() {
 }
 
 
-void MySQL_Session::handler_again___new_thread_to_kill_connection() {
+void Client_Session::handler_again___new_thread_to_kill_connection() {
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	if (myds->myconn && myds->myconn->mysql) {
 		if (myds->killed_at==0) {
@@ -1702,7 +1702,7 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 // true should jump to handler_again
 #define NEXT_IMMEDIATE_NEW(new_st) do { set_status(new_st); return true; } while (0)
 
-bool MySQL_Session::handler_again___verify_backend_multi_statement() {
+bool Client_Session::handler_again___verify_backend_multi_statement() {
 	if ((client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (mybe->server_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)) {
 
 		if (client_myds->myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)
@@ -1731,7 +1731,7 @@ bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 	return false;
 }
 
-bool MySQL_Session::handler_again___verify_init_connect() {
+bool Client_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent=true;
@@ -1760,7 +1760,7 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 	return false;
 }
 
-bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
+bool Client_Session::handler_again___verify_backend_session_track_gtids() {
 	bool ret = false;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->options.session_track_gtids, mybe->server_myds->myconn->options.session_track_gtids);
 	// we first verify that the backend supports it
@@ -1824,7 +1824,7 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 	return ret;
 }
 
-bool MySQL_Session::handler_again___verify_ldap_user_variable() {
+bool Client_Session::handler_again___verify_ldap_user_variable() {
 	bool ret = false;
 	if (mybe->server_myds->myconn->options.ldap_user_variable_sent==false) {
 		ret = true;
@@ -1878,7 +1878,7 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 	return false;
 }
 
-bool MySQL_Session::handler_again___verify_backend_autocommit() {
+bool Client_Session::handler_again___verify_backend_autocommit() {
 	if (sending_set_autocommit) {
 		// if sending_set_autocommit==true, the next query proxysql is going
 		// to run defines autocommit, for example:
@@ -1972,7 +1972,7 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	return false;
 }
 
-bool MySQL_Session::handler_again___verify_backend_user_schema() {
+bool Client_Session::handler_again___verify_backend_user_schema() {
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
@@ -2043,7 +2043,7 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 	return false;
 }
 
-bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
+bool Client_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -2109,7 +2109,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 	return ret;
 }
 
-bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) {
+bool Client_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -2204,7 +2204,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 	return ret;
 }
 
-bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
+bool Client_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -2286,7 +2286,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 	return ret;
 }
 
-bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
+bool Client_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
@@ -2363,7 +2363,7 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	return false;
 }
 
-bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote, bool set_transaction) {
+bool Client_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote, bool set_transaction) {
 	bool ret = false;
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -2527,7 +2527,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 	return ret;
 }
 
-bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
+bool Client_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
@@ -2589,14 +2589,14 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 	return ret;
 }
 
-bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc) {
+bool Client_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
 	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids, true);
 	return ret;
 }
 
-bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
+bool Client_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	bool ret=false;
 	//fprintf(stderr,"CHANGING_SCHEMA\n");
 	assert(mybe->server_myds->myconn);
@@ -2662,7 +2662,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 }
 
 
-bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) { 
+bool Client_Session::handler_again___status_CONNECTING_SERVER(int *_rc) { 
 	//fprintf(stderr,"CONNECTING_SERVER\n");
 	unsigned long long curtime=monotonic_time();
 	thread->atomic_curtime=curtime;
@@ -2839,7 +2839,7 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 	}
 	return false;
 }
-bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
+bool Client_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
@@ -2927,7 +2927,7 @@ bool MySQL_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	return false;
 }
 
-bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
+bool Client_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	//fprintf(stderr,"CHANGING_AUTOCOMMIT\n");
 	assert(mybe->server_myds->myconn);
 	MySQL_Data_Stream *myds=mybe->server_myds;
@@ -3012,14 +3012,14 @@ bool MySQL_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	return false;
 }
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
 // client_myds->DSS = STATE_SLEEP
 // enum_mysql_command = _MYSQL_COM_STMT_PREPARE
 //
 // all break were replaced with a return
-void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt) {
 	if (session_type != PROXYSQL_SESSION_MYSQL) { // only MySQL module supports prepared statement!!
 		l_free(pkt.size,pkt.ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -3130,14 +3130,14 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt) {
 	}
 }
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
 // client_myds->DSS = STATE_SLEEP
 // enum_mysql_command = _MYSQL_COM_STMT_EXECUTE
 //
 // all break were replaced with a return
-void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt) {
 	if (session_type != PROXYSQL_SESSION_MYSQL) { // only MySQL module supports prepared statement!!
 		l_free(pkt.size,pkt.ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -3263,10 +3263,10 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt) {
 	}
 }
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // ClickHouse doesn't support COM_INIT_DB , so we replace it
 // with a COM_QUERY running USE
-void MySQL_Session::handler_WCDSS_MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt) {
 	PtrSize_t _new_pkt;
 	_new_pkt.ptr=malloc(pkt.size+4); // USE + space
 	memcpy(_new_pkt.ptr , pkt.ptr, 4);
@@ -3282,13 +3282,13 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t
 	pkt.ptr = _new_pkt.ptr;
 }
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
 // client_myds->DSS = STATE_SLEEP
 // enum_mysql_command = _MYSQL_COM_QUERY
 // it processes the session not MYSQL_SESSION
-void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt) {
 	switch (session_type) {
 		case PROXYSQL_SESSION_ADMIN:
 		case PROXYSQL_SESSION_STATS:
@@ -3314,14 +3314,14 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt) {
 }
 
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
 // client_myds->DSS = STATE_SLEEP
 // enum_mysql_command = _MYSQL_COM_QUERY
 // it searches for SQL injection
 // it returns true if it detected an SQL injection
-bool MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY_detect_SQLi() {
+bool Client_Session::handler_WCDSS_MYSQL_COM_QUERY_detect_SQLi() {
 	if (client_myds->com_field_list == false) {
 		if (qpo->firewall_whitelist_mode != WUS_OFF) {
 			struct libinjection_sqli_state state;
@@ -3351,13 +3351,13 @@ bool MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY_detect_SQLi() {
 	return false;
 }
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
 // client_myds->DSS = STATE_SLEEP_MULTI_PACKET
 //
 // replacing the single goto with return true
-bool MySQL_Session::handler_WCDSS_MULTI_PACKET(PtrSize_t& pkt) {
+bool Client_Session::handler_WCDSS_MULTI_PACKET(PtrSize_t& pkt) {
 	if (client_myds->multi_pkt.ptr==NULL) {
 		// not initialized yet
 		client_myds->multi_pkt.ptr=pkt.ptr;
@@ -3388,7 +3388,7 @@ bool MySQL_Session::handler_WCDSS_MULTI_PACKET(PtrSize_t& pkt) {
 }
 
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
 // client_myds->DSS = STATE_SLEEP
@@ -3396,7 +3396,7 @@ bool MySQL_Session::handler_WCDSS_MULTI_PACKET(PtrSize_t& pkt) {
 // the most common values for enum_mysql_command are handled from the calling function
 // here we only process the not so common ones
 // we return false if the enum_mysql_command is not found
-bool MySQL_Session::handler_WCDSS_MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass) {
+bool Client_Session::handler_WCDSS_MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass) {
 	unsigned char c;
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	switch ((enum_mysql_command)c) {
@@ -3432,13 +3432,13 @@ bool MySQL_Session::handler_WCDSS_MYSQL_COM__various(PtrSize_t* pkt, bool* wrong
 }
 
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = NONE or default
 //
 // this is triggered when proxysql receives a packet when doesn't expect any
 // for example while it is supposed to be sending resultset to client
-void MySQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
+void Client_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
 	char buf[INET6_ADDRSTRLEN];
 	switch (client_myds->client_addr->sa_family) {
 		case AF_INET: {
@@ -3475,10 +3475,10 @@ void MySQL_Session::handler___status_NONE_or_default(PtrSize_t& pkt) {
 	return;
 }
 
-// this function was inline inside MySQL_Session::get_pkts_from_client
+// this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
+void Client_Session::handler___status_WAITING_CLIENT_DATA___default() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Statuses: WAITING_CLIENT_DATA - STATE_UNKNOWN\n");
 	if (mirror==false) {
 		char buf[INET6_ADDRSTRLEN];
@@ -3504,7 +3504,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 	}
 }
 
-int MySQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
+int Client_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
 	int handler_ret = 0;
 	unsigned char c;
 
@@ -3864,14 +3864,14 @@ __get_pkts_from_client:
 	}
 	return handler_ret;
 }
-// end of MySQL_Session::get_pkts_from_client()
+// end of Client_Session::get_pkts_from_client()
 
 
 // this function returns:
 // 0 : no action
 // -1 : the calling function will return
 // 1 : call to NEXT_IMMEDIATE
-int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds) {
+int Client_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds) {
 	MySQL_Connection *myconn = myds->myconn;
 	// the query failed
 	if (
@@ -3934,7 +3934,7 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 	return 0;
 }
 
-void MySQL_Session::SetQueryTimeout() {
+void Client_Session::SetQueryTimeout() {
 	mybe->server_myds->wait_until=0;
 	if (qpo) {
 		if (qpo->timeout > 0) {
@@ -3956,7 +3956,7 @@ void MySQL_Session::SetQueryTimeout() {
 // now it returns:
 // true: NEXT_IMMEDIATE(st) needs to be called
 // false: continue
-bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
+bool Client_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
 	thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
 	GloMyStmt->wrlock();
 	uint32_t client_stmtid;
@@ -4006,7 +4006,7 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 
 
 // this function used to be inline
-void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds) {
+void Client_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds) {
 	thread->status_variables.stvar[st_var_backend_stmt_execute]++;
 	PROXY_TRACE2();
 	if (CurrentQuery.mysql_stmt) {
@@ -4060,7 +4060,7 @@ void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds)
 // now it returns:
 // true: NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
 // false: continue
-bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, int myerr, char **errmsg) {
+bool Client_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, int myerr, char **errmsg) {
 	MySQL_Connection *myconn = myds->myconn;
 	bool retry_conn=false;
 	// client error, serious
@@ -4119,7 +4119,7 @@ bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, i
 
 
 // this function was inline
-void MySQL_Session::handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn, int myerr, char *errmsg) {
+void Client_Session::handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn, int myerr, char *errmsg) {
 	if (mysql_thread___verbose_query_error) {
 		proxy_warning("Error during query on (%d,%s,%d,%lu) , user \"%s@%s\" , schema \"%s\" , %d, %s . digest_text = \"%s\"\n", myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, myconn->get_mysql_thread_id(), client_myds->myconn->userinfo->username, (client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown" ), client_myds->myconn->userinfo->schemaname, myerr, ( errmsg ? errmsg : mysql_error(myconn->mysql)), CurrentQuery.QueryParserArgs.digest_text );
 	} else {
@@ -4135,7 +4135,7 @@ void MySQL_Session::handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn,
 //		if handler_ret == -1 : return
 //		if handler_ret == 0 : NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
 // false: continue
-bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret) {
+bool Client_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret) {
 	bool retry_conn=false;
 	MySQL_Connection * myconn = myds->myconn;
 	handler_ret = 0; // default
@@ -4211,7 +4211,7 @@ bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int
 }
 
 // this function used to be inline.
-void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass) {
+void Client_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass) {
 	switch (status) {
 		case PROCESSING_QUERY:
 			if (myconn) {
@@ -4267,7 +4267,7 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 }
 
 // this function was inline
-void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
+void Client_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	if (myds->myconn) {
 		myds->myconn->reduce_auto_increment_delay_token();
 		if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -4289,7 +4289,7 @@ void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *my
 }
 
 // this function was inline
-int MySQL_Session::RunQuery_mysql(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
+int Client_Session::RunQuery_mysql(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	PROXY_TRACE2();
 	int rc = 0;
 	switch (status) {
@@ -4313,7 +4313,7 @@ int MySQL_Session::RunQuery_mysql(MySQL_Data_Stream *myds, MySQL_Connection *myc
 }
 
 // this function was inline
-void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
+void Client_Session::handler___status_WAITING_CLIENT_DATA() {
 	if (mybes) {
 		MySQL_Backend *_mybe;
 		unsigned int i;
@@ -4337,7 +4337,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 }
 
 // this function was inline
-void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
+void Client_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
 		if (mysql_thread___client_session_track_gtid) {
 			gtid_hid = current_hostgroup;
@@ -4346,7 +4346,7 @@ void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	}
 }
 
-int MySQL_Session::handler() {
+int Client_Session::handler() {
 	int handler_ret = 0;
 	bool prepared_stmt_with_no_params = false;
 	bool wrong_pass=false;
@@ -4886,7 +4886,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 // end ::handler()
 
 
-bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
+bool Client_Session::handler_again___multiple_statuses(int *rc) {
 	bool ret = false;
 	switch(status) {
 		case CHANGING_USER_SERVER:
@@ -4919,7 +4919,7 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	return ret;
 }
 
-void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
+void Client_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	// FIXME: no support for SSL yet
 	if (
 		client_myds->myprot.process_pkt_auth_swich_response((unsigned char *)pkt->ptr,pkt->size)==true
@@ -4985,7 +4985,7 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 	}
 }
 
-void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
+void Client_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
 	bool handshake_response_return = client_myds->myprot.process_pkt_handshake_response((unsigned char *)pkt->ptr,pkt->size);
 	bool handshake_err = true;
@@ -5301,7 +5301,7 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 // therefore tracking it is not needed, unless in future this should become a security enhancement,
 // returning errors to all clients trying to send multi-statements .
 // see also #1140
-void MySQL_Session::handler_WCDSS_MYSQL_COM_SET_OPTION(PtrSize_t *pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_SET_OPTION(PtrSize_t *pkt) {
 	gtid_hid=-1;
 	char v;
 	v=*((char *)pkt->ptr+3);
@@ -5326,7 +5326,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_SET_OPTION(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_PING(PtrSize_t *pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_PING(PtrSize_t *pkt) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_PING packet\n");
 	l_free(pkt->size,pkt->ptr);
@@ -5338,7 +5338,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_PING(PtrSize_t *pkt) {
 	client_myds->DSS=STATE_SLEEP;
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_FIELD_LIST(PtrSize_t *pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_FIELD_LIST(PtrSize_t *pkt) {
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		/* FIXME: temporary */
 		l_free(pkt->size,pkt->ptr);
@@ -5353,14 +5353,14 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_FIELD_LIST(PtrSize_t *pkt) {
 	}
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_PROCESS_KILL(PtrSize_t *pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_PROCESS_KILL(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9003,(char *)"28000",(char *)"Command not supported");
 	client_myds->DSS=STATE_SLEEP;
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_INIT_DB(PtrSize_t *pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_INIT_DB(PtrSize_t *pkt) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_INIT_DB packet\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
@@ -5387,7 +5387,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_INIT_DB(PtrSize_t *pkt) {
 
 // this function was introduced due to isseu #718
 // some application (like the one written in Perl) do not use COM_INIT_DB , but COM_QUERY with USE dbname
-void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUERY with USE dbname\n");
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
@@ -5431,7 +5431,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt) {
 
 
 // this function as inline in handler_WCDSS_MYSQL_COM_QUERY_qpo
-void MySQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
+void Client_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
 	// the query was rewritten
 	l_free(pkt->size,pkt->ptr);	// free old pkt
 	// allocate new pkt
@@ -5461,7 +5461,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt) {
 }
 
 // this function as inline in handler_WCDSS_MYSQL_COM_QUERY_qpo
-void MySQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt) {
+void Client_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt) {
 	gtid_hid = -1;
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	unsigned int nTrx=NumActiveTransactions();
@@ -5473,7 +5473,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt) {
 }
 
 // this function as inline in handler_WCDSS_MYSQL_COM_QUERY_qpo
-void MySQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt) {
+void Client_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt) {
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1148,(char *)"42000",qpo->error_msg);
 	RequestEnd_mysql(NULL);
@@ -5481,7 +5481,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt) {
 }
 
 // this function as inline in handler_WCDSS_MYSQL_COM_QUERY_qpo
-void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
+void Client_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 	// ER_NET_PACKET_TOO_LARGE
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,1153,(char *)"08S01",(char *)"Got a packet bigger than 'max_allowed_packet' bytes", true);
@@ -5495,7 +5495,7 @@ void MySQL_Session::handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt) {
 // 0 : no action
 // 1 : return false
 // 2 : return true
-int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq) {
+int Client_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq) {
 	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
 	opt2->set_case_sensitive(false);
 	char *pattern=(char *)"(?: *)SET *(?:|SESSION +|@@|@@session.)SQL_LOG_BIN *(?:|:)= *(\\d+) *(?:(|;|-- .*|#.*))$";
@@ -5567,7 +5567,7 @@ int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool
 }
 */
 
-bool MySQL_Session::handler_WCDSS_MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, bool prepared) {
+bool Client_Session::handler_WCDSS_MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, bool prepared) {
 /*
 	lock_hostgroup:
 		If this variable is set to true, this session will get lock to a
@@ -6440,7 +6440,7 @@ __exit_set_destination_hostgroup:
 	return false;
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_STATISTICS(PtrSize_t *pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_STATISTICS(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_STATISTICS packet\n");
 	l_free(pkt->size,pkt->ptr);
 	client_myds->setDSS_STATE_QUERY_SENT_NET();
@@ -6448,7 +6448,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_STATISTICS(PtrSize_t *pkt) {
 	client_myds->DSS=STATE_SLEEP;	
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *wrong_pass) {
+void Client_Session::handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *wrong_pass) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_CHANGE_USER packet\n");
 	//if (session_type == PROXYSQL_SESSION_MYSQL) {
@@ -6525,7 +6525,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *wr
 	}
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got MYSQL_COM_RESET_CONNECTION packet\n");
 
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
@@ -6572,7 +6572,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
 	}
 }
 
-void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_mysql_connection() {
+void Client_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_mysql_connection() {
 			// Get a MySQL Connection
 
 		MySQL_Connection *mc=NULL;
@@ -6745,7 +6745,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 	}
 }
 
-void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn) {
+void Client_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn) {
 	MySQL_ResultSet *MyRS = NULL;
 	if (myconn) {
 		if (myconn->MyRS) {
@@ -6793,7 +6793,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	}
 }
 
-void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds) {
+void Client_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds) {
         if (mysql == NULL) {
                 // error
                 client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
@@ -6870,7 +6870,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 	}
 }
 
-void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot, bool in_transaction, bool deprecate_eof_active) {
+void Client_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot, bool in_transaction, bool deprecate_eof_active) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
@@ -6956,13 +6956,13 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 	}
 }
 
-void MySQL_Session::set_unhealthy() {
+void Client_Session::set_unhealthy() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess:%p\n", this);
 	healthy=0;
 }
 
 
-unsigned int MySQL_Session::NumActiveTransactions() {
+unsigned int Client_Session::NumActiveTransactions() {
 	unsigned int ret=0;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
@@ -6977,7 +6977,7 @@ unsigned int MySQL_Session::NumActiveTransactions() {
 	return ret;
 }
 
-bool MySQL_Session::HasOfflineBackends() {
+bool Client_Session::HasOfflineBackends() {
 	bool ret=false;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
@@ -6994,7 +6994,7 @@ bool MySQL_Session::HasOfflineBackends() {
 	return ret;
 }
 
-bool MySQL_Session::SetEventInOfflineBackends() {
+bool Client_Session::SetEventInOfflineBackends() {
 	bool ret=false;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
@@ -7011,7 +7011,7 @@ bool MySQL_Session::SetEventInOfflineBackends() {
 	return ret;
 }
 
-int MySQL_Session::FindOneActiveTransaction() {
+int Client_Session::FindOneActiveTransaction() {
 	int ret=-1;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
@@ -7026,7 +7026,7 @@ int MySQL_Session::FindOneActiveTransaction() {
 	return ret;
 }
 
-unsigned long long MySQL_Session::IdleTime() {
+unsigned long long Client_Session::IdleTime() {
 	unsigned long long ret = 0;
 	if (client_myds==0) return 0;
 	if (status!=WAITING_CLIENT_DATA && status!=CONNECTING_CLIENT) return 0;
@@ -7044,7 +7044,7 @@ unsigned long long MySQL_Session::IdleTime() {
 
 // this is called either from RequestEnd_mysql(), or at the end of executing
 // prepared statements 
-void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
+void Client_Session::LogQuery(MySQL_Data_Stream *myds) {
 	// we need to access statistics before calling CurrentQuery.end()
 	// so we track the time here
 	CurrentQuery.end_time=thread->curtime;
@@ -7063,7 +7063,7 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 }
 // this should execute most of the commands executed when a request is finalized
 // this should become the place to hook other functions
-void MySQL_Session::RequestEnd_mysql(MySQL_Data_Stream *myds) {
+void Client_Session::RequestEnd_mysql(MySQL_Data_Stream *myds) {
 	// check if multiplexing needs to be disabled
 	char *qdt=CurrentQuery.get_digest_text();
 	if (qdt && myds && myds->myconn) {
@@ -7103,14 +7103,14 @@ void MySQL_Session::RequestEnd_mysql(MySQL_Data_Stream *myds) {
 
 
 // this function tries to report all the memory statistics related to the sessions
-void MySQL_Session::Memory_Stats() {
+void Client_Session::Memory_Stats() {
 	if (thread==NULL)
 		return;
 	unsigned int i;
 	unsigned long long backend=0;
 	unsigned long long frontend=0;
 	unsigned long long internal=0;
-	internal+=sizeof(MySQL_Session);
+	internal+=sizeof(Client_Session);
 	if (qpo)
 		internal+=sizeof(Query_Processor_Output);
 	if (client_myds) {
@@ -7163,7 +7163,7 @@ void MySQL_Session::Memory_Stats() {
 }
 
 
-void MySQL_Session::create_new_session_and_reset_mysql_connection(MySQL_Data_Stream *_myds) {
+void Client_Session::create_new_session_and_reset_mysql_connection(MySQL_Data_Stream *_myds) {
 	MySQL_Data_Stream *new_myds = NULL;
 	MySQL_Connection * mc = _myds->myconn;
 	// we remove the connection from the original data stream
@@ -7171,7 +7171,7 @@ void MySQL_Session::create_new_session_and_reset_mysql_connection(MySQL_Data_Str
 	_myds->unplug_backend();
 
 	// we create a brand new session, a new data stream, and attach the connection to it
-	MySQL_Session * new_sess = new MySQL_Session();
+	Client_Session * new_sess = new Client_Session();
 	new_sess->mybe = new_sess->find_or_create_mysql_backend(mc->parent->myhgc->hid);
 
 	new_myds = new_sess->mybe->server_myds;
@@ -7197,7 +7197,7 @@ void MySQL_Session::create_new_session_and_reset_mysql_connection(MySQL_Data_Str
 	}
 }
 
-bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
+bool Client_Session::handle_command_query_kill(PtrSize_t *pkt) {
 	unsigned char command_type=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		if (command_type == _MYSQL_COM_QUERY) {
@@ -7252,7 +7252,7 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 	return false;
 }
 
-void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
+void Client_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (GloMyLdapAuth==NULL)
 		return;
 	if (use_ldap_auth == false)
@@ -7297,7 +7297,7 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	CurrentQuery.QueryPointer = (unsigned char *)_pkt->ptr + 5;
 }
 
-void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
+void Client_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
 					myds->myconn->reduce_auto_increment_delay_token();
 					if (locked_on_hostgroup >= 0) {
 						if (qpo->multiplex == -1) {
@@ -7352,7 +7352,7 @@ void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *mycon
 }
 
 
-bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
+bool Client_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 	bool ret = false;
 	switch (digest) {
 		case 1732998280766099668ULL: // "SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT"
@@ -7386,7 +7386,7 @@ bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 
 
 
-void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
+void Client_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	// we couldn't parse the query
 	string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
@@ -7421,7 +7421,7 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	}
 }
 
-bool MySQL_Session::has_any_backend() {
+bool Client_Session::has_any_backend() {
 	for (unsigned int j=0;j < mybes->len;j++) {
 		MySQL_Backend *tmp_mybe=(MySQL_Backend *)mybes->index(j);
 		MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
@@ -7432,7 +7432,7 @@ bool MySQL_Session::has_any_backend() {
 	return false;
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	SLDH->reset(stmt_global_id);
@@ -7446,7 +7446,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
 	status=WAITING_CLIENT_DATA;
 }
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
 	uint32_t client_global_id=0;
 	memcpy(&client_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
 	// FIXME: no input validation
@@ -7466,7 +7466,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_CLOSE(PtrSize_t& pkt) {
 }
 
 
-void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) {
+void Client_Session::handler_WCDSS_MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) {
 	// FIXME: no input validation
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
@@ -7478,7 +7478,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt) 
 	l_free(pkt.size,pkt.ptr);
 }
 
-void MySQL_Session::detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose) {
+void Client_Session::detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose) {
 	char *msg = (char *)message;
 	if (msg == NULL) {
 		msg = (char *)"Detected offline server prior to statement execution";
@@ -7496,7 +7496,7 @@ void MySQL_Session::detected_broken_connection(const char *file, unsigned int li
 	}
 }
 
-void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
+void Client_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 	SQLite3_result *resultset = MyHGM->SQL3_Connection_Pool(false, &hid);
 	json j_res;
 	if (resultset->rows_count) {

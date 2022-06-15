@@ -1,6 +1,6 @@
 #include "gen_utils.h"
 #include "ProxyWorker_Thread.h"
-#include "MySQL_Session.h"
+#include "Client_Session.h"
 #include "mysql_backend.h"
 //#include "MySQL_Data_Stream.h"
 #include "query_cache.hpp"

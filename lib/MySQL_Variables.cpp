@@ -1,7 +1,7 @@
 #include "MySQL_Variables.h"
 #include "proxysql.h"
 
-#include "MySQL_Session.h"
+#include "Client_Session.h"
 #include "MySQL_Data_Stream.h"
 #include "SpookyV2.h"
 
@@ -76,7 +76,7 @@ MySQL_Variables::MySQL_Variables() {
 
 MySQL_Variables::~MySQL_Variables() {}
 
-bool MySQL_Variables::client_set_hash_and_value(MySQL_Session* session, int idx, const std::string& value, uint32_t hash) {
+bool MySQL_Variables::client_set_hash_and_value(Client_Session* session, int idx, const std::string& value, uint32_t hash) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");
 		return false;
@@ -91,7 +91,7 @@ bool MySQL_Variables::client_set_hash_and_value(MySQL_Session* session, int idx,
 	return true;
 }
 
-void MySQL_Variables::server_set_hash_and_value(MySQL_Session* session, int idx, const char* value, uint32_t hash) {
+void MySQL_Variables::server_set_hash_and_value(Client_Session* session, int idx, const char* value, uint32_t hash) {
 	if (!session || !session->mybe || !session->mybe->server_myds || !session->mybe->server_myds->myconn || !value) {
 		proxy_warning("Session validation failed\n");
 		return;
@@ -137,7 +137,7 @@ void MySQL_Variables::server_set_hash_and_value(MySQL_Session* session, int idx,
  *
  * @return 'true' in case of success, 'false' otherwise.
  */
-bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const std::string& value) {
+bool MySQL_Variables::client_set_value(Client_Session* session, int idx, const std::string& value) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
 		proxy_warning("Session validation failed\n");
 		return false;
@@ -189,21 +189,21 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 	return true;
 }
 
-const char* MySQL_Variables::client_get_value(MySQL_Session* session, int idx) const {
+const char* MySQL_Variables::client_get_value(Client_Session* session, int idx) const {
 	assert(session);
 	assert(session->client_myds);
 	assert(session->client_myds->myconn);
 	return session->client_myds->myconn->variables[idx].value;
 }
 
-uint32_t MySQL_Variables::client_get_hash(MySQL_Session* session, int idx) const {
+uint32_t MySQL_Variables::client_get_hash(Client_Session* session, int idx) const {
 	assert(session);
 	assert(session->client_myds);
 	assert(session->client_myds->myconn);
 	return session->client_myds->myconn->var_hash[idx];
 }
 
-void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const char* value) {
+void MySQL_Variables::server_set_value(Client_Session* session, int idx, const char* value) {
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
@@ -219,7 +219,7 @@ void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const ch
 	session->mybe->server_myds->myconn->reorder_dynamic_variables_idx();
 }
 
-const char* MySQL_Variables::server_get_value(MySQL_Session* session, int idx) const {
+const char* MySQL_Variables::server_get_value(Client_Session* session, int idx) const {
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
@@ -227,7 +227,7 @@ const char* MySQL_Variables::server_get_value(MySQL_Session* session, int idx) c
 	return session->mybe->server_myds->myconn->variables[idx].value;
 }
 
-uint32_t MySQL_Variables::server_get_hash(MySQL_Session* session, int idx) const {
+uint32_t MySQL_Variables::server_get_hash(Client_Session* session, int idx) const {
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
@@ -235,7 +235,7 @@ uint32_t MySQL_Variables::server_get_hash(MySQL_Session* session, int idx) const
 	return session->mybe->server_myds->myconn->var_hash[idx];
 }
 
-bool MySQL_Variables::update_variable(MySQL_Session* session, session_status status, int &_rc) {
+bool MySQL_Variables::update_variable(Client_Session* session, session_status status, int &_rc) {
 	int idx = SQL_NAME_LAST_HIGH_WM;
 	if (session->status == SETTING_VARIABLE) {
 		// if status is SETTING_VARIABLE , what variable needs to be changed is defined in changing_variable_idx
@@ -252,7 +252,7 @@ bool MySQL_Variables::update_variable(MySQL_Session* session, session_status sta
 	return updaters[idx](session, idx, _rc);
 }
 
-bool MySQL_Variables::verify_variable(MySQL_Session* session, int idx) const {
+bool MySQL_Variables::verify_variable(Client_Session* session, int idx) const {
 	auto ret = false;
 	if (likely(verifiers[idx])) {
 		auto client_hash = session->client_myds->myconn->var_hash[idx];
@@ -264,7 +264,7 @@ bool MySQL_Variables::verify_variable(MySQL_Session* session, int idx) const {
 	return ret;
 }
 
-bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
+bool validate_charset(Client_Session* session, int idx, int &_rc) {
 	if (idx == SQL_CHARACTER_SET || idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_RESULTS ||
 			idx == SQL_CHARACTER_SET_CONNECTION || idx == SQL_CHARACTER_SET_DATABASE || idx == SQL_COLLATION_CONNECTION) {
 		MySQL_Data_Stream *myds = session->mybe->server_myds;
@@ -357,7 +357,7 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 	return true;
 }
 
-bool update_server_variable(MySQL_Session* session, int idx, int &_rc) {
+bool update_server_variable(Client_Session* session, int idx, int &_rc) {
 	bool no_quote = true;
 	if (mysql_tracked_variables[idx].quote) no_quote = false;
 	bool st = mysql_tracked_variables[idx].set_transaction;
@@ -428,7 +428,7 @@ bool update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 	return ret;
 }
 
-bool verify_set_names(MySQL_Session* session) {
+bool verify_set_names(Client_Session* session) {
 	uint32_t client_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
 	if (client_charset_hash == 0)
 		return false;
@@ -482,7 +482,7 @@ bool verify_set_names(MySQL_Session* session) {
 	return false;
 }
 
-inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash) {
+inline bool verify_server_variable(Client_Session* session, int idx, uint32_t client_hash, uint32_t server_hash) {
 	if (client_hash && client_hash != server_hash) {
 		// Edge case for set charset command, because we do not know database character set
 		// for now we are setting connection and collation to empty
@@ -518,12 +518,12 @@ inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t cli
 	return false;
 }
 
-bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc) {
+bool logbin_update_server_variable(Client_Session* session, int idx, int &_rc) {
 	return session->handler_again___status_SETTING_SQL_LOG_BIN(&_rc);
 }
 
 
-bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
+bool MySQL_Variables::parse_variable_boolean(Client_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s value %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 	int __tmp_value = -1;
 	if (
@@ -564,7 +564,7 @@ bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, strin
 
 
 
-bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
+bool MySQL_Variables::parse_variable_number(Client_Session *sess, int idx, string& value1, bool * lock_hostgroup) {
 	int vl = strlen(value1.c_str());
 	const char *v = value1.c_str();
 	bool only_digit_chars = true;

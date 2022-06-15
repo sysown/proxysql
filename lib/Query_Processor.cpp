@@ -1320,7 +1320,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 }
 
 
-Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
+Query_Processor_Output * Query_Processor::process_mysql_query(Client_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
 	// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
 	// to avoid unnecssary deallocation/allocation, we initialize qpo witout new allocation
 	Query_Processor_Output *ret=sess->qpo;
@@ -1921,7 +1921,7 @@ enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_
 	return ret;
 }
 
-unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
+unsigned long long Query_Processor::query_parser_update_counters(Client_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
@@ -1978,7 +1978,7 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	return ret;
 }
 
-void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, MySQL_Session *sess) {
+void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, Client_Session *sess) {
 	pthread_rwlock_wrlock(&digest_rwlock);
 	QP_query_digest_stats *qds;
 

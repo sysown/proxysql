@@ -90,7 +90,7 @@ class MySQL_Data_Stream
 	ProxySQL_Poll *mypolls;
 	//int listener;
 	MySQL_Connection *myconn;
-	MySQL_Session *sess;  // pointer to the session using this data stream
+	Client_Session *sess;  // pointer to the session using this data stream
 	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
 	char *x509_subject_alt_name;
 	SSL *ssl;
@@ -146,7 +146,7 @@ class MySQL_Data_Stream
 
 	int array2buffer_full();
 	void init();	// initialize the data stream
-	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
+	void init(enum MySQL_DS_type, Client_Session *, int); // initialize with arguments
 	void shut_soft();
 	void shut_hard();
 	int read_from_net();

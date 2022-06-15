@@ -1929,7 +1929,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	}
 	if (async_state_machine==ASYNC_NEXT_RESULT_START) {
 		// if we reached this point it measn we are processing a multi-statement
-		// and we need to exit to give control to MySQL_Session
+		// and we need to exit to give control to Client_Session
 		processing_multi_statement=true;
 		return 2;
 	}
@@ -2629,7 +2629,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	}
 	if (async_state_machine==ASYNC_NEXT_RESULT_START) {
 		// if we reached this point it measn we are processing a multi-statement
-		// and we need to exit to give control to MySQL_Session
+		// and we need to exit to give control to Client_Session
 		processing_multi_statement=true;
 		return 2;
 	}

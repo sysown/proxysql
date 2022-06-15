@@ -68,11 +68,11 @@
 
 using namespace clickhouse;
 
-__thread MySQL_Session * clickhouse_thread___mysql_sess;
+__thread Client_Session * clickhouse_thread___mysql_sess;
 
 //static void ClickHouse_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
 inline void ClickHouse_to_MySQL(const Block& block) {
-	MySQL_Session *sess = clickhouse_thread___mysql_sess;
+	Client_Session *sess = clickhouse_thread___mysql_sess;
 	MySQL_Protocol *myprot=NULL;
 	myprot=&sess->client_myds->myprot;
 
@@ -434,7 +434,7 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
-void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
+void ClickHouse_Server_session_handler(Client_Session *sess, void *_pa, PtrSize_t *pkt) {
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -1215,7 +1215,7 @@ static void *child_mysql(void *arg) {
 	ProxyWorker_Thread *mysql_thr=new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 
-	MySQL_Session *sess = NULL;
+	Client_Session *sess = NULL;
 	MySQL_Data_Stream *myds = NULL;
 
 	ClickHouse_Session *sqlite_sess = new ClickHouse_Session();

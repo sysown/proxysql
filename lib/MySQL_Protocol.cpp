@@ -295,7 +295,7 @@ MySQL_Prepared_Stmt_info::MySQL_Prepared_Stmt_info(unsigned char *pkt, unsigned 
 
 
 
-void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo *__userinfo, MySQL_Session *__sess) {
+void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo *__userinfo, Client_Session *__sess) {
 	myds=__myds;
 	userinfo=__userinfo;
 	sess=__sess;
@@ -1501,7 +1501,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			if (pass_len == 0) {
 				// mysql_native_password
 				(*myds)->switching_auth_type = 1;
-				// started 'Auth Switch Request' for 'CHANGE_USER' in MySQL_Session.
+				// started 'Auth Switch Request' for 'CHANGE_USER' in Client_Session.
 				(*myds)->sess->change_user_auth_switch = true;
 
 				generate_pkt_auth_switch_request(true, NULL, NULL);

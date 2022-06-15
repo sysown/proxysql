@@ -85,7 +85,7 @@ void MySQL_Event::set_server(int _hid, const char *ptr, int len) {
 	hid=_hid;
 }
 
-uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
+uint64_t MySQL_Event::write(std::fstream *f, Client_Session *sess) {
 	uint64_t total_bytes=0;
 	switch (et) {
 		case PROXYSQL_COM_QUERY:
@@ -118,7 +118,7 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 	return total_bytes;
 }
 
-void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
+void MySQL_Event::write_auth(std::fstream *f, Client_Session *sess) {
 	json j;
 	j["timestamp"] = start_time/1000;
 	{
@@ -623,7 +623,7 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 	flush_log();
 };
 
-void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
+void MySQL_Logger::log_request(Client_Session *sess, MySQL_Data_Stream *myds) {
 	if (events.enabled==false) return;
 	if (events.logfile==NULL) return;
 
@@ -741,7 +741,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	}
 }
 
-void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
+void MySQL_Logger::log_audit_entry(log_event_type _et, Client_Session *sess, MySQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
 	if (audit.logfile==NULL) return;
 

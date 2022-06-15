@@ -463,6 +463,6 @@ class ProxySQL_Admin {
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
 #endif
-	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
+	friend void admin_session_handler(Client_Session *sess, void *_pa, PtrSize_t *pkt);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

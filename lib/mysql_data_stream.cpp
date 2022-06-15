@@ -439,7 +439,7 @@ void MySQL_Data_Stream::reinit_queues() {
 }
 
 // this function initializes a MySQL_Data_Stream with arguments
-void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int _fd) {
+void MySQL_Data_Stream::init(enum MySQL_DS_type _type, Client_Session *_sess, int _fd) {
 	myds_type=_type;
 	sess=_sess;
 	init();

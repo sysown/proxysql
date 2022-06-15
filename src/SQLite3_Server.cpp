@@ -309,7 +309,7 @@ bool match_monitor_query(const std::string& monitor_query, const std::string& qu
 	}
 }
 
-void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
+void SQLite3_Server_session_handler(Client_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	char *error=NULL;
 	int cols;
@@ -784,7 +784,7 @@ static void *child_mysql(void *arg) {
 
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	Client_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_SQLITE;
 	sess->handler_function=SQLite3_Server_session_handler;
@@ -1105,7 +1105,7 @@ SQLite3_Server::SQLite3_Server() {
 
 
 #ifdef TEST_GALERA
-void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
+void SQLite3_Server::populate_galera_table(Client_Session *sess) {
 	// this function needs to be called with lock on mutex galera_mutex already acquired
 	sessdb->execute("BEGIN TRANSACTION");
 	char *error=NULL;
@@ -1158,7 +1158,7 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 #endif // TEST_GALERA
 
 #ifdef TEST_AURORA
-void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
+void SQLite3_Server::populate_aws_aurora_table(Client_Session *sess) {
 	// this function needs to be called with lock on mutex aurora_mutex already acquired
 	sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
 	sqlite3_stmt *statement=NULL;
@@ -1244,7 +1244,7 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
  * @param sess The current session performing a query.
  * @param txs_behind Unused parameter.
  */
-void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind) {
+void SQLite3_Server::populate_grouprep_table(Client_Session *sess, int txs_behind) {
 	GloAdmin->mysql_servers_wrlock();
 	// We are going to repopulate the map
 	this->grouprep_map.clear();

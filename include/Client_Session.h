@@ -39,7 +39,7 @@ class Session_Regex {
 class Query_Info {
 	public:
 	SQP_par_t QueryParserArgs;
-	MySQL_Session *sess;
+	Client_Session *sess;
 	unsigned char *QueryPointer;
 	unsigned long long start_time;
 	unsigned long long end_time;
@@ -71,7 +71,7 @@ class Query_Info {
 	bool is_select_NOT_for_update();
 };
 
-class MySQL_Session
+class Client_Session
 {
 	private:
 	//int handler_ret;
@@ -271,7 +271,7 @@ class MySQL_Session
 	 * @details It becomes 'true' when the packet is detected and processed by:
 	 *    - 'MySQL_Protocol::process_pkt_COM_CHANGE_USER'
 	 *   It's reset before sending the final response for 'Auth Switch' to the client by:
-	 *   -  'MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE'
+	 *   -  'Client_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE'
 	 *   This flag was introduced for issue #3504.
 	 */
 	bool change_user_auth_switch;
@@ -293,15 +293,15 @@ class MySQL_Session
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum mysql_variable_name changing_variable_idx;
 
-	MySQL_Session();
-	~MySQL_Session();
+	Client_Session();
+	~Client_Session();
 
 	void set_unhealthy();
 	
 	void set_status(enum session_status e);
 	int handler();
 
-	void (*handler_function) (MySQL_Session *arg, void *, PtrSize_t *pkt);
+	void (*handler_function) (Client_Session *arg, void *, PtrSize_t *pkt);
 	MySQL_Backend * find_mysql_backend(int);
 	MySQL_Backend * create_mysql_backend(int, MySQL_Data_Stream *_myds=NULL);
 	MySQL_Backend * find_or_create_mysql_backend(int, MySQL_Data_Stream *_myds=NULL);

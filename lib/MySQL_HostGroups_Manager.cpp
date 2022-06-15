@@ -2775,7 +2775,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
-MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
+MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, Client_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
@@ -3167,7 +3167,7 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 
 
 
-MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
+MySQL_Connection * MySrvConnList::get_random_MyConn(Client_Session *sess, bool ff) {
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int conn_found_idx;
@@ -3344,7 +3344,7 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, Client_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
