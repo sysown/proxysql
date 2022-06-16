@@ -10,6 +10,8 @@
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Variables.h"
 
+#include "MySQL_Session.h"
+
 #include <sstream>
 
 //#include <ma_global.h>
@@ -2418,7 +2420,7 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		for (i=0;i<num_params;i++) {
 			unsigned long *_l = 0;
 			my_bool * _is_null;
-			void *_data = (*myds)->sess->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
+			void *_data = ((MySQL_Session *)((*myds)->sess))->SLDH->get(ret->stmt_id, i, &_l, &_is_null);
 			if (_data) {
 				// Data was sent via STMT_SEND_LONG_DATA so no data in the packet.
 				binds[i].length = _l;

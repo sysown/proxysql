@@ -1,12 +1,14 @@
-#ifndef __CLASS_CLIENT_SESSION_H
-#define __CLASS_CLIENT_SESSION_H
+#ifndef __CLASS_MYSQL_SESSION_H
+#define __CLASS_MYSQL_SESSION_H
 #include "proxysql.h"
 #include "cpp.h"
+#include "Client_Session.h"
 #include "MySQL_Variables.h"
 
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 
+/*
 extern class MySQL_Variables mysql_variables;
 
 enum proxysql_session_type {
@@ -70,18 +72,23 @@ class Query_Info {
 	char *get_digest_text();
 	bool is_select_NOT_for_update();
 };
-
-class Client_Session
+*/
+class MySQL_Session: public Client_Session
 {
-	friend class MySQL_Session;
+	friend class Client_Session;
+	friend class Query_Info;
+	friend class MySQL_Protocol;
 	private:
+/*
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
 	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
-
-//	void handler_WCDSS_MYSQL_COM_FIELD_LIST(PtrSize_t *);
+*/
+	void handler_WCDSS_MYSQL_COM_FIELD_LIST(PtrSize_t *);
+/*
 	void handler_WCDSS_MYSQL_COM_INIT_DB(PtrSize_t *);
+*/
 	/**
 	 * @brief Handles 'COM_QUERIES' holding 'USE DB' statements.
 	 *
@@ -93,10 +100,11 @@ class Client_Session
 	 *   But since it was change for handling 'USE' statements which are preceded by
 	 *   comments, it's called after 'QueryProcessor' has processed the query.
 	 */
+/*
 	void handler_WCDSS_MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
-//	void handler_WCDSS_MYSQL_COM_PING(PtrSize_t *);
-
-//	void handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
+*/
+	void handler_WCDSS_MYSQL_COM_PING(PtrSize_t *);
+	void handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
 	/**
 	 * @brief Handles the command 'COM_RESET_CONNECTION'.
 	 * @param pkt Pointer to packet received holding the 'COM_RESET_CONNECTION'.
@@ -111,10 +119,13 @@ class Client_Session
 	 *      user.
 	 *   4. Respond to client with 'OK' packet.
 	 */
-//	void handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt);
-//	void handler_WCDSS_MYSQL_COM_SET_OPTION(PtrSize_t *);
+	void handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt);
+	void handler_WCDSS_MYSQL_COM_SET_OPTION(PtrSize_t *);
+/*
 	void handler_WCDSS_MYSQL_COM_STATISTICS(PtrSize_t *);
-//	void handler_WCDSS_MYSQL_COM_PROCESS_KILL(PtrSize_t *);
+*/
+	void handler_WCDSS_MYSQL_COM_PROCESS_KILL(PtrSize_t *);
+/*
 	bool handler_WCDSS_MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_mysql_connection();	
@@ -123,11 +134,13 @@ class Client_Session
 	bool handler_special_queries(PtrSize_t *);
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
+*/
 	/**
 	 * @brief Performs the cleanup of current session state, and the required operations to the supplied
 	 *   'MySQL_Data_Stream' required for processing further queries.
 	 * @param The 'MySQL_Data_Stream' which executed the previous query and which status should be updated.
 	 */
+/*
 	void RequestEnd_mysql(MySQL_Data_Stream *);
 	void LogQuery(MySQL_Data_Stream *);
 
@@ -153,24 +166,27 @@ class Client_Session
 	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
 	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
 	bool handler_again___multiple_statuses(int *rc);
+*/
+	void mysql_session_init();
+	void mysql_session_reset();
+/*
 	void add_ldap_comment_to_pkt(PtrSize_t *);
 
 	int get_pkts_from_client(bool&, PtrSize_t&);
-/*
+*/
 	void handler_WCDSS_MYSQL_COM_STMT_RESET(PtrSize_t&);
 	void handler_WCDSS_MYSQL_COM_STMT_CLOSE(PtrSize_t&);
 	void handler_WCDSS_MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t&);
 	void handler_WCDSS_MYSQL_COM_STMT_PREPARE(PtrSize_t& pkt);
 	void handler_WCDSS_MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt);
-*/
-
+/*
 	// these functions have code that used to be inline, and split into functions for readibility
 	int handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds);
 	void SetQueryTimeout();
-/*
+*/
 	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params);
 	void handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds);
-*/
+/*
 	bool handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, int myerr, char **errmsg);
 	void handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn, int myerr, char *errmsg);
 	bool handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret);
@@ -194,10 +210,6 @@ class Client_Session
 	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt);
 	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt);
 //	int handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq);
-
-	protected:
-	void init();
-	void reset();
 
 	public:
 	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
@@ -238,11 +250,13 @@ class Client_Session
 	int user_max_connections;
 	int current_hostgroup;
 	int default_hostgroup;
+*/
 	/**
 	 * @brief Charset directly specified by the client. Supplied and updated via 'HandshakeResponse'
 	 *   and 'COM_CHANGE_USER' packets.
 	 * @details Used when session needs to be restored via 'COM_RESET_CONNECTION'.
 	 */
+/*
 	int default_charset;
 	int locked_on_hostgroup;
 	int next_query_flagIN;
@@ -272,6 +286,7 @@ class Client_Session
 	bool session_fast_forward;
 	bool started_sending_data_to_client; // this status variable tracks if some result set was sent to the client, or if proxysql is still buffering everything
 	bool use_ssl;
+*/
 	/**
 	 * @brief This status variable tracks whether the session is performing an
 	 *   'Auth Switch' due to a 'COM_CHANGE_USER' packet.
@@ -281,6 +296,7 @@ class Client_Session
 	 *   -  'Client_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE'
 	 *   This flag was introduced for issue #3504.
 	 */
+/*
 	bool change_user_auth_switch;
 
 	bool with_gtid;
@@ -288,10 +304,10 @@ class Client_Session
 	char gtid_buf[128];
 	//uint64_t gtid_trxid;
 	int gtid_hid;
-
-//	MySQL_STMTs_meta *sess_STMTs_meta;
-//	StmtLongDataHandler *SLDH;
-
+*/
+	MySQL_STMTs_meta *sess_STMTs_meta;
+	StmtLongDataHandler *SLDH;
+/*
 	Session_Regex **match_regexes;
 
 	ProxySQL_Node_Address * proxysql_node_address; // this is used ONLY for Admin, and only if the other party is another proxysql instance part of a cluster
@@ -327,6 +343,7 @@ class Client_Session
 	void Memory_Stats();
 	void create_new_session_and_reset_mysql_connection(MySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
+*/
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
 	 *  'transaction_persistent_hostgroup', and updates the 'MySQL_Data_Stream' and 'MySQL_Connection' before
@@ -339,6 +356,7 @@ class Client_Session
 	 * @param prepared_stmt_with_no_params specifies if the processed query was a prepared statement with no
 	 *   params.
 	 */
+/*
 	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
@@ -346,8 +364,10 @@ class Client_Session
 	bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
+*/
 };
 
+/*
 #define KILL_QUERY       1
 #define KILL_CONNECTION  2
 
@@ -366,5 +386,6 @@ class KillArgs {
 };
 
 void * kill_query_thread(void *arg);
+*/
 
-#endif /* __CLASS_CLIENT_SESSION_ H */
+#endif /* __CLASS_MYSQL_SESSION_ H */

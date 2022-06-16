@@ -24,6 +24,8 @@
 #include "libinjection.h"
 #include "libinjection_sqli.h"
 
+#include "MySQL_Session.h"
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 
@@ -318,6 +320,7 @@ void Query_Info::end() {
 	if (sess->with_gtid) {
 		__sync_add_and_fetch(&sess->thread->status_variables.stvar[st_var_queries_gtid],1);
 	}
+	if (sess->session_type==PROXYSQL_SESSION_MYSQL) {
 	assert(mysql_stmt==NULL);
 	if (stmt_info) {
 		stmt_info=NULL;
@@ -326,11 +329,12 @@ void Query_Info::end() {
 		if (stmt_meta->pkt) {
 			uint32_t stmt_global_id=0;
 			memcpy(&stmt_global_id,(char *)(stmt_meta->pkt)+5,sizeof(uint32_t));
-			sess->SLDH->reset(stmt_global_id);
+			((MySQL_Session *)sess)->SLDH->reset(stmt_global_id);
 			free(stmt_meta->pkt);
 			stmt_meta->pkt=NULL;
 		}
 		stmt_meta = NULL;
+	}
 	}
 }
 
@@ -575,8 +579,13 @@ void Client_Session::init() {
 	transaction_persistent_hostgroup=-1;
 	transaction_persistent=false;
 	mybes= new PtrArray(4);
+	if (session_type==PROXYSQL_SESSION_MYSQL) {
+		((MySQL_Session *)this)->mysql_session_init();
+	}
+/*
 	sess_STMTs_meta=new MySQL_STMTs_meta();
 	SLDH=new StmtLongDataHandler();
+*/
 }
 
 void Client_Session::reset() {
@@ -588,6 +597,10 @@ void Client_Session::reset() {
 	default_hostgroup=-1;
 	locked_on_hostgroup=-1;
 	locked_on_hostgroup_and_all_variables_set=false;
+	if (session_type==PROXYSQL_SESSION_MYSQL) {
+		((MySQL_Session *)this)->mysql_session_reset();
+	}
+/*
 	if (sess_STMTs_meta) {
 		delete sess_STMTs_meta;
 		sess_STMTs_meta=NULL;
@@ -596,6 +609,7 @@ void Client_Session::reset() {
 		delete SLDH;
 		SLDH=NULL;
 	}
+*/
 	if (mybes) {
 		reset_all_mysql_backends();
 		delete mybes;
@@ -3012,6 +3026,7 @@ bool Client_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	return false;
 }
 
+/*
 // this function was inline inside Client_Session::get_pkts_from_client
 // where:
 // status = WAITING_CLIENT_DATA
@@ -3262,6 +3277,7 @@ void Client_Session::handler_WCDSS_MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt) {
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 	}
 }
+*/
 
 // this function was inline inside Client_Session::get_pkts_from_client
 // ClickHouse doesn't support COM_INIT_DB , so we replace it
@@ -3401,13 +3417,13 @@ bool Client_Session::handler_WCDSS_MYSQL_COM__various(PtrSize_t* pkt, bool* wron
 	c=*((unsigned char *)pkt->ptr+sizeof(mysql_hdr));
 	switch ((enum_mysql_command)c) {
 		case _MYSQL_COM_CHANGE_USER:
-			handler_WCDSS_MYSQL_COM_CHANGE_USER(pkt, wrong_pass);
+			((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_CHANGE_USER(pkt, wrong_pass);
 			break;
 		case _MYSQL_COM_PING:
-			handler_WCDSS_MYSQL_COM_PING(pkt);
+			((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_PING(pkt);
 			break;
 		case _MYSQL_COM_SET_OPTION:
-			handler_WCDSS_MYSQL_COM_SET_OPTION(pkt);
+			((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_SET_OPTION(pkt);
 			break;
 		case _MYSQL_COM_STATISTICS:
 			handler_WCDSS_MYSQL_COM_STATISTICS(pkt);
@@ -3416,13 +3432,13 @@ bool Client_Session::handler_WCDSS_MYSQL_COM__various(PtrSize_t* pkt, bool* wron
 			handler_WCDSS_MYSQL_COM_INIT_DB(pkt);
 			break;
 		case _MYSQL_COM_FIELD_LIST:
-			handler_WCDSS_MYSQL_COM_FIELD_LIST(pkt);
+			((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_FIELD_LIST(pkt);
 			break;
 		case _MYSQL_COM_PROCESS_KILL:
-			handler_WCDSS_MYSQL_COM_PROCESS_KILL(pkt);
+			((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_PROCESS_KILL(pkt);
 			break;
 		case _MYSQL_COM_RESET_CONNECTION:
-			handler_WCDSS_MYSQL_COM_RESET_CONNECTION(pkt);
+			((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_RESET_CONNECTION(pkt);
 			break;
 		default:
 			return false;
@@ -3793,19 +3809,19 @@ __get_pkts_from_client:
 								}
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
-								handler_WCDSS_MYSQL_COM_STMT_PREPARE(pkt);
+								((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_STMT_PREPARE(pkt);
 								break;
 							case _MYSQL_COM_STMT_EXECUTE:
-								handler_WCDSS_MYSQL_COM_STMT_EXECUTE(pkt);
+								((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_STMT_EXECUTE(pkt);
 								break;
 							case _MYSQL_COM_STMT_RESET:
-								handler_WCDSS_MYSQL_COM_STMT_RESET(pkt);
+								((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_STMT_RESET(pkt);
 								break;
 							case _MYSQL_COM_STMT_CLOSE:
-								handler_WCDSS_MYSQL_COM_STMT_CLOSE(pkt);
+								((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_STMT_CLOSE(pkt);
 								break;
 							case _MYSQL_COM_STMT_SEND_LONG_DATA:
-								handler_WCDSS_MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
+								((MySQL_Session *)this)->handler_WCDSS_MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
 								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
@@ -3952,6 +3968,7 @@ void Client_Session::SetQueryTimeout() {
 	}
 }
 
+/*
 // this function used to be inline.
 // now it returns:
 // true: NEXT_IMMEDIATE(st) needs to be called
@@ -4014,7 +4031,7 @@ void Client_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds
 		// during STMT_EXECUTE, so a failure in the prepared statement
 		// metadata cache is only hit once. This way we ensure that the next
 		// 'PREPARE' will be answered with the properly updated metadata.
-		/********************************************************************/
+		// ********************************************************************
 		// Lock the global statement manager
 		GloMyStmt->wrlock();
 		// Update the global prepared statement metadata
@@ -4022,7 +4039,7 @@ void Client_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds
 		stmt_info->update_metadata(CurrentQuery.mysql_stmt);
 		// Unlock the global statement manager
 		GloMyStmt->unlock();
-		/********************************************************************/
+		// ********************************************************************
 	}
 	MySQL_Stmt_Result_to_MySQL_wire(CurrentQuery.mysql_stmt, myds->myconn);
 	LogQuery(myds);
@@ -4055,6 +4072,7 @@ void Client_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds
 	}
 	CurrentQuery.mysql_stmt=NULL;
 }
+*/
 
 // this function used to be inline.
 // now it returns:
@@ -4247,7 +4265,7 @@ void Client_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds
 				if (myconn && myconn->mysql) {
 					if (myconn->MyRS) {
 						PROXY_TRACE2();
-						myds->sess->handler_rc0_PROCESSING_STMT_EXECUTE(myds);
+						((MySQL_Session *)(myds->sess))->handler_rc0_PROCESSING_STMT_EXECUTE(myds);
 					} else {
 						sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
 						client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1,mysql_errno(myconn->mysql),sqlstate,(char *)mysql_stmt_error(myconn->query.stmt));
@@ -4666,13 +4684,13 @@ handler_again:
 						case PROCESSING_STMT_PREPARE:
 							{
 								enum session_status st;
-								if (handler_rc0_PROCESSING_STMT_PREPARE(st, myds, prepared_stmt_with_no_params)) {
+								if (((MySQL_Session *)this)->handler_rc0_PROCESSING_STMT_PREPARE(st, myds, prepared_stmt_with_no_params)) {
 									NEXT_IMMEDIATE(st);
 								}
 							}
 							break;
 						case PROCESSING_STMT_EXECUTE:
-							handler_rc0_PROCESSING_STMT_EXECUTE(myds);
+							((MySQL_Session *)this)->handler_rc0_PROCESSING_STMT_EXECUTE(myds);
 							break;
 						default:
 							// LCOV_EXCL_START
@@ -5297,6 +5315,7 @@ void Client_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE
 	}
 }
 
+/*
 // Note: as commented in issue #546 and #547 , some clients ignore the status of CLIENT_MULTI_STATEMENTS
 // therefore tracking it is not needed, unless in future this should become a security enhancement,
 // returning errors to all clients trying to send multi-statements .
@@ -5340,7 +5359,7 @@ void Client_Session::handler_WCDSS_MYSQL_COM_PING(PtrSize_t *pkt) {
 
 void Client_Session::handler_WCDSS_MYSQL_COM_FIELD_LIST(PtrSize_t *pkt) {
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
-		/* FIXME: temporary */
+		// FIXME: temporary
 		l_free(pkt->size,pkt->ptr);
 		client_myds->setDSS_STATE_QUERY_SENT_NET();
 		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",(char *)"Command not supported", true);
@@ -5359,6 +5378,7 @@ void Client_Session::handler_WCDSS_MYSQL_COM_PROCESS_KILL(PtrSize_t *pkt) {
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9003,(char *)"28000",(char *)"Command not supported");
 	client_myds->DSS=STATE_SLEEP;
 }
+*/
 
 void Client_Session::handler_WCDSS_MYSQL_COM_INIT_DB(PtrSize_t *pkt) {
 	gtid_hid=-1;
@@ -6448,6 +6468,7 @@ void Client_Session::handler_WCDSS_MYSQL_COM_STATISTICS(PtrSize_t *pkt) {
 	client_myds->DSS=STATE_SLEEP;	
 }
 
+/*
 void Client_Session::handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *wrong_pass) {
 	gtid_hid=-1;
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_CHANGE_USER packet\n");
@@ -6472,7 +6493,8 @@ void Client_Session::handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *w
 			client_authenticated=true;
 			//int free_users=0;
 			int used_users=0;
-			/*free_users */GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
+			// free_users
+			GloMyAuth->increase_frontend_user_connections(client_myds->myconn->userinfo->username, &used_users);
 			// FIXME: max_connections is not handled for CHANGE_USER
 		} else {
 			l_free(pkt->size,pkt->ptr);
@@ -6524,7 +6546,8 @@ void Client_Session::handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *pkt, bool *w
 		l_free(pkt->size,pkt->ptr);
 	}
 }
-
+*/
+/*
 void Client_Session::handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
 	proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got MYSQL_COM_RESET_CONNECTION packet\n");
 
@@ -6571,7 +6594,7 @@ void Client_Session::handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt) {
 		status=WAITING_CLIENT_DATA;
 	}
 }
-
+*/
 void Client_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_mysql_connection() {
 			// Get a MySQL Connection
 
@@ -7432,6 +7455,7 @@ bool Client_Session::has_any_backend() {
 	return false;
 }
 
+/*
 void Client_Session::handler_WCDSS_MYSQL_COM_STMT_RESET(PtrSize_t& pkt) {
 	uint32_t stmt_global_id=0;
 	memcpy(&stmt_global_id,(char *)pkt.ptr+5,sizeof(uint32_t));
@@ -7477,6 +7501,7 @@ void Client_Session::handler_WCDSS_MYSQL_COM_STMT_SEND_LONG_DATA(PtrSize_t& pkt)
 	status=WAITING_CLIENT_DATA;
 	l_free(pkt.size,pkt.ptr);
 }
+*/
 
 void Client_Session::detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose) {
 	char *msg = (char *)message;
