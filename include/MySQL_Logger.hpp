@@ -83,8 +83,8 @@ class MySQL_Logger {
 	void events_set_base_filename();
 	void audit_set_datadir(char *);
 	void audit_set_base_filename();
-	void log_request(Client_Session *, MySQL_Data_Stream *);
-	void log_audit_entry(log_event_type, Client_Session *, MySQL_Data_Stream *, char *e = NULL);
+	void log_request(Client_Session *, ProxySQL_Data_Stream *);
+	void log_audit_entry(log_event_type, Client_Session *, ProxySQL_Data_Stream *, char *e = NULL);
 	void flush();
 	void wrlock();
 	void wrunlock();

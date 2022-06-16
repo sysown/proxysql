@@ -38,7 +38,7 @@ class MyDS_real_query {
 
 enum sslstatus { SSLSTATUS_OK, SSLSTATUS_WANT_IO, SSLSTATUS_FAIL};
 
-class MySQL_Data_Stream
+class ProxySQL_Data_Stream
 {
 	private:
 	int array2buffer();
@@ -47,8 +47,6 @@ class MySQL_Data_Stream
 	enum sslstatus do_ssl_handshake();
 	void queue_encrypted_bytes(const char *buf, size_t len);
 	public:
-	void * operator new(size_t);
-	void operator delete(void *);
 
 	queue_t queueIN;
 	uint64_t pkts_recv; // counter of received packets
@@ -141,8 +139,8 @@ class MySQL_Data_Stream
 	bool com_field_list;
 	char *com_field_wild;
 
-	MySQL_Data_Stream();
-	~MySQL_Data_Stream();
+	ProxySQL_Data_Stream();
+	~ProxySQL_Data_Stream();
 
 	int array2buffer_full();
 	void init();	// initialize the data stream

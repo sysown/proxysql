@@ -5,7 +5,7 @@
 #include "re2/regexp.h"
 
 #include "MySQL_PreparedStatement.h"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Variables.h"
@@ -297,7 +297,7 @@ MySQL_Prepared_Stmt_info::MySQL_Prepared_Stmt_info(unsigned char *pkt, unsigned 
 
 
 
-void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo *__userinfo, Client_Session *__sess) {
+void MySQL_Protocol::init(ProxySQL_Data_Stream **__myds, MySQL_Connection_userinfo *__userinfo, Client_Session *__sess) {
 	myds=__myds;
 	userinfo=__userinfo;
 	sess=__sess;
@@ -2654,7 +2654,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	if (myprot==NULL) {
 		return; // this is a mirror
 	}
-	MySQL_Data_Stream * c_myds = *(myprot->myds);
+	ProxySQL_Data_Stream * c_myds = *(myprot->myds);
 	if (c_myds->com_field_list==false) {
 		myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields,this);
 		sid++;
@@ -2727,7 +2727,7 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 	PROXY_TRACE2();
 	assert(stmt);
 	MYSQL_STMT *_stmt = stmt;
-	MySQL_Data_Stream * c_myds = *(myprot->myds);
+	ProxySQL_Data_Stream * c_myds = *(myprot->myds);
 		buffer_to_PSarrayOut();
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
@@ -2986,7 +2986,7 @@ void MySQL_ResultSet::add_eof() {
 	resultset_completed=true;
 }
 
-void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
+void MySQL_ResultSet::add_err(ProxySQL_Data_Stream *_myds) {
 	PtrSize_t pkt;
 	if (myprot) {
 		MYSQL *_mysql=_myds->myconn->mysql;

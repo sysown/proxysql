@@ -11,7 +11,7 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
@@ -179,7 +179,7 @@ static unsigned int near_pow_2 (unsigned int n) {
 void ProxySQL_Poll::shrink() {
 	unsigned int new_size=near_pow_2(len+1);
 	fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-	myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
+	myds=(ProxySQL_Data_Stream **)realloc(myds,new_size*sizeof(ProxySQL_Data_Stream *));
 	last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
 	last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
 	size=new_size;
@@ -189,7 +189,7 @@ void ProxySQL_Poll::expand(unsigned int more) {
 	if ( (len+more) > size ) {
 		unsigned int new_size=near_pow_2(len+more);
 		fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-		myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
+		myds=(ProxySQL_Data_Stream **)realloc(myds,new_size*sizeof(ProxySQL_Data_Stream *));
 		last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
 		last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
 		size=new_size;
@@ -205,7 +205,7 @@ ProxySQL_Poll::ProxySQL_Poll() {
 	pending_listener_del=0;
 	size=MIN_POLL_LEN;
 	fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
-	myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
+	myds=(ProxySQL_Data_Stream **)malloc(size*sizeof(ProxySQL_Data_Stream *));
 	last_recv=(unsigned long long *)malloc(size*sizeof(unsigned long long));
 	last_sent=(unsigned long long *)malloc(size*sizeof(unsigned long long));
 }
@@ -228,7 +228,7 @@ ProxySQL_Poll::~ProxySQL_Poll() {
 }
 
 
-void ProxySQL_Poll::add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
+void ProxySQL_Poll::add(uint32_t _events, int _fd, ProxySQL_Data_Stream *_myds, unsigned long long sent_time) {
 	if (len==size) {
 		expand(1);
 	}
@@ -2805,7 +2805,7 @@ Client_Session * ProxyWorker_Thread::create_new_session_and_client_data_stream(i
 	int arg_on=1;
 	Client_Session *sess=new Client_Session;
 	register_session(sess); // register session
-	sess->client_myds = new MySQL_Data_Stream();
+	sess->client_myds = new ProxySQL_Data_Stream();
 	sess->client_myds->fd=_fd;
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
 
@@ -2899,7 +2899,7 @@ struct pollfd * ProxyWorker_Thread::get_pollfd(unsigned int i) {
 }
 
 void ProxyWorker_Thread::poll_listener_add(int sock) {
-	MySQL_Data_Stream *listener_DS = new MySQL_Data_Stream();
+	ProxySQL_Data_Stream *listener_DS = new ProxySQL_Data_Stream();
 	listener_DS->myds_type=MYDS_LISTENER;
 	listener_DS->fd=sock;
 
@@ -2910,7 +2910,7 @@ void ProxyWorker_Thread::poll_listener_add(int sock) {
 void ProxyWorker_Thread::poll_listener_del(int sock) {
 	int i=mypolls.find_index(sock);
 	if (i>=0) {
-		MySQL_Data_Stream *myds=mypolls.myds[i];
+		ProxySQL_Data_Stream *myds=mypolls.myds[i];
 		mypolls.remove_index_fast(i);
 #ifdef SO_REUSEPORT
 		if (GloVars.global.reuseport)
@@ -2945,7 +2945,7 @@ void ProxyWorker_Thread::run___get_multiple_idle_connections(int& num_idles) {
 	int i;
 	num_idles=MyHGM->get_multiple_idle_connections(-1, curtime-mysql_thread___ping_interval_server_msec*1000, my_idle_conns, SESSIONS_FOR_CONNECTIONS_HANDLER);
 	for (i=0; i<num_idles; i++) {
-		MySQL_Data_Stream *myds;
+		ProxySQL_Data_Stream *myds;
 		MySQL_Connection *mc=my_idle_conns[i];
 		Client_Session *sess=new Client_Session();
 		sess->mybe=sess->find_or_create_mysql_backend(mc->parent->myhgc->hid);
@@ -2985,7 +2985,7 @@ void ProxyWorker_Thread::ProcessAllMyDS_BeforePoll() {
 	}
 #endif
 	for (unsigned int n = 0; n < mypolls.len; n++) {
-		MySQL_Data_Stream *myds=NULL;
+		ProxySQL_Data_Stream *myds=NULL;
 		myds=mypolls.myds[n];
 		mypolls.fds[n].revents=0;
 		if (myds) {
@@ -3025,7 +3025,7 @@ void ProxyWorker_Thread::ProcessAllMyDS_AfterPoll() {
 	for (unsigned int n = 0; n < mypolls.len; n++) {
 		proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
 
-		MySQL_Data_Stream *myds=mypolls.myds[n];
+		ProxySQL_Data_Stream *myds=mypolls.myds[n];
 		if (myds==NULL) {
 			read_one_byte_from_pipe(n);
 			continue;
@@ -3358,7 +3358,7 @@ void ProxyWorker_Thread::idle_thread_to_kill_idle_sessions() {
 		Client_Session *mysess=(Client_Session *)mysql_sessions->index(sess_pos);
 		if (mysess->idle_since < min_idle || mysess->killed==true) {
 			mysess->killed=true;
-			MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+			ProxySQL_Data_Stream *tmp_myds=mysess->client_myds;
 			int dsidx=tmp_myds->poll_fds_idx;
 			//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
 			mypolls.remove_index_fast(dsidx);
@@ -3386,7 +3386,7 @@ void ProxyWorker_Thread::idle_thread_prepares_session_to_send_to_worker_thread(i
 		uint32_t sess_thr_id=events[i].data.u32;
 		uint32_t sess_pos=sessmap[sess_thr_id];
 		Client_Session *mysess=(Client_Session *)mysql_sessions->index(sess_pos);
-		MySQL_Data_Stream *tmp_myds=mysess->client_myds;
+		ProxySQL_Data_Stream *tmp_myds=mysess->client_myds;
 		int dsidx=tmp_myds->poll_fds_idx;
 		//fprintf(stderr,"Removing session %p, DS %p idx %d\n",mysess,tmp_myds,dsidx);
 		mypolls.remove_index_fast(dsidx);
@@ -3473,7 +3473,7 @@ void ProxyWorker_Thread::worker_thread_gets_sessions_from_idle_thread() {
 					while (myexchange.resume_mysql_sessions->len) {
 						Client_Session *mysess=(Client_Session *)myexchange.resume_mysql_sessions->remove_index_fast(0);
 						register_session(mysess, false);
-						MySQL_Data_Stream *myds=mysess->client_myds;
+						ProxySQL_Data_Stream *myds=mysess->client_myds;
 						mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 					}
 				}
@@ -3482,7 +3482,7 @@ void ProxyWorker_Thread::worker_thread_gets_sessions_from_idle_thread() {
 #endif // IDLE_THREADS
 
 
-bool ProxyWorker_Thread::process_data_on_mysql_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
+bool ProxyWorker_Thread::process_data_on_mysql_data_stream(ProxySQL_Data_Stream *myds, unsigned int n) {
 				if (mypolls.fds[n].revents) {
 #ifdef IDLE_THREADS
 					if (myds->myds_type==MYDS_FRONTEND) {
@@ -4130,7 +4130,7 @@ void ProxyWorker_Thread::unregister_session_connection_handler(int idx, bool _ne
 	mysql_sessions->remove_index_fast(idx);
 }
 
-void ProxyWorker_Thread::listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n) {
+void ProxyWorker_Thread::listener_handle_new_connection(ProxySQL_Data_Stream *myds, unsigned int n) {
 	int c;
 	union {
 		struct sockaddr_in in;
@@ -5400,7 +5400,7 @@ void ProxyWorker_Thread::Scan_Sessions_to_Kill(PtrArray *mysess) {
 }
 
 #ifdef IDLE_THREADS
-bool ProxyWorker_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n) {
+bool ProxyWorker_Thread::move_session_to_idle_mysql_sessions(ProxySQL_Data_Stream *myds, unsigned int n) {
 	unsigned long long _tmp_idle = mypolls.last_recv[n] > mypolls.last_sent[n] ? mypolls.last_recv[n] : mypolls.last_sent[n] ;
 	if (_tmp_idle < ( (curtime > (unsigned int)mysql_thread___session_idle_ms * 1000) ? (curtime - mysql_thread___session_idle_ms * 1000) : 0)) {
 		// make sure data stream has no pending data out and session is not throttled (#1939)
@@ -5411,7 +5411,7 @@ bool ProxyWorker_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *
 /*
 			for (j=0;j<myds->sess->mybes->len;j++) {
 				MySQL_Backend *tmp_mybe=(MySQL_Backend *)myds->sess->mybes->index(j);
-				MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
+				ProxySQL_Data_Stream *__myds=tmp_mybe->server_myds;
 				if (__myds->myconn) {
 					conns++;
 				}
@@ -5434,7 +5434,7 @@ bool ProxyWorker_Thread::move_session_to_idle_mysql_sessions(MySQL_Data_Stream *
 }
 #endif // IDLE_THREADS
 
-bool ProxyWorker_Thread::set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n) {
+bool ProxyWorker_Thread::set_backend_to_be_skipped_if_frontend_is_slow(ProxySQL_Data_Stream *myds, unsigned int n) {
 	if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
 		unsigned int buffered_data=0;
 		buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
@@ -5456,7 +5456,7 @@ void ProxyWorker_Thread::idle_thread_gets_sessions_from_worker_thread() {
 	while (myexchange.idle_mysql_sessions->len) {
 		Client_Session *mysess=(Client_Session *)myexchange.idle_mysql_sessions->remove_index_fast(0);
 		register_session(mysess, false);
-		MySQL_Data_Stream *myds=mysess->client_myds;
+		ProxySQL_Data_Stream *myds=mysess->client_myds;
 		mypolls.add(POLLIN, myds->fd, myds, monotonic_time());
 		// add in epoll()
 		struct epoll_event event;
@@ -5523,7 +5523,7 @@ void ProxyWorker_Thread::check_timing_out_session(unsigned int n) {
 	// FIXME: this logic was removed completely because we added mariadb client library. Yet, we need to implement a way to manage connection timeout
 	// check for timeout
 	// no events. This section is copied from process_data_on_data_stream()
-	MySQL_Data_Stream *_myds=mypolls.myds[n];
+	ProxySQL_Data_Stream *_myds=mypolls.myds[n];
 	if (_myds && _myds->sess) {
 		if (_myds->wait_until && curtime > _myds->wait_until) {
 			// timeout
@@ -5541,7 +5541,7 @@ void ProxyWorker_Thread::check_for_invalid_fd(unsigned int n) {
 	// check if the FD is valid
 	if (mypolls.fds[n].revents==POLLNVAL) {
 		// debugging output before assert
-		MySQL_Data_Stream *_myds=mypolls.myds[n];
+		ProxySQL_Data_Stream *_myds=mypolls.myds[n];
 		if (_myds) {
 			if (_myds->myconn) {
 				proxy_error("revents==POLLNVAL for FD=%d, events=%d, MyDSFD=%d, MyConnFD=%d\n", mypolls.fds[n].fd, mypolls.fds[n].events, _myds->fd, _myds->myconn->fd);
@@ -5574,7 +5574,7 @@ void ProxyWorker_Thread::read_one_byte_from_pipe(unsigned int n) {
 	}
 }
 
-void ProxyWorker_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds) {
+void ProxyWorker_Thread::tune_timeout_for_myds_needs_pause(ProxySQL_Data_Stream *myds) {
 	if (myds->wait_until > curtime) {
 		if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
 			mypolls.poll_timeout= myds->wait_until - curtime;
@@ -5583,14 +5583,14 @@ void ProxyWorker_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *my
 	}
 }
 
-void ProxyWorker_Thread::tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds) {
+void ProxyWorker_Thread::tune_timeout_for_session_needs_pause(ProxySQL_Data_Stream *myds) {
 	if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
 		mypolls.poll_timeout= myds->sess->pause_until - curtime;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , pause_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->sess->pause_until, curtime);
 	}
 }
 
-void ProxyWorker_Thread::configure_pollout(MySQL_Data_Stream *myds, unsigned int n) {
+void ProxyWorker_Thread::configure_pollout(ProxySQL_Data_Stream *myds, unsigned int n) {
 	if (myds->myds_type==MYDS_FRONTEND && myds->DSS==STATE_SLEEP && myds->sess && myds->sess->status==WAITING_CLIENT_DATA) {
 		myds->set_pollout();
 	} else {

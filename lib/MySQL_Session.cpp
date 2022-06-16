@@ -1,5 +1,5 @@
 #include "MySQL_Session.h"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "proxysql_utils.h"
 
 #include "query_processor.h"
@@ -501,7 +501,7 @@ void MySQL_Session::handler_WCDSS_MYSQL_COM_STMT_EXECUTE(PtrSize_t& pkt) {
 // now it returns:
 // true: NEXT_IMMEDIATE(st) needs to be called
 // false: continue
-bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
+bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, ProxySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
 	thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
 	GloMyStmt->wrlock();
 	uint32_t client_stmtid;
@@ -551,7 +551,7 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 
 
 // this function used to be inline
-void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds) {
+void MySQL_Session::handler_rc0_PROCESSING_STMT_EXECUTE(ProxySQL_Data_Stream *myds) {
 	thread->status_variables.stvar[st_var_backend_stmt_execute]++;
 	PROXY_TRACE2();
 	if (CurrentQuery.mysql_stmt) {

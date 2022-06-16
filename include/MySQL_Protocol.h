@@ -24,7 +24,7 @@ class MySQL_ResultSet {
 	bool resultset_completed;
 	//bool reset_pid;
 	uint8_t sid;
-	MySQL_Data_Stream *myds;
+	ProxySQL_Data_Stream *myds;
 	MySQL_Protocol *myprot;
 	MYSQL *mysql;
 	MYSQL_RES *result;
@@ -53,7 +53,7 @@ class MySQL_ResultSet {
 	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
 	void remove_last_eof();
-	void add_err(MySQL_Data_Stream *_myds);
+	void add_err(ProxySQL_Data_Stream *_myds);
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	//bool generate_COM_FIELD_LIST_response(PtrSizeArray *PSarrayFinal);
 	unsigned char *buffer;
@@ -96,17 +96,17 @@ class MySQL_Protocol {
 	MySQL_Connection_userinfo *userinfo;
 	Client_Session *sess;
 	public:
-	MySQL_Data_Stream **myds;
+	ProxySQL_Data_Stream **myds;
 #ifdef DEBUG
 	bool dump_pkt;
 #endif
 	MySQL_Prepared_Stmt_info *current_PreStmt;
 	uint16_t prot_status;
-	MySQL_Data_Stream *get_myds() { return *myds; }
+	ProxySQL_Data_Stream *get_myds() { return *myds; }
 	MySQL_Protocol() {
 		prot_status=0;
 	}
-	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, Client_Session *);
+	void init(ProxySQL_Data_Stream **, MySQL_Connection_userinfo *, Client_Session *);
 
 	// members get as arguments:
 	// - a data stream (optionally NULL for some)
@@ -123,15 +123,15 @@ class MySQL_Protocol {
 	bool generate_pkt_auth_switch_request(bool send, void **ptr, unsigned int *len);
 	bool process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len);
 
-//	bool generate_pkt_column_count(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count);
+//	bool generate_pkt_column_count(ProxySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count);
 	bool generate_pkt_column_count(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, uint64_t count, MySQL_ResultSet *myrs=NULL);
-//	bool generate_pkt_field(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue);
+//	bool generate_pkt_field(ProxySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue);
 	bool generate_pkt_field2(void **ptr, unsigned int *len, uint8_t sequence_id, MYSQL_FIELD *field, MySQL_ResultSet *myrs);
 	bool generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue, MySQL_ResultSet *myrs=NULL);
 	bool generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt);
 	uint8_t generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt, unsigned long rl);
 	bool generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *thread_id, bool deprecate_eof_active);
-//	bool generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
+//	bool generate_statistics_response(ProxySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
 	bool generate_statistics_response(bool send, void **ptr, unsigned int *len);
 
 	// process_* members get a arguments:

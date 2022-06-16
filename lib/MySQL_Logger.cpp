@@ -2,7 +2,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
@@ -623,7 +623,7 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 	flush_log();
 };
 
-void MySQL_Logger::log_request(Client_Session *sess, MySQL_Data_Stream *myds) {
+void MySQL_Logger::log_request(Client_Session *sess, ProxySQL_Data_Stream *myds) {
 	if (events.enabled==false) return;
 	if (events.logfile==NULL) return;
 
@@ -741,7 +741,7 @@ void MySQL_Logger::log_request(Client_Session *sess, MySQL_Data_Stream *myds) {
 	}
 }
 
-void MySQL_Logger::log_audit_entry(log_event_type _et, Client_Session *sess, MySQL_Data_Stream *myds, char *xi) {
+void MySQL_Logger::log_audit_entry(log_event_type _et, Client_Session *sess, ProxySQL_Data_Stream *myds, char *xi) {
 	if (audit.enabled==false) return;
 	if (audit.logfile==NULL) return;
 

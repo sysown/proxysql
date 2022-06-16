@@ -8,7 +8,7 @@
 #include "cpp.h"
 
 #include "MySQL_Logger.hpp"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "query_processor.h"
 
 #include <search.h>
@@ -77,7 +77,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 	myprot=&sess->client_myds->myprot;
 
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	int columns=block.GetColumnCount();
 	ClickHouse_Session *clickhouse_sess = (ClickHouse_Session *)sess->thread->gen_args;
@@ -785,7 +785,7 @@ void ClickHouse_Server_session_handler(Client_Session *sess, void *_pa, PtrSize_
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			//if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 			setStatus += SERVER_STATUS_AUTOCOMMIT;
-			MySQL_Data_Stream *myds=sess->client_myds;
+			ProxySQL_Data_Stream *myds=sess->client_myds;
 			MySQL_Protocol *myprot=&sess->client_myds->myprot;
 			myds->DSS=STATE_QUERY_SENT_DS;
 			int sid=1;
@@ -814,7 +814,7 @@ void ClickHouse_Server_session_handler(Client_Session *sess, void *_pa, PtrSize_
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			//if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 			setStatus += SERVER_STATUS_AUTOCOMMIT;
-			MySQL_Data_Stream *myds=sess->client_myds;
+			ProxySQL_Data_Stream *myds=sess->client_myds;
 			MySQL_Protocol *myprot=&sess->client_myds->myprot;
 			myds->DSS=STATE_QUERY_SENT_DS;
 			int sid=1;
@@ -1066,7 +1066,7 @@ __run_query:
   			MySQL_Protocol *myprot=NULL;
   			myprot=&sess->client_myds->myprot;
 			assert(myprot);
-			MySQL_Data_Stream *myds=myprot->get_myds();
+			ProxySQL_Data_Stream *myds=myprot->get_myds();
 			myds->DSS=STATE_QUERY_SENT_DS;
 			myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)"Command not supported");
 			myds->DSS=STATE_SLEEP;
@@ -1077,7 +1077,7 @@ __run_query:
 				if (clickhouse_sess->connected == true) {
 					if (clickhouse_sess->schema_initialized == false) {
 						if (sess && sess->client_myds) {
-							MySQL_Data_Stream *ds = sess->client_myds;
+							ProxySQL_Data_Stream *ds = sess->client_myds;
 							if (ds->myconn && ds->myconn->userinfo && ds->myconn->userinfo->schemaname) {
 								char *sn = ds->myconn->userinfo->schemaname;
 								char *use_query = NULL;
@@ -1096,7 +1096,7 @@ __run_query:
 
   						MySQL_Protocol *myprot=NULL;
 	  					myprot=&sess->client_myds->myprot; assert(myprot);
-  						MySQL_Data_Stream *myds=myprot->get_myds();
+  						ProxySQL_Data_Stream *myds=myprot->get_myds();
 
 						if (clickhouse_sess->transfer_started) {
 	    					myprot->generate_pkt_EOF(true,NULL,NULL,clickhouse_sess->sid,0, 2); clickhouse_sess->sid++;
@@ -1110,7 +1110,7 @@ __run_query:
 						clickhouse_sess->client->Execute(myq);
   						MySQL_Protocol *myprot=NULL;
 	  					myprot=&sess->client_myds->myprot; assert(myprot);
-  						MySQL_Data_Stream *myds=myprot->get_myds();
+  						ProxySQL_Data_Stream *myds=myprot->get_myds();
 						myds->DSS=STATE_QUERY_SENT_DS;
 						myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"");
   						myds->DSS=STATE_SLEEP;
@@ -1119,7 +1119,7 @@ __run_query:
 				} else {
   					MySQL_Protocol *myprot=NULL;
 	  				myprot=&sess->client_myds->myprot; assert(myprot);
-  					MySQL_Data_Stream *myds=myprot->get_myds();
+  					ProxySQL_Data_Stream *myds=myprot->get_myds();
 					myds->DSS=STATE_QUERY_SENT_DS;
 					myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)"Backend not connected");
 					myds->DSS=STATE_SLEEP;
@@ -1128,7 +1128,7 @@ __run_query:
   				MySQL_Protocol *myprot=NULL;
   				myprot=&sess->client_myds->myprot;
 				assert(myprot);
-				MySQL_Data_Stream *myds=myprot->get_myds();
+				ProxySQL_Data_Stream *myds=myprot->get_myds();
 				myds->DSS=STATE_QUERY_SENT_DS;
 				std::stringstream buffer;
 				buffer << e.what();
@@ -1216,7 +1216,7 @@ static void *child_mysql(void *arg) {
 	mysql_thr->curtime=monotonic_time();
 
 	Client_Session *sess = NULL;
-	MySQL_Data_Stream *myds = NULL;
+	ProxySQL_Data_Stream *myds = NULL;
 
 	ClickHouse_Session *sqlite_sess = new ClickHouse_Session();
 	sqlite_sess->init();
@@ -1581,7 +1581,7 @@ bool ClickHouse_Server::set_variable(char *name, char *value) {  // this is the 
 
 void ClickHouse_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,2,0,msg);
 	myds->DSS=STATE_SLEEP;
@@ -1589,7 +1589,7 @@ void ClickHouse_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int row
 
 void ClickHouse_Server::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",msg);
 	myds->DSS=STATE_SLEEP;

@@ -2,7 +2,7 @@
 #include "proxysql.h"
 
 #include "Client_Session.h"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "SpookyV2.h"
 
 #include <sstream>
@@ -267,7 +267,7 @@ bool MySQL_Variables::verify_variable(Client_Session* session, int idx) const {
 bool validate_charset(Client_Session* session, int idx, int &_rc) {
 	if (idx == SQL_CHARACTER_SET || idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_RESULTS ||
 			idx == SQL_CHARACTER_SET_CONNECTION || idx == SQL_CHARACTER_SET_DATABASE || idx == SQL_COLLATION_CONNECTION) {
-		MySQL_Data_Stream *myds = session->mybe->server_myds;
+		ProxySQL_Data_Stream *myds = session->mybe->server_myds;
 		MySQL_Connection *myconn = myds->myconn;
 		char msg[128];
 		const MARIADB_CHARSET_INFO *ci = NULL;

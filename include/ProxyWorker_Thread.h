@@ -63,7 +63,7 @@ class ProxySQL_Poll {
 	unsigned int len;
 	unsigned int size;
 	struct pollfd *fds;
-	MySQL_Data_Stream **myds;
+	ProxySQL_Data_Stream **myds;
 	unsigned long long *last_recv;
 	unsigned long long *last_sent;
 	volatile int pending_listener_add;
@@ -71,7 +71,7 @@ class ProxySQL_Poll {
 
 	ProxySQL_Poll();
 	~ProxySQL_Poll();
-	void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time);
+	void add(uint32_t _events, int _fd, ProxySQL_Data_Stream *_myds, unsigned long long sent_time);
 	void remove_index_fast(unsigned int i);
 	int find_index(int fd);
 };
@@ -152,19 +152,19 @@ class ProxyWorker_Thread
 	void idle_thread_check_if_worker_thread_has_unprocess_resumed_sessions_and_signal_it(ProxyWorker_Thread *thr);
 	void idle_thread_prepares_session_to_send_to_worker_thread(int i);
 	void idle_thread_to_kill_idle_sessions();
-	bool move_session_to_idle_mysql_sessions(MySQL_Data_Stream *myds, unsigned int n);
+	bool move_session_to_idle_mysql_sessions(ProxySQL_Data_Stream *myds, unsigned int n);
 #endif // IDLE_THREADS
 
 	unsigned int find_session_idx_in_mysql_sessions(Client_Session *sess);
-	bool set_backend_to_be_skipped_if_frontend_is_slow(MySQL_Data_Stream *myds, unsigned int n);
+	bool set_backend_to_be_skipped_if_frontend_is_slow(ProxySQL_Data_Stream *myds, unsigned int n);
 	void handle_mirror_queue_mysql_sessions();
 	void handle_kill_queues();
 	void check_timing_out_session(unsigned int n);
 	void check_for_invalid_fd(unsigned int n);
 	void read_one_byte_from_pipe(unsigned int n);
-	void tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds);
-	void tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds);
-	void configure_pollout(MySQL_Data_Stream *myds, unsigned int n);
+	void tune_timeout_for_myds_needs_pause(ProxySQL_Data_Stream *myds);
+	void tune_timeout_for_session_needs_pause(ProxySQL_Data_Stream *myds);
+	void configure_pollout(ProxySQL_Data_Stream *myds, unsigned int n);
 
 	protected:
 	int nfds;
@@ -228,7 +228,7 @@ class ProxyWorker_Thread
   void register_session(Client_Session*, bool up_start=true);
   void unregister_session(int);
   struct pollfd * get_pollfd(unsigned int i);
-	bool process_data_on_mysql_data_stream(MySQL_Data_Stream *myds, unsigned int n);
+	bool process_data_on_mysql_data_stream(ProxySQL_Data_Stream *myds, unsigned int n);
 	void ProcessAllSessions_SortingSessions();
 	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, Client_Session *sess);
 	void ProcessAllSessions_MaintenanceLoop(Client_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
@@ -236,7 +236,7 @@ class ProxyWorker_Thread
   void refresh_variables();
   void register_session_connection_handler(Client_Session *_sess, bool _new=false);
   void unregister_session_connection_handler(int idx, bool _new=false);
-  void listener_handle_new_connection(MySQL_Data_Stream *myds, unsigned int n);
+  void listener_handle_new_connection(ProxySQL_Data_Stream *myds, unsigned int n);
 	void Get_Memory_Stats();
 	MySQL_Connection * get_MyConn_local(unsigned int, Client_Session *sess, char *gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 	void push_MyConn_local(MySQL_Connection *);

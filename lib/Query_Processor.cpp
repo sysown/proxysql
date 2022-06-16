@@ -7,7 +7,7 @@
 #include "cpp.h"
 
 #include "MySQL_PreparedStatement.h"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "query_processor.h"
 
 #include "SpookyV2.h"

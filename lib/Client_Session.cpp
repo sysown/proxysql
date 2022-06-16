@@ -9,7 +9,7 @@
 #include "mysqld_error.h"
 #include "set_parser.h"
 
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
@@ -701,14 +701,14 @@ MySQL_Backend * Client_Session::find_mysql_backend(int hostgroup_id) {
 };
 
 
-MySQL_Backend * Client_Session::create_mysql_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
+MySQL_Backend * Client_Session::create_mysql_backend(int hostgroup_id, ProxySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=new MySQL_Backend();
 	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
 	_mybe->hostgroup_id=hostgroup_id;
 	if (_myds) {
 		_mybe->server_myds=_myds;
 	} else {
-		_mybe->server_myds = new MySQL_Data_Stream();
+		_mybe->server_myds = new ProxySQL_Data_Stream();
 		_mybe->server_myds->DSS=STATE_NOT_INITIALIZED;
 		_mybe->server_myds->init(MYDS_BACKEND_NOT_CONNECTED, this, 0);
 	}
@@ -716,7 +716,7 @@ MySQL_Backend * Client_Session::create_mysql_backend(int hostgroup_id, MySQL_Dat
 	return _mybe;
 };
 
-MySQL_Backend * Client_Session::find_or_create_mysql_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
+MySQL_Backend * Client_Session::find_or_create_mysql_backend(int hostgroup_id, ProxySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=find_mysql_backend(hostgroup_id);
 	proxy_debug(PROXY_DEBUG_NET,4,"HID=%d, _myds=%p, _mybe=%p\n" , hostgroup_id, _myds, _mybe);
 	return ( _mybe ? _mybe : create_mysql_backend(hostgroup_id, _myds) );
@@ -1103,7 +1103,7 @@ void Client_Session::generate_proxysql_internal_session_json(json &j) {
 		j["backends"][i]["hostgroup_id"] = i;
 		j["backends"][i]["gtid"] = ( strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "" );
 		if (_mybe->server_myds) {
-			MySQL_Data_Stream *_myds=_mybe->server_myds;
+			ProxySQL_Data_Stream *_myds=_mybe->server_myds;
 			sprintf(buff,"%p",_myds);
 			j["backends"][i]["stream"]["address"] = buff;
 			j["backends"][i]["stream"]["questions"] = _myds->statuses.questions;
@@ -1475,7 +1475,7 @@ void Client_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
 		Client_Session *newsess=NULL;
 		if (thread->mirror_queue_mysql_sessions_cache->len==0) {
 			newsess=new Client_Session();
-			newsess->client_myds = new MySQL_Data_Stream();
+			newsess->client_myds = new ProxySQL_Data_Stream();
 			newsess->client_myds->DSS=STATE_SLEEP;
 			newsess->client_myds->sess=newsess;
 			newsess->client_myds->fd=0;
@@ -1558,7 +1558,7 @@ void Client_Session::handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session() {
 
 int Client_Session::handler_again___status_PINGING_SERVER() {
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	int rc=myconn->async_ping(myds->revents);
 	if (rc==0) {
@@ -1605,7 +1605,7 @@ int Client_Session::handler_again___status_PINGING_SERVER() {
 
 int Client_Session::handler_again___status_RESETTING_CONNECTION() {
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	if (myds->mypolls==NULL) {
 		thread->mypolls.add(POLLIN|POLLOUT, myds->fd, myds, thread->curtime);
@@ -1677,7 +1677,7 @@ int Client_Session::handler_again___status_RESETTING_CONNECTION() {
 
 
 void Client_Session::handler_again___new_thread_to_kill_connection() {
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	if (myds->myconn && myds->myconn->mysql) {
 		if (myds->killed_at==0) {
 			myds->wait_until=0;
@@ -1987,7 +1987,7 @@ bool Client_Session::handler_again___verify_backend_autocommit() {
 }
 
 bool Client_Session::handler_again___verify_backend_user_schema() {
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->username, mybe->server_myds->myconn->userinfo->username);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
 	if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
@@ -2060,7 +2060,7 @@ bool Client_Session::handler_again___verify_backend_user_schema() {
 bool Client_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
@@ -2126,7 +2126,7 @@ bool Client_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 bool Client_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
@@ -2221,7 +2221,7 @@ bool Client_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc)
 bool Client_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
@@ -2302,7 +2302,7 @@ bool Client_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 
 bool Client_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 
 	/* Validate that server can support client's charset */
@@ -2380,7 +2380,7 @@ bool Client_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 bool Client_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote, bool set_transaction) {
 	bool ret = false;
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
@@ -2543,7 +2543,7 @@ bool Client_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, c
 
 bool Client_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	enum session_status st=status;
 	bool ret = false;
@@ -2614,7 +2614,7 @@ bool Client_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 	bool ret=false;
 	//fprintf(stderr,"CHANGING_SCHEMA\n");
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
@@ -2742,7 +2742,7 @@ bool Client_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		*_rc=1;
 		return false;
 	} else {
-		MySQL_Data_Stream *myds=mybe->server_myds;
+		ProxySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=myds->myconn;
 		int rc;
 		if (default_hostgroup<0) {
@@ -2855,7 +2855,7 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 }
 bool Client_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
@@ -2944,7 +2944,7 @@ bool Client_Session::handler_again___status_CHANGING_USER_SERVER(int *_rc) {
 bool Client_Session::handler_again___status_CHANGING_AUTOCOMMIT(int *_rc) {
 	//fprintf(stderr,"CHANGING_AUTOCOMMIT\n");
 	assert(mybe->server_myds->myconn);
-	MySQL_Data_Stream *myds=mybe->server_myds;
+	ProxySQL_Data_Stream *myds=mybe->server_myds;
 	MySQL_Connection *myconn=myds->myconn;
 	myds->DSS=STATE_MARIADB_QUERY;
 	enum session_status st=status;
@@ -3887,7 +3887,7 @@ __get_pkts_from_client:
 // 0 : no action
 // -1 : the calling function will return
 // 1 : call to NEXT_IMMEDIATE
-int Client_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds) {
+int Client_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(ProxySQL_Data_Stream *myds) {
 	MySQL_Connection *myconn = myds->myconn;
 	// the query failed
 	if (
@@ -3973,7 +3973,7 @@ void Client_Session::SetQueryTimeout() {
 // now it returns:
 // true: NEXT_IMMEDIATE(st) needs to be called
 // false: continue
-bool Client_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
+bool Client_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, ProxySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
 	thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
 	GloMyStmt->wrlock();
 	uint32_t client_stmtid;
@@ -4023,7 +4023,7 @@ bool Client_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st
 
 
 // this function used to be inline
-void Client_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds) {
+void Client_Session::handler_rc0_PROCESSING_STMT_EXECUTE(ProxySQL_Data_Stream *myds) {
 	thread->status_variables.stvar[st_var_backend_stmt_execute]++;
 	PROXY_TRACE2();
 	if (CurrentQuery.mysql_stmt) {
@@ -4078,7 +4078,7 @@ void Client_Session::handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds
 // now it returns:
 // true: NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
 // false: continue
-bool Client_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, int myerr, char **errmsg) {
+bool Client_Session::handler_minus1_ClientLibraryError(ProxySQL_Data_Stream *myds, int myerr, char **errmsg) {
 	MySQL_Connection *myconn = myds->myconn;
 	bool retry_conn=false;
 	// client error, serious
@@ -4153,7 +4153,7 @@ void Client_Session::handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn
 //		if handler_ret == -1 : return
 //		if handler_ret == 0 : NEXT_IMMEDIATE(CONNECTING_SERVER) needs to be called
 // false: continue
-bool Client_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret) {
+bool Client_Session::handler_minus1_HandleErrorCodes(ProxySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret) {
 	bool retry_conn=false;
 	MySQL_Connection * myconn = myds->myconn;
 	handler_ret = 0; // default
@@ -4229,7 +4229,7 @@ bool Client_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, in
 }
 
 // this function used to be inline.
-void Client_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass) {
+void Client_Session::handler_minus1_GenerateErrorMessage(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass) {
 	switch (status) {
 		case PROCESSING_QUERY:
 			if (myconn) {
@@ -4285,7 +4285,7 @@ void Client_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds
 }
 
 // this function was inline
-void Client_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
+void Client_Session::handler_minus1_HandleBackendConnection(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	if (myds->myconn) {
 		myds->myconn->reduce_auto_increment_delay_token();
 		if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
@@ -4307,7 +4307,7 @@ void Client_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *m
 }
 
 // this function was inline
-int Client_Session::RunQuery_mysql(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
+int Client_Session::RunQuery_mysql(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 	PROXY_TRACE2();
 	int rc = 0;
 	switch (status) {
@@ -4338,7 +4338,7 @@ void Client_Session::handler___status_WAITING_CLIENT_DATA() {
 		for (i=0; i < mybes->len; i++) {
 			_mybe=(MySQL_Backend *)mybes->index(i);
 			if (_mybe->server_myds) {
-				MySQL_Data_Stream *_myds=_mybe->server_myds;
+				ProxySQL_Data_Stream *_myds=_mybe->server_myds;
 				if (_myds->myconn) {
 					if (_myds->myconn->multiplex_delayed) {
 						if (_myds->wait_until <= thread->curtime) {
@@ -4519,7 +4519,7 @@ handler_again:
 				}
 				NEXT_IMMEDIATE(CONNECTING_SERVER);
 			} else {
-				MySQL_Data_Stream *myds=mybe->server_myds;
+				ProxySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 				mybe->server_myds->max_connect_time=0;
 				// we insert it in mypolls only if not already there
@@ -4815,7 +4815,7 @@ handler_again:
 			// to the connection pool when finished. Actual logging of received warnings is performed in
 			// 'MySQL_Connection' while processing 'ASYNC_USE_RESULT_CONT'.
 			{
-				MySQL_Data_Stream *myds=mybe->server_myds;
+				ProxySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 
 				// Setting POLLOUT is required just in case this state has been reached when 'RunQuery_mysql' from
@@ -4883,7 +4883,7 @@ __exit_DSS__STATE_NOT_INITIALIZED:
 	if (mybe && mybe->server_myds) {
 	if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
 #ifdef DEBUG
-		MySQL_Data_Stream *myds=mybe->server_myds;
+		ProxySQL_Data_Stream *myds=mybe->server_myds;
 		MySQL_Connection *myconn=mybe->server_myds->myconn;
 #endif /* DEBUG */
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
@@ -6278,7 +6278,7 @@ bool Client_Session::handler_WCDSS_MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *loc
 		unsigned int nTrx=NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-		MySQL_Data_Stream *myds=client_myds;
+		ProxySQL_Data_Stream *myds=client_myds;
 		MySQL_Protocol *myprot=&client_myds->myprot;
 		myds->DSS=STATE_QUERY_SENT_DS;
 		int sid=1;
@@ -6360,7 +6360,7 @@ bool Client_Session::handler_WCDSS_MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *loc
 				unsigned int nTrx=NumActiveTransactions();
 				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-				MySQL_Data_Stream *myds=client_myds;
+				ProxySQL_Data_Stream *myds=client_myds;
 				MySQL_Protocol *myprot=&client_myds->myprot;
 				myds->DSS=STATE_QUERY_SENT_DS;
 				int sid=1;
@@ -6816,7 +6816,7 @@ void Client_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Con
 	}
 }
 
-void Client_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds) {
+void Client_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, ProxySQL_Data_Stream *_myds) {
         if (mysql == NULL) {
                 // error
                 client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
@@ -6895,7 +6895,7 @@ void Client_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *M
 
 void Client_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot, bool in_transaction, bool deprecate_eof_active) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	int sid=1;
 	if (result) {
@@ -7067,7 +7067,7 @@ unsigned long long Client_Session::IdleTime() {
 
 // this is called either from RequestEnd_mysql(), or at the end of executing
 // prepared statements 
-void Client_Session::LogQuery(MySQL_Data_Stream *myds) {
+void Client_Session::LogQuery(ProxySQL_Data_Stream *myds) {
 	// we need to access statistics before calling CurrentQuery.end()
 	// so we track the time here
 	CurrentQuery.end_time=thread->curtime;
@@ -7086,7 +7086,7 @@ void Client_Session::LogQuery(MySQL_Data_Stream *myds) {
 }
 // this should execute most of the commands executed when a request is finalized
 // this should become the place to hook other functions
-void Client_Session::RequestEnd_mysql(MySQL_Data_Stream *myds) {
+void Client_Session::RequestEnd_mysql(ProxySQL_Data_Stream *myds) {
 	// check if multiplexing needs to be disabled
 	char *qdt=CurrentQuery.get_digest_text();
 	if (qdt && myds && myds->myconn) {
@@ -7137,7 +7137,7 @@ void Client_Session::Memory_Stats() {
 	if (qpo)
 		internal+=sizeof(Query_Processor_Output);
 	if (client_myds) {
-		internal+=sizeof(MySQL_Data_Stream);
+		internal+=sizeof(ProxySQL_Data_Stream);
 		if (client_myds->queueIN.buffer)
 			frontend+=QUEUE_T_DEFAULT_SIZE;
 		if (client_myds->queueOUT.buffer)
@@ -7161,7 +7161,7 @@ void Client_Session::Memory_Stats() {
 		MySQL_Backend *_mybe=(MySQL_Backend *)mybes->index(i);
 			internal+=sizeof(MySQL_Backend);
 		if (_mybe->server_myds) {
-			internal+=sizeof(MySQL_Data_Stream);
+			internal+=sizeof(ProxySQL_Data_Stream);
 			if (_mybe->server_myds->queueIN.buffer)
 				backend+=QUEUE_T_DEFAULT_SIZE;
 			if (_mybe->server_myds->queueOUT.buffer)
@@ -7186,8 +7186,8 @@ void Client_Session::Memory_Stats() {
 }
 
 
-void Client_Session::create_new_session_and_reset_mysql_connection(MySQL_Data_Stream *_myds) {
-	MySQL_Data_Stream *new_myds = NULL;
+void Client_Session::create_new_session_and_reset_mysql_connection(ProxySQL_Data_Stream *_myds) {
+	ProxySQL_Data_Stream *new_myds = NULL;
 	MySQL_Connection * mc = _myds->myconn;
 	// we remove the connection from the original data stream
 	_myds->detach_connection();
@@ -7320,7 +7320,7 @@ void Client_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	CurrentQuery.QueryPointer = (unsigned char *)_pkt->ptr + 5;
 }
 
-void Client_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
+void Client_Session::finishQuery(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
 					myds->myconn->reduce_auto_increment_delay_token();
 					if (locked_on_hostgroup >= 0) {
 						if (qpo->multiplex == -1) {
@@ -7447,7 +7447,7 @@ void Client_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 bool Client_Session::has_any_backend() {
 	for (unsigned int j=0;j < mybes->len;j++) {
 		MySQL_Backend *tmp_mybe=(MySQL_Backend *)mybes->index(j);
-		MySQL_Data_Stream *__myds=tmp_mybe->server_myds;
+		ProxySQL_Data_Stream *__myds=tmp_mybe->server_myds;
 		if (__myds->myconn) {
 			return true;
 		}

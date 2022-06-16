@@ -440,7 +440,6 @@ typedef struct _debug_level debug_level;
 #endif /* DEBUG */
 typedef struct _global_variables_t global_variables;
 typedef struct _global_variable_entry_t global_variable_entry_t;
-typedef struct _mysql_data_stream_t mysql_data_stream_t;
 typedef struct _mysql_session_t mysql_session_t;
 typedef struct _bytes_stats_t bytes_stats_t;
 typedef struct _mysql_hdr mysql_hdr;
@@ -458,7 +457,7 @@ typedef struct __SQP_query_parser_t SQP_par_t;
 //#ifdef __cplusplus
 #ifndef PROXYSQL_CLASSES
 #define PROXYSQL_CLASSES
-class MySQL_Data_Stream;
+class ProxySQL_Data_Stream;
 class MySQL_Connection_userinfo;
 class Client_Session;
 class MySQL_Session;
@@ -600,22 +599,6 @@ typedef struct _queue_t {
 	mysql_hdr hdr;
 } queue_t;
 
-
-/* Every communication between client and proxysql, and between proxysql and mysql server is
- * performed within a mysql_data_stream_t
- */
-struct _mysql_data_stream_t {
-	mysql_session_t *sess;	// pointer to the session using this data stream
-	uint64_t pkts_recv;	// counter of received packets
-	uint64_t pkts_sent;	// counter of sent packets
-	bytes_stats_t bytes_info;	// bytes statistics
-	int fd;	// file descriptor
-	struct evbuffer *evbIN;
-	struct evbuffer *evbOUT;
-	int active_transaction;	// 1 if there is an active transaction
-	int active;	// data stream is active. If not, shutdown+close needs to be called
-	int status;	// status . FIXME: make it a ORable variable
-};
 
 struct _global_variables_t {
 	pthread_rwlock_t rwlock_usernames;

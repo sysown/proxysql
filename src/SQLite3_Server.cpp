@@ -7,7 +7,7 @@
 #include "cpp.h"
 
 #include "MySQL_Logger.hpp"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "proxysql_utils.h"
 #include "query_processor.h"
 #include "SQLite3_Server.h"
@@ -788,7 +788,7 @@ static void *child_mysql(void *arg) {
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_SQLITE;
 	sess->handler_function=SQLite3_Server_session_handler;
-	MySQL_Data_Stream *myds=sess->client_myds;
+	ProxySQL_Data_Stream *myds=sess->client_myds;
 
 	fds[0].fd=client;
 	fds[0].revents=0;
@@ -1481,7 +1481,7 @@ bool SQLite3_Server::set_variable(char *name, char *value) {  // this is the pub
 
 void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows, uint16_t status) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,status,0,msg,false);
 	myds->DSS=STATE_SLEEP;
@@ -1489,7 +1489,7 @@ void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows, 
 
 void SQLite3_Server::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",msg);
 	myds->DSS=STATE_SLEEP;

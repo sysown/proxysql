@@ -6,7 +6,7 @@
 #include <sstream>
 
 #include "MySQL_PreparedStatement.h"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "MySQL_Variables.h"
 

@@ -125,11 +125,11 @@ class Client_Session
 	bool handler_SetAutocommit(PtrSize_t *);
 	/**
 	 * @brief Performs the cleanup of current session state, and the required operations to the supplied
-	 *   'MySQL_Data_Stream' required for processing further queries.
-	 * @param The 'MySQL_Data_Stream' which executed the previous query and which status should be updated.
+	 *   'ProxySQL_Data_Stream' required for processing further queries.
+	 * @param The 'ProxySQL_Data_Stream' which executed the previous query and which status should be updated.
 	 */
-	void RequestEnd_mysql(MySQL_Data_Stream *);
-	void LogQuery(MySQL_Data_Stream *);
+	void RequestEnd_mysql(ProxySQL_Data_Stream *);
+	void LogQuery(ProxySQL_Data_Stream *);
 
 	void handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
@@ -165,18 +165,18 @@ class Client_Session
 */
 
 	// these functions have code that used to be inline, and split into functions for readibility
-	int handler_ProcessingQueryError_CheckBackendConnectionStatus(MySQL_Data_Stream *myds);
+	int handler_ProcessingQueryError_CheckBackendConnectionStatus(ProxySQL_Data_Stream *myds);
 	void SetQueryTimeout();
 /*
-	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params);
-	void handler_rc0_PROCESSING_STMT_EXECUTE(MySQL_Data_Stream *myds);
+	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, ProxySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params);
+	void handler_rc0_PROCESSING_STMT_EXECUTE(ProxySQL_Data_Stream *myds);
 */
-	bool handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, int myerr, char **errmsg);
+	bool handler_minus1_ClientLibraryError(ProxySQL_Data_Stream *myds, int myerr, char **errmsg);
 	void handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn, int myerr, char *errmsg);
-	bool handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret);
-	void handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass);
-	void handler_minus1_HandleBackendConnection(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
-	int RunQuery_mysql(MySQL_Data_Stream *myds, MySQL_Connection *myconn);
+	bool handler_minus1_HandleErrorCodes(ProxySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret);
+	void handler_minus1_GenerateErrorMessage(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass);
+	void handler_minus1_HandleBackendConnection(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn);
+	int RunQuery_mysql(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
 	void handler_WCDSS_MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
@@ -222,7 +222,7 @@ class Client_Session
 	StatCounters *command_counters;
 	MySQL_Backend *mybe;
 	PtrArray *mybes;
-	MySQL_Data_Stream *client_myds;
+	ProxySQL_Data_Stream *client_myds;
 	char * default_schema;
 	char * user_attributes;
 
@@ -310,11 +310,11 @@ class Client_Session
 
 	void (*handler_function) (Client_Session *arg, void *, PtrSize_t *pkt);
 	MySQL_Backend * find_mysql_backend(int);
-	MySQL_Backend * create_mysql_backend(int, MySQL_Data_Stream *_myds=NULL);
-	MySQL_Backend * find_or_create_mysql_backend(int, MySQL_Data_Stream *_myds=NULL);
+	MySQL_Backend * create_mysql_backend(int, ProxySQL_Data_Stream *_myds=NULL);
+	MySQL_Backend * find_or_create_mysql_backend(int, ProxySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false);
-	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds=NULL);
+	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, ProxySQL_Data_Stream *_myds=NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions();
 	bool HasOfflineBackends();
@@ -325,21 +325,21 @@ class Client_Session
 	void reset_all_mysql_backends();
 	void writeout();
 	void Memory_Stats();
-	void create_new_session_and_reset_mysql_connection(MySQL_Data_Stream *_myds);
+	void create_new_session_and_reset_mysql_connection(ProxySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
-	 *  'transaction_persistent_hostgroup', and updates the 'MySQL_Data_Stream' and 'MySQL_Connection' before
+	 *  'transaction_persistent_hostgroup', and updates the 'ProxySQL_Data_Stream' and 'MySQL_Connection' before
 	 *  returning the connection back to the connection pool. After this operation the session should be ready
 	 *  for handling new client connections.
 	 *
-	 * @param myds The 'MySQL_Data_Stream' which status should be updated.
+	 * @param myds The 'ProxySQL_Data_Stream' which status should be updated.
 	 * @param myconn The 'MySQL_Connection' which status should be updated, and which should be returned to
 	 *   the connection pool.
 	 * @param prepared_stmt_with_no_params specifies if the processed query was a prepared statement with no
 	 *   params.
 	 */
-	void finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
+	void finishQuery(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn, bool);
 	void generate_proxysql_internal_session_json(json &);
 	bool known_query_for_locked_on_hostgroup(uint64_t);
 	void unable_to_parse_set_statement(bool *);

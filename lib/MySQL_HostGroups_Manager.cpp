@@ -4,7 +4,7 @@
 #include "SpookyV2.h"
 
 #include "MySQL_PreparedStatement.h"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 
 #include <memory>
 #include <pthread.h>

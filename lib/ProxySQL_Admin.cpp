@@ -16,7 +16,7 @@
 #include "prometheus_helpers.h"
 #include "cpp.h"
 
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #include "MySQL_Authentication.hpp"
@@ -1173,7 +1173,7 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	//queries *= 1000;
 	Client_Session *sess = new Client_Session();
 
-	sess->client_myds = new MySQL_Data_Stream();
+	sess->client_myds = new ProxySQL_Data_Stream();
 	sess->client_myds->fd=0;
 	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
 	MySQL_Connection *myconn=new MySQL_Connection();
@@ -4171,7 +4171,7 @@ void admin_session_handler(Client_Session *sess, void *_pa, PtrSize_t *pkt) {
 			sprintf(buf,"%lu",GloVars.checksums_values.global_checksum);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			uint16_t setStatus = 0;
-			MySQL_Data_Stream *myds=sess->client_myds;
+			ProxySQL_Data_Stream *myds=sess->client_myds;
 			MySQL_Protocol *myprot=&sess->client_myds->myprot;
 			myds->DSS=STATE_QUERY_SENT_DS;
 			int sid=1;
@@ -5203,7 +5203,7 @@ void *child_mysql(void *arg) {
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
 	sess->handler_function=admin_session_handler;
-	MySQL_Data_Stream *myds=sess->client_myds;
+	ProxySQL_Data_Stream *myds=sess->client_myds;
 
 	sess->start_time=mysql_thr->curtime;
 
@@ -10490,7 +10490,7 @@ void ProxySQL_Admin::__refresh_clickhouse_users() {
 
 void ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,2,0,msg,false);
 	myds->DSS=STATE_SLEEP;
@@ -10498,7 +10498,7 @@ void ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) 
 
 void ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	char *a = (char *)"ProxySQL Admin Error: ";
 	char *new_msg = (char *)malloc(strlen(msg)+strlen(a)+1);
