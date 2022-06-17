@@ -22,6 +22,7 @@ __thread bool mysql_thread___query_digests_replace_null = true;
 __thread bool mysql_thread___query_digests_no_digits = false;
 __thread int mysql_thread___query_digests_grouping_limit = 3;
 __thread int mysql_thread___query_digests_groups_grouping_limit = 1;
+__thread int mysql_thread___query_digests_keep_comment = 0;
 
 using std::string;
 using option_err = std::pair<int, string>;
@@ -94,6 +95,10 @@ option_err parse_parameter_options(int argc, const char** argv) {
 		(const char *)"", 1, 1, 0, (const char *)"Query digest 'GroupsGroupingLimit'",
 		(const char *)"-G", (const char *)"--groups-grouping-limit"
 	);
+	opts.add(
+		(const char *)"", 1, 1, 0, (const char *)"Query digest 'KeepComment'",
+		(const char *)"-c", (const char *)"--keep-comment"
+	);
 
 	// parse the arguments
 	opts.parse(argc, argv);
@@ -144,6 +149,12 @@ option_err parse_parameter_options(int argc, const char** argv) {
 		return err_res;
 	} else {
 		mysql_thread___query_digests_groups_grouping_limit = option_value;
+	}
+	err_res = check_and_set_option(opts, "-c", &option_value);
+	if (err_res.first != EXIT_SUCCESS) {
+		return err_res;
+	} else {
+		mysql_thread___query_digests_keep_comment = option_value;
 	}
 
 	return err_res;
