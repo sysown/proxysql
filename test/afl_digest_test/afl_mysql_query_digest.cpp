@@ -184,7 +184,11 @@ int main(int argc, const char** argv) {
 
 	while (__AFL_LOOP(10000)) {
 		int len = __AFL_FUZZ_TESTCASE_LEN;
-		process_digest_test(buf, len);
+
+		unsigned char* alloc_buff = static_cast<unsigned char*>(malloc(len));
+		memcpy(alloc_buff, buf, len);
+
+		process_digest_test(alloc_buff, len);
 	}
 
 	return 0;
