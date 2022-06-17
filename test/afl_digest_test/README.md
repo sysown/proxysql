@@ -14,6 +14,33 @@ cd /src/test/afl_digest_test/
 make
 ```
 
+For better testing for invalid memory accesses, compiling with ASAN is recommended:
+
+```
+docker run -tid -v $(pwd):/src aflplusplus/aflplusplus
+docker exec -it $(CONTAINER_ID) /bin/bash
+cd /src/test/afl_digest_test/
+export AFL_USE_ASAN=1
+make
+```
+
+For checking that the compilation with ASAN was successful, you can check the binary symbols:
+
+```
+nm -a afl_test | grep '__asan\|__tsan\|__msan'
+```
+
+ASAN symbols should be visible:
+
+```
+   ...
+U __asan_after_dynamic_init
+U __asan_before_dynamic_init
+U __asan_handle_no_return
+U __asan_init
+   ...
+```
+
 Then for launching an individual instance of `afl-fuzz` it's enough to run:
 
 ```
@@ -37,6 +64,7 @@ OPTIONS:
 -l, --lowercase ARG               Query digest 'LowerCase'
 -n, --replace-null ARG            Query digest 'ReplaceNULL'
 -s, --digest-size ARG             Query digest 'MaxLength'
+-c, --keep-comment ARG            Query digest 'KeepComment'. Value '0' or '1', default '0'.
 
 ```
 
