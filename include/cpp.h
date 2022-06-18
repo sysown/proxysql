@@ -18,7 +18,7 @@
 #include "fileutils.hpp"
 #include "configfile.hpp"
 //#include "query_processor.h"
-#include "proxysql_admin.h"
+//#include "proxysql_admin.h"
 //#include "SQLite3_Server.h"
 #ifdef PROXYSQLCLICKHOUSE
 #include "ClickHouse_Server.h"

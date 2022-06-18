@@ -164,7 +164,7 @@ class ProxyWorker_Thread
 	void read_one_byte_from_pipe(unsigned int n);
 	void tune_timeout_for_myds_needs_pause(ProxySQL_Data_Stream *myds);
 	void tune_timeout_for_session_needs_pause(ProxySQL_Data_Stream *myds);
-	void configure_pollout(ProxySQL_Data_Stream *myds, unsigned int n);
+	void configure_pollout(MySQL_Data_Stream *myds, unsigned int n);
 
 	protected:
 	int nfds;
@@ -216,7 +216,7 @@ class ProxyWorker_Thread
   pthread_mutex_t thread_mutex;
   ProxyWorker_Thread();
   ~ProxyWorker_Thread();
-  Client_Session * create_new_session_and_client_data_stream(int _fd);
+  MySQL_Session * create_new_session_and_client_mysql_data_stream(int _fd);
   bool init();
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();
@@ -231,7 +231,7 @@ class ProxyWorker_Thread
 	bool process_data_on_mysql_data_stream(ProxySQL_Data_Stream *myds, unsigned int n);
 	void ProcessAllSessions_SortingSessions();
 	void ProcessAllSessions_CompletedMirrorSession(unsigned int& n, Client_Session *sess);
-	void ProcessAllSessions_MaintenanceLoop(Client_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
+	void ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_);
 	void process_all_sessions();
   void refresh_variables();
   void register_session_connection_handler(Client_Session *_sess, bool _new=false);

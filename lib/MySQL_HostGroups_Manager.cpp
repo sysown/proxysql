@@ -18,6 +18,11 @@
 #include "prometheus_helpers.h"
 #include "proxysql_utils.h"
 
+#include "MySQL_Data_Stream.h"
+#include "MySQL_Session.h"
+
+#include "proxysql_admin.h"
+
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
 
@@ -3193,8 +3198,9 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(Client_Session *sess, bool f
 		} else {
 			i=fastrand()%l;
 		}
-		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
-			MySQL_Connection * client_conn = sess->client_myds->myconn;
+		// APPLY THIS LOGIC ONLY FOR MYSQL FRONTEND
+		if (sess && ((MySQL_Session *)sess)->client_myds && ((MySQL_Session *)sess)->client_myds->myconn && ((MySQL_Session *)sess)->client_myds->myconn->userinfo) {
+			MySQL_Connection * client_conn = ((MySQL_Session *)sess)->client_myds->myconn;
 			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
 				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);

@@ -74,14 +74,15 @@ class Query_Info {
 class Client_Session
 {
 	friend class MySQL_Session;
+	friend class Admin_MySQL_Session;
 	private:
 	//int handler_ret;
-	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
+//	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
-	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
+//	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
 
 //	void handler_WCDSS_MYSQL_COM_FIELD_LIST(PtrSize_t *);
-	void handler_WCDSS_MYSQL_COM_INIT_DB(PtrSize_t *);
+//	void handler_WCDSS_MYSQL_COM_INIT_DB(PtrSize_t *);
 	/**
 	 * @brief Handles 'COM_QUERIES' holding 'USE DB' statements.
 	 *
@@ -93,7 +94,7 @@ class Client_Session
 	 *   But since it was change for handling 'USE' statements which are preceded by
 	 *   comments, it's called after 'QueryProcessor' has processed the query.
 	 */
-	void handler_WCDSS_MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
+//	void handler_WCDSS_MYSQL_COM_QUERY_USE_DB(PtrSize_t *pkt);
 //	void handler_WCDSS_MYSQL_COM_PING(PtrSize_t *);
 
 //	void handler_WCDSS_MYSQL_COM_CHANGE_USER(PtrSize_t *, bool *);
@@ -113,47 +114,51 @@ class Client_Session
 	 */
 //	void handler_WCDSS_MYSQL_COM_RESET_CONNECTION(PtrSize_t *pkt);
 //	void handler_WCDSS_MYSQL_COM_SET_OPTION(PtrSize_t *);
-	void handler_WCDSS_MYSQL_COM_STATISTICS(PtrSize_t *);
+//	void handler_WCDSS_MYSQL_COM_STATISTICS(PtrSize_t *);
 //	void handler_WCDSS_MYSQL_COM_PROCESS_KILL(PtrSize_t *);
-	bool handler_WCDSS_MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
+//	bool handler_WCDSS_MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_mysql_connection();	
 
 	void return_proxysql_internal(PtrSize_t *);
+/*
 	bool handler_special_queries(PtrSize_t *);
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
+*/
 	/**
 	 * @brief Performs the cleanup of current session state, and the required operations to the supplied
 	 *   'ProxySQL_Data_Stream' required for processing further queries.
 	 * @param The 'ProxySQL_Data_Stream' which executed the previous query and which status should be updated.
 	 */
-	void RequestEnd_mysql(ProxySQL_Data_Stream *);
+//	void RequestEnd_mysql(ProxySQL_Data_Stream *);
 	void LogQuery(ProxySQL_Data_Stream *);
 
+/*
 	void handler_WCDSS_MYSQL_COM_QUERY___create_mirror_session();
 	int handler_again___status_PINGING_SERVER();
 	int handler_again___status_RESETTING_CONNECTION();
+*/
 	void handler_again___new_thread_to_kill_connection();
 
-	bool handler_again___verify_init_connect();
-	bool handler_again___verify_ldap_user_variable();
-	bool handler_again___verify_backend_autocommit();
-	bool handler_again___verify_backend_session_track_gtids();
-	bool handler_again___verify_backend_multi_statement();
-	bool handler_again___verify_backend_user_schema();
-	bool handler_again___status_SETTING_INIT_CONNECT(int *);
-	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
+//	bool handler_again___verify_init_connect();
+//	bool handler_again___verify_ldap_user_variable();
+//	bool handler_again___verify_backend_autocommit();
+//	bool handler_again___verify_backend_session_track_gtids();
+//	bool handler_again___verify_backend_multi_statement();
+//	bool handler_again___verify_backend_user_schema();
+//	bool handler_again___status_SETTING_INIT_CONNECT(int *);
+//	bool handler_again___status_SETTING_LDAP_USER_VARIABLE(int *);
 	bool handler_again___status_SETTING_SQL_MODE(int *);
-	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
-	bool handler_again___status_CHANGING_CHARSET(int *_rc);
-	bool handler_again___status_CHANGING_SCHEMA(int *);
+//	bool handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *);
+//	bool handler_again___status_CHANGING_CHARSET(int *_rc);
+//	bool handler_again___status_CHANGING_SCHEMA(int *);
 	bool handler_again___status_CONNECTING_SERVER(int *);
 	bool handler_again___status_CHANGING_USER_SERVER(int *);
-	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
-	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
-	bool handler_again___multiple_statuses(int *rc);
-	void add_ldap_comment_to_pkt(PtrSize_t *);
+//	bool handler_again___status_CHANGING_AUTOCOMMIT(int *);
+//	bool handler_again___status_SETTING_MULTI_STMT(int *_rc);
+//	bool handler_again___multiple_statuses(int *rc);
+//	void add_ldap_comment_to_pkt(PtrSize_t *);
 
 	int get_pkts_from_client(bool&, PtrSize_t&);
 /*
@@ -170,29 +175,29 @@ class Client_Session
 /*
 	bool handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, ProxySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params);
 	void handler_rc0_PROCESSING_STMT_EXECUTE(ProxySQL_Data_Stream *myds);
-*/
 	bool handler_minus1_ClientLibraryError(ProxySQL_Data_Stream *myds, int myerr, char **errmsg);
 	void handler_minus1_LogErrorDuringQuery(MySQL_Connection *myconn, int myerr, char *errmsg);
 	bool handler_minus1_HandleErrorCodes(ProxySQL_Data_Stream *myds, int myerr, char **errmsg, int& handler_ret);
 	void handler_minus1_GenerateErrorMessage(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn, bool& wrong_pass);
 	void handler_minus1_HandleBackendConnection(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn);
+*/
 	int RunQuery_mysql(ProxySQL_Data_Stream *myds, MySQL_Connection *myconn);
 	void handler___status_WAITING_CLIENT_DATA();
 	void handler_rc0_Process_GTID(MySQL_Connection *myconn);
 	void handler_WCDSS_MYSQL_COM_INIT_DB_replace_CLICKHOUSE(PtrSize_t& pkt);
 	void handler_WCDSS_MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt);
-	bool handler_WCDSS_MYSQL_COM_QUERY_detect_SQLi();
-	bool handler_WCDSS_MULTI_PACKET(PtrSize_t& pkt);
-	bool handler_WCDSS_MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
-	void handler___status_WAITING_CLIENT_DATA___default();
+//	bool handler_WCDSS_MYSQL_COM_QUERY_detect_SQLi();
+//	bool handler_WCDSS_MULTI_PACKET(PtrSize_t& pkt);
+//	bool handler_WCDSS_MYSQL_COM__various(PtrSize_t* pkt, bool* wrong_pass);
+//	void handler___status_WAITING_CLIENT_DATA___default();
 	void handler___status_NONE_or_default(PtrSize_t& pkt);
 
 	void handler_WCDSS_MYSQL_COM_QUERY_inner1(PtrSize_t&);
 
-	void handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt);
-	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt);
-	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt);
-	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt);
+//	void handler_WCD_SS_MCQ_qpo_QueryRewrite(PtrSize_t *pkt);
+//	void handler_WCD_SS_MCQ_qpo_OK_msg(PtrSize_t *pkt);
+//	void handler_WCD_SS_MCQ_qpo_error_msg(PtrSize_t *pkt);
+//	void handler_WCD_SS_MCQ_qpo_LargePacket(PtrSize_t *pkt);
 //	int handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool *lock_hostgroup, unsigned int nTrx, string& nq);
 
 	protected:
@@ -200,8 +205,8 @@ class Client_Session
 	void reset();
 
 	public:
-	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
-	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
+//	bool handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, const char *var_name, const char *var_value, bool no_quote=false, bool set_transaction=false);
+//	bool handler_again___status_SETTING_SQL_LOG_BIN(int *);
 	std::stack<enum session_status> previous_status;
 	void * operator new(size_t);
 	void operator delete(void *);
@@ -222,7 +227,7 @@ class Client_Session
 	StatCounters *command_counters;
 	MySQL_Backend *mybe;
 	PtrArray *mybes;
-	ProxySQL_Data_Stream *client_myds;
+//	ProxySQL_Data_Stream *client_myds;
 	char * default_schema;
 	char * user_attributes;
 
@@ -314,8 +319,8 @@ class Client_Session
 	MySQL_Backend * find_or_create_mysql_backend(int, ProxySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false);
-	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, ProxySQL_Data_Stream *_myds=NULL);
-	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
+//	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, ProxySQL_Data_Stream *_myds=NULL);
+//	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions();
 	bool HasOfflineBackends();
 	bool SetEventInOfflineBackends();
@@ -325,7 +330,7 @@ class Client_Session
 	void reset_all_mysql_backends();
 	void writeout();
 	void Memory_Stats();
-	void create_new_session_and_reset_mysql_connection(ProxySQL_Data_Stream *_myds);
+//	void create_new_session_and_reset_mysql_connection(ProxySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session

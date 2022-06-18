@@ -13,6 +13,7 @@
 #include <array>
 
 #include "ProxySQL_RESTAPI_Server.hpp"
+//#include "MySQL_Session.h"
 
 typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
@@ -115,6 +116,21 @@ struct admin_metrics_map_idx {
 
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
+
+// class Admin_MySQL_Session is identical to MySQL_Session
+// but has different session_type
+// ... or no ?!?!!!
+/*
+class Admin_MySQL_Session: public MySQL_Session
+{
+    friend class Client_Session;
+    friend class MySQL_Session;
+    friend class Query_Info;
+    friend class MySQL_Protocol;
+    private:
+	public:
+};
+*/
 
 class ProxySQL_Admin {
 	private:

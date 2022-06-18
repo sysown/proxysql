@@ -10,6 +10,8 @@
 #include "SQLite3_Server.h"
 #include "MySQL_Authentication.hpp"
 
+#include "proxysql_admin.h"
+
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>

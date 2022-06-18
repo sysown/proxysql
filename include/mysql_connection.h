@@ -107,7 +107,7 @@ class MySQL_Connection {
 	MySQL_ResultSet *MyRS_reuse;
 	MySrvC *parent;
 	MySQL_Connection_userinfo *userinfo;
-	ProxySQL_Data_Stream *myds;
+	MySQL_Data_Stream *myds;
 	/**
 	 * @brief Keeps tracks of the 'server_status'. Do not confuse with the 'server_status' from the
 	 *  'MYSQL' connection itself. This flag keeps track of the configured server status from the

@@ -6,6 +6,7 @@
 
 #include "MySQL_PreparedStatement.h"
 #include "ProxySQL_Data_Stream.h"
+#include "MySQL_Data_Stream.h"
 #include "MySQL_Authentication.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
 #include "MySQL_Variables.h"
@@ -297,7 +298,7 @@ MySQL_Prepared_Stmt_info::MySQL_Prepared_Stmt_info(unsigned char *pkt, unsigned 
 
 
 
-void MySQL_Protocol::init(ProxySQL_Data_Stream **__myds, MySQL_Connection_userinfo *__userinfo, Client_Session *__sess) {
+void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo *__userinfo, Client_Session *__sess) {
 	myds=__myds;
 	userinfo=__userinfo;
 	sess=__sess;
@@ -1464,7 +1465,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	// Check and get 'Client Auth Plugin' if capability is supported
 	char* client_auth_plugin = nullptr;
 	if (pkt + len > pkt + cur) {
-		int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
+		//int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag; // was this a bug?
+		int capabilities = (*myds)->myconn->options.client_flag;
 		if (capabilities & CLIENT_PLUGIN_AUTH) {
 			client_auth_plugin = reinterpret_cast<char*>(pkt + cur);
 		}
@@ -1601,13 +1603,14 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				if (default_transaction_isolation != j_user_attributes.end()) {
 					std::string def_trx_isolation_val =
 						j_user_attributes["default-transaction_isolation"].get<std::string>();
-					mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
+					mysql_variables.client_set_value((MySQL_Session *)((*myds)->sess), SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
 				}
 			}
 		}
 		assert(sess);
-		assert(sess->client_myds);
-		MySQL_Connection *myconn=sess->client_myds->myconn;
+		assert(sess->session_type==PROXYSQL_SESSION_MYSQL);
+		assert(((MySQL_Session *)sess)->client_myds);
+		MySQL_Connection *myconn=((MySQL_Session *)sess)->client_myds->myconn;
 		assert(myconn);
 
 		myconn->set_charset(charset, CONNECT_START);
@@ -1618,10 +1621,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		/* We are processing handshake from client. Client sends us a character set it will use in communication.
 		 * we store this character set in the client's variables to use later in multiplexing with different backends
 		 */
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
+		mysql_variables.client_set_value((MySQL_Session *)sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
+		mysql_variables.client_set_value((MySQL_Session *)sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
+		mysql_variables.client_set_value((MySQL_Session *)sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
+		mysql_variables.client_set_value((MySQL_Session *)sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
 	return ret;
 }
@@ -2154,9 +2157,10 @@ __exit_do_auth:
 		free(tmp_pass);
 	}
 #endif
-	assert(sess);
-	assert(sess->client_myds);
-	myconn=sess->client_myds->myconn;
+	assert(sess != NULL);
+	assert(sess->session_type==PROXYSQL_SESSION_MYSQL || sess->session_type==PROXYSQL_SESSION_ADMIN || sess->session_type==PROXYSQL_SESSION_STATS || sess->session_type==PROXYSQL_SESSION_SQLITE || sess->session_type==PROXYSQL_SESSION_CLICKHOUSE);
+	assert(((MySQL_Session *)sess)->client_myds != NULL);
+	myconn=((MySQL_Session *)sess)->client_myds->myconn;
 	assert(myconn);
 	myconn->set_charset(charset, CONNECT_START);
 	{
@@ -2166,10 +2170,10 @@ __exit_do_auth:
 		/* We are processing handshake from client. Client sends us a character set it will use in communication.
 		 * we store this character set in the client's variables to use later in multiplexing with different backends
 		 */
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
+		mysql_variables.client_set_value((MySQL_Session *)sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
+		mysql_variables.client_set_value((MySQL_Session *)sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
+		mysql_variables.client_set_value((MySQL_Session *)sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
+		mysql_variables.client_set_value((MySQL_Session *)sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
 	// enable compression
 	if (capabilities & CLIENT_COMPRESS) {
@@ -2256,7 +2260,7 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 			auto default_transaction_isolation = j.find("default-transaction_isolation");
 			if (default_transaction_isolation != j.end()) {
 				std::string default_transaction_isolation_value = j["default-transaction_isolation"].get<std::string>();
-				mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
+				mysql_variables.client_set_value((MySQL_Session *)((*myds)->sess), SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
 			}
 		}
 	}
@@ -2654,7 +2658,7 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	if (myprot==NULL) {
 		return; // this is a mirror
 	}
-	ProxySQL_Data_Stream * c_myds = *(myprot->myds);
+	MySQL_Data_Stream * c_myds = *(myprot->myds);
 	if (c_myds->com_field_list==false) {
 		myprot->generate_pkt_column_count(false,&pkt.ptr,&pkt.size,sid,num_fields,this);
 		sid++;
@@ -2727,7 +2731,7 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 	PROXY_TRACE2();
 	assert(stmt);
 	MYSQL_STMT *_stmt = stmt;
-	ProxySQL_Data_Stream * c_myds = *(myprot->myds);
+	MySQL_Data_Stream * c_myds = *(myprot->myds);
 		buffer_to_PSarrayOut();
 		unsigned long long total_size=0;
 		MYSQL_ROWS *r=_stmt->result.data;
@@ -2986,7 +2990,7 @@ void MySQL_ResultSet::add_eof() {
 	resultset_completed=true;
 }
 
-void MySQL_ResultSet::add_err(ProxySQL_Data_Stream *_myds) {
+void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 	PtrSize_t pkt;
 	if (myprot) {
 		MYSQL *_mysql=_myds->myconn->mysql;

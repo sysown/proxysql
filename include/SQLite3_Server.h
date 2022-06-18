@@ -62,7 +62,7 @@ class SQLite3_Server {
 	unsigned int num_aurora_servers[3];
 	unsigned int max_num_aurora_servers;
 	pthread_mutex_t aurora_mutex;
-	void populate_aws_aurora_table(Client_Session *sess);
+	void populate_aws_aurora_table(MySQL_Session *sess);
 	void init_aurora_ifaces_string(std::string& s);
 #endif // TEST_AURORA
 #ifdef TEST_GALERA
@@ -70,13 +70,13 @@ class SQLite3_Server {
 	unsigned int num_galera_servers[3];
 	unsigned int max_num_galera_servers;
 	pthread_mutex_t galera_mutex;
-	void populate_galera_table(Client_Session *sess);
+	void populate_galera_table(MySQL_Session *sess);
 	void init_galera_ifaces_string(std::string& s);
 #endif // TEST_GALERA
 #ifdef TEST_GROUPREP
 	unsigned int max_num_grouprep_servers;
 	pthread_mutex_t grouprep_mutex;
-	void populate_grouprep_table(Client_Session *sess, int txs_behind = 0);
+	void populate_grouprep_table(MySQL_Session *sess, int txs_behind = 0);
 	void init_grouprep_ifaces_string(std::string& s);
 	group_rep_status grouprep_test_value(const std::string& srv_addr);
 #endif // TEST_GROUPREP

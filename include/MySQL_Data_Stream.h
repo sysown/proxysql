@@ -1,15 +1,15 @@
-#ifndef __CLASS_PROXYSQL_DATA_STREAM_H
-#define __CLASS_PROXYSQL_DATA_STREAM_H
+#ifndef __CLASS_MYSQL_DATA_STREAM_H
+#define __CLASS_MYSQL_DATA_STREAM_H
 
 #include "proxysql.h"
 #include "cpp.h"
 
 #include "MySQL_Protocol.h"
 
+/*
 #define QUEUE_T_DEFAULT_SIZE	32768
 #define MY_SSL_BUFFER	8192
-
-/*
+*/
 // this class avoid copying data
 class MyDS_real_query {
 	public:
@@ -30,28 +30,27 @@ class MyDS_real_query {
 		QueryPtr=NULL;
 	}
 };
-*/
+
+/*
 enum sslstatus { SSLSTATUS_OK, SSLSTATUS_WANT_IO, SSLSTATUS_FAIL};
-
-
-class ProxySQL_Data_Stream
+*/
+class MySQL_Data_Stream: public ProxySQL_Data_Stream
 {
 	private:
-/*
 	int array2buffer();
 	int buffer2array();
 	void generate_compressed_packet();
 	enum sslstatus do_ssl_handshake();
 	void queue_encrypted_bytes(const char *buf, size_t len);
-*/
+
 	public:
 
+/*
 	queue_t queueIN;
 	uint64_t pkts_recv; // counter of received packets
 	queue_t queueOUT;
 	uint64_t pkts_sent; // counter of sent packets
-
-/*
+*/
 	struct {
 		PtrSize_t pkt;
 		unsigned int partial;
@@ -63,7 +62,7 @@ class ProxySQL_Data_Stream
 
 	MySQL_Protocol myprot;
 	MyDS_real_query mysql_real_query;
-*/
+/*
 	bytes_stats_t bytes_info; // bytes statistics
 
 	PtrSize_t multi_pkt;
@@ -87,9 +86,13 @@ class ProxySQL_Data_Stream
 
 	ProxySQL_Poll *mypolls;
 	//int listener;
-//	MySQL_Connection *myconn;
+*/
+	MySQL_Connection *myconn;
+/*
 	Client_Session *sess;  // pointer to the session using this data stream
-//	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
+*/
+	MySQL_Backend *mybe;  // if this is a connection to a mysql server, this points to a backend structure
+/*
 	char *x509_subject_alt_name;
 	SSL *ssl;
 	BIO *rbio_ssl;
@@ -135,39 +138,40 @@ class ProxySQL_Data_Stream
 	bool net_failure;
 
 	uint8_t pkt_sid;
+*/
 
-//	bool com_field_list;
-//	char *com_field_wild;
-
-	ProxySQL_Data_Stream();
-	~ProxySQL_Data_Stream();
-
-//	int array2buffer_full();
-//	void init();	// initialize the data stream
-//	void init(enum MySQL_DS_type, Client_Session *, int); // initialize with arguments
+	bool com_field_list;
+	char *com_field_wild;
+	MySQL_Data_Stream();
+	~MySQL_Data_Stream();
+	int array2buffer_full();
+	void init();	// initialize the data stream
+	void init(enum MySQL_DS_type, Client_Session *, int); // initialize with arguments
+/*
 	void shut_soft();
 	void shut_hard();
-//	int read_from_net();
-//	int write_to_net();
-//	int write_to_net_poll();
+*/
+	int read_from_net();
+	int write_to_net();
+	int write_to_net_poll();
+/*
 	bool available_data_out();	
 	void remove_pollout();
-//	void set_pollout();	
-//	void mysql_free();
-
+*/
+	void set_pollout();	
+	void mysql_free();
+/*
 	void set_net_failure();
 	void setDSS_STATE_QUERY_SENT_NET();
 
 	void setDSS(enum data_stream_status dss) {
 		DSS=dss;
 	}
+*/
+	int read_pkts();
+	int write_pkts();
 
-//	int read_pkts();
-//	int write_pkts();
-
-//	void unplug_backend();
-
-/*
+	void unplug_backend();
 	void check_data_flow();
 	int assign_fd_from_mysql_conn();
 
@@ -195,10 +199,11 @@ class ProxySQL_Data_Stream
 	
 	void destroy_MySQL_Connection_From_Pool(bool sq);
 	void free_mysql_real_query();	
-*/
+/*
 	void reinit_queues();
 	void destroy_queues();
 
 	bool data_in_rbio();
+*/
 };
-#endif /* __CLASS_PROXYSQL_DATA_STREAM_H */
+#endif /* __CLASS_MYSQL_DATA_STREAM_H */

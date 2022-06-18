@@ -9,6 +9,8 @@
 #include "ProxySQL_Cluster.hpp"
 #include "MySQL_LDAP_Authentication.hpp"
 
+#include "proxysql_admin.h"
+
 #ifdef DEBUG
 #define DEB "_DEBUG"
 #else

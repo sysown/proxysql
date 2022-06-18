@@ -9,7 +9,11 @@
 
 #include "MySQL_Logger.hpp"
 #include "ProxySQL_Data_Stream.h"
+#include "MySQL_Data_Stream.h"
+#include "MySQL_Session.h"
 #include "query_processor.h"
+
+#include "proxysql_admin.h"
 
 #include <search.h>
 #include <stdlib.h>
@@ -68,11 +72,11 @@
 
 using namespace clickhouse;
 
-__thread Client_Session * clickhouse_thread___mysql_sess;
+__thread MySQL_Session * clickhouse_thread___mysql_sess;
 
 //static void ClickHouse_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
 inline void ClickHouse_to_MySQL(const Block& block) {
-	Client_Session *sess = clickhouse_thread___mysql_sess;
+	MySQL_Session *sess = clickhouse_thread___mysql_sess;
 	MySQL_Protocol *myprot=NULL;
 	myprot=&sess->client_myds->myprot;
 
@@ -434,7 +438,8 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
-void ClickHouse_Server_session_handler(Client_Session *sess, void *_pa, PtrSize_t *pkt) {
+void ClickHouse_Server_session_handler(Client_Session *c_sess, void *_pa, PtrSize_t *pkt) {
+	MySQL_Session *sess = (MySQL_Session *)c_sess;
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -1077,7 +1082,7 @@ __run_query:
 				if (clickhouse_sess->connected == true) {
 					if (clickhouse_sess->schema_initialized == false) {
 						if (sess && sess->client_myds) {
-							ProxySQL_Data_Stream *ds = sess->client_myds;
+							MySQL_Data_Stream *ds = sess->client_myds;
 							if (ds->myconn && ds->myconn->userinfo && ds->myconn->userinfo->schemaname) {
 								char *sn = ds->myconn->userinfo->schemaname;
 								char *use_query = NULL;
@@ -1215,8 +1220,8 @@ static void *child_mysql(void *arg) {
 	ProxyWorker_Thread *mysql_thr=new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 
-	Client_Session *sess = NULL;
-	ProxySQL_Data_Stream *myds = NULL;
+	MySQL_Session *sess = NULL;
+	MySQL_Data_Stream *myds = NULL;
 
 	ClickHouse_Session *sqlite_sess = new ClickHouse_Session();
 	sqlite_sess->init();
@@ -1224,7 +1229,7 @@ static void *child_mysql(void *arg) {
 
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	sess=mysql_thr->create_new_session_and_client_mysql_data_stream(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_CLICKHOUSE;
 	sess->handler_function=ClickHouse_Server_session_handler;

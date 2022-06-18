@@ -24,7 +24,7 @@ class MySQL_ResultSet {
 	bool resultset_completed;
 	//bool reset_pid;
 	uint8_t sid;
-	ProxySQL_Data_Stream *myds;
+	MySQL_Data_Stream *myds;
 	MySQL_Protocol *myprot;
 	MYSQL *mysql;
 	MYSQL_RES *result;
@@ -53,7 +53,7 @@ class MySQL_ResultSet {
 	unsigned int add_row2(MYSQL_ROWS *row, unsigned char *offset);
 	void add_eof();
 	void remove_last_eof();
-	void add_err(ProxySQL_Data_Stream *_myds);
+	void add_err(MySQL_Data_Stream *myds);
 	bool get_resultset(PtrSizeArray *PSarrayFinal);
 	//bool generate_COM_FIELD_LIST_response(PtrSizeArray *PSarrayFinal);
 	unsigned char *buffer;
@@ -96,17 +96,17 @@ class MySQL_Protocol {
 	MySQL_Connection_userinfo *userinfo;
 	Client_Session *sess;
 	public:
-	ProxySQL_Data_Stream **myds;
+	MySQL_Data_Stream **myds;
 #ifdef DEBUG
 	bool dump_pkt;
 #endif
 	MySQL_Prepared_Stmt_info *current_PreStmt;
 	uint16_t prot_status;
-	ProxySQL_Data_Stream *get_myds() { return *myds; }
+	MySQL_Data_Stream *get_myds() { return *myds; }
 	MySQL_Protocol() {
 		prot_status=0;
 	}
-	void init(ProxySQL_Data_Stream **, MySQL_Connection_userinfo *, Client_Session *);
+	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, Client_Session *);
 
 	// members get as arguments:
 	// - a data stream (optionally NULL for some)

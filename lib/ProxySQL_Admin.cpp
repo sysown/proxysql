@@ -6,7 +6,6 @@
 #include <prometheus/exposer.h>
 #include <prometheus/counter.h>
 #include "MySQL_HostGroups_Manager.h"
-#include "proxysql_admin.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -15,8 +14,11 @@
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
+#include "MySQL_Session.h"
+#include "proxysql_admin.h"
 
 #include "ProxySQL_Data_Stream.h"
+#include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
 #include "MySQL_Authentication.hpp"
@@ -1171,9 +1173,12 @@ int ProxySQL_Test___PurgeDigestTable(bool async_purge, bool parallel, char **msg
 int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 	//unsigned long long queries=n;
 	//queries *= 1000;
-	Client_Session *sess = new Client_Session();
-
-	sess->client_myds = new ProxySQL_Data_Stream();
+	MySQL_Session *sess = new MySQL_Session();
+	// When the session is destroyed, client_connections is automatically decreased.
+	// Because this is not a real connection, we artificially increase
+	// client_connections
+	__sync_fetch_and_add(&MyHGM->status.client_connections,1);
+	sess->client_myds = new MySQL_Data_Stream();
 	sess->client_myds->fd=0;
 	sess->client_myds->init(MYDS_FRONTEND, sess, sess->client_myds->fd);
 	MySQL_Connection *myconn=new MySQL_Connection();
@@ -1393,7 +1398,7 @@ static admin_main_loop_listeners S_amll;
 
 
 
-bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, Client_Session *sess, ProxySQL_Admin *pa) {
+bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
 	uint32_t id=atoi(query_no_space+16);
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
 	bool rc=GloPWTH->kill_session(id);
@@ -1412,7 +1417,7 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  * 	returns false if the command is a valid one and is processed
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
  */
-bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, Client_Session *sess, ProxySQL_Admin *pa) {
+bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
 	if (!(strncasecmp("PROXYSQL CLUSTER_NODE_UUID ", query_no_space, strlen("PROXYSQL CLUSTER_NODE_UUID ")))) {
 		int l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
 		if (sess->client_myds->addr.port == 0) {
@@ -1750,7 +1755,7 @@ bool is_valid_global_variable(const char *var_name) {
 // multiple variables at once.
 //
 // It modifies the original query.
-bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, Client_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
+bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	if (!strstr(query_no_space,(char *)"password")) { // issue #599
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command %s\n", query_no_space);
 		if (strncasecmp(query_no_space,(char *)"set autocommit",strlen((char *)"set autocommit"))) {
@@ -1809,7 +1814,7 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 /* Note:
  * This function can modify the original query
  */
-bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, Client_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
+bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa, char **q, unsigned int *ql) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 5, "Received command %s\n", query_no_space);
 
 #ifdef DEBUG
@@ -3652,8 +3657,8 @@ std::string timediff_timezone_offset() {
 	return time_zone_offset;
 }
 
-void admin_session_handler(Client_Session *sess, void *_pa, PtrSize_t *pkt) {
-
+void admin_session_handler(Client_Session *c_sess, void *_pa, PtrSize_t *pkt) {
+	MySQL_Session *sess = (MySQL_Session *)c_sess;
 	ProxySQL_Admin *pa=(ProxySQL_Admin *)_pa;
 	bool needs_vacuum = false;
 	char *error=NULL;
@@ -5199,11 +5204,11 @@ void *child_mysql(void *arg) {
 	mysql_thr->curtime=monotonic_time();
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	Client_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	MySQL_Session *sess = mysql_thr->create_new_session_and_client_mysql_data_stream(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
 	sess->handler_function=admin_session_handler;
-	ProxySQL_Data_Stream *myds=sess->client_myds;
+	MySQL_Data_Stream *myds=sess->client_myds;
 
 	sess->start_time=mysql_thr->curtime;
 

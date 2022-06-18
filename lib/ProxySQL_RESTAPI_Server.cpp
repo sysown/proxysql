@@ -8,6 +8,8 @@
 #include "ProxySQL_RESTAPI_Server.hpp"
 #include "proxysql_utils.h"
 
+#include "proxysql_admin.h"
+
 using namespace httpserver;
 
 

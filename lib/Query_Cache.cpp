@@ -6,6 +6,8 @@
 #include "proxysql_atomic.h"
 #include "SpookyV2.h"
 #include "prometheus_helpers.h"
+#include "ProxySQL_Data_Stream.h"
+#include "MySQL_Data_Stream.h"
 #include "MySQL_Protocol.h"
 
 #define THR_UPDATE_CNT(__a, __b, __c, __d) \

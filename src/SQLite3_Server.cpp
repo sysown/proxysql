@@ -8,9 +8,13 @@
 
 #include "MySQL_Logger.hpp"
 #include "ProxySQL_Data_Stream.h"
+#include "MySQL_Data_Stream.h"
+#include "MySQL_Session.h"
 #include "proxysql_utils.h"
 #include "query_processor.h"
 #include "SQLite3_Server.h"
+
+#include "proxysql_admin.h"
 
 #include <search.h>
 #include <stdlib.h>
@@ -309,8 +313,8 @@ bool match_monitor_query(const std::string& monitor_query, const std::string& qu
 	}
 }
 
-void SQLite3_Server_session_handler(Client_Session *sess, void *_pa, PtrSize_t *pkt) {
-
+void SQLite3_Server_session_handler(Client_Session *c_sess, void *_pa, PtrSize_t *pkt) {
+	MySQL_Session *sess = (MySQL_Session *)c_sess;
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -784,11 +788,11 @@ static void *child_mysql(void *arg) {
 
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	Client_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	MySQL_Session *sess=mysql_thr->create_new_session_and_client_mysql_data_stream(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_SQLITE;
 	sess->handler_function=SQLite3_Server_session_handler;
-	ProxySQL_Data_Stream *myds=sess->client_myds;
+	MySQL_Data_Stream *myds=sess->client_myds;
 
 	fds[0].fd=client;
 	fds[0].revents=0;
@@ -1105,7 +1109,7 @@ SQLite3_Server::SQLite3_Server() {
 
 
 #ifdef TEST_GALERA
-void SQLite3_Server::populate_galera_table(Client_Session *sess) {
+void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex galera_mutex already acquired
 	sessdb->execute("BEGIN TRANSACTION");
 	char *error=NULL;
@@ -1158,7 +1162,7 @@ void SQLite3_Server::populate_galera_table(Client_Session *sess) {
 #endif // TEST_GALERA
 
 #ifdef TEST_AURORA
-void SQLite3_Server::populate_aws_aurora_table(Client_Session *sess) {
+void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 	// this function needs to be called with lock on mutex aurora_mutex already acquired
 	sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
 	sqlite3_stmt *statement=NULL;
@@ -1244,7 +1248,7 @@ void SQLite3_Server::populate_aws_aurora_table(Client_Session *sess) {
  * @param sess The current session performing a query.
  * @param txs_behind Unused parameter.
  */
-void SQLite3_Server::populate_grouprep_table(Client_Session *sess, int txs_behind) {
+void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind) {
 	GloAdmin->mysql_servers_wrlock();
 	// We are going to repopulate the map
 	this->grouprep_map.clear();
@@ -1481,7 +1485,7 @@ bool SQLite3_Server::set_variable(char *name, char *value) {  // this is the pub
 
 void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows, uint16_t status) {
 	assert(myprot);
-	ProxySQL_Data_Stream *myds=myprot->get_myds();
+	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,status,0,msg,false);
 	myds->DSS=STATE_SLEEP;
@@ -1489,7 +1493,7 @@ void SQLite3_Server::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows, 
 
 void SQLite3_Server::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	assert(myprot);
-	ProxySQL_Data_Stream *myds=myprot->get_myds();
+	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",msg);
 	myds->DSS=STATE_SLEEP;

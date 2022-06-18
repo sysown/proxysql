@@ -22,6 +22,8 @@
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
 
+#include "proxysql_admin.h"
+
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>
 #include <libdaemon/dlog.h>
