@@ -3820,8 +3820,8 @@ void MySQL_Thread::process_all_sessions() {
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
 					bool keep_sess_proc = true;
-
-					while (keep_sess_proc) {
+					rc = 0; // initialization
+					while (keep_sess_proc && rc==0 && sess->killed==false) {
 						rc=sess->handler();
 
 						if (sess->client_myds) {

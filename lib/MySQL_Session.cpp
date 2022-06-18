@@ -3862,7 +3862,7 @@ __get_pkts_from_client:
 				break;
 		}
 		// If there is more than one packet and status is already 'PROCESSING_QUERY'. Multiple packets have
-		// been recevied, but we should only process the first and postpone the rest.
+		// been received, but we should only process the first and postpone the rest.
 		if (client_myds->PSarrayIN && client_myds->PSarrayIN->len > 0 && status == PROCESSING_QUERY) {
 			break;
 		}
@@ -4361,6 +4361,7 @@ int MySQL_Session::handler() {
 	pktH=&pkt;
 	//unsigned int j;
 	//unsigned char c;
+	bool run_gpfc = false;
 
 	if (active_transactions == 0) {
 		active_transactions=NumActiveTransactions();
@@ -4392,38 +4393,53 @@ int MySQL_Session::handler() {
 		}
 	}
 	}
-
-	{
-		// special case for 'CONNECTING_SERVER' status and 'FAST_FORWARD'
-		bool FF_check = previous_status.empty() == false && previous_status.top() == FAST_FORWARD;
-		// special case of unexpected 'COM_QUIT' received
-		bool is_COM_QUIT = false;
-
+	if (mirror==true && status==WAITING_CLIENT_DATA) {
+		// call immediately
+		run_gpfc = true;
+		handler_ret = get_pkts_from_client(wrong_pass, pkt);
+		if (handler_ret != 0) {
+			return handler_ret;
+		}
+	} else {
 		if (client_myds->PSarrayIN && client_myds->PSarrayIN->len > 0) {
-			PtrSize_t* f_packet = client_myds->PSarrayIN->index(0);
-			unsigned char c = *((unsigned char *)f_packet->ptr+sizeof(mysql_hdr));
+			if (status == WAITING_CLIENT_DATA || status == FAST_FORWARD) {
+				run_gpfc = true;
+				handler_ret = get_pkts_from_client(wrong_pass, pkt);
+				if (handler_ret != 0) {
+					return handler_ret;
+				}
+			} else { // handle more complex state
 
-			if (c == _MYSQL_COM_QUIT) {
-				is_COM_QUIT = true;
+				// special case for 'CONNECTING_SERVER' status and 'FAST_FORWARD'
+				bool FF_check = previous_status.empty() == false && previous_status.top() == FAST_FORWARD;
+				// special case of unexpected 'COM_QUIT' received
+				bool is_COM_QUIT = false;
+				PtrSize_t* f_packet = client_myds->PSarrayIN->index(0);
+				unsigned char c = *((unsigned char *)f_packet->ptr+sizeof(mysql_hdr));
+
+				if (c == _MYSQL_COM_QUIT) {
+					is_COM_QUIT = true;
+				}
+
+				bool extra_pkts_states =
+					this->status == CONNECTING_CLIENT ||
+					(this->status == CONNECTING_SERVER && FF_check) ||
+					is_COM_QUIT;
+
+				if (extra_pkts_states) {
+					run_gpfc = true;
+				}
 			}
 		}
-
-		bool extra_pkts_states =
-			this->status == CONNECTING_CLIENT ||
-			this->status == WAITING_CLIENT_DATA ||
-			this->status == FAST_FORWARD ||
-			(this->status == CONNECTING_SERVER && FF_check) ||
-			is_COM_QUIT;
-
-		if (extra_pkts_states) {
-			handler_ret = get_pkts_from_client(wrong_pass, pkt);
-			if (handler_ret != 0) {
-				return handler_ret;
-			}
-		} else {
-			handler_ret = 0;
-			goto handler_again;
+	}
+	if (run_gpfc == true) {
+		handler_ret = get_pkts_from_client(wrong_pass, pkt);
+		if (handler_ret != 0) {
+			return handler_ret;
 		}
+	} else {
+		handler_ret = 0;
+		goto handler_again;
 	}
 
 handler_again:
