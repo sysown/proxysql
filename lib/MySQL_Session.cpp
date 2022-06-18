@@ -4396,18 +4396,10 @@ int MySQL_Session::handler() {
 	if (mirror==true && status==WAITING_CLIENT_DATA) {
 		// call immediately
 		run_gpfc = true;
-		handler_ret = get_pkts_from_client(wrong_pass, pkt);
-		if (handler_ret != 0) {
-			return handler_ret;
-		}
 	} else {
 		if (client_myds->PSarrayIN && client_myds->PSarrayIN->len > 0) {
 			if (status == WAITING_CLIENT_DATA || status == FAST_FORWARD) {
 				run_gpfc = true;
-				handler_ret = get_pkts_from_client(wrong_pass, pkt);
-				if (handler_ret != 0) {
-					return handler_ret;
-				}
 			} else { // handle more complex state
 
 				// special case for 'CONNECTING_SERVER' status and 'FAST_FORWARD'
