@@ -13,6 +13,12 @@
  *      any error reported by the client due to broken connections.
  */
 
+/*
+NOTE: the parameters in this test are tuned in a way that if proxysql starts
+with only 1 worker thread, it is unlikely to ping all connections on time.
+See note on wait_timeout
+*/
+
 #include <string>
 #include <vector>
 #include <map>
@@ -32,6 +38,45 @@ using std::string;
 using std::pair;
 
 using srv_cfg = vector<pair<string,int>>;
+
+int wait_timeout = 10;
+
+// if only 1 worker thread is running, wait_timeout should be bigger
+// 1 worker thread : wait_timeout = 45
+// 4 worker threads : wait_timeout = 10
+int compute_wait_timeout(MYSQL *my_conn) {
+	int res = EXIT_SUCCESS;
+	res = mysql_query(my_conn, "SELECT @@mysql-threads");
+	if (res != EXIT_SUCCESS) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
+		res = EXIT_FAILURE;
+		return res;
+	}
+	MYSQL_RES* my_res = mysql_store_result(my_conn);
+	if (my_res == nullptr) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
+		res = EXIT_FAILURE;
+		return res;
+	}
+
+	MYSQL_ROW row = mysql_fetch_row(my_res);
+	if (row == nullptr || row[0] == nullptr) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
+		res = EXIT_FAILURE;
+		return res;
+	} else {
+		const char *val = row[0];
+		diag("mysql-threads = %s", val);
+		if (strcmp(val,"1")==0) {
+			diag("Setting wait_timeout to 45 instead of 10");
+			wait_timeout = 45;
+		}
+	}
+	mysql_free_result(my_res);
+
+	return res;
+}
+
 
 int change_mysql_cfg(
 	const CommandLine& cl, const string& host, const string& port, const srv_cfg& new_srv_cfg, srv_cfg& out_old_srv_cfg
@@ -78,7 +123,9 @@ int change_mysql_cfg(
 
 			mysql_free_result(my_res);
 
-			mysql_query(my_conn, string { "SET GLOBAL " + config_var.first + "=" + std::to_string(config_var.second) }.c_str());
+			string query = string { "SET GLOBAL " + config_var.first + "=" + std::to_string(config_var.second) };
+			diag("Setting on %s:%s : %s", host.c_str(), port.c_str(), query.c_str());
+			mysql_query(my_conn, query.c_str());
 			if (res != EXIT_SUCCESS) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
 				res = EXIT_FAILURE;
@@ -337,6 +384,7 @@ int wait_target_backend_conns(MYSQL* admin, uint32_t tg_backend_conns, uint32_t 
 			break;
 		} else {
 			waited += 1;
+			diag("tg_backend_conns: %d, cur_conn_num: %ld , not matching after %lu checks", tg_backend_conns, cur_conn_num, waited);
 			sleep(1);
 		}
 	}
@@ -387,6 +435,10 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
+	if (compute_wait_timeout(proxy_admin) != EXIT_SUCCESS) {
+		return EXIT_FAILURE;
+	}
+
 	double intv = 5;
 	double b = 128;
 	double b_0 = 256;
@@ -416,15 +468,22 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	diag("Setting ProxySQL config...");
-	// Set the backend connections ping frequency
-	MYSQL_QUERY(proxy_admin, string { "SET mysql-ping_interval_server_msec=" + std::to_string(freq) }.c_str());
-	// Make sure no connection cleanup takes place
-	MYSQL_QUERY(proxy_admin, "SET mysql-free_connections_pct=100");
-	// Don't retry on failure
-	MYSQL_QUERY(proxy_admin, "SET mysql-query_retries_on_failure=0");
-	// Set a higher max_connection number for the servers
-	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-
+	{
+		// Set the backend connections ping frequency
+		string query = string { "SET mysql-ping_interval_server_msec=" + std::to_string(freq) };
+		diag("%s", query.c_str());
+		MYSQL_QUERY(proxy_admin, query.c_str());
+		// Make sure no connection cleanup takes place
+		query = "SET mysql-free_connections_pct=100";
+		diag("%s", query.c_str());
+		MYSQL_QUERY(proxy_admin, query.c_str());
+		// Don't retry on failure
+		query = "SET mysql-query_retries_on_failure=0";
+		diag("%s", query.c_str());
+		MYSQL_QUERY(proxy_admin, query.c_str());
+		// Set a higher max_connection number for the servers
+		MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	}
 	// Configure MySQL infra servers with: 'wait_timeout' and 'max_connections'
 	vector<pair<mysql_res_row, srv_cfg>> servers_old_configs {};
 
@@ -440,7 +499,7 @@ int main(int, char**) {
 			return EXIT_FAILURE;
 		}
 
-		srv_cfg new_srv_cfg { { "wait_timeout", 10 }, { "max_connections", 2500 } };
+		srv_cfg new_srv_cfg { { "wait_timeout", wait_timeout }, { "max_connections", 2500 } };
 
 		for (const mysql_res_row& srv_row : servers_rows) {
 			srv_cfg old_srv_cfg {};
