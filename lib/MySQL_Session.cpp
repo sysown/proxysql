@@ -2062,7 +2062,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
-		if (rc==-1) {
+		if (rc==-1 || rc==-2) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(
@@ -2077,11 +2077,18 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 				// client error, serious
 				detected_broken_connection(__FILE__ , __LINE__ , __func__ , "while setting INIT CONNECT", myconn, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								retry_conn=true;
+							if (rc != -2) { // see PMC-10003
+								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+									retry_conn=true;
+							}
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd=0;
+				if (rc==-2) {
+					// Here we handle PMC-10003
+					// and we terminate the session
+					retry_conn=false;
+				}
 				if (retry_conn) {
 					myds->DSS=STATE_NOT_INITIALIZED;
 					//previous_status.push(PROCESSING_QUERY);
