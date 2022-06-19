@@ -33,7 +33,7 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(4);
+	plan(8);
 
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
 	diag("Waiting few seconds for replication...");
 	sleep(2);
 	MYSQL_QUERY(mysql, "USE test");
+	MYSQL_QUERY(mysql, "INSERT INTO sbtest1 (id) VALUES (NULL)");
 
 
 	MYSQL_RES *res;
@@ -64,7 +65,7 @@ int main(int argc, char** argv) {
 		unsigned long long num_rows = mysql_num_rows(res);
 		ok(num_rows == 1, "mysql_num_rows() , expected: 1 , actual: %llu", num_rows);
 		while ((row = mysql_fetch_row(res))) {
-				ok(strcmp(row[0],"500")==0, "row: expected: \"500\" , actual: \"%s\"", row[0]); 
+				ok(strcmp(row[0],"501")==0, "row: expected: \"501\" , actual: \"%s\"", row[0]);
 		}	
 		mysql_free_result(res);
 	}
