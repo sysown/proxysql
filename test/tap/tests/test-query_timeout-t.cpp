@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	const char *q = "SELECT /* query_timeout=3300 */ SLEEP(10)";
+	const char *q = "SELECT /* query_timeout=3300 */ SLEEP(20)";
 	diag("Running query; %s", q);
 	unsigned long long begin = monotonic_time();
 	MYSQL_QUERY(mysql, q);
@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
 
 	unsigned long time_diff_ms = (end-begin)/1000;
 
-	ok(time_diff_ms>3100 && time_diff_ms<3500 , "Query should be interrupted at around 3300ms . Exact time: %llums", time_diff_ms);
+	ok(time_diff_ms>3100 && time_diff_ms<5000 , "Query should be interrupted at around 3300ms . Exact time: %llums", time_diff_ms);
 
 	mysql_close(mysql);
 
