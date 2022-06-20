@@ -377,6 +377,7 @@ void check_message_count_parse_failure(const map<string, double>& prev_metrics, 
 			if (match_res.second) {
 				metric_tags = match_res.first;
 				after_metric_it = metric_key;
+				break;
 			}
 		}
 	}
@@ -386,6 +387,7 @@ void check_message_count_parse_failure(const map<string, double>& prev_metrics, 
 
 			if (match_res.second) {
 				prev_metric_it = metric_key;
+				break;
 			}
 		}
 	}
