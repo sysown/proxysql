@@ -1177,6 +1177,7 @@ bool ClickHouse_Session::init() {
 		co.SetHost(hostname);
 		co.SetPort(atoi(port));
 		co.SetCompressionMethod(CompressionMethod::None);
+		client = NULL;
 		client = new clickhouse::Client(co);
 		ret=true;
 	} catch (const std::exception& e) {
