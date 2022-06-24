@@ -139,7 +139,7 @@ int create_users(MYSQL *pa) {
 	if (result) {
 		int j = fetch_and_discard_results(result, true);
 		mysql_free_result(result);
-		ok(j==4, "Line %d : Rows in clickhouse_users should be 0. Actual: %d" , __LINE__, j);
+		ok(j==4, "Line %d : Rows in clickhouse_users should be 4. Actual: %d" , __LINE__, j);
 	} else {
 		ok(false,"Line %d : Query failed: %s . Error: %s", __LINE__, q, mysql_error(pa));
 		return exit_status();
@@ -240,6 +240,8 @@ std::vector<query_spec> queries_set1 {
 	std::make_tuple<std::string, int>("SELECT 1+1", 0, 1),
 	std::make_tuple<std::string, int>("SELECT CONCAT('AAA','BBB')", 0, 1),
 	std::make_tuple<std::string, int>("SELECT NULL", 0, 1),
+	std::make_tuple<std::string, int>("SELECT NULL AS a", 0, 1),
+	std::make_tuple<std::string, int>("SELECT NULL+2 AS a, 'hello', NULL+1, 'world', NULL AS b", 0, 1),
 	std::make_tuple<std::string, int>("SELECT CONCAT('AAA',NULL)", 0, 1),
 	std::make_tuple<std::string, int>("DROP TABLE IF EXISTS table1", 0, -1),
 	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 0, -1),
