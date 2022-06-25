@@ -266,7 +266,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
     free(p);
 }
 
-
+/*
 struct cpu_timer
 {
 	cpu_timer() {
@@ -282,7 +282,7 @@ struct cpu_timer
 	};
 	unsigned long long begin;
 };
-
+*/
 static char *s_strdup(char *s) {
 	char *ret=NULL;
 	if (s) {
@@ -471,6 +471,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 			if (
 				!strncasecmp("SET AUTOCOMMIT", query_no_space, 14) ||
 				!strncasecmp("SET NAMES ", query_no_space, 10) ||
+				!strncasecmp("SET FOREIGN_KEY_CHECKS",query_no_space,22) ||
 				!strncasecmp("SET CHARACTER", query_no_space, 13) ||
 				!strncasecmp("SET COLLATION", query_no_space, 13) ||
 				!strncasecmp("SET SQL_AUTO_", query_no_space, 13) ||
@@ -636,16 +637,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen("SELECT @@storage_engine;")+5) && strncasecmp((char *)"SELECT @@storage_engine;",(char *)pkt->ptr+5,pkt->size-5)==0)
-		) {
-				l_free(query_length,query);
-				query=l_strdup("SELECT 'MergeTree' AS '@@storage_engine'");
-				query_length=strlen(query)+1;
-				run_query_sqlite = true;
-				goto __run_query_sqlite;
-		}
-		if (
-			(pkt->size==(strlen("SELECT @@storage_engine;")+5) && strncasecmp((char *)"SELECT @@storage_engine;",(char *)pkt->ptr+5,pkt->size-5)==0)
+			(pkt->size==(strlen("SELECT @@storage_engine")+5) && strncasecmp((char *)"SELECT @@storage_engine",(char *)pkt->ptr+5,pkt->size-5)==0)
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT 'MergeTree' AS '@@storage_engine'");
@@ -808,6 +800,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 			run_query=false;
 			goto __run_query;
 		}
+/*
 		if (
 			(pkt->size==(strlen("SELECT current_user()")+5) && strncasecmp((char *)"SELECT current_user()",(char *)pkt->ptr+5,pkt->size-5)==0)
 		) {
@@ -837,6 +830,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 			run_query=false;
 			goto __run_query;
 		}
+*/
 	}
 
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
@@ -851,7 +845,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
+			char *query1=(char *)"SELECT 'admin' AS \"DATABASE()\", '%s' AS \"USER()\"";
 			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
 			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
 			query=l_strdup(query2);
@@ -864,25 +858,16 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 	if (query_no_space_length==SELECT_CHARSET_VARIOUS_LEN) {
 		if (!strncasecmp(SELECT_CHARSET_VARIOUS, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			char *query1=(char *)"select 'utf8' as '@@character_set_client', 'utf8' as '@@character_set_connection', 'utf8' as '@@character_set_server', 'utf8' as '@@character_set_database' limit 1";
+			char *query1=(char *)"select 'utf8' as \"@@character_set_client\", 'utf8' as \"@@character_set_connection\", 'utf8' as \"@@character_set_server\", 'utf8' as \"@@character_set_database\" limit 1";
 			query=l_strdup(query1);
 			query_length=strlen(query1)+1;
 			goto __run_query;
 		}
 	}
 
-	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS '@@version'";
-		query_length=strlen(q)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
-	}
-
 	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
 		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS 'version()'";
+		char *q=(char *)"SELECT '%s' AS \"version()\"";
 		query_length=strlen(q)+20;
 		query=(char *)l_alloc(query_length);
 		sprintf(query,q,PROXYSQL_VERSION);
@@ -948,11 +933,12 @@ __end_show_commands:
 	// see issue #1022
 	if (query_no_space_length==strlen("SELECT DATABASE() AS name") && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
-		query=l_strdup("SELECT \"main\" AS 'DATABASE()'");
+		query=l_strdup("SELECT 'main' AS \"DATABASE()\"");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
+/*
 	if (sess->session_type == PROXYSQL_SESSION_SQLITE) { // no admin
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
@@ -965,8 +951,9 @@ __end_show_commands:
 			goto __run_query;
 		}
 	}
-
+*/
 	if (sess->session_type == PROXYSQL_SESSION_CLICKHOUSE) { // no admin
+/*
 		if (
 			(strncasecmp("SHOW SESSION VARIABLES",query_no_space,22)==0)
 			||
@@ -982,6 +969,7 @@ __end_show_commands:
             run_query_sqlite = true;
             goto __run_query_sqlite;
 		}
+*/
 		if (
 			(strncasecmp("SET NAMES",query_no_space,9)==0)
 			||
@@ -1446,7 +1434,7 @@ void ClickHouse_Server::print_version() {
 };
 
 bool ClickHouse_Server::init() {
-	cpu_timer cpt;
+//	cpu_timer cpt;
 
 	child_func[0]=child_mysql;
 	main_shutdown=0;
@@ -1472,9 +1460,11 @@ bool ClickHouse_Server::init() {
 		perror("Thread creation");
 		exit(EXIT_FAILURE);
 	}
+/*
 #ifdef DEBUG
 	std::cerr << "SQLite3 Server initialized in ";
 #endif
+*/
 	return true;
 };
 

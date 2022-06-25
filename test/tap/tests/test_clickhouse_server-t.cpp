@@ -216,8 +216,8 @@ int execute_and_check_queries(MYSQL* proxysql_clickhouse, const std::vector<quer
 		if (exp_err_code == 0) {
 			ok(
 				exp_err_code == m_errno,
-				"Line: %d . Query '%s' should succeed. Error code: (Expected:'%d' == Actual:'%d')",
-				__LINE__, query.c_str(), exp_err_code, m_errno
+				"Line: %d . Query '%s' should succeed. Error code: (Expected:'%d' == Actual:'%d'), Err: '%s'",
+				__LINE__, query.c_str(), exp_err_code, m_errno, m_error
 			);
 		} else {
 			ok(
@@ -234,6 +234,8 @@ std::vector<query_spec> queries_set1 {
 	std::make_tuple<std::string, int>("SHOW SCHEMAS", 0, 4),
 	std::make_tuple<std::string, int>("SHOW DATABASES", 0, 4),
 	std::make_tuple<std::string, int>("SELECT DATABASE()", 0, 1),
+	std::make_tuple<std::string, int>("SELECT USER()", 0, 1),
+	std::make_tuple<std::string, int>("SELECT CURRENT_USER()", 0, 1),
 	std::make_tuple<std::string, int>("SELECT VERSION()", 0, 1),
 	std::make_tuple<std::string, int>("SELECT CONCAT(version(),'')", 0, 1),
 	std::make_tuple<std::string, int>("SELECT 1", 0, 1),
@@ -263,9 +265,66 @@ std::vector<query_spec> queries_set1 {
 	std::make_tuple<std::string, int>("INSERT INTO table1 SELECT * FROM table1", 0, -1),
 	std::make_tuple<std::string, int>("SELECT CounterID, EventDate, SUM(col1) s FROM table1 GROUP BY CounterID,EventDate ORDER BY CounterID", 0, 4),
 	std::make_tuple<std::string, int>("SELECT * FROM table1 t1 JOIN table1 t2 ON t1.CounterID==t2.CounterID ORDER BY t1.CounterID", 0, 64),
-	
+	std::make_tuple<std::string, int>("DESC table1", 0, 3),
+	std::make_tuple<std::string, int>("SHOW COLUMNS FROM table1", 0, 3),
+	std::make_tuple<std::string, int>("LOCK TABLE table1", 0, -1),
+	std::make_tuple<std::string, int>("UNLOCK TABLE table1", 0, -1),
+};
+std::vector<query_spec> queries_set2 {
+	std::make_tuple<std::string, int>("DROP TABLE IF EXISTS table2", 0, -1),
+	std::make_tuple<std::string, int>("CREATE TABLE table2 (CounterID INT, EventDate DATE, col0 INT, col1 Nullable(INT), col2 Nullable(UInt8), col3 Nullable(UInt16), col4 Nullable(UInt32), col5 Nullable(UInt64), col6 Nullable(Float32), col7 Nullable(Float64), col8 Nullable(Enum8('hello' = 1, 'world' = 2)) , col9 Nullable(Enum16('hello' = 1, 'world' = 2))) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 0, -1),
+	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', 0, 1, 2, 3, 4, 5, 6, 7, 'hello', 'world'", 0, -1),
+	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', 1, 2, 3, 4, 5, 6, 7, 'hello', 'world'", 1148, -1), // incorrect number of values
+	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL", 1148, -1), // col0 can't be null
+	std::make_tuple<std::string, int>("INSERT INTO table2 SELECT 1,'2022-06-23', 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL", 0, -1),
+	std::make_tuple<std::string, int>("SELECT * FROM table2 ORDER BY CounterID", 0, 2),
+	std::make_tuple<std::string, int>("DESC table2", 0, 12),
+	std::make_tuple<std::string, int>("SHOW COLUMNS FROM table2", 0, 12),
 };
 
+std::vector<query_spec> queries_set3 {
+	std::make_tuple<std::string, int>("SHOW FULL TABLES FROM `default`", 0, 2), // table1 and table2
+	std::make_tuple<std::string, int>("SHOW CHARSET", 0, 42),
+	std::make_tuple<std::string, int>("SET AUTOCOMMIT=0", 0, -1),
+	std::make_tuple<std::string, int>("SET foreign_key_checks=0", 0, -1),
+	std::make_tuple<std::string, int>("/*!40101 SET whatever", 0, -1),
+	std::make_tuple<std::string, int>("SET NAMES utf8", 0, -1),
+	std::make_tuple<std::string, int>("SET WAIT_TIMEOUT=10", 0, -1),
+	std::make_tuple<std::string, int>("SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED", 0, -1),
+	std::make_tuple<std::string, int>("SET SQL_SAFE_UPDATES = OFF", 0, -1),
+	std::make_tuple<std::string, int>("SET SQL_AUTO_IS_NULL = OFF", 0, -1),
+	std::make_tuple<std::string, int>("SHOW GLOBAL VARIABLES", 0, 6),
+	std::make_tuple<std::string, int>("SHOW ALL VARIABLES", 0, 6),
+	std::make_tuple<std::string, int>("SHOW GLOBAL STATUS", 0, 6),
+	std::make_tuple<std::string, int>("SHOW ENGINES", 0, 1),
+	std::make_tuple<std::string, int>("SHOW VARIABLES LIKE 'lower_case_table_names'", 0, 1),
+	std::make_tuple<std::string, int>("SELECT * FROM INFORMATION_SCHEMA.COLLATIONS", 0, 375),
+	std::make_tuple<std::string, int>("SHOW COLLATION", 0, 375),
+	std::make_tuple<std::string, int>("SHOW CHARSET", 0, 42),
+	std::make_tuple<std::string, int>("SELECT * FROM INFORMATION_SCHEMA.CHARACTER_SETS", 0, 42),
+	std::make_tuple<std::string, int>("SELECT @@collation_server", 0, 1),
+	std::make_tuple<std::string, int>("SELECT @@character_set_results", 0, 1),
+	std::make_tuple<std::string, int>("SELECT @@have_profiling", 0, 1),
+	std::make_tuple<std::string, int>("SELECT @@lower_case_table_names", 0, 1),
+	std::make_tuple<std::string, int>("SELECT @@version, @@version_comment", 0, 1),
+	std::make_tuple<std::string, int>("SELECT @@storage_engine", 0, 1),
+	std::make_tuple<std::string, int>("SELECT `SCHEMA_NAME` FROM `INFORMATION_SCHEMA`.`SCHEMATA`", 0, 4),
+	std::make_tuple<std::string, int>("select name, type FROM mysql.proc where db='default'", 0, 0),
+	std::make_tuple<std::string, int>("SELECT logfile_group_name FROM information_schema.FILES", 0, 0),
+	std::make_tuple<std::string, int>("SELECT tablespace_name FROM information_schema.FILES", 0, 0),
+	std::make_tuple<std::string, int>("SELECT CONNECTION_ID()", 0, 1),
+	std::make_tuple<std::string, int>("select @@version_comment limit 1", 0, 1),
+	std::make_tuple<std::string, int>("select DATABASE(), USER() limit 1", 0, 1),
+	std::make_tuple<std::string, int>("select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1", 0, 1),
+	std::make_tuple<std::string, int>("SELECT @@version", 0, 1),
+	std::make_tuple<std::string, int>("SHOW TABLES FROM default", 0, 2),
+	std::make_tuple<std::string, int>("SELECT DATABASE() AS name", 0, 1),
+	std::make_tuple<std::string, int>("SHOW MASTER STATUS", 1045, -1),
+	std::make_tuple<std::string, int>("SHOW SLAVE STATUS", 1045, -1),
+	std::make_tuple<std::string, int>("SHOW MASTER LOGS", 1045, -1),
+	std::make_tuple<std::string, int>("LOCK TABLE table1", 0, -1),
+	std::make_tuple<std::string, int>("UNLOCK TABLE table1", 0, -1),
+};
 /**
  * @brief Perform several admin queries to exercise more paths.
  */
@@ -292,7 +351,10 @@ int main(int argc, char** argv) {
 		crash_loops
 		+ 2 /* Fail to connect with wrong username and password */
 		+ 4 // during LOAD USERS TO RUNTIME
+		+ 4 // during LOAD USERS TO RUNTIME , second time
 		+ queries_set1.size()
+		+ queries_set2.size()
+		+ queries_set3.size()
 		+ admin_queries.size() + ch_intf_queries.size()
 		+ 1 /* Connect to new setup interface */
 	);
@@ -320,6 +382,7 @@ int main(int argc, char** argv) {
 
 
 	create_users(proxysql_admin);
+	create_users(proxysql_admin); // to trigger more code coverage
 
 
 	{
@@ -398,6 +461,16 @@ int main(int argc, char** argv) {
 
 		diag("Started performing queries set 1");
 		if (execute_and_check_queries(proxysql_clickhouse, queries_set1)) {
+			return exit_status();
+		}
+
+		diag("Started performing queries set 2");
+		if (execute_and_check_queries(proxysql_clickhouse, queries_set2)) {
+			return exit_status();
+		}
+
+		diag("Started performing queries set 3");
+		if (execute_and_check_queries(proxysql_clickhouse, queries_set3)) {
 			return exit_status();
 		}
 

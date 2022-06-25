@@ -1829,7 +1829,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			if (GloMyLdapAuth) { // we check if user exists only if GloMyLdapAuth is enabled
 #ifdef PROXYSQLCLICKHOUSE
 				if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
-					user_exists = GloClickHouseAuth->exists((char *)user);
+					//user_exists = GloClickHouseAuth->exists((char *)user);
 					// for clickhouse, we currently do not support clear text or LDAP
 					user_exists = true;
 				} else {
@@ -1859,7 +1859,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 					bool user_exists = true;
 #ifdef PROXYSQLCLICKHOUSE
 					if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
-						user_exists = GloClickHouseAuth->exists((char *)user);
+						//user_exists = GloClickHouseAuth->exists((char *)user);
 						// for clickhouse, we currently do not support clear text or LDAP
 						user_exists = true;
 					} else {
