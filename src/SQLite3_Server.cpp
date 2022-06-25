@@ -65,6 +65,7 @@
         } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
+/*
 struct cpu_timer
 {
 	cpu_timer() {
@@ -80,6 +81,7 @@ struct cpu_timer
 	};
 	unsigned long long begin;
 };
+*/
 
 static char *s_strdup(char *s) {
 	char *ret=NULL;
@@ -234,6 +236,7 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
+#ifdef TEST_GROUPREP
 /**
  * @brief Helper function that checks if the supplied string
  *   is a number.
@@ -308,6 +311,7 @@ bool match_monitor_query(const std::string& monitor_query, const std::string& qu
 		return is_number(number);
 	}
 }
+#endif // TEST_GROUPREP
 
 void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
@@ -1356,7 +1360,7 @@ void SQLite3_Server::print_version() {
 };
 
 bool SQLite3_Server::init() {
-	cpu_timer cpt;
+	//cpu_timer cpt;
 
 #ifdef TEST_AURORA
 	tables_defs_aurora = new std::vector<table_def_t *>;
