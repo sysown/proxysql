@@ -141,7 +141,7 @@ static inline char is_hex_char(char c)
 
 // between pointer, check string is number - need to be changed more functions
 // TODO: f-1 shouldn't be access if 'f' is the first position supplied, could lead to
-// buffer overflow.
+// buffer overflow. NOTE: This is now addressed by 'is_digit_string_2'.
 static char is_digit_string(char *f, char *t)
 {
 	if(f == t)
@@ -1043,7 +1043,10 @@ enum p_st get_next_st(const struct options* opts, struct shared_st* shared_st) {
 	enum p_st st = st_no_mark_found;
 
 	// cmnt type 1 - start with '/*'
-	if(*shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	if(
+		// v1_crashing_payload_05
+		shared_st->q_cur_pos < (shared_st->d_max_len-1) && *shared_st->q == '/' && *(shared_st->q+1) == '*'
+	) {
 		st = st_cmnt_type_1;
 	}
 	// cmnt type 2 - start with '#'
@@ -1105,6 +1108,61 @@ void copy_next_char(shared_st* shared_st, options* opts) {
 char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
 
 /**
+ * @brief Safer version of 'is_digit_string' performing boundary checks.
+ *
+ * @param shared_st The shared state used for the boundary checks.
+ * @param f Initial position of the string being checked.
+ * @param t Final position of the string being checked.
+ *
+ * @return '1' if the supplied string is recognized as a 'digit_string', '0' otherwise.
+ */
+static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
+{
+	if(f == t)
+	{
+		if(is_digit_char(*f))
+			return 1;
+		else
+			return 0;
+	}
+
+	int is_hex = 0;
+	int i = 0;
+
+	// 0x, 0X, n.m, nE+m, nE-m, Em
+	while(f != t)
+	{
+		char is_float = 0;
+
+		if (f > shared_st->res_init_pos) {
+			is_float = *f == '.' || tolower(*f) == 'e' || (tolower(*(f-1)) == 'e' && (*f == '+' || *f == '-'));
+		} else {
+			is_float = *f == '.' || tolower(*f) == 'e';
+		}
+
+		if(f > shared_st->res_init_pos && i == 1 && *(f-1) == '0' && (*f == 'x' || *f == 'X'))
+		{
+			is_hex = 1;
+		}
+		// none hex
+		else if(!is_hex && !is_digit_char(*f) && is_float == 0)
+		{
+			return 0;
+		}
+		// hex
+		else if(is_hex && !is_hex_char(*f))
+		{
+			return 0;
+		}
+
+		f++;
+		i++;
+	}
+
+	return 1;
+}
+
+/**
  * @brief Process a detected comment of type "/\* *\/". Determines when to exit the 'st_cmnt_type_1' state.
  * @details Function assumes that 'shared_st->q' is pointing to the initial mark '/' of the comment start, and
  *   that it's safe to look forward for '*'. State 'st_cmnt_type_1' doesn't copy any data to the result
@@ -1124,7 +1182,8 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
 	// initial mark "/*|/*!" detection
-	if (shared_st->res_cur_pos < (res_final_pos - 2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
+	if (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 
 		// check length before accessing beyond 'q_cur_pos + 1'
@@ -1143,6 +1202,11 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 		// discard processed "/*" or "/*!"
 		shared_st->q += 2 + c_t_1_st->is_cmd;
 		shared_st->q_cur_pos += 2 + c_t_1_st->is_cmd;
+
+		// v1_crashing_payload_04
+		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
+			return st_no_mark_found;
+		}
 	}
 
 //  TODO: Check if there is exclusion between this regular first comments and first comment that are 'cmd'
@@ -1272,6 +1336,8 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 		shared_st->prev_char = ' ';
 		// back to main shared_st->query parsing state
 		next_st = st_no_mark_found;
+		// reset the comment processing state (v1_crashing_payload_04)
+		c_t_1_st->is_cmd = 0;
 		// skip ending mark for comment for next iteration
 		shared_st->q_cur_pos += 1;
 		shared_st->q++;
@@ -1295,10 +1361,15 @@ static __attribute__((always_inline)) inline
 enum p_st process_cmnt_type_2(shared_st* shared_st) {
 	enum p_st next_state = st_cmnt_type_2;
 
-	// discard processed "#"
-	if (*shared_st->q == '#') {
+	// discard processed "#" (v1_crashing_payload_02)
+	if (*shared_st->q == '#' && shared_st->q_cur_pos <= (shared_st->q_len - 2)) {
 		shared_st->q += 1;
 		shared_st->q_cur_pos += 1;
+
+		if (shared_st->q_cur_pos == (shared_st->q_len - 2)) {
+			next_state = st_no_mark_found;
+			return next_state;
+		}
 	}
 
 	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->q_len - 1)) {
@@ -1328,9 +1399,17 @@ enum p_st process_cmnt_type_3(shared_st* shared_st) {
 	enum p_st next_state = st_cmnt_type_3;
 
 	// discard processed "-- "
-	if (*shared_st->q == '-' && *(shared_st->q+1)=='-' && is_space_char(*(shared_st->q+2))) {
+	if (
+		shared_st->q_cur_pos <= (shared_st->q_len - 4) &&
+		*shared_st->q == '-' && *(shared_st->q+1)=='-' && is_space_char(*(shared_st->q+2))
+	) {
 		shared_st->q += 3;
 		shared_st->q_cur_pos += 3;
+
+		if (shared_st->q_cur_pos == (shared_st->q_len - 4)) {
+			next_state = st_no_mark_found;
+			return next_state;
+		}
 	}
 
 	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->q_len - 1)) {
@@ -1457,7 +1536,7 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 	char is_float_char = *shared_st->q == '.' ||
 		( tolower(shared_st->prev_char) == 'e' && ( *shared_st->q == '-' || *shared_st->q == '+' ) );
 	if ((is_token_char(*shared_st->q) && is_float_char == 0) || shared_st->q_len == shared_st->q_cur_pos + 1) {
-		if (is_digit_string(digit_st->start_pos, shared_st->res_cur_pos)) {
+		if (is_digit_string_2(shared_st, digit_st->start_pos, shared_st->res_cur_pos)) {
 			shared_st->res_cur_pos = digit_st->start_pos;
 
 			// place the replacement mark
@@ -1882,13 +1961,22 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 	// second stage: Space and (+|-) replacement
 	while (shared_st->res_cur_pos <= digest_end) {
 		if (*shared_st->res_cur_pos == ' ') {
-			char lc = *(shared_st->res_cur_pos-1);
+			char lc = '0';
+
+			if (shared_st->res_cur_pos > shared_st->res_init_pos) {
+				lc = *(shared_st->res_cur_pos-1);
+			}
+
 			char rc = *(shared_st->res_cur_pos+1);
 
 			if (lc == '(' || rc == ')') {
 				shared_st->res_cur_pos++;
 			} else if ((is_arithmetic_op(lc) && rc == '?') || lc == ',' || rc == ',') {
-				char llc = *(shared_st->res_cur_pos-2);
+				char llc = '0';
+
+				if (shared_st->res_cur_pos > shared_st->res_init_pos + 1) {
+					llc = *(shared_st->res_cur_pos-2);
+				}
 
 				if (opts->keep_comment && (llc == '*' && lc == '/')) {
 					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
@@ -1901,8 +1989,14 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 				*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
 			}
 		} else if (*shared_st->res_cur_pos == '+' || *shared_st->res_cur_pos == '-') {
-			char llc = *(shared_st->res_cur_pos-2);
-			char lc = *(shared_st->res_cur_pos-1);
+			char llc = '0';
+			if (shared_st->res_cur_pos > shared_st->res_init_pos + 1) {
+				llc = *(shared_st->res_cur_pos-2);
+			}
+			char lc = '0';
+			if (shared_st->res_cur_pos > shared_st->res_init_pos) {
+				lc = *(shared_st->res_cur_pos-1);
+			}
 			char rc = *(shared_st->res_cur_pos+1);
 
 			// patterns to cover:
@@ -1929,7 +2023,7 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 				}
 			}
 		} else if (opts->replace_number == 1 && is_digit_char(*shared_st->res_cur_pos) ) {
-			if (*(shared_st->res_pre_pos-1) != '?') {
+			if (shared_st->res_pre_pos > shared_st->res_init_pos && *(shared_st->res_pre_pos-1) != '?') {
 				*shared_st->res_pre_pos++ = '?';
 			}
 			shared_st->res_cur_pos++;
@@ -2387,9 +2481,10 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	// D: `select ?  `
 	//              ^ never collapsed
 	// ```
-	if (shared_st->res_cur_pos > shared_st->res_init_pos) {
+	{
+		// v1_crashing_payload_06
 		char* wspace = shared_st->res_cur_pos - 1;
-		while (*wspace == ' ') {
+		while (wspace > shared_st->res_init_pos && *wspace == ' ') {
 			wspace--;
 		}
 		wspace++;
