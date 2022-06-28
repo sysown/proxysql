@@ -765,7 +765,7 @@ int main(int argc, char** argv) {
 			exec_grouping_tests = false;
 		}
 		if (tests_filter_str.find("regular") == std::string::npos) {
-			exec_grouping_tests = false;
+			exec_regular_tests = false;
 		}
 	}
 
