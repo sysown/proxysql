@@ -974,17 +974,25 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					goto __ret_autocommit_OK;
 				}
 __ret_autocommit_OK:
-				client_myds->DSS=STATE_QUERY_SENT_NET;
-				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-				client_myds->DSS=STATE_SLEEP;
-				status=WAITING_CLIENT_DATA;
-				if (mirror==false) {
-					RequestEnd(NULL);
+				if (session_type == PROXYSQL_SESSION_MYSQL) { // do not run this if PROXYSQL_SESSION_SQLITE
+					client_myds->DSS=STATE_QUERY_SENT_NET;
+					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+					if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+					client_myds->DSS=STATE_SLEEP;
+					status=WAITING_CLIENT_DATA;
+					if (mirror==false) {
+						RequestEnd(NULL);
+					}
+					__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
 				}
-				l_free(pkt->size,pkt->ptr);
-				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
+				if (session_type == PROXYSQL_SESSION_MYSQL) {
+					// free() only if session_type == PROXYSQL_SESSION_MYSQL
+					// because the packet will be freed in
+					// handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql()
+					// for all session type other than PROXYSQL_SESSION_MYSQL
+					l_free(pkt->size,pkt->ptr);
+				}
 				free(_new_pkt.ptr);
 				return true;
 			}
@@ -3295,6 +3303,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 // client_myds->DSS = STATE_SLEEP
 // enum_mysql_command = _MYSQL_COM_QUERY
 // it processes the session not MYSQL_SESSION
+// Make sure that handler_function() doesn't free the packet
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt) {
 	switch (session_type) {
 		case PROXYSQL_SESSION_ADMIN:
@@ -6893,13 +6902,19 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		myds->DSS=STATE_COLUMN_DEFINITION;
 		unsigned int nTrx = 0;
 		uint16_t setStatus = 0;
+		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 		if (in_transaction == false) {
 			nTrx=NumActiveTransactions();
-			setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			setStatus |= (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		} else {
 			// this is for SQLite3 Server
-			setStatus = SERVER_STATUS_AUTOCOMMIT;
+			if (session_type == PROXYSQL_SESSION_SQLITE) {
+				//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			} else {
+				// for sessions that are not SQLITE . Admin and Clickhouse .
+				// default
+				setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			}
 			setStatus |= SERVER_STATUS_IN_TRANS;
 		}
 		if (!deprecate_eof_active) {
@@ -6928,10 +6943,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		if (deprecate_eof_active) {
 			myprot->generate_pkt_OK(true, NULL, NULL, sid, 0, 0, setStatus, 0, NULL, true); sid++;
 		} else {
-			// I think the 2 | setStatus here is a bug. the previous generate_pkt_EOF was changed from 2|setStatus to just
-			// setStatus a long time ago in c3e6fda7a47ecb94e97d4e191cdbd0f10fec7924
-			// also 2 represents the SERVER_STATUS_IN_TRANS which is already set in setStatus
-			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus ); sid++;
+			myprot->generate_pkt_EOF(true,NULL,NULL, sid, 0, setStatus ); sid++;
 		}
 
 		myds->DSS=STATE_SLEEP;
@@ -6956,7 +6968,13 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			} else {
 				// this is for SQLite3 Server
-				setStatus = SERVER_STATUS_AUTOCOMMIT;
+				if (session_type == PROXYSQL_SESSION_SQLITE) {
+					//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+				} else {
+					// for sessions that are not SQLITE . Admin and Clickhouse .
+					// default
+					setStatus |= SERVER_STATUS_AUTOCOMMIT;
+				}
 				setStatus |= SERVER_STATUS_IN_TRANS;
 			}
 			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,setStatus,0,NULL);

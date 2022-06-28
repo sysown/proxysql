@@ -372,6 +372,100 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		query_no_space[query_no_space_length]=0;
 	}
 
+
+	{
+		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		char c=((char *)pkt->ptr)[5];
+		bool ret=false;
+		if (c=='c' || c=='C') {
+			if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
+				if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+					ret=true;
+				}
+			}
+		} else {
+			if (c=='r' || c=='R') {
+				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
+					if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+						ret=true;
+					}
+				}
+			}
+		}
+		// if there is no transactions we filter both commit and rollback
+		if (ret == true) {
+			uint16_t status=0;
+			if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
+			if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+				status |= SERVER_STATUS_IN_TRANS;
+			}
+			GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
+			run_query=false;
+			goto __run_query;
+		}
+	}
+
+
+
+	{
+		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		bool prev_autocommit = sess->autocommit;
+		bool autocommit_to_skip = sess->handler_SetAutocommit(pkt);
+		if (prev_autocommit == sess->autocommit) {
+			if (autocommit_to_skip==true) {
+				uint16_t status=0;
+				if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
+				if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+					status |= SERVER_STATUS_IN_TRANS;
+				}
+				GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
+				run_query=false;
+				goto __run_query;
+			}
+		} else {
+			// autocommit changed
+			if (sess->autocommit == false) {
+				// we simply reply ok. We will create a transaction at the next query
+				// we defer the creation of the transaction to simulate how MySQL works
+				uint16_t status=0;
+				if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
+				if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+					status |= SERVER_STATUS_IN_TRANS;
+				}
+				GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
+				run_query=false;
+				goto __run_query;
+/*
+				l_free(query_length,query);
+				query = l_strdup((char *)"BEGIN IMMEDIATE");
+				query_length=strlen(query)+1;
+				goto __run_query;
+*/
+			} else {
+				// setting autocommit=1
+				if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+					// there is no transaction
+					uint16_t status=0;
+					if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
+					if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+						status |= SERVER_STATUS_IN_TRANS;
+					}
+					GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
+					run_query=false;
+					goto __run_query;
+				} else {
+					// there is a transaction, we run COMMIT
+					l_free(query_length,query);
+					query = l_strdup((char *)"COMMIT");
+					query_length=strlen(query)+1;
+					goto __run_query;
+				}
+			}
+		}
+	}
+
 	// fix bug #1047
 	if (
 /*
@@ -390,8 +484,8 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		||
 		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
 		||
-		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
-		||
+		//(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
+		//||
 		(!strncasecmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */")))
 		||
 		(!strncasecmp("/*!40103 SET TIME_ZONE=", query_no_space, strlen("/*!40103 SET TIME_ZONE=")))
@@ -404,9 +498,10 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
 		sqlite3 *db = sqlite_sess->sessdb->get_db();
-		uint16_t status=2; // autocommit
+		uint16_t status=0;
+		if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
 		if ((*proxy_sqlite3_get_autocommit)(db)==0) {
-			status = 3; // autocommit + transaction
+			status |= SERVER_STATUS_IN_TRANS;
 		}
 		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
 		run_query=false;
@@ -601,6 +696,20 @@ __end_show_commands:
 		goto __run_query;
 	}
 
+	if (query_length>20 && strncasecmp(query,"SELECT",6)==0) {
+		if (strncasecmp(query+query_length-12," FOR UPDATE",11)==0) {
+			char * query_new = strndup(query,query_length-12);
+			l_free(query_length,query);
+			query_length-=11;
+			query = query_new;
+		} else if (strncasecmp(query+query_length-20," LOCK IN SHARE MODE",19)==0) {
+			char * query_new = strndup(query,query_length-20);
+			l_free(query_length,query);
+			query_length-=11;
+			query = query_new;
+		}
+	}
+
 	if (sess->session_type == PROXYSQL_SESSION_SQLITE) { // no admin
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
@@ -679,6 +788,13 @@ __run_query:
 		}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		if (sess->autocommit==false) {
+			sqlite3 *db = sqlite_sess->sessdb->get_db();
+			if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+				// we defer the creation of the transaction to simulate how MySQL works
+				sqlite_sess->sessdb->execute("BEGIN IMMEDIATE");
+			}
+		}
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
