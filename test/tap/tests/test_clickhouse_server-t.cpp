@@ -14,6 +14,9 @@
  *  - Changes 'clickhouse-mysql_ifaces' and tries to connect to the new interface.
  *  - Connects to ProxySQL Admin and performs the following operations:
  *      + LOAD|SAVE SQLITESERVER TO|FROM RUNTIME|MEMORY|DISK
+ *  - This test is also compiled against 'libmysqlclient' resulting in the binary
+ *    'test_clickhouse_server_libmysql-t'. This duplicate test exists for testing 'deprecate_eof' support
+ *    against ProxySQL ClickHouse server.
  *
  */
 
@@ -192,7 +195,12 @@ int execute_and_check_queries(MYSQL* proxysql_clickhouse, const std::vector<quer
 
 		diag("Line: %d . Running query: %s" , __LINE__ , query.c_str());
 		int query_err = mysql_query(proxysql_clickhouse, query.c_str());
-		MYSQL_RES* result = mysql_store_result(proxysql_clickhouse);
+		MYSQL_RES* result = nullptr;
+		// NOTE: For test compatibility with 'libmysqlclient', 'mysql_store_result' should only be called
+		// in case no error is present. Otherwise would modify the error itself, thus making test fail.
+		if (!query_err) {
+			result = mysql_store_result(proxysql_clickhouse);
+		}
 		if (exp_rows >= 0 && result == NULL) {
 			diag ("We were expecting %d rows, but we didn't receive a resultset", exp_rows);
 			return exit_status();
