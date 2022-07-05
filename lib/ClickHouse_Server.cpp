@@ -195,7 +195,10 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 		unsigned int nTrx=0;
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		//if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus ); sid++;
+		bool deprecate_eof_active = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
 	}
 	char **p=(char **)malloc(sizeof(char*)*columns);
 	unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*columns);
@@ -883,14 +886,23 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 			myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
 			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"CONNECTION_ID()",(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
 			myds->DSS=STATE_COLUMN_DEFINITION;
-			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			bool deprecate_eof_active = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+			if (!deprecate_eof_active) {
+				myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			}
 			char **p=(char **)malloc(sizeof(char*)*1);
 			unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
 			l[0]=strlen(buf);;
 			p[0]=buf;
 			myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 			myds->DSS=STATE_ROW;
-			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			if (!deprecate_eof_active) {
+				myprot->generate_pkt_EOF(true, NULL, NULL, sid, 0, setStatus);
+				sid++;
+			} else {
+				myprot->generate_pkt_OK(true, NULL, NULL, sid, 0, 0, setStatus, 0, NULL, true);
+				sid++;
+			}
 			myds->DSS=STATE_SLEEP;
 			run_query=false;
 			goto __run_query;
@@ -1186,7 +1198,15 @@ __run_query:
   						MySQL_Data_Stream *myds=myprot->get_myds();
 
 						if (clickhouse_sess->transfer_started) {
-	    					myprot->generate_pkt_EOF(true,NULL,NULL,clickhouse_sess->sid,0, 2); clickhouse_sess->sid++;
+							myds->DSS=STATE_ROW;
+							bool deprecate_eof_active = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+							if (deprecate_eof_active) {
+								myprot->generate_pkt_OK(true, NULL, NULL, clickhouse_sess->sid, 0, 0, 2, 0, NULL, true);
+								clickhouse_sess->sid++;
+							} else {
+								myprot->generate_pkt_EOF(true, NULL, NULL, clickhouse_sess->sid, 0, 2);
+								clickhouse_sess->sid++;
+							}
 						} else {
 							myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"");
 						}
@@ -1235,7 +1255,8 @@ __run_query_sqlite: // we are introducing this new section to send some query to
 	if (run_query_sqlite) {
 		ClickHouse_Session *sqlite_sess = (ClickHouse_Session *)sess->thread->gen_args;
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		bool deprecate_eof_active = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
 		l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 		l_free(query_length,query);
@@ -1322,7 +1343,7 @@ static void *child_mysql(void *arg) {
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 	free(arg);
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false);
+	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
