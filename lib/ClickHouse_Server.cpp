@@ -87,8 +87,103 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 		columns=block.GetColumnCount();
 		//int rows=block.GetRowCount();
 		myprot->generate_pkt_column_count(true,NULL,NULL,sid,block.GetColumnCount()); sid++;
+		// Return proper types for:
+		// - Int8/Int16/Int32/Int64/Float/Double/NULL/DATE/Datetime
 		for (Block::Iterator bi(block); bi.IsValid(); bi.Next()) {
-			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)bi.Name().c_str(),(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL);
+			clickhouse::Type::Code cc = bi.Type()->GetCode();
+
+			uint8_t is_null = 1;
+
+			if (cc != clickhouse::Type::Code::Nullable) {
+				is_null = 0;
+			} else {
+				auto s_t = bi.Column()->As<ColumnNullable>();
+				cc = s_t->Nested()->GetType().GetCode();
+			}
+
+			if (cc >= clickhouse::Type::Code::Int8 && cc <= clickhouse::Type::Code::Float64) {
+				bool _unsigned = false;
+				uint16_t flags = is_null | 128;
+
+				// NOTE: Both 'size' and 'decimals' are just used for representation purposes.
+				// For this reason, the values we specify here are always the 'MAX' length of these
+				// fields without any computation specific to the current value. See note:
+				//   - https://dev.mysql.com/doc/internals/en/com-query-response.html#column-definition
+				uint32_t size = 0;
+				uint8_t decimals = 0;
+
+				enum_field_types type = MYSQL_TYPE_LONG;
+
+				switch(cc) {
+					case clickhouse::Type::Code::UInt8:
+						_unsigned = true;
+					case clickhouse::Type::Code::Int8:
+						type = MYSQL_TYPE_TINY;
+						flags |= (_unsigned ? 32 : 0);
+						size = 4;
+						break;
+					case clickhouse::Type::Code::UInt16:
+						_unsigned = true;
+					case clickhouse::Type::Code::Int16:
+						type = MYSQL_TYPE_SHORT;
+						flags |= (_unsigned ? 32 : 0);
+						size = 6;
+						break;
+					case clickhouse::Type::Code::UInt32:
+						_unsigned = true;
+					case clickhouse::Type::Code::Int32:
+						type = MYSQL_TYPE_LONG;
+						flags |= (_unsigned ? 32 : 0);
+						size = 11;
+						break;
+					case clickhouse::Type::Code::UInt64:
+						_unsigned = true;
+					case clickhouse::Type::Code::Int64:
+						type = MYSQL_TYPE_LONGLONG;
+						flags |= (_unsigned ? 32 : 0);
+						size = 20;
+						break;
+					case clickhouse::Type::Code::Float32:
+						type = MYSQL_TYPE_FLOAT;
+						size = 12;
+						decimals = 31;
+						break;
+					case clickhouse::Type::Code::Float64:
+						type = MYSQL_TYPE_DOUBLE;
+						size = 22;
+						decimals = 31;
+						break;
+					default:
+						_unsigned = false;
+						flags = 128;
+						size = 22;
+				}
+
+				myprot->generate_pkt_field(
+					true, NULL, NULL, sid, (char*)"", (char*)"", (char*)"", (char*)bi.Name().c_str(),
+					(char*)"", 63, size, type, flags, decimals, false, 0, NULL
+				);
+			} else if (cc == clickhouse::Type::Code::Date || cc == clickhouse::Type::Code::DateTime) {
+				if (cc == clickhouse::Type::Code::Date) {
+					const uint32_t size = strlen("YYYY-MM-DD") + 1;
+					myprot->generate_pkt_field(
+						true, NULL, NULL, sid, (char*)"", (char*)"", (char*)"", (char*)bi.Name().c_str(),
+						(char*)"", 33, size, MYSQL_TYPE_DATE, 0, 0x0, false, 0, NULL
+					);
+				} else {
+					const uint32_t size = strlen("YYYY-MM-DD hh:mm:ss") + 1;
+					myprot->generate_pkt_field(
+						true, NULL, NULL, sid, (char*)"", (char*)"", (char*)"", (char*)bi.Name().c_str(),
+						(char*)"", 33, size, MYSQL_TYPE_DATETIME, 0, 0x0, false, 0, NULL
+					);
+				}
+			} else {
+				myprot->generate_pkt_field(
+					true, NULL, NULL, sid, (char *)"", (char *)"", (char *)"", (char *)bi.Name().c_str(),
+					(char *)"", 33, 15, MYSQL_TYPE_VAR_STRING, 0, 0x1f, false, 0, NULL
+				);
+			}
+
 			sid++;
 		}
 /*
@@ -179,7 +274,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 						if (s_t->IsNull(r)) {
 							is_null = true;
 						} else {
-							clickhouse::Type::Code cnc = block[i]->Type()->GetCode();
+							clickhouse::Type::Code cnc = s_t->Nested()->Type()->GetCode();
 							switch (cnc) {
 								case clickhouse::Type::Code::Int8:
 									s=std::to_string(s_t->Nested()->As<ColumnInt8>()->At(r));
