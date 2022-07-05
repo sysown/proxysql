@@ -748,6 +748,9 @@ void ProxySQL_Main_init_SQLite3Server() {
 	// start SQLite3Server
 	GloSQLite3Server = new SQLite3_Server();
 	GloSQLite3Server->init();
+	// NOTE: Always perform the 'load_*_to_runtime' after module start, otherwise values won't be properly
+	// loaded from disk at ProxySQL startup.
+	GloAdmin->load_sqliteserver_variables_to_runtime();
 	GloAdmin->init_sqliteserver_variables();
 	GloSQLite3Server->print_version();
 }
@@ -756,6 +759,9 @@ void ProxySQL_Main_init_ClickHouseServer() {
 	// start SQServer
 	GloClickHouseServer = new ClickHouse_Server();
 	GloClickHouseServer->init();
+	// NOTE: Always perform the 'load_*_to_runtime' after module start, otherwise values won't be properly
+	// loaded from disk at ProxySQL startup.
+	GloAdmin->load_clickhouse_variables_to_runtime();
 	GloAdmin->init_clickhouse_variables();
 	GloClickHouseServer->print_version();
 	GloClickHouseAuth = new ClickHouse_Authentication();
