@@ -5946,6 +5946,7 @@ bool ProxySQL_Admin::init() {
 	flush_debug_levels_runtime_to_database(admindb, true);
 #endif /* DEBUG */
 
+	// Set default values for the module variables in the target 'dbs'
 	flush_mysql_variables___runtime_to_database(configdb, false, false, false);
 	flush_mysql_variables___runtime_to_database(admindb, false, true, false);
 
@@ -5954,6 +5955,7 @@ bool ProxySQL_Admin::init() {
 
 	load_or_update_global_settings(configdb);
 
+	// Insert or update the configuration from 'disk'
 	__insert_or_replace_maintable_select_disktable();
 
 	// removing this line of code. It seems redundant
