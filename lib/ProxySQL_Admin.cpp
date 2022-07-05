@@ -6320,6 +6320,10 @@ void ProxySQL_Admin::load_or_update_global_settings(SQLite3DB *db) {
 				uuid=NULL;
 			}
 		}
+
+		if (resultset) {
+			delete resultset;
+		}
 	}
 }
 
