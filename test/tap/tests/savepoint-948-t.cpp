@@ -41,8 +41,9 @@ struct cpu_timer
 	unsigned long long begin;
 };
 
-unsigned int num_threads=1;
-int count=0;
+bool debug_diag = true;
+unsigned int num_threads=5;
+int count=10;
 char *username=NULL;
 char *password=NULL;
 char *host=(char *)"localhost";
@@ -51,7 +52,7 @@ char *schema=(char *)"information_schema";
 int silent = 0;
 int sysbench = 0;
 int local=0;
-int transactions=0;
+int transactions=200;
 int uniquequeries=0;
 int histograms=-1;
 
@@ -60,6 +61,7 @@ unsigned int g_failed=0;
 
 std::atomic<int> cnt_transactions;
 std::atomic<int> cnt_SELECT_outside_transactions;
+std::atomic<int> cnt_expected_errors;
 
 unsigned int status_connections = 0;
 unsigned int connect_phase_completed = 0;
@@ -129,6 +131,8 @@ void * my_conn_thread(void *arg) {
 		int sleepDelay;
 		for (int i=0; i<fr%3; i++) {
 			std::string q = "SET autocommit=" + std::to_string(fr%2);
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, q.c_str());
 			if (mysql_query(mysql, q.c_str())) {
 				fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysql));
 				exit(EXIT_FAILURE);
@@ -144,6 +148,8 @@ void * my_conn_thread(void *arg) {
 			} else {
 				q = "SET AUTOCOMMIT=0";
 			}
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, q.c_str());
 			if (mysql_query(mysql, q.c_str())) {
 				fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysql));
 				exit(EXIT_FAILURE);
@@ -152,16 +158,25 @@ void * my_conn_thread(void *arg) {
 			usleep(sleepDelay * 100);
 		}
 
-		if (fr%3 == 0) {
-			if (mysql_query(mysql, sel1.c_str())) {
-				fprintf(stderr,"Error running query: %s. Error: %s\n", sel1.c_str(), mysql_error(mysql));
+		if (fr%3 == 0 || explicit_transaction==false) {
+			std::string sel;
+			if (explicit_transaction==false) {
+				// we need to issue a SELECT FOR UPDATE to trigger a transaction
+				sel = sel1 + " FOR UPDATE";
+			} else {
+				sel = sel1;
+			}
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, sel.c_str());
+			if (mysql_query(mysql, sel.c_str())) {
+				fprintf(stderr,"Error running query: %s. Error: %s\n", sel.c_str(), mysql_error(mysql));
 			} else {
 				MYSQL_RES *result = mysql_store_result(mysql);
 				mysql_free_result(result);
 				select_OK++;
-				if (explicit_transaction == false) {
-					cnt_SELECT_outside_transactions++;
-				}
+//				if (explicit_transaction == false) {
+//					cnt_SELECT_outside_transactions++;
+//				}
 			}
 			sleepDelay = fastrand()%100;
 			usleep(sleepDelay * 100);
@@ -173,6 +188,8 @@ void * my_conn_thread(void *arg) {
 		{
 			std::string q = "SAVEPOINT ";
 			q += buf;
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, q.c_str());
 			if (mysql_query(mysql, q.c_str())) {
 				fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysql));
 				exit(EXIT_FAILURE);
@@ -181,6 +198,8 @@ void * my_conn_thread(void *arg) {
 			usleep(sleepDelay * 100);
 		}
 		for (int i=0; i<fr%3+1; i++) {
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, sel1.c_str());
 			if (mysql_query(mysql, sel1.c_str())) {
 				fprintf(stderr,"Error running query: %s. Error: %s\n", sel1.c_str(), mysql_error(mysql));
 			} else {
@@ -192,10 +211,29 @@ void * my_conn_thread(void *arg) {
 			usleep(sleepDelay * 100);
 		}
 		int aa = fr%10;
+		if (aa==2 || aa==3) { // sometime before RELEASE, sometimes before ROLLBACK
+			std::string q = "ROLLBACK TO SAVEPOINT ";
+			q+= buf;
+			q+= "NonExistingSavePoint";
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, q.c_str());
+			int rc = mysql_query(mysql, q.c_str());
+			if (rc != 0) {
+				cnt_expected_errors++;
+				if (debug_diag==true)
+					diag("EXPECTED error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysql));
+			} else {
+				ok(rc!=0, "Generating a \"not ok\" . We didn't receive any error for: %s", q.c_str());
+			}
+			sleepDelay = fastrand()%100;
+			usleep(sleepDelay * 100);
+		}
 		if (aa < 3) {
 			std::string q;
 			q = "RELEASE SAVEPOINT ";
 			q += buf;
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, q.c_str());
 			if (mysql_query(mysql, q.c_str())) {
 				fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysql));
 				exit(EXIT_FAILURE);
@@ -206,6 +244,8 @@ void * my_conn_thread(void *arg) {
 			std::string q;
 			q = "ROLLBACK TO SAVEPOINT ";
 			q += buf;
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, q.c_str());
 			if (mysql_query(mysql, q.c_str())) {
 				fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysql));
 				exit(EXIT_FAILURE);
@@ -215,6 +255,8 @@ void * my_conn_thread(void *arg) {
 			if (aa > 7) {
 				q = "RELEASE SAVEPOINT ";
 				q += buf;
+				if (debug_diag==true)
+					diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, q.c_str());
 				if (mysql_query(mysql, q.c_str())) {
 					fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysql));
 					exit(EXIT_FAILURE);
@@ -239,6 +281,8 @@ void * my_conn_thread(void *arg) {
 				}
 */
 			}
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, q.c_str());
 			if (mysql_query(mysql, q.c_str())) {
 				fprintf(stderr,"Error running query: %s. Error: %s\n", q.c_str(), mysql_error(mysql));
 				exit(EXIT_FAILURE);
@@ -255,6 +299,23 @@ void * my_conn_thread(void *arg) {
 			ok(testPassed, "mysql connection [%p], thread_id [%lu], transaction completed", mysql, mysql->thread_id);
 		}
 */
+		if (fr%7 == 0) {
+			std::string sel;
+			sel = sel1;
+			if (debug_diag==true)
+				diag("Thread %lu , connection %p , query: %s", pthread_self(), mysql, sel.c_str());
+			if (mysql_query(mysql, sel.c_str())) {
+				fprintf(stderr,"Error running query: %s. Error: %s\n", sel.c_str(), mysql_error(mysql));
+			} else {
+				MYSQL_RES *result = mysql_store_result(mysql);
+				mysql_free_result(result);
+				select_OK++;
+				cnt_SELECT_outside_transactions++;
+			}
+			sleepDelay = fastrand()%100;
+			usleep(sleepDelay * 100);
+		}
+
 	}
 	for (i=0; i<count; i++) {
 		MYSQL *mysql = mysqlconns[i];
@@ -304,6 +365,7 @@ void print_global_status(MYSQL *mysqladmin) {
 int main(int argc, char *argv[]) {
 	cnt_transactions = 0;
 	cnt_SELECT_outside_transactions = 0;
+	cnt_expected_errors = 0;
 	CommandLine cl;
 
 	if(cl.getEnv())
@@ -373,12 +435,18 @@ int main(int argc, char *argv[]) {
 	}
 	print_global_status(mysqladmin);
 	print_commands_stats(mysqladmin);
-	num_threads = 4;
-	transactions = 200;
-	count = 10;
+	//num_threads = 4;
+	//transactions = 200;
+	//count = 10;
 
 	// plan(transactions * num_threads + 1); // this was too verbose
 	plan(1);
+
+	if (debug_diag==true) {
+		diag("Running test with debug enabled. Set debug_diag=false for less verbosity");
+	} else {
+		diag("Running test with debug disabled. Set debug_diag=true for more verbosity");
+	}
 
 	if (strcmp(host,"localhost")==0) {
 		local = 1;
@@ -418,6 +486,7 @@ int main(int argc, char *argv[]) {
 	print_commands_stats(mysqladmin);
 	std::cerr << std::endl << "MyHGM_myconnpoll_get: " << MyHGM_myconnpoll_get << std::endl;
 	std::cerr << "cnt_SELECT_outside_transactions: " << cnt_SELECT_outside_transactions << std::endl;
+	std::cerr << "cnt_expected_errors: " << cnt_expected_errors << std::endl;
 	std::cerr << "cnt_transactions: " << cnt_transactions << std::endl;
 	//ok((MyHGM_myconnpoll_push == cnt_transactions+cnt_SELECT_outside_transactions) , "Number of transactions [%d] , Queries outside transaction [%d] , total connections returned [%d]", cnt_transactions.load(std::memory_order_relaxed), cnt_SELECT_outside_transactions.load(std::memory_order_relaxed), MyHGM_myconnpoll_push);
 	// FIXME: until we fix the autocommit bug, we may have some minor mismatch
