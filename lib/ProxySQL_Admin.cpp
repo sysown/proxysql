@@ -484,9 +484,9 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define STATS_SQLITE_TABLE_MYSQL_FREE_CONNECTIONS "CREATE TABLE stats_mysql_free_connections (fd INT NOT NULL , hostgroup INT NOT NULL , srv_host VARCHAR NOT NULL , srv_port INT NOT NULL , user VARCHAR NOT NULL , schema VARCHAR , init_connect VARCHAR , time_zone VARCHAR , sql_mode VARCHAR , autocommit VARCHAR , idle_ms INT , statistics VARCHAR , mysql_info VARCHAR)"
 
-#define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST "CREATE TABLE stats_mysql_query_digest (hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, schemaname, username, client_address, digest))"
+#define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST "CREATE TABLE stats_mysql_query_digest (hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , recent_min_time INTEGER NOT NULL , recent_max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, schemaname, username, client_address, digest))"
 
-#define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_mysql_query_digest_reset (hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, schemaname, username, client_address, digest))"
+#define STATS_SQLITE_TABLE_MYSQL_QUERY_DIGEST_RESET "CREATE TABLE stats_mysql_query_digest_reset (hostgroup INT , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , digest VARCHAR NOT NULL , digest_text VARCHAR NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , sum_time INTEGER NOT NULL , min_time INTEGER NOT NULL , max_time INTEGER NOT NULL , recent_min_time INTEGER NOT NULL ,  recent_max_time INTEGER NOT NULL , sum_rows_affected INTEGER NOT NULL , sum_rows_sent INTEGER NOT NULL , PRIMARY KEY(hostgroup, schemaname, username, client_address, digest))"
 
 #define STATS_SQLITE_TABLE_MYSQL_GLOBAL "CREATE TABLE stats_mysql_global (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
@@ -1032,8 +1032,8 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 	char *query1=NULL;
 	char *query32=NULL;
 	std::string query32s = "";
-	query1=(char *)"INSERT INTO history_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)";
-	query32s = "INSERT INTO history_mysql_query_digest VALUES " + generate_multi_rows_query(32,15);
+	query1=(char *)"INSERT INTO history_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)";
+	query32s = "INSERT INTO history_mysql_query_digest VALUES " + generate_multi_rows_query(32,17);
 	query32 = (char *)query32s.c_str();
 	rc = sdb->prepare_v2(query1, &statement1);
 	ASSERT_SQLITE_OK(rc, sdb);
@@ -1051,40 +1051,42 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 		QP_query_digest_stats * qds = (QP_query_digest_stats *)it->second;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+1, __now); ASSERT_SQLITE_OK(rc, sdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+2, qds->hid); ASSERT_SQLITE_OK(rc, sdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*15)+3, qds->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*15)+4, qds->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*15)+5, qds->client_address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+1, __now); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+2, qds->hid); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*17)+3, qds->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*17)+4, qds->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*17)+5, qds->client_address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
 			sprintf(qdsp.digest,"0x%016llX", (long long unsigned int)qds->digest);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*15)+6, qdsp.digest, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*17)+6, qdsp.digest, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
 			if (qds->digest_text) {
-				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*15)+7, qds->digest_text, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*17)+7, qds->digest_text, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
 			} else {
 				std::unordered_map<uint64_t, char *>::iterator it2;
 				it2=uqdt.find(qds->digest);
 				if (it2 != uqdt.end()) {
-					rc=(*proxy_sqlite3_bind_text)(statement32, (idx*15)+7, it2->second, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
+					rc=(*proxy_sqlite3_bind_text)(statement32, (idx*17)+7, it2->second, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sdb);
 				} else {
 					// LCOV_EXCL_START
 					assert(0);
 					// LCOV_EXCL_STOP
 				}
 			}
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+8, qds->count_star); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+8, qds->count_star); ASSERT_SQLITE_OK(rc, sdb);
 			{
 				seen_time = __now - curtime/1000000 + qds->first_seen/1000000;
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+9, seen_time); ASSERT_SQLITE_OK(rc, sdb);
+				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+9, seen_time); ASSERT_SQLITE_OK(rc, sdb);
 			}
 			{
 				seen_time = __now - curtime/1000000 + qds->last_seen/1000000;
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+10, seen_time); ASSERT_SQLITE_OK(rc, sdb);
+				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+10, seen_time); ASSERT_SQLITE_OK(rc, sdb);
 			}
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+11, qds->sum_time); ASSERT_SQLITE_OK(rc, sdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+12, qds->min_time); ASSERT_SQLITE_OK(rc, sdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+13, qds->max_time); ASSERT_SQLITE_OK(rc, sdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+14, qds->rows_affected); ASSERT_SQLITE_OK(rc, sdb); // rows affected
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*15)+15, qds->rows_sent); ASSERT_SQLITE_OK(rc, sdb); // rows sent
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+11, qds->sum_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+12, qds->min_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+13, qds->max_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+14, qds->recent_min_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+15, qds->recent_max_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+16, qds->rows_affected); ASSERT_SQLITE_OK(rc, sdb); // rows affected
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*17)+17, qds->rows_sent); ASSERT_SQLITE_OK(rc, sdb); // rows sent
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
 				rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, sdb);
@@ -1128,8 +1130,10 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 11, qds->sum_time); ASSERT_SQLITE_OK(rc, sdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 12, qds->min_time); ASSERT_SQLITE_OK(rc, sdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 13, qds->max_time); ASSERT_SQLITE_OK(rc, sdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 14, qds->rows_affected); ASSERT_SQLITE_OK(rc, sdb); // rows affected
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 15, qds->rows_sent); ASSERT_SQLITE_OK(rc, sdb); // rows sent
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 14, qds->recent_min_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 15, qds->recent_max_time); ASSERT_SQLITE_OK(rc, sdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 16, qds->rows_affected); ASSERT_SQLITE_OK(rc, sdb); // rows affected
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 17, qds->rows_sent); ASSERT_SQLITE_OK(rc, sdb); // rows sent
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, sdb);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, sdb);
@@ -9250,12 +9254,12 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 	//}
 //	char *a=(char *)"INSERT INTO stats_mysql_query_digest VALUES (%s,\"%s\",\"%s\",\"%s\",\"%s\",%s,%s,%s,%s,%s,%s)";
 	if (reset) {
-		query1=(char *)"INSERT INTO stats_mysql_query_digest_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
-		query32s = "INSERT INTO stats_mysql_query_digest_reset VALUES " + generate_multi_rows_query(32,14);
+		query1=(char *)"INSERT INTO stats_mysql_query_digest_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
+		query32s = "INSERT INTO stats_mysql_query_digest_reset VALUES " + generate_multi_rows_query(32,16);
 		query32 = (char *)query32s.c_str();
 	} else {
-		query1=(char *)"INSERT INTO stats_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
-		query32s = "INSERT INTO stats_mysql_query_digest VALUES " + generate_multi_rows_query(32,14);
+		query1=(char *)"INSERT INTO stats_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)";
+		query32s = "INSERT INTO stats_mysql_query_digest VALUES " + generate_multi_rows_query(32,16);
 		query32 = (char *)query32s.c_str();
 	}
 
@@ -9272,20 +9276,22 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 		SQLite3_row *r1=*it;
 		int idx=row_idx%32;
 		if (row_idx<max_bulk_row_idx) { // bulk
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+1, atoll(r1->fields[11])); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+2, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+3, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+4, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+5, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+6, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+7, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+8, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+9, atoll(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+10, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+11, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+12, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+13, atoll(r1->fields[12])); ASSERT_SQLITE_OK(rc, statsdb); // rows affected
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+14, atoll(r1->fields[13])); ASSERT_SQLITE_OK(rc, statsdb); // rows sent
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+1, atoll(r1->fields[11])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*16)+2, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*16)+3, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*16)+4, r1->fields[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*16)+5, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*16)+6, r1->fields[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+7, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+8, atoll(r1->fields[6])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+9, atoll(r1->fields[7])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+10, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+11, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+12, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+13, atoll(r1->fields[11])); ASSERT_SQLITE_OK(rc, statsdb); // recent min time
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+14, atoll(r1->fields[12])); ASSERT_SQLITE_OK(rc, statsdb); // recent max time
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+15, atoll(r1->fields[13])); ASSERT_SQLITE_OK(rc, statsdb); // rows affected
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*16)+16, atoll(r1->fields[14])); ASSERT_SQLITE_OK(rc, statsdb); // rows sent
 			if (idx==31) {
 				SAFE_SQLITE3_STEP2(statement32);
 				rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, statsdb);
@@ -9304,8 +9310,10 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 10, atoll(r1->fields[8])); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 11, atoll(r1->fields[9])); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 12, atoll(r1->fields[10])); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 13, atoll(r1->fields[12])); ASSERT_SQLITE_OK(rc, statsdb); // rows affected
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 14, atoll(r1->fields[13])); ASSERT_SQLITE_OK(rc, statsdb); // rows sent
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 13, atoll(r1->fields[11])); ASSERT_SQLITE_OK(rc, statsdb); // recent min time
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 14, atoll(r1->fields[12])); ASSERT_SQLITE_OK(rc, statsdb); // recent max time
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 15, atoll(r1->fields[13])); ASSERT_SQLITE_OK(rc, statsdb); // rows affected
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 16, atoll(r1->fields[14])); ASSERT_SQLITE_OK(rc, statsdb); // rows sent
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
