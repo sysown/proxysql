@@ -520,6 +520,7 @@ class MySQL_Threads_Handler
 		int threshold_resultset_size;
 		int query_digests_max_digest_length;
 		int query_digests_max_query_length;
+		int query_digests_recent_time_msec;
 		int wait_timeout;
 		int throttle_max_bytes_per_second_to_client;
 		int throttle_ratio_server_to_client;
