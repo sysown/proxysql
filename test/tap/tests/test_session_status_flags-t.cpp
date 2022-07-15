@@ -38,6 +38,8 @@ int main(int argc, char *argv[]) {
 		return exit_status();
 	}
 
+	plan(23);
+
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
@@ -50,7 +52,7 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Wait for ProxySQL to detect replication issues
-	sleep(10);
+	//sleep(10);
 
 	{
 		MYSQL* proxysql_mysql = mysql_init(NULL);
@@ -718,6 +720,7 @@ int main(int argc, char *argv[]) {
 
 		const std::vector<std::string> savepoint_queries {
 			"SET AUTOCOMMIT=0",
+			"SELECT * FROM test.test_savepoint LIMIT 1 FOR UPDATE",
 			"SAVEPOINT test_session_variables_savepoint",
 			"PROXYSQL INTERNAL SESSION",
 			"COMMIT",
@@ -770,7 +773,6 @@ int main(int argc, char *argv[]) {
 		} else {
 			ok(false, "No backends detected for the current connection.");
 		}
-
 		mysql_close(proxysql_mysql);
 	}
 
