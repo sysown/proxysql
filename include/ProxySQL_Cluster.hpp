@@ -11,8 +11,19 @@
 
 #define PROXYSQL_NODE_METRICS_LEN	5
 
-#define CLUSTER_QUERY_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'"
-#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups"
+/**
+ * @brief This query is intercepted by 'ProxySQL_Admin' and doesn't represent the actual resultset being received when
+ *  issuing it. Instead it represent the 'intended' resultset that should be received when fetching a cluster peer
+ *  `MYSQL_SERVERS` table. The caller issuing the query is responsable of the extra-processing.
+ * @details Received resultset corresponds to 'MySQL_HostGroups_Manager::dump_table_proxysql_servers' resultset.
+ */
+#define CLUSTER_QUERY_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+/**
+ * @brief The result of this query is later used for the computation of the checksum of the received 'mysql_servers'.
+ *  Since it differs from the query being issued by 'MySQL_HostGroups_Manager::commit' for the checksum computation,
+ *  it should be revisit whenever the table 'mysql_replication_hostgroups' change.
+ */
+#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
 
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:
@@ -368,9 +379,9 @@ class ProxySQL_Cluster {
 	void p_update_metrics();
 	void thread_ending(pthread_t);
 	void join_term_thread();
-	void pull_mysql_query_rules_from_peer();
+	void pull_mysql_query_rules_from_peer(const std::string& expected_checksum);
 	void pull_mysql_servers_from_peer();
-	void pull_mysql_users_from_peer();
+	void pull_mysql_users_from_peer(const std::string& expected_checksum);
 	/**
 	 * @brief Pulls from peer the specified global variables by the type parameter.
 	 * @param type A string specifying the type of global variables to pull from the peer, supported
@@ -378,7 +389,7 @@ class ProxySQL_Cluster {
 	 *    - 'mysql'.
      *    - 'admin'.
 	 */
-	void pull_global_variables_from_peer(const std::string& type);
+	void pull_global_variables_from_peer(const std::string& type, const std::string& expected_checksum);
 	void pull_proxysql_servers_from_peer(const char *expected_checksum);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */

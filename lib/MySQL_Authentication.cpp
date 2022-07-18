@@ -585,48 +585,123 @@ bool MySQL_Authentication::reset() {
 	return true;
 }
 
+using std::map;
 
-uint64_t MySQL_Authentication::_get_runtime_checksum(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
-	std::map<uint64_t, account_details_t *>::iterator it;
-	if (cg.bt_map.size() == 0) {
+uint64_t compute_accounts_hash(const umap_auth& accs_map) {
+	if (accs_map.size() == 0) {
 		return 0;
 	}
 	bool foundany = false;
-	SpookyHash myhash;
-	myhash.Init(13,4);
-	for (it = cg.bt_map.begin(); it != cg.bt_map.end(); ) {
-		account_details_t *ad=it->second;
+	SpookyHash acc_map_hash;
+	acc_map_hash.Init(13,4);
+
+	for (const pair<const uint64_t, account_details_t*>& map_entry : accs_map) {
+		const account_details_t* ad = map_entry.second;
+
 		if (ad->default_hostgroup >= 0) {
 			foundany = true;
-			myhash.Update(&ad->use_ssl,sizeof(ad->use_ssl));
-			myhash.Update(&ad->default_hostgroup,sizeof(ad->default_hostgroup));
-			myhash.Update(&ad->schema_locked,sizeof(ad->schema_locked));
-			myhash.Update(&ad->transaction_persistent,sizeof(ad->transaction_persistent));
-			myhash.Update(&ad->fast_forward,sizeof(ad->fast_forward));
-			myhash.Update(&ad->max_connections,sizeof(ad->max_connections));
-			myhash.Update(ad->username,strlen(ad->username));
-			myhash.Update(ad->password,strlen(ad->password));
+			acc_map_hash.Update(&ad->use_ssl,sizeof(ad->use_ssl));
+			acc_map_hash.Update(&ad->default_hostgroup,sizeof(ad->default_hostgroup));
+			acc_map_hash.Update(&ad->schema_locked,sizeof(ad->schema_locked));
+			acc_map_hash.Update(&ad->transaction_persistent,sizeof(ad->transaction_persistent));
+			acc_map_hash.Update(&ad->fast_forward,sizeof(ad->fast_forward));
+			acc_map_hash.Update(&ad->max_connections,sizeof(ad->max_connections));
+			acc_map_hash.Update(ad->username,strlen(ad->username));
+			acc_map_hash.Update(ad->password,strlen(ad->password));
 			if (ad->default_schema)
-				myhash.Update(ad->default_schema,strlen(ad->default_schema));
+				acc_map_hash.Update(ad->default_schema,strlen(ad->default_schema));
 			if (ad->comment)
-				myhash.Update(ad->comment,strlen(ad->comment));
+				acc_map_hash.Update(ad->comment,strlen(ad->comment));
 			if (ad->attributes) {
-				myhash.Update(ad->attributes,strlen(ad->attributes));
+				acc_map_hash.Update(ad->attributes,strlen(ad->attributes));
 			}
 		}
-		it++;
 	}
+
 	if (foundany == false) {
 		return 0;
+	} else {
+		uint64_t hash1 = 0, hash2 = 0;
+		acc_map_hash.Final(&hash1, &hash2);
+
+		return hash1;
 	}
-	uint64_t hash1, hash2;
-	myhash.Final(&hash1, &hash2);
-	return hash1;
+}
+
+uint64_t MySQL_Authentication::_get_runtime_checksum(enum cred_username_type usertype) {
+	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	uint64_t accs_hash = compute_accounts_hash(cg.bt_map);
+
+	return accs_hash;
 }
 
 uint64_t MySQL_Authentication::get_runtime_checksum() {
 	uint64_t hashB = _get_runtime_checksum(USERNAME_BACKEND);
 	uint64_t hashF = _get_runtime_checksum(USERNAME_FRONTEND);
 	return hashB+hashF;
+}
+
+pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset) {
+	if (resultset == nullptr) { return { umap_auth {}, umap_auth {} }; }
+
+	// The following order is assumed for the resulset received fields:
+	//  - username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, 
+	// 	  transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment.
+	umap_auth f_accs_map {};
+	umap_auth b_accs_map {};
+
+	while (MYSQL_ROW row = mysql_fetch_row(resultset)) {
+		account_details_t* acc_details { new account_details_t {} };
+
+		acc_details->username = row[0];
+		acc_details->password = row[1] ? row[1] : const_cast<char*>("");
+		acc_details->__active = strcmp(row[2], "1") == 0 ? true : false;
+		acc_details->use_ssl = strcmp(row[3], "1") == 0 ? true : false;
+		acc_details->default_hostgroup = atoi(row[4]);
+		acc_details->default_schema = row[5] ? row[5] : const_cast<char*>("");
+		acc_details->schema_locked = strcmp(row[6], "1") == 0 ? true : false;
+		acc_details->transaction_persistent = strcmp(row[7], "1") == 0 ? true : false;
+		acc_details->fast_forward = strcmp(row[8], "1") == 0 ? true : false;
+		acc_details->__backend = strcmp(row[9], "1") == 0 ? true : false;
+		acc_details->__frontend = strcmp(row[10], "1") == 0 ? true : false;
+		acc_details->max_connections = atoi(row[11]);
+		acc_details->attributes = row[12] ? row[12] : const_cast<char*>("");
+		acc_details->comment = row[13] ? row[13] : const_cast<char*>("");
+
+		// compute the 'username' hash for the map
+		uint64_t u_hash = 0, _u_hash2 = 0;
+		SpookyHash myhash {};
+		myhash.Init(1,2);
+
+		myhash.Update(acc_details->username, strlen(acc_details->username));
+		myhash.Final(&u_hash, &_u_hash2);
+
+		if (acc_details->__backend) {
+			b_accs_map.insert({u_hash, acc_details});
+		} else {
+			f_accs_map.insert({u_hash, acc_details});
+		}
+	}
+
+	mysql_data_seek(resultset, 0);
+
+	return { b_accs_map, f_accs_map };
+}
+
+uint64_t MySQL_Authentication::get_runtime_checksum(MYSQL_RES* resultset) {
+	if (resultset == NULL) { return 0; }
+
+	pair<umap_auth, umap_auth> acc_maps { extract_accounts_details(resultset) };
+
+	uint64_t b_acc_hash = compute_accounts_hash(acc_maps.first);
+	uint64_t f_acc_hash = compute_accounts_hash(acc_maps.second);
+
+	for (pair<const uint64_t, account_details_t*>& map_entry : acc_maps.first) {
+		delete map_entry.second;
+	}
+	for (pair<const uint64_t, account_details_t*>& map_entry : acc_maps.second) {
+		delete map_entry.second;
+	}
+
+	return b_acc_hash + f_acc_hash;
 }

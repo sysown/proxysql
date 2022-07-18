@@ -76,6 +76,17 @@ class MySQL_Authentication {
 	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
 	unsigned int memory_usage();
 	uint64_t get_runtime_checksum();
+	/**
+	 * @brief Computes the checksum for the 'mysql_users' table contained in the supplied resultset.
+	 *  It's UNSAFE to call this function with another resultset than the specified in @param doc.
+	 * @param resultset Assumed to be the result of hte following query against the Admin interface:
+	 *   - '"SELECT username, password, active, use_ssl, default_hostgroup, default_schema,
+	 *     schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections,
+	 *     attributes, comment FROM runtime_mysql_users"'
+	 *   The order isn't relevant in the query itself because ordering is performed while processing.
+	 * @return The computed hash for the provided resultset.
+	 */
+	uint64_t get_runtime_checksum(MYSQL_RES* resultset);
 };
 
 #endif /* __CLASS_MYSQL_AUTHENTICATION_H */

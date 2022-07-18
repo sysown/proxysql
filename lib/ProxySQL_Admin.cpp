@@ -11380,8 +11380,8 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+6, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=(*proxy_sqlite3_bind_text)(statement32, (idx*12)+5, ( _runtime ? r1->fields[4] : ( strcmp(r1->fields[4],"SHUNNED")==0 ? "ONLINE" : r1->fields[4] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*12)+9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
@@ -11398,8 +11398,8 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 				rc=(*proxy_sqlite3_bind_text)(statement1, 2, r1->fields[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atoi(r1->fields[3])); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_text)(statement1, 5, ( _runtime ? r1->fields[5] : ( strcmp(r1->fields[5],"SHUNNED")==0 ? "ONLINE" : r1->fields[5] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atoi(r1->fields[4])); ASSERT_SQLITE_OK(rc, admindb);
+				rc=(*proxy_sqlite3_bind_text)(statement1, 5, ( _runtime ? r1->fields[4] : ( strcmp(r1->fields[4],"SHUNNED")==0 ? "ONLINE" : r1->fields[4] ) ), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atoi(r1->fields[5])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atoi(r1->fields[6])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atoi(r1->fields[7])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 9, atoi(r1->fields[8])); ASSERT_SQLITE_OK(rc, admindb);
