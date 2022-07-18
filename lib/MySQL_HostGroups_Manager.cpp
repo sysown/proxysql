@@ -2124,6 +2124,9 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 		it++;
 	}
 
+	// NOTE: We are required to lock while iterating over 'MyHostGroups'. Otherwise race conditions could take place,
+	// e.g. servers could be purged by 'purge_mysql_servers_table' and invalid memory be accessed.
+	wrlock();
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
@@ -2164,6 +2167,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 			}
 		}
 	}
+	wrunlock();
 	std::vector<string> to_remove;
 	it = gtid_map.begin();
 	while(it != gtid_map.end()) {
