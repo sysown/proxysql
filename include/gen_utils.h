@@ -1,6 +1,10 @@
 #ifndef __CLASS_PTR_ARRAY_H
 #define __CLASS_PTR_ARRAY_H
+
+#include <memory>
+
 #include "proxysql.h"
+#include "sqlite3db.h"
 
 #define MIN_ARRAY_LEN 8
 #define MIN_ARRAY_DELETE_RATIO  8
@@ -240,3 +244,10 @@ int remove_spaces(const char *);
 char *trim_spaces_in_place(char *str);
 char *trim_spaces_and_quotes_in_place(char *str);
 bool mywildcmp(const char *p, const char *str);
+
+/**
+ * @brief Helper function that converts a MYSQL_RES into a 'SQLite3_result'.
+ * @param resultset The resultset to be converted into a 'SQLite3_result'.
+ * @return An 'unique_ptr' holding the resulting 'SQLite3_result'.
+ */
+std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset);
