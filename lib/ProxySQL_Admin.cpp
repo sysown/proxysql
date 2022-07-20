@@ -6944,7 +6944,11 @@ void ProxySQL_Admin::flush_clickhouse_variables___database_to_runtime(SQLite3DB 
 
 void ProxySQL_Admin::flush_clickhouse_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ClickHouse variables. Replace:%d, Delete:%d, Only_If_Empty:%d\n", replace, del, onlyifempty);
-	if (GloVars.global.clickhouse_server == false) {
+	if (
+		(GloVars.global.clickhouse_server == false)
+		||
+		( GloClickHouseServer == NULL )
+	) {
 		return;
 	}
 	if (onlyifempty) {
