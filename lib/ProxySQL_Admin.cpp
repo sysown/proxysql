@@ -4476,18 +4476,34 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS '@@version'";
-		query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
+		if (GloMyLdapAuth == nullptr) {
+			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
+		} else {
+			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+strlen(" Enterprise");
+		}
 		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
+		if (GloMyLdapAuth == nullptr) {
+			sprintf(query, q, PROXYSQL_VERSION);
+		} else {
+			sprintf(query, q, PROXYSQL_VERSION" Enterprise");
+		}
 		goto __run_query;
 	}
 
 	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS 'version()'";
-		query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
+		if (GloMyLdapAuth == nullptr) {
+			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
+		} else {
+			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+strlen(" Enterprise");
+		}
 		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
+		if (GloMyLdapAuth == nullptr) {
+			sprintf(query, q, PROXYSQL_VERSION);
+		} else {
+			sprintf(query, q, PROXYSQL_VERSION" Enterprise");
+		}
 		goto __run_query;
 	}
 
