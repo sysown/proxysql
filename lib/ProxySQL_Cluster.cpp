@@ -1116,14 +1116,69 @@ int fetch_mysql_users_checksum(MYSQL* conn, char* hostname, uint16_t port, strin
 	return res;
 }
 
-uint64_t get_mysql_users_checksum(MYSQL_RES* resultset) {
+uint64_t get_mysql_users_checksum(MYSQL_RES* resultset, MYSQL_RES* ldap_resultset) {
 	uint64_t raw_users_checksum = GloMyAuth->get_runtime_checksum(resultset);
 
 	if (GloMyLdapAuth) {
-		raw_users_checksum += GloMyLdapAuth->get_ldap_mapping_runtime_checksum();
+		raw_users_checksum += mysql_raw_checksum(ldap_resultset);
 	}
 
 	return raw_users_checksum;
+}
+
+void update_mysql_users(MYSQL_RES* result) {
+	GloAdmin->admindb->execute("DELETE FROM mysql_users");
+	char* q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema,"
+		" schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment)"
+		" VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+
+	sqlite3_stmt *statement1 = NULL;
+	int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
+	ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+	while (MYSQL_ROW row = mysql_fetch_row(result)) {
+		rc=(*proxy_sqlite3_bind_text)(statement1, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
+		rc=(*proxy_sqlite3_bind_text)(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // password
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoll(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // active
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atoll(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // use_ssl
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 5, atoll(row[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_hostgroup
+		rc=(*proxy_sqlite3_bind_text)(statement1, 6, row[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_schema
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atoll(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // schema_locked
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atoll(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // transaction_persistent
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 9, atoll(row[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // fast_forward
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 10, atoll(row[9])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 11, atoll(row[10])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 12, atoll(row[11])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_connection
+		rc=(*proxy_sqlite3_bind_text)(statement1, 13, row[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // attributes
+		rc=(*proxy_sqlite3_bind_text)(statement1, 14, row[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+
+		SAFE_SQLITE3_STEP2(statement1);
+		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+	}
+}
+
+void update_ldap_mappings(MYSQL_RES* result) {
+	GloAdmin->admindb->execute("DELETE FROM mysql_ldap_mapping");
+	char* q = const_cast<char*>(
+		"INSERT INTO mysql_ldap_mapping (priority, frontend_entity, backend_entity, comment)"
+		" VALUES (?1 , ?2 , ?3 , ?4)"
+	);
+
+	sqlite3_stmt *statement1 = NULL;
+	int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
+	ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+	while (MYSQL_ROW row = mysql_fetch_row(result)) {
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atoll(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // priority
+		rc=(*proxy_sqlite3_bind_text)(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend_entity
+		rc=(*proxy_sqlite3_bind_text)(statement1, 3, row[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend_entity
+		rc=(*proxy_sqlite3_bind_text)(statement1, 4, row[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+
+		SAFE_SQLITE3_STEP2(statement1);
+		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+	}
 }
 
 void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksum) {
@@ -1134,10 +1189,8 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
-		// bool rc_bool = true;
 		MYSQL *rc_conn;
 		int rc_query;
-		int rc;
 		MYSQL *conn = mysql_init(NULL);
 		if (conn==NULL) {
 			proxy_error("Unable to run mysql_init()\n");
@@ -1152,121 +1205,110 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
+
 			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
-			if (rc_conn) {
-				rc_query = mysql_query(conn, "SELECT username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_mysql_users");
-				if ( rc_query == 0 ) {
-					MYSQL_RES *result = mysql_store_result(conn);
-					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d completed\n", hostname, port);
+			if (rc_conn == nullptr) {
+				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
 
-					const uint64_t users_raw_checksum = get_mysql_users_checksum(result);
-					const string computed_checksum { get_checksum_from_hash(users_raw_checksum) };
-
-					if (expected_checksum == computed_checksum) {
-
-					GloAdmin->admindb->execute("DELETE FROM mysql_users");
-					MYSQL_ROW row;
-					char *q = (char *)"INSERT INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment) VALUES (?1 , ?2 , ?3 , ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
-					sqlite3_stmt *statement1 = NULL;
-					//sqlite3 *mydb3 = GloAdmin->admindb->get_db();
-					//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q, -1, &statement1, 0);
-					rc = GloAdmin->admindb->prepare_v2(q, &statement1);
-					ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-					while ((row = mysql_fetch_row(result))) {
-						rc=(*proxy_sqlite3_bind_text)(statement1, 1, row[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
-						rc=(*proxy_sqlite3_bind_text)(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // password
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atoll(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // active
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atoll(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // use_ssl
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 5, atoll(row[4])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_hostgroup
-						rc=(*proxy_sqlite3_bind_text)(statement1, 6, row[5], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // default_schema
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atoll(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // schema_locked
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atoll(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // transaction_persistent
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 9, atoll(row[8])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // fast_forward
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 10, atoll(row[9])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 11, atoll(row[10])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend
-						rc=(*proxy_sqlite3_bind_int64)(statement1, 12, atoll(row[11])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_connection
-						rc=(*proxy_sqlite3_bind_text)(statement1, 13, row[12], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // attributes
-						rc=(*proxy_sqlite3_bind_text)(statement1, 14, row[13], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
-
-						SAFE_SQLITE3_STEP2(statement1);
-						rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-						rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-					}
-					mysql_free_result(result);
-					proxy_info("Cluster: Loading to runtime MySQL Users from peer %s:%d\n", hostname, port);
-					GloAdmin->init_users();
-					if (GloProxyCluster->cluster_mysql_users_save_to_disk == true) {
-						proxy_info("Cluster: Saving to disk MySQL Users from peer %s:%d\n", hostname, port);
-						GloAdmin->flush_mysql_users__from_memory_to_disk();
-					} else {
-						proxy_info("Cluster: Saving to disk MySQL Users Rules from peer %s:%d\n", hostname, port);
-					}
-					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_success]->Increment();
-
-						metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_success]->Increment();
-					} else {
-						proxy_info(
-							"Cluster: Fetching MySQL Users from peer %s:%d failed: Checksum changed from %s to %s\n",
-							hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
-						);
-						metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
-					}
-				} else {
-					proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
-					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
+				if (GloMyLdapAuth) {
+					proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
 				}
 
-				// TODO: Fix LDAP support for cluster synchronization
+				goto __exit_pull_mysql_users_from_peer;
+			}
+
+			rc_query = mysql_query(
+				conn,
+				"SELECT username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked,"
+					" transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_mysql_users"
+				);
+			if (rc_query == 0) {
+				MYSQL_RES* mysql_users_result = mysql_store_result(conn);
+				MYSQL_RES* ldap_mapping_result = nullptr;
+
+				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d completed\n", hostname, port);
+
 				if (GloMyLdapAuth) {
+					proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d.\n", hostname, port);
+
 					rc_query = mysql_query(
-						conn,
-						"SELECT priority, frontend_entity, backend_entity, comment FROM runtime_mysql_ldap_mapping"
+						conn, "SELECT priority, frontend_entity, backend_entity, comment FROM mysql_ldap_mapping ORDER BY priority"
 					);
 
 					if (rc_query == 0) {
-						MYSQL_RES *result = mysql_store_result(conn);
-						GloAdmin->admindb->execute("DELETE FROM mysql_ldap_mapping");
-						MYSQL_ROW row;
-						char* q = const_cast<char*>(
-								"INSERT INTO mysql_ldap_mapping (priority, frontend_entity, backend_entity, comment)"
-								" VALUES (?1 , ?2 , ?3 , ?4)"
-							);
-						sqlite3_stmt *statement1 = NULL;
-						rc = GloAdmin->admindb->prepare_v2(q, &statement1);
-						ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-
-						while ((row = mysql_fetch_row(result))) {
-							rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atoll(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // priority
-							rc=(*proxy_sqlite3_bind_text)(statement1, 2, row[1], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // frontend_entity
-							rc=(*proxy_sqlite3_bind_text)(statement1, 3, row[2], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // backend_entity
-							rc=(*proxy_sqlite3_bind_text)(statement1, 4, row[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
-
-							SAFE_SQLITE3_STEP2(statement1);
-							rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-							rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
-						}
-
-						mysql_free_result(result);
+						ldap_mapping_result = mysql_store_result(conn);
 						proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d completed\n", hostname, port);
-						proxy_info("Cluster: Loading to runtime LDAP Mappings from peer %s:%d\n", hostname, port);
-						GloAdmin->init_users();
-
-						if (GloProxyCluster->cluster_mysql_users_save_to_disk == true) {
-							proxy_info("Cluster: Saving to disk LDAP Mappings from peer %s:%d\n", hostname, port);
-							GloAdmin->flush_mysql_users__from_memory_to_disk();
-						} else {
-							proxy_info("Cluster: Saving to disk LDAP Mappings Rules from peer %s:%d\n", hostname, port);
-						}
-
-						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_success]->Increment();
 					} else {
 						proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
 					}
 				}
+
+				const uint64_t users_raw_checksum = get_mysql_users_checksum(mysql_users_result, ldap_mapping_result);
+				const string computed_checksum { get_checksum_from_hash(users_raw_checksum) };
+
+				if (expected_checksum == computed_checksum) {
+					update_mysql_users(mysql_users_result);
+					mysql_free_result(mysql_users_result);
+
+					if (GloMyLdapAuth) {
+						update_ldap_mappings(ldap_mapping_result);
+						mysql_free_result(ldap_mapping_result);
+					}
+
+					proxy_info("Cluster: Loading to runtime MySQL Users from peer %s:%d\n", hostname, port);
+					if (GloMyLdapAuth) {
+						proxy_info("Cluster: Loading to runtime LDAP Mappings from peer %s:%d\n", hostname, port);
+					}
+
+					GloAdmin->init_users();
+					if (GloProxyCluster->cluster_mysql_users_save_to_disk == true) {
+						proxy_info("Cluster: Saving to disk MySQL Users from peer %s:%d\n", hostname, port);
+						if (GloMyLdapAuth) {
+							proxy_info("Cluster: Saving to disk LDAP Mappings from peer %s:%d\n", hostname, port);
+						}
+
+						GloAdmin->flush_mysql_users__from_memory_to_disk();
+					} else {
+						proxy_info("Cluster: NOT saving to disk MySQL Users from peer %s:%d\n", hostname, port);
+						if (GloMyLdapAuth) {
+							proxy_info("Cluster: NOT Saving to disk LDAP Mappings from peer %s:%d\n", hostname, port);
+						}
+					}
+
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_success]->Increment();
+
+					if (GloMyLdapAuth) {
+						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_success]->Increment();
+					}
+				} else {
+					if (mysql_users_result) {
+						mysql_free_result(mysql_users_result);
+					}
+					if (ldap_mapping_result) {
+						mysql_free_result(ldap_mapping_result);
+					}
+
+					proxy_info(
+						"Cluster: Fetching MySQL Users from peer %s:%d failed: Checksum changed from %s to %s\n",
+						hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
+					);
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
+
+					if (GloMyLdapAuth) {
+						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
+					}
+				}
 			} else {
 				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
-				metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
+				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
+
+				if (GloMyLdapAuth) {
+					proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
+					metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
+				}
 			}
 		}
 __exit_pull_mysql_users_from_peer:
