@@ -62,6 +62,13 @@ int main(int argc, char *argv[]) {
 			return -1;
 		}
 
+		diag("Preparing table test.test_savepoint");
+		MYSQL_QUERY(proxysql_mysql, "CREATE DATABASE IF NOT EXISTS test");
+		MYSQL_QUERY(proxysql_mysql, "CREATE TABLE IF NOT EXISTS test.test_savepoint(id INT NOT NULL AUTO_INCREMENT PRIMARY KEY) ENGINE=INNODB");
+		MYSQL_QUERY(proxysql_mysql, "DELETE FROM test.test_savepoint");
+		MYSQL_QUERY(proxysql_mysql, "INSERT INTO test.test_savepoint VALUES (1), (2)");
+		sleep(1);
+
 		// Check that transaction state is reflected when actively in a transaction
 		const std::vector<std::string> transaction_queries { "START TRANSACTION", "SELECT 1", "PROXYSQL INTERNAL SESSION", "COMMIT" };
 		json j_status;
