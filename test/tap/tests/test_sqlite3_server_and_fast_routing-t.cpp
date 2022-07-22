@@ -18,7 +18,7 @@ using query_spec = std::tuple<std::string, int>;
 
 const int sqlite3_port = 0;
 
-#include "sqlite_3_server_test.h"
+#include "modules_server_test.h"
 
 inline unsigned long long monotonic_time() {
   struct timespec ts;
@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
 	}
 
 //	{
-	host_port_err = extract_sqlite3_host_port(proxysql_admin, host_port); 
+	host_port_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", host_port); 
 	if (host_port_err) {
 		diag("Failed to get and parse 'sqliteserver-mysql_ifaces' at line '%d'", __LINE__);
 		goto cleanup;
