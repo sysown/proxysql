@@ -47,7 +47,7 @@ ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
 	IS_CXX17 := 1
 endif
 else
-	GCC_VERSION := $(shell gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
 	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
 ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
 	IS_CXX17 := 1
@@ -166,12 +166,12 @@ ifeq ($(IS_CXX17), 1)
 	echo ">>> Clickhouse CXX17"
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.1.0 clickhouse-cpp
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-	cd clickhouse-cpp && tar -zxf v2.1.0.tar.gz
+	cd clickhouse-cpp && tar -zxf v2.1.0.tar.gz && sync
 else
 	echo ">>> Clickhouse CXX11"
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz
+	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
 	cd clickhouse-cpp && sed -i 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
 endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
