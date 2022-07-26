@@ -57,6 +57,11 @@ extern "C" void __gcov_dump();
 extern "C" void __gcov_reset();
 #endif
 
+
+#ifdef DEBUG
+//#define BENCHMARK_FASTROUTING_LOAD
+#endif // DEBUG
+
 //#define MYSQL_THREAD_IMPLEMENTATION
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
@@ -3717,6 +3722,49 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES))) {
+			GloQPro->wrlock();
+			resultset = GloQPro->get_current_query_rules_inner();
+			if (resultset == NULL) {
+				GloQPro->wrunlock(); // unlock first
+				resultset = GloQPro->get_current_query_rules();
+				if (resultset) {
+					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					delete resultset;
+					run_query=false;
+					goto __run_query;
+				}
+			} else {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				//delete resultset; // DO NOT DELETE . This is the inner resultset of Query_Processor
+				GloQPro->wrunlock();
+				run_query=false;
+				goto __run_query;
+			}
+		}
+		if (!strncasecmp(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING, query_no_space, strlen(CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING))) {
+			GloQPro->wrlock();
+			resultset = GloQPro->get_current_query_rules_fast_routing_inner();
+			if (resultset == NULL) {
+				GloQPro->wrunlock(); // unlock first
+				resultset = GloQPro->get_current_query_rules_fast_routing();
+				if (resultset) {
+					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+					delete resultset;
+					run_query=false;
+					goto __run_query;
+				}
+			} else {
+				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+				//delete resultset; // DO NOT DELETE . This is the inner resultset of Query_Processor
+				GloQPro->wrunlock();
+				run_query=false;
+				goto __run_query;
+			}
+		}
+	}
+
 	// if the client simply executes:
 	// SELECT COUNT(*) FROM runtime_mysql_query_rules_fast_routing
 	// we just return the count
@@ -5779,6 +5827,7 @@ bool ProxySQL_Admin::init() {
 
 	admindb=new SQLite3DB();
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+	admindb->execute("PRAGMA cache_size = -50000");
 	//sqlite3_enable_load_extension(admindb->get_db(),1);
 	//sqlite3_auto_extension( (void(*)(void))sqlite3_json_init);
 	statsdb=new SQLite3DB();
@@ -11833,26 +11882,43 @@ char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {
 	return NULL;
 }
 
-char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
+char * ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result *SQLite3_query_rules_resultset, SQLite3_result *SQLite3_query_rules_fast_routing_resultset) {
+	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and
+	// CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
 	if (GloQPro==NULL) return (char *)"Global Query Processor not started: command impossible to run";
 	SQLite3_result *resultset=NULL;
 	char *query=(char *)"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM main.mysql_query_rules WHERE active=1 ORDER BY rule_id";
-	admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	if (SQLite3_query_rules_resultset==NULL) {
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	} else {
+		// Cluster can pass SQLite3_query_rules_resultset , to absolutely speed up
+		// the process and therefore there is no need to run any query
+		resultset = SQLite3_query_rules_resultset;
+	}
 	char *error2 = NULL;
 	int cols2 = 0;
 	int affected_rows2 = 0;
 	SQLite3_result *resultset2 = NULL;
 	char *query2=(char *)"SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM main.mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN";
-	admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+	if (SQLite3_query_rules_fast_routing_resultset==NULL) {
+		admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+	} else {
+		// Cluster can pass SQLite3_query_rules_fast_routing_resultset , to absolutely speed up
+		// the process and therefore there is no need to run any query
+		resultset2 = SQLite3_query_rules_fast_routing_resultset;
+	}
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else if (error2) {
 		proxy_error("Error on %s : %s\n", query2, error2);
 	} else {
 		GloQPro->wrlock();
+#ifdef BENCHMARK_FASTROUTING_LOAD
+		for (int i=0; i<10; i++) {
+#endif // BENCHMARK_FASTROUTING_LOAD
 		if (checksum_variables.checksum_mysql_query_rules) {
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			uint64_t hash1 = resultset->raw_checksum();
@@ -11931,11 +11997,24 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime() {
 			GloQPro->insert(nqpr, false);
 		}
 		GloQPro->sort(false);
+#ifdef BENCHMARK_FASTROUTING_LOAD
+		// load a copy of resultset and resultset2
+		SQLite3_result *resultset3 = new SQLite3_result(resultset);
+		GloQPro->save_query_rules(resultset3);
+		SQLite3_result *resultset4 = new SQLite3_result(resultset2);
+		GloQPro->load_fast_routing(resultset4);
+#else
+		// load the original resultset and resultset2
+		GloQPro->save_query_rules(resultset);
 		GloQPro->load_fast_routing(resultset2);
+#endif // BENCHMARK_FASTROUTING_LOAD
 		GloQPro->commit();
+#ifdef BENCHMARK_FASTROUTING_LOAD
+		}
+#endif // BENCHMARK_FASTROUTING_LOAD
 		GloQPro->wrunlock();
 	}
-	if (resultset) delete resultset;
+	// if (resultset) delete resultset; // never delete it. GloQPro saves it
 	// if (resultset2) delete resultset2; // never delete it. GloQPro saves it
 	return NULL;
 }
