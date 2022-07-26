@@ -1,3 +1,6 @@
+#!/bin/make -f
+
+
 ifndef GIT_VERSION
 	GIT_VERSION := $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
@@ -54,7 +57,7 @@ PROMETHEUS_LDIR=$(PROMETHEUS_PATH)/lib
 
 IDIR=../include
 
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) $(MICROHTTPD_IDIR) $(LIBHTTPSERVER_IDIR) $(LIBINJECTION_IDIR) $(CURL_IDIR) -I$(EV_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR)
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) -I$(CLICKHOUSE_CPP_DIR)/contrib/ $(MICROHTTPD_IDIR) $(LIBHTTPSERVER_IDIR) $(LIBINJECTION_IDIR) $(CURL_IDIR) -I$(EV_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR)
 
 LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH) -L$(PROMETHEUS_LDIR)
 
@@ -97,16 +100,38 @@ ifeq ($(UNAME_S),Darwin)
 NOJEM=-DNOJEM
 endif
 
-PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
-ifeq ($(PROXYSQLCLICKHOUSE),1)
-PSQLCH=-DPROXYSQLCLICKHOUSE
-else
-PSQLCH=
+
+# determine good compiler version for stdc++17
+IS_CXX17 := 0
+ifeq ($(CXX),clang++)
+	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
+	IS_CXX17 := 1
 endif
+else
+	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
+	IS_CXX17 := 1
+endif
+endif
+
+
+PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
+PSQLCH=
+ifeq ($(PROXYSQLCLICKHOUSE),1)
+	PSQLCH=-DPROXYSQLCLICKHOUSE
+ifeq ($(IS_CXX17),1)
+	PSQLCH=-DPROXYSQLCLICKHOUSE -std=c++17 -DCXX17
+endif
+endif
+
 
 ifeq ($(UNAME_S),Darwin)
 	IDIRS+= -I/usr/local/opt/openssl/include
 endif
+
 
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding

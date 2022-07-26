@@ -41,7 +41,7 @@ using query_spec = std::tuple<std::string, int>;
 
 const int sqlite3_port = 0;
 
-#include "sqlite_3_server_test.h"
+#include "modules_server_test.h"
 
 void fetch_and_discard_results(MYSQL_RES* result, bool verbose=false) {
 	MYSQL_ROW row = nullptr;
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
 
 	{
 		std::pair<std::string, int> host_port {};
-		int host_port_err = extract_sqlite3_host_port(proxysql_admin, host_port); 
+		int host_port_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", host_port); 
 		if (host_port_err) {
 			diag("Failed to get and parse 'sqliteserver-mysql_ifaces' at line '%d'", __LINE__);
 			goto cleanup;
@@ -292,7 +292,7 @@ int main(int argc, char** argv) {
 
 		ok(
 			failed_to_connect,
-			"An invalid user should fail to connect to SQLite3 server, error was: %s",
+			"An invalid password should fail to connect to SQLite3 server, error was: %s",
 			inv_pass_err.c_str()
 		);
 
@@ -340,7 +340,7 @@ int main(int argc, char** argv) {
 
 		// Connect to the new interface
 		std::pair<std::string, int> new_host_port {};
-		int ext_intf_err = extract_sqlite3_host_port(proxysql_admin, new_host_port);
+		int ext_intf_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", new_host_port);
 		if (ext_intf_err) {
 			diag("Failed to get and parse 'sqliteserver-mysql_ifaces' at line '%d'", __LINE__);
 			goto cleanup;

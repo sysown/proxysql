@@ -521,6 +521,7 @@ Query_Processor::Query_Processor() {
 		rand_del[13] = '-';
 		rand_del[14] = 0;
 	}
+	query_rules_resultset = NULL;
 	fast_routing_resultset = NULL;
 	rules_fast_routing = kh_init(khStrInt); // create a hashtable
 	rules_fast_routing___keys_values = NULL;
@@ -546,6 +547,10 @@ Query_Processor::~Query_Processor() {
 	}
 	digest_umap.erase(digest_umap.begin(),digest_umap.end());
 	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
+	if (query_rules_resultset) {
+		delete query_rules_resultset;
+		query_rules_resultset = NULL;
+	}
 	if (fast_routing_resultset) {
 		delete fast_routing_resultset;
 		fast_routing_resultset = NULL;
@@ -846,6 +851,17 @@ int Query_Processor::get_current_query_rules_fast_routing_count() {
 	result = fast_routing_resultset->rows_count;
 	pthread_rwlock_unlock(&rwlock);
 	return result;
+}
+
+// we return the resultset fast_routing_resultset
+// the caller of this function must lock Query Processor
+SQLite3_result * Query_Processor::get_current_query_rules_fast_routing_inner() {
+	return fast_routing_resultset;
+}
+// we return the resultset query_rules_resultset
+// the caller of this function must lock Query Processor
+SQLite3_result * Query_Processor::get_current_query_rules_inner() {
+	return query_rules_resultset;
 }
 
 SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
@@ -2727,6 +2743,11 @@ void Query_Processor::load_mysql_firewall_rules(SQLite3_result *resultset) {
 	nsize *= oh;
 	tot_size += nsize;
 	global_mysql_firewall_whitelist_rules_map___size = tot_size;
+}
+
+void Query_Processor::save_query_rules(SQLite3_result *resultset) {
+	delete query_rules_resultset;
+	query_rules_resultset = resultset; // save it
 }
 
 void Query_Processor::load_fast_routing(SQLite3_result *resultset) {

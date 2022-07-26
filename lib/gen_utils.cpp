@@ -1,4 +1,5 @@
 #include <vector>
+#include <memory>
 
 #include "gen_utils.h"
 

@@ -101,7 +101,7 @@ OPT=-O2 $(WGCOV) -Wl,--no-as-needed
 debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
-tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper set_testing-240.csv
+tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper set_testing-240.csv test_clickhouse_server_libmysql
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -149,3 +149,6 @@ reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cp
 
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
 	$(CXX) -DLIBMYSQL_HELPER -DDEBUG reg_test_3504-change_user_helper.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"
+
+test_clickhouse_server_libmysql: test_clickhouse_server-t.cpp
+	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o test_clickhouse_server_libmysql-t -DGITVERSION=\"$(GIT_VERSION)\"

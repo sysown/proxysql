@@ -914,21 +914,27 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 			if (rc_conn) {
 				MYSQL_RES *result1 = NULL;
 				MYSQL_RES *result2 = NULL;
-				rc_query = mysql_query(conn,"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules");
+				//rc_query = mysql_query(conn,"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules");
+				rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_QUERY_RULES);
 				if ( rc_query == 0 ) {
 					MYSQL_RES *result1 = mysql_store_result(conn);
-					rc_query = mysql_query(conn,"SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM runtime_mysql_query_rules_fast_routing");
+					rc_query = mysql_query(conn,CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING);
 					if ( rc_query == 0) {
 						result2 = mysql_store_result(conn);
 						proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d completed\n", hostname, port);
 
-						const uint64_t query_rules_hash = mysql_raw_checksum(result1) + mysql_raw_checksum(result2);
+						std::unique_ptr<SQLite3_result> SQLite3_query_rules_resultset = get_SQLite3_resulset(result1);
+						std::unique_ptr<SQLite3_result> SQLite3_query_rules_fast_routing_resultset = get_SQLite3_resulset(result2);
+
+						const uint64_t query_rules_hash =
+							SQLite3_query_rules_resultset->raw_checksum() + SQLite3_query_rules_fast_routing_resultset->raw_checksum();
 						const string computed_checksum { get_checksum_from_hash(query_rules_hash) };
 
 						if (expected_checksum == computed_checksum) {
 
 						proxy_info("Cluster: Loading to runtime MySQL Query Rules from peer %s:%d\n", hostname, port);
 						pthread_mutex_lock(&GloAdmin->sql_query_global_mutex);
+						//GloAdmin->admindb->execute("PRAGMA quick_check");
 						GloAdmin->admindb->execute("DELETE FROM mysql_query_rules");
 						GloAdmin->admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
 						MYSQL_ROW row;
@@ -938,6 +944,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 						//rc=(*proxy_sqlite3_prepare_v2)(mydb3, q, -1, &statement1, 0);
 						rc = GloAdmin->admindb->prepare_v2(q, &statement1);
 						ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+						GloAdmin->admindb->execute("BEGIN TRANSACTION");
 						while ((row = mysql_fetch_row(result1))) {
 							rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atoll(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // rule_id
 							rc=(*proxy_sqlite3_bind_int64)(statement1, 2, 1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // active
@@ -978,6 +985,9 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 							rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 							rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 						}
+						GloAdmin->admindb->execute("COMMIT");
+
+
 						std::string query32frs = "INSERT INTO mysql_query_rules_fast_routing(username, schemaname, flagIN, destination_hostgroup, comment) VALUES " + generate_multi_rows_query(32,5);
 						char *q1fr = (char *)"INSERT INTO mysql_query_rules_fast_routing(username, schemaname, flagIN, destination_hostgroup, comment) VALUES (?1, ?2, ?3, ?4, ?5)";
 						char *q32fr = (char *)query32frs.c_str();
@@ -992,6 +1002,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 						int row_idx=0;
 						int max_bulk_row_idx=mysql_num_rows(result2)/32;
 						max_bulk_row_idx=max_bulk_row_idx*32;
+						GloAdmin->admindb->execute("BEGIN TRANSACTION");
 						while ((row = mysql_fetch_row(result2))) {
 							int idx=row_idx%32;
 							if (row_idx<max_bulk_row_idx) { // bulk
@@ -1017,7 +1028,11 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 							}
 							row_idx++;
 						}
-						GloAdmin->load_mysql_query_rules_to_runtime();
+						//GloAdmin->admindb->execute("PRAGMA integrity_check");
+						GloAdmin->admindb->execute("COMMIT");
+						// We release the ownership of the memory for 'SQLite3' resultsets here since now it's no longer
+						// our responsability to free the memory, they should be directly passed to the 'Query Processor'
+						GloAdmin->load_mysql_query_rules_to_runtime(SQLite3_query_rules_resultset.release(), SQLite3_query_rules_fast_routing_resultset.release());
 						if (GloProxyCluster->cluster_mysql_query_rules_save_to_disk == true) {
 							proxy_info("Cluster: Saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_mysql_query_rules__from_memory_to_disk();
@@ -1029,7 +1044,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 
 						} else {
 							proxy_info(
-								"Cluster: Fetching MySQL Query Rules from peer %s:%d failed: Checksum changed from %s to %s\n",
+								"Cluster: Fetching MySQL Query Rules from peer %s:%d failed because of mismatching checksum. Expected: %s , Computed: %s\n",
 								hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
 							);
 							metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
