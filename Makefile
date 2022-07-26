@@ -58,7 +58,6 @@ USERCHECK := $(shell getent passwd proxysql)
 GROUPCHECK := $(shell getent group proxysql)
 
 
-
 .PHONY: default
 default: build_deps build_lib build_src
 
