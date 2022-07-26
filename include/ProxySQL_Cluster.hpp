@@ -14,6 +14,12 @@
 #define CLUSTER_QUERY_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD'"
 #define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups"
 
+// the following two queries are the same used in ProxySQL_Admin::load_mysql_query_rules_to_runtime() , but on runtime_ tables.
+// It is important to note that the queries in ProxySQL_Admin::load_mysql_query_rules_to_runtime() are used to compute the checksum,
+// and are the same resultset saved. Therefore it Cluster can retrieve the same resultset saved it can easily compute the checksum before loading.
+#define CLUSTER_QUERY_MYSQL_QUERY_RULES "SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules ORDER BY rule_id"
+#define CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING "SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM runtime_mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN"
+
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:
 	time_t last_updated;
@@ -368,7 +374,7 @@ class ProxySQL_Cluster {
 	void p_update_metrics();
 	void thread_ending(pthread_t);
 	void join_term_thread();
-	void pull_mysql_query_rules_from_peer();
+	void pull_mysql_query_rules_from_peer(const char *expected_checksum);
 	void pull_mysql_servers_from_peer();
 	void pull_mysql_users_from_peer();
 	/**

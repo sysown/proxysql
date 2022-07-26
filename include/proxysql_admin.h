@@ -341,7 +341,7 @@ class ProxySQL_Admin {
 	void flush_ldap_variables__from_memory_to_disk();
 	void load_mysql_servers_to_runtime();
 	void save_mysql_servers_from_runtime();
-	char * load_mysql_query_rules_to_runtime();
+	char * load_mysql_query_rules_to_runtime(SQLite3_result *SQLite3_query_rules_resultset=NULL, SQLite3_result *SQLite3_query_rules_fast_routing_resultset=NULL);
 	void save_mysql_query_rules_from_runtime(bool);
 	void save_mysql_query_rules_fast_routing_from_runtime(bool);
 	char * load_mysql_firewall_to_runtime();
