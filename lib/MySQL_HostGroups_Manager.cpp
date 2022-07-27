@@ -3160,6 +3160,23 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 						conn_found_idx = k;
 					}
 				}
+			} else {
+				if (connection_quality_level == 1) {
+					int rca = mysql_thread___reset_connection_algorithm;
+					if (rca==1) {
+						int ql = GloMTH->variables.connpoll_reset_queue_length;
+						if (ql==0) {
+							// if:
+							// mysql-reset_connection_algorithm=1 and
+							// mysql-connpoll_reset_queue_length=0
+							// we will not return a connection with connection_quality_level == 1
+							// because we want to run COM_CHANGE_USER
+							// This change was introduced to work around Galera bug
+							// https://github.com/codership/galera/issues/613
+							connection_quality_level = 0;
+						}
+					}
+				}
 			}
 		}
 	}
