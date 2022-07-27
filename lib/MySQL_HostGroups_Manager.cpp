@@ -1644,7 +1644,7 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 	return resultset;
 }
 
-bool MySQL_HostGroups_Manager::commit() {
+bool MySQL_HostGroups_Manager::commit(const std::string& checksum, const time_t epoch) {
 
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
@@ -2051,7 +2051,11 @@ bool MySQL_HostGroups_Manager::commit() {
 		//struct timespec ts;
 		//clock_gettime(CLOCK_REALTIME, &ts);
 		time_t t = time(NULL);
-		GloVars.checksums_values.mysql_servers.epoch = t;
+		if (epoch != 0 && checksum != "" && GloVars.checksums_values.mysql_servers.checksum == checksum) {
+			GloVars.checksums_values.mysql_servers.epoch = epoch;
+		} else {
+			GloVars.checksums_values.mysql_servers.epoch = t;
+		}
 		GloVars.checksums_values.updates_cnt++;
 		GloVars.generate_global_checksum();
 		GloVars.epoch_version = t;

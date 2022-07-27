@@ -235,15 +235,15 @@ class ProxySQL_Admin {
 	void __add_active_users(enum cred_username_type usertype, char *user=NULL, uint64_t *hash1 = NULL);
 	void __delete_inactive_users(enum cred_username_type usertype);
 	void add_admin_users();
-	void __refresh_users();
+	void __refresh_users(const std::string& checksum = "", const time_t epoch = 0);
 	void __add_active_users_ldap();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
-	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	char **get_variables_list();
 	bool set_variable(char *name, char *value);
-	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
@@ -273,7 +273,7 @@ class ProxySQL_Admin {
 	
 	// LDAP
 	void flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
-	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace);
+	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	public:
 	pthread_mutex_t sql_query_global_mutex;
@@ -306,7 +306,7 @@ class ProxySQL_Admin {
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);
-	void init_users();
+	void init_users(const std::string& checksum = "", const time_t epoch = 0);
 	void init_mysql_servers();
 	void init_mysql_query_rules();
 	void init_mysql_firewall();
@@ -339,9 +339,33 @@ class ProxySQL_Admin {
 //	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
-	void load_mysql_servers_to_runtime();
+	void load_mysql_servers_to_runtime(const std::string& checksum = "", const time_t epoch = 0);
 	void save_mysql_servers_from_runtime();
-	char * load_mysql_query_rules_to_runtime(SQLite3_result *SQLite3_query_rules_resultset=NULL, SQLite3_result *SQLite3_query_rules_fast_routing_resultset=NULL);
+	/**
+	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
+	 *  'mysql_query_rules_fast_routing' and computes the 'mysql_query_rules' module checksum.
+	 *
+	 * @param SQLite3_query_rules_resultset If this parameter is provided, current rows on
+	 *  'mysql_query_rules' are not queried, instead, the contents of the resultset are used. Must
+	 *  be the outcome of query 'CLUSTER_QUERY_MYSQL_QUERY_RULES', it's UNSAFE to supply other
+	 *  resultset to the function.
+	 * @param SQLite3_query_rules_fast_routing_resultset If this parameter is provided, current rows on
+	 *  'mysql_query_rules_fast_routing' are not queried, instead, the contents of the resultset are used. Must
+	 *  be the outcome of query 'CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING', it's UNSAFE to supply other
+	 *  resultset to the function.
+	 * @param checksum When used, this parameter must match several requirements depending on the other
+	 *  supplied parameters:
+	 *  - If the previous two resultset parameters are supplied to this function, this parameter MUST BE the
+	 *    already computed checksum from both resultsets combined.
+	 *  - When used in combination with the epoch parameter, if the checksum computed for the values from
+	 *    tables 'mysql_query_rules' and 'mysql_query_rules_fast_routing' matches this supplied checksum, the
+	 *    epoch of 'GloVars.checksums_values.mysql_query_rules.epoch' is updated to be the supplied epoch.
+	 * @param epoch When 'checksum' parameter is supplied, this is the epoch to which the computed checksum
+	 *  is to be updated if it matches 'checksum' parameter.
+	 *
+	 * @return Error message in case of not being able to perform the operation, 'NULL' otherwise.
+	 */
+	char* load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset=NULL, SQLite3_result* SQLite3_query_rules_fast_routing_resultset=NULL, const std::string& checksum = "", const time_t epoch = 0);
 	void save_mysql_query_rules_from_runtime(bool);
 	void save_mysql_query_rules_fast_routing_from_runtime(bool);
 	char * load_mysql_firewall_to_runtime();
@@ -355,12 +379,12 @@ class ProxySQL_Admin {
 	void flush_scheduler__from_memory_to_disk();
 	void flush_scheduler__from_disk_to_memory();
 
-	void load_admin_variables_to_runtime() { flush_admin_variables___database_to_runtime(admindb, true); }
+	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 	void load_or_update_global_settings(SQLite3DB *);
 
-	void load_mysql_variables_to_runtime() { flush_mysql_variables___database_to_runtime(admindb, true); }
+	void load_mysql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_mysql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
 
 	void p_update_metrics();
@@ -406,7 +430,7 @@ class ProxySQL_Admin {
 	void flush_configdb(); // 923
 
 	// Cluster
-	void load_proxysql_servers_to_runtime(bool _lock=true);
+	void load_proxysql_servers_to_runtime(bool _lock=true, const std::string& checksum = "", const time_t epoch = 0);
 	void flush_proxysql_servers__from_memory_to_disk();
 	void flush_proxysql_servers__from_disk_to_memory();
 	void save_proxysql_servers_runtime_to_database(bool);
@@ -414,7 +438,7 @@ class ProxySQL_Admin {
 
 	// LDAP
 	void init_ldap_variables();
-	void load_ldap_variables_to_runtime() { flush_ldap_variables___database_to_runtime(admindb, true); }
+	void load_ldap_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_ldap_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_ldap_variables_from_runtime() { flush_ldap_variables___runtime_to_database(admindb, true, true, false); }
 	void save_mysql_ldap_mapping_runtime_to_database(bool);
 

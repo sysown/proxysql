@@ -6397,7 +6397,7 @@ void ProxySQL_Admin::load_or_update_global_settings(SQLite3DB *db) {
 	}
 }
 
-void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const string& checksum, const time_t epoch) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
 	char *error=NULL;
 	int cols=0;
@@ -6464,11 +6464,19 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 			GloVars.checksums_values.admin_variables.set_checksum(buf);
 			GloVars.checksums_values.admin_variables.version++;
 			time_t t = time(NULL);
-			GloVars.checksums_values.admin_variables.epoch = t;
+			if (epoch != 0 && checksum != "" && GloVars.checksums_values.admin_variables.checksum == checksum) {
+				GloVars.checksums_values.admin_variables.epoch = epoch;
+			} else {
+				GloVars.checksums_values.admin_variables.epoch = t;
+			}
 			GloVars.epoch_version = t;
 			GloVars.generate_global_checksum();
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
+			proxy_info(
+				"Computed checksum for 'LOAD ADMIN VARIABLES TO RUNTIME' was '%s', with epoch '%d'\n",
+				GloVars.checksums_values.admin_variables.checksum, GloVars.checksums_values.admin_variables.epoch
+			);
 			delete resultset;
 		}
 		wrunlock();
@@ -6631,7 +6639,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 	if (resultset) delete resultset;
 }
 
-void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum, const time_t epoch) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing MySQL variables. Replace:%d\n", replace);
 	char *error=NULL;
 	int cols=0;
@@ -6805,13 +6813,21 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			GloVars.checksums_values.mysql_variables.set_checksum(buf);
 			GloVars.checksums_values.mysql_variables.version++;
 			time_t t = time(NULL);
-			GloVars.checksums_values.mysql_variables.epoch = t;
+			if (epoch != 0 && checksum != "" && GloVars.checksums_values.mysql_variables.checksum == checksum) {
+				GloVars.checksums_values.mysql_variables.epoch = epoch;
+			} else {
+				GloVars.checksums_values.mysql_variables.epoch = t;
+			}
 			GloVars.epoch_version = t;
 			GloVars.generate_global_checksum();
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			delete resultset;
 		}
+		proxy_info(
+			"Computed checksum for 'LOAD MYSQL VARIABLES TO RUNTIME' was '%s', with epoch '%d'\n",
+			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
+		);
 	}
 	if (resultset) delete resultset;
 }
@@ -7392,7 +7408,7 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	free(varnames);
 }
 
-void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace) {
+void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum, const time_t epoch) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing LDAP variables. Replace:%d\n", replace);
 	if (GloMyLdapAuth == NULL) {
 		return;
@@ -7460,13 +7476,21 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 			GloVars.checksums_values.ldap_variables.set_checksum(buf);
 			GloVars.checksums_values.ldap_variables.version++;
 			time_t t = time(NULL);
-			GloVars.checksums_values.ldap_variables.epoch = t;
+			if (epoch != 0 && checksum != "" && GloVars.checksums_values.ldap_variables.checksum == checksum) {
+				GloVars.checksums_values.ldap_variables.epoch = epoch;
+			} else {
+				GloVars.checksums_values.ldap_variables.epoch = t;
+			}
 			GloVars.epoch_version = t;
 			GloVars.generate_global_checksum();
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			delete resultset;
 		}
+		proxy_info(
+			"Computed checksum for 'LOAD LDAP VARIABLES TO RUNTIME' was '%s', with epoch '%d'\n",
+			GloVars.checksums_values.ldap_variables.checksum, GloVars.checksums_values.ldap_variables.epoch
+		);
 	}
 	if (resultset) delete resultset;
 }
@@ -10457,9 +10481,9 @@ void ProxySQL_Admin::__attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias) {
 }
 
 
-void ProxySQL_Admin::init_users() {
+void ProxySQL_Admin::init_users(const std::string& checksum, const time_t epoch) {
 	pthread_mutex_lock(&users_mutex);
-	__refresh_users();
+	__refresh_users(checksum, epoch);
 	pthread_mutex_unlock(&users_mutex);
 }
 
@@ -10499,7 +10523,7 @@ void ProxySQL_Admin::add_admin_users() {
 #endif /* DEBUG */
 }
 
-void ProxySQL_Admin::__refresh_users() {
+void ProxySQL_Admin::__refresh_users(const std::string& checksum, const time_t epoch) {
 	bool calculate_checksum = false;
 	if (checksum_variables.checksum_mysql_users) {
 		calculate_checksum = true;
@@ -10540,12 +10564,20 @@ void ProxySQL_Admin::__refresh_users() {
 		GloVars.checksums_values.mysql_users.set_checksum(buf);
 		GloVars.checksums_values.mysql_users.version++;
 		time_t t = time(NULL);
-		GloVars.checksums_values.mysql_users.epoch = t;
+		if (epoch != 0 && checksum != "" && GloVars.checksums_values.mysql_users.checksum == checksum) {
+			GloVars.checksums_values.mysql_users.epoch = epoch;
+		} else {
+			GloVars.checksums_values.mysql_users.epoch = t;
+		}
 		GloVars.epoch_version = t;
 		GloVars.generate_global_checksum();
 		GloVars.checksums_values.updates_cnt++;
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}
+	proxy_info(
+		"Computed checksum for 'LOAD MYSQL USERS TO RUNTIME' was '%s', with epoch '%d'\n",
+		GloVars.checksums_values.mysql_users.checksum, GloVars.checksums_values.mysql_users.epoch
+	);
 }
 
 #ifdef PROXYSQLCLICKHOUSE
@@ -11684,7 +11716,7 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 	resultset=NULL;
 }
 
-void ProxySQL_Admin::load_mysql_servers_to_runtime() {
+void ProxySQL_Admin::load_mysql_servers_to_runtime(const std::string& checksum, const time_t epoch) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *error=NULL;
 	int cols=0;
@@ -11819,7 +11851,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime() {
 		MyHGM->set_incoming_aws_aurora_hostgroups(resultset_aws_aurora);
 	}
 	// commit all the changes
-	MyHGM->commit();
+	MyHGM->commit(checksum, epoch);
 	GloAdmin->save_mysql_servers_runtime_to_database(true);
 
 	// clean up
@@ -11899,7 +11931,7 @@ char * ProxySQL_Admin::load_mysql_firewall_to_runtime() {
 	return NULL;
 }
 
-char * ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result *SQLite3_query_rules_resultset, SQLite3_result *SQLite3_query_rules_fast_routing_resultset) {
+char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_query_rules_resultset, SQLite3_result* SQLite3_query_rules_fast_routing_resultset, const std::string& checksum, const time_t epoch) {
 	// About the queries used here, see notes about CLUSTER_QUERY_MYSQL_QUERY_RULES and
 	// CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING in ProxySQL_Cluster.hpp
 	char *error=NULL;
@@ -11938,21 +11970,52 @@ char * ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result *SQLite3
 #endif // BENCHMARK_FASTROUTING_LOAD
 		if (checksum_variables.checksum_mysql_query_rules) {
 			pthread_mutex_lock(&GloVars.checksum_mutex);
-			uint64_t hash1 = resultset->raw_checksum();
-			uint64_t hash2 = resultset2->raw_checksum();
-			hash1 += hash2;
-			uint32_t d32[2];
+			char* buff = nullptr;
 			char buf[20];
-			memcpy(&d32, &hash1, sizeof(hash1));
-			sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
-			GloVars.checksums_values.mysql_query_rules.set_checksum(buf);
+
+			// If both the resultsets are supplied, then the supplied checksum is the already computed one.
+			if (
+				SQLite3_query_rules_resultset == nullptr ||
+				SQLite3_query_rules_fast_routing_resultset == nullptr
+			) {
+				uint64_t hash1 = resultset->raw_checksum();
+				uint64_t hash2 = resultset2->raw_checksum();
+				hash1 += hash2;
+				uint32_t d32[2];
+				memcpy(&d32, &hash1, sizeof(hash1));
+				sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+
+				buff = buf;
+			} else {
+				buff = const_cast<char*>(checksum.c_str());
+			}
+
+			GloVars.checksums_values.mysql_query_rules.set_checksum(buff);
 			GloVars.checksums_values.mysql_query_rules.version++;
 			time_t t = time(NULL);
-			GloVars.checksums_values.mysql_query_rules.epoch = t;
+
+			// Since the supplied checksum is the already computed one and both resultset are
+			// supplied there is no need for comparsion, because we will be comparing it with itself.
+			bool same_checksum =
+				SQLite3_query_rules_resultset != nullptr &&
+				SQLite3_query_rules_fast_routing_resultset != nullptr;
+			bool matching_checksums =
+				same_checksum || (GloVars.checksums_values.mysql_query_rules.checksum == checksum);
+
+			if (epoch != 0 && checksum != "" && matching_checksums)  {
+				GloVars.checksums_values.mysql_query_rules.epoch = epoch;
+			} else {
+				GloVars.checksums_values.mysql_query_rules.epoch = t;
+			}
+
 			GloVars.epoch_version = t;
 			GloVars.generate_global_checksum();
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
+			proxy_info(
+				"Computed checksum for 'LOAD MYSQL QUERY RULES TO RUNTIME' was '%s', with epoch '%d'\n",
+				GloVars.checksums_values.mysql_query_rules.checksum, GloVars.checksums_values.mysql_query_rules.epoch
+			);
 		}
 		GloQPro->reset_all(false);
 		QP_rule_t * nqpr;
@@ -12840,7 +12903,7 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 	return next_run;
 }
 
-void ProxySQL_Admin::load_proxysql_servers_to_runtime(bool _lock) {
+void ProxySQL_Admin::load_proxysql_servers_to_runtime(bool _lock, const std::string& checksum, const time_t epoch) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *error=NULL;
 	int cols=0;
@@ -12863,11 +12926,19 @@ void ProxySQL_Admin::load_proxysql_servers_to_runtime(bool _lock) {
 			GloVars.checksums_values.proxysql_servers.set_checksum(buf);
 			GloVars.checksums_values.proxysql_servers.version++;
 			time_t t = time(NULL);
-			GloVars.checksums_values.proxysql_servers.epoch = t;
+			if (epoch != 0 && checksum != "" && GloVars.checksums_values.proxysql_servers.checksum == checksum) {
+				GloVars.checksums_values.proxysql_servers.epoch = epoch;
+			} else {
+				GloVars.checksums_values.proxysql_servers.epoch = t;
+			}
 			GloVars.epoch_version = t;
 			GloVars.generate_global_checksum();
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
+			proxy_info(
+				"Computed checksum for 'LOAD PROXYSQL SERVERS TO RUNTIME' was '%s', with epoch '%d'\n",
+				GloVars.checksums_values.proxysql_servers.checksum, GloVars.checksums_values.proxysql_servers.epoch
+			);
 //		}
 	}
 	if (resultset) delete resultset;

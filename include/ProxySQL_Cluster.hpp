@@ -385,9 +385,9 @@ class ProxySQL_Cluster {
 	void p_update_metrics();
 	void thread_ending(pthread_t);
 	void join_term_thread();
-	void pull_mysql_query_rules_from_peer(const std::string& expected_checksum);
-	void pull_mysql_servers_from_peer();
-	void pull_mysql_users_from_peer(const std::string& expected_checksum);
+	void pull_mysql_query_rules_from_peer(const std::string& expected_checksum, const time_t epoch);
+	void pull_mysql_servers_from_peer(const std::string& expected_checksum, const time_t epoch);
+	void pull_mysql_users_from_peer(const std::string& expected_checksum, const time_t epoch);
 	/**
 	 * @brief Pulls from peer the specified global variables by the type parameter.
 	 * @param type A string specifying the type of global variables to pull from the peer, supported
@@ -395,7 +395,7 @@ class ProxySQL_Cluster {
 	 *    - 'mysql'.
      *    - 'admin'.
 	 */
-	void pull_global_variables_from_peer(const std::string& type, const std::string& expected_checksum);
-	void pull_proxysql_servers_from_peer(const char *expected_checksum);
+	void pull_global_variables_from_peer(const std::string& type, const std::string& expected_checksum, const time_t epoch);
+	void pull_proxysql_servers_from_peer(const std::string& expected_checksum, const time_t epoch);
 };
 #endif /* CLASS_PROXYSQL_CLUSTER_H */
