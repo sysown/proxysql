@@ -9,19 +9,39 @@ ProxySQL offers 3 types of releases:
 - source code archives - tar.gz or zip
   https://github.com/sysown/proxysql/releases
 
-The list of currently supported operating systems for binary packaging is:
- - CentOS 6,7,8
- - Debian 8,9,0,11
- - Ubuntu 14,16,18,20,22
- - Fedora 27,28,34,38
- - OpenSUSE 15
- - AlmaLinux 8,9
+Instaling from native installer packages
+----------------------------------------
+
+The list of currently supported operating systems for native packaging is:
+- AMD64
+  - CentOS 6,7,8
+  - Debian 8,9,0,11
+  - Ubuntu 14,16,18,20,22
+  - Fedora 27,28,33,34
+  - OpenSUSE 15
+  - AlmaLinux 8,9
+- ARM64
+  - CentOS 7,8
+  - Debian 9,10,11
+  - Ubuntu 16,18,20,22
+  - Fedora 33,24
+  - OpenSUSE 15
+  - AlmaLinux 8,9
+ 
+Download a __deb__ or __rpm__ installer file for your OS and architecture from:
+
+https://github.com/sysown/proxysql/releases
+
+There is also a choice of debug packages and CLang compiled packages.
 
 Installing from git repo using docker
 -------------------------------------
 This is the recommended way of building as it provides a reproducible environment.
 
 Make sure you have docker installed, best from upstream docker.io
+
+https://docs.docker.com/engine/install/
+
 ```
 git clone https://github.com/sysown/proxysql.git
 cd proxysql
@@ -36,6 +56,14 @@ For valid target distros see above or inspect the Makefile.
 
 Installing from source
 ----------------------
+Download a release source code archive from:
+
+https://github.com/sysown/proxysql/releases
+
+or get the latest development sources from:
+
+https://github.com/sysown/proxysql/archive/refs/heads/v2.x.zip
+
 Make sure you have installed the equivalent for each of these packages for your operating system:
 - automake
 - bzip2
@@ -63,9 +91,11 @@ apt-get install -y automake bzip2 cmake make g++ gcc git openssl libssl-dev libg
 ```
 
 For more details, inspect the docker build images:
+
 https://github.com/ProxySQL/docker-images/tree/main/build-images
 
-For CLang builds, inspect the docker build-clang images
+For CLang builds, inspect the docker build-clang images:
+
 https://github.com/ProxySQL/docker-images/tree/main/build-clang-images
 
 On Mac OSX, Proxysql's dependencies are not fully satisfied by the tools included with the XCode/clang toolkit. The Proxysql build system needs to be told where to find non-system `curl` (and possibly `openssl`) libraries. Using the [Homebrew](https://brew.sh/) OSX package manager, dependencies can be installed and located on OSX like this:
