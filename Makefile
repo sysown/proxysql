@@ -1,10 +1,18 @@
 #!/bin/make -f
 
 
+### NOTES:
+### version string is fetched from git history
+### when not available, specify GIT_VERSION on commnad line:
+###
+### ```
+### GIT_HISTORY=2.x-dev make $(nproc)
+### ```
+
 ifndef GIT_VERSION
-	GIT_VERSION := $(shell git describe --long --abbrev=7)
+GIT_VERSION := $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-	$(error GIT_VERSION is not set)
+$(error GIT_VERSION is not set)
 endif
 endif
 
