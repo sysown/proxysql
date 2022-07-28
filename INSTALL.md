@@ -7,6 +7,7 @@ ProxySQL offers multiple ways of install:
 - build from git repo any taged or dev version - https://github.com/sysown/proxysql.git
 - build from source code archives - https://github.com/sysown/proxysql/releases
 
+
 Instaling using native installer packages
 ----------------------------------------
 
@@ -32,11 +33,13 @@ https://github.com/sysown/proxysql/releases
 
 There is also a choice of debug packages and CLang compiled packages.
 
+
 Installing from package repository
 ----------------------------------
-Please follow the intructions on setting up a repository:
+Please follow the intructions how to configure a repository:
 
 https://repo.proxysql.com/
+
 
 Building and installing from git repo using docker
 --------------------------------------------------
@@ -59,6 +62,7 @@ The __executable__ file will be located in ./src, the __rpm__ or __deb__ install
 Install the package as usual on the target system.
 
 For valid target distros see above or inspect the Makefile.
+
 
 Building and installing from source
 -----------------------------------
