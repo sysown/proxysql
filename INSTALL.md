@@ -3,10 +3,11 @@ How to install ProxySQL
 
 ProxySQL offers multiple ways of install:
 - install deb or rpm packages - https://github.com/sysown/proxysql/releases
+- install from the package repo - https://repo.proxysql.com/
 - build from git repo any taged or dev version - https://github.com/sysown/proxysql.git
 - build from source code archives - https://github.com/sysown/proxysql/releases
 
-Instaling from native installer packages
+Instaling using native installer packages
 ----------------------------------------
 
 The list of currently supported operating systems for native packaging is:
@@ -30,6 +31,12 @@ Download a __deb__ or __rpm__ installer file for your OS and architecture from:
 https://github.com/sysown/proxysql/releases
 
 There is also a choice of debug packages and CLang compiled packages.
+
+Installing from package repository
+----------------------------------
+Please follow the intructions on setting up a repository:
+
+https://repo.proxysql.com/
 
 Building and installing from git repo using docker
 --------------------------------------------------
