@@ -1249,6 +1249,12 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 				}
 			}
 		}
+		if (username) {
+			free(username);
+		}
+		if (password) {
+			free(password);
+		}
 __exit_pull_mysql_users_from_peer:
 		if (conn) {
 			if (conn->net.pvio) {
@@ -1741,6 +1747,12 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment();
 			}
 		}
+		if (username) {
+			free(username);
+		}
+		if (password) {
+			free(password);
+		}
 __exit_pull_mysql_servers_from_peer:
 		if (conn) {
 			if (conn->net.pvio) {
@@ -1913,6 +1925,12 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 				metrics.p_counter_array[failure_metric]->Increment();
 			}
 		}
+		if (username) {
+			free(username);
+		}
+		if (password) {
+			free(password);
+		}
 __exit_pull_mysql_variables_from_peer:
 		if (conn) {
 			if (conn->net.pvio) {
@@ -2015,6 +2033,12 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 				proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
 			}
+		}
+		if (username) {
+			free(username);
+		}
+		if (password) {
+			free(password);
 		}
 __exit_pull_proxysql_servers_from_peer:
 		if (conn) {
