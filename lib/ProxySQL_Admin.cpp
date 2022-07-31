@@ -12928,6 +12928,9 @@ Scheduler_Row::~Scheduler_Row() {
 		}
 		args[i]=NULL;
 	}
+	if (filename) {
+		free(filename);
+	}
 	free(args);
 	free(comment);
 	args=NULL;
