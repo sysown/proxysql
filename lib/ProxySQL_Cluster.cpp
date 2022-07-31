@@ -900,6 +900,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 						const uint64_t query_rules_hash =
 							SQLite3_query_rules_resultset->raw_checksum() + SQLite3_query_rules_fast_routing_resultset->raw_checksum();
 						const string computed_checksum { get_checksum_from_hash(query_rules_hash) };
+						proxy_info("Cluster: Computed checksum for MySQL Query Rules from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 
 						if (expected_checksum == computed_checksum) {
 
@@ -1186,6 +1187,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 				const uint64_t users_raw_checksum =
 					get_mysql_users_checksum(mysql_users_result, ldap_mapping_result, mysql_users_resultset);
 				const string computed_checksum { get_checksum_from_hash(users_raw_checksum) };
+				proxy_info("Cluster: Computed checksum for MySQL Users from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 
 				if (expected_checksum == computed_checksum) {
 					update_mysql_users(mysql_users_result);
@@ -1542,6 +1544,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 				if (fetching_error == false) {
 					const uint64_t servers_hash = compute_servers_tables_raw_checksum(results);
 					const string computed_checksum { get_checksum_from_hash(servers_hash) };
+					proxy_info("Cluster: Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 
 					if (computed_checksum == peer_checksum) {
 						// No need to perform the conversion if checksums don't match
@@ -1846,6 +1849,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 
 					uint64_t glovars_hash = mysql_raw_checksum(result);
 					string computed_checksum { get_checksum_from_hash(glovars_hash) };
+					proxy_info("Cluster: Computed checksum for %s Variables from peer %s:%d : %s\n", vars_type_str, hostname, port, computed_checksum.c_str());
 
 					if (expected_checksum == computed_checksum) {
 
