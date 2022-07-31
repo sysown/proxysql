@@ -375,6 +375,20 @@ class MySQL_HostGroups_Manager {
 	void generate_mysql_replication_hostgroups_table();
 	Galera_Info *get_galera_node_info(int hostgroup);
 
+	/**
+	 * @brief These resultset holds the latest values for 'incoming_*' tables used promoted servers to runtime.
+	 * @details All these resultsets are used by 'Cluster' to fetch and promote the same configuration used in the
+	 *  node across the whole cluster. For these, the queries:
+	 *   - 'CLUSTER_QUERY_MYSQL_SERVERS'
+	 *   - 'CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS'
+	 *   - 'CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS'
+	 *   - 'CLUSTER_QUERY_MYSQL_GALERA'
+	 *   - 'CLUSTER_QUERY_MYSQL_AWS_AURORA'
+	 *  Issued by 'Cluster' are intercepted by 'ProxySQL_Admin' and return the content of these resultsets. This is
+	 *  possible because 'incoming_*' tables represent the actual applied configuration to the node servers before
+	 *  reconfiguration ('commit') is triggered, making this process convergent on the supplied config.
+	 */
+	SQLite3_result* incoming_mysql_servers;
 	SQLite3_result *incoming_replication_hostgroups;
 
 	void generate_mysql_group_replication_hostgroups_table();
@@ -540,10 +554,23 @@ class MySQL_HostGroups_Manager {
 	int servers_add(SQLite3_result *resultset);
 	bool commit(const std::string& checksum = "", const time_t epoch = 0);
 
+	/**
+	 * @brief These setters/getter functions store and retrieve the currently hold resultset for the 'incoming_*'
+	 *  table set that have been loaded to runtime. Whose hold the config to be propagated by Cluster.
+	 * @param The resulset to be stored replacing the current one.
+	 */
+	void set_incoming_mysql_servers(SQLite3_result *);
 	void set_incoming_replication_hostgroups(SQLite3_result *);
 	void set_incoming_group_replication_hostgroups(SQLite3_result *);
 	void set_incoming_galera_hostgroups(SQLite3_result *);
 	void set_incoming_aws_aurora_hostgroups(SQLite3_result *);
+
+	SQLite3_result* get_current_mysql_servers_inner();
+	SQLite3_result* get_current_mysql_replication_hostgroups_inner();
+	SQLite3_result* get_current_mysql_group_replication_hostgroups_inner();
+	SQLite3_result* get_current_mysql_galera_hostgroups();
+	SQLite3_result* get_current_mysql_aws_aurora_hostgroups();
+
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();

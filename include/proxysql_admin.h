@@ -116,6 +116,14 @@ struct admin_metrics_map_idx {
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
 
+struct incoming_servers_t {
+	SQLite3_result* incoming_mysql_servers = NULL;
+	SQLite3_result* incoming_replication_hostgroups = NULL;
+	SQLite3_result* incoming_group_replication_hostgroups = NULL;
+	SQLite3_result* incoming_galera_hostgroups = NULL;
+	SQLite3_result* incoming_aurora_hostgroups = NULL;
+};
+
 class ProxySQL_Admin {
 	private:
 	volatile int main_shutdown;
@@ -232,10 +240,31 @@ class ProxySQL_Admin {
 	void __insert_or_replace_disktable_select_maintable();
 	void __attach_db(SQLite3DB *db1, SQLite3DB *db2, char *alias);
 
-	void __add_active_users(enum cred_username_type usertype, char *user=NULL, uint64_t *hash1 = NULL);
+	/**
+	 * @brief Loads to runtime either supplied users via params or users in 'mysql_users' table.
+	 * @details If the 'usertype' and 'user' parameters are supplied, it loads the target user to runtime. If
+	 *  'user' parameter is not supplied, and 'resulset' param is, it loads the users contained in this
+	 *  resultset. If both these params are 'nullptr' current contents of 'mysql_users' table are load to
+	 *  runtime. Param 'usertype' is ignored when 'resultset' param is supplied. It always return a
+	 *  'SQLite3_result*' with the users that have been loaded to runtime.
+	 *
+	 *  NOTE: The returned resultset doesn't contains duplicated rows for the 'frontend'/'backend' users,
+	 *  instead, contains a single row for representing both. This is by design, and the checksum computation
+	 *  in the received end should take this into account.
+	 *
+	 * @param usertype The target usertype supplied in param 'user' to 'load to runtime'.
+	 * @param user The username of the user to LOAD TO RUNTIME.
+	 * @param resultset If supplied, must contain all the users to be 'load to runtime'. Typically the
+	 *  parameter supplied here is the resultset of query 'CLUSTER_QUERY_MYSQL_USERS'.
+	 *
+	 * @return A 'SQLite3_result*' containing all the users that have been 'loaded to runtime'. When
+	 *  param 'resultset' is supplied, it will match it's value, otherwise it will be a locally created
+	 *  'SQLite3_result*' that should be freed.
+	 */
+	SQLite3_result* __add_active_users(enum cred_username_type usertype, char *user=NULL, SQLite3_result* resultset = nullptr);
 	void __delete_inactive_users(enum cred_username_type usertype);
 	void add_admin_users();
-	void __refresh_users(const std::string& checksum = "", const time_t epoch = 0);
+	void __refresh_users(std::unique_ptr<SQLite3_result>&& all_users = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void __add_active_users_ldap();
 
 	void flush_mysql_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false, bool use_lock=true);
@@ -306,7 +335,7 @@ class ProxySQL_Admin {
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
 	bool has_variable(const char *name);
-	void init_users(const std::string& checksum = "", const time_t epoch = 0);
+	void init_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void init_mysql_servers();
 	void init_mysql_query_rules();
 	void init_mysql_firewall();
@@ -339,7 +368,7 @@ class ProxySQL_Admin {
 //	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
-	void load_mysql_servers_to_runtime(const std::string& checksum = "", const time_t epoch = 0);
+	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const std::string& checksum = "", const time_t epoch = 0);
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and

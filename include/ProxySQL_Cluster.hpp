@@ -12,24 +12,45 @@
 #define PROXYSQL_NODE_METRICS_LEN	5
 
 /**
- * @brief This query is intercepted by 'ProxySQL_Admin' and doesn't represent the actual resultset being received when
- *  issuing it. Instead it represent the 'intended' resultset that should be received when fetching a cluster peer
- *  `MYSQL_SERVERS` table. The caller issuing the query is responsable of the extra-processing.
- * @details Received resultset corresponds to 'MySQL_HostGroups_Manager::dump_table_proxysql_servers' resultset.
+ * CLUSTER QUERIES DEFINITION
+ * ==========================
+ *
+ * The following queries are used by 'ProxySQL_Cluster' and intercepted by 'ProxySQL_Admin'. These queries should match
+ * the queries issued for generating the checksum for each of the target modules, for simpler reasoning, they should
+ * also represent the actual resultset being received when issuing them, since this resultset is used for computing the
+ * 'expected checksum' for the fetched config before loading it to runtime. This is done for the following modules:
+ *   - 'runtime_mysql_servers': tables 'mysql_servers', 'mysql_replication_hostgroups', 'mysql_group_replication_hostroups',
+ *     'mysql_galera_hostgroups', 'mysql_aws_aurora_hostgroups'.
+ *   - 'runtime_mysql_users'.
+ *   - 'runtime_mysql_query_rules'.
+ *
+ * IMPORTANT: For further clarify this means that it's important that the actual resultset produced by the intercepted
+ * query preserve the filtering and ordering expressed in this queries.
  */
-#define CLUSTER_QUERY_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
-/**
- * @brief The result of this query is later used for the computation of the checksum of the received 'mysql_servers'.
- *  Since it differs from the query being issued by 'MySQL_HostGroups_Manager::commit' for the checksum computation,
- *  it should be revisit whenever the table 'mysql_replication_hostgroups' change.
- */
-#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
 
-// the following two queries are the same used in ProxySQL_Admin::load_mysql_query_rules_to_runtime() , but on runtime_ tables.
-// It is important to note that the queries in ProxySQL_Admin::load_mysql_query_rules_to_runtime() are used to compute the checksum,
-// and are the same resultset saved. Therefore it Cluster can retrieve the same resultset saved it can easily compute the checksum before loading.
-#define CLUSTER_QUERY_MYSQL_QUERY_RULES "SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules ORDER BY rule_id"
-#define CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING "SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM runtime_mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN"
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_servers'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_replication_hostgroups'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_group_replication_hostgroups'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_group_replication_hostgroups ORDER BY writer_hostgroup"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_aurora_hostgroups'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_AWS_AURORA "PROXY_SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment FROM runtime_mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_galera_hostgroups'. See top comment for details. */
+#define	CLUSTER_QUERY_MYSQL_GALERA "PROXY_SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_galera_hostgroups ORDER BY writer_hostgroup"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_users'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_USERS "PROXY_SELECT username, password, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_mysql_users"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_users'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_QUERY_RULES "PROXY_SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules ORDER BY rule_id"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_users'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING "PROXY_SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM runtime_mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN"
 
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	public:

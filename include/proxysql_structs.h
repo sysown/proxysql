@@ -39,7 +39,7 @@ enum log_event_type {
 	PROXYSQL_COM_STMT_PREPARE
 };
 
-enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND };
+enum cred_username_type { USERNAME_BACKEND, USERNAME_FRONTEND, USERNAME_NONE };
 
 #define PROXYSQL_USE_RESULT
 

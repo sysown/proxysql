@@ -641,7 +641,7 @@ uint64_t MySQL_Authentication::get_runtime_checksum() {
 	return hashB+hashF;
 }
 
-pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset) {
+pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
 	if (resultset == nullptr) { return { umap_auth {}, umap_auth {} }; }
 
 	// The following order is assumed for the resulset received fields:
@@ -650,48 +650,76 @@ pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset) {
 	umap_auth f_accs_map {};
 	umap_auth b_accs_map {};
 
-	while (MYSQL_ROW row = mysql_fetch_row(resultset)) {
+	// Create the SQLite3 resultsets for 'frontend' and 'backend' users
+	uint32_t num_fields = mysql_num_fields(resultset);
+	MYSQL_FIELD* fields = mysql_fetch_fields(resultset);
+
+	SQLite3_result* _all_users { new SQLite3_result(num_fields) };
+
+	for (uint32_t i = 0; i < num_fields; i++) {
+		_all_users->add_column_definition(SQLITE_TEXT, fields[i].name);
+	}
+
+	const auto create_account_details = [] (MYSQL_ROW row) -> account_details_t* {
 		account_details_t* acc_details { new account_details_t {} };
 
 		acc_details->username = row[0];
 		acc_details->password = row[1] ? row[1] : const_cast<char*>("");
-		acc_details->__active = strcmp(row[2], "1") == 0 ? true : false;
-		acc_details->use_ssl = strcmp(row[3], "1") == 0 ? true : false;
-		acc_details->default_hostgroup = atoi(row[4]);
-		acc_details->default_schema = row[5] ? row[5] : const_cast<char*>("");
-		acc_details->schema_locked = strcmp(row[6], "1") == 0 ? true : false;
-		acc_details->transaction_persistent = strcmp(row[7], "1") == 0 ? true : false;
-		acc_details->fast_forward = strcmp(row[8], "1") == 0 ? true : false;
-		acc_details->__backend = strcmp(row[9], "1") == 0 ? true : false;
-		acc_details->__frontend = strcmp(row[10], "1") == 0 ? true : false;
-		acc_details->max_connections = atoi(row[11]);
-		acc_details->attributes = row[12] ? row[12] : const_cast<char*>("");
-		acc_details->comment = row[13] ? row[13] : const_cast<char*>("");
+		acc_details->__active = true;
+		acc_details->use_ssl = strcmp(row[2], "1") == 0 ? true : false;
+		acc_details->default_hostgroup = atoi(row[3]);
+		acc_details->default_schema = row[4] ? row[4] : const_cast<char*>("");
+		acc_details->schema_locked = strcmp(row[5], "1") == 0 ? true : false;
+		acc_details->transaction_persistent = strcmp(row[6], "1") == 0 ? true : false;
+		acc_details->fast_forward = strcmp(row[7], "1") == 0 ? true : false;
+		acc_details->__backend = strcmp(row[8], "1") == 0 ? true : false;
+		acc_details->__frontend = strcmp(row[9], "1") == 0 ? true : false;
+		acc_details->max_connections = atoi(row[10]);
+		acc_details->attributes = row[11] ? row[11] : const_cast<char*>("");
+		acc_details->comment = row[12] ? row[12] : const_cast<char*>("");
 
+		return acc_details;
+	};
+
+	vector<char*> pta(static_cast<size_t>(num_fields));
+	while (MYSQL_ROW row = mysql_fetch_row(resultset)) {
 		// compute the 'username' hash for the map
 		uint64_t u_hash = 0, _u_hash2 = 0;
 		SpookyHash myhash {};
 		myhash.Init(1,2);
-
-		myhash.Update(acc_details->username, strlen(acc_details->username));
+		myhash.Update(row[0], strlen(row[0]));
 		myhash.Final(&u_hash, &_u_hash2);
 
-		if (acc_details->__backend) {
+		// is backend
+		if (strcmp(row[8], "1") == 0) {
+			account_details_t* acc_details = create_account_details(row);
 			b_accs_map.insert({u_hash, acc_details});
-		} else {
+		}
+		// is frontend
+		if (strcmp(row[9], "1") == 0) {
+			account_details_t* acc_details = create_account_details(row);
 			f_accs_map.insert({u_hash, acc_details});
 		}
+
+		// Update the contents of the row for the SQLite3 resultset
+		for (uint32_t i = 0; i < num_fields; i++) {
+			pta[i] = row[i];
+		}
+		_all_users->add_row(&pta[0]);
 	}
 
 	mysql_data_seek(resultset, 0);
 
+	// Update the supplied 'unique_ptr' with the target resultsets
+	all_users.reset(_all_users);
+
 	return { b_accs_map, f_accs_map };
 }
 
-uint64_t MySQL_Authentication::get_runtime_checksum(MYSQL_RES* resultset) {
+uint64_t MySQL_Authentication::get_runtime_checksum(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
 	if (resultset == NULL) { return 0; }
 
-	pair<umap_auth, umap_auth> acc_maps { extract_accounts_details(resultset) };
+	pair<umap_auth, umap_auth> acc_maps { extract_accounts_details(resultset, all_users) };
 
 	uint64_t b_acc_hash = compute_accounts_hash(acc_maps.first);
 	uint64_t f_acc_hash = compute_accounts_hash(acc_maps.second);
@@ -704,4 +732,12 @@ uint64_t MySQL_Authentication::get_runtime_checksum(MYSQL_RES* resultset) {
 	}
 
 	return b_acc_hash + f_acc_hash;
+}
+
+void MySQL_Authentication::save_mysql_users(unique_ptr<SQLite3_result>&& users) {
+	this->mysql_users_resultset = std::move(users);
+}
+
+SQLite3_result* MySQL_Authentication::get_current_mysql_users() {
+	return this->mysql_users_resultset.get();
 }

@@ -1410,6 +1410,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
 	MyHostGroups=new PtrArray();
+	incoming_mysql_servers=NULL;
 	incoming_replication_hostgroups=NULL;
 	incoming_group_replication_hostgroups=NULL;
 	incoming_galera_hostgroups=NULL;
@@ -3788,7 +3789,19 @@ __exit_get_multiple_idle_connections:
 	return num_conn_current;
 }
 
+void MySQL_HostGroups_Manager::set_incoming_mysql_servers(SQLite3_result *s) {
+	if (incoming_mysql_servers) {
+		delete incoming_mysql_servers;
+		incoming_mysql_servers = nullptr;
+	}
+	incoming_mysql_servers=s;
+}
+
 void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_result *s) {
+	if (incoming_replication_hostgroups) {
+		delete incoming_replication_hostgroups;
+		incoming_replication_hostgroups = nullptr;
+	}
 	incoming_replication_hostgroups=s;
 }
 
@@ -3814,6 +3827,26 @@ void MySQL_HostGroups_Manager::set_incoming_aws_aurora_hostgroups(SQLite3_result
 		incoming_aws_aurora_hostgroups = NULL;
 	}
 	incoming_aws_aurora_hostgroups=s;
+}
+
+SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_servers_inner() {
+	return this->incoming_mysql_servers;
+}
+
+SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_replication_hostgroups_inner() {
+	return this->incoming_replication_hostgroups;
+}
+
+SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_group_replication_hostgroups_inner() {
+	return this->incoming_group_replication_hostgroups;
+}
+
+SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_galera_hostgroups() {
+	return this->incoming_galera_hostgroups;
+}
+
+SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_aws_aurora_hostgroups() {
+	return this->incoming_aws_aurora_hostgroups;
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
