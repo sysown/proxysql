@@ -777,7 +777,7 @@ admin_metrics_map = std::make_tuple(
 			// TODO: Check why 'global_mysql_firewall_whitelist_users_result___size' never updated
 			p_admin_gauge::mysql_firewall_users_config,
 			"proxysql_mysql_firewall_users_config_bytes",
-			"Full 'mysql_firewall_users' config 'resulset' size.",
+			"Full 'mysql_firewall_users' config 'resultset' size.",
 			metric_tags {}
 		),
 		std::make_tuple (
@@ -789,7 +789,7 @@ admin_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_admin_gauge::mysql_firewall_rules_config,
 			"proxysql_mysql_firewall_rules_config_bytes",
-			"Full 'mysql_firewall_users' config 'resulset' size.",
+			"Full 'mysql_firewall_users' config 'resultset' size.",
 			metric_tags {}
 		),
 		std::make_tuple (
