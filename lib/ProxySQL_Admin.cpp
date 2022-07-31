@@ -978,6 +978,22 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 	return false;
 }
 
+incoming_servers_t::incoming_servers_t() {}
+
+incoming_servers_t::incoming_servers_t(
+	SQLite3_result* incoming_mysql_servers,
+	SQLite3_result* incoming_replication_hostgroups,
+	SQLite3_result* incoming_group_replication_hostgroups,
+	SQLite3_result* incoming_galera_hostgroups,
+	SQLite3_result* incoming_aurora_hostgroups
+) :
+	incoming_mysql_servers(incoming_mysql_servers),
+	incoming_replication_hostgroups(incoming_replication_hostgroups),
+	incoming_group_replication_hostgroups(incoming_group_replication_hostgroups),
+	incoming_galera_hostgroups(incoming_galera_hostgroups),
+	incoming_aurora_hostgroups(incoming_aurora_hostgroups)
+{}
+
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	int r = 0;
 	if (!GloQPro) return 0;

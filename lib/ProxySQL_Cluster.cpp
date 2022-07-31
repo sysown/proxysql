@@ -1424,9 +1424,9 @@ uint64_t compute_servers_tables_raw_checksum(const vector<MYSQL_RES*>& results) 
 
 incoming_servers_t convert_servers_resultsets(const std::vector<MYSQL_RES*>& results) {
 	if (results.size() != sizeof(incoming_servers_t) / sizeof(void*)) {
-		return {};
+		return incoming_servers_t {};
 	} else {
-		return {
+		return incoming_servers_t {
 			get_SQLite3_resulset(results[0]).release(),
 			get_SQLite3_resulset(results[1]).release(),
 			get_SQLite3_resulset(results[2]).release(),
