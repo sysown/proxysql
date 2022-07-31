@@ -517,10 +517,10 @@ int main(int, char**) {
 
 	{
 		vector<mysql_server_tuple> insert_mysql_servers_values {
-			std::make_tuple(0, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, ""),
-			std::make_tuple(1, "127.0.0.1", 13307, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, ""),
 			std::make_tuple(2, "127.0.0.1", 13308, 14, "OFFLINE_HARD", 2, 1, 500, 300, 1, 200, ""),
-			std::make_tuple(3, "127.0.0.1", 13309, 15, "SHUNNED", 1, 0, 500, 300, 1, 200, "")
+			std::make_tuple(3, "127.0.0.1", 13309, 15, "SHUNNED", 1, 0, 500, 300, 1, 200, ""),
+			std::make_tuple(0, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, ""),
+			std::make_tuple(1, "127.0.0.1", 13307, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, "")
 		};
 
 		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values);
@@ -675,10 +675,10 @@ int main(int, char**) {
 			"active, max_writers, writer_is_also_reader, max_transactions_behind, comment) "
 			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d, %s)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int, const char*>> insert_galera_values {
-			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_galera_hostgroup'"),
-			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_galera_hostgroup'"),
-			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150, "'reader_writer_test_galera_hostgroup'"),
 			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_galera_hostgroup'"),
 		};
 		std::vector<std::string> insert_mysql_galera_hostgroup_queries {};
 
@@ -791,10 +791,10 @@ int main(int, char**) {
 			"active, max_writers, writer_is_also_reader, max_transactions_behind) "
 			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int>> insert_group_replication_values {
-			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200),
-			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250),
 			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150),
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200),
 			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250),
 		};
 		std::vector<std::string> insert_mysql_group_replication_hostgroup_queries {};
 
@@ -908,10 +908,10 @@ int main(int, char**) {
 			"active, max_writers, writer_is_also_reader, max_transactions_behind, comment) "
 			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d, %s)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int, const char*>> insert_group_replication_values {
-			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_group_replication_hostgroup'"),
-			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_group_replication_hostgroup'"),
 			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150, "'reader_writer_test_group_replication_hostgroup'"),
 			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350, "'reader_writer_test_group_replication_hostgroup'"),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_group_replication_hostgroup'"),
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_group_replication_hostgroup'")
 		};
 		std::vector<std::string> insert_mysql_group_replication_hostgroup_queries {};
 
@@ -1174,10 +1174,10 @@ int main(int, char**) {
 			"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks) "
 			"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d)";
 		std::vector<std::tuple<int,int,int,int,const char*,int,int,int,int,int,int,int,int>> insert_aws_aurora_values {
-			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1),
-			std::make_tuple(1, 5, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1),
 			std::make_tuple(2, 6, 1, 3308, ".test_domain2", 10002, 2002, 2002, 0, 3, 50, 100, 1),
 			std::make_tuple(3, 7, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1),
+			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1),
+			std::make_tuple(1, 5, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1),
 		};
 		std::vector<std::string> insert_mysql_aws_aurora_hostgroup_queries {};
 
@@ -1301,10 +1301,10 @@ int main(int, char**) {
 			"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) "
 			"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
 		std::vector<std::tuple<int,int,int,int,const char*,int,int,int,int,int,int,int,int,const char*>> insert_aws_aurora_values {
-			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
+			std::make_tuple(3, 7, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
 			std::make_tuple(1, 5, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
 			std::make_tuple(2, 6, 1, 3308, ".test_domain2", 10002, 2002, 2002, 0, 3, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
-			std::make_tuple(3, 7, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
+			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
 		};
 		std::vector<std::string> insert_mysql_aws_aurora_hostgroup_queries {};
 
