@@ -4624,13 +4624,13 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		if (GloMyLdapAuth == nullptr) {
 			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
 		} else {
-			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+strlen(" Enterprise");
+			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+strlen("-Enterprise");
 		}
 		query=(char *)l_alloc(query_length);
 		if (GloMyLdapAuth == nullptr) {
 			sprintf(query, q, PROXYSQL_VERSION);
 		} else {
-			sprintf(query, q, PROXYSQL_VERSION" Enterprise");
+			sprintf(query, q, PROXYSQL_VERSION"-Enterprise");
 		}
 		goto __run_query;
 	}
@@ -4641,13 +4641,13 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		if (GloMyLdapAuth == nullptr) {
 			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION);
 		} else {
-			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+strlen(" Enterprise");
+			query_length=strlen(q)+20+strlen(PROXYSQL_VERSION)+strlen("-Enterprise");
 		}
 		query=(char *)l_alloc(query_length);
 		if (GloMyLdapAuth == nullptr) {
 			sprintf(query, q, PROXYSQL_VERSION);
 		} else {
-			sprintf(query, q, PROXYSQL_VERSION" Enterprise");
+			sprintf(query, q, PROXYSQL_VERSION"-Enterprise");
 		}
 		goto __run_query;
 	}

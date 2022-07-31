@@ -114,7 +114,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 					bool same_version = false;
 					while ((row = mysql_fetch_row(result))) {
 						if (row[0]) {
-							const char* PROXYSQL_VERSION_ = GloMyLdapAuth == nullptr ? PROXYSQL_VERSION : PROXYSQL_VERSION" Enterprise";
+							const char* PROXYSQL_VERSION_ = GloMyLdapAuth == nullptr ? PROXYSQL_VERSION : PROXYSQL_VERSION"-Enterprise";
 							if (strcmp(row[0], PROXYSQL_VERSION_)==0) {
 								proxy_info("Cluster: clustering with peer %s:%d . Remote version: %s . Self version: %s\n", node->hostname, node->port, row[0], PROXYSQL_VERSION_);
 								same_version = true;
