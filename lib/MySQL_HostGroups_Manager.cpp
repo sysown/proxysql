@@ -1956,6 +1956,25 @@ bool MySQL_HostGroups_Manager::commit(
 				SQLite3_result* resultset = NULL;
 
 				mydb->execute_statement(MYHGM_GEN_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
+
+				// Remove 'OFFLINE_HARD' servers since they are not relevant to propagate to other Cluster
+				// nodes, or relevant for checksum computation.
+				const size_t init_row_count = resultset->rows_count;
+				size_t rm_rows_count = 0;
+				const auto is_offline_server = [&rm_rows_count] (SQLite3_row* row) {
+					if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
+						rm_rows_count += 1;
+						return true;
+					} else {
+						return false;
+					}
+				};
+				resultset->rows.erase(
+					std::remove_if(resultset->rows.begin(), resultset->rows.end(), is_offline_server),
+					resultset->rows.end()
+				);
+				resultset->rows_count = init_row_count - rm_rows_count;
+
 				save_runtime_mysql_servers(resultset);
 			} else {
 				save_runtime_mysql_servers(runtime_mysql_servers);
