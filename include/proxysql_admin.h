@@ -117,7 +117,7 @@ struct admin_metrics_map_idx {
 extern int admin__web_verbosity;
 
 struct incoming_servers_t {
-	SQLite3_result* incoming_mysql_servers = NULL;
+	SQLite3_result* runtime_mysql_servers = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
 	SQLite3_result* incoming_group_replication_hostgroups = NULL;
 	SQLite3_result* incoming_galera_hostgroups = NULL;

@@ -981,13 +981,13 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 incoming_servers_t::incoming_servers_t() {}
 
 incoming_servers_t::incoming_servers_t(
-	SQLite3_result* incoming_mysql_servers,
+	SQLite3_result* runtime_mysql_servers,
 	SQLite3_result* incoming_replication_hostgroups,
 	SQLite3_result* incoming_group_replication_hostgroups,
 	SQLite3_result* incoming_galera_hostgroups,
 	SQLite3_result* incoming_aurora_hostgroups
 ) :
-	incoming_mysql_servers(incoming_mysql_servers),
+	runtime_mysql_servers(runtime_mysql_servers),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
 	incoming_group_replication_hostgroups(incoming_group_replication_hostgroups),
 	incoming_galera_hostgroups(incoming_galera_hostgroups),
@@ -11890,41 +11890,24 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
 
-	SQLite3_result* incoming_mysql_servers = incoming_servers.incoming_mysql_servers;
+	SQLite3_result* runtime_mysql_servers = incoming_servers.runtime_mysql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_servers.incoming_replication_hostgroups;
 	SQLite3_result* incoming_group_replication_hostgroups = incoming_servers.incoming_group_replication_hostgroups;
 	SQLite3_result* incoming_galera_hostgroups = incoming_servers.incoming_galera_hostgroups;
 	SQLite3_result* incoming_aurora_hostgroups = incoming_servers.incoming_aurora_hostgroups;
 
-	// TODO: Fix ordering here and place mixed ordering in TEST
 	char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	if (incoming_mysql_servers == nullptr) {
+	if (runtime_mysql_servers == nullptr) {
 		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
 	} else {
-		resultset_servers = incoming_mysql_servers;
+		resultset_servers = runtime_mysql_servers;
 	}
 	//MyHGH->wrlock();
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		MyHGM->servers_add(resultset_servers);
-		size_t init_row_count = resultset_servers->rows_count;
-		size_t rm_rows_count = 0;
-		const auto is_offline_server = [&rm_rows_count] (SQLite3_row* row) {
-			if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
-				rm_rows_count += 1;
-				return true;
-			} else {
-				return false;
-			}
-		};
-		resultset_servers->rows.erase(
-			std::remove_if(resultset_servers->rows.begin(), resultset_servers->rows.end(), is_offline_server),
-			resultset_servers->rows.end()
-		);
-		resultset_servers->rows_count = init_row_count - rm_rows_count;
-		MyHGM->set_incoming_mysql_servers(resultset_servers);
 	}
 	resultset=NULL;
 
@@ -11954,7 +11937,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->set_incoming_replication_hostgroups(resultset_replication);
+		MyHGM->save_incoming_replication_hostgroups(resultset_replication);
 	}
 	//if (resultset) delete resultset;
 	//resultset=NULL;
@@ -11988,7 +11971,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->set_incoming_group_replication_hostgroups(resultset_group_replication);
+		MyHGM->save_incoming_group_replication_hostgroups(resultset_group_replication);
 	}
 
 	// support for Galera, table mysql_galera_hostgroups
@@ -12019,7 +12002,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->set_incoming_galera_hostgroups(resultset_galera);
+		MyHGM->save_incoming_galera_hostgroups(resultset_galera);
 	}
 
 	// support for AWS Aurora, table mysql_aws_aurora_hostgroups
@@ -12054,10 +12037,10 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->set_incoming_aws_aurora_hostgroups(resultset_aws_aurora);
+		MyHGM->save_incoming_aws_aurora_hostgroups(resultset_aws_aurora);
 	}
 	// commit all the changes
-	MyHGM->commit(checksum, epoch);
+	MyHGM->commit(runtime_mysql_servers, checksum, epoch);
 	GloAdmin->save_mysql_servers_runtime_to_database(true);
 
 	// clean up

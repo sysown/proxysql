@@ -1410,7 +1410,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
 	MyHostGroups=new PtrArray();
-	incoming_mysql_servers=NULL;
+	runtime_mysql_servers=NULL;
 	incoming_replication_hostgroups=NULL;
 	incoming_group_replication_hostgroups=NULL;
 	incoming_galera_hostgroups=NULL;
@@ -1645,7 +1645,9 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 	return resultset;
 }
 
-bool MySQL_HostGroups_Manager::commit(const std::string& checksum, const time_t epoch) {
+bool MySQL_HostGroups_Manager::commit(
+	SQLite3_result* runtime_mysql_servers, const std::string& checksum, const time_t epoch
+) {
 
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
@@ -1947,6 +1949,18 @@ bool MySQL_HostGroups_Manager::commit(const std::string& checksum, const time_t 
 			SQLite3_result *resultset=NULL;
 			char *query=(char *)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port";
 			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+			if (runtime_mysql_servers == nullptr) {
+				char* error = NULL;
+				int cols = 0;
+				int affected_rows = 0;
+				SQLite3_result* resultset = NULL;
+
+				mydb->execute_statement(MYHGM_GEN_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
+				save_runtime_mysql_servers(resultset);
+			} else {
+				save_runtime_mysql_servers(runtime_mysql_servers);
+			}
+
 			if (resultset) {
 				if (resultset->rows_count) {
 					if (init == false) {
@@ -2594,9 +2608,8 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", MYHGM_GEN_ADMIN_RUNTIME_SERVERS);
+	mydb->execute_statement(MYHGM_GEN_ADMIN_RUNTIME_SERVERS, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
 	return resultset;
 }
@@ -3789,15 +3802,15 @@ __exit_get_multiple_idle_connections:
 	return num_conn_current;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_mysql_servers(SQLite3_result *s) {
-	if (incoming_mysql_servers) {
-		delete incoming_mysql_servers;
-		incoming_mysql_servers = nullptr;
+void MySQL_HostGroups_Manager::save_runtime_mysql_servers(SQLite3_result *s) {
+	if (runtime_mysql_servers) {
+		delete runtime_mysql_servers;
+		runtime_mysql_servers = nullptr;
 	}
-	incoming_mysql_servers=s;
+	runtime_mysql_servers=s;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::save_incoming_replication_hostgroups(SQLite3_result *s) {
 	if (incoming_replication_hostgroups) {
 		delete incoming_replication_hostgroups;
 		incoming_replication_hostgroups = nullptr;
@@ -3805,7 +3818,7 @@ void MySQL_HostGroups_Manager::set_incoming_replication_hostgroups(SQLite3_resul
 	incoming_replication_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::save_incoming_group_replication_hostgroups(SQLite3_result *s) {
 	if (incoming_group_replication_hostgroups) {
 		delete incoming_group_replication_hostgroups;
 		incoming_group_replication_hostgroups = NULL;
@@ -3813,7 +3826,7 @@ void MySQL_HostGroups_Manager::set_incoming_group_replication_hostgroups(SQLite3
 	incoming_group_replication_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_galera_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::save_incoming_galera_hostgroups(SQLite3_result *s) {
 	if (incoming_galera_hostgroups) {
 		delete incoming_galera_hostgroups;
 		incoming_galera_hostgroups = NULL;
@@ -3821,7 +3834,7 @@ void MySQL_HostGroups_Manager::set_incoming_galera_hostgroups(SQLite3_result *s)
 	incoming_galera_hostgroups=s;
 }
 
-void MySQL_HostGroups_Manager::set_incoming_aws_aurora_hostgroups(SQLite3_result *s) {
+void MySQL_HostGroups_Manager::save_incoming_aws_aurora_hostgroups(SQLite3_result *s) {
 	if (incoming_aws_aurora_hostgroups) {
 		delete incoming_aws_aurora_hostgroups;
 		incoming_aws_aurora_hostgroups = NULL;
@@ -3830,7 +3843,7 @@ void MySQL_HostGroups_Manager::set_incoming_aws_aurora_hostgroups(SQLite3_result
 }
 
 SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_servers_inner() {
-	return this->incoming_mysql_servers;
+	return this->runtime_mysql_servers;
 }
 
 SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_replication_hostgroups_inner() {
