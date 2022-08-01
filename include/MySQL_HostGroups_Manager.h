@@ -390,8 +390,8 @@ class MySQL_HostGroups_Manager {
 	 *  As previously stated, these reconfigurations are monitoring actions, they can't be packed or performed
 	 *  in a single action, since monitoring data is required, which may not be already present. This makes
 	 *  this a convergent, but iterative process, that can't be compressed into a single action. Using other
-	 *  servers 'runtime_mysql_servers' while fetching represents a best effort for avoiding these
-	 *  reconfigurations in servers that already holds the same monitoring conditions. If monitoring
+	 *  nodes 'runtime_mysql_servers' while fetching represents a best effort for avoiding these
+	 *  reconfigurations in nodes that already holds the same monitoring conditions. If monitoring
 	 *  conditions are not the same, circular fetching is still possible due to the previously described
 	 *  scenario.
 	 */
