@@ -92,7 +92,7 @@ ifeq ($(MIN_VERSION),$(lastword $(sort $(GCC_VERSION) $(MIN_VERSION))))
 	REQUIRE_PATCH = true
 endif
 
-libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
+libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: microhttpd re2
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
 ifeq ($(REQUIRE_PATCH), true)
@@ -124,7 +124,7 @@ libev/libev/.libs/libev.a:
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
 ev: libev/libev/.libs/libev.a
 
-curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
+curl/curl/lib/.libs/libcurl.a: libssl
 	cd curl && rm -rf curl-*/ || true
 	cd curl && tar -zxf curl-*.tar.gz
 	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
@@ -201,7 +201,7 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 WITHASAN := $(shell echo $(WITHASAN))
 
-mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
+mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
