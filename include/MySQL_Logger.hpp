@@ -32,10 +32,10 @@ class MySQL_Event {
 	uint64_t rows_sent;
 	public:
 	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
-	uint64_t write(std::fstream *f, MySQL_Session *sess);
+	uint64_t write(std::fstream *f, Client_Session *sess);
 	uint64_t write_query_format_1(std::fstream *f);
 	uint64_t write_query_format_2_json(std::fstream *f);
-	void write_auth(std::fstream *f, MySQL_Session *sess);
+	void write_auth(std::fstream *f, Client_Session *sess);
 	void set_query(const char *ptr, int len);
 	void set_server(int _hid, const char *ptr, int len);
 	void set_extra_info(char *);
@@ -83,8 +83,8 @@ class MySQL_Logger {
 	void events_set_base_filename();
 	void audit_set_datadir(char *);
 	void audit_set_base_filename();
-	void log_request(MySQL_Session *, MySQL_Data_Stream *);
-	void log_audit_entry(log_event_type, MySQL_Session *, MySQL_Data_Stream *, char *e = NULL);
+	void log_request(Client_Session *, ProxySQL_Data_Stream *);
+	void log_audit_entry(log_event_type, Client_Session *, ProxySQL_Data_Stream *, char *e = NULL);
 	void flush();
 	void wrlock();
 	void wrunlock();

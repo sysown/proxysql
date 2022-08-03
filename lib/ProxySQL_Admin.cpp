@@ -6,7 +6,6 @@
 #include <prometheus/exposer.h>
 #include <prometheus/counter.h>
 #include "MySQL_HostGroups_Manager.h"
-#include "proxysql_admin.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "proxysql.h"
@@ -15,7 +14,10 @@
 #include "proxysql_utils.h"
 #include "prometheus_helpers.h"
 #include "cpp.h"
+#include "MySQL_Session.h"
+#include "proxysql_admin.h"
 
+#include "ProxySQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "ProxySQL_HTTP_Server.hpp" // HTTP server
@@ -291,7 +293,7 @@ extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 extern MySQL_Monitor *GloMyMon;
@@ -1158,7 +1160,7 @@ int ProxySQL_Admin::FlushDigestTableToDisk(SQLite3DB *_db) {
 }
 
 bool ProxySQL_Test___Refresh_MySQL_Variables(unsigned int cnt) {
-	MySQL_Thread *mysql_thr=new MySQL_Thread();
+	ProxyWorker_Thread *mysql_thr=new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	for (unsigned int i = 0; i < cnt ; i++) {
 		mysql_thr->refresh_variables();
@@ -1404,7 +1406,7 @@ static admin_main_loop_listeners S_amll;
 bool admin_handler_command_kill_connection(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
 	uint32_t id=atoi(query_no_space+16);
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Trying to kill session %u\n", id);
-	bool rc=GloMTH->kill_session(id);
+	bool rc=GloPWTH->kill_session(id);
 	ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 	if (rc) {
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
@@ -1505,10 +1507,10 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		}
 		if (rc) {
 			// Set the status variable 'threads_initialized' to 0 because it's initialized back
-			// in main 'init_phase3'. After GloMTH have been initialized again.
-			__sync_bool_compare_and_swap(&GloMTH->status_variables.threads_initialized, 1, 0);
+			// in main 'init_phase3'. After GloPWTH have been initialized again.
+			__sync_bool_compare_and_swap(&GloPWTH->status_variables.threads_initialized, 1, 0);
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Starting ProxySQL following PROXYSQL START command\n");
-			while(__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
+			while(__sync_fetch_and_add(&GloPWTH->status_variables.threads_initialized, 0) == 1) {
 				usleep(1000);
 			}
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
@@ -1534,15 +1536,15 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		proxy_info("Received PROXYSQL STOP command\n");
 		// to speed up this process we first change wait_timeout to 0
 		// MySQL_thread will call poll() with a maximum timeout of 100ms
-		old_wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
-		GloMTH->set_variable((char *)"wait_timeout",(char *)"0");
-		GloMTH->commit();
-		GloMTH->signal_all_threads(0);
-		GloMTH->stop_listeners();
+		old_wait_timeout=GloPWTH->get_variable_int((char *)"wait_timeout");
+		GloPWTH->set_variable((char *)"wait_timeout",(char *)"0");
+		GloPWTH->commit();
+		GloPWTH->signal_all_threads(0);
+		GloPWTH->stop_listeners();
 		char buf[32];
 		sprintf(buf,"%d",old_wait_timeout);
-		GloMTH->set_variable((char *)"wait_timeout",buf);
-		GloMTH->commit();
+		GloPWTH->set_variable((char *)"wait_timeout",buf);
+		GloPWTH->commit();
 		glovars.reload=2;
 		// This function was introduced into 'prometheus::Registry' for being
 		// able to do a complete reset of all the 'prometheus counters'. It
@@ -1551,7 +1553,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 		// After setting the shutdown flag, we should wake all threads and wait for
 		// the shutdown phase to complete.
-		GloMTH->signal_all_threads(0);
+		GloPWTH->signal_all_threads(0);
 		while (__sync_fetch_and_add(&glovars.shutdown,0)==1) {
 			usleep(1000);
 		}
@@ -1575,18 +1577,18 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (proxysql_mysql_paused==false) {
 			// to speed up this process we first change poll_timeout to 10
 			// MySQL_thread will call poll() with a maximum timeout of 10ms
-			old_wait_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
-			GloMTH->set_variable((char *)"poll_timeout",(char *)"10");
-			GloMTH->commit();
-			GloMTH->signal_all_threads(0);
-			GloMTH->stop_listeners();
+			old_wait_timeout=GloPWTH->get_variable_int((char *)"poll_timeout");
+			GloPWTH->set_variable((char *)"poll_timeout",(char *)"10");
+			GloPWTH->commit();
+			GloPWTH->signal_all_threads(0);
+			GloPWTH->stop_listeners();
 			proxysql_mysql_paused=true;
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			// we now rollback poll_timeout
 			char buf[32];
 			sprintf(buf,"%d",old_wait_timeout);
-			GloMTH->set_variable((char *)"poll_timeout",buf);
-			GloMTH->commit();
+			GloPWTH->set_variable((char *)"poll_timeout",buf);
+			GloPWTH->commit();
 		} else {
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is already paused, impossible to pause");
 		}
@@ -1605,22 +1607,22 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		if (proxysql_mysql_paused==true) {
 			// to speed up this process we first change poll_timeout to 10
 			// MySQL_thread will call poll() with a maximum timeout of 10ms
-			old_wait_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
-			GloMTH->set_variable((char *)"poll_timeout",(char *)"10");
-			GloMTH->commit();
-			GloMTH->signal_all_threads(0);
-			GloMTH->start_listeners();
+			old_wait_timeout=GloPWTH->get_variable_int((char *)"poll_timeout");
+			GloPWTH->set_variable((char *)"poll_timeout",(char *)"10");
+			GloPWTH->commit();
+			GloPWTH->signal_all_threads(0);
+			GloPWTH->start_listeners();
 			//char buf[32];
 			//sprintf(buf,"%d",old_wait_timeout);
-			//GloMTH->set_variable((char *)"poll_timeout",buf);
-			//GloMTH->commit();
+			//GloPWTH->set_variable((char *)"poll_timeout",buf);
+			//GloPWTH->commit();
 			proxysql_mysql_paused=false;
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			// we now rollback poll_timeout
 			char buf[32];
 			sprintf(buf,"%d",old_wait_timeout);
-			GloMTH->set_variable((char *)"poll_timeout",buf);
-			GloMTH->commit();
+			GloPWTH->set_variable((char *)"poll_timeout",buf);
+			GloPWTH->commit();
 		} else {
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"ProxySQL MySQL module is not paused, impossible to resume");
 		}
@@ -1659,8 +1661,8 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 	if (!strcasecmp("PROXYSQL FLUSH MYSQL CLIENT HOSTS", query_no_space)) {
 		proxy_info("Received PROXYSQL FLUSH MYSQL CLIENT HOSTS command\n");
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-		if (GloMTH) {
-			GloMTH->flush_client_host_cache();
+		if (GloPWTH) {
+			GloPWTH->flush_client_host_cache();
 		}
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
@@ -1737,7 +1739,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 
 // Returns true if the given name is either a know mysql or admin global variable.
 bool is_valid_global_variable(const char *var_name) {
-	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloMTH->has_variable(var_name + 6)) {
+	if (strlen(var_name) > 6 && !strncmp(var_name, "mysql-", 6) && GloPWTH->has_variable(var_name + 6)) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
 		return true;
@@ -3660,8 +3662,8 @@ std::string timediff_timezone_offset() {
 	return time_zone_offset;
 }
 
-void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
-
+void admin_session_handler(Client_Session *c_sess, void *_pa, PtrSize_t *pkt) {
+	MySQL_Session *sess = (MySQL_Session *)c_sess;
 	ProxySQL_Admin *pa=(ProxySQL_Admin *)_pa;
 	bool needs_vacuum = false;
 	char *error=NULL;
@@ -4222,7 +4224,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			sprintf(buf,"%lu",GloVars.checksums_values.global_checksum);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			uint16_t setStatus = 0;
-			MySQL_Data_Stream *myds=sess->client_myds;
+			ProxySQL_Data_Stream *myds=sess->client_myds;
 			MySQL_Protocol *myprot=&sess->client_myds->myprot;
 			myds->DSS=STATE_QUERY_SENT_DS;
 			int sid=1;
@@ -4353,9 +4355,9 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		}
 	}
 
-	// FIXME: this should be removed, it is just a POC for issue #253 . What is important is the call to GloMTH->signal_all_threads();
+	// FIXME: this should be removed, it is just a POC for issue #253 . What is important is the call to GloPWTH->signal_all_threads();
 	if (!strncasecmp("SIGNAL MYSQL THREADS", query_no_space, strlen("SIGNAL MYSQL THREADS"))) {
-		GloMTH->signal_all_threads();
+		GloPWTH->signal_all_threads();
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received %s command\n", query_no_space);
 		ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 		SPA->save_admin_variables_from_runtime();
@@ -4848,7 +4850,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		SQLite3_result* resultset = new SQLite3_result(1);
 		resultset->add_column_definition(SQLITE_TEXT,"Data");
 
-		if (__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 0) == 1) {
+		if (__sync_fetch_and_add(&GloPWTH->status_variables.threads_initialized, 0) == 1) {
 			auto result = pa->serial_exposer({});
 			pta[0] = (char*)result.second.c_str();
 			resultset->add_row(pta);
@@ -5218,7 +5220,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 
 
 void *child_mysql(void *arg) {
-	if (GloMTH == nullptr) { return NULL; }
+	if (GloPWTH == nullptr) { return NULL; }
 
 	pthread_attr_t thread_attr;
 	size_t tmp_stack_size=0;
@@ -5234,23 +5236,23 @@ void *child_mysql(void *arg) {
 	//struct sockaddr *addr = arg->addr;
 	//socklen_t addr_size;
 
-	GloMTH->wrlock();
+	GloPWTH->wrlock();
 	{
-		char *s=GloMTH->get_variable((char *)"server_capabilities");
+		char *s=GloPWTH->get_variable((char *)"server_capabilities");
 		mysql_thread___server_capabilities=atoi(s);
 		free(s);
 	}
-	GloMTH->wrunlock();
+	GloPWTH->wrunlock();
 
 	struct pollfd fds[1];
 	nfds_t nfds=1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
-	MySQL_Thread *mysql_thr=new MySQL_Thread();
+	ProxyWorker_Thread *mysql_thr=new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	MySQL_Session *sess = mysql_thr->create_new_session_and_client_mysql_data_stream(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_ADMIN;
 	sess->handler_function=admin_session_handler;
@@ -5447,11 +5449,11 @@ static void * admin_main_loop(void *arg)
 		}
 __end_while_pool:
 		{
-			if (GloProxyStats->MySQL_Threads_Handler_timetoget(curtime)) {
-				if (GloMTH) {
-					SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus(false);
+			if (GloProxyStats->ProxyWorker_Threads_Handler_timetoget(curtime)) {
+				if (GloPWTH) {
+					SQLite3_result * resultset=GloPWTH->SQL3_GlobalStatus(false);
 					if (resultset) {
-						GloProxyStats->MySQL_Threads_Handler_sets(resultset);
+						GloProxyStats->ProxyWorker_Threads_Handler_sets(resultset);
 						delete resultset;
 					}
 				}
@@ -5582,8 +5584,8 @@ __end_while_pool:
  */
 void update_modules_metrics() {
 	// Update mysql_threads_handler metrics
-	if (GloMTH) {
-		GloMTH->p_update_metrics();
+	if (GloPWTH) {
+		GloPWTH->p_update_metrics();
 	}
 	// Update mysql_hostgroups_manager metrics
 	if (MyHGM) {
@@ -6627,19 +6629,19 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		proxy_error("Error on %s : %s\n", q, error);
 		return;
 	} else {
-		GloMTH->wrlock();
-		char * previous_default_charset = GloMTH->get_variable_string((char *)"default_charset");
-		char * previous_default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
+		GloPWTH->wrlock();
+		char * previous_default_charset = GloPWTH->get_variable_string((char *)"default_charset");
+		char * previous_default_collation_connection = GloPWTH->get_variable_string((char *)"default_collation_connection");
 		assert(previous_default_charset);
 		assert(previous_default_collation_connection);
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			const char *value = r->fields[1];
-				bool rc=GloMTH->set_variable(r->fields[0],value);
+				bool rc=GloPWTH->set_variable(r->fields[0],value);
 				if (rc==false) {
 					proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],value);
 					if (replace) {
-						char *val=GloMTH->get_variable(r->fields[0]);
+						char *val=GloPWTH->get_variable(r->fields[0]);
 						char q[1000];
 						if (val) {
 							if (strcmp(val,value)) {
@@ -6672,7 +6674,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						(strcmp(r->fields[0],"default_collation_connection")==0)
 						|| (strcmp(r->fields[0],"default_charset")==0)
 					) {
-						char *val=GloMTH->get_variable(r->fields[0]);
+						char *val=GloPWTH->get_variable(r->fields[0]);
 						char q[1000];
 						if (val) {
 							if (strcmp(val,value)) {
@@ -6692,8 +6694,8 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		}
 
 		char q[1000];
-		char * default_charset = GloMTH->get_variable_string((char *)"default_charset");
-		char * default_collation_connection = GloMTH->get_variable_string((char *)"default_collation_connection");
+		char * default_charset = GloPWTH->get_variable_string((char *)"default_charset");
+		char * default_collation_connection = GloPWTH->get_variable_string((char *)"default_collation_connection");
 		assert(default_charset);
 		assert(default_collation_connection);
 		MARIADB_CHARSET_INFO * ci = NULL;
@@ -6711,16 +6713,16 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 				proxy_info("Resetting mysql-default_charset to hardcoded default value: %s\n", ci->csname);
 				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", ci->csname);
 				db->execute(q);
-				GloMTH->set_variable((char *)"default_charset",ci->csname);
+				GloPWTH->set_variable((char *)"default_charset",ci->csname);
 				proxy_info("Resetting mysql-default_collation_connection to hardcoded default value: %s\n", ci->name);
 				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
 				db->execute(q);
-				GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+				GloPWTH->set_variable((char *)"default_collation_connection",ci->name);
 			} else {
 				proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", ci->csname, ci->name);
 				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", ci->csname);
 				db->execute(q);
-				GloMTH->set_variable((char *)"default_charset",ci->csname);
+				GloPWTH->set_variable((char *)"default_charset",ci->csname);
 			}
 		} else {
 			MARIADB_CHARSET_INFO * cic = NULL;
@@ -6730,7 +6732,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 				proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
 				sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
 				db->execute(q);
-				GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+				GloPWTH->set_variable((char *)"default_collation_connection",ci->name);
 			} else {
 				if (strcmp(cic->csname,ci->csname)==0) {
 					// mysql-default_collation_connection and mysql-default_charset are compatible
@@ -6748,12 +6750,12 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 						proxy_info("Changing mysql-default_charset to %s using configured mysql-default_collation_connection %s\n", cic->csname, cic->name);
 						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_charset\",\"%s\")", cic->csname);
 						db->execute(q);
-						GloMTH->set_variable((char *)"default_charset",cic->csname);
+						GloPWTH->set_variable((char *)"default_charset",cic->csname);
 					} else {
 						proxy_info("Changing mysql-default_collation_connection to %s using configured mysql-default_charset: %s\n", ci->name, ci->csname);
 						sprintf(q,"INSERT OR REPLACE INTO global_variables VALUES(\"mysql-default_collation_connection\",\"%s\")", ci->name);
 						db->execute(q);
-						GloMTH->set_variable((char *)"default_collation_connection",ci->name);
+						GloPWTH->set_variable((char *)"default_collation_connection",ci->name);
 					}
 				}
 			}
@@ -6762,10 +6764,10 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		free(default_collation_connection);
 		free(previous_default_charset);
 		free(previous_default_collation_connection);
-		GloMTH->commit();
-		GloMTH->wrunlock();
+		GloPWTH->commit();
+		GloPWTH->wrunlock();
 		if (checksum_variables.checksum_mysql_variables) {
-			// NOTE: 'GloMTH->wrunlock()' should have been called before this point to avoid possible
+			// NOTE: 'GloPWTH->wrunlock()' should have been called before this point to avoid possible
 			// deadlocks. See issue #3847.
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
@@ -7335,12 +7337,12 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 		ASSERT_SQLITE_OK(rc, db);
 	}
 	if (use_lock) {
-		GloMTH->wrlock();
+		GloPWTH->wrlock();
 		db->execute("BEGIN");
 	}
-	char **varnames=GloMTH->get_variables_list();
+	char **varnames=GloPWTH->get_variables_list();
 	for (int i=0; varnames[i]; i++) {
-		char *val=GloMTH->get_variable(varnames[i]);
+		char *val=GloPWTH->get_variable(varnames[i]);
 		char *qualified_name=(char *)malloc(strlen(varnames[i])+7);
 		sprintf(qualified_name, "mysql-%s", varnames[i]);
 		rc=(*proxy_sqlite3_bind_text)(statement1, 1, qualified_name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
@@ -7361,7 +7363,7 @@ void ProxySQL_Admin::flush_mysql_variables___runtime_to_database(SQLite3DB *db, 
 	}
 	if (use_lock) {
 		db->execute("COMMIT");
-		GloMTH->wrunlock();
+		GloPWTH->wrunlock();
 	}
 	(*proxy_sqlite3_finalize)(statement1);
 	if (runtime)
@@ -8354,7 +8356,7 @@ int32_t get_open_fds() {
 }
 
 void ProxySQL_Admin::p_stats___memory_metrics() {
-	if (!GloMTH) return;
+	if (!GloPWTH) return;
 
 	// Check that last execution is older than the specified interval
 	unsigned long long new_ts = monotonic_time() / 1000 / 1000;
@@ -8455,7 +8457,7 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 }
 
 void ProxySQL_Admin::stats___memory_metrics() {
-	if (!GloMTH) return;
+	if (!GloPWTH) return;
 	SQLite3_result * resultset = NULL;
 
 	int highwater;
@@ -8554,8 +8556,8 @@ void ProxySQL_Admin::stats___memory_metrics() {
 		}
 		if (GloQPro) {
 			unsigned long long mu = GloQPro->get_rules_mem_used();
-			if (GloMTH) {
-				mu += mu * GloMTH->num_threads;
+			if (GloPWTH) {
+				mu += mu * GloPWTH->num_threads;
 			}
 			vn=(char *)"mysql_query_rules_memory";
 			sprintf(bu,"%llu",mu);
@@ -8652,8 +8654,8 @@ void ProxySQL_Admin::p_update_stmt_metrics() {
 }
 
 void ProxySQL_Admin::stats___mysql_global() {
-	if (!GloMTH) return;
-	SQLite3_result * resultset=GloMTH->SQL3_GlobalStatus(true);
+	if (!GloPWTH) return;
+	SQLite3_result * resultset=GloPWTH->SQL3_GlobalStatus(true);
 	if (resultset==NULL) return;
 	statsdb->execute("BEGIN");
 	statsdb->execute("DELETE FROM stats_mysql_global");
@@ -8806,9 +8808,9 @@ void ProxySQL_Admin::stats___mysql_global() {
 
 void ProxySQL_Admin::stats___mysql_processlist() {
 	int rc;
-	if (!GloMTH) return;
+	if (!GloPWTH) return;
 	mysql_thread___show_processlist_extended = variables.mysql_show_processlist_extended;
-	SQLite3_result * resultset=GloMTH->SQL3_Processlist();
+	SQLite3_result * resultset=GloPWTH->SQL3_Processlist();
 	if (resultset==NULL) return;
 
 	sqlite3_stmt *statement1=NULL;
@@ -9388,7 +9390,7 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
 	if (!GloQPro) return;
 
-	SQLite3_result* resultset = GloMTH->get_client_host_cache(reset);
+	SQLite3_result* resultset = GloPWTH->get_client_host_cache(reset);
 	if (resultset==NULL) return;
 
 	statsdb->execute("BEGIN");
@@ -10548,7 +10550,7 @@ void ProxySQL_Admin::__refresh_clickhouse_users() {
 
 void ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	myprot->generate_pkt_OK(true,NULL,NULL,1,rows,0,2,0,msg,false);
 	myds->DSS=STATE_SLEEP;
@@ -10556,7 +10558,7 @@ void ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) 
 
 void ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
 	assert(myprot);
-	MySQL_Data_Stream *myds=myprot->get_myds();
+	ProxySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	char *a = (char *)"ProxySQL Admin Error: ";
 	char *new_msg = (char *)malloc(strlen(msg)+strlen(a)+1);

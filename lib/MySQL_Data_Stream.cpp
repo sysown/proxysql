@@ -6,7 +6,9 @@
 #endif 
 
 #include "MySQL_PreparedStatement.h"
+#include "ProxySQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "MySQL_Session.h"
 
 #include <openssl/x509v3.h>
 
@@ -68,7 +70,7 @@ struct bio_st {
 #define RESULTSET_BUFLEN_DS_16K 16000
 #define RESULTSET_BUFLEN_DS_1M 1000*1024
 
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {
@@ -237,16 +239,9 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 	return status;
 }
 
-void * MySQL_Data_Stream::operator new(size_t size) {
-  return l_alloc(size);
-}
-
-void MySQL_Data_Stream::operator delete(void *ptr) {
-  l_free(sizeof(MySQL_Data_Stream),ptr);
-}
-
 // Constructor
 MySQL_Data_Stream::MySQL_Data_Stream() {
+/*
 	bytes_info.bytes_recv=0;
 	bytes_info.bytes_sent=0;
 	pkts_recv=0;
@@ -259,11 +254,12 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	proxy_addr.port=0;
 
 	sess=NULL;
+*/
 	mysql_real_query.pkt.ptr=NULL;
 	mysql_real_query.pkt.size=0;
 	mysql_real_query.QueryPtr=NULL;
 	mysql_real_query.QuerySize=0;
-
+/*
 	query_retries_on_failure=0;
 	connect_retries_on_failure=0;
 	max_connect_time=0;
@@ -281,10 +277,14 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	resultset=NULL;
 	queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
+*/
 	mybe=NULL;
+/*
 	active=1;
 	mypolls=NULL;
+*/
 	myconn=NULL;	// 20141011
+/*
 	DSS=STATE_NOT_CONNECTED;
 	encrypted=false;
 	switching_auth_stage = 0;
@@ -296,25 +296,27 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	ssl_write_len = 0;
 	ssl_write_buf = NULL;
 	net_failure=false;
+*/
 	CompPktIN.pkt.ptr=NULL;
 	CompPktIN.pkt.size=0;
 	CompPktIN.partial=0;
 	CompPktOUT.pkt.ptr=NULL;
 	CompPktOUT.pkt.size=0;
 	CompPktOUT.partial=0;
+/*
 	multi_pkt.ptr=NULL;
 	multi_pkt.size=0;
 	
 	statuses.questions = 0;
 	statuses.myconnpoll_get = 0;
 	statuses.myconnpoll_put = 0;
-
+*/
 	com_field_wild=NULL;
 }
 
 // Destructor
 MySQL_Data_Stream::~MySQL_Data_Stream() {
-
+/*
 	queue_destroy(queueIN);
 	queue_destroy(queueOUT);
 	if (client_addr) {
@@ -329,14 +331,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		free(proxy_addr.addr);
 		proxy_addr.addr=NULL;
 	}
-
+*/
 	free_mysql_real_query();
 
 	if (com_field_wild) {
 		free(com_field_wild);
 		com_field_wild=NULL;
 	}
-
+/*
 	proxy_debug(PROXY_DEBUG_NET,1, "Shutdown Data Stream. Session=%p, DataStream=%p\n" , sess, this);
 	PtrSize_t pkt;
 	if (PSarrayIN) {
@@ -362,7 +364,7 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 	}
 	if (mypolls) mypolls->remove_index_fast(poll_fds_idx);
 
-
+*/
 	if (fd>0) {
 //	// Changing logic here. The socket should be closed only if it is not a backend
 		if (myds_type==MYDS_FRONTEND) {
@@ -385,21 +387,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 			SSL_shutdown(ssl);
 		}
 		if (ssl) SSL_free(ssl);
-/*
-		SSL_free() should also take care of these
-		if (rbio_ssl) {
-			BIO_free(rbio_ssl);
-		}
-		if (wbio_ssl) {
-			BIO_free(wbio_ssl);
-		}
-*/
 	}
+/*
 	if (multi_pkt.ptr) {
 		l_free(multi_pkt.size,multi_pkt.ptr);
 		multi_pkt.ptr=NULL;
 		multi_pkt.size=0;
 	}
+*/
 	if (CompPktIN.pkt.ptr) {
 		l_free(CompPktIN.pkt.size,CompPktIN.pkt.ptr);
 		CompPktIN.pkt.ptr=NULL;
@@ -410,13 +405,14 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 		CompPktOUT.pkt.ptr=NULL;
 		CompPktOUT.pkt.size=0;
 	}
+/*
 	if (x509_subject_alt_name) {
 		free(x509_subject_alt_name);
 		x509_subject_alt_name=NULL;
 	}
+*/
 }
-
-// this function initializes a MySQL_Data_Stream 
+// this function initializes a ProxySQL_Data_Stream 
 void MySQL_Data_Stream::init() {
 	if (myds_type!=MYDS_LISTENER) {
 		proxy_debug(PROXY_DEBUG_NET,1, "Init Data Stream. Session=%p, DataStream=%p -- type %d\n" , sess, this, myds_type);
@@ -430,16 +426,16 @@ void MySQL_Data_Stream::init() {
 		queue_destroy(queueOUT);
 	}
 }
-
-void MySQL_Data_Stream::reinit_queues() {
+/*
+void ProxySQL_Data_Stream::reinit_queues() {
 	if (queueIN.buffer==NULL)
 		queue_init(queueIN,QUEUE_T_DEFAULT_SIZE);
 	if (queueOUT.buffer==NULL)
 		queue_init(queueOUT,QUEUE_T_DEFAULT_SIZE);
 }
-
-// this function initializes a MySQL_Data_Stream with arguments
-void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int _fd) {
+*/
+// this function initializes a ProxySQL_Data_Stream with arguments
+void MySQL_Data_Stream::init(enum MySQL_DS_type _type, Client_Session *_sess, int _fd) {
 	myds_type=_type;
 	sess=_sess;
 	init();
@@ -449,9 +445,10 @@ void MySQL_Data_Stream::init(enum MySQL_DS_type _type, MySQL_Session *_sess, int
 	if (myconn) myconn->fd=fd;
 }
 
+/*
 // Soft shutdown of socket : it only deactivate the data stream
 // TODO: should check the status of the data stream, and identify if it is safe to reconnect or if the session should be destroyed
-void MySQL_Data_Stream::shut_soft() {
+void ProxySQL_Data_Stream::shut_soft() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown soft fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
 	active=0;
 	set_net_failure();
@@ -459,7 +456,7 @@ void MySQL_Data_Stream::shut_soft() {
 }
 
 // Hard shutdown of socket
-void MySQL_Data_Stream::shut_hard() {
+void ProxySQL_Data_Stream::shut_hard() {
 	proxy_debug(PROXY_DEBUG_NET, 4, "Shutdown hard fd=%d. Session=%p, DataStream=%p\n", fd, sess, this);
 	set_net_failure();
 	if (encrypted) {
@@ -476,6 +473,7 @@ void MySQL_Data_Stream::shut_hard() {
 		fd = -1;
 	}
 }
+*/
 
 void MySQL_Data_Stream::check_data_flow() {
 	if ( (PSarrayIN->len || queue_data(queueIN) ) && ( PSarrayOUT->len || queue_data(queueOUT) ) ){
@@ -753,8 +751,8 @@ int MySQL_Data_Stream::write_to_net() {
 	}
 	return bytes_io;
 }
-
-bool MySQL_Data_Stream::available_data_out() {
+/*
+bool ProxySQL_Data_Stream::available_data_out() {
 	int buflen=queue_data(queueOUT);
 	if (buflen || PSarrayOUT->len) {
 		return true;
@@ -762,12 +760,12 @@ bool MySQL_Data_Stream::available_data_out() {
 	return false;
 }
 
-void MySQL_Data_Stream::remove_pollout() {
+void ProxySQL_Data_Stream::remove_pollout() {
 	struct pollfd *_pollfd;
 	_pollfd=&mypolls->fds[poll_fds_idx];
 	_pollfd->events = 0;
 }
-
+*/
 void MySQL_Data_Stream::set_pollout() {
 	struct pollfd *_pollfd;
 	_pollfd=&mypolls->fds[poll_fds_idx];
@@ -1343,7 +1341,6 @@ void MySQL_Data_Stream::buffer2resultset(unsigned char *ptr, unsigned int size) 
 		resultset->add(buff,bl-bf);
 	}
 };
-
 int MySQL_Data_Stream::array2buffer_full() {
 	int rc=0;
 	int r=0;
@@ -1368,20 +1365,22 @@ void MySQL_Data_Stream::unplug_backend() {
   fd=0;
 }
 
-void MySQL_Data_Stream::set_net_failure() {
+/*
+void ProxySQL_Data_Stream::set_net_failure() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p , myds_type:%d\n", this->sess, this, myds_type);
 #ifdef DEBUG
 	if (myds_type!=MYDS_FRONTEND) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p , myds_type:%d not frontend\n", this->sess, this, myds_type);
 	}
-#endif /* DEBUG */
+#endif // DEBUG
 	net_failure=true;
 }
 
-void MySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
+void ProxySQL_Data_Stream::setDSS_STATE_QUERY_SENT_NET() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, myds=%p\n", this->sess, this);
 	DSS=STATE_QUERY_SENT_NET;
 }
+*/
 
 void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	MySQL_Connection *mc=myconn;
@@ -1397,7 +1396,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 	if (
 		(( (intv) && (mc->last_time_used > mc->creation_time + intv) )
 		||
-		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection ))
+		( mc->local_stmts->get_num_backend_stmts() > (unsigned int)GloPWTH->variables.max_stmts_per_connection ))
 		&&
 		// NOTE: If the current session if in 'PINGING_SERVER' status, there is
 		// no need to reset the session. The destruction and creation of a new
@@ -1407,7 +1406,7 @@ void MySQL_Data_Stream::return_MySQL_Connection_To_Pool() {
 		sess->status != PINGING_SERVER
 	) {
 		if (mysql_thread___reset_connection_algorithm == 2) {
-			sess->create_new_session_and_reset_connection(this);
+			((MySQL_Session *)sess)->create_new_session_and_reset_mysql_connection(this);
 		} else {
 			destroy_MySQL_Connection_From_Pool(true);
 		}
@@ -1428,10 +1427,12 @@ void MySQL_Data_Stream::free_mysql_real_query() {
 	}
 }
 
-void MySQL_Data_Stream::destroy_queues() {
+/*
+void ProxySQL_Data_Stream::destroy_queues() {
 	queue_destroy(queueIN);
 	queue_destroy(queueOUT);
 }
+*/
 
 void MySQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	MySQL_Connection *mc=myconn;
@@ -1442,9 +1443,11 @@ void MySQL_Data_Stream::destroy_MySQL_Connection_From_Pool(bool sq) {
 	MyHGM->destroy_MyConn_from_pool(mc);
 }
 
-bool MySQL_Data_Stream::data_in_rbio() {
+/*
+bool ProxySQL_Data_Stream::data_in_rbio() {
 	if (rbio_ssl->num_write > rbio_ssl->num_read) {
 		return true;
 	}
 	return false;
 }
+*/

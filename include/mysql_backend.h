@@ -7,8 +7,6 @@
 class MySQL_Backend
 {
 	public:
-	void * operator new(size_t);
-	void operator delete(void *);
 	int hostgroup_id;
 	char gtid_uuid[128];
 	uint64_t gtid_trxid;

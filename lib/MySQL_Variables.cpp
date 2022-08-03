@@ -2,10 +2,12 @@
 #include "proxysql.h"
 
 #include "MySQL_Session.h"
+#include "ProxySQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
 #include "SpookyV2.h"
 
 #include <sstream>
+
 
 
 static inline char is_digit(char c) {
@@ -235,6 +237,11 @@ uint32_t MySQL_Variables::server_get_hash(MySQL_Session* session, int idx) const
 	return session->mybe->server_myds->myconn->var_hash[idx];
 }
 
+bool MySQL_Variables::update_variable(Client_Session* session, session_status status, int &_rc) {
+	assert(session->session_type==PROXYSQL_SESSION_MYSQL);
+	return update_variable((MySQL_Session *)session, status, _rc);
+}
+
 bool MySQL_Variables::update_variable(MySQL_Session* session, session_status status, int &_rc) {
 	int idx = SQL_NAME_LAST_HIGH_WM;
 	if (session->status == SETTING_VARIABLE) {
@@ -250,6 +257,11 @@ bool MySQL_Variables::update_variable(MySQL_Session* session, session_status sta
 	}
 	assert(idx != SQL_NAME_LAST_HIGH_WM);
 	return updaters[idx](session, idx, _rc);
+}
+
+bool MySQL_Variables::verify_variable(Client_Session* session, int idx) const {
+	assert(session->session_type==PROXYSQL_SESSION_MYSQL);
+	return verify_variable((MySQL_Session *)session, idx);
 }
 
 bool MySQL_Variables::verify_variable(MySQL_Session* session, int idx) const {
@@ -426,6 +438,11 @@ bool update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 		ret = session->handler_again___status_SETTING_GENERIC_VARIABLE(&_rc, set_var_name, mysql_variables.server_get_value(session, idx), no_quote, st);
 	}
 	return ret;
+}
+
+bool verify_set_names(Client_Session * session) {
+	assert(session->session_type==PROXYSQL_SESSION_MYSQL);
+	return verify_set_names((MySQL_Session *)session);
 }
 
 bool verify_set_names(MySQL_Session* session) {

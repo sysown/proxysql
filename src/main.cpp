@@ -22,6 +22,8 @@
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
 
+#include "proxysql_admin.h"
+
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>
 #include <libdaemon/dlog.h>
@@ -309,25 +311,25 @@ void ProxySQL_Main_init_SSL_module() {
 /*
 void example_listern() {
 // few examples tests to demonstrate the ability to add and remove listeners at runtime
-	GloMTH->listener_add((char *)"0.0.0.0:6033");
+	GloPWTH->listener_add((char *)"0.0.0.0:6033");
 	sleep(3);
-	GloMTH->listener_add((char *)"127.0.0.1:5033");
+	GloPWTH->listener_add((char *)"127.0.0.1:5033");
 	sleep(3);
-	GloMTH->listener_add((char *)"127.0.0.2:5033");
+	GloPWTH->listener_add((char *)"127.0.0.2:5033");
 	sleep(3);
-	GloMTH->listener_add((char *)"/tmp/proxysql.sock");
+	GloPWTH->listener_add((char *)"/tmp/proxysql.sock");
 	for (int t=0; t<10; t++) {
-		GloMTH->listener_add((char *)"127.0.0.1",7000+t);
+		GloPWTH->listener_add((char *)"127.0.0.1",7000+t);
 		sleep(3);
 	}
 
-	GloMTH->listener_del((char *)"0.0.0.0:6033");
+	GloPWTH->listener_del((char *)"0.0.0.0:6033");
 	sleep(3);
-	GloMTH->listener_del((char *)"127.0.0.1:5033");
+	GloPWTH->listener_del((char *)"127.0.0.1:5033");
 	sleep(3);
-	GloMTH->listener_del((char *)"127.0.0.2:5033");
+	GloPWTH->listener_del((char *)"127.0.0.2:5033");
 	sleep(3);
-	GloMTH->listener_del((char *)"/tmp/proxysql.sock");
+	GloPWTH->listener_del((char *)"/tmp/proxysql.sock");
 }
 */
 
@@ -373,7 +375,7 @@ ClickHouse_Authentication *GloClickHouseAuth;
 #endif /* PROXYSQLCLICKHOUSE */
 Query_Processor *GloQPro;
 ProxySQL_Admin *GloAdmin;
-MySQL_Threads_Handler *GloMTH = NULL;
+ProxyWorker_Threads_Handler *GloPWTH = NULL;
 Web_Interface *GloWebInterface;
 MySQL_STMT_Manager_v14 *GloMyStmt;
 
@@ -407,7 +409,7 @@ void * mysql_worker_thread_func(void *arg) {
 	}
 
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
-	MySQL_Thread *worker = new MySQL_Thread();
+	ProxyWorker_Thread *worker = new ProxyWorker_Thread();
 	mysql_thread->worker=worker;
 	worker->init();
 //	worker->poll_listener_add(listen_fd);
@@ -437,7 +439,7 @@ void * mysql_worker_thread_func_idles(void *arg) {
 
 //	__thr_sfp=l_mem_init();
 	proxysql_mysql_thread_t *mysql_thread=(proxysql_mysql_thread_t *)arg;
-	MySQL_Thread *worker = new MySQL_Thread();
+	ProxyWorker_Thread *worker = new ProxyWorker_Thread();
 	mysql_thread->worker=worker;
 	worker->epoll_thread=true;
 	worker->init();
@@ -643,7 +645,7 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 void ProxySQL_Main_init_main_modules() {
 	GloQC=NULL;
 	GloQPro=NULL;
-	GloMTH=NULL;
+	GloPWTH=NULL;
 	GloMyAuth=NULL;
 #ifdef PROXYSQLCLICKHOUSE
 	GloClickHouseAuth=NULL;
@@ -660,9 +662,9 @@ void ProxySQL_Main_init_main_modules() {
 
 	MyHGM=new MySQL_HostGroups_Manager();
 	MyHGM->init();
-	MySQL_Threads_Handler * _tmp_GloMTH = NULL;
-	_tmp_GloMTH=new MySQL_Threads_Handler();
-	GloMTH = _tmp_GloMTH;
+	ProxyWorker_Threads_Handler * _tmp_GloPWTH = NULL;
+	_tmp_GloPWTH=new ProxyWorker_Threads_Handler();
+	GloPWTH = _tmp_GloPWTH;
 	GloMyLogger = new MySQL_Logger();
 	GloMyLogger->print_version();
 	GloMyStmt=new MySQL_STMT_Manager_v14();
@@ -705,24 +707,24 @@ void ProxySQL_Main_init_Query_module() {
 //	}
 }
 
-void ProxySQL_Main_init_MySQL_Threads_Handler_module() {
+void ProxySQL_Main_init_ProxyWorker_Threads_Handler_module() {
 	unsigned int i;
-	GloMTH->init();
+	GloPWTH->init();
 	load_ = 1;
-	load_ += GloMTH->num_threads;
+	load_ += GloPWTH->num_threads;
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
-		load_ += GloMTH->num_threads;
+		load_ += GloPWTH->num_threads;
 	} else {
 		proxy_warning("proxysql instance running without --idle-threads : most workloads benefit from this option\n");
 		proxy_warning("proxysql instance running without --idle-threads : enabling it can potentially improve performance\n");
 	}
 #endif // IDLE_THREADS
-	for (i=0; i<GloMTH->num_threads; i++) {
-		GloMTH->create_thread(i,mysql_worker_thread_func, false);
+	for (i=0; i<GloPWTH->num_threads; i++) {
+		GloPWTH->create_thread(i,mysql_worker_thread_func, false);
 #ifdef IDLE_THREADS
 		if (GloVars.global.idle_threads) {
-			GloMTH->create_thread(i,mysql_worker_thread_func_idles, true);
+			GloPWTH->create_thread(i,mysql_worker_thread_func_idles, true);
 		}
 #endif // IDLE_THREADS
 	}
@@ -772,11 +774,11 @@ void ProxySQL_Main_init_ClickHouseServer() {
 
 void ProxySQL_Main_join_all_threads() {
 	cpu_timer t;
-	if (GloMTH) {
+	if (GloPWTH) {
 		cpu_timer t;
-		GloMTH->shutdown_threads();
+		GloPWTH->shutdown_threads();
 #ifdef DEBUG
-		std::cerr << "GloMTH joined in ";
+		std::cerr << "GloPWTH joined in ";
 #endif
 	}
 	if (GloQC) {
@@ -871,14 +873,14 @@ void ProxySQL_Main_shutdown_all_modules() {
 		std::cerr << "GloMyAuth shutdown in ";
 #endif
 	}
-	if (GloMTH) {
+	if (GloPWTH) {
 		cpu_timer t;
 		pthread_mutex_lock(&GloVars.global.ext_glomth_mutex);
-		delete GloMTH;
-		GloMTH=NULL;
+		delete GloPWTH;
+		GloPWTH=NULL;
 		pthread_mutex_unlock(&GloVars.global.ext_glomth_mutex);
 #ifdef DEBUG
-		std::cerr << "GloMTH shutdown in ";
+		std::cerr << "GloPWTH shutdown in ";
 #endif
 	}
 	if (GloMyLogger) {
@@ -1012,7 +1014,7 @@ void ProxySQL_Main_init_phase2___not_started() {
 
 	ProxySQL_Main_init_main_modules();
 	ProxySQL_Main_init_Admin_module();
-	GloMTH->print_version();
+	GloPWTH->print_version();
 
 	{
 		cpu_timer t;
@@ -1071,9 +1073,9 @@ void ProxySQL_Main_init_phase3___start_all() {
 	}
 	{
 		cpu_timer t;
-		ProxySQL_Main_init_MySQL_Threads_Handler_module();
+		ProxySQL_Main_init_ProxyWorker_Threads_Handler_module();
 #ifdef DEBUG
-		std::cerr << "Main phase3 : MySQL Threads Handler initialized in ";
+		std::cerr << "Main phase3 : ProxySQL Worker Threads Handler initialized in ";
 #endif
 	}
 	{
@@ -1090,13 +1092,13 @@ void ProxySQL_Main_init_phase3___start_all() {
 #endif
 	} while (load_ != 1);
 	load_ = 0;
-	__sync_fetch_and_add(&GloMTH->status_variables.threads_initialized, 1);
+	__sync_fetch_and_add(&GloPWTH->status_variables.threads_initialized, 1);
 
 	{
 		cpu_timer t;
-		GloMTH->start_listeners();
+		GloPWTH->start_listeners();
 #ifdef DEBUG
-		std::cerr << "Main phase3 : MySQL Threads Handler listeners started in ";
+		std::cerr << "Main phase3 : ProxySQL Worker Threads Handler listeners started in ";
 #endif
 	}
 	if ( GloVars.global.sqlite3_server == true ) {
@@ -1557,9 +1559,9 @@ __start_label:
 				inner_loops = 0;
 				continue;
 			}
-			if (GloMTH) {
+			if (GloPWTH) {
 				unsigned long long atomic_curtime = 0;
-				unsigned long long poll_timeout = (unsigned int)GloMTH->variables.poll_timeout;
+				unsigned long long poll_timeout = (unsigned int)GloPWTH->variables.poll_timeout;
 				unsigned int threads_missing_heartbeat = 0;
 				poll_timeout += 1000; // add 1 second (rounding up)
 				poll_timeout *= 1000; // convert to us
@@ -1569,10 +1571,10 @@ __start_label:
 				previous_time = curtime;
 				inner_loops = 0;
 				unsigned int i;
-				if (GloMTH->mysql_threads) {
-					for (i=0; i<GloMTH->num_threads; i++) {
-						if (GloMTH->mysql_threads[i].worker) {
-							atomic_curtime = GloMTH->mysql_threads[i].worker->atomic_curtime;
+				if (GloPWTH->mysql_threads) {
+					for (i=0; i<GloPWTH->num_threads; i++) {
+						if (GloPWTH->mysql_threads[i].worker) {
+							atomic_curtime = GloPWTH->mysql_threads[i].worker->atomic_curtime;
 							if (curtime > atomic_curtime + poll_timeout) {
 								threads_missing_heartbeat++;
 							}
@@ -1581,10 +1583,10 @@ __start_label:
 				}
 #ifdef IDLE_THREADS
 				if (GloVars.global.idle_threads) {
-					if (GloMTH->mysql_threads) {
-						for (i=0; i<GloMTH->num_threads; i++) {
-							if (GloMTH->mysql_threads_idles[i].worker) {
-								atomic_curtime = GloMTH->mysql_threads_idles[i].worker->atomic_curtime;
+					if (GloPWTH->mysql_threads) {
+						for (i=0; i<GloPWTH->num_threads; i++) {
+							if (GloPWTH->mysql_threads_idles[i].worker) {
+								atomic_curtime = GloPWTH->mysql_threads_idles[i].worker->atomic_curtime;
 								if (curtime > atomic_curtime + poll_timeout) {
 									threads_missing_heartbeat++;
 								}

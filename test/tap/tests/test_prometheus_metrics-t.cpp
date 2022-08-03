@@ -345,14 +345,50 @@ void check_message_count_parse_failure(const map<string, double>& prev_metrics, 
 	map<string,double>::const_iterator after_metric_it { after_metrics.end() };
 	map<string,double>::const_iterator prev_metric_it { prev_metrics.end() };
 
+	map<string,string> metric_tags {};
+
+	const auto match_exp_tags = [](map<string,double>::const_iterator metric_key) -> pair<map<string,string>,bool> {
+		// Find the right metric using the proper tags for 'proxysql_message_count_total'
+		map<string,string> metric_tags = extract_metric_tags(metric_key->first);
+		auto message_id_it = metric_tags.find("message_id");
+		auto filename_it = metric_tags.find("filename");
+		auto line_it = metric_tags.find("line");
+		auto func_it = metric_tags.find("func");
+
+		bool all_tags_present =
+			message_id_it != metric_tags.end() && filename_it != metric_tags.end() &&
+			line_it != metric_tags.end() && func_it != metric_tags.end();
+		bool correct_tag_values = false;
+
+		if (all_tags_present == true) {
+			correct_tag_values =
+				message_id_it->second == string {"10002"} && line_it->second != "0" &&
+				filename_it->second == "Client_Session.cpp" &&
+				func_it->second == "handler_WCDSS_MYSQL_COM_QUERY_qpo";
+		}
+
+		return { metric_tags, correct_tag_values };
+	};
+
 	for (auto metric_key = after_metrics.begin(); metric_key != after_metrics.end(); metric_key++) {
 		if (metric_key->first.rfind("proxysql_message_count_total") == 0) {
-			after_metric_it = metric_key;
+			pair<map<string,string>,bool> match_res { match_exp_tags(metric_key) };
+
+			if (match_res.second) {
+				metric_tags = match_res.first;
+				after_metric_it = metric_key;
+				break;
+			}
 		}
 	}
 	for (auto metric_key = prev_metrics.begin(); metric_key != prev_metrics.end(); metric_key++) {
 		if (metric_key->first.rfind("proxysql_message_count_total") == 0) {
-			prev_metric_it = metric_key;
+			pair<map<string,string>,bool> match_res { match_exp_tags(metric_key) };
+
+			if (match_res.second) {
+				prev_metric_it = metric_key;
+				break;
+			}
 		}
 	}
 
@@ -369,27 +405,8 @@ void check_message_count_parse_failure(const map<string, double>& prev_metrics, 
 		double after_metric_val = after_metric_it->second;
 		bool is_updated = fabs(prev_metric_val + 1 - after_metric_val) < 0.1;
 
-		// Check metric tags
-		auto metric_tags = extract_metric_tags(after_metric_it->first);
-		auto message_id_it = metric_tags.find("message_id");
-		auto filename_it = metric_tags.find("filename");
-		auto line_it = metric_tags.find("line");
-		auto func_it = metric_tags.find("func");
-
-		bool all_tags_present =
-			message_id_it != metric_tags.end() && filename_it != metric_tags.end() &&
-			line_it != metric_tags.end() && func_it != metric_tags.end();
-		bool correct_tag_values = false;
-
-		if (all_tags_present == true) {
-			correct_tag_values =
-				message_id_it->second == string {"10002"} && line_it->second != "0" &&
-				filename_it->second == "MySQL_Session.cpp" &&
-				func_it->second == "handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo";
-		}
-
 		ok(
-			is_updated && all_tags_present && correct_tag_values,
+			metric_found && is_updated,
 			"Metric has a proper tag values and updated value: { old_value: '%lf', new_value: '%lf', tags: '%s' }",
 			prev_metric_val, after_metric_val, nlohmann::json(metric_tags).dump().c_str()
 		);

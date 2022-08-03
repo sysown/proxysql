@@ -6,9 +6,11 @@
 #include <sstream>
 
 #include "MySQL_PreparedStatement.h"
+#include "ProxySQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "MySQL_Variables.h"
+#include "MySQL_Session.h"
 
 #include <atomic>
 
@@ -530,14 +532,14 @@ unsigned int MySQL_Connection::set_charset(unsigned int _c, enum charset_action 
 	// SQL_CHARACTER_SET should be set befor setting SQL_CHRACTER_ACTION
 	std::stringstream ss;
 	ss << _c;
-	mysql_variables.client_set_value(myds->sess, SQL_CHARACTER_SET, ss.str());
+	mysql_variables.client_set_value((MySQL_Session *)(myds->sess), SQL_CHARACTER_SET, ss.str());
 
 	// When SQL_CHARACTER_ACTION is set character set variables are set according to
 	// SQL_CHRACTER_SET value
 	ss.str(std::string());
 	ss.clear();
 	ss << action;
-	mysql_variables.client_set_value(myds->sess, SQL_CHARACTER_ACTION, ss.str());
+	mysql_variables.client_set_value((MySQL_Session *)(myds->sess), SQL_CHARACTER_ACTION, ss.str());
 
 	return _c;
 }
@@ -718,7 +720,7 @@ void MySQL_Connection::connect_start() {
 	mysql_options(mysql, MYSQL_OPT_CONNECT_TIMEOUT, (void *)&timeout);
 	/* Take client character set and use it to connect to backend */
 	if (myds && myds->sess) {
-		csname = mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET);
+		csname = mysql_variables.client_get_value((MySQL_Session *)(myds->sess), SQL_CHARACTER_SET);
 	}
 
 	const MARIADB_CHARSET_INFO * c = NULL;
@@ -741,11 +743,11 @@ void MySQL_Connection::connect_start() {
 		std::stringstream ss;
 		ss << c->nr;
 
-		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET, ss.str().c_str());
-		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
-		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
-		mysql_variables.server_set_value(myds->sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
-		mysql_variables.server_set_value(myds->sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
+		mysql_variables.server_set_value((MySQL_Session *)(myds->sess), SQL_CHARACTER_SET, ss.str().c_str());
+		mysql_variables.server_set_value((MySQL_Session *)(myds->sess), SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
+		mysql_variables.server_set_value((MySQL_Session *)(myds->sess), SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
+		mysql_variables.server_set_value((MySQL_Session *)(myds->sess), SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
+		mysql_variables.server_set_value((MySQL_Session *)(myds->sess), SQL_COLLATION_CONNECTION, ss.str().c_str());
 	}
 	//mysql_options(mysql, MYSQL_SET_CHARSET_NAME, c->csname);
 	mysql->charset = c;
@@ -755,9 +757,10 @@ void MySQL_Connection::connect_start() {
 
 	if (myds) {
 		if (myds->sess) {
-			if (myds->sess->client_myds) {
-				if (myds->sess->client_myds->myconn) {
-					uint32_t orig_client_flags = myds->sess->client_myds->myconn->options.client_flag;
+			MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+			if (mysess->client_myds) {
+				if (mysess->client_myds->myconn) {
+					uint32_t orig_client_flags = mysess->client_myds->myconn->options.client_flag;
 					if (orig_client_flags & CLIENT_FOUND_ROWS) {
 						client_flags |= CLIENT_FOUND_ROWS;
 					}
@@ -784,9 +787,10 @@ void MySQL_Connection::connect_start() {
 
 	if (myds != NULL) {
 		if (myds->sess != NULL) {
-			if (myds->sess->session_fast_forward == true) { // this is a fast_forward connection
-				assert(myds->sess->client_myds != NULL);
-				MySQL_Connection * c = myds->sess->client_myds->myconn;
+			MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+			if (mysess->session_fast_forward == true) { // this is a fast_forward connection
+				assert(mysess->client_myds != NULL);
+				MySQL_Connection * c = mysess->client_myds->myconn;
 				assert(c != NULL);
 				mysql->options.client_flag &= ~(CLIENT_DEPRECATE_EOF); // we disable it by default
 				// if both client_flag and server_capabilities (used for client) , set CLIENT_DEPRECATE_EOF
@@ -836,11 +840,12 @@ void MySQL_Connection::change_user_start() {
 	PROXY_TRACE();
 	//fprintf(stderr,"change_user_start FD %d\n", fd);
 	MySQL_Connection_userinfo *_ui = NULL;
-	if (myds->sess->client_myds == NULL) {
+	MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+	if (mysess->client_myds == NULL) {
 		// if client_myds is not defined, we are using CHANGE_USER to reset the connection
 		_ui = userinfo;
 	} else {
-		_ui = myds->sess->client_myds->myconn->userinfo;
+		_ui = mysess->client_myds->myconn->userinfo;
 		userinfo->set(_ui);	// fix for bug #605
 	}
 	char *auth_password=NULL;
@@ -878,7 +883,8 @@ void MySQL_Connection::ping_cont(short event) {
 
 void MySQL_Connection::initdb_start() {
 	PROXY_TRACE();
-	MySQL_Connection_userinfo *client_ui=myds->sess->client_myds->myconn->userinfo;
+	MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+	MySQL_Connection_userinfo *client_ui=mysess->client_myds->myconn->userinfo;
 	async_exit_status = mysql_select_db_start(&interr,mysql,client_ui->schemaname);
 }
 
@@ -912,14 +918,15 @@ void MySQL_Connection::set_autocommit_cont(short event) {
 
 void MySQL_Connection::set_names_start() {
 	PROXY_TRACE();
-	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
+	MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+	const MARIADB_CHARSET_INFO * c = proxysql_find_charset_nr(atoi(mysql_variables.client_get_value(mysess, SQL_CHARACTER_SET)));
 	if (!c) {
 		// LCOV_EXCL_START
-		proxy_error("Not existing charset number %u\n", atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
+		proxy_error("Not existing charset number %u\n", atoi(mysql_variables.client_get_value(mysess, SQL_CHARACTER_SET)));
 		assert(0);
 		// LCOV_EXCL_STOP
 	}
-	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, atoi(mysql_variables.client_get_value(myds->sess, SQL_CHARACTER_SET)));
+	async_exit_status = mysql_set_character_set_start(&interr,mysql, NULL, atoi(mysql_variables.client_get_value(mysess, SQL_CHARACTER_SET)));
 }
 
 void MySQL_Connection::set_names_cont(short event) {
@@ -1276,13 +1283,14 @@ handler_again:
 					NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
 				} else {
 					if (myds->sess->mirror==false) {
+					MySQL_Session * mysess = (MySQL_Session *)myds->sess;
 						if (MyRS_reuse == NULL) {
 							MyRS = new MySQL_ResultSet();
-							MyRS->init(&myds->sess->client_myds->myprot, query.stmt_result, mysql, query.stmt);
+							MyRS->init(&mysess->client_myds->myprot, query.stmt_result, mysql, query.stmt);
 						} else {
 							MyRS = MyRS_reuse;
 							MyRS_reuse = NULL;
-							MyRS->init(&myds->sess->client_myds->myprot, query.stmt_result, mysql, query.stmt);
+							MyRS->init(&mysess->client_myds->myprot, query.stmt_result, mysql, query.stmt);
 						}
 					} else {
 /*
@@ -1310,10 +1318,11 @@ handler_again:
 		case ASYNC_STMT_EXECUTE_STORE_RESULT_CONT:
 			PROXY_TRACE2();
 			{ // this copied mostly from ASYNC_USE_RESULT_CONT
-				if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
+				MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+				if (myds->sess && mysess->client_myds && mysess->mirror==false) {
 					unsigned int buffered_data=0;
-					buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
-					buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
+					buffered_data = mysess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
+					buffered_data += mysess->client_myds->resultset->len * RESULTSET_BUFLEN;
 					if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*8) {
 						next_event(ASYNC_STMT_EXECUTE_STORE_RESULT_CONT); // we temporarily pause . See #1232
 						break;
@@ -1454,14 +1463,15 @@ handler_again:
 			if (mysql_result==NULL) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			} else {
-				if (myds->sess->mirror==false) {
+				MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+				if (mysess->mirror==false) {
 					if (MyRS_reuse == NULL) {
 						MyRS = new MySQL_ResultSet();
-						MyRS->init(&myds->sess->client_myds->myprot, mysql_result, mysql);
+						MyRS->init(&mysess->client_myds->myprot, mysql_result, mysql);
 					} else {
 						MyRS = MyRS_reuse;
 						MyRS_reuse = NULL;
-						MyRS->init(&myds->sess->client_myds->myprot, mysql_result, mysql);
+						MyRS->init(&mysess->client_myds->myprot, mysql_result, mysql);
 					}
 				} else {
 					if (MyRS_reuse == NULL) {
@@ -1479,10 +1489,11 @@ handler_again:
 			break;
 		case ASYNC_USE_RESULT_CONT:
 			{
-				if (myds->sess && myds->sess->client_myds && myds->sess->mirror==false) {
+				MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+				if (mysess && mysess->client_myds && mysess->mirror==false) {
 					unsigned int buffered_data=0;
-					buffered_data = myds->sess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
-					buffered_data += myds->sess->client_myds->resultset->len * RESULTSET_BUFLEN;
+					buffered_data = mysess->client_myds->PSarrayOUT->len * RESULTSET_BUFLEN;
+					buffered_data += mysess->client_myds->resultset->len * RESULTSET_BUFLEN;
 					if (buffered_data > (unsigned int)mysql_thread___threshold_resultset_size*8) {
 						next_event(ASYNC_USE_RESULT_CONT); // we temporarily pause . See #1232
 						break;
@@ -1503,7 +1514,7 @@ handler_again:
 					if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS) {
 						proxy_warning("MySQL Warning. Level: [%s], Code: [%s], Message: [%s]\n", mysql_row[0], mysql_row[1], mysql_row[2]);
 					}
-					unsigned int br=MyRS->add_row(mysql_row);
+					unsigned int br=MyRS->add_row(mysql_row, mysql_fetch_lengths(mysql_result));
 					__sync_fetch_and_add(&parent->bytes_recv,br);
 					myds->sess->thread->status_variables.stvar[st_var_queries_backends_bytes_recv]+=br;
 					myds->bytes_info.bytes_recv += br;
@@ -1929,7 +1940,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 	}
 	if (async_state_machine==ASYNC_NEXT_RESULT_START) {
 		// if we reached this point it measn we are processing a multi-statement
-		// and we need to exit to give control to MySQL_Session
+		// and we need to exit to give control to Client_Session
 		processing_multi_statement=true;
 		return 2;
 	}
@@ -2538,12 +2549,13 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	}
 	if (mysql) {
 		if (myds && myds->sess) {
-			if (myds->sess->client_myds && myds->sess->client_myds->myconn) {
+			MySQL_Session * mysess = (MySQL_Session *)myds->sess;
+			if (mysess->client_myds && mysess->client_myds->myconn) {
 				// if SERVER_STATUS_NO_BACKSLASH_ESCAPES is changed it is likely
 				// because of sql_mode was changed
 				// we set the same on the client connection
 				unsigned int ss = mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES;
-				myds->sess->client_myds->myconn->set_no_backslash_escapes(ss);
+				mysess->client_myds->myconn->set_no_backslash_escapes(ss);
 			}
 		}
 	}
@@ -2629,7 +2641,7 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	}
 	if (async_state_machine==ASYNC_NEXT_RESULT_START) {
 		// if we reached this point it measn we are processing a multi-statement
-		// and we need to exit to give control to MySQL_Session
+		// and we need to exit to give control to Client_Session
 		processing_multi_statement=true;
 		return 2;
 	}

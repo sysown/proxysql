@@ -4,7 +4,7 @@
 #include "SpookyV2.h"
 
 #include "MySQL_PreparedStatement.h"
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 
 #include <memory>
 #include <pthread.h>
@@ -17,6 +17,11 @@
 
 #include "prometheus_helpers.h"
 #include "proxysql_utils.h"
+
+#include "MySQL_Data_Stream.h"
+#include "MySQL_Session.h"
+
+#include "proxysql_admin.h"
 
 #define char_malloc (char *)malloc
 #define itostr(__s, __i)  { __s=char_malloc(32); sprintf(__s, "%lld", __i); }
@@ -54,7 +59,7 @@ static unsigned long long array_mysrvc_cands = 0;
 
 extern ProxySQL_Admin *GloAdmin;
 
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 extern MySQL_Monitor *GloMyMon;
 
@@ -183,9 +188,9 @@ static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int re
 }
 
 static void gtid_timer_cb (struct ev_loop *loop, struct ev_timer *timer, int revents) {
-	if (GloMTH == nullptr) { return; }
+	if (GloPWTH == nullptr) { return; }
 	ev_timer_stop(loop, timer);
-	ev_timer_set(timer, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
+	ev_timer_set(timer, __sync_add_and_fetch(&GloPWTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
 	if (glovars.shutdown) {
 		ev_break(loop);
 	}
@@ -641,7 +646,7 @@ static void * GTID_syncer_run() {
 	MyHGM->gtid_ev_timer = (struct ev_timer *)malloc(sizeof(struct ev_timer));
 	ev_async_init(MyHGM->gtid_ev_async, gtid_async_cb);
 	ev_async_start(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_async);
-	//ev_timer_init(MyHGM->gtid_ev_timer, gtid_timer_cb, __sync_add_and_fetch(&GloMTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
+	//ev_timer_init(MyHGM->gtid_ev_timer, gtid_timer_cb, __sync_add_and_fetch(&GloPWTH->variables.binlog_reader_connect_retry_msec,0)/1000, 0);
 	ev_timer_init(MyHGM->gtid_ev_timer, gtid_timer_cb, 3, 0);
 	ev_timer_start(MyHGM->gtid_ev_loop, MyHGM->gtid_ev_timer);
 	//ev_ref(gtid_ev_loop);
@@ -1661,7 +1666,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
-	if (GloMTH->variables.hostgroup_manager_verbose) {
+	if (GloPWTH->variables.hostgroup_manager_verbose) {
 		mydb->execute_statement((char *)"SELECT * FROM mysql_servers_incoming", &error , &cols , &affected_rows , &resultset);
 		if (error) {
 			proxy_error("Error on read from mysql_servers_incoming : %s\n", error);
@@ -1679,7 +1684,7 @@ bool MySQL_HostGroups_Manager::commit() {
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
-		if (GloMTH->variables.hostgroup_manager_verbose) {
+		if (GloPWTH->variables.hostgroup_manager_verbose) {
 			proxy_info("Dumping mysql_servers LEFT JOIN mysql_servers_incoming\n");
 			resultset->dump_to_stderr();
 		}
@@ -1716,7 +1721,7 @@ bool MySQL_HostGroups_Manager::commit() {
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 
-		if (GloMTH->variables.hostgroup_manager_verbose) {
+		if (GloPWTH->variables.hostgroup_manager_verbose) {
 			proxy_info("Dumping mysql_servers JOIN mysql_servers_incoming\n");
 			resultset->dump_to_stderr();
 		}
@@ -1740,7 +1745,7 @@ bool MySQL_HostGroups_Manager::commit() {
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Server %s:%d , weight=%d, status=%d, mem_pointer=%llu, hostgroup=%d, compression=%d\n", r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]), ptr, atoi(r->fields[0]), atoi(r->fields[6]));
 			//fprintf(stderr,"%lld\n", ptr);
 			if (ptr==0) {
-				if (GloMTH->variables.hostgroup_manager_verbose) {
+				if (GloPWTH->variables.hostgroup_manager_verbose) {
 					proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%d, status=%d\n", atoi(r->fields[0]), r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]));
 				}
 				MySrvC *mysrvc=new MySrvC(r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]), atoi(r->fields[4]), (MySerStatus) atoi(r->fields[5]), atoi(r->fields[6]), atoi(r->fields[7]), atoi(r->fields[8]), atoi(r->fields[9]), atoi(r->fields[10]), r->fields[11]); // add new fields here if adding more columns in mysql_servers
@@ -1764,18 +1769,18 @@ bool MySQL_HostGroups_Manager::commit() {
 				MySrvC *mysrvc=(MySrvC *)ptr;
 				// carefully increase the 2nd index by 1 for every new column added
 				if (atoi(r->fields[3])!=atoi(r->fields[13])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing gtid_port for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3]) , mysrvc->gtid_port , atoi(r->fields[13]));
 					mysrvc->gtid_port=atoi(r->fields[13]);
 				}
 
 				if (atoi(r->fields[4])!=atoi(r->fields[14])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->weight , atoi(r->fields[14]));
 					mysrvc->weight=atoi(r->fields[14]);
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[15])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]) , mysrvc->status , atoi(r->fields[15]));
 					mysrvc->status=(MySerStatus)atoi(r->fields[15]);
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
@@ -1783,17 +1788,17 @@ bool MySQL_HostGroups_Manager::commit() {
 					}
 				}
 				if (atoi(r->fields[6])!=atoi(r->fields[16])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing compression for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[6]) , mysrvc->compression , atoi(r->fields[16]));
 					mysrvc->compression=atoi(r->fields[16]);
 				}
 				if (atoi(r->fields[7])!=atoi(r->fields[17])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 					proxy_info("Changing max_connections for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[7]) , mysrvc->max_connections , atoi(r->fields[17]));
 					mysrvc->max_connections=atoi(r->fields[17]);
 				}
 				if (atoi(r->fields[8])!=atoi(r->fields[18])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing max_replication_lag for server %u:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[8]) , mysrvc->max_replication_lag , atoi(r->fields[18]));
 					mysrvc->max_replication_lag=atoi(r->fields[18]);
 					if (mysrvc->max_replication_lag == 0) { // we just changed it to 0
@@ -1806,17 +1811,17 @@ bool MySQL_HostGroups_Manager::commit() {
 					}
 				}
 				if (atoi(r->fields[9])!=atoi(r->fields[19])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing use_ssl for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[9]) , mysrvc->use_ssl , atoi(r->fields[19]));
 					mysrvc->use_ssl=atoi(r->fields[19]);
 				}
 				if (atoi(r->fields[10])!=atoi(r->fields[20])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing max_latency_ms for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[10]) , mysrvc->max_latency_us/1000 , atoi(r->fields[20]));
 					mysrvc->max_latency_us=1000*atoi(r->fields[20]);
 				}
 				if (strcmp(r->fields[11],r->fields[21])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
+					if (GloPWTH->variables.hostgroup_manager_verbose)
 						proxy_info("Changing comment for server %d:%s:%d (%s:%d) from '%s' to '%s'\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), r->fields[11], r->fields[21]);
 					free(mysrvc->comment);
 					mysrvc->comment=strdup(r->fields[21]);
@@ -2083,8 +2088,8 @@ bool MySQL_HostGroups_Manager::commit() {
 	curtime2 = curtime2/1000;
 	proxy_info("MySQL_HostGroups_Manager::commit() locked for %llums\n", curtime2-curtime1);
 
-	if (GloMTH) {
-		GloMTH->signal_all_threads(1);
+	if (GloPWTH) {
+		GloPWTH->signal_all_threads(1);
 	}
 
 	return true;
@@ -2730,16 +2735,16 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lo
 	mysrvc=(MySrvC *)c->parent;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 	mysrvc->ConnectionsUsed->remove(c);
-	if (GloMTH == NULL) { goto __exit_push_MyConn_to_pool; }
-	if (c->largest_query_length > (unsigned int)GloMTH->variables.threshold_query_length) {
+	if (GloPWTH == NULL) { goto __exit_push_MyConn_to_pool; }
+	if (c->largest_query_length > (unsigned int)GloPWTH->variables.threshold_query_length) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d . largest_query_length = %lu\n", c, mysrvc->address, mysrvc->port, mysrvc->status, c->largest_query_length);
 		delete c;
 		goto __exit_push_MyConn_to_pool;
 	}
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
-			if (GloMTH == NULL) { goto __exit_push_MyConn_to_pool; }
-			if (c->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection) {
+			if (GloPWTH == NULL) { goto __exit_push_MyConn_to_pool; }
+			if (c->local_stmts->get_num_backend_stmts() > (unsigned int)GloPWTH->variables.max_stmts_per_connection) {
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d because has too many prepared statements\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 //				delete c;
 				mysrvc->ConnectionsUsed->add(c);
@@ -2775,7 +2780,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 	wrunlock();
 }
 
-MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
+MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, Client_Session *sess) {
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
@@ -2854,7 +2859,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 								(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
 							) {
 #ifdef DEBUG
-								if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
+								if (GloPWTH->variables.hostgroup_manager_verbose >= 3) {
 									proxy_info("Unshunning server %s:%d.\n", mysrvc->address, mysrvc->port);
 								}
 #endif
@@ -3184,7 +3189,7 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 
 
 
-MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
+MySQL_Connection * MySrvConnList::get_random_MyConn(Client_Session *sess, bool ff) {
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int conn_found_idx;
@@ -3210,8 +3215,9 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 		} else {
 			i=fastrand()%l;
 		}
-		if (sess && sess->client_myds && sess->client_myds->myconn && sess->client_myds->myconn->userinfo) {
-			MySQL_Connection * client_conn = sess->client_myds->myconn;
+		// APPLY THIS LOGIC ONLY FOR MYSQL FRONTEND
+		if (sess && ((MySQL_Session *)sess)->client_myds && ((MySQL_Session *)sess)->client_myds->myconn && ((MySQL_Session *)sess)->client_myds->myconn->userinfo) {
+			MySQL_Connection * client_conn = ((MySQL_Session *)sess)->client_myds->myconn;
 			get_random_MyConn_inner_search(i, l, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
 			if (connection_quality_level !=3 ) { // we didn't find the perfect connection
 				get_random_MyConn_inner_search(0, i, conn_found_idx, connection_quality_level, number_of_matching_session_variables, client_conn);
@@ -3311,7 +3317,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid) {
 	// we scan all hostgroups looking for a specific server to unshun
 	// if skip_hid is not NULL , the specific hostgroup is skipped
-	if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
+	if (GloPWTH->variables.hostgroup_manager_verbose >= 3) {
 		char buf[64];
 		if (skip_hid == NULL) {
 			sprintf(buf,"NULL");
@@ -3345,7 +3351,7 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 							||
 							(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
 						) {
-							if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
+							if (GloPWTH->variables.hostgroup_manager_verbose >= 3) {
 								proxy_info("Unshunning server %d:%s:%d . time_last_detected_error=%llu\n", mysrvc->myhgc->hid, address, port, mysrvc->time_last_detected_error);
 							}
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
@@ -3361,7 +3367,7 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
-MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, Client_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
@@ -3387,7 +3393,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, bool _lock) {
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
-	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
+	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloPWTH->variables.connpoll_reset_queue_length,0)) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			// overall, the backend seems healthy and so it is the connection. Try to reset it
 			int myerr=mysql_errno(c->mysql);
@@ -4270,7 +4276,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			if (num_rows==0) {
 				// the server has read_only=0 , but we can't find any writer, so we perform a swap
 				GloAdmin->mysql_servers_wrlock();
-				if (GloMTH->variables.hostgroup_manager_verbose) {
+				if (GloPWTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
 					int cols2=0;
 					int affected_rows2=0;
@@ -4292,7 +4298,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					free(query2);
 				}
 				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
-				if (GloMTH->variables.hostgroup_manager_verbose) {
+				if (GloPWTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
 					int cols2=0;
 					int affected_rows2=0;
@@ -4323,7 +4329,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					sprintf(query,Q3B,hostname,port);
 				}
 				admindb->execute(query);
-				if (GloMTH->variables.hostgroup_manager_verbose) {
+				if (GloPWTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
 					int cols2=0;
 					int affected_rows2=0;
@@ -4381,7 +4387,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				wrunlock();
 				if (act==true) {	// there are servers either missing, or with stats=OFFLINE_HARD
 					GloAdmin->mysql_servers_wrlock();
-					if (GloMTH->variables.hostgroup_manager_verbose) {
+					if (GloPWTH->variables.hostgroup_manager_verbose) {
 						char *error2=NULL;
 						int cols2=0;
 						int affected_rows2=0;
@@ -4407,7 +4413,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 					admindb->execute(query);
 					sprintf(query,Q2B,hostname,port);
 					admindb->execute(query);
-					if (GloMTH->variables.hostgroup_manager_verbose) {
+					if (GloPWTH->variables.hostgroup_manager_verbose) {
 						char *error2=NULL;
 						int cols2=0;
 						int affected_rows2=0;
@@ -4434,7 +4440,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 						sprintf(query,Q3B,hostname,port);
 					}
 					admindb->execute(query);
-					if (GloMTH->variables.hostgroup_manager_verbose) {
+					if (GloPWTH->variables.hostgroup_manager_verbose) {
 						char *error2=NULL;
 						int cols2=0;
 						int affected_rows2=0;
@@ -4464,7 +4470,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			if (num_rows) {
 				// the server has read_only=1 , but we find it as writer, so we perform a swap
 				GloAdmin->mysql_servers_wrlock();
-				if (GloMTH->variables.hostgroup_manager_verbose) {
+				if (GloPWTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
 					int cols2=0;
 					int affected_rows2=0;
@@ -4488,7 +4494,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				GloAdmin->save_mysql_servers_runtime_to_database(false); // SAVE MYSQL SERVERS FROM RUNTIME
 				sprintf(query,Q4,hostname,port);
 				admindb->execute(query);
-				if (GloMTH->variables.hostgroup_manager_verbose) {
+				if (GloPWTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
 					int cols2=0;
 					int affected_rows2=0;
@@ -4511,7 +4517,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 				}
 				sprintf(query,Q5,hostname,port);
 				admindb->execute(query);
-				if (GloMTH->variables.hostgroup_manager_verbose) {
+				if (GloPWTH->variables.hostgroup_manager_verbose) {
 					char *error2=NULL;
 					int cols2=0;
 					int affected_rows2=0;
@@ -5209,7 +5215,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 				}
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
-					if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+					if (GloPWTH->variables.hostgroup_manager_verbose > 1) {
 						proxy_info("Group replication: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
 					}
 					for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
@@ -5229,7 +5235,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 				} else {
 					if (num_writers < info->max_writers && num_backup_writers) { // or way too low writer
 						int to_move= ( (info->max_writers - num_writers) < num_backup_writers ? (info->max_writers - num_writers) : num_backup_writers);
-						if (GloMTH->variables.hostgroup_manager_verbose) {
+						if (GloPWTH->variables.hostgroup_manager_verbose) {
 							proxy_info("Group replication: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
 						}
 						for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -5877,7 +5883,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 				}
 				wrunlock();
 			} else {
-				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+				if (GloPWTH->variables.hostgroup_manager_verbose > 1) {
 					proxy_warning("Galera: skipping setting node %s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _hostname, _port, _writer_hostgroup);
 				}
 			}
@@ -5934,7 +5940,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				if (num_writers > info->max_writers) { // there are more writers than allowed
 					int to_move=num_writers-info->max_writers;
 					int to_keep = info->max_writers;
-					if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+					if (GloPWTH->variables.hostgroup_manager_verbose > 1) {
 						proxy_info("Galera: max_writers=%d , moving %d nodes from writer HG %d to backup HG %d\n", info->max_writers, to_move, info->writer_hostgroup, info->backup_writer_hostgroup);
 					}
 					//for (std::vector<SQLite3_row *>::reverse_iterator it = resultset->rows.rbegin() ; it != resultset->rows.rend(); ++it) {
@@ -5973,7 +5979,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 				} else {
 					if (num_writers < info->max_writers && num_backup_writers) { // or way too low writer
 						int to_move= ( (info->max_writers - num_writers) < num_backup_writers ? (info->max_writers - num_writers) : num_backup_writers);
-						if (GloMTH->variables.hostgroup_manager_verbose) {
+						if (GloPWTH->variables.hostgroup_manager_verbose) {
 							proxy_info("Galera: max_writers=%d , moving %d nodes from backup HG %d to writer HG %d\n", info->max_writers, to_move, info->backup_writer_hostgroup, info->writer_hostgroup);
 						}
 						for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -5984,7 +5990,7 @@ void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
 									q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 									query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
 									sprintf(query,q,info->writer_hostgroup,info->backup_writer_hostgroup,r->fields[1],atoi(r->fields[2]));
-									if (GloMTH->variables.hostgroup_manager_verbose) {
+									if (GloPWTH->variables.hostgroup_manager_verbose) {
 										proxy_info("Galera: %s\n", query);
 									}
 									mydb->execute(query);
@@ -6988,7 +6994,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 */
 				wrunlock();
 			} else {
-				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
+				if (GloPWTH->variables.hostgroup_manager_verbose > 1) {
 					proxy_warning("AWS Aurora: skipping setting node %s%s:%d from hostgroup %d as writer because won't change the list of ONLINE nodes in writer hostgroup\n", _server_id, domain_name, aurora_port, _writer_hostgroup);
 				}
 			}

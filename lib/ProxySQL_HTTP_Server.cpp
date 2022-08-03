@@ -10,6 +10,8 @@
 #include "SQLite3_Server.h"
 #include "MySQL_Authentication.hpp"
 
+#include "proxysql_admin.h"
+
 #include <search.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -40,7 +42,7 @@
 
 
 extern ProxySQL_Statistics *GloProxyStats;
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Authentication *GloMyAuth;
 extern SQLite3_Server *GloSQLite3Server;
@@ -163,7 +165,7 @@ static char *generate_home() {
 	html.append("<b>Worker threads = </b>");
 	{
 		char buf[16];
-		sprintf(buf,"%u",GloMTH->num_threads);
+		sprintf(buf,"%u",GloPWTH->num_threads);
 		html.append(buf);
 	}
 	html.append("<br>\n");
@@ -176,7 +178,7 @@ static char *generate_home() {
 	html.append("<br>\n");
 	html.append("<b>Monitor = </b>");
 	{
-		char *en = GloMTH->get_variable((char *)"monitor_enabled");
+		char *en = GloPWTH->get_variable((char *)"monitor_enabled");
 		if (en && strcmp(en,"true")==0) {
 			html.append("<span style=\"color: green;\">enabled</span>");
 		} else {
@@ -213,8 +215,8 @@ static char *generate_home() {
 #else
 	html.append("<b>ClickHouse = </b><span style=\"background-color: red;\"> support not compiled </span><br>\n");
 #endif
-	if (GloMTH) {
-		char *en = GloMTH->get_variable((char *)"interfaces");
+	if (GloPWTH) {
+		char *en = GloPWTH->get_variable((char *)"interfaces");
 		if (en) {
 			html.append("<b>MySQL interface(s)</b> = ");
 			html.append(en);

@@ -7,10 +7,14 @@
 #include "cpp.h"
 
 #include "MySQL_Logger.hpp"
+#include "ProxySQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "MySQL_Session.h"
 #include "proxysql_utils.h"
 #include "query_processor.h"
 #include "SQLite3_Server.h"
+
+#include "proxysql_admin.h"
 
 #include <search.h>
 #include <stdlib.h>
@@ -95,7 +99,7 @@ extern Query_Cache *GloQC;
 extern MySQL_Authentication *GloMyAuth;
 extern ProxySQL_Admin *GloAdmin;
 extern Query_Processor *GloQPro;
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 extern MySQL_Logger *GloMyLogger;
 extern MySQL_Monitor *GloMyMon;
 extern SQLite3_Server *GloSQLite3Server;
@@ -309,8 +313,8 @@ bool match_monitor_query(const std::string& monitor_query, const std::string& qu
 	}
 }
 
-void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
-
+void SQLite3_Server_session_handler(Client_Session *c_sess, void *_pa, PtrSize_t *pkt) {
+	MySQL_Session *sess = (MySQL_Session *)c_sess;
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -764,19 +768,19 @@ static void *child_mysql(void *arg) {
 
 	int client = *(int *)arg;
 
-	GloMTH->wrlock();
+	GloPWTH->wrlock();
 	{
-		char *s=GloMTH->get_variable((char *)"server_capabilities");
+		char *s=GloPWTH->get_variable((char *)"server_capabilities");
 		mysql_thread___server_capabilities=atoi(s);
 		free(s);
 	}
-	GloMTH->wrunlock();
+	GloPWTH->wrunlock();
 
 	struct pollfd fds[1];
 	nfds_t nfds=1;
 	int rc;
 	pthread_mutex_unlock(&sock_mutex);
-	MySQL_Thread *mysql_thr=new MySQL_Thread();
+	ProxyWorker_Thread *mysql_thr=new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 
 	SQLite3_Session *sqlite_sess = new SQLite3_Session();
@@ -784,7 +788,7 @@ static void *child_mysql(void *arg) {
 
 	GloQPro->init_thread();
 	mysql_thr->refresh_variables();
-	MySQL_Session *sess=mysql_thr->create_new_session_and_client_data_stream(client);
+	MySQL_Session *sess=mysql_thr->create_new_session_and_client_mysql_data_stream(client);
 	sess->thread=mysql_thr;
 	sess->session_type = PROXYSQL_SESSION_SQLITE;
 	sess->handler_function=SQLite3_Server_session_handler;

@@ -21,6 +21,7 @@ typedef bool (*update_var)(MySQL_Session* session, int idx, int &_rc);
 bool validate_charset(MySQL_Session* session, int idx, int &_rc);
 bool update_server_variable(MySQL_Session* session, int idx, int &_rc);
 bool verify_server_variable(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);
+bool verify_set_names(Client_Session* session);
 bool verify_set_names(MySQL_Session* session);
 bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc);
 
@@ -47,7 +48,9 @@ public:
 	const char* server_get_value(MySQL_Session* session, int idx) const;
 	inline uint32_t server_get_hash(MySQL_Session* session, int idx) const;
 
+	bool verify_variable(Client_Session* session, int idx) const;
 	bool verify_variable(MySQL_Session* session, int idx) const;
+	bool update_variable(Client_Session* session, session_status status, int &_rc);
 	bool update_variable(MySQL_Session* session, session_status status, int &_rc);
 	bool parse_variable_boolean(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
 	bool parse_variable_number(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);

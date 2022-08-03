@@ -2,10 +2,13 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#include "MySQL_Data_Stream.h"
+#include "ProxySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+
+#include "MySQL_Session.h"
+#include "MySQL_Data_Stream.h"
 
 #include <dirent.h>
 #include <libgen.h>
@@ -85,7 +88,7 @@ void MySQL_Event::set_server(int _hid, const char *ptr, int len) {
 	hid=_hid;
 }
 
-uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
+uint64_t MySQL_Event::write(std::fstream *f, Client_Session *sess) {
 	uint64_t total_bytes=0;
 	switch (et) {
 		case PROXYSQL_COM_QUERY:
@@ -118,7 +121,7 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 	return total_bytes;
 }
 
-void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
+void MySQL_Event::write_auth(std::fstream *f, Client_Session *sess) {
 	json j;
 	j["timestamp"] = start_time/1000;
 	{
@@ -224,13 +227,16 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 		default:
 			break;
 	}
-	if (sess->client_myds) {
-		if (sess->client_myds->proxy_addr.addr) {
-			std::string s = sess->client_myds->proxy_addr.addr;
-			s += ":" + std::to_string(sess->client_myds->proxy_addr.port);
-			j["proxy_addr"] = s;
+	if (sess->session_type==PROXYSQL_SESSION_MYSQL || sess->session_type==PROXYSQL_SESSION_ADMIN || sess->session_type==PROXYSQL_SESSION_SQLITE) {
+		MySQL_Data_Stream *client_myds = ((MySQL_Session *)sess)->client_myds;
+		if (client_myds) {
+			if (client_myds->proxy_addr.addr) {
+				std::string s = client_myds->proxy_addr.addr;
+				s += ":" + std::to_string(client_myds->proxy_addr.port);
+				j["proxy_addr"] = s;
+			}
+			j["ssl"] = client_myds->encrypted;
 		}
-		j["ssl"] = sess->client_myds->encrypted;
 	}
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
@@ -623,9 +629,15 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 	flush_log();
 };
 
-void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
+void MySQL_Logger::log_request(Client_Session *c_sess, ProxySQL_Data_Stream *pds) {
 	if (events.enabled==false) return;
 	if (events.logfile==NULL) return;
+
+	if (c_sess->session_type != PROXYSQL_SESSION_MYSQL)
+		return;
+
+	MySQL_Session *sess = (MySQL_Session *)c_sess;
+	MySQL_Data_Stream *myds = (MySQL_Data_Stream *)pds;
 
 	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 
@@ -741,11 +753,16 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	}
 }
 
-void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
+void MySQL_Logger::log_audit_entry(log_event_type _et, Client_Session *c_sess, ProxySQL_Data_Stream *pds, char *xi) {
 	if (audit.enabled==false) return;
 	if (audit.logfile==NULL) return;
 
-	if (sess == NULL) return;
+	if (c_sess == NULL) return;
+	if (c_sess->session_type != PROXYSQL_SESSION_MYSQL)
+		return;
+
+	MySQL_Session *sess = (MySQL_Session *)c_sess;
+	MySQL_Data_Stream *myds = (MySQL_Data_Stream *)pds;
 	if (sess->client_myds == NULL)  return; 
 
 	MySQL_Connection_userinfo *ui= NULL;

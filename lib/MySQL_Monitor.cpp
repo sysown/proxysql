@@ -31,7 +31,7 @@
 #define MYSQL_MONITOR_VERSION "2.0.1226" DEB
 
 extern ProxySQL_Admin *GloAdmin;
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 
 static MySQL_Monitor *GloMyMon;
@@ -474,7 +474,7 @@ void * monitor_connect_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
-	while (GloMTH==NULL) {
+	while (GloPWTH==NULL) {
 		usleep(50000);
 	}
 	usleep(100000);
@@ -487,7 +487,7 @@ void * monitor_ping_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
-	while (GloMTH==NULL) {
+	while (GloPWTH==NULL) {
 		usleep(50000);
 	}
 	usleep(100000);
@@ -500,7 +500,7 @@ void * monitor_read_only_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
-	while (GloMTH==NULL) {
+	while (GloPWTH==NULL) {
 		usleep(50000);
 	}
 	usleep(100000);
@@ -513,7 +513,7 @@ void * monitor_group_replication_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
-	while (GloMTH==NULL) {
+	while (GloPWTH==NULL) {
 		usleep(50000);
 	}
 	usleep(100000);
@@ -526,7 +526,7 @@ void * monitor_galera_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
-	while (GloMTH==NULL) {
+	while (GloPWTH==NULL) {
 		usleep(50000);
 	}
 	usleep(100000);
@@ -539,7 +539,7 @@ void * monitor_aws_aurora_pthread(void *arg) {
 //	bool cache=false;
 //	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 //#endif
-	while (GloMTH==NULL) {
+	while (GloPWTH==NULL) {
 		usleep(50000);
 	}
 	usleep(100000);
@@ -552,7 +552,7 @@ void * monitor_replication_lag_pthread(void *arg) {
 	bool cache=false;
 	mallctl("thread.tcache.enabled", NULL, NULL, &cache, sizeof(bool));
 #endif
-	while (GloMTH==NULL) {
+	while (GloPWTH==NULL) {
 		usleep(50000);
 	}
 	usleep(100000);
@@ -767,9 +767,9 @@ MySQL_Monitor::MySQL_Monitor() {
 
 
 /*
-	if (GloMTH) {
-		if (GloMTH->num_threads) {
-			num_threads=GloMTH->num_threads*2;
+	if (GloPWTH) {
+		if (GloPWTH->num_threads) {
+			num_threads=GloPWTH->num_threads*2;
 		}
 	}
 	if (num_threads>16) {
@@ -928,8 +928,8 @@ void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
 void * monitor_connect_thread(void *arg) {
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
 
@@ -989,8 +989,8 @@ void * monitor_connect_thread(void *arg) {
 void * monitor_ping_thread(void *arg) {
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
 
@@ -1217,8 +1217,8 @@ void * monitor_read_only_thread(void *arg) {
 	mysql_close(mysql_init(NULL));
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
 
@@ -1475,10 +1475,10 @@ __fast_exit_monitor_read_only_thread:
 void * monitor_group_replication_thread(void *arg) {
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
@@ -1818,10 +1818,10 @@ __fast_exit_monitor_group_replication_thread:
 void * monitor_galera_thread(void *arg) {
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	mmsd->mysql=GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd);
 	unsigned long long start_time=mysql_thr->curtime;
@@ -2210,8 +2210,8 @@ __fast_exit_monitor_galera_thread:
 void * monitor_replication_lag_thread(void *arg) {
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
 
@@ -2475,12 +2475,12 @@ __fast_exit_monitor_replication_lag_thread:
 
 void * MySQL_Monitor::monitor_connect() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 
 	unsigned long long t1;
@@ -2502,10 +2502,10 @@ void * MySQL_Monitor::monitor_connect() {
 		unsigned int glover;
 		t1=monotonic_time();
 
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+		glover=GloPWTH->get_global_version();
+		if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
@@ -2604,12 +2604,12 @@ __sleep_monitor_connect_loop:
 void * MySQL_Monitor::monitor_ping() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	unsigned long long t1;
 	unsigned long long t2;
@@ -2630,10 +2630,10 @@ void * MySQL_Monitor::monitor_ping() {
 		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM monitor_internal.mysql_servers GROUP BY hostname, port ORDER BY RANDOM()";
 		t1=monotonic_time();
 
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+		glover=GloPWTH->get_global_version();
+		if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
@@ -2881,12 +2881,12 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 void * MySQL_Monitor::monitor_read_only() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	unsigned long long t1;
 	unsigned long long t2;
@@ -2901,10 +2901,10 @@ void * MySQL_Monitor::monitor_read_only() {
 		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl, check_type FROM mysql_servers JOIN mysql_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE status NOT IN (2,3) GROUP BY hostname, port ORDER BY RANDOM()";
 		t1=monotonic_time();
 
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+		glover=GloPWTH->get_global_version();
+		if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
@@ -3014,12 +3014,12 @@ __sleep_monitor_read_only:
 void * MySQL_Monitor::monitor_group_replication() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	unsigned long long t1;
 	unsigned long long t2;
@@ -3034,10 +3034,10 @@ void * MySQL_Monitor::monitor_group_replication() {
 //		char *query=(char *)"SELECT hostname, port, MAX(use_ssl) use_ssl FROM mysql_servers JOIN mysql_group_replication_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=writer_hostgroup hostgroup_id=reader_hostgroup WHERE status NOT LIKE 'OFFLINE\%' GROUP BY hostname, port";
 		t1=monotonic_time();
 
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+		glover=GloPWTH->get_global_version();
+		if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
@@ -3143,12 +3143,12 @@ __sleep_monitor_group_replication:
 void * MySQL_Monitor::monitor_galera() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	unsigned long long t1;
 	unsigned long long t2;
@@ -3159,10 +3159,10 @@ void * MySQL_Monitor::monitor_galera() {
 		unsigned int glover;
 		t1=monotonic_time();
 
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+		glover=GloPWTH->get_global_version();
+		if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
@@ -3234,12 +3234,12 @@ __sleep_monitor_galera:
 
 void * MySQL_Monitor::monitor_replication_lag() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	unsigned long long t1;
 	unsigned long long t2;
@@ -3259,10 +3259,10 @@ void * MySQL_Monitor::monitor_replication_lag() {
 		}
 		t1=monotonic_time();
 
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
+		glover=GloPWTH->get_global_version();
+		if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
@@ -3351,18 +3351,18 @@ __sleep_monitor_replication_lag:
 
 
 void * MySQL_Monitor::run() {
-	while (GloMTH==NULL) {
+	while (GloPWTH==NULL) {
 		usleep(50000);
 	}
 	usleep(100000);
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
 	pthread_mutex_init(&mon_en_mutex,NULL);
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	//if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	//if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 __monitor_run:
 	while (queue->size()) { // this is a clean up in case Monitor was restarted
 		WorkItem* item = (WorkItem*)queue->remove();
@@ -3434,10 +3434,10 @@ __monitor_run:
 	}
 	while (shutdown==false && mysql_thread___monitor_enabled==true) {
 		unsigned int glover;
-		if (GloMTH) {
-			glover=GloMTH->get_global_version();
-			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		if (GloPWTH) {
+			glover=GloPWTH->get_global_version();
+			if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+				MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 				mysql_thr->refresh_variables();
 				unsigned int old_num_threads = num_threads;
 				unsigned int threads_min = (unsigned int)mysql_thread___monitor_threads_min;
@@ -3527,10 +3527,10 @@ __monitor_run:
 	pthread_join(monitor_replication_lag_thread,NULL);
 	while (shutdown==false) {
 		unsigned int glover;
-		if (GloMTH) {
-			glover=GloMTH->get_global_version();
-			if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-				MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		if (GloPWTH) {
+			glover=GloPWTH->get_global_version();
+			if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+				MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 				mysql_thr->refresh_variables();
 			}
 		}
@@ -4243,12 +4243,12 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	//unsigned int i = 0;
 	proxy_info("Started Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	uint64_t initial_raw_checksum = 0;
 
@@ -4320,16 +4320,16 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 		//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
 
-		if (!GloMTH) {
+		if (!GloPWTH) {
 			//proxy_info("Stopping Monitor thread for AWS Aurora writer HG %u\n", wHG);
 			goto __exit_monitor_AWS_Aurora_thread_HG_now;
 			return NULL;	// quick exit during shutdown/restart
 		}
 
 		// if variables has changed, triggers new checks
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		glover=GloPWTH->get_global_version();
+		if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
@@ -4703,12 +4703,12 @@ __exit_monitor_AWS_Aurora_thread_HG_now:
 
 void * MySQL_Monitor::monitor_aws_aurora() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
-	MySQL_Thread * mysql_thr = new MySQL_Thread();
+	unsigned int MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version;
+	ProxyWorker_Thread * mysql_thr = new ProxyWorker_Thread();
 	mysql_thr->curtime=monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version=GloMTH->get_global_version();
+	MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=GloPWTH->get_global_version();
 	mysql_thr->refresh_variables();
-	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+	if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 	uint64_t last_raw_checksum = 0;
 
@@ -4724,12 +4724,12 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 
 		unsigned int glover;
 
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+		if (!GloPWTH) return NULL;	// quick exit during shutdown/restart
 
 		// if variables has changed, triggers new checks
-		glover=GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover ) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version=glover;
+		glover=GloPWTH->get_global_version();
+		if (MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version < glover ) {
+			MySQL_Monitor__thread_ProxyWorker_Thread_Variables_version=glover;
 			mysql_thr->refresh_variables();
 		}
 

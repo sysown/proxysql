@@ -197,7 +197,7 @@ class MySQL_STMTs_local_v14 {
 
 	std::map<uint64_t, MYSQL_STMT *> global_stmt_to_backend_stmt;
 
-	MySQL_Session *sess;
+	Client_Session *sess;
 	MySQL_STMTs_local_v14(bool _ic) {
 		local_max_stmt_id = 0;
 		sess = NULL;
@@ -209,7 +209,7 @@ class MySQL_STMTs_local_v14 {
 		global_stmt_to_backend_stmt = std::map<uint64_t, MYSQL_STMT *>();
 		free_client_ids = std::stack<uint32_t>();
 	}
-	void set_is_client(MySQL_Session *_s) {
+	void set_is_client(Client_Session *_s) {
 		sess=_s;
 		is_client_ = true;
 	}

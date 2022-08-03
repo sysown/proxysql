@@ -87,15 +87,15 @@ class ProxySQL_Statistics {
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
-	unsigned long long next_timer_MySQL_Threads_Handler;
+	unsigned long long next_timer_ProxyWorker_Threads_Handler;
 	unsigned long long next_timer_mysql_query_digest_to_disk;
 	unsigned long long next_timer_system_cpu;
 #ifndef NOJEM
 	unsigned long long next_timer_system_memory;
 #endif
 	unsigned long long next_timer_MySQL_Query_Cache;
-	void MySQL_Threads_Handler_sets_v1(SQLite3_result *);
-	void MySQL_Threads_Handler_sets_v2(SQLite3_result *);
+	void ProxyWorker_Threads_Handler_sets_v1(SQLite3_result *);
+	void ProxyWorker_Threads_Handler_sets_v2(SQLite3_result *);
 	void MyHGM_Handler_sets_v1(SQLite3_result *);
 	void MyHGM_Handler_sets_connection_pool(SQLite3_result *);
 	public:
@@ -114,14 +114,14 @@ class ProxySQL_Statistics {
 	SQLite3DB *statsdb_disk; // internal statistics DB
 	void init();
 	void print_version();
-	bool MySQL_Threads_Handler_timetoget(unsigned long long);
+	bool ProxyWorker_Threads_Handler_timetoget(unsigned long long);
 	bool mysql_query_digest_to_disk_timetoget(unsigned long long);
 	bool system_cpu_timetoget(unsigned long long);
 #ifndef NOJEM
 	bool system_memory_timetoget(unsigned long long);
 #endif
 	bool MySQL_Query_Cache_timetoget(unsigned long long);
-	void MySQL_Threads_Handler_sets(SQLite3_result *);
+	void ProxyWorker_Threads_Handler_sets(SQLite3_result *);
 	void MyHGM_Handler_sets(SQLite3_result *, SQLite3_result *);
 	void system_cpu_sets();
 

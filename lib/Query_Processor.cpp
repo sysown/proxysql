@@ -7,7 +7,9 @@
 #include "cpp.h"
 
 #include "MySQL_PreparedStatement.h"
+#include "ProxySQL_Data_Stream.h"
 #include "MySQL_Data_Stream.h"
+#include "MySQL_Session.h"
 #include "query_processor.h"
 
 #include "SpookyV2.h"
@@ -27,7 +29,7 @@
 
 #include <thread>
 #include <future>
-extern MySQL_Threads_Handler *GloMTH;
+extern ProxyWorker_Threads_Handler *GloPWTH;
 
 static int int_cmp(const void *a, const void *b) {
 	const unsigned long long *ia = (const unsigned long long *)a;
@@ -1118,7 +1120,7 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 	ret += sizeof(QP_query_digest_stats)*map_size;
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel search
 /*
-		int n = GloMTH->num_threads;
+		int n = GloPWTH->num_threads;
 		std::future<unsigned long long> results[n];
 */
 		int n=DIGEST_STATS_FAST_THREADS;
@@ -1336,7 +1338,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 }
 
 
-Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
+Query_Processor_Output * Query_Processor::process_mysql_query(Client_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
 	// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
 	// to avoid unnecssary deallocation/allocation, we initialize qpo witout new allocation
 	Query_Processor_Output *ret=sess->qpo;
@@ -1448,6 +1450,10 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 		//}
 		pthread_rwlock_unlock(&rwlock);
 	}
+	MySQL_Data_Stream * client_myds = NULL;
+	if (sess->session_type==PROXYSQL_SESSION_MYSQL) {
+		client_myds = ((MySQL_Session *)sess)->client_myds;
+	}
 	QP_rule_t *qr = NULL;
 	re2_t *re2p;
 	int flagIN=0;
@@ -1478,13 +1484,13 @@ __internal_loop:
 			continue;
 		}
 		if (qr->username && strlen(qr->username)) {
-			if (strcmp(qr->username,sess->client_myds->myconn->userinfo->username)!=0) {
+			if ( client_myds!= NULL && strcmp(qr->username,client_myds->myconn->userinfo->username)!=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching username\n", qr->rule_id);
 				continue;
 			}
 		}
 		if (qr->schemaname && strlen(qr->schemaname)) {
-			if (strcmp(qr->schemaname,sess->client_myds->myconn->userinfo->schemaname)!=0) {
+			if ( client_myds!= NULL && strcmp(qr->schemaname,client_myds->myconn->userinfo->schemaname)!=0) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching schemaname\n", qr->rule_id);
 				continue;
 			}
@@ -1492,9 +1498,9 @@ __internal_loop:
 
 		// match on client address
 		if (qr->client_addr && strlen(qr->client_addr)) {
-			if (sess->client_myds->addr.addr) {
+			if (client_myds!= NULL && client_myds->addr.addr) {
 				if (qr->client_addr_wildcard_position == -1) { // no wildcard , old algorithm
-					if (strcmp(qr->client_addr,sess->client_myds->addr.addr)!=0) {
+					if (strcmp(qr->client_addr,client_myds->addr.addr)!=0) {
 						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
 						continue;
 					}
@@ -1502,7 +1508,7 @@ __internal_loop:
 					// catch all!
 					// therefore we have a match
 				} else { // client_addr_wildcard_position > 0
-					if (strncmp(qr->client_addr,sess->client_myds->addr.addr,qr->client_addr_wildcard_position)!=0) {
+					if (strncmp(qr->client_addr,client_myds->addr.addr,qr->client_addr_wildcard_position)!=0) {
 						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching client_addr\n", qr->rule_id);
 						continue;
 					}
@@ -1511,9 +1517,9 @@ __internal_loop:
 		}
 
 		// match on proxy_addr
-		if (qr->proxy_addr && strlen(qr->proxy_addr)) {
-			if (sess->client_myds->proxy_addr.addr) {
-				if (strcmp(qr->proxy_addr,sess->client_myds->proxy_addr.addr)!=0) {
+		if (client_myds!= NULL && qr->proxy_addr && strlen(qr->proxy_addr)) {
+			if (client_myds->proxy_addr.addr) {
+				if (strcmp(qr->proxy_addr,client_myds->proxy_addr.addr)!=0) {
 					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_addr\n", qr->rule_id);
 					continue;
 				}
@@ -1521,8 +1527,8 @@ __internal_loop:
 		}
 
 		// match on proxy_port
-		if (qr->proxy_port>=0) {
-			if (qr->proxy_port!=sess->client_myds->proxy_addr.port) {
+		if (client_myds!= NULL && qr->proxy_port>=0) {
+			if (qr->proxy_port!=client_myds->proxy_addr.port) {
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has no matching proxy_port\n", qr->rule_id);
 				continue;
 			}
@@ -1717,8 +1723,8 @@ __exit_process_mysql_query:
 		if (_thr___rules_fast_routing___keys_values) {
 			char keybuf[256];
 			char * keybuf_ptr = keybuf;
-			const char * u = sess->client_myds->myconn->userinfo->username;
-			const char * s = sess->client_myds->myconn->userinfo->schemaname;
+			const char * u = client_myds->myconn->userinfo->username;
+			const char * s = client_myds->myconn->userinfo->schemaname;
 			size_t keylen = strlen(u)+strlen(rand_del)+strlen(s)+30; // 30 is a big number
 			if (keylen > 250) {
 				keybuf_ptr = (char *)malloc(keylen);
@@ -1758,13 +1764,13 @@ __exit_process_mysql_query:
 		char *username = NULL;
 		char *client_address = NULL;
 		bool check_run = true;
-		if (sess->client_myds) {
+		if (client_myds != NULL) {
 			check_run = false;
-			if (sess->client_myds->myconn && sess->client_myds->myconn->userinfo && sess->client_myds->myconn->userinfo->username) {
-				if (sess->client_myds->addr.addr) {
+			if (client_myds->myconn && client_myds->myconn->userinfo && client_myds->myconn->userinfo->username) {
+				if (client_myds->addr.addr) {
 					check_run = true;
-					username = sess->client_myds->myconn->userinfo->username;
-					client_address = sess->client_myds->addr.addr;
+					username = client_myds->myconn->userinfo->username;
+					client_address = client_myds->addr.addr;
 					pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 					// FIXME
 					// for now this function search for either username@ip or username@''
@@ -1779,7 +1785,7 @@ __exit_process_mysql_query:
 					ret->firewall_whitelist_mode = wus_status;
 					if (wus_status == WUS_DETECTING || wus_status == WUS_PROTECTING) {
 						bool allowed_query = false;
-						char * schemaname = sess->client_myds->myconn->userinfo->schemaname;
+						char * schemaname = client_myds->myconn->userinfo->schemaname;
 						if (qp && qp->digest) {
 							allowed_query = find_firewall_whitelist_rule(username, client_address, schemaname, flagIN, qp->digest);
 						}
@@ -1807,7 +1813,7 @@ __exit_process_mysql_query:
 						if (ret->firewall_whitelist_mode == WUS_DETECTING) {
 							action = (char *)"detected unknown";
 						}
-						proxy_warning("Firewall %s query with digest %s from user %s@%s\n", action, buf, username, sess->client_myds->addr.addr);
+						proxy_warning("Firewall %s query with digest %s from user %s@%s\n", action, buf, username, client_myds->addr.addr);
 					}
 				}
 			}
@@ -1937,15 +1943,19 @@ enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_
 	return ret;
 }
 
-unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
+unsigned long long Query_Processor::query_parser_update_counters(Client_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
 	char *ca = (char *)"";
+	MySQL_Data_Stream * client_myds = NULL;
+	if (sess->session_type==PROXYSQL_SESSION_MYSQL) {
+		client_myds = ((MySQL_Session *)sess)->client_myds;
+	}
 	if (mysql_thread___query_digests_track_hostname) {
-		if (sess->client_myds) {
-			if (sess->client_myds->addr.addr) {
-				ca = sess->client_myds->addr.addr;
+		if (client_myds) {
+			if (client_myds->addr.addr) {
+				ca = client_myds->addr.addr;
 			}
 		}
 	}
@@ -1956,10 +1966,10 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 		SpookyHash myhash;
 		myhash.Init(19,3);
 		assert(sess);
-		assert(sess->client_myds);
-		assert(sess->client_myds->myconn);
-		assert(sess->client_myds->myconn->userinfo);
-		MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+		assert(client_myds);
+		assert(client_myds->myconn);
+		assert(client_myds->myconn->userinfo);
+		MySQL_Connection_userinfo *ui=client_myds->myconn->userinfo;
 		assert(ui->username);
 		assert(ui->schemaname);
 		myhash.Update(ui->username,strlen(ui->username));
@@ -1975,10 +1985,10 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 		SpookyHash myhash;
 		myhash.Init(19,3);
 		assert(sess);
-		assert(sess->client_myds);
-		assert(sess->client_myds->myconn);
-		assert(sess->client_myds->myconn->userinfo);
-		MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
+		assert(client_myds);
+		assert(client_myds->myconn);
+		assert(client_myds->myconn->userinfo);
+		MySQL_Connection_userinfo *ui=client_myds->myconn->userinfo;
 		assert(ui->username);
 		assert(ui->schemaname);
 		MySQL_STMT_Global_info *stmt_info=sess->CurrentQuery.stmt_info;
@@ -1994,7 +2004,11 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 	return ret;
 }
 
-void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, MySQL_Session *sess) {
+void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, Client_Session *sess) {
+	MySQL_Data_Stream * client_myds = NULL;
+	if (sess->session_type==PROXYSQL_SESSION_MYSQL) {
+		client_myds = ((MySQL_Session *)sess)->client_myds;
+	}
 	pthread_rwlock_wrlock(&digest_rwlock);
 	QP_query_digest_stats *qds;
 
@@ -2023,9 +2037,9 @@ void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connecti
 		}
 		char *ca = (char *)"";
 		if (mysql_thread___query_digests_track_hostname) {
-			if (sess->client_myds) {
-				if (sess->client_myds->addr.addr) {
-					ca = sess->client_myds->addr.addr;
+			if (client_myds) {
+				if (client_myds->addr.addr) {
+					ca = client_myds->addr.addr;
 				}
 			}
 		}
@@ -2763,7 +2777,7 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 			row_length += rand_del_size;
 			tot_size += row_length;
 		}
-		int nt = GloMTH->num_threads;
+		int nt = GloPWTH->num_threads;
 		rules_fast_routing___keys_values = (char *)malloc(tot_size);
 		rules_fast_routing___keys_values___size = tot_size;
 		rules_mem_used += rules_fast_routing___keys_values___size; // global
