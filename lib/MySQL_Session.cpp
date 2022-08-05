@@ -806,28 +806,34 @@ void MySQL_Session::writeout() {
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
 
-// FIXME: This function is currently disabled . See #469
 bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	char c=((char *)pkt->ptr)[5];
 	bool ret=false;
 	if (c=='c' || c=='C') {
-		if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
+		if (pkt->size==strlen("commit")+5) {
+			if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
 				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
 				ret=true;
 			}
-		} else {
-			if (c=='r' || c=='R') {
+		}
+	} else {
+		if (c=='r' || c=='R') {
+			if (pkt->size==strlen("rollback")+5) {
 				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
 					__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
 					ret=true;
 				}
 			}
 		}
+	}
 
 	if (ret==false) {
 		return false;	// quick exit
 	}
-	unsigned int nTrx=NumActiveTransactions();
+	// this is the only part of the code (as at release 2.4.3) where we call
+	// NumActiveTransactions() with the check_savepoint flag .
+	// This to try to handle MySQL bug https://bugs.mysql.com/bug.php?id=107875
+	unsigned int nTrx=NumActiveTransactions(true);
 	if (nTrx) {
 		// there is an active transaction, we must forward the request
 		return false;
@@ -1943,7 +1949,13 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	} else {
 		if (autocommit == false) { // also IsAutoCommit==false
 			if (mysql_thread___enforce_autocommit_on_reads == false) {
-				if (mybe->server_myds->myconn->IsActiveTransaction() == false) {
+				if (
+					mybe->server_myds->myconn->IsActiveTransaction() == false
+					&&
+					// another edge case related to MySQL bug https://bugs.mysql.com/bug.php?id=107875
+					// about autocommit=0 and SAVEPOINT
+					mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == false
+				) {
 					if (CurrentQuery.is_select_NOT_for_update()==true) {
 						// client wants autocommit=0
 						// enforce_autocommit_on_reads=false
@@ -6962,17 +6974,29 @@ void MySQL_Session::set_unhealthy() {
 }
 
 
-unsigned int MySQL_Session::NumActiveTransactions() {
+unsigned int MySQL_Session::NumActiveTransactions(bool check_savepoint) {
 	unsigned int ret=0;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
 	unsigned int i;
 	for (i=0; i < mybes->len; i++) {
 		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds)
-			if (_mybe->server_myds->myconn)
-				if (_mybe->server_myds->myconn->IsActiveTransaction())
+		if (_mybe->server_myds) {
+			if (_mybe->server_myds->myconn) {
+				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
 					ret++;
+				} else {
+					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
+					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
+					// SAVEPOINT and autocommit=0
+					if (check_savepoint) {
+						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
+							ret++;
+						}
+					}
+				}
+			}
+		}
 	}
 	return ret;
 }

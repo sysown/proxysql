@@ -308,7 +308,7 @@ class MySQL_Session
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false);
 	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds=NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
-	unsigned int NumActiveTransactions();
+	unsigned int NumActiveTransactions(bool check_savpoint=false);
 	bool HasOfflineBackends();
 	bool SetEventInOfflineBackends();
 	int FindOneActiveTransaction();
