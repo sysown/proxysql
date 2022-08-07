@@ -2260,6 +2260,17 @@ void MySQL_Connection::async_free_result() {
 	}
 }
 
+// This function check if autocommit=0 and if there are any savepoint.
+// this is an attempt to mitigate MySQL bug https://bugs.mysql.com/bug.php?id=107875
+bool MySQL_Connection::AutocommitFalse_AndSavepoint() {
+	bool ret=false;
+	if (IsAutoCommit() == false) {
+		if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) == true) {
+			ret = true;
+		}
+	}
+	return ret;
+}
 
 bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
@@ -2275,12 +2286,13 @@ bool MySQL_Connection::IsActiveTransaction() {
 				ret = true;
 			}
 		}
-		if (ret == false) {
-			if (get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT)) {
-				// there are savepoints
-				ret = true;
-			}
-		}
+		// in the past we were incorrectly checking STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT
+		// and returning true in case there were any savepoint.
+		// Although flag STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT was not reset in
+		// case of no transaction, thus the check was incorrect.
+		// We can ignore STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT for multiplexing
+		// purpose in IsActiveTransaction() because it is also checked
+		// in MultiplexDisabled()
 	}
 	return ret;
 }
@@ -2520,7 +2532,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			}
 		}
 	} else {
-		if (
+		if ( // get_status(STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) == true
 			(
 				// make sure we don't have a transaction running
 				// checking just for COMMIT and ROLLBACK is not enough, because `SET autocommit=1` can commit too
@@ -2529,9 +2541,9 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				( (mysql->server_status & SERVER_STATUS_IN_TRANS) == 0 )
 			)
 			||
-			!strcasecmp(query_digest_text,"COMMIT")
+			(strcasecmp(query_digest_text,"COMMIT") == 0)
 			||
-			!strcasecmp(query_digest_text,"ROLLBACK")
+			(strcasecmp(query_digest_text,"ROLLBACK") == 0)
 		) {
 			set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
 		}
