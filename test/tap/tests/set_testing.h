@@ -106,6 +106,9 @@ int readTestCasesJSON(const std::string& fileName) {
 			}
 		}
 		testCases.push_back({newbuf, vars, reset_vars});
+		if (i%5000 == 0) {
+			fprintf(stderr,"Read %d tests...\n", i);
+		}
 	}
 
 	fclose(fp);

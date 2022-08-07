@@ -33,9 +33,11 @@
 
 
 
-int queries_per_connections=1;
-unsigned int num_threads=1;
-int count=0;
+int queries_per_connections=10;
+//unsigned int num_threads=1;
+//unsigned int num_threads=5;
+unsigned int num_threads=20;
+int count=20;
 char *username=NULL;
 char *password=NULL;
 char *host=(char *)"localhost";
@@ -45,7 +47,7 @@ char *schema=(char *)"information_schema";
 int silent = 0;
 int sysbench = 0;
 int local=0;
-int queries=0;
+int queries=3000;
 int uniquequeries=0;
 int histograms=-1;
 
@@ -95,6 +97,7 @@ void * my_conn_thread(void *arg) {
 	unsigned int select_ERR=0;
 	int i, j;
 	MYSQL **mysqlconns=(MYSQL **)malloc(sizeof(MYSQL *)*count);
+	bool set_sql_mode[count];
 	std::vector<json> varsperconn(count);
 
 	if (mysqlconns==NULL) {
@@ -119,6 +122,7 @@ void * my_conn_thread(void *arg) {
 			exit(EXIT_FAILURE);
 		}
 		mysqlconns[i]=mysql;
+		set_sql_mode[i]=false;
 		__sync_add_and_fetch(&status_connections,1);
 	}
 	__sync_fetch_and_add(&connect_phase_completed,1);
@@ -126,17 +130,19 @@ void * my_conn_thread(void *arg) {
 	while(__sync_fetch_and_add(&connect_phase_completed,0) != num_threads) {
 	}
 	MYSQL *mysql=NULL;
+	int mysql_idx = 0;
 	json vars;
 	std::string paddress = "";
 	for (j=0; j<queries; j++) {
-		int fr = fastrand();
+		int fr = rand();
 		int r1=fr%count;
 		//int r2=fastrand()%testCases.size();
 		int r2=rand()%testCases.size();
 
 		if (j%queries_per_connections==0) {
-			mysql=mysqlconns[r1];
-			vars = varsperconn[r1];
+			mysql_idx=r1;
+			mysql=mysqlconns[mysql_idx];
+			vars = varsperconn[mysql_idx];
 		}
 		if (strcmp(username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
@@ -162,6 +168,35 @@ void * my_conn_thread(void *arg) {
 				mysql_free_result(result);
 				select_OK++;
 				__sync_fetch_and_add(&g_select_OK,1);
+				if (strcasestr(c.c_str(),"sql_mode") != NULL) {
+//					diag("Line %d: Debug NO_BACKSLASH_ESCAPES , set_sql_mode=%s , connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", __LINE__, (set_sql_mode[mysql_idx] == true ? "true" : "false") , mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+					if (set_sql_mode[mysql_idx] == false) {
+						// first time we set sql_mode
+						if (strcasestr(c.c_str(),"NO_BACKSLASH_ESCAPES") != NULL) {
+							if (mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) {
+							} else {
+								diag("Line %d: ERROR with NO_BACKSLASH_ESCAPES . connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", __LINE__, mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+								exit(EXIT_FAILURE);
+							}
+						} else {
+							if (mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) {
+								diag("Line %d: ERROR with NO_BACKSLASH_ESCAPES . connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", __LINE__, mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+								exit(EXIT_FAILURE);
+							} else {
+							}
+						}
+						set_sql_mode[mysql_idx] = 1;
+//						diag("Setting set_sql_mode=true . New value = %s . For: connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]" , (set_sql_mode[mysql_idx] == true ? "true" : "false") , mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+					} else {
+						if (strcasestr(c.c_str(),"NO_BACKSLASH_ESCAPES") != NULL) {
+							if (mysql->server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) {
+							} else {
+								diag("Line %d: ERROR with NO_BACKSLASH_ESCAPES . connections mysql[%p] proxysql[%s], thread_id [%lu], command [%s]", __LINE__, mysql, paddress.c_str(), mysql->thread_id, testCases[r2].command.c_str());
+								exit(EXIT_FAILURE);
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -413,9 +448,11 @@ int main(int argc, char *argv[]) {
 		return exit_status();
 	}
 
+/*
 	num_threads = 10;
 	queries_per_connections = 10;
 	count = 10;
+*/
 	username = cl.username;
 	password = cl.password;
 	host = cl.host;
@@ -447,7 +484,7 @@ int main(int argc, char *argv[]) {
 	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-	queries = 3000;
+	//queries = 3000;
 	//queries = testCases.size();
 	plan(queries * num_threads);
 
