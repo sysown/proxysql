@@ -311,7 +311,7 @@ class MySQL_Session
 	unsigned int NumActiveTransactions(bool check_savpoint=false);
 	bool HasOfflineBackends();
 	bool SetEventInOfflineBackends();
-	int FindOneActiveTransaction();
+	int FindOneActiveTransaction(bool check_savepoint=false);
 	unsigned long long IdleTime();
 
 	void reset_all_backends();

@@ -830,7 +830,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	if (ret==false) {
 		return false;	// quick exit
 	}
-	// this is the only part of the code (as at release 2.4.3) where we call
+	// in this part of the code (as at release 2.4.3) where we call
 	// NumActiveTransactions() with the check_savepoint flag .
 	// This to try to handle MySQL bug https://bugs.mysql.com/bug.php?id=107875
 	unsigned int nTrx=NumActiveTransactions(true);
@@ -953,12 +953,16 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					goto __ret_autocommit_OK;
 				}
 				if (fd==1 && autocommit==false) {
-					if (nTrx) {
+					// in this part of the code (as at release 2.4.3) where we call
+					// NumActiveTransactions() with the check_savepoint flag .
+					// This to try to handle MySQL bug https://bugs.mysql.com/bug.php?id=107875
+					unsigned int nTrx_SP=NumActiveTransactions(true); // check savepoint
+					if (nTrx_SP) { // previously we were checking nTrx . Now nTrx_SP
 						// there is an active transaction, we need to forward it
 						// because this can potentially close the transaction
 						autocommit=true;
 						client_myds->myconn->set_autocommit(autocommit);
-						autocommit_on_hostgroup=FindOneActiveTransaction();
+						autocommit_on_hostgroup=FindOneActiveTransaction(true);
 						free(_new_pkt.ptr);
 						sending_set_autocommit=true;
 						return false;
@@ -1897,6 +1901,12 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 		MySQL_Connection *mc = mybe->server_myds->myconn;
 		mc->set_autocommit(autocommit);
 		mc->options.last_set_autocommit = ( mc->options.autocommit ? 1 : 0 );
+		if (autocommit==1) {
+			// due to  MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
+			// SAVEPOINT and autocommit=0 , if we send autocommit=1 we need to drop
+			// the flag related to savepoint
+			mc->set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+		}
 		return false;
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %d , backend: %d\n", this, client_myds->myconn->options.autocommit, mybe->server_myds->myconn->options.autocommit);
@@ -7035,17 +7045,29 @@ bool MySQL_Session::SetEventInOfflineBackends() {
 	return ret;
 }
 
-int MySQL_Session::FindOneActiveTransaction() {
+int MySQL_Session::FindOneActiveTransaction(bool check_savepoint) {
 	int ret=-1;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
 	unsigned int i;
 	for (i=0; i < mybes->len; i++) {
 		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds)
-			if (_mybe->server_myds->myconn)
-				if (_mybe->server_myds->myconn->IsActiveTransaction())
+		if (_mybe->server_myds) {
+			if (_mybe->server_myds->myconn) {
+				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
 					return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+				} else {
+					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
+					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
+					// SAVEPOINT and autocommit=0
+					if (check_savepoint) {
+						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
+							return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+						}
+					}
+				}
+			}
+		}
 	}
 	return ret;
 }
