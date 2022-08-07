@@ -75,7 +75,7 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 libssl/openssl/libssl.a:
-	cd libssl && rm -rf openssl-openssl-*/ || true
+	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
 	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
 	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
@@ -314,7 +314,7 @@ cleanall:
 	cd libmicrohttpd && rm -f libmicrohttpd || true
 	cd curl && rm -rf curl-*/ || true
 	cd libev && rm -rf libev-*/ || true
-	cd libssl && rm -rf openssl-openssl-*/ || true
+	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
 	cd cityhash && rm -rf cityhash/ || true
