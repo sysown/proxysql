@@ -219,7 +219,7 @@ int main(int argc, char** argv) {
 	// plan as many tests as queries
 	plan(
 		2 /* Fail to connect with wrong username and password */ + successful_queries.size()
-		+ unsuccessful_queries.size() + admin_queries.size() + sqlite_intf_queries.size()
+		+ unsuccessful_queries.size() + admin_queries.size() // + sqlite_intf_queries.size()
 		+ 1 /* Connect to new setup interface */
 	);
 
@@ -323,7 +323,7 @@ int main(int argc, char** argv) {
 		// Reinitialize MYSQL handle
 		mysql_close(proxysql_sqlite3);
 		proxysql_sqlite3 = mysql_init(NULL);
-
+/*
 		// Change SQLite interface and connect to new port
 		for (const auto& admin_query : sqlite_intf_queries) {
 			int query_err = mysql_query(proxysql_admin, admin_query.c_str());
@@ -332,7 +332,7 @@ int main(int argc, char** argv) {
 				admin_query.c_str(), __LINE__, mysql_error(proxysql_admin)
 			);
 		}
-
+*/
 		// NOTE: Wait for ProxySQL to reconfigure, changing SQLite3 interface.
 		// Trying to perform a connection immediately after changing the
 		// interface could lead to 'EADDRINUSE' in ProxySQL side.
