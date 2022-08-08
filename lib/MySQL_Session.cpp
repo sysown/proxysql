@@ -5694,8 +5694,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					auto values = std::begin(it->second);
 					if (var == "sql_mode") {
 						std::string value1 = *values;
-						if (strcasecmp(value1.c_str(),"NO_BACKSLASH_ESCAPE") != 0) {
-							// client is setting NO_BACKSLASH_ESCAPE in sql_mode
+						if (strcasestr(value1.c_str(),"NO_BACKSLASH_ESCAPES") != NULL) {
+							// client is setting NO_BACKSLASH_ESCAPES in sql_mode
 							// Because we will reply with an OK packet without
 							// first setting sql_mode to the backend (this is
 							// by design) we need to set no_backslash_escapes
