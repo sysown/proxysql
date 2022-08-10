@@ -118,8 +118,11 @@ std::vector<query_spec> successful_queries {
 	std::make_tuple<std::string, int>("SHOW SCHEMAS", 0),
 	std::make_tuple<std::string, int>("SHOW DATABASES", 0),
 	std::make_tuple<std::string, int>("SELECT DATABASE()", 0),
+	std::make_tuple<std::string, int>("SELECT DATABASE() AS name", 0),
 	std::make_tuple<std::string, int>("SELECT DATABASE(), USER() LIMIT 1", 0),
 	std::make_tuple<std::string, int>("SELECT @@version_comment LIMIT 1", 0),
+	std::make_tuple<std::string, int>("SELECT @@version", 0),
+	std::make_tuple<std::string, int>("SELECT version()", 0),
 	std::make_tuple<std::string, int>(
 		"SELECT @@character_set_client, @@character_set_connection,"
 		" @@character_set_server, @@character_set_database LIMIT 1",
@@ -134,6 +137,7 @@ std::vector<query_spec> successful_queries {
 		0
 	),
 	std::make_tuple<std::string, int>("SHOW CREATE TABLE test_sqlite3_server_p0712", 0),
+	std::make_tuple<std::string, int>("SHOW CREATE TABLE `test_sqlite3_server_p0712`", 0),
 	std::make_tuple<std::string, int>("SHOW TABLES", 0),
 	std::make_tuple<std::string, int>(
 		"INSERT INTO test_sqlite3_server_p0712"
@@ -149,8 +153,15 @@ std::vector<query_spec> successful_queries {
 		"DELETE FROM test_sqlite3_server_p0712",
 		0
 	),
+	std::make_tuple<std::string, int>("SHOW TABLES FROM main", 0),
+	std::make_tuple<std::string, int>("SHOW TABLES LIKE test_sqlite3_server_p0712", 0),
+	std::make_tuple<std::string, int>("SHOW TABLES LIKE 'test_sqlite3_server_p0712'", 0),
 	std::make_tuple<std::string, int>("DROP TABLE test_sqlite3_server_p0712", 0),
 	std::make_tuple<std::string, int>("SHOW TABLES", 0),
+	std::make_tuple<std::string, int>("START TRANSACTION", 0),
+	std::make_tuple<std::string, int>("COMMIT", 0),
+	std::make_tuple<std::string, int>("BEGIN", 0),
+	std::make_tuple<std::string, int>("ROLLBACK", 0),
 };
 
 /**
@@ -160,6 +171,7 @@ std::vector<query_spec> successful_queries {
 std::vector<query_spec> unsuccessful_queries {
 	std::make_tuple<std::string, int>("SHOW CHEMAS", 1045),
 	std::make_tuple<std::string, int>("SHOW DAABASES", 1045),
+	std::make_tuple<std::string, int>("PRAGMA synchronous=0", 1045),
 	std::make_tuple<std::string, int>("SELECT DAABASE()", 1045),
 	std::make_tuple<std::string, int>("SELECT DAABASE(), USER() LIMIT 1", 1045),
 	std::make_tuple<std::string, int>("SHOW CREATE TABLE test_sqlite3_server_p0712", 0),

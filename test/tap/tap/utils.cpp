@@ -124,7 +124,7 @@ int get_server_version(MYSQL *mysql, std::string& version) {
 	return 0;
 }
 
-int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
+int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql, bool sqlite) {
 	std::random_device rd;
 	std::mt19937 mt(rd());
 	std::uniform_int_distribution<int> dist(0.0, 9.0);
@@ -133,7 +133,11 @@ int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
 	while (num_rows) {
 		std::stringstream q;
 
+		if (sqlite==false) {
 		q << "INSERT INTO test.sbtest1 (k, c, pad) values ";
+		} else {
+			q << "INSERT INTO sbtest1 (k, c, pad) values ";
+		}
 		bool put_comma = false;
 		int i=0;
 		unsigned int cnt=5+rand()%50;
@@ -173,6 +177,14 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
 
 	return add_more_rows_test_sbtest1(num_rows, mysql);
+}
+
+int create_table_test_sqlite_sbtest1(int num_rows, MYSQL *mysql) {
+	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS sbtest1");
+	MYSQL_QUERY(mysql, "CREATE TABLE if not exists sbtest1 (id INTEGER PRIMARY KEY AUTOINCREMENT, `k` int(10) NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '')");
+	MYSQL_QUERY(mysql, "CREATE INDEX IF NOT EXISTS idx_sbtest1_k1 ON sbtest1 (k)");
+
+	return add_more_rows_test_sbtest1(num_rows, mysql, true);
 }
 
 int execvp(const std::string& cmd, const std::vector<const char*>& argv, std::string& result) {

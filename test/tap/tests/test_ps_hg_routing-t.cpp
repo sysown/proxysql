@@ -58,9 +58,16 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
 	MYSQL_QUERY(mysqladmin, "delete from mysql_query_rules");
-	MYSQL_QUERY(mysqladmin, "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, apply) values (100, 1, 0, '^SELECT.*FOR UPDATE$', 0, 'CASELESS', 0, 1)");
+	{
+		char * query_in = "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, comment, apply) values (100, 1, 0, \"^SELECT.*FOR UPDATE$\", 0, \"CASELESS\", 0, \"\"\"hello\"\" 'world'\", 1)";
+		char query_out[1024];
+		mysql_real_escape_string(mysqladmin, query_out, query_in, strlen(query_in));
+		diag("Running query: %s", query_out);
+		MYSQL_QUERY(mysqladmin, query_out);
+	}
 	MYSQL_QUERY(mysqladmin, "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, apply) values (200, 1, 0, '^SELECT', 0, 'CASELESS', 2, 1)");
 	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
+	MYSQL_QUERY(mysqladmin, "save mysql query rules from runtime");
 	MYSQL_QUERY(mysqladmin, "INSERT INTO mysql_servers SELECT 2, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=0");
 	MYSQL_QUERY(mysqladmin, "LOAD MYSQL SERVERS TO RUNTIME");
 
