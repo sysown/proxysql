@@ -51,6 +51,8 @@
 
 #define EXPMARIA
 
+using std::function;
+using std::vector;
 
 static inline char is_digit(char c) {
 	if(c >= '0' && c <= '9')
@@ -686,6 +688,28 @@ MySQL_Backend * MySQL_Session::find_backend(int hostgroup_id) {
 	return NULL; // NULL = backend not found
 };
 
+void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connection*)>>& checks) {
+	for (uint32_t i = 0; i < mybes->len; i++) {
+		MySQL_Backend* mybe = static_cast<MySQL_Backend*>(mybes->index(i));
+		MySQL_Data_Stream* myds = mybe != nullptr ? mybe->server_myds : nullptr;
+		MySQL_Connection* myconn = myds != nullptr ? myds->myconn : nullptr;
+
+		if (myconn != nullptr) {
+			const bool is_active_transaction = myconn->IsActiveTransaction();
+			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
+
+			// Make sure the connection is reusable before performing any check
+			if (myconn->reusable==true && is_active_transaction==false && multiplex_disabled==false) {
+				for (const function<bool(MySQL_Connection*)>& check : checks) {
+					if (check(myconn)) {
+						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
+						break;
+					}
+				}
+			}
+		}
+	}
+}
 
 MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=new MySQL_Backend();
@@ -4374,6 +4398,33 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 	}
 }
 
+void MySQL_Session::housekeeping_before_pkts() {
+	if (mysql_thread___multiplexing) {
+		for (const int hg_id : hgs_expired_conns) {
+			MySQL_Backend* mybe = find_backend(hg_id);
+
+			if (mybe != nullptr) {
+				MySQL_Data_Stream* myds = mybe->server_myds;
+
+				if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+					if (mysql_thread___reset_connection_algorithm == 2) {
+						create_new_session_and_reset_connection(myds);
+					} else {
+						myds->destroy_MySQL_Connection_From_Pool(true);
+					}
+				} else {
+					myds->return_MySQL_Connection_To_Pool();
+				}
+			}
+		}
+		// We are required to perform a cleanup after consuming the elements, thus preventing any subsequent
+		// 'handler' call to perform recomputing of the already processed elements.
+		if (hgs_expired_conns.empty() == false) {
+			hgs_expired_conns.clear();
+		}
+	}
+}
+
 // this function was inline
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
@@ -4426,6 +4477,7 @@ int MySQL_Session::handler() {
 	}
 	}
 
+	housekeeping_before_pkts();
 	handler_ret = get_pkts_from_client(wrong_pass, pkt);
 	if (handler_ret != 0) {
 		return handler_ret;

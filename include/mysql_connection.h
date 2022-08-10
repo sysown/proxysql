@@ -95,6 +95,8 @@ class MySQL_Connection {
 	char scramble_buff[40];
 	unsigned long long creation_time;
 	unsigned long long last_time_used;
+	/* @brief Time at which the last 'event' was processed by 'handler' */
+	unsigned long long last_event_time;
 	unsigned long long timeout;
 	int auto_increment_delay_token;
 	int fd;
@@ -217,11 +219,13 @@ class MySQL_Connection {
 	bool IsServerOffline();
 	bool IsAutoCommit();
 	bool AutocommitFalse_AndSavepoint();
-	bool MultiplexDisabled();
+	bool MultiplexDisabled(bool check_delay_token = true);
 	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 	void optimize();
 	void close_mysql();
+	uint64_t idle_time(uint64_t curtime);
+	bool expire_auto_increment_delay(uint64_t curtime, uint64_t timeout);
 
 	void set_is_client(); // used for local_stmts
 

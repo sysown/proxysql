@@ -1,4 +1,8 @@
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
+
+#include <functional>
+#include <vector>
+
 #include "MySQL_HostGroups_Manager.h"
 #include "prometheus_helpers.h"
 #define MYSQL_THREAD_IMPLEMENTATION
@@ -16,6 +20,9 @@
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+
+using std::vector;
+using std::function;
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -3733,12 +3740,19 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 		}
 	}
 
-	if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
-		MySQL_Connection* myconn = sess->mybe->server_myds->myconn;
+	// Perform the maintenance of expired 'auto_increment_delay_multiplex' for connections on the session
+	if (mysql_thread___multiplexing) {
+		const auto auto_incr_delay_multiplex_check = [curtime=this->curtime] (MySQL_Connection* myconn) -> bool {
+			const uint64_t multiplex_timeout_us = static_cast<uint64_t>(mysql_thread___auto_increment_delay_multiplex_timeout_ms) * 1000;
+			const bool timeout_expired = multiplex_timeout_us != 0 && myconn->expire_auto_increment_delay(curtime, multiplex_timeout_us);
+			return timeout_expired;
+		};
 
-		if (mysql_thread___auto_increment_delay_multiplex_timeout_ms != 0 && (sess_time/1000 > (unsigned long long)mysql_thread___auto_increment_delay_multiplex_timeout_ms)) {
-			myconn->auto_increment_delay_token = 0;
-		}
+		const vector<function<bool(MySQL_Connection*)>> expire_conn_checks {
+			auto_incr_delay_multiplex_check
+		};
+
+		sess->update_expired_conns(expire_conn_checks);
 	}
 }
 
