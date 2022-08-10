@@ -7,7 +7,10 @@
  *     are present.
  *  2. 'auto_increment_delay_multiplex' behaves properly for different values.
  *  3. 'auto_increment_delay_multiplex_timeout_ms' behaves properly for different values.
- *  4. 'auto_increment_delay_multiplex_timeout_ms' behaves properly for value '0' (disabled).
+ *  4. 'auto_increment_delay_multiplex_timeout_ms' should be delayed by queries in the same hostgroup.
+ *  5. 'auto_increment_delay_multiplex_timeout_ms' should not take effect on transactions.
+ *  6. 'auto_increment_delay_multiplex_timeout_ms' should not take effect on multiplex dissabling scenarios.
+ *     Eg: SET statements that create session variables.
  */
 
 #include <cstring>
@@ -112,7 +115,10 @@ int main(int argc, char** argv) {
 		1 + // Check variables are present
 		((VAL_RANGE / STEP) + 1) * 2 + // Tests for different 'auto_increment_delay_multiplex' values
 		(VAL_RANGE / STEP) * 3 + // Tests for different 'auto_increment_delay_multiplex_timeout_ms' values
-		3 // Tests for 'auto_increment_delay_multiplex_timeout_ms' zero value
+		3 + // Tests for 'auto_increment_delay_multiplex_timeout_ms' zero value
+		2 + // Tests for 'auto_increment_delay_multiplex_timeout_ms' keep alive queries
+		2 + // Tests for 'auto_increment_delay_multiplex_timeout_ms' transaction behavior
+		1 // Tests for 'auto_increment_delay_multiplex_timeout_ms' multiplex disabled by SET statement
 	);
 
 	MYSQL* proxy_mysql = mysql_init(NULL);
@@ -253,8 +259,8 @@ int main(int argc, char** argv) {
 			);
 		} else {
 			ok(
-				0 == cur_auto_inc_delay_mult,
-				"'auto_increment_delay_token' val should be '0' after timeout:"
+				-1 == cur_auto_inc_delay_mult,
+				"'auto_increment_delay_token' val should be '-1' after timeout:"
 				" { Exp: %d, Act: %d, Timeout: %d, Waited: %d }",
 				0, cur_auto_inc_delay_mult, auto_inc_delay_to, waited
 			);
@@ -282,6 +288,8 @@ int main(int argc, char** argv) {
 
 		return EXIT_SUCCESS;
 	};
+
+	const char* insert_query { "INSERT INTO test.auto_inc_multiplex (c2, c3) VALUES ('foo','bar')" };
 
 	// 3. Change and check 'auto_increment_delay_multiplex_timeout_ms' behavior
 	{
@@ -316,6 +324,157 @@ int main(int argc, char** argv) {
 		// Check that value '0' for 'auto_increment_delay_multiplex_timeout_ms' disables the feature
 		int c_res = check_auto_increment_to(proxy_admin, proxy_mysql, f_auto_incr_val, poll_timeout, 0);
 		if (c_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
+
+		// Check that using the connection reset the internal timer, keeping the connection attached
+		const uint32_t timeout_ms = 2000;
+		// Impose a big delay so we are sure only 'timeout' is being relevant
+		const uint32_t delay = 100;
+		const string timeout_query {
+			"SET mysql-auto_increment_delay_multiplex_timeout_ms=" + std::to_string(timeout_ms)
+		};
+		const string delay_query { "SET mysql-auto_increment_delay_multiplex=" + std::to_string(delay) };
+		poll_timeout = 0;
+		const string poll_timeout_query {
+			"SELECT variable_value FROM global_variables WHERE variable_name='mysql-poll_timeout'"
+		};
+
+		g_res = get_query_result(proxy_admin, poll_timeout_query.c_str(), poll_timeout);
+		if (g_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
+
+		MYSQL_QUERY(proxy_admin, delay_query.c_str());
+		diag("%s: Executing query `%s`...", tap_curtime().c_str(), delay_query.c_str());
+		MYSQL_QUERY(proxy_admin, timeout_query.c_str());
+		diag("%s: Executing query `%s`...", tap_curtime().c_str(), timeout_query.c_str());
+		MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+		{
+			// Insert disabling multiplexing for the connection
+			diag("%s: Executing query `%s`...", tap_curtime().c_str(), insert_query);
+			MYSQL_QUERY(proxy_mysql, insert_query);
+
+			// Perform queries in the same connection
+			diag("Execute queries beyond imposed timeout");
+			uint32_t waited = 0;
+			while (waited < timeout_ms * 3) {
+				sleep(1);
+
+				diag("%s: Executing query `%s`...", tap_curtime().c_str(), "/* hostgroup=0 */ DO 1");
+				MYSQL_QUERY(proxy_mysql, "/* hostgroup=0 */ DO 1");
+				waited += 1000;
+			}
+
+			int cur_delay = 0;
+			int g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_delay);
+			if (g_res != EXIT_SUCCESS) {
+				return EXIT_FAILURE;
+			}
+
+			uint32_t exp_delay = delay - (waited/1000);
+			ok(
+				exp_delay == cur_delay,
+				"Connection was kept after timeout due to queries issues in the same hostgroup:"
+				" 'auto_increment_delay_multiplex' - Exp: '%d', Act: '%d'",
+				exp_delay, cur_delay
+			);
+
+			waited = 0;
+			// Perform queries in other connections
+			while (waited < timeout_ms * 3) {
+				sleep(1);
+
+				diag("%s: Executing query `%s`...", tap_curtime().c_str(), "SELECT 1");
+				MYSQL_QUERY(proxy_mysql, "SELECT 1");
+				mysql_free_result(mysql_store_result(proxy_mysql));
+
+				waited += 1000;
+				// After this time the connection should have timeout already
+				if (waited > timeout_ms + poll_timeout + 500) {
+					break;
+				}
+			}
+
+			cur_delay = 0;
+			g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_delay);
+			if (g_res != EXIT_SUCCESS) {
+				return EXIT_FAILURE;
+			}
+
+			ok(
+				-1 == cur_delay,
+				"Connection returned to connpool when queries are issued in different hostgroup - Exp: '%d', Act: '%d'",
+				-1, cur_delay
+			);
+		}
+
+		// Transactions connections should be preserved by 'auto_increment_delay_multiplex_timeout_ms'
+		{
+			diag("%s: Executing query `%s`...", tap_curtime().c_str(), "BEGIN");
+			MYSQL_QUERY(proxy_mysql, "BEGIN");
+			diag("%s: Executing query `%s`...", tap_curtime().c_str(), insert_query);
+			MYSQL_QUERY(proxy_mysql, insert_query);
+
+			// Wait for the timeout and check the value
+			diag("%s: Waiting for timeout to expire...", tap_curtime().c_str());
+			usleep(timeout_ms * 1000 + poll_timeout * 1000 + 500 * 1000 * 2);
+
+			diag("%s: Extracting current auto inc delay...", tap_curtime().c_str());
+			int cur_delay = 0;
+			int g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_delay);
+			if (g_res != EXIT_SUCCESS) {
+				return EXIT_FAILURE;
+			}
+
+			ok(
+				delay == cur_delay,
+				"Connection should not be returned to conn_pool due to transaction - Exp: '%d', Act: '%d'",
+				delay, cur_delay
+			);
+
+			diag("%s: Executing query `%s`...", tap_curtime().c_str(), "COMMIT");
+			MYSQL_QUERY(proxy_mysql, "COMMIT");
+
+			diag("%s: Waiting for timeout to expire...", tap_curtime().c_str());
+			usleep(timeout_ms * 1000 + poll_timeout * 1000 + 500 * 1000 * 2);
+
+			diag("%s: Extracting current auto inc delay...", tap_curtime().c_str());
+			cur_delay = 0;
+			g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_delay);
+			if (g_res != EXIT_SUCCESS) {
+				return EXIT_FAILURE;
+			}
+
+			ok(
+				-1 == cur_delay,
+				"Connection should be returned to conn_pool after 'COMMIT' and 'timeout' wait - Exp: '%d', Act: '%d'",
+				-1, cur_delay
+			);
+		}
+
+		// Multiplex disabled by any action should take precedence over 'auto_increment_delay_multiplex_timeout_ms'
+		{
+			const char* set_query { "SET @local_var='foo'" };
+			diag("%s: Executing query `%s`...", tap_curtime().c_str(), set_query);
+			MYSQL_QUERY(proxy_mysql, "SET @local_var='foo'");
+			diag("%s: Executing query `%s`...", tap_curtime().c_str(), insert_query);
+			MYSQL_QUERY(proxy_mysql, insert_query);
+
+			// Wait for the timeout and check the value
+			diag("%s: Waiting for timeout to expire...", tap_curtime().c_str());
+			usleep(timeout_ms * 1000 + poll_timeout * 1000 + 500 * 1000 * 2);
+
+			diag("%s: Extracting current auto inc delay...", tap_curtime().c_str());
+			int cur_delay = 0;
+			int g_res = get_conn_auto_inc_delay_token(proxy_mysql, cur_delay);
+			if (g_res != EXIT_SUCCESS) {
+				return EXIT_FAILURE;
+			}
+
+			ok(
+				delay == cur_delay,
+				"Connection should not be returned to conn_pool due to SET session var - Exp: '%d', Act: '%d'",
+				delay, cur_delay
+			);
+		}
 	}
 
 cleanup:
