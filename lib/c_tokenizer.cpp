@@ -864,8 +864,6 @@ enum p_st {
  *   processing stages.
  */
 typedef struct shared_st {
-	/* @brief The current state being processed by 'stage_1'. */
-	enum p_st st;
 	/* @brief Global computed compression offset from the previous iteration. Used when uncompressed query
 		exceeds the maximum buffer side specified by `mysql_thread___query_digests_max_query_length` */
 	int gl_c_offset;
@@ -885,10 +883,12 @@ typedef struct shared_st {
 	char* res_cur_pos;
 	/* @brief Position in the return buffer prior to the start of any parsing st that isn't 'no_mark_found'. */
 	char* res_pre_pos;
-	/* @brief Preserve currently imposed 'prev_char' in **on current** char processing instead of replacing it. */
-	bool keep_prev_char;
+	/* @brief The current state being processed by 'stage_1'. */
+	enum p_st st;
 	/* @brief Last copied char to the result buffer. */
 	char prev_char;
+	/* @brief Preserve currently imposed 'prev_char' in **on current** char processing instead of replacing it. */
+	bool keep_prev_char;
 	/* @brief Decides whether or not the next char should be copy during 'stage_1'. */
 	bool copy_next_char;
 } shared_st;
