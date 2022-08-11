@@ -864,8 +864,6 @@ enum p_st {
  *   processing stages.
  */
 typedef struct shared_st {
-	/* @brief The current state being processed by 'stage_1'. */
-	enum p_st st;
 	/* @brief Global computed compression offset from the previous iteration. Used when uncompressed query
 		exceeds the maximum buffer side specified by `mysql_thread___query_digests_max_query_length` */
 	int gl_c_offset;
@@ -885,8 +883,12 @@ typedef struct shared_st {
 	char* res_cur_pos;
 	/* @brief Position in the return buffer prior to the start of any parsing st that isn't 'no_mark_found'. */
 	char* res_pre_pos;
+	/* @brief The current state being processed by 'stage_1'. */
+	enum p_st st;
 	/* @brief Last copied char to the result buffer. */
 	char prev_char;
+	/* @brief Preserve currently imposed 'prev_char' in **on current** char processing instead of replacing it. */
+	bool keep_prev_char;
 	/* @brief Decides whether or not the next char should be copy during 'stage_1'. */
 	bool copy_next_char;
 } shared_st;
@@ -921,6 +923,7 @@ typedef struct literal_string_st {
 	int delim_num;
 	/* @brief Found char delimiter found for the literal string being processed. */
 	char delim_char;
+	const char* q_start_pos;
 } literal_string_st;
 
 /**
@@ -1086,6 +1089,18 @@ enum p_st get_next_st(const struct options* opts, struct shared_st* shared_st) {
 	return st;
 }
 
+static __attribute__((always_inline)) inline
+void inc_proc_pos(shared_st* shared_st) {
+	if (shared_st->keep_prev_char == false) {
+		shared_st->prev_char = *shared_st->q;
+	} else {
+		shared_st->keep_prev_char = false;
+	}
+
+	shared_st->q++;
+	shared_st->q_cur_pos++;
+}
+
 /**
  * @brief Copy the next character and increment the current processing position.
  *
@@ -1100,9 +1115,8 @@ void copy_next_char(shared_st* shared_st, options* opts) {
 	} else {
 		*shared_st->res_cur_pos++ = !is_space_char(*shared_st->q) ? tolower(*shared_st->q) : ' ';
 	}
-	// store previously copied char and increment positions
-	shared_st->prev_char = *shared_st->q++;
-	shared_st->q_cur_pos++;
+
+	inc_proc_pos(shared_st);
 }
 
 char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
@@ -1429,6 +1443,19 @@ enum p_st process_cmnt_type_3(shared_st* shared_st) {
  *   current char until the end delimiter is found. Then replaces the previous position in the result buffer
  *   with the mark '?'.
  *
+ *  TODO: This function currently doesn't take into account if 'NO_BACKSLASH_ESCAPES' sql_mode is being used.
+ *  This can lead to 'stats_mysql_query_digest' pollution because a valid query could be received with strings
+ *  ending in '\''. With current implementation this final '\'' will be collapsed, leading to a string not
+ *  properly finding the target string delimiter. To solve this scenario the following approach could be taken:
+ *   - Add an additional parameter to 'Query_Info::begin' that propagates 'no_backslash_escapes' from
+ *     'MySQL_Session::client_myds::myconn::options' through 'Query_Info::query_parser_init'.
+ *   - Add a new parameter to 'query_parser_init' (or reuse currently unused 'flags' for this purpose).
+ *   - Add a new parameter to 'mysql_query_digest_and_first_comment_2' to propagate this flags.
+ *   - Add a new field into the 'options' struct defined in this file for holding such flags.
+ *   - Pass 'options' already received by 'stage_1_parsing' into this function and make use of it for deciding
+ *     whether to ignore the processing of chars within the string when are preceded by '\'.
+ *  This is just a proposal and a future implementation may be subject to change.
+ *
  * @param shared_st Shared state used to continue the query processing.
  * @param str_st The literal string parsing state, holds the information so far found about the state.
  *
@@ -1443,6 +1470,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 	// process the first delimiter
 	if (str_st->delim_num == 0) {
 		// store found delimiter
+		str_st->q_start_pos = shared_st->q;
 		str_st->delim_char = *shared_st->q;
 		str_st->delim_num = 1;
 
@@ -1451,7 +1479,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 	}
 
 	// need to be ignored case
-	if(shared_st->res_cur_pos > shared_st->res_pre_pos + SIZECHAR)
+	if(shared_st->q > str_st->q_start_pos + SIZECHAR)
 	{
 		if(
 			(shared_st->prev_char == '\\' && *shared_st->q == '\\') || // to process '\\\\', '\\'
@@ -1459,10 +1487,10 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 			(shared_st->prev_char == str_st->delim_char && *shared_st->q == str_st->delim_char) // to process ''''
 		)
 		{
+			shared_st->keep_prev_char = true;
 			shared_st->prev_char = 'X';
-			shared_st->q++;
-			shared_st->q_cur_pos++;
 
+			// NOTE: Don't increment the position in query buffer. See 'stage_1_parsing' doc.
 			return next_state;
 		}
 	}
@@ -1490,6 +1518,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 		// reinit the string literal state
 		str_st->delim_char = 0;
 		str_st->delim_num = 0;
+		str_st->q_start_pos = 0;
 
 		// update the shared state
 		shared_st->prev_char = str_st->delim_char;
@@ -1896,9 +1925,7 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts
 			if (shared_st->copy_next_char) {
 				copy_next_char(shared_st, opts);
 			} else {
-				// if we do not copy we skip the next char, but copy it to `prev_char`
-				shared_st->prev_char = *shared_st->q++;
-				shared_st->q_cur_pos++;
+				inc_proc_pos(shared_st);
 			}
 		}
 	}

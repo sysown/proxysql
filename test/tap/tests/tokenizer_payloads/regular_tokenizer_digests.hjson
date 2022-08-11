@@ -189,10 +189,10 @@
 	},
 	{
 		"q":  "SELECT N'string', _utf8'str\\'i\nng'",
-		"s1":  "SELECT N?, _utf8?i ng",
-		"s2":  "SELECT N?,_utf8?i ng",
-		"s3":  "SELECT N?,_utf8?i ng",
-		"s4":  "SELECT N?,_utf8?i ng"
+		"s1":  "SELECT N?, _utf8?",
+		"s2":  "SELECT N?,_utf8?",
+		"s3":  "SELECT N?,_utf8?",
+		"s4":  "SELECT N?,_utf8?"
 	},
 	{
 		"q": "create table test.1_null_digests (null_c1 TEXT, c2 TEXT, c3 TEXT)",
@@ -260,6 +260,34 @@
 		"s2": "select ?,?,?",
 		"s3": "select ?,?,?",
 		"s4": "select ?,?,?"
+	},
+	// string - symbols '''', '\'', '\\\\' are properly compressed
+	{
+		"q": [
+			"select ''''''''",
+			"select '\\''",
+			"select '\\\\'",
+			"select '''\\\\''\\''''",
+
+			"select \"\"\"\"\"\"\"\"",
+			"select \"\\\"\"",
+			"select \"\\\\\"",
+			"select \"\"\"\\\\\"\"\\\"\"\"\""
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s3": "select ?"
+	},
+	{
+		"q": [
+			"select '', '\\'', 'foo''bar\\'', '\\\\str_\\'foo'''",
+			"select \"\", \"\\\"\", \"foo\"\"bar\\\"\", \"\\\\str_\\\"foo\"\"\""
+		],
+		"s1": "select ?, ?, ?, ?",
+		"s2": "select ?,?,?,?",
+		"s3": "select ?,?,?,?",
+		"s3": "select ?,?,?,?"
 	},
 	// NOTE: KnownIssue - 7: Spaces not removed after parenthesis when literal strings are preceded by '+|-'
 	{
