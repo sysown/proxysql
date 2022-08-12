@@ -704,3 +704,51 @@ MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
 		return admin;
 	}
 }
+
+int get_variable_value(
+	MYSQL* proxysql_admin, const std::string& variable_name, std::string& variable_value, bool runtime
+) {
+	if (proxysql_admin == NULL) {
+		return EINVAL;
+	}
+
+	int res = EXIT_FAILURE;
+
+	const std::string t_select_var_query {
+		"SELECT * FROM %sglobal_variables WHERE Variable_name='%s'"
+	};
+	std::string select_var_query {};
+
+	if (runtime) {
+		string_format(t_select_var_query, select_var_query, "runtime_", variable_name.c_str());
+	} else {
+		string_format(t_select_var_query, select_var_query, "", variable_name.c_str());
+	}
+
+	MYSQL_QUERY(proxysql_admin, select_var_query.c_str());
+
+	MYSQL_RES* admin_res = mysql_store_result(proxysql_admin);
+	if (!admin_res) {
+		diag("'mysql_store_result' at line %d failed: %s", __LINE__, mysql_error(proxysql_admin));
+		goto cleanup;
+	}
+
+	{
+		MYSQL_ROW row = mysql_fetch_row(admin_res);
+		if (!row || row[0] == nullptr || row[1] == nullptr) {
+			diag("'mysql_fetch_row' at line %d returned 'NULL'", __LINE__);
+			res = -1;
+			goto cleanup;
+		}
+
+		// Extract the result
+		std::string _variable_value { row[1] };
+		variable_value = _variable_value;
+
+		res = EXIT_SUCCESS;
+	}
+
+cleanup:
+
+	return res;
+}

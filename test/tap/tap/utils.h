@@ -233,4 +233,22 @@ struct conn_opts_t {
  */
 MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout);
 
+/**
+ * @brief Extract the current value for a given 'variable_name' from
+ *   ProxySQL current configuration, either MEMORY or RUNTIME.
+ * @param proxysql_admin An already opened connection to ProxySQL Admin.
+ * @param variable_name The name of the variable to be retrieved from ProxySQL
+ *   config.
+ * @param variable_value Reference to string acting as output parameter which
+ *   will content the value of the specified variable.
+ * @return EXIT_SUCCESS, or one of the following error codes:
+ *   - EINVAL if supplied 'proxysql_admin' is NULL.
+ *   - '-1' in case of ProxySQL returns an 'NULL' row for the query selecting
+ *     the variable 'sqliteserver-read_only'.
+ *   - EXIT_FAILURE in case other operation failed.
+ */
+int get_variable_value(
+	MYSQL* proxysql_admin, const std::string& variable_name, std::string& variable_value, bool runtime=false
+);
+
 #endif // #define UTILS_H
