@@ -1100,11 +1100,11 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 		}
 	}
-	for (unsigned int k=0; k<mybes->len; k++) {
+	for (unsigned int i=0; i<mybes->len; i++) {
 		MySQL_Backend *_mybe = NULL;
-		_mybe=(MySQL_Backend *)mybes->index(k);
-		unsigned int i = _mybe->hostgroup_id;
-		j["backends"][i]["hostgroup_id"] = i;
+		_mybe=(MySQL_Backend *)mybes->index(i);
+		//unsigned int i = _mybe->hostgroup_id;
+		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
 		j["backends"][i]["gtid"] = ( strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "" );
 		if (_mybe->server_myds) {
 			MySQL_Data_Stream *_myds=_mybe->server_myds;
