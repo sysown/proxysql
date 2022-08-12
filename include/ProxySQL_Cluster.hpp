@@ -46,10 +46,10 @@
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_users'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_USERS "PROXY_SELECT username, password, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment FROM runtime_mysql_users"
 
-/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_users'. See top comment for details. */
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_query_rules'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_QUERY_RULES "PROXY_SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules ORDER BY rule_id"
 
-/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_users'. See top comment for details. */
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_query_rules_fast_routing'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_QUERY_RULES_FAST_ROUTING "PROXY_SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM runtime_mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN"
 
 class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
