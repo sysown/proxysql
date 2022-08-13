@@ -225,8 +225,8 @@ class MySQL_Session
 	MySQL_Data_Stream *server_myds;
 	/*
 	 * @brief Store the hostgroups that hold connections that have been flagged as 'expired' by the
-	 *  maintenance thread. This values will be used to release the retained connection in the specific
-	 *  hostgroup in housekeeping operations, before client packet processing. Currently 'housekeeping_before_pkts'.
+	 *  maintenance thread. These values will be used to release the retained connections in the specific
+	 *  hostgroups in housekeeping operations, before client packet processing. Currently 'housekeeping_before_pkts'.
 	 */
 	std::vector<int32_t> hgs_expired_conns {};
 	char * default_schema;
