@@ -697,9 +697,10 @@ void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connec
 		if (myconn != nullptr) {
 			const bool is_active_transaction = myconn->IsActiveTransaction();
 			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
+			const bool is_idle = myconn->async_state_machine == ASYNC_IDLE;
 
 			// Make sure the connection is reusable before performing any check
-			if (myconn->reusable==true && is_active_transaction==false && multiplex_disabled==false) {
+			if (myconn->reusable==true && is_active_transaction==false && multiplex_disabled==false && is_idle) {
 				for (const function<bool(MySQL_Connection*)>& check : checks) {
 					if (check(myconn)) {
 						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
