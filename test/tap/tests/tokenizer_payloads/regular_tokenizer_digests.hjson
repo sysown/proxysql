@@ -31,6 +31,45 @@
 		"s3": "select ?",
 		"s4": "select ?"
 	},
+	// Final spaces and ending query delimiters (';')
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE           ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE;       ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE  ;  /* comment */",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE; -- final_comment\n   "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE"
+	},
+	// Final spaces and ending and middle query delimiters (';'). Just one space preserved before and after (';').
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE  ; SELECT 1         ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE ;  SELECT 1;     ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE  ;  /* comment */ SELECT 1     ;",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE ; -- final_comment\n SELECT 1;  -- final_comment\n  "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?"
+	},
+	// Final spaces and ending and middle query delimiters (';'). No extra spaces before (';')
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT 1         ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE;  SELECT 1;     ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE;  /* comment */ SELECT 1     ;",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE; -- final_comment\n SELECT 1;  -- final_comment\n  "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?"
+	},
 	// Floats
 	{
 		"q": [
