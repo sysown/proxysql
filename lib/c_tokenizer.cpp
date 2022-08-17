@@ -2511,7 +2511,7 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	{
 		// v1_crashing_payload_06
 		char* wspace = shared_st->res_cur_pos - 1;
-		while (wspace > shared_st->res_init_pos && *wspace == ' ') {
+		while (wspace > shared_st->res_init_pos && (*wspace == ' ' || *wspace == ';')) {
 			wspace--;
 		}
 		wspace++;
