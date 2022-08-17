@@ -2498,27 +2498,29 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 		}
 	}
 
-	// remove all trailing whitespaces
-	// ===============================
+	// Remove all trailing whitespaces and semicolons
+	// ==============================================
 	//
-	// Final spaces left by comments which are never collapsed, ex:
+	// - Final spaces left by comments which are never collapsed, ex:
 	//
 	// ```
 	// Q: `select 1.1   -- final_comment  \n`
 	// D: `select ?  `
 	//              ^ never collapsed
 	// ```
+	//
+	// - Semicolons (';') marking the end of the query are also removed.
 	{
 		// v1_crashing_payload_06
-		char* wspace = shared_st->res_cur_pos - 1;
-		while (wspace > shared_st->res_init_pos && (*wspace == ' ' || *wspace == ';')) {
-			wspace--;
+		char* f_char = shared_st->res_cur_pos - 1;
+		while (f_char > shared_st->res_init_pos && (*f_char == ' ' || *f_char == ';')) {
+			f_char--;
 		}
-		wspace++;
-		*wspace = '\0';
+		f_char++;
+		*f_char = '\0';
 		// NOTE: Since this is the last operation this isn't really required. But it's left in case this block
 		// is moved in the future.
-		shared_st->res_cur_pos = wspace;
+		shared_st->res_cur_pos = f_char;
 	}
 }
 
