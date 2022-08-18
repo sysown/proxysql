@@ -2628,7 +2628,13 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 	if (MyRS) {
 		// this is a severe mistake, we shouldn't have reach here
 		// for now we do not assert but report the error
-		proxy_error("Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n", stmt);
+		// PMC-10003: Retrieved a resultset while running a simple command using async_send_simple_command() .
+		// async_send_simple_command() is used by ProxySQL to configure the connection, thus it
+		// shouldn't retrieve any resultset.
+		// A common issue for triggering this error is to have configure mysql-init_connect to
+		// run a statement that returns a resultset.
+		proxy_error2(10003, "PMC-10003: Retrieved a resultset while running a simple command. This is an error!! Simple command: %s\n", stmt);
+		return -2;
 	}
 	if (async_state_machine==ASYNC_QUERY_END) {
 		compute_unknown_transaction_status();

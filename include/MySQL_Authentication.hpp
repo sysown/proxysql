@@ -55,6 +55,11 @@ typedef struct _creds_group_t {
 
 class MySQL_Authentication {
 	private:
+	/**
+	 * @brief Holds the current value for 'runtime_mysql_users' used by 'ProxySQL_Admin' to reply to
+	 *  'CLUSTER_QUERY_MYSQL_USERS'.
+	 */
+	std::unique_ptr<SQLite3_result> mysql_users_resultset { nullptr };
 	creds_group_t creds_backends;
 	creds_group_t creds_frontends;
 	bool _reset(enum cred_username_type usertype);
@@ -76,6 +81,29 @@ class MySQL_Authentication {
 	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
 	unsigned int memory_usage();
 	uint64_t get_runtime_checksum();
+	/**
+	 * @brief Computes the checksum for the 'mysql_users' table contained in the supplied resultset.
+	 *  It's UNSAFE to call this function with another resultset than the specified in @param doc.
+	 * @param resultset Assumed to be the result of hte following query against the Admin interface:
+	 *   - '"SELECT username, password, active, use_ssl, default_hostgroup, default_schema,
+	 *     schema_locked, transaction_persistent, fast_forward, backend, frontend, max_connections,
+	 *     attributes, comment FROM runtime_mysql_users"'
+	 *   The order isn't relevant in the query itself because ordering is performed while processing.
+	 * @param mysql_users A 'unique_ptr' to be filled with the 'frontend' and 'backend' users found in the
+	 *  provided resulset.
+	 * @return The computed hash for the provided resultset.
+	 */
+	uint64_t get_runtime_checksum(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& mysql_users);
+	/**
+	 * @brief Takes ownership of the supplied resultset and stores it in 'mysql_users_resultset' field.
+	 * @param users Holds the current value for 'runtime_mysql_users'.
+	 */
+	void save_mysql_users(std::unique_ptr<SQLite3_result>&& users);
+	/**
+	 * @brief Return a pointer to internally managed 'mysql_users_resultset' field. DO NOT FREE.
+	 * @return A pointer to the internally managed 'mysql_users_resultset'.
+	 */
+	SQLite3_result* get_current_mysql_users();
 };
 
 #endif /* __CLASS_MYSQL_AUTHENTICATION_H */

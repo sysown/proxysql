@@ -54,6 +54,7 @@
 										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR ," \
 										  "UNIQUE (reader_hostgroup))"
 
+#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
@@ -375,6 +376,36 @@ class MySQL_HostGroups_Manager {
 	void generate_mysql_replication_hostgroups_table();
 	Galera_Info *get_galera_node_info(int hostgroup);
 
+	/**
+	 * @brief This resultset holds the current values for 'runtime_mysql_servers' computed by either latest
+	 *  'commit' or fetched from another Cluster node. It's also used by ProxySQL_Admin to respond to the
+	 *  intercepted query 'CLUSTER_QUERY_MYSQL_SERVERS'.
+	 * @details This resultset can't right now just contain the value for 'incoming_mysql_servers' as with the
+	 *  rest of the intercepted resultset. This is due to 'runtime_mysql_servers' reconfigurations that can be
+	 *  triggered by monitoring actions like 'Galera' currently performs. These actions not only trigger status
+	 *  changes in the servers, but also re-generate the servers table via 'commit', thus generating a new
+	 *  checksum in the process. Because of this potential mismatch, the fetching server wouldn't be able to
+	 *  compute the proper checksum for the fetched 'runtime_mysql_servers' config.
+	 *
+	 *  As previously stated, these reconfigurations are monitoring actions, they can't be packed or performed
+	 *  in a single action, since monitoring data is required, which may not be already present. This makes
+	 *  this a convergent, but iterative process, that can't be compressed into a single action. Using other
+	 *  nodes 'runtime_mysql_servers' while fetching represents a best effort for avoiding these
+	 *  reconfigurations in nodes that already holds the same monitoring conditions. If monitoring
+	 *  conditions are not the same, circular fetching is still possible due to the previously described
+	 *  scenario.
+	 */
+	SQLite3_result* runtime_mysql_servers;
+	/**
+	 * @brief These resultset holds the latest values for 'incoming_*' tables used to promoted servers to runtime.
+	 * @details All these resultsets are used by 'Cluster' to fetch and promote the same configuration used in the
+	 *  node across the whole cluster. For these, the queries:
+	 *   - 'CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS'
+	 *   - 'CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS'
+	 *   - 'CLUSTER_QUERY_MYSQL_GALERA'
+	 *   - 'CLUSTER_QUERY_MYSQL_AWS_AURORA'
+	 *  Issued by 'Cluster' are intercepted by 'ProxySQL_Admin' and return the content of these resultsets.
+	 */
 	SQLite3_result *incoming_replication_hostgroups;
 
 	void generate_mysql_group_replication_hostgroups_table();
@@ -538,12 +569,31 @@ class MySQL_HostGroups_Manager {
 	void wrlock();
 	void wrunlock();
 	int servers_add(SQLite3_result *resultset);
-	bool commit();
+	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 
-	void set_incoming_replication_hostgroups(SQLite3_result *);
-	void set_incoming_group_replication_hostgroups(SQLite3_result *);
-	void set_incoming_galera_hostgroups(SQLite3_result *);
-	void set_incoming_aws_aurora_hostgroups(SQLite3_result *);
+	/**
+	 * @brief Store the resultset for the 'runtime_mysql_servers' table set that have been loaded to runtime.
+	 *  The store configuration is later used by Cluster to propagate current config.
+	 * @param The resulset to be stored replacing the current one.
+	 */
+	void save_runtime_mysql_servers(SQLite3_result *);
+	/**
+	 * @brief These setters/getter functions store and retrieve the currently hold resultset for the
+	 *  'incoming_*' table set that have been loaded to runtime. The store configuration is later used by
+	 *  Cluster to propagate current config.
+	 * @param The resulset to be stored replacing the current one.
+	 */
+	void save_incoming_replication_hostgroups(SQLite3_result *);
+	void save_incoming_group_replication_hostgroups(SQLite3_result *);
+	void save_incoming_galera_hostgroups(SQLite3_result *);
+	void save_incoming_aws_aurora_hostgroups(SQLite3_result *);
+
+	SQLite3_result* get_current_mysql_servers_inner();
+	SQLite3_result* get_current_mysql_replication_hostgroups_inner();
+	SQLite3_result* get_current_mysql_group_replication_hostgroups_inner();
+	SQLite3_result* get_current_mysql_galera_hostgroups();
+	SQLite3_result* get_current_mysql_aws_aurora_hostgroups();
+
 	SQLite3_result * execute_query(char *query, char **error);
 	SQLite3_result *dump_table_mysql_servers();
 	SQLite3_result *dump_table_mysql_replication_hostgroups();
