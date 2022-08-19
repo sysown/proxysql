@@ -3740,16 +3740,24 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 		}
 	}
 
-	// Perform the maintenance of expired 'auto_increment_delay_multiplex' for connections on the session
+	// Perform the maintenance for expired connections on the session
 	if (mysql_thread___multiplexing) {
 		const auto auto_incr_delay_multiplex_check = [curtime=this->curtime] (MySQL_Connection* myconn) -> bool {
-			const uint64_t multiplex_timeout_us = static_cast<uint64_t>(mysql_thread___auto_increment_delay_multiplex_timeout_ms) * 1000;
-			const bool timeout_expired = multiplex_timeout_us != 0 && myconn->expire_auto_increment_delay(curtime, multiplex_timeout_us);
+			const uint64_t multiplex_timeout_ms = mysql_thread___auto_increment_delay_multiplex_timeout_ms;
+			const bool multiplex_delayed_enabled = multiplex_timeout_ms != 0 && myconn->auto_increment_delay_token > 0;
+			const bool timeout_expired = multiplex_delayed_enabled && myconn->myds->wait_until != 0 && myconn->myds->wait_until < curtime;
+			return timeout_expired;
+		};
+
+		const auto conn_delay_multiplex = [curtime=this->curtime] (MySQL_Connection* myconn) -> bool {
+			const bool multiplex_delayed = mysql_thread___connection_delay_multiplex_ms != 0 && myconn->multiplex_delayed == true;
+			const bool timeout_expired = multiplex_delayed && myconn->myds->wait_until != 0 && myconn->myds->wait_until < curtime;
 			return timeout_expired;
 		};
 
 		const vector<function<bool(MySQL_Connection*)>> expire_conn_checks {
-			auto_incr_delay_multiplex_check
+			auto_incr_delay_multiplex_check,
+			conn_delay_multiplex
 		};
 
 		sess->update_expired_conns(expire_conn_checks);

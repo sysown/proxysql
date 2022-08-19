@@ -560,32 +560,6 @@ bool MySQL_Connection::get_status(uint32_t status_flag) {
 	return this->status_flags & status_flag;
 }
 
-uint64_t MySQL_Connection::idle_time(uint64_t curtime) {
-	// ASYNC_QUERY_END not required due to being transient state
-	const bool is_idle = this->async_state_machine == ASYNC_IDLE;
-
-	if (is_idle) {
-		return curtime - this->last_event_time;
-	} else {
-		return 0;
-	}
-}
-
-bool MySQL_Connection::expire_auto_increment_delay(uint64_t curtime, uint64_t timeout) {
-	if (timeout == 0) {
-		return false;
-	}
-
-	uint64_t idle_time = this->idle_time(curtime);
-
-	if (idle_time > timeout) {
-		this->auto_increment_delay_token = 0;
-		return true;
-	} else {
-		return false;
-	}
-}
-
 void MySQL_Connection::set_status_sql_log_bin0(bool v) {
 	if (v) {
 		status_flags |= STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0;
@@ -1039,7 +1013,6 @@ void MySQL_Connection::set_is_client() {
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
 MDB_ASYNC_ST MySQL_Connection::handler(short event) {
-	this->last_event_time = myds->sess->thread->curtime;
 	unsigned long long processed_bytes=0;	// issue #527 : this variable will store the amount of bytes processed during this event
 	if (mysql==NULL) {
 		// it is the first time handler() is being called
