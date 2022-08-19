@@ -1648,6 +1648,14 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		// integer variable ?
 		std::unordered_map<std::string, std::tuple<int *, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
+			// Log warnings for variables with possibly wrong values
+			if (nameS == "auto_increment_delay_multiplex_timeout_ms") {
+				int intv = atoi(value);
+				if (intv <= 60) {
+					proxy_warning("'mysql-auto_increment_delay_multiplex_timeout_ms' is set to a low value: %ums. Remember value is in 'ms'\n", intv);
+				}
+			}
+
 			bool special_variable = std::get<3>(it->second); // if special_variable is true, min and max values are ignored, and more input validation is needed
 			if (special_variable == false) {
 				int intv=atoi(value);
