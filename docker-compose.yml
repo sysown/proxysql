@@ -5,8 +5,8 @@ services:
   centos6_build:
     image: proxysql/packaging:build-centos6
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/rhel6/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rhel6/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -19,8 +19,8 @@ services:
   centos6_dbg_build:
     image: proxysql/packaging:build-centos6
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/rhel6/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rhel6/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -34,9 +34,9 @@ services:
   centos7_build:
     image: proxysql/packaging:build-centos7
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -49,9 +49,9 @@ services:
   centos7_dbg_build:
     image: proxysql/packaging:build-centos7
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -64,9 +64,9 @@ services:
   centos8_build:
     image: proxysql/packaging:build-centos8
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -79,9 +79,9 @@ services:
   centos8_clang_build:
     image: proxysql/packaging:build-clang-centos8
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -94,9 +94,9 @@ services:
   centos8_dbg_build:
     image: proxysql/packaging:build-centos8
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/rpmbuild/:/root/rpmbuild/
-      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -254,6 +254,7 @@ services:
       - MAKEOPT
       - CURVER
       - PKG_RELEASE=debian8
+      
     command: bash -l -c /opt/entrypoint/entrypoint.bash
 
   debian8_dbg_build:
