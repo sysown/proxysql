@@ -17,10 +17,14 @@ verifying rename and external dependencies issues
 
 prefixed number forces ordering, to recreate use:
 ```
-N=0; for F in $(ls -1 ../tests/*-t | sort); do ln -s "$F $(printf %03d $N)_${F##*/}"; ((N++)); done
+N=0; for F in $(ls -1 ../tests/*-t | sort); do ln -s $F $(printf %03d $N)_${F##*/}; ((N++)); done
 ```
-dependent data files need to be linked manually
-copy dependent data if modification is needed
+dependent data files and folders:
+```
+for F in $(ls -1 ../tests/*{.json,.cnf,.csv} | sort); do ln -s $F ${F##*/}; ((N++)); done
+for F in $(ls -1d ../tests/*/ | sort); do F=${F%/}; ln -s $F ${F##*/}; done
+```
+make a copy dependent data instead of a symlink if modification is needed
 
 ### Fails
 
