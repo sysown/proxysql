@@ -3819,7 +3819,20 @@ void MySQL_Thread::process_all_sessions() {
 		} else {
 			if (sess->to_process==1) {
 				if (sess->pause_until <= curtime) {
-					rc=sess->handler();
+					bool keep_sess_proc = true;
+					rc = 0; // initialization
+					while (keep_sess_proc && rc==0 && sess->killed==false) {
+						rc=sess->handler();
+
+						if (sess->client_myds) {
+							keep_sess_proc =
+								sess->status == WAITING_CLIENT_DATA && sess->client_myds->DSS == STATE_SLEEP &&
+								sess->client_myds->PSarrayIN && sess->client_myds->PSarrayIN->len > 0;
+						} else {
+							keep_sess_proc = false;
+						}
+					}
+
 					//total_active_transactions_+=sess->active_transactions;
 					if (rc==-1 || sess->killed==true) {
 						char _buf[1024];
