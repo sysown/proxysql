@@ -74,6 +74,7 @@ class MySQL_Connection {
 		int8_t last_set_autocommit;
 		bool autocommit;
 		bool no_backslash_escapes;
+		bool is_mariadb;
 	} options;
 
 	Variable variables[SQL_NAME_LAST_HIGH_WM];

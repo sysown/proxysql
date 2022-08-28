@@ -2614,7 +2614,69 @@ bool MySQL_Session::handler_again___status_SETTING_MULTI_STMT(int *_rc) {
 bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc) {
 	bool ret=false;
 	assert(mybe->server_myds->myconn);
-	ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids, true);
+	MySQL_Data_Stream *myds=mybe->server_myds;
+	MySQL_Connection *myconn=myds->myconn;
+	
+	if (myconn->options.is_mariadb) {
+		char * query = "SET SESSION_TRACK_STATE_CHANGE = ON, SESSION_TRACK_SYSTEM_VARIABLES = 'last_gtid'";
+		unsigned long query_length=strlen(query);
+
+		myds->DSS=STATE_MARIADB_QUERY;
+		enum session_status st=status;
+		if (myds->mypolls==NULL) {
+			thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
+		}
+		int rc=myconn->async_send_simple_command(myds->revents,query,query_length);
+		if (rc==0) {
+			myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
+			myds->DSS = STATE_MARIADB_GENERIC;
+			st=previous_status.top();
+			previous_status.pop();
+			NEXT_IMMEDIATE_NEW(st);
+		} else {
+			if (rc==-1) {
+				// the command failed
+				int myerr=mysql_errno(myconn->mysql);
+				MyHGM->p_update_mysql_error_counter(
+					p_mysql_error_type::mysql,
+					myconn->parent->myhgc->hid,
+					myconn->parent->address,
+					myconn->parent->port,
+					( myerr ? myerr : ER_PROXYSQL_OFFLINE_SRV )
+				);
+				if (myerr >= 2000 || myerr == 0) {
+					bool retry_conn=false;
+					// client error, serious
+					char * action = "while enabling SESSION_TRACK_STATE_CHANGE";
+					detected_broken_connection(__FILE__ , __LINE__ , __func__ , action, myconn, myerr, mysql_error(myconn->mysql));
+					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+						retry_conn=true;
+					}
+					myds->destroy_MySQL_Connection_From_Pool(false);
+					myds->fd=0;
+					if (retry_conn) {
+						myds->DSS=STATE_NOT_INITIALIZED;
+						NEXT_IMMEDIATE_NEW(CONNECTING_SERVER);
+					}
+					*_rc=-1;	// an error happened, we should destroy the Session
+				} else {
+					proxy_warning("Error while enabling SESSION_TRACK_STATE_CHANGE on %s:%d hg %d : %d, %s\n", myconn->parent->address, myconn->parent->port, current_hostgroup, myerr, mysql_error(myconn->mysql));
+					// we won't go back to PROCESSING_QUERY
+					st=previous_status.top();
+					previous_status.pop();
+					char sqlstate[10];
+					sprintf(sqlstate,"%s",mysql_sqlstate(myconn->mysql));
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
+					myds->destroy_MySQL_Connection_From_Pool(true);
+					myds->fd=0;
+					RequestEnd(myds);
+					ret = true;
+				}
+			}
+		}
+	} else { // !is_mariadb
+		ret = handler_again___status_SETTING_GENERIC_VARIABLE(_rc, (char *)"SESSION_TRACK_GTIDS", mybe->server_myds->myconn->options.session_track_gtids, true);
+	}
 	return ret;
 }
 

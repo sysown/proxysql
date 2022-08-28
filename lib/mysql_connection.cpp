@@ -4,6 +4,7 @@
 #include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
+#include <inttypes.h>
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -1070,6 +1071,7 @@ handler_again:
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
 			options.client_flag = mysql->client_flag;
+			options.is_mariadb = mariadb_connection(mysql);
 			//assert(mysql->net.vio->async_context);
 			//mysql->net.vio->async_context= mysql->options.extension->async_context;
 			//if (parent->use_ssl) {
@@ -2704,23 +2706,62 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
 				const char *data;
 				size_t length;
-				if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
-					if (length >= (sizeof(gtid_uuid) - 1)) {
-						length = sizeof(gtid_uuid) - 1;
+				if (!options.is_mariadb) {
+					if (mysql_session_track_get_first(mysql, SESSION_TRACK_GTIDS, &data, &length) == 0) {
+						if (length >= (sizeof(gtid_uuid) - 1)) {
+							length = sizeof(gtid_uuid) - 1;
+						}
+						if (memcmp(gtid_uuid,data,length)) {
+							// copy to local buffer in MySQL_Connection
+							memcpy(gtid_uuid,data,length);
+							gtid_uuid[length]=0;
+							// copy to external buffer in MySQL_Backend
+							memcpy(buff,data,length);
+							buff[length]=0;
+							ret = true;
+						}
 					}
-					if (memcmp(gtid_uuid,data,length)) {
-						// copy to local buffer in MySQL_Connection
-						memcpy(gtid_uuid,data,length);
-						gtid_uuid[length]=0;
-						// copy to external buffer in MySQL_Backend
-						memcpy(buff,data,length);
-						buff[length]=0;
-						__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
-						ret = true;
+				} else {
+					if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) == 0) {
+						bool hit = false;
+						while (true) {
+							if (!strncmp(data, "last_gtid", length))
+								hit = true;
+							if (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &data, &length) != 0)
+								break;
+							if (hit) {
+								// convert mariadb gtid (domain-server-id) to mysql-conform gtid (uuid:id)
+								char * endptr;
+								const char * p = data;
+								uint32_t domain = strtoul(p, &endptr, 10);
+								if (endptr == p || endptr >= p + length || *endptr != '-')
+									return ret;
+								p = endptr + 1;
+								uint32_t server_id = strtoul(p, &endptr, 10);
+								if (endptr == p || endptr >= p + length || *endptr != '-')
+									return ret;
+								p = endptr + 1;
+
+								char buf[22];
+								memcpy(buf, p, data + length - p); // unfortunately we can't modify data
+								buf[data + length - p] = '\0'; // and strtoull doesn't accept a maximum length - so we need a trailing \0
+								uint64_t id = strtoull(buf, &endptr, 10);
+								if (endptr == buf || endptr >= buf + sizeof(buf) || *endptr != '\0')
+									return ret;
+
+								sprintf(gtid_uuid, "%08" PRIX32 "-0000-0000-0000-%08" PRIX32 ":%" PRIu64, domain, server_id, id);
+								strcpy(buff, gtid_uuid);
+
+								ret = true;
+								break;
+							}
+						}
 					}
 				}
 			}
 		}
 	}
+	if (ret)
+		__sync_fetch_and_add(&myds->sess->thread->status_variables.stvar[st_var_gtid_session_collected],1);
 	return ret;
 }
