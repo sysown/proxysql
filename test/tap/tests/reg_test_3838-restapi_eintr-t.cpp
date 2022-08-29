@@ -31,6 +31,18 @@
 #include "command_line.h"
 #include "utils.h"
 
+
+#define MYSQL_QUERY(mysql, query) \
+	do { \
+		diag("MYSQL_QUERY: '%s'", query); \
+		if (mysql_query(mysql, query)) { \
+			fprintf(stderr, "File %s, line %d, Error: %s\n", \
+					__FILE__, __LINE__, mysql_error(mysql)); \
+			return EXIT_FAILURE; \
+		} \
+	} while(0)
+
+
 using std::string;
 using std::vector;
 
@@ -55,6 +67,7 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+	diag("Workdir: %s", cl.workdir);
 
 	plan(endpoint_requests.size());
 
