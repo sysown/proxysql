@@ -116,6 +116,7 @@ int main(int argc, char** argv) {
 
 	// Load RESTAPI
 	MYSQL_QUERY(proxysql_admin, "LOAD RESTAPI TO RUNTIME");
+	sleep(5);
 
 	// Sensible wait until the new configured enpoints are ready. Use the first enpoint for the check
 	const auto& first_request_tuple { endpoint_requests.front() };

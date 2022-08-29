@@ -151,6 +151,7 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL_QUERY(proxysql_admin, "LOAD restapi TO RUNTIME");
+	sleep(5);
 
 	// Sensible wait until the new configured enpoints are ready.
 	// Use the first enpoint for the check
