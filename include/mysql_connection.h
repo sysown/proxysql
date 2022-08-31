@@ -216,6 +216,7 @@ class MySQL_Connection {
 	} */
 	bool IsServerOffline();
 	bool IsAutoCommit();
+	bool AutocommitFalse_AndSavepoint();
 	bool MultiplexDisabled();
 	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);

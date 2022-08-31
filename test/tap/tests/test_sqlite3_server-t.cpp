@@ -41,7 +41,7 @@ using query_spec = std::tuple<std::string, int>;
 
 const int sqlite3_port = 0;
 
-#include "sqlite_3_server_test.h"
+#include "modules_server_test.h"
 
 void fetch_and_discard_results(MYSQL_RES* result, bool verbose=false) {
 	MYSQL_ROW row = nullptr;
@@ -118,8 +118,11 @@ std::vector<query_spec> successful_queries {
 	std::make_tuple<std::string, int>("SHOW SCHEMAS", 0),
 	std::make_tuple<std::string, int>("SHOW DATABASES", 0),
 	std::make_tuple<std::string, int>("SELECT DATABASE()", 0),
+	std::make_tuple<std::string, int>("SELECT DATABASE() AS name", 0),
 	std::make_tuple<std::string, int>("SELECT DATABASE(), USER() LIMIT 1", 0),
 	std::make_tuple<std::string, int>("SELECT @@version_comment LIMIT 1", 0),
+	std::make_tuple<std::string, int>("SELECT @@version", 0),
+	std::make_tuple<std::string, int>("SELECT version()", 0),
 	std::make_tuple<std::string, int>(
 		"SELECT @@character_set_client, @@character_set_connection,"
 		" @@character_set_server, @@character_set_database LIMIT 1",
@@ -134,6 +137,7 @@ std::vector<query_spec> successful_queries {
 		0
 	),
 	std::make_tuple<std::string, int>("SHOW CREATE TABLE test_sqlite3_server_p0712", 0),
+	std::make_tuple<std::string, int>("SHOW CREATE TABLE `test_sqlite3_server_p0712`", 0),
 	std::make_tuple<std::string, int>("SHOW TABLES", 0),
 	std::make_tuple<std::string, int>(
 		"INSERT INTO test_sqlite3_server_p0712"
@@ -149,8 +153,15 @@ std::vector<query_spec> successful_queries {
 		"DELETE FROM test_sqlite3_server_p0712",
 		0
 	),
+	std::make_tuple<std::string, int>("SHOW TABLES FROM main", 0),
+	std::make_tuple<std::string, int>("SHOW TABLES LIKE test_sqlite3_server_p0712", 0),
+	std::make_tuple<std::string, int>("SHOW TABLES LIKE 'test_sqlite3_server_p0712'", 0),
 	std::make_tuple<std::string, int>("DROP TABLE test_sqlite3_server_p0712", 0),
 	std::make_tuple<std::string, int>("SHOW TABLES", 0),
+	std::make_tuple<std::string, int>("START TRANSACTION", 0),
+	std::make_tuple<std::string, int>("COMMIT", 0),
+	std::make_tuple<std::string, int>("BEGIN", 0),
+	std::make_tuple<std::string, int>("ROLLBACK", 0),
 };
 
 /**
@@ -160,6 +171,7 @@ std::vector<query_spec> successful_queries {
 std::vector<query_spec> unsuccessful_queries {
 	std::make_tuple<std::string, int>("SHOW CHEMAS", 1045),
 	std::make_tuple<std::string, int>("SHOW DAABASES", 1045),
+	std::make_tuple<std::string, int>("PRAGMA synchronous=0", 1045),
 	std::make_tuple<std::string, int>("SELECT DAABASE()", 1045),
 	std::make_tuple<std::string, int>("SELECT DAABASE(), USER() LIMIT 1", 1045),
 	std::make_tuple<std::string, int>("SHOW CREATE TABLE test_sqlite3_server_p0712", 0),
@@ -246,7 +258,7 @@ int main(int argc, char** argv) {
 
 	{
 		std::pair<std::string, int> host_port {};
-		int host_port_err = extract_sqlite3_host_port(proxysql_admin, host_port); 
+		int host_port_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", host_port); 
 		if (host_port_err) {
 			diag("Failed to get and parse 'sqliteserver-mysql_ifaces' at line '%d'", __LINE__);
 			goto cleanup;
@@ -292,7 +304,7 @@ int main(int argc, char** argv) {
 
 		ok(
 			failed_to_connect,
-			"An invalid user should fail to connect to SQLite3 server, error was: %s",
+			"An invalid password should fail to connect to SQLite3 server, error was: %s",
 			inv_pass_err.c_str()
 		);
 
@@ -340,7 +352,7 @@ int main(int argc, char** argv) {
 
 		// Connect to the new interface
 		std::pair<std::string, int> new_host_port {};
-		int ext_intf_err = extract_sqlite3_host_port(proxysql_admin, new_host_port);
+		int ext_intf_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", new_host_port);
 		if (ext_intf_err) {
 			diag("Failed to get and parse 'sqliteserver-mysql_ifaces' at line '%d'", __LINE__);
 			goto cleanup;

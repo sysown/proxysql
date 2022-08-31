@@ -149,6 +149,8 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 		mysql_free_result(mysql_store_result(select_conn));
 	}
 
+	mysql_close(select_conn);
+
 	return EXIT_SUCCESS;
 }
 
@@ -237,6 +239,12 @@ int main(int argc, char** argv) {
 
 	if (argc == 2) {
 		if (string { argv[1] } == "stop_on_failure") { stop_on_failure = true; }
+	}
+
+	if (stop_on_failure) {
+		plan(0);
+	} else {
+		plan(3);
 	}
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);

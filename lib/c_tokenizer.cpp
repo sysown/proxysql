@@ -141,7 +141,7 @@ static inline char is_hex_char(char c)
 
 // between pointer, check string is number - need to be changed more functions
 // TODO: f-1 shouldn't be access if 'f' is the first position supplied, could lead to
-// buffer overflow.
+// buffer overflow. NOTE: This is now addressed by 'is_digit_string_2'.
 static char is_digit_string(char *f, char *t)
 {
 	if(f == t)
@@ -864,8 +864,6 @@ enum p_st {
  *   processing stages.
  */
 typedef struct shared_st {
-	/* @brief The current state being processed by 'stage_1'. */
-	enum p_st st;
 	/* @brief Global computed compression offset from the previous iteration. Used when uncompressed query
 		exceeds the maximum buffer side specified by `mysql_thread___query_digests_max_query_length` */
 	int gl_c_offset;
@@ -885,8 +883,12 @@ typedef struct shared_st {
 	char* res_cur_pos;
 	/* @brief Position in the return buffer prior to the start of any parsing st that isn't 'no_mark_found'. */
 	char* res_pre_pos;
+	/* @brief The current state being processed by 'stage_1'. */
+	enum p_st st;
 	/* @brief Last copied char to the result buffer. */
 	char prev_char;
+	/* @brief Preserve currently imposed 'prev_char' in **on current** char processing instead of replacing it. */
+	bool keep_prev_char;
 	/* @brief Decides whether or not the next char should be copy during 'stage_1'. */
 	bool copy_next_char;
 } shared_st;
@@ -921,6 +923,7 @@ typedef struct literal_string_st {
 	int delim_num;
 	/* @brief Found char delimiter found for the literal string being processed. */
 	char delim_char;
+	const char* q_start_pos;
 } literal_string_st;
 
 /**
@@ -1043,7 +1046,10 @@ enum p_st get_next_st(const struct options* opts, struct shared_st* shared_st) {
 	enum p_st st = st_no_mark_found;
 
 	// cmnt type 1 - start with '/*'
-	if(*shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	if(
+		// v1_crashing_payload_05
+		shared_st->q_cur_pos < (shared_st->d_max_len-1) && *shared_st->q == '/' && *(shared_st->q+1) == '*'
+	) {
 		st = st_cmnt_type_1;
 	}
 	// cmnt type 2 - start with '#'
@@ -1083,6 +1089,18 @@ enum p_st get_next_st(const struct options* opts, struct shared_st* shared_st) {
 	return st;
 }
 
+static __attribute__((always_inline)) inline
+void inc_proc_pos(shared_st* shared_st) {
+	if (shared_st->keep_prev_char == false) {
+		shared_st->prev_char = *shared_st->q;
+	} else {
+		shared_st->keep_prev_char = false;
+	}
+
+	shared_st->q++;
+	shared_st->q_cur_pos++;
+}
+
 /**
  * @brief Copy the next character and increment the current processing position.
  *
@@ -1097,12 +1115,66 @@ void copy_next_char(shared_st* shared_st, options* opts) {
 	} else {
 		*shared_st->res_cur_pos++ = !is_space_char(*shared_st->q) ? tolower(*shared_st->q) : ' ';
 	}
-	// store previously copied char and increment positions
-	shared_st->prev_char = *shared_st->q++;
-	shared_st->q_cur_pos++;
+
+	inc_proc_pos(shared_st);
 }
 
 char cur_cmd_cmnt[FIRST_COMMENT_MAX_LENGTH];
+
+/**
+ * @brief Safer version of 'is_digit_string' performing boundary checks.
+ *
+ * @param shared_st The shared state used for the boundary checks.
+ * @param f Initial position of the string being checked.
+ * @param t Final position of the string being checked.
+ *
+ * @return '1' if the supplied string is recognized as a 'digit_string', '0' otherwise.
+ */
+static char is_digit_string_2(shared_st* shared_st, char *f, char *t)
+{
+	if(f == t)
+	{
+		if(is_digit_char(*f))
+			return 1;
+		else
+			return 0;
+	}
+
+	int is_hex = 0;
+	int i = 0;
+
+	// 0x, 0X, n.m, nE+m, nE-m, Em
+	while(f != t)
+	{
+		char is_float = 0;
+
+		if (f > shared_st->res_init_pos) {
+			is_float = *f == '.' || tolower(*f) == 'e' || (tolower(*(f-1)) == 'e' && (*f == '+' || *f == '-'));
+		} else {
+			is_float = *f == '.' || tolower(*f) == 'e';
+		}
+
+		if(f > shared_st->res_init_pos && i == 1 && *(f-1) == '0' && (*f == 'x' || *f == 'X'))
+		{
+			is_hex = 1;
+		}
+		// none hex
+		else if(!is_hex && !is_digit_char(*f) && is_float == 0)
+		{
+			return 0;
+		}
+		// hex
+		else if(is_hex && !is_hex_char(*f))
+		{
+			return 0;
+		}
+
+		f++;
+		i++;
+	}
+
+	return 1;
+}
 
 /**
  * @brief Process a detected comment of type "/\* *\/". Determines when to exit the 'st_cmnt_type_1' state.
@@ -1124,7 +1196,8 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 	const char* res_final_pos = shared_st->res_init_pos + shared_st->d_max_len;
 
 	// initial mark "/*|/*!" detection
-	if (shared_st->res_cur_pos < (res_final_pos - 2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
+	// comments are not copied by while processed, boundary checks should rely on 'q_cur_pos' and 'q_len'.
+	if (shared_st->q_cur_pos <= (shared_st->q_len-2) && *shared_st->q == '/' && *(shared_st->q+1) == '*') {
 		c_t_1_st->cur_cmd_cmnt_len = 0;
 
 		// check length before accessing beyond 'q_cur_pos + 1'
@@ -1143,6 +1216,11 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 		// discard processed "/*" or "/*!"
 		shared_st->q += 2 + c_t_1_st->is_cmd;
 		shared_st->q_cur_pos += 2 + c_t_1_st->is_cmd;
+
+		// v1_crashing_payload_04
+		if (shared_st->q_cur_pos >= shared_st->q_len - 1) {
+			return st_no_mark_found;
+		}
 	}
 
 //  TODO: Check if there is exclusion between this regular first comments and first comment that are 'cmd'
@@ -1272,6 +1350,8 @@ enum p_st process_cmnt_type_1(options* opts, shared_st* shared_st, cmnt_type_1_s
 		shared_st->prev_char = ' ';
 		// back to main shared_st->query parsing state
 		next_st = st_no_mark_found;
+		// reset the comment processing state (v1_crashing_payload_04)
+		c_t_1_st->is_cmd = 0;
 		// skip ending mark for comment for next iteration
 		shared_st->q_cur_pos += 1;
 		shared_st->q++;
@@ -1295,10 +1375,15 @@ static __attribute__((always_inline)) inline
 enum p_st process_cmnt_type_2(shared_st* shared_st) {
 	enum p_st next_state = st_cmnt_type_2;
 
-	// discard processed "#"
-	if (*shared_st->q == '#') {
+	// discard processed "#" (v1_crashing_payload_02)
+	if (*shared_st->q == '#' && shared_st->q_cur_pos <= (shared_st->q_len - 2)) {
 		shared_st->q += 1;
 		shared_st->q_cur_pos += 1;
+
+		if (shared_st->q_cur_pos == (shared_st->q_len - 2)) {
+			next_state = st_no_mark_found;
+			return next_state;
+		}
 	}
 
 	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->q_len - 1)) {
@@ -1328,9 +1413,17 @@ enum p_st process_cmnt_type_3(shared_st* shared_st) {
 	enum p_st next_state = st_cmnt_type_3;
 
 	// discard processed "-- "
-	if (*shared_st->q == '-' && *(shared_st->q+1)=='-' && is_space_char(*(shared_st->q+2))) {
+	if (
+		shared_st->q_cur_pos <= (shared_st->q_len - 4) &&
+		*shared_st->q == '-' && *(shared_st->q+1)=='-' && is_space_char(*(shared_st->q+2))
+	) {
 		shared_st->q += 3;
 		shared_st->q_cur_pos += 3;
+
+		if (shared_st->q_cur_pos == (shared_st->q_len - 4)) {
+			next_state = st_no_mark_found;
+			return next_state;
+		}
 	}
 
 	if (*shared_st->q == '\n' || *shared_st->q == '\r' || (shared_st->q_cur_pos == shared_st->q_len - 1)) {
@@ -1350,6 +1443,19 @@ enum p_st process_cmnt_type_3(shared_st* shared_st) {
  *   current char until the end delimiter is found. Then replaces the previous position in the result buffer
  *   with the mark '?'.
  *
+ *  TODO: This function currently doesn't take into account if 'NO_BACKSLASH_ESCAPES' sql_mode is being used.
+ *  This can lead to 'stats_mysql_query_digest' pollution because a valid query could be received with strings
+ *  ending in '\''. With current implementation this final '\'' will be collapsed, leading to a string not
+ *  properly finding the target string delimiter. To solve this scenario the following approach could be taken:
+ *   - Add an additional parameter to 'Query_Info::begin' that propagates 'no_backslash_escapes' from
+ *     'MySQL_Session::client_myds::myconn::options' through 'Query_Info::query_parser_init'.
+ *   - Add a new parameter to 'query_parser_init' (or reuse currently unused 'flags' for this purpose).
+ *   - Add a new parameter to 'mysql_query_digest_and_first_comment_2' to propagate this flags.
+ *   - Add a new field into the 'options' struct defined in this file for holding such flags.
+ *   - Pass 'options' already received by 'stage_1_parsing' into this function and make use of it for deciding
+ *     whether to ignore the processing of chars within the string when are preceded by '\'.
+ *  This is just a proposal and a future implementation may be subject to change.
+ *
  * @param shared_st Shared state used to continue the query processing.
  * @param str_st The literal string parsing state, holds the information so far found about the state.
  *
@@ -1364,6 +1470,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 	// process the first delimiter
 	if (str_st->delim_num == 0) {
 		// store found delimiter
+		str_st->q_start_pos = shared_st->q;
 		str_st->delim_char = *shared_st->q;
 		str_st->delim_num = 1;
 
@@ -1372,7 +1479,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 	}
 
 	// need to be ignored case
-	if(shared_st->res_cur_pos > shared_st->res_pre_pos + SIZECHAR)
+	if(shared_st->q > str_st->q_start_pos + SIZECHAR)
 	{
 		if(
 			(shared_st->prev_char == '\\' && *shared_st->q == '\\') || // to process '\\\\', '\\'
@@ -1380,10 +1487,10 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 			(shared_st->prev_char == str_st->delim_char && *shared_st->q == str_st->delim_char) // to process ''''
 		)
 		{
+			shared_st->keep_prev_char = true;
 			shared_st->prev_char = 'X';
-			shared_st->q++;
-			shared_st->q_cur_pos++;
 
+			// NOTE: Don't increment the position in query buffer. See 'stage_1_parsing' doc.
 			return next_state;
 		}
 	}
@@ -1411,6 +1518,7 @@ enum p_st process_literal_string(shared_st* shared_st, literal_string_st* str_st
 		// reinit the string literal state
 		str_st->delim_char = 0;
 		str_st->delim_num = 0;
+		str_st->q_start_pos = 0;
 
 		// update the shared state
 		shared_st->prev_char = str_st->delim_char;
@@ -1457,7 +1565,7 @@ enum p_st process_literal_digit(shared_st* shared_st, literal_digit_st* digit_st
 	char is_float_char = *shared_st->q == '.' ||
 		( tolower(shared_st->prev_char) == 'e' && ( *shared_st->q == '-' || *shared_st->q == '+' ) );
 	if ((is_token_char(*shared_st->q) && is_float_char == 0) || shared_st->q_len == shared_st->q_cur_pos + 1) {
-		if (is_digit_string(digit_st->start_pos, shared_st->res_cur_pos)) {
+		if (is_digit_string_2(shared_st, digit_st->start_pos, shared_st->res_cur_pos)) {
 			shared_st->res_cur_pos = digit_st->start_pos;
 
 			// place the replacement mark
@@ -1817,9 +1925,7 @@ void stage_1_parsing(shared_st* shared_st, stage_1_st* stage_1_st, options* opts
 			if (shared_st->copy_next_char) {
 				copy_next_char(shared_st, opts);
 			} else {
-				// if we do not copy we skip the next char, but copy it to `prev_char`
-				shared_st->prev_char = *shared_st->q++;
-				shared_st->q_cur_pos++;
+				inc_proc_pos(shared_st);
 			}
 		}
 	}
@@ -1882,13 +1988,22 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 	// second stage: Space and (+|-) replacement
 	while (shared_st->res_cur_pos <= digest_end) {
 		if (*shared_st->res_cur_pos == ' ') {
-			char lc = *(shared_st->res_cur_pos-1);
+			char lc = '0';
+
+			if (shared_st->res_cur_pos > shared_st->res_init_pos) {
+				lc = *(shared_st->res_cur_pos-1);
+			}
+
 			char rc = *(shared_st->res_cur_pos+1);
 
 			if (lc == '(' || rc == ')') {
 				shared_st->res_cur_pos++;
 			} else if ((is_arithmetic_op(lc) && rc == '?') || lc == ',' || rc == ',') {
-				char llc = *(shared_st->res_cur_pos-2);
+				char llc = '0';
+
+				if (shared_st->res_cur_pos > shared_st->res_init_pos + 1) {
+					llc = *(shared_st->res_cur_pos-2);
+				}
 
 				if (opts->keep_comment && (llc == '*' && lc == '/')) {
 					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
@@ -1901,8 +2016,14 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 				*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
 			}
 		} else if (*shared_st->res_cur_pos == '+' || *shared_st->res_cur_pos == '-') {
-			char llc = *(shared_st->res_cur_pos-2);
-			char lc = *(shared_st->res_cur_pos-1);
+			char llc = '0';
+			if (shared_st->res_cur_pos > shared_st->res_init_pos + 1) {
+				llc = *(shared_st->res_cur_pos-2);
+			}
+			char lc = '0';
+			if (shared_st->res_cur_pos > shared_st->res_init_pos) {
+				lc = *(shared_st->res_cur_pos-1);
+			}
 			char rc = *(shared_st->res_cur_pos+1);
 
 			// patterns to cover:
@@ -1929,7 +2050,7 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 				}
 			}
 		} else if (opts->replace_number == 1 && is_digit_char(*shared_st->res_cur_pos) ) {
-			if (*(shared_st->res_pre_pos-1) != '?') {
+			if (shared_st->res_pre_pos > shared_st->res_init_pos && *(shared_st->res_pre_pos-1) != '?') {
 				*shared_st->res_pre_pos++ = '?';
 			}
 			shared_st->res_cur_pos++;
@@ -2387,9 +2508,10 @@ void final_stage(shared_st* shared_st, stage_1_st* stage_1_st, const options* op
 	// D: `select ?  `
 	//              ^ never collapsed
 	// ```
-	if (shared_st->res_cur_pos > shared_st->res_init_pos) {
+	{
+		// v1_crashing_payload_06
 		char* wspace = shared_st->res_cur_pos - 1;
-		while (*wspace == ' ') {
+		while (wspace > shared_st->res_init_pos && *wspace == ' ') {
 			wspace--;
 		}
 		wspace++;

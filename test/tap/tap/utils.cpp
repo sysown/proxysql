@@ -124,7 +124,7 @@ int get_server_version(MYSQL *mysql, std::string& version) {
 	return 0;
 }
 
-int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
+int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql, bool sqlite) {
 	std::random_device rd;
 	std::mt19937 mt(rd());
 	std::uniform_int_distribution<int> dist(0.0, 9.0);
@@ -133,7 +133,11 @@ int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql) {
 	while (num_rows) {
 		std::stringstream q;
 
+		if (sqlite==false) {
 		q << "INSERT INTO test.sbtest1 (k, c, pad) values ";
+		} else {
+			q << "INSERT INTO sbtest1 (k, c, pad) values ";
+		}
 		bool put_comma = false;
 		int i=0;
 		unsigned int cnt=5+rand()%50;
@@ -173,6 +177,14 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
 
 	return add_more_rows_test_sbtest1(num_rows, mysql);
+}
+
+int create_table_test_sqlite_sbtest1(int num_rows, MYSQL *mysql) {
+	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS sbtest1");
+	MYSQL_QUERY(mysql, "CREATE TABLE if not exists sbtest1 (id INTEGER PRIMARY KEY AUTOINCREMENT, `k` int(10) NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '')");
+	MYSQL_QUERY(mysql, "CREATE INDEX IF NOT EXISTS idx_sbtest1_k1 ON sbtest1 (k)");
+
+	return add_more_rows_test_sbtest1(num_rows, mysql, true);
 }
 
 int execvp(const std::string& cmd, const std::vector<const char*>& argv, std::string& result) {
@@ -691,4 +703,52 @@ MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
 	} else {
 		return admin;
 	}
+}
+
+int get_variable_value(
+	MYSQL* proxysql_admin, const std::string& variable_name, std::string& variable_value, bool runtime
+) {
+	if (proxysql_admin == NULL) {
+		return EINVAL;
+	}
+
+	int res = EXIT_FAILURE;
+
+	const std::string t_select_var_query {
+		"SELECT * FROM %sglobal_variables WHERE Variable_name='%s'"
+	};
+	std::string select_var_query {};
+
+	if (runtime) {
+		string_format(t_select_var_query, select_var_query, "runtime_", variable_name.c_str());
+	} else {
+		string_format(t_select_var_query, select_var_query, "", variable_name.c_str());
+	}
+
+	MYSQL_QUERY(proxysql_admin, select_var_query.c_str());
+
+	MYSQL_RES* admin_res = mysql_store_result(proxysql_admin);
+	if (!admin_res) {
+		diag("'mysql_store_result' at line %d failed: %s", __LINE__, mysql_error(proxysql_admin));
+		goto cleanup;
+	}
+
+	{
+		MYSQL_ROW row = mysql_fetch_row(admin_res);
+		if (!row || row[0] == nullptr || row[1] == nullptr) {
+			diag("'mysql_fetch_row' at line %d returned 'NULL'", __LINE__);
+			res = -1;
+			goto cleanup;
+		}
+
+		// Extract the result
+		std::string _variable_value { row[1] };
+		variable_value = _variable_value;
+
+		res = EXIT_SUCCESS;
+	}
+
+cleanup:
+
+	return res;
 }

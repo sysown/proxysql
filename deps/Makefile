@@ -1,3 +1,5 @@
+#!/bin/make -f
+
 
 UNAME_S := $(shell uname -s)
 UNAME_MS := $(word 2, $(shell uname -ms))
@@ -35,11 +37,29 @@ endif
 
 endif
 
+
+# determine good compiler version for stdc++17
+IS_CXX17 := 0
+ifeq ($(CXX),clang++)
+	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
+	IS_CXX17 := 1
+endif
+else
+	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
+	IS_CXX17 := 1
+endif
+endif
+
+
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
 endif
 .PHONY: default
 
@@ -55,7 +75,7 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 libssl/openssl/libssl.a:
-	cd libssl && rm -rf openssl-openssl-*/ || true
+	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
 	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
 	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
@@ -72,7 +92,7 @@ ifeq ($(MIN_VERSION),$(lastword $(sort $(GCC_VERSION) $(MIN_VERSION))))
 	REQUIRE_PATCH = true
 endif
 
-libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
+libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
 ifeq ($(REQUIRE_PATCH), true)
@@ -140,17 +160,24 @@ lz4/lz4/liblz4.a:
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
 lz4: lz4/lz4/liblz4.a
 
-clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a:
-	cd clickhouse-cpp && rm -rf clickhouse-cpp/ || true
-	cd clickhouse-cpp && tar -zxf clickhouse-cpp.tar.gz
-ifeq ($(CXX),clang++)
-	cd clickhouse-cpp/clickhouse-cpp && sed -i 's/"-O2 -pthread -Wall -Wextra -Werror"/"-O2 -pthread -Wall -Wextra -Werror -Wno-deprecated-copy"/' CMakeLists.txt
+
+clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
+ifeq ($(IS_CXX17), 1)
+	echo ">>> Clickhouse CXX17"
+	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.1.0 clickhouse-cpp
+	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
+	cd clickhouse-cpp && tar -zxf v2.1.0.tar.gz && sync
+else
+	echo ">>> Clickhouse CXX11"
+	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
+	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
+	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
+	cd clickhouse-cpp && sed -i 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
 endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
-	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/columns/column.h < ../column.h.diff
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
-clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib.a
+clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a
 
 
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
@@ -281,13 +308,13 @@ cleanall:
 	cd re2 && rm -rf re2-*/ || true
 	cd pcre && rm -rf pcre-*/ || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
-	cd clickhouse-cpp/ && rm -rf clickhouse-cpp/ || true
+	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-* || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd libmicrohttpd && rm -f libmicrohttpd || true
 	cd curl && rm -rf curl-*/ || true
 	cd libev && rm -rf libev-*/ || true
-	cd libssl && rm -rf openssl-openssl-*/ || true
+	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
 	cd cityhash && rm -rf cityhash/ || true

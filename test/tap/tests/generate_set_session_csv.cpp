@@ -253,6 +253,8 @@ int main() {
 	vars["time_zone"]->add(std::vector<std::string> {"'-11:10'", "`-11:33`", "\"-04:56\""});
 	vars["sql_mode"] = new variable("sql_mode", true, false, false);
 	vars["sql_mode"]->add(std::vector<std::string> {"'traditional'", "TRADITIONAL", "''"});
+	vars["sql_mode"]->add(std::vector<std::string> {"'NO_BACKSLASH_ESCAPES'", "NO_BACKSLASH_ESCAPES"});
+	vars["sql_mode"]->add(std::vector<std::string> {"'TRADITIONAL,NO_BACKSLASH_ESCAPES'", "\"NO_BACKSLASH_ESCAPES,TRADITIONAL\""});
 	vars["sql_mode"]->add(std::vector<std::string> {"'PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'", "\"PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION\""});
 	vars["sql_mode"]->add(std::vector<std::string> {"ALLOW_INVALID_DATES", "'ALLOW_INVALID_DATES'", "\"ALLOW_INVALID_DATES\""});
 	vars["sql_mode"]->add(std::vector<std::string> {"NO_ENGINE_SUBSTITUTION", "'NO_ENGINE_SUBSTITUTION'", "\"NO_ENGINE_SUBSTITUTION\""});

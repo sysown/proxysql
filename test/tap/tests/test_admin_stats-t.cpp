@@ -12,6 +12,15 @@
  * @date 2021-10-28
  */
 
+/*
+NOTE:
+Test 4 assumes that no new variable was introduced after
+table history_mysql_status_variables was initialized.
+If this is not true, manually run the following before running the test:
+
+DELETE FROM history_mysql_status_variables;
+*/
+
 #include <algorithm>
 #include <string>
 #include <stdio.h>

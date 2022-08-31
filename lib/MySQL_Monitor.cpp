@@ -4294,6 +4294,11 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			cur_host_idx++;
 		}
 	}
+	// NOTE: 'cur_host_idx' should never be higher than 'num_hosts' otherwise later an invalid memory access
+	// can table place later when accessing 'hpa[cur_host_idx]'.
+	if (cur_host_idx >= num_hosts) {
+		cur_host_idx = num_hosts - 1;
+	}
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 
 	bool exit_now = false;

@@ -2155,8 +2155,8 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_query_interval"] = make_tuple(&variables.monitor_query_interval,  100, 7*24*3600*1000, false);
 		VariablesPointers_int["monitor_query_timeout"]  = make_tuple(&variables.monitor_query_timeout,   100,       600*1000, false);
 
-		VariablesPointers_int["monitor_threads_min"]    = make_tuple(&variables.monitor_threads_min, 2,  16, false);
-		VariablesPointers_int["monitor_threads_max"]    = make_tuple(&variables.monitor_threads_max, 4, 256, false);
+		VariablesPointers_int["monitor_threads_min"]    = make_tuple(&variables.monitor_threads_min, 2,  256, false);
+		VariablesPointers_int["monitor_threads_max"]    = make_tuple(&variables.monitor_threads_max, 4, 1024, false);
 
 		VariablesPointers_int["monitor_slave_lag_when_null"]   = make_tuple(&variables.monitor_slave_lag_when_null,    0, 604800, false);
 		VariablesPointers_int["monitor_threads_queue_maxsize"] = make_tuple(&variables.monitor_threads_queue_maxsize, 16,   1024, false);

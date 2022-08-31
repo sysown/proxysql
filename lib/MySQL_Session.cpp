@@ -806,28 +806,34 @@ void MySQL_Session::writeout() {
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Writeout Session %p\n" , this->thread, this, this);
 }
 
-// FIXME: This function is currently disabled . See #469
 bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	char c=((char *)pkt->ptr)[5];
 	bool ret=false;
 	if (c=='c' || c=='C') {
-		if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
+		if (pkt->size==strlen("commit")+5) {
+			if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
 				__sync_fetch_and_add(&MyHGM->status.commit_cnt, 1);
 				ret=true;
 			}
-		} else {
-			if (c=='r' || c=='R') {
+		}
+	} else {
+		if (c=='r' || c=='R') {
+			if (pkt->size==strlen("rollback")+5) {
 				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
 					__sync_fetch_and_add(&MyHGM->status.rollback_cnt, 1);
 					ret=true;
 				}
 			}
 		}
+	}
 
 	if (ret==false) {
 		return false;	// quick exit
 	}
-	unsigned int nTrx=NumActiveTransactions();
+	// in this part of the code (as at release 2.4.3) where we call
+	// NumActiveTransactions() with the check_savepoint flag .
+	// This to try to handle MySQL bug https://bugs.mysql.com/bug.php?id=107875
+	unsigned int nTrx=NumActiveTransactions(true);
 	if (nTrx) {
 		// there is an active transaction, we must forward the request
 		return false;
@@ -947,12 +953,16 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					goto __ret_autocommit_OK;
 				}
 				if (fd==1 && autocommit==false) {
-					if (nTrx) {
+					// in this part of the code (as at release 2.4.3) where we call
+					// NumActiveTransactions() with the check_savepoint flag .
+					// This to try to handle MySQL bug https://bugs.mysql.com/bug.php?id=107875
+					unsigned int nTrx_SP=NumActiveTransactions(true); // check savepoint
+					if (nTrx_SP) { // previously we were checking nTrx . Now nTrx_SP
 						// there is an active transaction, we need to forward it
 						// because this can potentially close the transaction
 						autocommit=true;
 						client_myds->myconn->set_autocommit(autocommit);
-						autocommit_on_hostgroup=FindOneActiveTransaction();
+						autocommit_on_hostgroup=FindOneActiveTransaction(true);
 						free(_new_pkt.ptr);
 						sending_set_autocommit=true;
 						return false;
@@ -974,17 +984,25 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					goto __ret_autocommit_OK;
 				}
 __ret_autocommit_OK:
-				client_myds->DSS=STATE_QUERY_SENT_NET;
-				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-				client_myds->DSS=STATE_SLEEP;
-				status=WAITING_CLIENT_DATA;
-				if (mirror==false) {
-					RequestEnd(NULL);
+				if (session_type == PROXYSQL_SESSION_MYSQL) { // do not run this if PROXYSQL_SESSION_SQLITE
+					client_myds->DSS=STATE_QUERY_SENT_NET;
+					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+					if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+					client_myds->DSS=STATE_SLEEP;
+					status=WAITING_CLIENT_DATA;
+					if (mirror==false) {
+						RequestEnd(NULL);
+					}
+					__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
 				}
-				l_free(pkt->size,pkt->ptr);
-				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
+				if (session_type == PROXYSQL_SESSION_MYSQL) {
+					// free() only if session_type == PROXYSQL_SESSION_MYSQL
+					// because the packet will be freed in
+					// handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql()
+					// for all session type other than PROXYSQL_SESSION_MYSQL
+					l_free(pkt->size,pkt->ptr);
+				}
 				free(_new_pkt.ptr);
 				return true;
 			}
@@ -1082,11 +1100,11 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 		}
 	}
-	for (unsigned int k=0; k<mybes->len; k++) {
+	for (unsigned int i=0; i<mybes->len; i++) {
 		MySQL_Backend *_mybe = NULL;
-		_mybe=(MySQL_Backend *)mybes->index(k);
-		unsigned int i = _mybe->hostgroup_id;
-		j["backends"][i]["hostgroup_id"] = i;
+		_mybe=(MySQL_Backend *)mybes->index(i);
+		//unsigned int i = _mybe->hostgroup_id;
+		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
 		j["backends"][i]["gtid"] = ( strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "" );
 		if (_mybe->server_myds) {
 			MySQL_Data_Stream *_myds=_mybe->server_myds;
@@ -1891,6 +1909,12 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 		MySQL_Connection *mc = mybe->server_myds->myconn;
 		mc->set_autocommit(autocommit);
 		mc->options.last_set_autocommit = ( mc->options.autocommit ? 1 : 0 );
+		if (autocommit==1) {
+			// due to  MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
+			// SAVEPOINT and autocommit=0 , if we send autocommit=1 we need to drop
+			// the flag related to savepoint
+			mc->set_status(false, STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT);
+		}
 		return false;
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %d , backend: %d\n", this, client_myds->myconn->options.autocommit, mybe->server_myds->myconn->options.autocommit);
@@ -1943,7 +1967,13 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 	} else {
 		if (autocommit == false) { // also IsAutoCommit==false
 			if (mysql_thread___enforce_autocommit_on_reads == false) {
-				if (mybe->server_myds->myconn->IsActiveTransaction() == false) {
+				if (
+					mybe->server_myds->myconn->IsActiveTransaction() == false
+					&&
+					// another edge case related to MySQL bug https://bugs.mysql.com/bug.php?id=107875
+					// about autocommit=0 and SAVEPOINT
+					mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == false
+				) {
 					if (CurrentQuery.is_select_NOT_for_update()==true) {
 						// client wants autocommit=0
 						// enforce_autocommit_on_reads=false
@@ -2062,7 +2092,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
-		if (rc==-1) {
+		if (rc==-1 || rc==-2) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(
@@ -2077,11 +2107,18 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 				// client error, serious
 				detected_broken_connection(__FILE__ , __LINE__ , __func__ , "while setting INIT CONNECT", myconn, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								retry_conn=true;
+							if (rc != -2) { // see PMC-10003
+								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+									retry_conn=true;
+							}
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd=0;
+				if (rc==-2) {
+					// Here we handle PMC-10003
+					// and we terminate the session
+					retry_conn=false;
+				}
 				if (retry_conn) {
 					myds->DSS=STATE_NOT_INITIALIZED;
 					//previous_status.push(PROCESSING_QUERY);
@@ -3288,6 +3325,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 // client_myds->DSS = STATE_SLEEP
 // enum_mysql_command = _MYSQL_COM_QUERY
 // it processes the session not MYSQL_SESSION
+// Make sure that handler_function() doesn't free the packet
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt) {
 	switch (session_type) {
 		case PROXYSQL_SESSION_ADMIN:
@@ -4919,6 +4957,7 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	return ret;
 }
 
+/*
 void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	// FIXME: no support for SSL yet
 	if (
@@ -4984,6 +5023,7 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 		__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 	}
 }
+*/
 
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
@@ -5672,8 +5712,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					auto values = std::begin(it->second);
 					if (var == "sql_mode") {
 						std::string value1 = *values;
-						if (strcasecmp(value1.c_str(),"NO_BACKSLASH_ESCAPE") != 0) {
-							// client is setting NO_BACKSLASH_ESCAPE in sql_mode
+						if (strcasestr(value1.c_str(),"NO_BACKSLASH_ESCAPES") != NULL) {
+							// client is setting NO_BACKSLASH_ESCAPES in sql_mode
 							// Because we will reply with an OK packet without
 							// first setting sql_mode to the backend (this is
 							// by design) we need to set no_backslash_escapes
@@ -6884,13 +6924,19 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		myds->DSS=STATE_COLUMN_DEFINITION;
 		unsigned int nTrx = 0;
 		uint16_t setStatus = 0;
+		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 		if (in_transaction == false) {
 			nTrx=NumActiveTransactions();
-			setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			setStatus |= (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		} else {
 			// this is for SQLite3 Server
-			setStatus = SERVER_STATUS_AUTOCOMMIT;
+			if (session_type == PROXYSQL_SESSION_SQLITE) {
+				//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			} else {
+				// for sessions that are not SQLITE . Admin and Clickhouse .
+				// default
+				setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			}
 			setStatus |= SERVER_STATUS_IN_TRANS;
 		}
 		if (!deprecate_eof_active) {
@@ -6919,10 +6965,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		if (deprecate_eof_active) {
 			myprot->generate_pkt_OK(true, NULL, NULL, sid, 0, 0, setStatus, 0, NULL, true); sid++;
 		} else {
-			// I think the 2 | setStatus here is a bug. the previous generate_pkt_EOF was changed from 2|setStatus to just
-			// setStatus a long time ago in c3e6fda7a47ecb94e97d4e191cdbd0f10fec7924
-			// also 2 represents the SERVER_STATUS_IN_TRANS which is already set in setStatus
-			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus ); sid++;
+			myprot->generate_pkt_EOF(true,NULL,NULL, sid, 0, setStatus ); sid++;
 		}
 
 		myds->DSS=STATE_SLEEP;
@@ -6947,7 +6990,13 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			} else {
 				// this is for SQLite3 Server
-				setStatus = SERVER_STATUS_AUTOCOMMIT;
+				if (session_type == PROXYSQL_SESSION_SQLITE) {
+					//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+				} else {
+					// for sessions that are not SQLITE . Admin and Clickhouse .
+					// default
+					setStatus |= SERVER_STATUS_AUTOCOMMIT;
+				}
 				setStatus |= SERVER_STATUS_IN_TRANS;
 			}
 			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,setStatus,0,NULL);
@@ -6962,17 +7011,29 @@ void MySQL_Session::set_unhealthy() {
 }
 
 
-unsigned int MySQL_Session::NumActiveTransactions() {
+unsigned int MySQL_Session::NumActiveTransactions(bool check_savepoint) {
 	unsigned int ret=0;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
 	unsigned int i;
 	for (i=0; i < mybes->len; i++) {
 		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds)
-			if (_mybe->server_myds->myconn)
-				if (_mybe->server_myds->myconn->IsActiveTransaction())
+		if (_mybe->server_myds) {
+			if (_mybe->server_myds->myconn) {
+				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
 					ret++;
+				} else {
+					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
+					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
+					// SAVEPOINT and autocommit=0
+					if (check_savepoint) {
+						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
+							ret++;
+						}
+					}
+				}
+			}
+		}
 	}
 	return ret;
 }
@@ -7011,17 +7072,29 @@ bool MySQL_Session::SetEventInOfflineBackends() {
 	return ret;
 }
 
-int MySQL_Session::FindOneActiveTransaction() {
+int MySQL_Session::FindOneActiveTransaction(bool check_savepoint) {
 	int ret=-1;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
 	unsigned int i;
 	for (i=0; i < mybes->len; i++) {
 		_mybe=(MySQL_Backend *)mybes->index(i);
-		if (_mybe->server_myds)
-			if (_mybe->server_myds->myconn)
-				if (_mybe->server_myds->myconn->IsActiveTransaction())
+		if (_mybe->server_myds) {
+			if (_mybe->server_myds->myconn) {
+				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
 					return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+				} else {
+					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
+					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
+					// SAVEPOINT and autocommit=0
+					if (check_savepoint) {
+						if (_mybe->server_myds->myconn->AutocommitFalse_AndSavepoint() == true) {
+							return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+						}
+					}
+				}
+			}
+		}
 	}
 	return ret;
 }

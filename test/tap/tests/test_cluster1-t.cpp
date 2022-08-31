@@ -77,29 +77,43 @@ int dumping_checksums_return_uniq(MYSQL_RES *res, std::set<std::string>& checksu
 	return checksums.size();
 }
 
+int _get_checksum(MYSQL* mysql, const std::string& name, std::string& value) {
+	std::string query { "SELECT checksum FROM runtime_checksums_values WHERE name='" + name + "'" };
 
-int get_checksum(MYSQL *mysql, const std::string& name, std::string& value) {
-	std::string query = "SELECT checksum FROM runtime_checksums_values WHERE name='" + name + "'";
-	MYSQL_QUERY(mysql,query.c_str());
+	if (mysql_query(mysql, query.c_str())) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+		return -1;
+	}
+
 	MYSQL_RES * res = mysql_store_result(mysql);
 	int rr = mysql_num_rows(res);
 	MYSQL_ROW row;
 	while ((row = mysql_fetch_row(res))) {
 		value = std::string(row[0]);
 	}
-	ok(rr == 1 && value.length() > 0, "Checksum for %s = %s" , name.c_str(), value.c_str());
 	mysql_free_result(res);
+
+	return rr;
+}
+
+int get_checksum(MYSQL *mysql, const std::string& name, std::string& value) {
+	int rr = _get_checksum(mysql, name, value);
+	ok(rr == 1 && value.length() > 0, "Checksum for %s = %s" , name.c_str(), value.c_str());
 	if (rr == 1 && value.length() > 0) return 0;
 	return 1;
 }
 
-int module_in_sync(MYSQL *mysql, const std::string& name, const std::string& value, int num_retries, int& i) {
+int module_in_sync(
+	MYSQL* tg_admin, MYSQL* fetch_conn, const std::string& name, const std::string& init_chk, int num_retries, int& i
+) {
 	std::string query = "SELECT hostname, port, name, version, epoch, checksum, changed_at, updated_at, diff_check FROM stats_proxysql_servers_checksums WHERE name='" + name + "'";
+	std::string checksum { init_chk };
 	int rc = 0;
+
 	while (i< num_retries && rc != 1) {
 		std::set<std::string> checksums;
-		MYSQL_QUERY(mysql,query.c_str());
-		MYSQL_RES * res = mysql_store_result(mysql);
+		MYSQL_QUERY(tg_admin, query.c_str());
+		MYSQL_RES * res = mysql_store_result(tg_admin);
 		std::string s;
 		get_time(s);
 		diag("%s: Dumping %s", s.c_str(), query.c_str());
@@ -107,13 +121,21 @@ int module_in_sync(MYSQL *mysql, const std::string& name, const std::string& val
 		mysql_free_result(res);
 		if (rc == 1) {
 			std::set<std::string>::iterator it = checksums.begin();
-			if (*it == value) {
+			if (*it == checksum) {
 				return 0;
+			} else {
+				int chk_res = _get_checksum(fetch_conn, name, checksum);
+				if (chk_res != -1) {
+					diag("Fetched new '%s' target checksum '%s'", name.c_str(), checksum.c_str());
+				} else {
+					diag("Fetching new checksum for module '%s' failed", name.c_str());
+				}
 			}
 		}
 		sleep(1);
 		i++;
 	}
+
 	return 1;
 }
 
@@ -145,12 +167,12 @@ int trigger_sync_and_check(MYSQL *mysql, std::string modname, const char *update
 	get_checksum(mysql, modname, chk2);
 	ok(chk1 != chk2 , "%s checksums. Before: %s , after: %s", modname.c_str(), chk1.c_str(), chk2.c_str());
 	int retries = 0;
-	rc = module_in_sync(mysql, modname, chk2, 30, retries);
+	rc = module_in_sync(mysql, mysql, modname, chk2, 30, retries);
 	ok (rc == 0, "Module %s %sin sync after %d seconds" , modname.c_str() , rc == 0 ? "" : "NOT " , retries);
 	for (int i = 4 ; i<conns.size() ; i++) {
 		diag("Checking satellite node %d", i);
 		int retries = 0;
-		rc = module_in_sync(conns[i], modname, chk2, 30, retries);
+		rc = module_in_sync(conns[i], mysql, modname, chk2, 30, retries);
 		ok (rc == 0, "On satellite %d: Module %s %sin sync after %d seconds" , i, modname.c_str() , rc == 0 ? "" : "NOT " , retries);
 	}
 	return 0;
@@ -224,16 +246,17 @@ int main(int argc, char** argv) {
 	ok(conns.size() == cluster_ports.size() , "Known nodes: %lu . Connected nodes: %lu", cluster_ports.size(), conns.size());
 
 	int retries = 0;
-	rc = module_in_sync(proxysql_admin, "mysql_variables", chk2, 30, retries);
+	rc = module_in_sync(proxysql_admin, proxysql_admin, "mysql_variables", chk2, 30, retries);
 	ok (rc == 0, "Module mysql_variables %sin sync after %d seconds" , rc == 0 ? "" : "NOT " , retries);
 
 
-	// the workflow here is simple:
-	// for each proxy:
-	// 	get the checksum of the module
-	// 	update the module
-	// 	get the new checksum
-	// 	wait for all the other core nodes to sync
+	// The workflow here is simple, for each proxy:
+	// 	- Get the checksum of the module
+	// 	- Update the module
+	// 	- Get the new checksum
+	// 	- Now retry the following until success or timeout:
+	// 		1. Wait for all the other core nodes to sync and check the checksums.
+	// 		2. If the sync failed, refetch the target checksum from the node that received the change.
 	for (int i = 0; i < 4; i++) {
 		diag("Running changes on server node %d", i);
 		trigger_sync_and_check(conns[i], "admin_variables", update_admin_variables_1, "LOAD ADMIN VARIABLES TO RUNTIME");
