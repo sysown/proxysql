@@ -641,7 +641,11 @@ MySQL_Session::~MySQL_Session() {
 					break;
 #endif /* PROXYSQLCLICKHOUSE */
 				default:
-					GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+					if (use_ldap_auth == false) {
+						GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+					} else {
+						GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
+					}
 					break;
 			}
 		}
