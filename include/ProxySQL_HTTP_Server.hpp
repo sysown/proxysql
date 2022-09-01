@@ -23,7 +23,7 @@ class ProxySQL_HTTP_Server {
 	ProxySQL_HTTP_Server();
 	~ProxySQL_HTTP_Server();
 	void init();
-	int handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr);
+	MHD_RESULT handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr);
 	void print_version();
 	void check_latest_version_http();
 };

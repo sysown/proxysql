@@ -84,11 +84,6 @@ LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIA
 
 UNAME_S := $(shell uname -s)
 
-ifeq ($(UNAME_S),Darwin)
-	IDIRS+= -I/usr/local/include -I/usr/local/opt/openssl/include
-	LDIRS+= -L/usr/local/lib
-endif
-
 
 # determine good compiler version for stdc++17
 IS_CXX17 := 0
@@ -160,12 +155,12 @@ MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc
 endif
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS=-lssl -lre2 -lmariadbclient -lpthread -lm -lz -liconv -lcrypto -lcurl -lgnutls -luuid
-else
-	CURL_DIR=$(DEPS_PATH)/curl/curl
-	IDIRS+= -L$(CURL_DIR)/include
-	LDIRS+= -L$(CURL_DIR)/lib/.libs
+	MYLIBS=-lssl -liconv -lcharset -lre2 -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -lgnutls -lpthread -lm -lz -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
 endif
+CURL_DIR=$(DEPS_PATH)/curl/curl
+IDIRS+= -L$(CURL_DIR)/include
+LDIRS+= -L$(CURL_DIR)/lib/.libs
+
 ifeq ($(UNAME_S),Linux)
 	MYLIBS+= -ldl
 endif
@@ -178,7 +173,7 @@ endif
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
-	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/curl/curl/lib/.libs/libcurl.a ../deps/sqlite3/sqlite3/sqlite3.o ../deps/libinjection/libinjection/src/libinjection.a  ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/libev/libev-4.24/.libs/libev.a
+	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/curl/curl/lib/.libs/libcurl.a ../deps/sqlite3/sqlite3/sqlite3.o ../deps/libinjection/libinjection/src/libinjection.a  ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/libev/libev-4.24/.libs/libev.a
 endif
 
 LIBPROXYSQLAR+= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a $(CITYHASH_DIR)/libcityhash.a
@@ -193,13 +188,23 @@ $(ODIR)/%.o: %.cpp
 	$(CXX) -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS) -Wall
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
+#	for darwin, this helps us because we there is no -W,l --export-dynamic for
+#	clang, and -static tries to statically link to everything including libc,
+#	which breaks.  Workaround is if clang can't find the .dylibs, it will
+#	statically link to the .a's instead.
+
+	find $(DEPS_PATH) \( -name '*.dylib' -o -name '*.so' \) -delete
+
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_DIR)/clickhouse/libclickhouse-cpp-lib-static.a $(LZ4_DIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 else
 	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 endif
+ifeq ($(UNAME_S),Darwin)
+	shasum $(EXECUTABLE) > $(EXECUTABLE).sha1
+else
 	sha1sum $(EXECUTABLE) > $(EXECUTABLE).sha1
-
+endif
 $(ODIR):
 	mkdir $(ODIR)
 

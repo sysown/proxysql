@@ -105,15 +105,6 @@ index 8c2a99b..cf6114a 100644
  
  /**************************************************************************
  ** Do a query. If query returned rows, free old rows.
-@@ -2189,6 +2245,8 @@ int ma_read_ok_packet(MYSQL *mysql, uchar *pos, ulong length)
-             char *data;
-             si_type= (enum enum_session_state_type)net_field_length(&pos);
-             switch(si_type) {
-+            case SESSION_TRACK_GTIDS:
-+              net_field_length(&pos); /* skip encoding */
-             case SESSION_TRACK_SCHEMA:
-             case SESSION_TRACK_STATE_CHANGE:
-             case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
 @@ -3670,18 +3728,27 @@ void STDCALL mysql_get_character_set_info(MYSQL *mysql, MY_CHARSET_INFO *cs)
    mariadb_get_charset_info(mysql, cs);
  }

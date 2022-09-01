@@ -218,7 +218,7 @@ int wexecvp(
 			FD_SET(PARENT_READ_ERR, &read_fds);
 
 			// Wait for the pipes to be ready
-			timeval select_to = { 0, to_opts.select_to_us };
+			timeval select_to = { 0, int(to_opts.select_to_us) };
 			int select_err = select(maxfd + 1, &read_fds, NULL, NULL, &select_to);
 
 			// Unexpected error while executing 'select'

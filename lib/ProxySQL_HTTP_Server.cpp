@@ -367,10 +367,11 @@ void ProxySQL_HTTP_Server::print_version() {
 
 #define EMPTY_PAGE "<html><head><title>File not found</title></head><body>File not found<br/><a href=\"/\">Go back home</a></body></html>"
 
-int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr) {
+MHD_RESULT ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr) {
 
 	struct MHD_Response *response;
-	int ret;
+	MHD_RESULT ret;
+	int digest_check_result;
 
 
 	char *username;
@@ -415,10 +416,10 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			return ret;
 		}
 	}
-	ret = MHD_digest_auth_check(connection, realm, username, password, 300);
+	digest_check_result = MHD_digest_auth_check(connection, realm, username, password, 300);
 	free(username);
 	free(password);
-	if ( (ret == MHD_INVALID_NONCE) || (ret == MHD_NO) ) {
+	if ( (digest_check_result == MHD_INVALID_NONCE) || (digest_check_result == MHD_NO) ) {
 		response = MHD_create_response_from_buffer(strlen(DENIED), (void *)DENIED, MHD_RESPMEM_PERSISTENT);
 		if (NULL == response)
 			return MHD_NO;
@@ -442,7 +443,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 	}
 	page_sec++;
 	if (page_sec > ProxySQL_HTTP_Server_Rate_Limit) {
-		response = MHD_create_response_from_buffer(strlen(RATE_LIMIT_PAGE), (void *) RATE_LIMIT_PAGE, MHD_RESPMEM_PERSISTENT); 
+		response = MHD_create_response_from_buffer(strlen(RATE_LIMIT_PAGE), (void *) RATE_LIMIT_PAGE, MHD_RESPMEM_PERSISTENT);
   		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
   		MHD_destroy_response (response);
 		return ret;
@@ -546,7 +547,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			free(nv[1]);
 			free(nv);
 			free(ts);
-			
+
 
 #ifndef NOJEM
 			nm = (char **)malloc(sizeof(char *)*5);
@@ -580,9 +581,9 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			free(nv);
 			free(ts);
 #endif
-			
+
 			s->append("</body></html>");
-	 		response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_PERSISTENT); 
+			response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_PERSISTENT);
   			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
   			MHD_destroy_response (response);
 			return ret;
@@ -931,5 +932,5 @@ string * ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int ns
 	ret->append("});\n");
 	ret->append("</script>\n");
 	return ret;
-	
+
 }

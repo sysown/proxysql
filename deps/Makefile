@@ -70,7 +70,11 @@ libinjection/libinjection/src/libinjection.a:
 ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
 endif
+ifeq ($(UNAME_S),Darwin)
+	sed -i.bak 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
+else
 	sed -i 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
+endif
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 libinjection: libinjection/libinjection/src/libinjection.a
 
@@ -94,7 +98,7 @@ endif
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
-	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
+	cd libhttpserver && tar -zxf libhttpserver-0.18.2.tar.gz
 ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch src/httpserver/basic_auth_fail_response.hpp < ../basic_auth_fail_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/create_webserver.hpp < ../create_webserver.hpp.patch
@@ -138,12 +142,9 @@ ifeq ($(CENTOSVER),6)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
 else
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.68 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.68.tar.gz
-	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
-endif
-ifeq ($(OS),Darwin)
-	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
+	cd libmicrohttpd && ln -s libmicrohttpd-0.9.75 libmicrohttpd
+	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
+	# cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
@@ -151,6 +152,7 @@ microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 cityhash/cityhash/src/.libs/libcityhash.a:
 	cd cityhash && rm -rf cityhash/ || true
 	cd cityhash && tar -zxf cityhash.tar.gz
+	cd cityhash/cityhash && patch -p1 < ../aarch64.patch
 	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
@@ -183,6 +185,7 @@ clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-s
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 	cd libdaemon && rm -rf libdaemon-*/ || true
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
+	cd libdaemon/libdaemon && patch -p1 < ../aarch64.patch
 	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && ./configure --disable-examples
 	cd libdaemon/libdaemon && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -203,11 +206,16 @@ WITHASAN := $(shell echo $(WITHASAN))
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
-	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
+	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.10-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
+	# cd mariadb-client-libraryq/mariadb_client && patch -p1 < ../homebrew.patch
+
+ifeq ($(ICONV_LIBRARIES),)
 	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
-#	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=/usr/local/opt/openssl # this is needed on MacOSX
+else
+	cd mariadb-client-library/mariadb_client && cmake . -DICONV_INCLUDE_DIR=$(ICONV_LIBRARIES)/include .
+endif
 ifeq ($(PROXYDEBUG),1)
 	cd mariadb-client-library/mariadb_client && patch include/ma_context.h < ../ma_context.h.patch
 else ifeq ($(USEVALGRIND),1)

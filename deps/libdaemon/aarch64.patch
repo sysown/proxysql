@@ -1,0 +1,11 @@
+diff -Nuar a/config.sub b/config.sub
+--- a/config.sub	2008-06-09 14:51:04.000000000 -0500
++++ b/config.sub	2022-08-31 11:19:18.000000000 -0500
+@@ -318,6 +318,7 @@
+ 	| alpha64-* | alpha64ev[4-8]-* | alpha64ev56-* | alpha64ev6[78]-* \
+ 	| alphapca5[67]-* | alpha64pca5[67]-* | arc-* \
+ 	| arm-*  | armbe-* | armle-* | armeb-* | armv*-* \
++	| aarch64-* \
+ 	| avr-* | avr32-* \
+ 	| bfin-* | bs2000-* \
+ 	| c[123]* | c30-* | [cjt]90-* | c4x-* | c54x-* | c55x-* | c6x-* \
