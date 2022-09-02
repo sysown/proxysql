@@ -730,7 +730,7 @@ void SQLite3DB::LoadPlugin(const char *plugin_name) {
 					SHA1(fb, statbuf.st_size, temp);
 					memset(binary_sha1_sqlite3, 0, SHA_DIGEST_LENGTH*2+1);
 					char buf[SHA_DIGEST_LENGTH*2];
-					for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
+					for (int i=0; i < SHA_DIGEST_LENGTH - 1; i++) {
 						sprintf((char*)&(buf[i*2]), "%02x", temp[i]);
 					}
 					memcpy(binary_sha1_sqlite3, buf, SHA_DIGEST_LENGTH*2);

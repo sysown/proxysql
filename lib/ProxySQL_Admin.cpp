@@ -1760,12 +1760,12 @@ bool is_valid_global_variable(const char *var_name) {
 		return true;
 	} else if (strlen(var_name) > 6 && !strncmp(var_name, "admin-", 6) && SPA->has_variable(var_name + 6)) {
 		return true;
-	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth->has_variable(var_name + 5)) {
+	} else if (strlen(var_name) > 5 && !strncmp(var_name, "ldap-", 5) && GloMyLdapAuth && GloMyLdapAuth->has_variable(var_name + 5)) {
 		return true;
-	} else if (strlen(var_name) > 13 && !strncmp(var_name, "sqliteserver-", 13) && GloSQLite3Server->has_variable(var_name + 13)) {
+	} else if (strlen(var_name) > 13 && !strncmp(var_name, "sqliteserver-", 13) && GloSQLite3Server && GloSQLite3Server->has_variable(var_name + 13)) {
 		return true;
 #ifdef PROXYSQLCLICKHOUSE
-	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer->has_variable(var_name + 11)) {
+	} else if (strlen(var_name) > 11 && !strncmp(var_name, "clickhouse-", 11) && GloClickHouseServer && GloClickHouseServer->has_variable(var_name + 11)) {
 		return true;
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
