@@ -6,7 +6,7 @@
 ### when not available, specify GIT_VERSION on commnad line:
 ###
 ### ```
-### GIT_HISTORY=2.x-dev make $(nproc)
+### export GIT_VERSION=2.x-dev
 ### ```
 
 ifndef GIT_VERSION
