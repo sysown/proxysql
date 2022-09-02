@@ -152,8 +152,7 @@ microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 cityhash/cityhash/src/.libs/libcityhash.a:
 	cd cityhash && rm -rf cityhash/ || true
 	cd cityhash && tar -zxf cityhash.tar.gz
-	cd cityhash/cityhash && patch -p1 < ../aarch64.patch
-	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+	cd cityhash/cityhash && cp ../config.guess . && cp ../config.sub . && chmod +x config.guess && chmod +x config.sub && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
 lz4/lz4/liblz4.a:
@@ -185,8 +184,7 @@ clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-s
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 	cd libdaemon && rm -rf libdaemon-*/ || true
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
-	cd libdaemon/libdaemon && patch -p1 < ../aarch64.patch
-	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && ./configure --disable-examples
+	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub && ./configure --disable-examples
 	cd libdaemon/libdaemon && CC=${CC} CXX=${CXX} ${MAKE}
 
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
