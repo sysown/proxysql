@@ -5914,10 +5914,6 @@ void ProxySQL_Admin::init_ldap() {
 		insert_into_tables_defs(tables_defs_admin,"mysql_ldap_mapping", ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING);
 		insert_into_tables_defs(tables_defs_admin,"runtime_mysql_ldap_mapping", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_LDAP_MAPPING);
 		insert_into_tables_defs(tables_defs_config,"mysql_ldap_mapping", ADMIN_SQLITE_TABLE_MYSQL_LDAP_MAPPING);
-		if (variables.hash_passwords==true) {
-			proxy_info("Impossible to set admin-hash_passwords=true when LDAP is enabled. Reverting to false\n");
-			variables.hash_passwords=false;
-		}
 	}
 }
 
@@ -6094,6 +6090,9 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_proxysql_message_metrics_reset", STATS_SQLITE_TABLE_PROXYSQL_MESSAGE_METRICS_RESET);
 
+	// init ldap here
+	init_ldap();
+
 	// upgrade mysql_servers if needed (upgrade from previous version)
 	disk_upgrade_mysql_servers();
 
@@ -6229,6 +6228,10 @@ void ProxySQL_Admin::init_sqliteserver_variables() {
 }
 
 void ProxySQL_Admin::init_ldap_variables() {
+	if (variables.hash_passwords==true) {
+		proxy_info("Impossible to set admin-hash_passwords=true when LDAP is enabled. Reverting to false\n");
+		variables.hash_passwords=false;
+	}
 	flush_ldap_variables___runtime_to_database(configdb, false, false, false);
 	flush_ldap_variables___runtime_to_database(admindb, false, true, false);
 	flush_ldap_variables___database_to_runtime(admindb,true);
