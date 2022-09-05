@@ -1027,7 +1027,6 @@ void ProxySQL_Main_init_phase2___not_started() {
 	}
 
 	if (GloMyLdapAuth) {
-		GloAdmin->init_ldap();
 		GloAdmin->load_ldap_variables_to_runtime();
 	}
 
