@@ -542,6 +542,10 @@ MySQL_Session::MySQL_Session() {
 	transaction_started_at = 0;
 
 	CurrentQuery.sess=this;
+	CurrentQuery.mysql_stmt=NULL;
+	CurrentQuery.stmt_meta=NULL;
+	CurrentQuery.stmt_global_id=0;
+	CurrentQuery.stmt_info=NULL;
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
