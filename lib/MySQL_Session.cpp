@@ -2738,9 +2738,8 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			std::string errmsg;
 			generate_status_one_hostgroup(current_hostgroup, errmsg);
 			proxy_error("%s . HG status: %s\n", buf, errmsg.c_str());
-			//enum session_status st;
+
 			while (previous_status.size()) {
-				previous_status.top();
 				previous_status.pop();
 			}
 			if (mybe->server_myds->myconn) {
