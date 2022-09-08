@@ -542,6 +542,10 @@ MySQL_Session::MySQL_Session() {
 	transaction_started_at = 0;
 
 	CurrentQuery.sess=this;
+	CurrentQuery.mysql_stmt=NULL;
+	CurrentQuery.stmt_meta=NULL;
+	CurrentQuery.stmt_global_id=0;
+	CurrentQuery.stmt_info=NULL;
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
@@ -2712,6 +2716,13 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
 		pause_until=0;
 	}
+	// If this is a 'fast_forward' session, we impose the 'connect_timeout' prior to actually getting the
+	// connection from the 'connection_pool'. This is used to ensure that we kill the session if
+	// 'CONNECTING_SERVER' isn't completed before this timeout expiring. For example, if 'max_connections'
+	// is reached for the target hostgroup.
+	if (session_fast_forward && mybe->server_myds->wait_until == 0) {
+		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
+	}
 	if (mybe->server_myds->max_connect_time) {
 		if (thread->curtime >= mybe->server_myds->max_connect_time) {
 			if (mirror) {
@@ -2727,19 +2738,16 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			std::string errmsg;
 			generate_status_one_hostgroup(current_hostgroup, errmsg);
 			proxy_error("%s . HG status: %s\n", buf, errmsg.c_str());
-			//enum session_status st;
+
 			while (previous_status.size()) {
-				previous_status.top();
 				previous_status.pop();
 			}
 			if (mybe->server_myds->myconn) {
-				// Created connection never reached 'connect_cont' phase, due to that
-				// internal structures of 'mysql->net' are not fully initialized.
-				// This induces a leak of the 'fd' associated with the socket
-				// opened by the library. To prevent this, we need to call
-				// `mysql_real_connect_cont` through `connect_cont`. This way
-				// we ensure a proper cleanup of all the resources when 'mysql_close'
-				// is later called. For more context see issue #3404.
+				// NOTE-3404: Created connection never reached 'connect_cont' phase, due to that internal
+				// structures of 'mysql->net' are not fully initialized.  This induces a leak of the 'fd'
+				// associated with the socket opened by the library. To prevent this, we need to call
+				// `mysql_real_connect_cont` through `connect_cont`. This way we ensure a proper cleanup of
+				// all the resources when 'mysql_close' is later called. For more context see issue #3404.
 				mybe->server_myds->myconn->connect_cont(MYSQL_WAIT_TIMEOUT);
 				mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 				if (mirror) {
@@ -2751,6 +2759,37 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 		}
 	}
+	if (session_fast_forward && mybe->server_myds->wait_until && mybe->server_myds->wait_until <= thread->curtime) {
+		std::string errmsg {};
+		string_format(
+			"Connect timeout reached while reaching hostgroup %d for 'fast_forward' session",
+			errmsg, current_hostgroup
+		);
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000", errmsg.c_str(), true);
+
+		std::string hosgroup_st {};
+		generate_status_one_hostgroup(current_hostgroup, hosgroup_st);
+		proxy_error("%s. HG status: %s\n", errmsg.c_str(), hosgroup_st.c_str());
+
+		RequestEnd(mybe->server_myds);
+		while (previous_status.size()) {
+			previous_status.pop();
+		}
+
+		if (mybe->server_myds->myconn) {
+			// See NOTE-3404.
+			mybe->server_myds->myconn->connect_cont(MYSQL_WAIT_TIMEOUT);
+			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+			if (mirror) {
+				PROXY_TRACE();
+				NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+			}
+		}
+
+		mybe->server_myds->wait_until=0;
+		NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+	}
+
 	if (mybe->server_myds->myconn==NULL) {
 		handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 	}

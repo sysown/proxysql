@@ -748,6 +748,8 @@ int get_variable_value(
 		res = EXIT_SUCCESS;
 	}
 
+	mysql_free_result(admin_res);
+
 cleanup:
 
 	return res;
