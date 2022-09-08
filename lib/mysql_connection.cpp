@@ -422,11 +422,11 @@ MySQL_Connection::MySQL_Connection() {
 	options.init_connect=NULL;
 	options.init_connect_sent=false;
 	options.session_track_gtids = NULL;
-	options.session_track_gtids_sent = false;
 	options.ldap_user_variable=NULL;
 	options.ldap_user_variable_value=NULL;
 	options.ldap_user_variable_sent=false;
 	options.session_track_gtids_int=0;
+	options.is_mariadb=false;
 	compression_pkt_id=0;
 	mysql_result=NULL;
 	query.ptr=NULL;
@@ -928,7 +928,7 @@ void MySQL_Connection::set_names_cont(short event) {
 	async_exit_status = mysql_set_character_set_cont(&interr,mysql, mysql_status(event, true));
 }
 
-void MySQL_Connection::set_query(char *stmt, unsigned long length) {
+void MySQL_Connection::set_query(const char *stmt, unsigned long length) {
 	query.length=length;
 	query.ptr=stmt;
 	if (length > largest_query_length) {
@@ -2603,7 +2603,7 @@ void MySQL_Connection::close_mysql() {
 
 
 // this function is identical to async_query() , with the only exception that MyRS should never be set
-int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigned long length) {
+int MySQL_Connection::async_send_simple_command(short event, const char *stmt, unsigned long length) {
 	PROXY_TRACE();
 	assert(mysql);
 	assert(ret_mysql);
@@ -2691,12 +2691,11 @@ void MySQL_Connection::reset() {
 	if (options.session_track_gtids) {
 		free (options.session_track_gtids);
 		options.session_track_gtids = NULL;
-		options.session_track_gtids_sent = false;
 	}
 }
 
 bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
-	// note: current implementation for for OWN GTID only!
+	// note: current implementation for for OWN GTID and MARIADB workaround only!
 	bool ret = false;
 	if (buff==NULL || trx_id == NULL) {
 		return ret;

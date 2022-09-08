@@ -1845,7 +1845,7 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 		variables.default_session_track_gtids=NULL;
 		if (vallen) {
-			// we only accept 2 value for session_track_gtids = OFF or OWN_GTID
+			// we only accept 3 value for session_track_gtids = OFF, OWN_GTID or MARIADB
 			if (strcasecmp(value,(char *)"OFF") == 0) {
 				// for convention, we stored the value as uppercase
 				variables.default_session_track_gtids=strdup((char *)"OFF");
@@ -1853,6 +1853,10 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			} else if (strcasecmp(value,(char *)"OWN_GTID") == 0) {
 				// for convention, we stored the value as uppercase
 				variables.default_session_track_gtids=strdup((char *)"OWN_GTID");
+				return true;
+			} else if (strcasecmp(value,(char *)"MARIADB") == 0) {
+				// for convention, we stored the value as uppercase
+				variables.default_session_track_gtids=strdup((char *)"MARIADB");
 				return true;
 			}
 		}

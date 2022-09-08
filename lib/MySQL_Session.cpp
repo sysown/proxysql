@@ -1791,6 +1791,13 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 		(b_int == 0) // not configured yet
 	) {
 		if (strcmp(mysql_thread___default_session_track_gtids, (char *)"OWN_GTID")==0) {
+			if (mybe->server_myds->myconn->options.is_mariadb)
+				proxy_warning("default_session_track_gtids is set to \"OWN_GTID\" but backend is a MariaDB server! Please set to \"MARIADB\".\n");
+			// backend connection doesn't have session_track_gtids enabled
+			ret = true;
+		} else if (strcmp(mysql_thread___default_session_track_gtids, (char *)"MARIADB")==0) {
+			if (!mybe->server_myds->myconn->options.is_mariadb)
+				proxy_warning("default_session_track_gtids is set to \"MARIADB\" but backend is not a MariaDB server! Please set to \"OWN_GTID\"\n");
 			// backend connection doesn't have session_track_gtids enabled
 			ret = true;
 		} else {
@@ -1808,14 +1815,14 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 			free(mybe->server_myds->myconn->options.session_track_gtids);
 			mybe->server_myds->myconn->options.session_track_gtids = NULL;
 		}
-		// because the only two possible values are OWN_GTID and OFF
+		// because the only two possible values are OWN_GTID/MARIADB and OFF
 		// and because we don't mind receiving GTIDs , if we reach here
-		// it means we are setting it to OWN_GTID, either because the client
+		// it means we are setting it to OWN_GTID/MARIADB, either because the client
 		// wants it, or because it is the default
-		// therefore we hardcode "OWN_GTID"
-		mybe->server_myds->myconn->options.session_track_gtids = strdup((char *)"OWN_GTID");
+		// therefore we use mysql_thread___default_session_track_gtids
+		mybe->server_myds->myconn->options.session_track_gtids = strdup(mysql_thread___default_session_track_gtids);
 		mybe->server_myds->myconn->options.session_track_gtids_int =
-			SpookyHash::Hash32((char *)"OWN_GTID", strlen((char *)"OWN_GTID"), 10);
+			SpookyHash::Hash32(mysql_thread___default_session_track_gtids, strlen(mysql_thread___default_session_track_gtids), 10);
 		// we now switch status to set session_track_gtids
 		switch(status) {
 			case PROCESSING_QUERY:
@@ -2618,7 +2625,7 @@ bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc)
 	MySQL_Connection *myconn=myds->myconn;
 	
 	if (myconn->options.is_mariadb) {
-		char * query = "SET SESSION_TRACK_STATE_CHANGE = ON, SESSION_TRACK_SYSTEM_VARIABLES = 'last_gtid'";
+		const char * query = "SET SESSION_TRACK_STATE_CHANGE = ON, SESSION_TRACK_SYSTEM_VARIABLES = 'last_gtid'";
 		unsigned long query_length=strlen(query);
 
 		myds->DSS=STATE_MARIADB_QUERY;
@@ -2647,7 +2654,7 @@ bool MySQL_Session::handler_again___status_SETTING_SESSION_TRACK_GTIDS(int *_rc)
 				if (myerr >= 2000 || myerr == 0) {
 					bool retry_conn=false;
 					// client error, serious
-					char * action = "while enabling SESSION_TRACK_STATE_CHANGE";
+					const char * action = "while enabling SESSION_TRACK_STATE_CHANGE";
 					detected_broken_connection(__FILE__ , __LINE__ , __func__ , action, myconn, myerr, mysql_error(myconn->mysql));
 					if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
 						retry_conn=true;
@@ -5967,19 +5974,15 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 					} else if (var == "session_track_gtids") {
 						std::string value1 = *values;
-						if ((strcasecmp(value1.c_str(),"OWN_GTID")==0) || (strcasecmp(value1.c_str(),"OFF")==0) || (strcasecmp(value1.c_str(),"ALL_GTIDS")==0)) {
+						if (strcmp(client_myds->myconn->options.session_track_gtids, "MARIADB") == 0) {
+							proxy_warning("SET session_track_gtids is not supported by MariaDB. Ignoring. Client %s:%d\n", client_myds->addr.addr, client_myds->addr.port);
+						} else if ((strcasecmp(value1.c_str(),"OWN_GTID")==0) || (strcasecmp(value1.c_str(),"OFF")==0) || (strcasecmp(value1.c_str(),"ALL_GTIDS")==0)) {
 							if (strcasecmp(value1.c_str(),"ALL_GTIDS")==0) {
 								// we convert session_track_gtids=ALL_GTIDS to session_track_gtids=OWN_GTID
-								std::string a = "";
-								if (client_myds && client_myds->addr.addr) {
-									a = " . Client ";
-									a+= client_myds->addr.addr;
-									a+= ":" + std::to_string(client_myds->addr.port);
-								}
-								proxy_warning("SET session_track_gtids=ALL_GTIDS is not allowed. Switching to session_track_gtids=OWN_GTID%s\n", a.c_str());
+								proxy_warning("SET session_track_gtids=ALL_GTIDS is not allowed. Switching to session_track_gtids=OWN_GTID. Client %s:%d\n", client_myds->addr.addr, client_myds->addr.port);
 								value1 = "OWN_GTID";
 							}
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET session_track_gtids value %s\n", value1.c_str());
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET session_track_gtids value. Client %s::%d\n", client_myds->addr.addr, client_myds->addr.port);
 							uint32_t session_track_gtids_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 							if (client_myds->myconn->options.session_track_gtids_int != session_track_gtids_int) {
 								client_myds->myconn->options.session_track_gtids_int = session_track_gtids_int;
