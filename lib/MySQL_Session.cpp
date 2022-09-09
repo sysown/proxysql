@@ -7181,7 +7181,14 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 // this should become the place to hook other functions
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	// check if multiplexing needs to be disabled
-	char *qdt=CurrentQuery.get_digest_text();
+	char *qdt = NULL;
+
+	if (status != PROCESSING_STMT_EXECUTE) {
+		qdt = CurrentQuery.get_digest_text();
+	} else {
+		qdt = CurrentQuery.stmt_info->digest_text;
+	}
+
 	if (qdt && myds && myds->myconn) {
 		myds->myconn->ProcessQueryAndSetStatusFlags(qdt);
 	}
