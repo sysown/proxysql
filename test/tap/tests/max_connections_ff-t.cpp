@@ -423,6 +423,11 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	plan(
+		1*2 + // 'test_ff_sess_exceeds_max_conns'
+		2*2   // 'test_ff_only_one_free_conn'
+	);
+
 	MYSQL* proxy_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
