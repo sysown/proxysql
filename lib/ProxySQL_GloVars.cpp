@@ -169,6 +169,7 @@ void ProxySQL_GlobalVariables::install_signal_handler() {
 	signal(SIGTERM, term_handler);
 	signal(SIGSEGV, crash_handler);
 	signal(SIGABRT, crash_handler);
+	signal(SIGFPE, crash_handler);
 	signal(SIGPIPE, SIG_IGN);
 }
 
