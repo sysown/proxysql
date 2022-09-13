@@ -5234,7 +5234,7 @@ __end_show_commands:
 	}
 
 __run_query:
-	if (sess->proxysql_node_address) {
+	if (sess->proxysql_node_address && (__sync_fetch_and_add(&glovars.shutdown,0)==0)) {
 		if (sess->client_myds->active) {
 			const string uuid { sess->proxysql_node_address->uuid };
 			const string hostname { sess->proxysql_node_address->hostname };
