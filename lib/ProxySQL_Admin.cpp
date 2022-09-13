@@ -6430,7 +6430,7 @@ int check_port_availability(int port_num, bool* port_free) {
 		close(sfd);
 		ecode = -1;
 	} else {
-		if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+		if (::bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
 			close(sfd);
 		} else {
 			*port_free = true;
@@ -6700,7 +6700,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 									variables.web_port
 								);
 							} else {
-								if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+								if (::bind(sfd, (struct sockaddr*)&tmp_addr, (socklen_t)sizeof(tmp_addr)) == -1) {
 									close(sfd);
 									proxy_error(
 										"Unable to start WebInterfacePlugin, port '%d' already in use.\n",

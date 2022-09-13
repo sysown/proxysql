@@ -5,6 +5,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <sys/time.h>
+
 
 #ifdef CXX17
 template<class...> struct conjunction : std::true_type { };
@@ -60,22 +62,22 @@ struct to_opts {
 	 * @brief Timeout for the script execution to be completed, in case of being
 	 *   exceeded, the script will be terminated.
 	 */
-	uint timeout_us;
+	unsigned int timeout_us;
 	/**
 	 * @brief Timeout used for 'select()' non blocking calls.
 	 */
-	uint select_to_us;
+	suseconds_t select_to_us;
 	/**
 	 * @brief The duration of the sleeps between the checks being performed
 	 *   on the child process waiting it to exit after being signaled to terminate,
 	 *   before issuing 'SIGKILL'.
 	 */
-	uint it_delay_us;
+	unsigned int it_delay_us;
 	/**
 	 * @brief The timeout to be waited on the child process after being signaled
 	 *   with 'SIGTERM' before being forcely terminated by 'SIGKILL'.
 	 */
-	uint sigkill_timeout_us;
+	unsigned int sigkill_timeout_us;
 };
 
 /**
