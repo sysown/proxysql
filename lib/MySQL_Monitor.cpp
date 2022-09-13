@@ -2655,6 +2655,7 @@ void * MySQL_Monitor::monitor_ping() {
 			int us=100;
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_ping_interval/2/resultset->rows_count;
+				us = us == 0 ? 1 : us;
 				us*=40;
 				if (us > 1000000) {
 					us = 10000;
@@ -2926,6 +2927,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			int us=100;
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_read_only_interval/2/resultset->rows_count;
+				us = us == 0 ? 1 : us;
 				us*=40;
 				if (us > 1000000) {
 					us = 10000;
