@@ -51,6 +51,8 @@
 
 #define EXPMARIA
 
+using std::function;
+using std::vector;
 
 static inline char is_digit(char c) {
 	if(c >= '0' && c <= '9')
@@ -694,6 +696,29 @@ MySQL_Backend * MySQL_Session::find_backend(int hostgroup_id) {
 	return NULL; // NULL = backend not found
 };
 
+void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connection*)>>& checks) {
+	for (uint32_t i = 0; i < mybes->len; i++) {
+		MySQL_Backend* mybe = static_cast<MySQL_Backend*>(mybes->index(i));
+		MySQL_Data_Stream* myds = mybe != nullptr ? mybe->server_myds : nullptr;
+		MySQL_Connection* myconn = myds != nullptr ? myds->myconn : nullptr;
+
+		if (myconn != nullptr) {
+			const bool is_active_transaction = myconn->IsActiveTransaction();
+			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
+			const bool is_idle = myconn->async_state_machine == ASYNC_IDLE;
+
+			// Make sure the connection is reusable before performing any check
+			if (myconn->reusable==true && is_active_transaction==false && multiplex_disabled==false && is_idle) {
+				for (const function<bool(MySQL_Connection*)>& check : checks) {
+					if (check(myconn)) {
+						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
+						break;
+					}
+				}
+			}
+		}
+	}
+}
 
 MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=new MySQL_Backend();
@@ -4395,6 +4420,9 @@ int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 
 // this function was inline
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
+// NOTE: Maintenance of 'multiplex_delayed' has been moved to 'housekeeping_before_pkts'. The previous impl
+// is left below as an example of how to perform a more passive maintenance over session connections.
+/*
 	if (mybes) {
 		MySQL_Backend *_mybe;
 		unsigned int i;
@@ -4413,6 +4441,34 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 					}
 				}
 			}
+		}
+	}
+*/
+}
+
+void MySQL_Session::housekeeping_before_pkts() {
+	if (mysql_thread___multiplexing) {
+		for (const int hg_id : hgs_expired_conns) {
+			MySQL_Backend* mybe = find_backend(hg_id);
+
+			if (mybe != nullptr) {
+				MySQL_Data_Stream* myds = mybe->server_myds;
+
+				if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+					if (mysql_thread___reset_connection_algorithm == 2) {
+						create_new_session_and_reset_connection(myds);
+					} else {
+						myds->destroy_MySQL_Connection_From_Pool(true);
+					}
+				} else {
+					myds->return_MySQL_Connection_To_Pool();
+				}
+			}
+		}
+		// We are required to perform a cleanup after consuming the elements, thus preventing any subsequent
+		// 'handler' call to perform recomputing of the already processed elements.
+		if (hgs_expired_conns.empty() == false) {
+			hgs_expired_conns.clear();
 		}
 	}
 }
@@ -4469,6 +4525,7 @@ int MySQL_Session::handler() {
 	}
 	}
 
+	housekeeping_before_pkts();
 	handler_ret = get_pkts_from_client(wrong_pass, pkt);
 	if (handler_ret != 0) {
 		return handler_ret;
@@ -7307,6 +7364,7 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 	new_myds->myprot.init(&new_myds, new_myds->myconn->userinfo, NULL);
 	new_sess->status = RESETTING_CONNECTION;
 	mc->async_state_machine = ASYNC_IDLE; // may not be true, but is used to correctly perform error handling
+	mc->auto_increment_delay_token = 0;
 	new_myds->DSS = STATE_MARIADB_QUERY;
 	thread->register_session_connection_handler(new_sess,true);
 	if (new_myds->mypolls==NULL) {
@@ -7427,9 +7485,29 @@ void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *mycon
 							myds->myconn->set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 						}
 					}
-					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
-							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
+
+					const bool is_active_transaction = myds->myconn->IsActiveTransaction();
+					const bool multiplex_disabled_by_status = myds->myconn->MultiplexDisabled(false);
+
+					const bool multiplex_delayed = myds->myconn->auto_increment_delay_token > 0;
+					const bool multiplex_delayed_with_timeout =
+						!multiplex_disabled_by_status && multiplex_delayed && mysql_thread___auto_increment_delay_multiplex_timeout_ms > 0;
+
+					const bool multiplex_disabled = !multiplex_disabled_by_status && (!multiplex_delayed || multiplex_delayed_with_timeout);
+					const bool conn_is_reusable = myds->myconn->reusable == true && !is_active_transaction && multiplex_disabled;
+
+					if (mysql_thread___multiplexing && conn_is_reusable) {
+						if ((mysql_thread___connection_delay_multiplex_ms || multiplex_delayed_with_timeout) && mirror==false) {
+							if (multiplex_delayed_with_timeout) {
+								uint64_t delay_multiplex_us = mysql_thread___connection_delay_multiplex_ms * 1000;
+								uint64_t auto_increment_delay_us = mysql_thread___auto_increment_delay_multiplex_timeout_ms * 1000;
+								uint64_t delay_us = delay_multiplex_us > auto_increment_delay_us ? delay_multiplex_us : auto_increment_delay_us;
+
+								myds->wait_until=thread->curtime + delay_us;
+							} else {
+								myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
+							}
+
 							myconn->async_state_machine=ASYNC_IDLE;
 							myconn->multiplex_delayed=true;
 							myds->DSS=STATE_MARIADB_GENERIC;

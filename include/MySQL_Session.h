@@ -1,5 +1,9 @@
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
+
+#include <functional>
+#include <vector>
+
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
@@ -155,7 +159,11 @@ class MySQL_Session
 	void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
-
+	/**
+	 * @brief Performs the required housekeeping operations over the session and its connections before
+	 *  performing any processing on received client packets.
+	 */
+	void housekeeping_before_pkts();
 	int get_pkts_from_client(bool&, PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
@@ -215,6 +223,12 @@ class MySQL_Session
 	PtrArray *mybes;
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
+	/*
+	 * @brief Store the hostgroups that hold connections that have been flagged as 'expired' by the
+	 *  maintenance thread. These values will be used to release the retained connections in the specific
+	 *  hostgroups in housekeeping operations, before client packet processing. Currently 'housekeeping_before_pkts'.
+	 */
+	std::vector<int32_t> hgs_expired_conns {};
 	char * default_schema;
 	char * user_attributes;
 
@@ -319,6 +333,7 @@ class MySQL_Session
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
+	void update_expired_conns(const std::vector<std::function<bool(MySQL_Connection*)>>&);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
 	 *  'transaction_persistent_hostgroup', and updates the 'MySQL_Data_Stream' and 'MySQL_Connection' before
