@@ -70,6 +70,10 @@ void MySQL_Event::set_rows_sent(uint64_t rs) {
 	rows_sent=rs;
 }
 
+void MySQL_Event::set_last_insert_id(uint64_t li_id) {
+	last_insert_id=li_id;
+}
+
 void MySQL_Event::set_extra_info(char *_err) {
 	extra_info = _err;
 }
@@ -259,6 +263,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	total_bytes+=mysql_encode_length(end_time,NULL);
 	total_bytes+=mysql_encode_length(affected_rows,NULL);
 	total_bytes+=mysql_encode_length(rows_sent,NULL);
+	total_bytes+=mysql_encode_length(last_insert_id,NULL);
 
 	total_bytes+=mysql_encode_length(query_digest,NULL);
 
@@ -322,6 +327,10 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	write_encoded_length(buf,rows_sent,len,buf[0]);
 	f->write((char *)buf,len);
 
+	len=mysql_encode_length(last_insert_id,buf);
+	write_encoded_length(buf,last_insert_id,len,buf[0]);
+	f->write((char *)buf,len);
+
 	len=mysql_encode_length(query_digest,buf);
 	write_encoded_length(buf,query_digest,len,buf[0]);
 	f->write((char *)buf,len);
@@ -378,6 +387,7 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	}
 	j["rows_affected"] = affected_rows;
 	j["rows_sent"] = rows_sent;
+	j["last_insert_id"] = last_insert_id;
 	j["query"] = string(query_ptr,query_len);
 	j["starttime_timestamp_us"] = start_time;
 	{
@@ -698,6 +708,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 
 	if (sess->CurrentQuery.have_affected_rows) {
 		me.set_affected_rows(sess->CurrentQuery.affected_rows);
+		me.set_last_insert_id(sess->CurrentQuery.last_insert_id);
 	}
 	me.set_rows_sent(sess->CurrentQuery.rows_sent);
 

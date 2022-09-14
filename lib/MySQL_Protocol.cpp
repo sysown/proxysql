@@ -526,6 +526,7 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 		if (sess->session_type == PROXYSQL_SESSION_MYSQL) {
 			sess->CurrentQuery.have_affected_rows = true;
 			sess->CurrentQuery.affected_rows = affected_rows;
+			sess->CurrentQuery.last_insert_id = last_insert_id;
 		}
 	}
 	if (*myds && (*myds)->myconn) {

@@ -275,6 +275,7 @@ Query_Info::Query_Info() {
 	have_affected_rows=false;
 	waiting_since = 0;
 	affected_rows=0;
+	last_insert_id=0;
 	rows_sent=0;
 	start_time=0;
 	end_time=0;
@@ -308,6 +309,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	waiting_since = 0;
 	affected_rows=0;
 	rows_sent=0;
+	last_insert_id=0;
 	sess->gtid_hid=-1;
 }
 

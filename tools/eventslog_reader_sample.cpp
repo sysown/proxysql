@@ -109,6 +109,7 @@ class MySQL_Event {
 	uint64_t hid;
 	uint64_t affected_rows;
 	uint64_t rows_sent;
+	uint64_t last_insert_id;
 	log_event_type et;
 	public:
 	MySQL_Event() {
@@ -163,6 +164,7 @@ class MySQL_Event {
 		read_encoded_length((uint64_t *)&end_time,f);
 		read_encoded_length((uint64_t *)&affected_rows,f);
 		read_encoded_length((uint64_t *)&rows_sent,f);
+		read_encoded_length((uint64_t *)&last_insert_id,f);
 		read_encoded_length((uint64_t *)&query_digest,f);
 		char digest_hex[20];
 		sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
@@ -185,6 +187,7 @@ class MySQL_Event {
 		cout << " duration=" << (end_time-start_time) << "us";
 		cout << " rows_affected=" << affected_rows;
 		cout << " rows_sent=" << rows_sent;
+		cout << " last_insert_id=" << last_insert_id;
 		cout << " digest=\"" << digest_hex << "\"" << endl << query_ptr << endl;
 	}
 	~MySQL_Event() {
