@@ -2454,6 +2454,13 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 				sprintf(query,q,"tx_isolation", var_value);
 			}
 		} else if (strncasecmp("aurora_read_replica_read_committed", var_name, 34) == 0) {
+			// If aurora_read_replica_read_committed is set, isolation level is
+			// internally reset so that it will be set again.
+			// This solves the weird behavior in AWS Aurora related to isolation level
+			// as described in
+			// https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Reference.html#AuroraMySQL.Reference.IsolationLevels
+			// Basically, to change isolation level you must first set
+			// aurora_read_replica_read_committed , and then isolation level
 			MySQL_Connection *beconn = mybe->server_myds->myconn;
 			if (beconn->var_hash[SQL_ISOLATION_LEVEL] != 0) {
 				beconn->var_hash[SQL_ISOLATION_LEVEL] = 0;
