@@ -386,6 +386,10 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->error_msg);
 	if (qr->OK_msg)
 		free(qr->OK_msg);
+	if (qr->attributes)
+		free(qr->attributes);
+	if (qr->comment)
+		free(qr->comment);
 	if (qr->regex_engine1) {
 		re2_t *r=(re2_t *)qr->regex_engine1;
 		if (r->opt1) { delete r->opt1; r->opt1=NULL; }

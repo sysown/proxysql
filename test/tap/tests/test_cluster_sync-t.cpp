@@ -2,6 +2,7 @@
  * @file test_cluster_sync-t.cpp
  * @brief Checks that ProxySQL is properly syncing multiple elements from another Cluster instance.
  * @details Checks the sync of the following tables:
+ *   - 'mysql_servers' with different status to check expected propagation.
  *   - 'mysql_galera_hostgroups' with and without NULL comments.
  *   - 'mysql_group_replication_hostgroups' with and without NULL comments.
  *   - 'proxysql_servers' with new values and empty (exercising bug from '#3847').
@@ -60,6 +61,7 @@
 
 using std::string;
 using std::vector;
+using std::tuple;
 
 /**
  * @brief Helper function to verify that the sync of a table (or variable) have been performed.
@@ -229,6 +231,166 @@ int check_nodes_sync(
 	return EXIT_SUCCESS;
 }
 
+const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
+
+using mysql_server_tuple = tuple<int,string,int,int,string,int,int,int,int,int,int,string>;
+
+
+int check_mysql_servers_sync(
+	const CommandLine& cl, MYSQL* proxy_admin, MYSQL* r_proxy_admin,
+	const vector<mysql_server_tuple>& insert_mysql_servers_values
+) {
+	MYSQL_QUERY(proxy_admin, "SET mysql-monitor_enabled='false'");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	// TODO: Perform a wait for the values of 'mysql-monitor_read_only_interval' and 'mysql-monitor_read_only_timeout'.
+	// This will ensure no further monitor 'read-only' operations are being performed before proceeding.
+	string monitor_read_only_interval {};
+	int g_err = get_variable_value(proxy_admin, "mysql-monitor_read_only_interval", monitor_read_only_interval);
+	if (g_err) { return EXIT_FAILURE; }
+	string monitor_read_only_timeout {};
+	g_err = get_variable_value(proxy_admin, "mysql-monitor_read_only_timeout", monitor_read_only_timeout);
+	if (g_err) { return EXIT_FAILURE; }
+
+	uint64_t wait = std::stol(monitor_read_only_interval) / 1000 + std::stol(monitor_read_only_timeout) / 1000;
+	sleep(wait*2);
+
+	std::string print_master_mysql_servers_hostgroups = "";
+	string_format(t_debug_query, print_master_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_servers");
+	std::string print_replica_mysql_servers_hostgroups = "";
+	string_format(t_debug_query, print_replica_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM mysql_servers");
+
+	// Configure 'mysql_servers' and check sync with NULL comments
+	const char* t_insert_mysql_servers =
+		"INSERT INTO mysql_servers ("
+			" hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections,"
+			" max_replication_lag, use_ssl, max_latency_ms, comment"
+		") VALUES (%d, '%s', %d, %d, '%s', %d, %d, %d, %d, %d, %d, '%s')";
+	std::vector<std::string> insert_mysql_mysql_servers_hostgroup_queries {};
+
+	for (auto const& values : insert_mysql_servers_values) {
+		std::string insert_mysql_servers_hostgroup_query = "";
+		string_format(
+			t_insert_mysql_servers,
+			insert_mysql_servers_hostgroup_query,
+			std::get<0>(values),
+			std::get<1>(values).c_str(),
+			std::get<2>(values),
+			std::get<3>(values),
+			std::get<4>(values).c_str(),
+			std::get<5>(values),
+			std::get<6>(values),
+			std::get<7>(values),
+			std::get<8>(values),
+			std::get<9>(values),
+			std::get<10>(values),
+			std::get<11>(values).c_str()
+		);
+		insert_mysql_mysql_servers_hostgroup_queries.push_back(insert_mysql_servers_hostgroup_query);
+	}
+
+	std::vector<std::string> select_mysql_mysql_servers_hostgroup_queries {};
+
+	for (auto const& values : insert_mysql_servers_values) {
+		const char* t_select_mysql_servers_inserted_entries =
+			"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d AND hostname='%s'"
+				" AND port=%d AND gtid_port=%d AND status='%s' AND weight=%d AND"
+				" compression=%d AND max_connections=%d AND max_replication_lag=%d"
+				" AND use_ssl=%d AND max_latency_ms=%d AND comment='%s'";
+
+		string status { std::get<4>(values) };
+		if (status == "SHUNNED") { status = "ONLINE"; }
+		std::string select_mysql_servers_hostgroup_query = "";
+
+		string_format(
+			t_select_mysql_servers_inserted_entries,
+			select_mysql_servers_hostgroup_query,
+			std::get<0>(values),
+			std::get<1>(values).c_str(),
+			std::get<2>(values),
+			std::get<3>(values),
+			status.c_str(),
+			std::get<5>(values),
+			std::get<6>(values),
+			std::get<7>(values),
+			std::get<8>(values),
+			std::get<9>(values),
+			std::get<10>(values),
+			std::get<11>(values).c_str()
+		);
+
+		if (status == "OFFLINE_HARD") {
+			t_select_mysql_servers_inserted_entries = "SELECT NOT(%s)";
+			string_format(
+				t_select_mysql_servers_inserted_entries,
+				select_mysql_servers_hostgroup_query,
+				select_mysql_servers_hostgroup_query.c_str()
+			);
+		}
+
+		select_mysql_mysql_servers_hostgroup_queries.push_back(select_mysql_servers_hostgroup_query);
+	}
+
+	// SETUP CONFIG
+
+	// Backup current table
+	MYSQL_QUERY(proxy_admin, "CREATE TABLE mysql_servers_sync_test_2687 AS SELECT * FROM mysql_servers");
+	MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_servers");
+
+	// Insert the new mysql_servers hostgroups values
+	for (const auto& query : insert_mysql_mysql_servers_hostgroup_queries) {
+		MYSQL_QUERY(proxy_admin, query.c_str());
+	}
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
+	system(print_master_mysql_servers_hostgroups.c_str());
+
+	// SYNCH CHECK
+
+	// Sleep until timeout waiting for synchronization
+	uint waited = 0;
+	bool not_synced_query = false;
+	while (waited < SYNC_TIMEOUT) {
+		not_synced_query = false;
+		// Check that all the entries have been synced
+		for (const auto& query : select_mysql_mysql_servers_hostgroup_queries) {
+			MYSQL_QUERY(r_proxy_admin, query.c_str());
+			MYSQL_RES* mysql_servers_res = mysql_store_result(r_proxy_admin);
+			MYSQL_ROW row = mysql_fetch_row(mysql_servers_res);
+			int row_value = atoi(row[0]);
+			mysql_free_result(mysql_servers_res);
+
+			if (row_value == 0) {
+				not_synced_query = true;
+				diag("Waiting on query '%s'...\n", query.c_str());
+				break;
+			}
+		}
+
+		if (not_synced_query) {
+			waited += 1;
+			sleep(1);
+		} else {
+			break;
+		}
+	}
+
+	std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
+	system(print_replica_mysql_servers_hostgroups.c_str());
+	ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+
+	// TEARDOWN CONFIG
+	MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_servers");
+	MYSQL_QUERY(proxy_admin, "INSERT INTO mysql_servers SELECT * FROM mysql_servers_sync_test_2687");
+	MYSQL_QUERY(proxy_admin, "DROP TABLE mysql_servers_sync_test_2687");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	MYSQL_QUERY(proxy_admin, "SET mysql-monitor_enabled='true'");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	return EXIT_SUCCESS;
+}
+
 int main(int, char**) {
 	int res = 0;
 	CommandLine cl;
@@ -239,10 +401,9 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	plan(12);
+	plan(15);
 
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
-	const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
 
 	MYSQL* proxy_admin = mysql_init(NULL);
 
@@ -353,6 +514,35 @@ int main(int, char**) {
 	}
 
 	sleep(2);
+
+	{
+		vector<mysql_server_tuple> insert_mysql_servers_values {
+			std::make_tuple(2, "127.0.0.1", 13308, 14, "OFFLINE_HARD", 2, 1, 500, 300, 1, 200, ""),
+			std::make_tuple(3, "127.0.0.1", 13309, 15, "SHUNNED", 1, 0, 500, 300, 1, 200, ""),
+			std::make_tuple(0, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, ""),
+			std::make_tuple(1, "127.0.0.1", 13307, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, "")
+		};
+
+		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values);
+
+		vector<mysql_server_tuple> insert_mysql_servers_values_2 {
+			std::make_tuple(0, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "mysql_1"),
+			std::make_tuple(1, "127.0.0.1", 13307, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, "mysql_2_offline"),
+			std::make_tuple(2, "127.0.0.1", 13308, 14, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, "mysql_3_offline"),
+			std::make_tuple(3, "127.0.0.1", 13309, 15, "OFFLINE_SOFT", 1, 0, 500, 300, 1, 200, "mysql_4_offline")
+		};
+
+		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values_2);
+
+		vector<mysql_server_tuple> insert_mysql_servers_values_3 {
+			std::make_tuple(0, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "mysql_1"),
+			std::make_tuple(1, "127.0.0.1", 13307, 13, "OFFLINE_HARD", 2, 1, 500, 300, 1, 200, "mysql_2_offline"),
+			std::make_tuple(2, "127.0.0.1", 13308, 14, "OFFLINE_HARD", 2, 1, 500, 300, 1, 200, "mysql_3_offline"),
+			std::make_tuple(3, "127.0.0.1", 13309, 15, "OFFLINE_HARD", 1, 0, 500, 300, 1, 200, "mysql_4_offline")
+		};
+
+		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values_3);
+	}
 
 	{
 		std::string print_master_galera_hostgroups = "";
@@ -485,10 +675,10 @@ int main(int, char**) {
 			"active, max_writers, writer_is_also_reader, max_transactions_behind, comment) "
 			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d, %s)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int, const char*>> insert_galera_values {
-			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_galera_hostgroup'"),
-			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_galera_hostgroup'"),
-			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150, "'reader_writer_test_galera_hostgroup'"),
 			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150, "'reader_writer_test_galera_hostgroup'"),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_galera_hostgroup'"),
 		};
 		std::vector<std::string> insert_mysql_galera_hostgroup_queries {};
 
@@ -601,10 +791,10 @@ int main(int, char**) {
 			"active, max_writers, writer_is_also_reader, max_transactions_behind) "
 			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int>> insert_group_replication_values {
-			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200),
-			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250),
 			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150),
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200),
 			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250),
 		};
 		std::vector<std::string> insert_mysql_group_replication_hostgroup_queries {};
 
@@ -718,10 +908,10 @@ int main(int, char**) {
 			"active, max_writers, writer_is_also_reader, max_transactions_behind, comment) "
 			"VALUES (%d, %d, %d, %d, %d, %d, %d, %d, %s)";
 		std::vector<std::tuple<int,int,int,int,int,int,int,int, const char*>> insert_group_replication_values {
-			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_group_replication_hostgroup'"),
-			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_group_replication_hostgroup'"),
 			std::make_tuple(2, 6, 10, 14, 1, 20, 0, 150, "'reader_writer_test_group_replication_hostgroup'"),
 			std::make_tuple(3, 7, 11, 15, 1, 20, 0, 350, "'reader_writer_test_group_replication_hostgroup'"),
+			std::make_tuple(1, 5, 9, 13, 1, 20, 0, 250, "'reader_writer_test_group_replication_hostgroup'"),
+			std::make_tuple(0, 4, 8, 12, 1, 10, 0, 200, "'reader_writer_test_group_replication_hostgroup'")
 		};
 		std::vector<std::string> insert_mysql_group_replication_hostgroup_queries {};
 
@@ -984,10 +1174,10 @@ int main(int, char**) {
 			"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks) "
 			"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d)";
 		std::vector<std::tuple<int,int,int,int,const char*,int,int,int,int,int,int,int,int>> insert_aws_aurora_values {
-			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1),
-			std::make_tuple(1, 5, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1),
 			std::make_tuple(2, 6, 1, 3308, ".test_domain2", 10002, 2002, 2002, 0, 3, 50, 100, 1),
 			std::make_tuple(3, 7, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1),
+			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1),
+			std::make_tuple(1, 5, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1),
 		};
 		std::vector<std::string> insert_mysql_aws_aurora_hostgroup_queries {};
 
@@ -1111,10 +1301,10 @@ int main(int, char**) {
 			"check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) "
 			"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, %d, %d, %d, %d, %d, '%s')";
 		std::vector<std::tuple<int,int,int,int,const char*,int,int,int,int,int,int,int,int,const char*>> insert_aws_aurora_values {
-			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
+			std::make_tuple(3, 7, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
 			std::make_tuple(1, 5, 1, 3307, ".test_domain1", 10001, 2001, 2001, 0, 2, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
 			std::make_tuple(2, 6, 1, 3308, ".test_domain2", 10002, 2002, 2002, 0, 3, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
-			std::make_tuple(3, 7, 1, 3309, ".test_domain3", 10003, 2003, 2003, 0, 4, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
+			std::make_tuple(0, 4, 1, 3306, ".test_domain0", 10000, 2000, 2000, 0, 1, 50, 100, 1, "reader_writer_test_aws_aurora_hostgroup"),
 		};
 		std::vector<std::string> insert_mysql_aws_aurora_hostgroup_queries {};
 

@@ -51,6 +51,8 @@
 
 #define EXPMARIA
 
+using std::function;
+using std::vector;
 
 static inline char is_digit(char c) {
 	if(c >= '0' && c <= '9')
@@ -542,6 +544,10 @@ MySQL_Session::MySQL_Session() {
 	transaction_started_at = 0;
 
 	CurrentQuery.sess=this;
+	CurrentQuery.mysql_stmt=NULL;
+	CurrentQuery.stmt_meta=NULL;
+	CurrentQuery.stmt_global_id=0;
+	CurrentQuery.stmt_info=NULL;
 
 	current_hostgroup=-1;
 	default_hostgroup=-1;
@@ -641,7 +647,11 @@ MySQL_Session::~MySQL_Session() {
 					break;
 #endif /* PROXYSQLCLICKHOUSE */
 				default:
-					GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+					if (use_ldap_auth == false) {
+						GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
+					} else {
+						GloMyLdapAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->fe_username);
+					}
 					break;
 			}
 		}
@@ -686,6 +696,29 @@ MySQL_Backend * MySQL_Session::find_backend(int hostgroup_id) {
 	return NULL; // NULL = backend not found
 };
 
+void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connection*)>>& checks) {
+	for (uint32_t i = 0; i < mybes->len; i++) {
+		MySQL_Backend* mybe = static_cast<MySQL_Backend*>(mybes->index(i));
+		MySQL_Data_Stream* myds = mybe != nullptr ? mybe->server_myds : nullptr;
+		MySQL_Connection* myconn = myds != nullptr ? myds->myconn : nullptr;
+
+		if (myconn != nullptr) {
+			const bool is_active_transaction = myconn->IsActiveTransaction();
+			const bool multiplex_disabled = myconn->MultiplexDisabled(false);
+			const bool is_idle = myconn->async_state_machine == ASYNC_IDLE;
+
+			// Make sure the connection is reusable before performing any check
+			if (myconn->reusable==true && is_active_transaction==false && multiplex_disabled==false && is_idle) {
+				for (const function<bool(MySQL_Connection*)>& check : checks) {
+					if (check(myconn)) {
+						this->hgs_expired_conns.push_back(mybe->hostgroup_id);
+						break;
+					}
+				}
+			}
+		}
+	}
+}
 
 MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
 	MySQL_Backend *_mybe=new MySQL_Backend();
@@ -984,17 +1017,25 @@ bool MySQL_Session::handler_SetAutocommit(PtrSize_t *pkt) {
 					goto __ret_autocommit_OK;
 				}
 __ret_autocommit_OK:
-				client_myds->DSS=STATE_QUERY_SENT_NET;
-				uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
-				client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-				client_myds->DSS=STATE_SLEEP;
-				status=WAITING_CLIENT_DATA;
-				if (mirror==false) {
-					RequestEnd(NULL);
+				if (session_type == PROXYSQL_SESSION_MYSQL) { // do not run this if PROXYSQL_SESSION_SQLITE
+					client_myds->DSS=STATE_QUERY_SENT_NET;
+					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+					if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
+					client_myds->DSS=STATE_SLEEP;
+					status=WAITING_CLIENT_DATA;
+					if (mirror==false) {
+						RequestEnd(NULL);
+					}
+					__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
 				}
-				l_free(pkt->size,pkt->ptr);
-				__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
+				if (session_type == PROXYSQL_SESSION_MYSQL) {
+					// free() only if session_type == PROXYSQL_SESSION_MYSQL
+					// because the packet will be freed in
+					// handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql()
+					// for all session type other than PROXYSQL_SESSION_MYSQL
+					l_free(pkt->size,pkt->ptr);
+				}
 				free(_new_pkt.ptr);
 				return true;
 			}
@@ -1092,11 +1133,11 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 		}
 	}
-	for (unsigned int k=0; k<mybes->len; k++) {
+	for (unsigned int i=0; i<mybes->len; i++) {
 		MySQL_Backend *_mybe = NULL;
-		_mybe=(MySQL_Backend *)mybes->index(k);
-		unsigned int i = _mybe->hostgroup_id;
-		j["backends"][i]["hostgroup_id"] = i;
+		_mybe=(MySQL_Backend *)mybes->index(i);
+		//unsigned int i = _mybe->hostgroup_id;
+		j["backends"][i]["hostgroup_id"] = _mybe->hostgroup_id;
 		j["backends"][i]["gtid"] = ( strlen(_mybe->gtid_uuid) ? _mybe->gtid_uuid : "" );
 		if (_mybe->server_myds) {
 			MySQL_Data_Stream *_myds=_mybe->server_myds;
@@ -2091,7 +2132,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 		previous_status.pop();
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
-		if (rc==-1) {
+		if (rc==-1 || rc==-2) {
 			// the command failed
 			int myerr=mysql_errno(myconn->mysql);
 			MyHGM->p_update_mysql_error_counter(
@@ -2106,11 +2147,18 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 				// client error, serious
 				detected_broken_connection(__FILE__ , __LINE__ , __func__ , "while setting INIT CONNECT", myconn, myerr, mysql_error(myconn->mysql));
 							//if ((myds->myconn->reusable==true) && ((myds->myprot.prot_status & SERVER_STATUS_IN_TRANS)==0)) {
-							if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-								retry_conn=true;
+							if (rc != -2) { // see PMC-10003
+								if ((myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
+									retry_conn=true;
+							}
 				}
 				myds->destroy_MySQL_Connection_From_Pool(false);
 				myds->fd=0;
+				if (rc==-2) {
+					// Here we handle PMC-10003
+					// and we terminate the session
+					retry_conn=false;
+				}
 				if (retry_conn) {
 					myds->DSS=STATE_NOT_INITIALIZED;
 					//previous_status.push(PROCESSING_QUERY);
@@ -2437,8 +2485,24 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			else {
 				sprintf(query,q,"tx_isolation", var_value);
 			}
-		}
-		else {
+		} else if (strncasecmp("aurora_read_replica_read_committed", var_name, 34) == 0) {
+			// If aurora_read_replica_read_committed is set, isolation level is
+			// internally reset so that it will be set again.
+			// This solves the weird behavior in AWS Aurora related to isolation level
+			// as described in
+			// https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Reference.html#AuroraMySQL.Reference.IsolationLevels
+			// Basically, to change isolation level you must first set
+			// aurora_read_replica_read_committed , and then isolation level
+			MySQL_Connection *beconn = mybe->server_myds->myconn;
+			if (beconn->var_hash[SQL_ISOLATION_LEVEL] != 0) {
+				beconn->var_hash[SQL_ISOLATION_LEVEL] = 0;
+				if (beconn->variables[SQL_ISOLATION_LEVEL].value) {
+					free(beconn->variables[SQL_ISOLATION_LEVEL].value);
+					beconn->variables[SQL_ISOLATION_LEVEL].value = NULL;
+				}
+			}
+			sprintf(query,q,var_name, var_value);
+		} else {
 			sprintf(query,q,var_name, var_value);
 		}
 		query_length=strlen(query);
@@ -2762,6 +2826,13 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
 		pause_until=0;
 	}
+	// If this is a 'fast_forward' session, we impose the 'connect_timeout' prior to actually getting the
+	// connection from the 'connection_pool'. This is used to ensure that we kill the session if
+	// 'CONNECTING_SERVER' isn't completed before this timeout expiring. For example, if 'max_connections'
+	// is reached for the target hostgroup.
+	if (session_fast_forward && mybe->server_myds->wait_until == 0) {
+		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
+	}
 	if (mybe->server_myds->max_connect_time) {
 		if (thread->curtime >= mybe->server_myds->max_connect_time) {
 			if (mirror) {
@@ -2777,19 +2848,16 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			std::string errmsg;
 			generate_status_one_hostgroup(current_hostgroup, errmsg);
 			proxy_error("%s . HG status: %s\n", buf, errmsg.c_str());
-			//enum session_status st;
+
 			while (previous_status.size()) {
-				previous_status.top();
 				previous_status.pop();
 			}
 			if (mybe->server_myds->myconn) {
-				// Created connection never reached 'connect_cont' phase, due to that
-				// internal structures of 'mysql->net' are not fully initialized.
-				// This induces a leak of the 'fd' associated with the socket
-				// opened by the library. To prevent this, we need to call
-				// `mysql_real_connect_cont` through `connect_cont`. This way
-				// we ensure a proper cleanup of all the resources when 'mysql_close'
-				// is later called. For more context see issue #3404.
+				// NOTE-3404: Created connection never reached 'connect_cont' phase, due to that internal
+				// structures of 'mysql->net' are not fully initialized.  This induces a leak of the 'fd'
+				// associated with the socket opened by the library. To prevent this, we need to call
+				// `mysql_real_connect_cont` through `connect_cont`. This way we ensure a proper cleanup of
+				// all the resources when 'mysql_close' is later called. For more context see issue #3404.
 				mybe->server_myds->myconn->connect_cont(MYSQL_WAIT_TIMEOUT);
 				mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
 				if (mirror) {
@@ -2801,6 +2869,37 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 		}
 	}
+	if (session_fast_forward && mybe->server_myds->wait_until && mybe->server_myds->wait_until <= thread->curtime) {
+		std::string errmsg {};
+		string_format(
+			"Connect timeout reached while reaching hostgroup %d for 'fast_forward' session",
+			errmsg, current_hostgroup
+		);
+		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000", errmsg.c_str(), true);
+
+		std::string hosgroup_st {};
+		generate_status_one_hostgroup(current_hostgroup, hosgroup_st);
+		proxy_error("%s. HG status: %s\n", errmsg.c_str(), hosgroup_st.c_str());
+
+		RequestEnd(mybe->server_myds);
+		while (previous_status.size()) {
+			previous_status.pop();
+		}
+
+		if (mybe->server_myds->myconn) {
+			// See NOTE-3404.
+			mybe->server_myds->myconn->connect_cont(MYSQL_WAIT_TIMEOUT);
+			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
+			if (mirror) {
+				PROXY_TRACE();
+				NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+			}
+		}
+
+		mybe->server_myds->wait_until=0;
+		NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
+	}
+
 	if (mybe->server_myds->myconn==NULL) {
 		handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 	}
@@ -3379,6 +3478,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 // client_myds->DSS = STATE_SLEEP
 // enum_mysql_command = _MYSQL_COM_QUERY
 // it processes the session not MYSQL_SESSION
+// Make sure that handler_function() doesn't free the packet
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(PtrSize_t& pkt) {
 	switch (session_type) {
 		case PROXYSQL_SESSION_ADMIN:
@@ -4405,6 +4505,9 @@ int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
 
 // this function was inline
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
+// NOTE: Maintenance of 'multiplex_delayed' has been moved to 'housekeeping_before_pkts'. The previous impl
+// is left below as an example of how to perform a more passive maintenance over session connections.
+/*
 	if (mybes) {
 		MySQL_Backend *_mybe;
 		unsigned int i;
@@ -4423,6 +4526,34 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 					}
 				}
 			}
+		}
+	}
+*/
+}
+
+void MySQL_Session::housekeeping_before_pkts() {
+	if (mysql_thread___multiplexing) {
+		for (const int hg_id : hgs_expired_conns) {
+			MySQL_Backend* mybe = find_backend(hg_id);
+
+			if (mybe != nullptr) {
+				MySQL_Data_Stream* myds = mybe->server_myds;
+
+				if (mysql_thread___autocommit_false_not_reusable && myds->myconn->IsAutoCommit()==false) {
+					if (mysql_thread___reset_connection_algorithm == 2) {
+						create_new_session_and_reset_connection(myds);
+					} else {
+						myds->destroy_MySQL_Connection_From_Pool(true);
+					}
+				} else {
+					myds->return_MySQL_Connection_To_Pool();
+				}
+			}
+		}
+		// We are required to perform a cleanup after consuming the elements, thus preventing any subsequent
+		// 'handler' call to perform recomputing of the already processed elements.
+		if (hgs_expired_conns.empty() == false) {
+			hgs_expired_conns.clear();
 		}
 	}
 }
@@ -4479,6 +4610,7 @@ int MySQL_Session::handler() {
 	}
 	}
 
+	housekeeping_before_pkts();
 	handler_ret = get_pkts_from_client(wrong_pass, pkt);
 	if (handler_ret != 0) {
 		return handler_ret;
@@ -5010,6 +5142,7 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	return ret;
 }
 
+/*
 void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	// FIXME: no support for SSL yet
 	if (
@@ -5075,6 +5208,7 @@ void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHA
 		__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
 	}
 }
+*/
 
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
@@ -6971,13 +7105,19 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		myds->DSS=STATE_COLUMN_DEFINITION;
 		unsigned int nTrx = 0;
 		uint16_t setStatus = 0;
+		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 		if (in_transaction == false) {
 			nTrx=NumActiveTransactions();
-			setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
-			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			setStatus |= (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		} else {
 			// this is for SQLite3 Server
-			setStatus = SERVER_STATUS_AUTOCOMMIT;
+			if (session_type == PROXYSQL_SESSION_SQLITE) {
+				//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			} else {
+				// for sessions that are not SQLITE . Admin and Clickhouse .
+				// default
+				setStatus |= SERVER_STATUS_AUTOCOMMIT;
+			}
 			setStatus |= SERVER_STATUS_IN_TRANS;
 		}
 		if (!deprecate_eof_active) {
@@ -7006,10 +7146,7 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 		if (deprecate_eof_active) {
 			myprot->generate_pkt_OK(true, NULL, NULL, sid, 0, 0, setStatus, 0, NULL, true); sid++;
 		} else {
-			// I think the 2 | setStatus here is a bug. the previous generate_pkt_EOF was changed from 2|setStatus to just
-			// setStatus a long time ago in c3e6fda7a47ecb94e97d4e191cdbd0f10fec7924
-			// also 2 represents the SERVER_STATUS_IN_TRANS which is already set in setStatus
-			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, 2 | setStatus ); sid++;
+			myprot->generate_pkt_EOF(true,NULL,NULL, sid, 0, setStatus ); sid++;
 		}
 
 		myds->DSS=STATE_SLEEP;
@@ -7034,7 +7171,13 @@ void MySQL_Session::SQLite3_to_MySQL(SQLite3_result *result, char *error, int af
 				if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			} else {
 				// this is for SQLite3 Server
-				setStatus = SERVER_STATUS_AUTOCOMMIT;
+				if (session_type == PROXYSQL_SESSION_SQLITE) {
+					//if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
+				} else {
+					// for sessions that are not SQLITE . Admin and Clickhouse .
+					// default
+					setStatus |= SERVER_STATUS_AUTOCOMMIT;
+				}
 				setStatus |= SERVER_STATUS_IN_TRANS;
 			}
 			myprot->generate_pkt_OK(true,NULL,NULL,sid,affected_rows,0,setStatus,0,NULL);
@@ -7176,7 +7319,14 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 // this should become the place to hook other functions
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	// check if multiplexing needs to be disabled
-	char *qdt=CurrentQuery.get_digest_text();
+	char *qdt = NULL;
+
+	if (status != PROCESSING_STMT_EXECUTE) {
+		qdt = CurrentQuery.get_digest_text();
+	} else {
+		qdt = CurrentQuery.stmt_info->digest_text;
+	}
+
 	if (qdt && myds && myds->myconn) {
 		myds->myconn->ProcessQueryAndSetStatusFlags(qdt);
 	}
@@ -7295,6 +7445,7 @@ void MySQL_Session::create_new_session_and_reset_connection(MySQL_Data_Stream *_
 	new_myds->myprot.init(&new_myds, new_myds->myconn->userinfo, NULL);
 	new_sess->status = RESETTING_CONNECTION;
 	mc->async_state_machine = ASYNC_IDLE; // may not be true, but is used to correctly perform error handling
+	mc->auto_increment_delay_token = 0;
 	new_myds->DSS = STATE_MARIADB_QUERY;
 	thread->register_session_connection_handler(new_sess,true);
 	if (new_myds->mypolls==NULL) {
@@ -7415,9 +7566,29 @@ void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *mycon
 							myds->myconn->set_status(true, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 						}
 					}
-					if (mysql_thread___multiplexing && (myds->myconn->reusable==true) && myds->myconn->IsActiveTransaction()==false && myds->myconn->MultiplexDisabled()==false) {
-						if (mysql_thread___connection_delay_multiplex_ms && mirror==false) {
-							myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
+
+					const bool is_active_transaction = myds->myconn->IsActiveTransaction();
+					const bool multiplex_disabled_by_status = myds->myconn->MultiplexDisabled(false);
+
+					const bool multiplex_delayed = myds->myconn->auto_increment_delay_token > 0;
+					const bool multiplex_delayed_with_timeout =
+						!multiplex_disabled_by_status && multiplex_delayed && mysql_thread___auto_increment_delay_multiplex_timeout_ms > 0;
+
+					const bool multiplex_disabled = !multiplex_disabled_by_status && (!multiplex_delayed || multiplex_delayed_with_timeout);
+					const bool conn_is_reusable = myds->myconn->reusable == true && !is_active_transaction && multiplex_disabled;
+
+					if (mysql_thread___multiplexing && conn_is_reusable) {
+						if ((mysql_thread___connection_delay_multiplex_ms || multiplex_delayed_with_timeout) && mirror==false) {
+							if (multiplex_delayed_with_timeout) {
+								uint64_t delay_multiplex_us = mysql_thread___connection_delay_multiplex_ms * 1000;
+								uint64_t auto_increment_delay_us = mysql_thread___auto_increment_delay_multiplex_timeout_ms * 1000;
+								uint64_t delay_us = delay_multiplex_us > auto_increment_delay_us ? delay_multiplex_us : auto_increment_delay_us;
+
+								myds->wait_until=thread->curtime + delay_us;
+							} else {
+								myds->wait_until=thread->curtime+mysql_thread___connection_delay_multiplex_ms*1000;
+							}
+
 							myconn->async_state_machine=ASYNC_IDLE;
 							myconn->multiplex_delayed=true;
 							myds->DSS=STATE_MARIADB_GENERIC;

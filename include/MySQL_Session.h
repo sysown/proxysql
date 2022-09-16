@@ -1,5 +1,9 @@
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
+
+#include <functional>
+#include <vector>
+
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Variables.h"
@@ -77,7 +81,7 @@ class MySQL_Session
 	//int handler_ret;
 	void handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *, bool *);
 
-	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
+//	void handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *, bool *);
 
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_FIELD_LIST(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB(PtrSize_t *);
@@ -155,7 +159,11 @@ class MySQL_Session
 	void init();
 	void reset();
 	void add_ldap_comment_to_pkt(PtrSize_t *);
-
+	/**
+	 * @brief Performs the required housekeeping operations over the session and its connections before
+	 *  performing any processing on received client packets.
+	 */
+	void housekeeping_before_pkts();
 	int get_pkts_from_client(bool&, PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_RESET(PtrSize_t&);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_CLOSE(PtrSize_t&);
@@ -215,6 +223,12 @@ class MySQL_Session
 	PtrArray *mybes;
 	MySQL_Data_Stream *client_myds;
 	MySQL_Data_Stream *server_myds;
+	/*
+	 * @brief Store the hostgroups that hold connections that have been flagged as 'expired' by the
+	 *  maintenance thread. These values will be used to release the retained connections in the specific
+	 *  hostgroups in housekeeping operations, before client packet processing. Currently 'housekeeping_before_pkts'.
+	 */
+	std::vector<int32_t> hgs_expired_conns {};
 	char * default_schema;
 	char * user_attributes;
 
@@ -319,6 +333,7 @@ class MySQL_Session
 	void Memory_Stats();
 	void create_new_session_and_reset_connection(MySQL_Data_Stream *_myds);
 	bool handle_command_query_kill(PtrSize_t *);
+	void update_expired_conns(const std::vector<std::function<bool(MySQL_Connection*)>>&);
 	/**
 	 * @brief Performs the final operations after current query has finished to be executed. It updates the session
 	 *  'transaction_persistent_hostgroup', and updates the 'MySQL_Data_Stream' and 'MySQL_Connection' before
@@ -338,6 +353,7 @@ class MySQL_Session
 	bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
+	friend void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
 
 #define KILL_QUERY       1

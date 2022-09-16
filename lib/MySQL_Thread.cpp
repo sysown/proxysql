@@ -1,4 +1,8 @@
 //#define __CLASS_STANDARD_MYSQL_THREAD_H
+
+#include <functional>
+#include <vector>
+
 #include "MySQL_HostGroups_Manager.h"
 #include "prometheus_helpers.h"
 #define MYSQL_THREAD_IMPLEMENTATION
@@ -16,6 +20,9 @@
 #include "StatCounters.h"
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
+
+using std::vector;
+using std::function;
 
 #ifdef DEBUG
 MySQL_Session *sess_stopat;
@@ -1641,6 +1648,14 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		// integer variable ?
 		std::unordered_map<std::string, std::tuple<int *, int, int, bool>>::const_iterator it = VariablesPointers_int.find(nameS);
 		if (it != VariablesPointers_int.end()) {
+			// Log warnings for variables with possibly wrong values
+			if (nameS == "auto_increment_delay_multiplex_timeout_ms") {
+				int intv = atoi(value);
+				if (intv <= 60) {
+					proxy_warning("'mysql-auto_increment_delay_multiplex_timeout_ms' is set to a low value: %ums. Remember value is in 'ms'\n", intv);
+				}
+			}
+
 			bool special_variable = std::get<3>(it->second); // if special_variable is true, min and max values are ignored, and more input validation is needed
 			if (special_variable == false) {
 				int intv=atoi(value);
@@ -2159,8 +2174,8 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_query_interval"] = make_tuple(&variables.monitor_query_interval,  100, 7*24*3600*1000, false);
 		VariablesPointers_int["monitor_query_timeout"]  = make_tuple(&variables.monitor_query_timeout,   100,       600*1000, false);
 
-		VariablesPointers_int["monitor_threads_min"]    = make_tuple(&variables.monitor_threads_min, 2,  16, false);
-		VariablesPointers_int["monitor_threads_max"]    = make_tuple(&variables.monitor_threads_max, 4, 256, false);
+		VariablesPointers_int["monitor_threads_min"]    = make_tuple(&variables.monitor_threads_min, 2,  256, false);
+		VariablesPointers_int["monitor_threads_max"]    = make_tuple(&variables.monitor_threads_max, 4, 1024, false);
 
 		VariablesPointers_int["monitor_slave_lag_when_null"]   = make_tuple(&variables.monitor_slave_lag_when_null,    0, 604800, false);
 		VariablesPointers_int["monitor_threads_queue_maxsize"] = make_tuple(&variables.monitor_threads_queue_maxsize, 16,   1024, false);
@@ -3737,12 +3752,27 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 		}
 	}
 
-	if (sess->mybe && sess->mybe->server_myds && sess->mybe->server_myds->myconn) {
-		MySQL_Connection* myconn = sess->mybe->server_myds->myconn;
+	// Perform the maintenance for expired connections on the session
+	if (mysql_thread___multiplexing) {
+		const auto auto_incr_delay_multiplex_check = [curtime=this->curtime] (MySQL_Connection* myconn) -> bool {
+			const uint64_t multiplex_timeout_ms = mysql_thread___auto_increment_delay_multiplex_timeout_ms;
+			const bool multiplex_delayed_enabled = multiplex_timeout_ms != 0 && myconn->auto_increment_delay_token > 0;
+			const bool timeout_expired = multiplex_delayed_enabled && myconn->myds->wait_until != 0 && myconn->myds->wait_until < curtime;
+			return timeout_expired;
+		};
 
-		if (mysql_thread___auto_increment_delay_multiplex_timeout_ms != 0 && (sess_time/1000 > (unsigned long long)mysql_thread___auto_increment_delay_multiplex_timeout_ms)) {
-			myconn->auto_increment_delay_token = 0;
-		}
+		const auto conn_delay_multiplex = [curtime=this->curtime] (MySQL_Connection* myconn) -> bool {
+			const bool multiplex_delayed = mysql_thread___connection_delay_multiplex_ms != 0 && myconn->multiplex_delayed == true;
+			const bool timeout_expired = multiplex_delayed && myconn->myds->wait_until != 0 && myconn->myds->wait_until < curtime;
+			return timeout_expired;
+		};
+
+		const vector<function<bool(MySQL_Connection*)>> expire_conn_checks {
+			auto_incr_delay_multiplex_check,
+			conn_delay_multiplex
+		};
+
+		sess->update_expired_conns(expire_conn_checks);
 	}
 }
 
@@ -3811,7 +3841,7 @@ void MySQL_Thread::process_all_sessions() {
 		if (sess->healthy==0) {
 			char _buf[1024];
 			if (sess->client_myds) {
-				if (mysql_thread___log_unhealthy_connections) {
+				if (mysql_thread___log_unhealthy_connections && sess->session_fast_forward == false) {
 					proxy_warning("Closing unhealthy client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 				}
 			}

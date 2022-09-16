@@ -31,6 +31,45 @@
 		"s3": "select ?",
 		"s4": "select ?"
 	},
+	// Final spaces and ending query delimiters (';')
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE           ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE;       ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE  ;  /* comment */",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE; -- final_comment\n   "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE"
+	},
+	// Final spaces and ending and middle query delimiters (';'). Just one space preserved before and after (';').
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE  ; SELECT 1         ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE ;  SELECT 1;     ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE  ;  /* comment */ SELECT 1     ;",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE ; -- final_comment\n SELECT 1;  -- final_comment\n  "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?"
+	},
+	// Final spaces and ending and middle query delimiters (';'). No extra spaces before (';')
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT 1         ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE;  SELECT 1;     ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE;  /* comment */ SELECT 1     ;",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE; -- final_comment\n SELECT 1;  -- final_comment\n  "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?"
+	},
 	// Floats
 	{
 		"q": [
@@ -189,10 +228,10 @@
 	},
 	{
 		"q":  "SELECT N'string', _utf8'str\\'i\nng'",
-		"s1":  "SELECT N?, _utf8?i ng",
-		"s2":  "SELECT N?,_utf8?i ng",
-		"s3":  "SELECT N?,_utf8?i ng",
-		"s4":  "SELECT N?,_utf8?i ng"
+		"s1":  "SELECT N?, _utf8?",
+		"s2":  "SELECT N?,_utf8?",
+		"s3":  "SELECT N?,_utf8?",
+		"s4":  "SELECT N?,_utf8?"
 	},
 	{
 		"q": "create table test.1_null_digests (null_c1 TEXT, c2 TEXT, c3 TEXT)",
@@ -260,6 +299,34 @@
 		"s2": "select ?,?,?",
 		"s3": "select ?,?,?",
 		"s4": "select ?,?,?"
+	},
+	// string - symbols '''', '\'', '\\\\' are properly compressed
+	{
+		"q": [
+			"select ''''''''",
+			"select '\\''",
+			"select '\\\\'",
+			"select '''\\\\''\\''''",
+
+			"select \"\"\"\"\"\"\"\"",
+			"select \"\\\"\"",
+			"select \"\\\\\"",
+			"select \"\"\"\\\\\"\"\\\"\"\"\""
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s3": "select ?"
+	},
+	{
+		"q": [
+			"select '', '\\'', 'foo''bar\\'', '\\\\str_\\'foo'''",
+			"select \"\", \"\\\"\", \"foo\"\"bar\\\"\", \"\\\\str_\\\"foo\"\"\""
+		],
+		"s1": "select ?, ?, ?, ?",
+		"s2": "select ?,?,?,?",
+		"s3": "select ?,?,?,?",
+		"s3": "select ?,?,?,?"
 	},
 	// NOTE: KnownIssue - 7: Spaces not removed after parenthesis when literal strings are preceded by '+|-'
 	{

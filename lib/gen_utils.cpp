@@ -1,9 +1,11 @@
 #include <vector>
+#include <memory>
 
 #include "gen_utils.h"
 
 
 using std::vector;
+using std::unique_ptr;
 
 char *escape_string_single_quotes(char *input, bool free_it) {
 	int i,j,l;
@@ -225,15 +227,15 @@ bool Proxy_file_regular(const char *path) {
 	return false;
 }
 
-SQLite3_result * get_SQLite3_resulset(MYSQL_RES* resultset) {
+std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset) {
 	if (resultset == nullptr) {
-		return nullptr;
+		return std::unique_ptr<SQLite3_result>(nullptr);
 	}
 
 	uint32_t num_fields = mysql_num_fields(resultset);
 	MYSQL_FIELD* fields = mysql_fetch_fields(resultset);
 
-	SQLite3_result * sqlite_result { new SQLite3_result(num_fields) };
+	std::unique_ptr<SQLite3_result> sqlite_result { new SQLite3_result(num_fields) };
 
 	for (uint32_t i = 0; i < num_fields; i++) {
 		sqlite_result->add_column_definition(SQLITE_TEXT, fields[i].name);

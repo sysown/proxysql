@@ -77,6 +77,8 @@ uint64_t benchmark_parsing(const vector<string>& queries, int mode, uint32_t ite
 	hrc::time_point end;
 
 	vector<char*> results {};
+	vector<char*> comments {};
+
 	char buf[QUERY_DIGEST_BUF];
 
 	start = hrc::now();
@@ -118,12 +120,25 @@ uint64_t benchmark_parsing(const vector<string>& queries, int mode, uint32_t ite
 					);
 			}
 
-			results.push_back(c_res);
+			if (query.size() > QUERY_DIGEST_BUF) {
+				results.push_back(c_res);
+			}
+			if (first_comment != NULL) {
+				comments.push_back(first_comment);
+			}
 		}
 	}
 
 	end = hrc::now();
 	duration = end - start;
+
+	for (char* result : results) {
+		free(result);
+	}
+
+	for (char* comment : comments) {
+		free(comment);
+	}
 
 	return duration.count();
 }

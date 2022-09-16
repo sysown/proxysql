@@ -2655,6 +2655,7 @@ void * MySQL_Monitor::monitor_ping() {
 			int us=100;
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_ping_interval/2/resultset->rows_count;
+				us = us == 0 ? 1 : us;
 				us*=40;
 				if (us > 1000000) {
 					us = 10000;
@@ -2926,6 +2927,7 @@ void * MySQL_Monitor::monitor_read_only() {
 			int us=100;
 			if (resultset->rows_count) {
 				us=mysql_thread___monitor_read_only_interval/2/resultset->rows_count;
+				us = us == 0 ? 1 : us;
 				us*=40;
 				if (us > 1000000) {
 					us = 10000;
@@ -4294,6 +4296,11 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			cur_host_idx++;
 		}
 	}
+	// NOTE: 'cur_host_idx' should never be higher than 'num_hosts' otherwise later an invalid memory access
+	// can table place later when accessing 'hpa[cur_host_idx]'.
+	if (cur_host_idx >= num_hosts) {
+		cur_host_idx = num_hosts - 1;
+	}
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 
 	bool exit_now = false;
@@ -4461,7 +4468,7 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			"SELECT SERVER_ID,"
 			"IF("
 				"SESSION_ID = 'MASTER_SESSION_ID' AND "
-				"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP ASC LIMIT 1), "
+				"SERVER_ID <> (SELECT SERVER_ID FROM INFORMATION_SCHEMA.REPLICA_HOST_STATUS WHERE SESSION_ID = 'MASTER_SESSION_ID' ORDER BY LAST_UPDATE_TIMESTAMP DESC LIMIT 1), "
 				"'probably_former_MASTER_SESSION_ID', SESSION_ID"
 			") SESSION_ID, " // it seems that during a failover, the old writer can keep MASTER_SESSION_ID because not updated
 			"LAST_UPDATE_TIMESTAMP, "

@@ -626,6 +626,9 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	if (events.enabled==false) return;
 	if (events.logfile==NULL) return;
+	// 'MySQL_Session::client_myds' could be NULL in case of 'RequestEnd' being called over a freshly created session
+	// due to a failed 'CONNECTION_RESET'. Because this scenario isn't a client request, we just return.
+	if (sess->client_myds==NULL || sess->client_myds->myconn== NULL) return;
 
 	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 

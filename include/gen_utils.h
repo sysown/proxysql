@@ -248,6 +248,6 @@ bool mywildcmp(const char *p, const char *str);
 /**
  * @brief Helper function that converts a MYSQL_RES into a 'SQLite3_result'.
  * @param resultset The resultset to be converted into a 'SQLite3_result'.
- * @return  the resulting 'SQLite3_result'.
+ * @return An 'unique_ptr' holding the resulting 'SQLite3_result'.
  */
-SQLite3_result * get_SQLite3_resulset(MYSQL_RES* resultset);
+std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset);

@@ -6,7 +6,7 @@
 ### when not available, specify GIT_VERSION on commnad line:
 ###
 ### ```
-### GIT_HISTORY=2.x-dev make $(nproc)
+### export GIT_VERSION=2.x-dev
 ### ```
 
 ifndef GIT_VERSION
@@ -39,7 +39,7 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.4.2
+export CURVER?=2.4.4
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
 else
