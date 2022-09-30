@@ -1029,7 +1029,7 @@ unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool p
 
 unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	unsigned long long ret = 0;
-	pthread_rwlock_rdlock(&digest_rwlock);
+	pthread_rwlock_wrlock(&digest_rwlock);
 	unsigned long long curtime1=monotonic_time();
 	size_t map1_size = digest_umap.size();
 	size_t map2_size = digest_text_umap.size();
@@ -1077,7 +1077,7 @@ unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 
 unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 	unsigned long long ret = 0;
-	pthread_rwlock_rdlock(&digest_rwlock);
+	pthread_rwlock_wrlock(&digest_rwlock);
 	size_t map_size = digest_umap.size();
 	if (parallel && map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel purge
 		int n=DIGEST_STATS_FAST_THREADS;
