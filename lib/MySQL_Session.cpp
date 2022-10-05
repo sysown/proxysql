@@ -7478,10 +7478,14 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (idx) {
 		size_t first_word_len = (char *)idx - (char *)_pkt->ptr - 5;
 		if (((char *)_pkt->ptr+5)[0]=='/' && ((char *)_pkt->ptr+5)[1]=='*') {
-			b[1]=' ';
-			b[2]=' ';
-			b[strlen(b)-1] = ' ';
-			b[strlen(b)-2] = ' ';
+			void* comment_endpos = memmem(static_cast<char*>(_pkt->ptr)+7, _pkt->size-7, "*/", strlen("*/"));
+
+			if (comment_endpos == NULL || idx < comment_endpos) {
+				b[1]=' ';
+				b[2]=' ';
+				b[strlen(b)-1] = ' ';
+				b[strlen(b)-2] = ' ';
+			}
 		}
 		memcpy(_c, (char *)_pkt->ptr+5, first_word_len);
 		_c+= first_word_len;
