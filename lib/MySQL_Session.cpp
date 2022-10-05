@@ -3915,6 +3915,13 @@ __get_pkts_from_client:
 								}
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
+								if (GloMyLdapAuth) {
+									if (session_type==PROXYSQL_SESSION_MYSQL) {
+										if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
+											add_ldap_comment_to_pkt(&pkt);
+										}
+									}
+								}
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(pkt);
 								break;
 							case _MYSQL_COM_STMT_EXECUTE:
