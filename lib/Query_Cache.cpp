@@ -519,6 +519,18 @@ unsigned char* eof_to_ok_packet(QC_entry_t* entry) {
 	memcpy(vp, it, 4);
 	// =======================================
 
+	// Decrement ids after the first EOF
+	unsigned char* dp = result + entry->column_eof_pkt_offset;
+	mysql_hdr decrement_hdr;
+	for (;;) {
+		memcpy(&decrement_hdr, dp, sizeof(mysql_hdr));
+		decrement_hdr.pkt_id--;
+		memcpy(dp, &decrement_hdr, sizeof(mysql_hdr));
+		dp += sizeof(mysql_hdr) + decrement_hdr.pkt_length;
+		if (dp >= vp)
+			break;
+	}
+
 	return result;
 }
 
