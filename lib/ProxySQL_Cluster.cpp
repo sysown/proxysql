@@ -1431,7 +1431,8 @@ incoming_servers_t convert_servers_resultsets(const std::vector<MYSQL_RES*>& res
 			get_SQLite3_resulset(results[1]).release(),
 			get_SQLite3_resulset(results[2]).release(),
 			get_SQLite3_resulset(results[3]).release(),
-			get_SQLite3_resulset(results[4]).release()
+			get_SQLite3_resulset(results[4]).release(),
+			get_SQLite3_resulset(results[5]).release()
 		};
 	}
 }

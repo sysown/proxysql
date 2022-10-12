@@ -56,6 +56,8 @@
 
 #define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
 
+#define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers<=2147483647 NOT NULL DEFAULT 2147483647) , comment VARCHAR NOT NULL DEFAULT '')"
+
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
 class MySrvConnList;
@@ -196,10 +198,13 @@ class MyHGC {	// MySQL Host Group Container
 	unsigned int hid;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
+	unsigned int current_number_online_servers;
+	unsigned int max_number_online_servers;
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
+	void refresh_current_number_online_servers();
 };
 
 class Group_Replication_Info {
@@ -411,6 +416,9 @@ class MySQL_HostGroups_Manager {
 	void generate_mysql_group_replication_hostgroups_table();
 	SQLite3_result *incoming_group_replication_hostgroups;
 
+	void generate_mysql_hostgroup_attributes_table();
+	SQLite3_result *incoming_mysql_hostgroup_attributes;
+
 	pthread_mutex_t Group_Replication_Info_mutex;
 	std::map<int , Group_Replication_Info *> Group_Replication_Info_Map;
 
@@ -585,6 +593,7 @@ class MySQL_HostGroups_Manager {
 	 */
 	void save_incoming_replication_hostgroups(SQLite3_result *);
 	void save_incoming_group_replication_hostgroups(SQLite3_result *);
+	void save_incoming_mysql_hostgroup_attributes(SQLite3_result *);
 	void save_incoming_galera_hostgroups(SQLite3_result *);
 	void save_incoming_aws_aurora_hostgroups(SQLite3_result *);
 

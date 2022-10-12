@@ -95,6 +95,27 @@ char * proxysql_version = NULL;
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
+
+const std::vector<std::string> list_mysql_servers_tables = {
+	"mysql_servers",
+	"mysql_replication_hostgroups",
+	"mysql_hostgroup_attributes",
+	"mysql_group_replication_hostgroups",
+	"mysql_galera_hostgroups",
+	"mysql_aws_aurora_hostgroups"
+};
+
+const std::vector<std::string> list_mysql_query_rules_tables = {
+	"mysql_query_rules",
+	"mysql_query_rules_fast_routing"
+};
+
+const std::vector<std::string> list_mysql_firewall_tables = {
+	"mysql_firewall_whitelist_users",
+	"mysql_firewall_whitelist_rules",
+	"mysql_firewall_whitelist_sqli_fingerprints"
+};
+
 /*
 static long
 get_file_size (const char *filename) {
@@ -475,6 +496,10 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , gtid_port INT CHECK ((gtid_port <> port OR gtid_port=0) AND gtid_port >= 0 AND gtid_port <= 65535) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers<=2147483647 NOT NULL DEFAULT 2147483647) , comment VARCHAR NOT NULL DEFAULT '')"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE runtime_mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers<=2147483647 NOT NULL DEFAULT 2147483647) , comment VARCHAR NOT NULL DEFAULT '')"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT CHECK (flagIN >= 0) NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT CHECK (proxy_port >= 0 AND proxy_port <= 65535), digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , flagOUT INT CHECK (flagOUT >= 0), replace_pattern VARCHAR CHECK(CASE WHEN replace_pattern IS NULL THEN 1 WHEN replace_pattern IS NOT NULL AND match_pattern IS NOT NULL THEN 1 ELSE 0 END) , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , cache_empty_result INT CHECK (cache_empty_result IN (0,1)) DEFAULT NULL , cache_timeout INT CHECK(cache_timeout >= 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED CHECK (timeout >= 0) , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED CHECK (delay >=0) , next_query_flagIN INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , OK_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1,2)) , gtid_from_hostgroup INT UNSIGNED , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '' , comment VARCHAR)"
 
@@ -983,12 +1008,14 @@ incoming_servers_t::incoming_servers_t() {}
 incoming_servers_t::incoming_servers_t(
 	SQLite3_result* runtime_mysql_servers,
 	SQLite3_result* incoming_replication_hostgroups,
+	SQLite3_result* incoming_mysql_hostgroup_attributes,
 	SQLite3_result* incoming_group_replication_hostgroups,
 	SQLite3_result* incoming_galera_hostgroups,
 	SQLite3_result* incoming_aurora_hostgroups
 ) :
 	runtime_mysql_servers(runtime_mysql_servers),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
+	incoming_mysql_hostgroup_attributes(incoming_mysql_hostgroup_attributes),
 	incoming_group_replication_hostgroups(incoming_group_replication_hostgroups),
 	incoming_galera_hostgroups(incoming_galera_hostgroups),
 	incoming_aurora_hostgroups(incoming_aurora_hostgroups)
@@ -3214,27 +3241,16 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (strstr(query_no_space,"global_variables"))
 			{ dump_global_variables=true; refresh=true; }
 		if (strstr(query_no_space,"runtime_")) {
-			if (
-				strstr(query_no_space,"runtime_mysql_servers")
-				||
-				strstr(query_no_space,"runtime_mysql_replication_hostgroups")
-				||
-				strstr(query_no_space,"runtime_mysql_group_replication_hostgroups")
-				||
-				strstr(query_no_space,"runtime_mysql_galera_hostgroups")
-				||
-				strstr(query_no_space,"runtime_mysql_aws_aurora_hostgroups")
-			) {
-				runtime_mysql_servers=true; refresh=true;
+			std::vector<std::string>::const_iterator it;
+			for (it = list_mysql_servers_tables.begin(); it != list_mysql_servers_tables.end() && runtime_mysql_servers==false ; it++) {
+				std::string s = "runtime_" + *it;
+				if (strstr(query_no_space,s.c_str()))
+					runtime_mysql_servers=true; refresh=true;
 			}
-			if (
-				strstr(query_no_space,"runtime_mysql_firewall_whitelist_rules")
-				||
-				strstr(query_no_space,"runtime_mysql_firewall_whitelist_users")
-				||
-				strstr(query_no_space,"runtime_mysql_firewall_whitelist_sqli_fingerprints")
-			) {
-				runtime_mysql_firewall=true; refresh=true;
+			for (it = list_mysql_query_rules_tables.begin(); it != list_mysql_query_rules_tables.end() && runtime_mysql_firewall==false ; it++) {
+				std::string s = "runtime_" + *it;
+				if (strstr(query_no_space,s.c_str()))
+					runtime_mysql_firewall=true; refresh=true;
 			}
 			if (strstr(query_no_space,"runtime_mysql_users")) {
 				runtime_mysql_users=true; refresh=true;
@@ -5995,6 +6011,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_users", ADMIN_SQLITE_RUNTIME_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_admin,"runtime_checksums_values", ADMIN_SQLITE_RUNTIME_CHECKSUMS_VALUES);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES);
+	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
@@ -6034,6 +6052,7 @@ bool ProxySQL_Admin::init() {
 
 	insert_into_tables_defs(tables_defs_config,"mysql_servers", ADMIN_SQLITE_TABLE_MYSQL_SERVERS);
 	insert_into_tables_defs(tables_defs_config,"mysql_users", ADMIN_SQLITE_TABLE_MYSQL_USERS);
+	insert_into_tables_defs(tables_defs_config,"mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_config,"mysql_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_group_replication_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
@@ -10259,54 +10278,12 @@ int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
 }
 #endif /* DEBUG */
 
-/*
-// commented in 2.3 as it seems unused in favour of
-// __insert_or_replace_maintable_select_disktable()
-void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("INSERT OR IGNORE INTO main.global_variables SELECT * FROM disk.global_variables");
-	admindb->execute("INSERT OR IGNORE INTO main.scheduler SELECT * FROM disk.scheduler");
-	admindb->execute("INSERT OR IGNORE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
-#ifdef DEBUG
-	admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
-	admindb->execute("INSERT OR IGNORE INTO main.debug_filters SELECT * FROM disk.debug_filters");
-#endif // DEBUG
-#ifdef PROXYSQLCLICKHOUSE
-	if ( GloVars.global.clickhouse_server == true ) {
- 		admindb->execute("INSERT OR IGNORE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
-	}
-#endif // PROXYSQLCLICKHOUSE
-	if (GloMyLdapAuth) {
-		admindb->execute("INSERT OR IGNORE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
-	}
-	admindb->execute("PRAGMA foreign_keys = ON");
-}
-*/
-
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
+	INSERT_OR_REPLACE_tables("disk","main", list_mysql_servers_tables);
+	INSERT_OR_REPLACE_tables("disk","main", {"mysql_users"});
+	INSERT_OR_REPLACE_tables("disk","main", list_mysql_query_rules_tables);
+	INSERT_OR_REPLACE_tables("disk","main", list_mysql_firewall_tables);
 	{
 		// online upgrade of mysql-session_idle_ms
 		char *error=NULL;
@@ -10331,17 +10308,13 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 		}
 		if (resultset) delete resultset;
 	}
-	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
-	admindb->execute("INSERT OR REPLACE INTO main.scheduler SELECT * FROM disk.scheduler");
-	admindb->execute("INSERT OR REPLACE INTO main.restapi_routes SELECT * FROM disk.restapi_routes");
-	admindb->execute("INSERT OR REPLACE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
+	INSERT_OR_REPLACE_tables("disk","main", {"global_variables", "scheduler", "restapi_routes", "proxysql_servers"});
 #ifdef DEBUG
-	admindb->execute("INSERT OR REPLACE INTO main.debug_levels SELECT * FROM disk.debug_levels");
-	admindb->execute("INSERT OR REPLACE INTO main.debug_filters SELECT * FROM disk.debug_filters");
+	INSERT_OR_REPLACE_tables("disk","main", {"debug_levels","debug_filters"});
 #endif /* DEBUG */
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
- 		admindb->execute("INSERT OR REPLACE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
+		INSERT_OR_REPLACE_tables("disk","main", {"clickhouse_users"});
 	}
 #endif /* PROXYSQLCLICKHOUSE */
 	admindb->execute("PRAGMA foreign_keys = ON");
@@ -10350,60 +10323,22 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 #endif
 }
 
-/* commented in 2.3 , unused
-void ProxySQL_Admin::__delete_disktable() {
-	admindb->execute("DELETE FROM disk.mysql_servers");
-	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
-	admindb->execute("DELETE FROM disk.mysql_users");
-	admindb->execute("DELETE FROM disk.mysql_query_rules");
-	admindb->execute("DELETE FROM disk.mysql_query_rules_fast_routing");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_users");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_rules");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("DELETE FROM disk.global_variables");
-	admindb->execute("DELETE FROM disk.scheduler");
-	admindb->execute("DELETE FROM disk.proxysql_servers");
-#ifdef DEBUG
-	admindb->execute("DELETE FROM disk.debug_levels");
-	admindb->execute("DELETE FROM disk.debug_filters");
-#endif // DEBUG
-#ifdef PROXYSQLCLICKHOUSE
-	if ( GloVars.global.clickhouse_server == true ) {
-		admindb->execute("DELETE FROM disk.clickhouse_users");
-	}
-#endif // PROXYSQLCLICKHOUSE
-	if (GloMyLdapAuth) {
-		admindb->execute("DELETE FROM disk.mysql_ldap_mapping");
-	}
-}
-*/
-
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_aws_aurora_hostgroups SELECT * FROM main.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_users SELECT * FROM main.mysql_firewall_whitelist_users");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_rules SELECT * FROM main.mysql_firewall_whitelist_rules");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM main.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
-	admindb->execute("INSERT OR REPLACE INTO disk.scheduler SELECT * FROM main.scheduler");
-	admindb->execute("INSERT OR REPLACE INTO disk.proxysql_servers SELECT * FROM main.proxysql_servers");
+	INSERT_OR_REPLACE_tables("main","disk", list_mysql_servers_tables);
+	INSERT_OR_REPLACE_tables("main","disk", list_mysql_query_rules_tables);
+	INSERT_OR_REPLACE_tables("main","disk", list_mysql_firewall_tables);
+	INSERT_OR_REPLACE_tables("main","disk", {"mysql_users"});
+	INSERT_OR_REPLACE_tables("main","disk", {"global_variables", "scheduler", "restapi_routes", "proxysql_servers"});
 #ifdef DEBUG
-	admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
-	admindb->execute("INSERT OR REPLACE INTO disk.debug_filters SELECT * FROM main.debug_filters");
+	INSERT_OR_REPLACE_tables("main","disk", {"debug_levels","debug_filters"});
 #endif /* DEBUG */
 #ifdef PROXYSQLCLICKHOUSE
 	if ( GloVars.global.clickhouse_server == true ) {
- 		admindb->execute("INSERT OR REPLACE INTO disk.clickhouse_users SELECT * FROM main.clickhouse_users");
+		INSERT_OR_REPLACE_tables("main","disk", {"clickhouse_users"});
 	}
 #endif /* PROXYSQLCLICKHOUSE */
 	if (GloMyLdapAuth) {
- 		admindb->execute("INSERT OR REPLACE INTO disk.mysql_ldap_mapping SELECT * FROM main.mysql_ldap_mapping");
+		INSERT_OR_REPLACE_tables("main","disk", {"mysql_ldap_mapping"});
 	}
 }
 
@@ -10411,11 +10346,9 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 void ProxySQL_Admin::flush_mysql_users__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM main.mysql_users");
-	admindb->execute("INSERT INTO main.mysql_users SELECT * FROM disk.mysql_users");
+	DELETE_and_INSERT_tables("disk","main", {"mysql_users"});
 	if (GloMyLdapAuth) {
-		admindb->execute("DELETE FROM main.mysql_ldap_mapping");
-		admindb->execute("INSERT INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
+		DELETE_and_INSERT_tables("disk","main", {"mysql_ldap_mapping"});
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
@@ -10426,9 +10359,9 @@ void ProxySQL_Admin::flush_mysql_users__from_memory_to_disk() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
 	admindb->execute("DELETE FROM disk.mysql_users");
 	admindb->execute("INSERT INTO disk.mysql_users SELECT * FROM main.mysql_users");
+	DELETE_and_INSERT_tables("main","disk", {"mysql_users"});
 	if (GloMyLdapAuth) {
-		admindb->execute("DELETE FROM disk.mysql_ldap_mapping");
-		admindb->execute("INSERT INTO disk.mysql_ldap_mapping SELECT * FROM main.mysql_ldap_mapping");
+		DELETE_and_INSERT_tables("main","disk", {"mysql_ldap_mapping"});
 	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
@@ -10438,8 +10371,7 @@ void ProxySQL_Admin::flush_mysql_users__from_memory_to_disk() {
 void ProxySQL_Admin::flush_clickhouse_users__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM main.clickhouse_users");
-	admindb->execute("INSERT INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
+	DELETE_and_INSERT_tables("disk","main", {"clickhouse_users"});
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -10447,8 +10379,7 @@ void ProxySQL_Admin::flush_clickhouse_users__from_disk_to_memory() {
 void ProxySQL_Admin::flush_clickhouse_users__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM disk.clickhouse_users");
-	admindb->execute("INSERT INTO disk.clickhouse_users SELECT * FROM main.clickhouse_users");
+	DELETE_and_INSERT_tables("main","disk", {"clickhouse_users"});
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -10457,30 +10388,41 @@ void ProxySQL_Admin::flush_clickhouse_users__from_memory_to_disk() {
 void ProxySQL_Admin::flush_scheduler__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("DELETE FROM main.scheduler");
-	admindb->execute("INSERT INTO main.scheduler SELECT * FROM disk.scheduler");
+	DELETE_and_INSERT_tables("disk","main", {"scheduler"});
 	admindb->wrunlock();
 }
 
 void ProxySQL_Admin::flush_scheduler__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("DELETE FROM disk.scheduler");
-	admindb->execute("INSERT INTO disk.scheduler SELECT * FROM main.scheduler");
+	DELETE_and_INSERT_tables("main","disk", {"scheduler"});
 	admindb->wrunlock();
+}
+
+void ProxySQL_Admin::INSERT_OR_REPLACE_tables(const std::string& from, const std::string& to, const std::vector<std::string>& list_tables) {
+	std::vector<std::string>::const_iterator it;
+	for (it=list_tables.begin(); it != list_tables.end(); it++) {
+		std::string s = "INSERT OR REPLACE INTO " + to + "." + *it + " SELECT * FROM " + from + "." + *it;
+		admindb->execute(s.c_str());
+	}
+}
+
+void ProxySQL_Admin::DELETE_and_INSERT_tables(const std::string& from, const std::string& to, const std::vector<std::string>& list_tables) {
+	std::vector<std::string>::const_iterator it;
+	for (it=list_tables.begin(); it != list_tables.end(); it++) {
+		std::string s = "DELETE FROM " + to + "." + *it;
+		admindb->execute(s.c_str());
+	}
+	for (it=list_tables.begin(); it != list_tables.end(); it++) {
+		std::string s = "INSERT INTO " + to + "." + *it + " SELECT * FROM " + from + "." + *it;
+		admindb->execute(s.c_str());
+	}
 }
 
 void ProxySQL_Admin::flush_mysql_servers__from_disk_to_memory() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM main.mysql_servers");
-	admindb->execute("DELETE FROM main.mysql_replication_hostgroups");
-	admindb->execute("DELETE FROM main.mysql_group_replication_hostgroups");
-	admindb->execute("DELETE FROM main.mysql_galera_hostgroups");
-	admindb->execute("DELETE FROM main.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-	admindb->execute("INSERT INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
-	admindb->execute("INSERT INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
-	admindb->execute("INSERT INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
+	DELETE_and_INSERT_tables("disk","main",list_mysql_servers_tables);
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -10488,16 +10430,7 @@ void ProxySQL_Admin::flush_mysql_servers__from_disk_to_memory() {
 void ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM disk.mysql_servers");
-	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
-	admindb->execute("DELETE FROM disk.mysql_group_replication_hostgroups");
-	admindb->execute("DELETE FROM disk.mysql_galera_hostgroups");
-	admindb->execute("DELETE FROM disk.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
-	admindb->execute("INSERT INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_aws_aurora_hostgroups SELECT * FROM main.mysql_aws_aurora_hostgroups");
+	DELETE_and_INSERT_tables("main","disk",list_mysql_servers_tables);
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -11894,6 +11827,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	SQLite3_result *resultset=NULL;
 	SQLite3_result *resultset_servers=NULL;
 	SQLite3_result *resultset_replication=NULL;
+	SQLite3_result *resultset_mysql_hostgroup_attributes=NULL;
 	SQLite3_result *resultset_group_replication=NULL;
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
@@ -11901,6 +11835,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	SQLite3_result* runtime_mysql_servers = incoming_servers.runtime_mysql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_servers.incoming_replication_hostgroups;
 	SQLite3_result* incoming_group_replication_hostgroups = incoming_servers.incoming_group_replication_hostgroups;
+	SQLite3_result* incoming_mysql_hostgroup_attributes = incoming_servers.incoming_mysql_hostgroup_attributes;
 	SQLite3_result* incoming_galera_hostgroups = incoming_servers.incoming_galera_hostgroups;
 	SQLite3_result* incoming_aurora_hostgroups = incoming_servers.incoming_aurora_hostgroups;
 
@@ -11947,8 +11882,22 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		// Pass the resultset to MyHGM
 		MyHGM->save_incoming_replication_hostgroups(resultset_replication);
 	}
-	//if (resultset) delete resultset;
-	//resultset=NULL;
+
+	// support for mysql_hostgroup_attributes
+
+	query=(char *)"SELECT hostgroup_id, max_num_servers FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	if (incoming_mysql_hostgroup_attributes == nullptr) {
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_mysql_hostgroup_attributes);
+	} else {
+		resultset_mysql_hostgroup_attributes = incoming_mysql_hostgroup_attributes;
+	}
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to MyHGM
+		MyHGM->save_incoming_mysql_hostgroup_attributes(resultset_mysql_hostgroup_attributes);
+	}
 
 	// support for Group Replication, table mysql_group_replication_hostgroups
 

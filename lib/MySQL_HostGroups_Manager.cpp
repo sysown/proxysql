@@ -970,11 +970,24 @@ MyHGC::MyHGC(int _hid) {
 	mysrvs=new MySrvList(this);
 	current_time_now = 0;
 	new_connections_now = 0;
+	current_number_online_servers = 0;
+	max_number_online_servers = 0;
 }
 
 
 MyHGC::~MyHGC() {
 	delete mysrvs;
+}
+
+void MyHGC::refresh_current_number_online_servers() {
+	unsigned int cnt = 0;
+	for (unsigned int i=0; i<mysrvs->servers->len; i++) {
+		MySrvC *mysrv=(MySrvC *)mysrvs->servers->index(i);
+		if (mysrv->status==MYSQL_SERVER_STATUS_ONLINE) {
+			cnt++;
+		}
+	}
+	current_number_online_servers = cnt;
 }
 
 using metric_name = std::string;
@@ -1408,6 +1421,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_GALERA_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
+	mydb->execute(MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
 	MyHostGroups=new PtrArray();
 	runtime_mysql_servers=NULL;
@@ -1871,6 +1885,13 @@ bool MySQL_HostGroups_Manager::commit(
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_group_replication_hostgroups\n");
 		mydb->execute("DELETE FROM mysql_group_replication_hostgroups");
 		generate_mysql_group_replication_hostgroups_table();
+	}
+
+	// hostgroup attributes
+	if (incoming_mysql_hostgroup_attributes) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_hostgroup_attributes\n");
+		mydb->execute("DELETE FROM mysql_hostgroup_attributes");
+		generate_mysql_hostgroup_attributes_table();
 	}
 
 	// galera
@@ -2414,6 +2435,38 @@ void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 		free(query);
 	}
 	incoming_replication_hostgroups=NULL;
+}
+
+void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
+	if (incoming_mysql_hostgroup_attributes==NULL)
+		return;
+	if (mysql_thread___hostgroup_manager_verbose) {
+		proxy_info("New mysql_hostgroup_attributes table\n");
+	}
+	for (std::vector<SQLite3_row *>::iterator it = incoming_mysql_hostgroup_attributes->rows.begin() ; it != incoming_mysql_hostgroup_attributes->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		char *o=NULL;
+		int comment_length=0;	// #issue #643
+		//if (r->fields[3]) { // comment is not null
+			o=escape_string_single_quotes(r->fields[2],false);
+			comment_length=strlen(o);
+		//}
+		char *query=(char *)malloc(256+comment_length);
+		//if (r->fields[3]) { // comment is not null
+			sprintf(query,"INSERT INTO mysql_hostgroup_attributes VALUES(%s,%s,'%s')",r->fields[0], r->fields[1], o);
+			if (o!=r->fields[2]) { // there was a copy
+				free(o);
+			}
+		//} else {
+			//sprintf(query,"INSERT INTO mysql_replication_hostgroups VALUES(%s,%s,NULL)",r->fields[0],r->fields[1]);
+		//}
+		mydb->execute(query);
+		if (mysql_thread___hostgroup_manager_verbose) {
+			fprintf(stderr,"hostgroup_id: %s , max_num_online_servers: %s, comment: %s\n", r->fields[0],r->fields[1], r->fields[2]);
+		}
+		free(query);
+	}
+	incoming_mysql_hostgroup_attributes=NULL;
 }
 
 
@@ -3853,6 +3906,14 @@ void MySQL_HostGroups_Manager::save_incoming_replication_hostgroups(SQLite3_resu
 		incoming_replication_hostgroups = nullptr;
 	}
 	incoming_replication_hostgroups=s;
+}
+
+void MySQL_HostGroups_Manager::save_incoming_mysql_hostgroup_attributes(SQLite3_result *s) {
+	if (incoming_mysql_hostgroup_attributes) {
+		delete incoming_mysql_hostgroup_attributes;
+		incoming_mysql_hostgroup_attributes = nullptr;
+	}
+	incoming_mysql_hostgroup_attributes=s;
 }
 
 void MySQL_HostGroups_Manager::save_incoming_group_replication_hostgroups(SQLite3_result *s) {

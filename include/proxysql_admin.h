@@ -119,12 +119,13 @@ extern int admin__web_verbosity;
 struct incoming_servers_t {
 	SQLite3_result* runtime_mysql_servers = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
+	SQLite3_result* incoming_mysql_hostgroup_attributes = NULL;
 	SQLite3_result* incoming_group_replication_hostgroups = NULL;
 	SQLite3_result* incoming_galera_hostgroups = NULL;
 	SQLite3_result* incoming_aurora_hostgroups = NULL;
 
 	incoming_servers_t();
-	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 class ProxySQL_Admin {
@@ -306,6 +307,9 @@ class ProxySQL_Admin {
 	// LDAP
 	void flush_ldap_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+
+	void DELETE_and_INSERT_tables(const std::string& from, const std::string& to, const std::vector<std::string>& list_tables);
+	void INSERT_OR_REPLACE_tables(const std::string& from, const std::string& to, const std::vector<std::string>& list_tables);
 
 	public:
 	pthread_mutex_t sql_query_global_mutex;
