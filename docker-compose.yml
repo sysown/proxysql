@@ -181,6 +181,37 @@ services:
       - PKG_RELEASE=dbg-fedora34
       - PROXYSQL_BUILD_TYPE=debug
 
+####################################################################################################
+  fedora36_build:
+    image: proxysql/packaging:build-fedora36
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=fedora36
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  fedora36_clang_build:
+    extends:
+      service: fedora36_build
+    image: proxysql/packaging:build-clang-fedora36
+    environment:
+      - PKG_RELEASE=fedora36-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora36_dbg_build:
+    extends:
+      service: fedora36_build
+    environment:
+      - PKG_RELEASE=dbg-fedora36
+      - PROXYSQL_BUILD_TYPE=debug
+
 
 ####################################################################################################
 ####################################################################################################
