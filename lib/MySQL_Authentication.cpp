@@ -150,6 +150,26 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 							json_rewritten = true; // the json was rewritten
 						}
 					}
+					auto default_tidb_replica_read = valid.find("default-tidb_replica_read");
+					if (default_tidb_replica_read != valid.end()) {
+						std::string dti = valid["default-tidb_replica_read"].get<std::string>();
+						// input validation
+						if (
+							   (strcasecmp(dti.c_str(), "")==0 )
+							|| (strcasecmp(dti.c_str(), "leader")==0 )
+							|| (strcasecmp(dti.c_str(), "follower")==0 )
+							|| (strcasecmp(dti.c_str(), "leader-and-follower")==0 )
+						) {
+							if (json_rewritten) {
+								valid["default-tidb_replica_read"]=dti;
+							}
+						} else {
+							std::string dti_orig = valid["default-tidb_replica_read"].get<std::string>();
+							proxy_error("Invalid default-tidb_replica_read for user %s : %s . Removing it from runtime\n", username, dti_orig.c_str());
+							valid.erase("default-tidb_replica_read");
+							json_rewritten = true; // the json was rewritten
+						}
+					}
 					if (json_rewritten) {
 						std::string d = valid.dump();
 						if (d.length()==2) { // empty json

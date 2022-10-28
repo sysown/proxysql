@@ -1594,12 +1594,19 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			char* user_attributes = (*myds)->sess->user_attributes;
 			if (strlen(user_attributes)) {
 				nlohmann::json j_user_attributes = nlohmann::json::parse(user_attributes);
+				// default-transaction_isolation
 				auto default_transaction_isolation = j_user_attributes.find("default-transaction_isolation");
-
 				if (default_transaction_isolation != j_user_attributes.end()) {
 					std::string def_trx_isolation_val =
 						j_user_attributes["default-transaction_isolation"].get<std::string>();
 					mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
+				}
+				// default-tidb_replica_read
+				auto default_tidb_replica_read = j_user_attributes.find("default-tidb_replica_read");
+				if (default_tidb_replica_read != j_user_attributes.end()) {
+					std::string def_tidb_replica_read_val =
+						j_user_attributes["default-tidb_replica_read"].get<std::string>();
+					mysql_variables.client_set_value((*myds)->sess, SQL_TIDB_REPLICA_READ, def_tidb_replica_read_val.c_str());
 				}
 			}
 		}
