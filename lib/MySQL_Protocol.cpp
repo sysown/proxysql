@@ -2264,6 +2264,11 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 				std::string default_transaction_isolation_value = j["default-transaction_isolation"].get<std::string>();
 				mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
 			}
+			auto default_tidb_replica_read = j.find("default-tidb_replica_read");
+			if (default_tidb_replica_read != j.end()) {
+				std::string def_tidb_replica_read_val = j["default-tidb_replica_read"].get<std::string>();
+				mysql_variables.client_set_value((*myds)->sess, SQL_TIDB_REPLICA_READ, def_tidb_replica_read_val.c_str());
+			}
 		}
 	}
 	return ret;
