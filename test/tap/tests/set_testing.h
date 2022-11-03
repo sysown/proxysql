@@ -29,7 +29,6 @@ const std::vector<std::string> possible_unknown_variables = {
 	"group_replication_consistency",
 	"query_cache_type",
 	"wsrep_osu_method",
-	"optimizer_use_condition_selectivity",
 	};
 
 int readTestCases(const std::string& fileName) {
@@ -192,7 +191,7 @@ void queryVariables(MYSQL *mysql, json& j, std::string& paddress) {
 		query << "SELECT /* mysql " << mysql << " " << paddress << " */ lower(variable_name), variable_value FROM information_schema.session_variables WHERE variable_name IN "
 			" ("
 			" 'sql_safe_updates', 'max_join_size', 'net_write_timeout', 'sql_select_limit', "
-			" 'sql_select_limit', 'character_set_results', 'tx_isolation', 'tx_read_only'";
+			" 'sql_select_limit', 'character_set_results', 'tx_isolation', 'tx_read_only', 'optimizer_use_condition_selectivity'";
 	}
 	if (is_cluster) {
 		query << "SELECT /* mysql " << mysql << " " << paddress << " */ * FROM performance_schema.session_variables WHERE variable_name IN "

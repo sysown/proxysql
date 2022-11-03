@@ -226,6 +226,11 @@ void * my_conn_thread(void *arg) {
 					vars[el.key()] = el.value();
 				}
 			}
+			else if (el.key() == "optimizer_use_condition_selectivity") {
+				if (is_mariadb) {
+					vars[el.key()] = el.value();
+				}
+			}
 			else {
 				vars[el.key()] = el.value();
 			}
