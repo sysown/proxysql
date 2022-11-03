@@ -2757,28 +2757,30 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
 		pause_until=0;
 	}
-	// If this is a 'fast_forward' session, we impose the 'connect_timeout' prior to actually getting the
-	// connection from the 'connection_pool'. This is used to ensure that we kill the session if
-	// 'CONNECTING_SERVER' isn't completed before this timeout expiring. For example, if 'max_connections'
-	// is reached for the target hostgroup.
-	if (session_fast_forward && mybe->server_myds->wait_until == 0) {
-		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
-	}
 	if (mybe->server_myds->max_connect_time) {
 		if (thread->curtime >= mybe->server_myds->max_connect_time) {
 			if (mirror) {
 				PROXY_TRACE();
 			}
-			char buf[256];
-			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
+
+			string errmsg {};
+			const string session_info { session_fast_forward ? "for 'fast_forward' session " : "" };
+			const uint64_t query_time = (thread->curtime - CurrentQuery.start_time)/1000;
+
+			string_format(
+				"Max connect timeout reached while reaching hostgroup %d %safter %llums",
+				errmsg, current_hostgroup, session_info.c_str(), query_time
+			);
+
 			if (thread) {
 				thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 			}
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf, true);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000", errmsg.c_str(), true);
 			RequestEnd(mybe->server_myds);
-			std::string errmsg;
-			generate_status_one_hostgroup(current_hostgroup, errmsg);
-			proxy_error("%s . HG status: %s\n", buf, errmsg.c_str());
+
+			string hg_status {};
+			generate_status_one_hostgroup(current_hostgroup, hg_status);
+			proxy_error("%s . HG status: %s\n", errmsg.c_str(), hg_status.c_str());
 
 			while (previous_status.size()) {
 				previous_status.pop();
@@ -2800,37 +2802,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 		}
 	}
-	if (session_fast_forward && mybe->server_myds->wait_until && mybe->server_myds->wait_until <= thread->curtime) {
-		std::string errmsg {};
-		string_format(
-			"Connect timeout reached while reaching hostgroup %d for 'fast_forward' session",
-			errmsg, current_hostgroup
-		);
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000", errmsg.c_str(), true);
-
-		std::string hosgroup_st {};
-		generate_status_one_hostgroup(current_hostgroup, hosgroup_st);
-		proxy_error("%s. HG status: %s\n", errmsg.c_str(), hosgroup_st.c_str());
-
-		RequestEnd(mybe->server_myds);
-		while (previous_status.size()) {
-			previous_status.pop();
-		}
-
-		if (mybe->server_myds->myconn) {
-			// See NOTE-3404.
-			mybe->server_myds->myconn->connect_cont(MYSQL_WAIT_TIMEOUT);
-			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
-			if (mirror) {
-				PROXY_TRACE();
-				NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
-			}
-		}
-
-		mybe->server_myds->wait_until=0;
-		NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
-	}
-
 	if (mybe->server_myds->myconn==NULL) {
 		handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 	}
@@ -3701,10 +3672,40 @@ __get_pkts_from_client:
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , client_myds=%p . Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n", this, client_myds);
 						if (session_fast_forward==true) { // if it is fast forward
+							// If this is a 'fast_forward' session that hasn't yet received a backend connection, we don't
+							// forward 'COM_QUIT' packets, since this will make the act of obtaining a connection pointless.
+							// Instead, we intercept the 'COM_QUIT' packet and end the 'MySQL_Session'.
+							unsigned char command = *(static_cast<unsigned char*>(pkt.ptr)+sizeof(mysql_hdr));
+							if (command == _MYSQL_COM_QUIT) {
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
+								if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
+								l_free(pkt.size,pkt.ptr);
+								handler_ret = -1;
+								return handler_ret;
+							}
+
 							mybe=find_or_create_backend(current_hostgroup); // set a backend
 							mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
 							mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 							previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
+
+							// If this is a 'fast_forward' session, we impose the 'connect_timeout' prior to actually getting the
+							// connection from the 'connection_pool'. This is used to ensure that we kill the session if
+							// 'CONNECTING_SERVER' isn't completed before this timeout expiring. For example, if 'max_connections'
+							// is reached for the target hostgroup.
+							if (mybe->server_myds->max_connect_time == 0) {
+								uint64_t connect_timeout =
+									mysql_thread___connect_timeout_server < mysql_thread___connect_timeout_server_max ?
+										mysql_thread___connect_timeout_server_max : mysql_thread___connect_timeout_server;
+								mybe->server_myds->max_connect_time = thread->curtime + connect_timeout * 1000;
+							}
+							// Impose the same connection retrying policy as done for regular connections during
+							// 'MYSQL_CON_QUERY'.
+							mybe->server_myds->connect_retries_on_failure = mysql_thread___connect_retries_on_failure;
+							// 'CurrentQuery' isn't used for 'FAST_FORWARD' but we update it for using it as a session
+							// startup time for when a fast_forward session has attempted to obtain a connection.
+							CurrentQuery.start_time=thread->curtime;
+
 							{
 								//NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
 								// we can't use NEXT_IMMEDIATE() inside get_pkts_from_client()
