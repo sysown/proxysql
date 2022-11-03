@@ -29,6 +29,7 @@ const std::vector<std::string> possible_unknown_variables = {
 	"group_replication_consistency",
 	"query_cache_type",
 	"wsrep_osu_method",
+	"optimizer_use_condition_selectivity",
 	};
 
 int readTestCases(const std::string& fileName) {
