@@ -2864,6 +2864,19 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->DSS=STATE_SLEEP;
 					myds->myconn->send_quit = false;
 					myds->myconn->reusable = false;
+					// In a 'fast_forward' session after we disable compression for the fronted connection
+					// after we have adquired a backend connection, this is, the 'FAST_FORWARD' session status
+					// is reached, and the 1-1 connection relationship is established. We can safely do this
+					// due two main reasons:
+					//   1. The client and backend have to agree on compression, i.e. if the client connected without
+					//   compression using fast-forward to a backend connections expected to have compression, it results
+					//   in a fallback to a connection without compression, as it's expected by protocol. In this case we do
+					//   not require to compress the data received from the backend.
+					//   2. The client and backend have agreed in using compression, in this case, the data received from
+					//   the backend is already compressed, so we are only required to forward the data to the client.
+					// In both cases, we do not require to perform any specials actions for the received data,
+					// so we completely disable the compression flag for the client connection.
+					client_myds->myconn->set_status(false, STATUS_MYSQL_CONNECTION_COMPRESSION);
 				}
 				NEXT_IMMEDIATE_NEW(st);
 				break;
