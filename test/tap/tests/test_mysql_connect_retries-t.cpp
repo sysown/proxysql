@@ -310,6 +310,11 @@ int check_connect_error_consistency(
 		return EXIT_FAILURE;
 	}
 
+	// NOTE: It's important to sleep at least '1' second before the connection creation, otherwise subsequent
+	// calls to this function can induce shunning errors in the target server, and invalidate the test.
+	diag("CONFIG: Sleeping before connection creation to avoid SHUNNING");
+	usleep(1500 * 1000);
+
 	MYSQL* proxy = mysql_init(NULL);
 	if (!mysql_real_connect(proxy, cl.host, user.c_str(), user.c_str(), NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
