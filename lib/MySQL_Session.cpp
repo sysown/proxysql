@@ -278,6 +278,7 @@ Query_Info::Query_Info() {
 	rows_sent=0;
 	start_time=0;
 	end_time=0;
+	stmt_client_id=0;
 }
 
 Query_Info::~Query_Info() {
@@ -309,6 +310,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	affected_rows=0;
 	rows_sent=0;
 	sess->gtid_hid=-1;
+	stmt_client_id=0;
 }
 
 void Query_Info::end() {
@@ -547,6 +549,7 @@ MySQL_Session::MySQL_Session() {
 	CurrentQuery.mysql_stmt=NULL;
 	CurrentQuery.stmt_meta=NULL;
 	CurrentQuery.stmt_global_id=0;
+	CurrentQuery.stmt_client_id=0;
 	CurrentQuery.stmt_info=NULL;
 
 	current_hostgroup=-1;
@@ -3226,6 +3229,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// for this reason, we do not need to prepare it again, and we can already reply to the client
 			// we will now generate a unique stmt and send it to the client
 			uint32_t new_stmt_id=client_myds->myconn->local_stmts->generate_new_client_stmt_id(stmt_info->statement_id);
+			CurrentQuery.stmt_client_id=new_stmt_id;
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,new_stmt_id);
 			LogQuery(NULL);
@@ -3275,6 +3279,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		uint32_t client_stmt_id=0;
 		uint64_t stmt_global_id=0;
 		memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+		CurrentQuery.stmt_client_id=client_stmt_id;
 		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
 		if (stmt_global_id == 0) {
 			// FIXME: add error handling
@@ -4088,7 +4093,7 @@ void MySQL_Session::SetQueryTimeout() {
 bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
 	thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
 	GloMyStmt->wrlock();
-	uint32_t client_stmtid;
+	uint32_t client_stmtid=0;
 	uint64_t global_stmtid;
 	//bool is_new;
 	MySQL_STMT_Global_info *stmt_info=NULL;
@@ -4112,6 +4117,7 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 	if (previous_status.size() == 0)
 	client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
 	CurrentQuery.mysql_stmt=NULL;
+	CurrentQuery.stmt_client_id=client_stmtid;
 	st=status;
 	size_t sts=previous_status.size();
 	if (sts) {
