@@ -212,10 +212,23 @@ int main(int argc, char **argv) {
 	fstream input;
 	char buf[10241];
 	input.rdbuf()->pubsetbuf(buf, sizeof buf);
-	input.open(argv[1], ios::in | ios::binary);
+
+	if (argc != 2) {
+		cout << "Invalid number of arguments. Please supply path to target log file.";
+		return EXIT_FAILURE;
+	}
+
+	try {
+		input.open(argv[1], ios::in | ios::binary);
+		input.exceptions (std::ifstream::failbit | std::ifstream::badbit | std::ifstream::eofbit);
+	} catch (std::exception& e) {
+		cout << "Opening log file '" << argv[1] << "' failed with exception '" << e.what() << "'";
+		return EXIT_FAILURE;
+	}
+
 	bool more_data=true;
 	uint64_t msg_len=0;
-	input.exceptions ( std::ifstream::failbit | std::ifstream::badbit | std::ifstream::eofbit );
+
 	while (more_data) {
 		try {
 			input.read((char *)&msg_len,sizeof(uint64_t));
@@ -227,9 +240,10 @@ int main(int argc, char **argv) {
 //			curpos+=msg_len;
 //			input.seekg(curpos);
 			
-		}
-		catch(...) {
+		} catch(...) {
 			more_data=false;
 		}
 	}
+
+	return EXIT_SUCCESS;
 }
