@@ -2839,10 +2839,24 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 		// and replace it with an ERR
 		// note that EOF is added on a packet on its own, instead of using a buffer,
 		// so that can be removed
+		//
+		// NOTE: After 2.4.5 previous behavior is modified in favor of the following:
+		//
+		// When CLIENT_DEPRECATE_EOF two EOF packets are two be expected in the response:
+		//   1. After the columns definitions (This is added directly by 'MySQL_ResultSet::init').
+		//   2. After the rows values, this can either be and EOF packet or a ERR packet in case of error.
+		//
+		// First EOF packet isn't optional, and it's just the second the one that is optionaly either an EOF
+		// or an ERR packet. The following code adds either the final EOF or ERR packet. This is equally valid
+		// for when CLIENT_DEPRECATE_EOF is enabled or not. If CLIENT_DEPRECATE_EOF is:
+		//   * DISABLED: The behavior is as described before.
+		//   * ENABLED: Code is identical for this case. The initial EOF packet is conditionally added by
+		//     'MySQL_ResultSet::init', thus, this packet should not be present if not needed at this point.
+		//     In case of error an ERR packet needs to be added, otherwise `add_eof` handles the generation of
+		//     the equivalent OK packet replacing the final EOF packet.
 		int myerr = mysql_stmt_errno(_stmt);
 		if (myerr) {
 			PROXY_TRACE2();
-			remove_last_eof();
 			add_err(myconn->myds);
 		} else {
 			PROXY_TRACE2();
