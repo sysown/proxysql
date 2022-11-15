@@ -230,6 +230,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../cr_new_stmt_metadata_removal.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ps_buffer_stmt_read_all_rows.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt_store_result_err.patch
 ifeq ($(WITHASAN),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_asan.patch
 endif
