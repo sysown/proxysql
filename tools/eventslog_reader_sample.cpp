@@ -105,6 +105,7 @@ class MySQL_Event {
 	char *client = NULL;
 	size_t server_len;
 	size_t client_len;
+	uint64_t client_stmt_id;
 	uint64_t total_length;
 	uint64_t hid;
 	uint64_t affected_rows;
@@ -113,6 +114,7 @@ class MySQL_Event {
 	public:
 	MySQL_Event() {
 		query_len=0;
+		client_stmt_id=0;
 	}
 	void read(std::fstream *f) {
 		f->read((char *)&et,1);
@@ -161,6 +163,9 @@ class MySQL_Event {
 		}
 		read_encoded_length((uint64_t *)&start_time,f);
 		read_encoded_length((uint64_t *)&end_time,f);
+		if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
+			read_encoded_length((uint64_t *)&client_stmt_id,f);
+		}
 		read_encoded_length((uint64_t *)&affected_rows,f);
 		read_encoded_length((uint64_t *)&rows_sent,f);
 		read_encoded_length((uint64_t *)&query_digest,f);
@@ -183,6 +188,9 @@ class MySQL_Event {
 		sprintf(buffer2,"%06u", (unsigned)(end_time%1000000));
 		cout << " endtime=\"" << buffer << "." << buffer2 << "\"";
 		cout << " duration=" << (end_time-start_time) << "us";
+		if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
+			cout << " client_stmt_id=" << client_stmt_id;
+		}
 		cout << " rows_affected=" << affected_rows;
 		cout << " rows_sent=" << rows_sent;
 		cout << " digest=\"" << digest_hex << "\"" << endl << query_ptr << endl;
