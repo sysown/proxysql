@@ -1,8 +1,10 @@
 /**
- * @file prepare_statement_err3024-t.cpp
- * @brief Checks proper handling by ProxySQL of binary resultset holding errors.
- * @details This test, performs a mixed set of queries, some of them expecting errors. The test is also
- *   compiled against 'libmysqlclient' and also makes use of both ASYNC and SYNC APIs.
+ * @file reg_test_mariadb_stmt_store_result-t.cpp
+ * @brief Regression test for 'mysql_stmt_store_result' internal error handling.
+ * @details When failed to execute, 'mysql_stmt_store_result' left and invalid internal state in 'stmt' which
+ *   leads to stalls when the 'mysql_stmt_execute' was called again over the 'stmt'. This test verifies that
+ *   this behavior is no longer present, for both, ASYNC and SYNC APIs. It also compiles against
+ *   'libmysqlclient' and exercises the same logic against ProxySQL.
  */
 
 #include <cstring>
@@ -15,16 +17,7 @@
 
 #include "tap.h"
 #include "command_line.h"
-#include "proxysql_utils.h"
 #include "utils.h"
-
-const int NUM_EXECUTIONS = 5;
-
-std::string select_query[3] = {
-	"SELECT /*+ MAX_EXECUTION_TIME(10) */ COUNT(*) FROM test.sbtest1 a JOIN test.sbtest1 b WHERE (a.id+b.id)%2" ,
-	"SELECT COUNT(*) FROM (SELECT a.* FROM test.sbtest1 a JOIN test.sbtest1 b WHERE (a.id+b.id)%2 LIMIT 1000) t" ,
-	"SELECT a.* FROM test.sbtest1 a JOIN test.sbtest1 b WHERE (a.id+b.id)%2 LIMIT 10000"
-};
 
 #ifndef LIBMYSQL_HELPER
 /* Helper function to do the waiting for events on the socket. */
@@ -122,12 +115,23 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 	return add_more_rows_test_sbtest1(num_rows, mysql);
 }
 
+std::string select_query = {
+	"SELECT /*+ MAX_EXECUTION_TIME(10) */ COUNT(*) FROM test.sbtest1 a JOIN test.sbtest1 b WHERE (a.id+b.id)%2"
+};
+
 using std::string;
+
+const int TWO_EXECUTIONS = 2;
 
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	plan(3 + NUM_EXECUTIONS*3*2); // 3 prepare + 3 * execution * 2 (execute + store)
+	plan(1 + TWO_EXECUTIONS*2); // 1 prepare + executions * 2 (execute + store)
+	bool use_async = false;
+
+	if (argc == 2 && string { argv[1] } == "async") {
+		use_async = true;
+	}
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -154,81 +158,58 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	MYSQL_STMT* stmt[3];
-	for (int i=0; i<3; i++) {
-		// Initialize and prepare the statement
-		stmt[i]= mysql_stmt_init(mysql);
-		if (!stmt[i]) {
-			diag("mysql_stmt_init(), out of memory\n");
-			return exit_status();
-		}
-		if (mysql_stmt_prepare(stmt[i], select_query[i].c_str(), strlen(select_query[i].c_str()))) {
-			diag("select_query: %s", select_query[i].c_str());
-			ok(false, "mysql_stmt_prepare at line %d failed: %s", __LINE__ , mysql_error(mysql));
-			mysql_close(mysql);
-			mysql_library_end();
-			return exit_status();
-		} else {
-			ok(true, "Prepare succeeded: %s", select_query[i].c_str());
-		}
+	MYSQL_STMT* stmt = nullptr;
+	// Initialize and prepare the statement
+	stmt= mysql_stmt_init(mysql);
+	if (!stmt) {
+		diag("mysql_stmt_init(), out of memory\n");
+		return exit_status();
 	}
+
+	if (mysql_stmt_prepare(stmt, select_query.c_str(), strlen(select_query.c_str()))) {
+		diag("select_query: %s", select_query.c_str());
+		ok(false, "mysql_stmt_prepare at line %d failed: %s", __LINE__ , mysql_error(mysql));
+		mysql_close(mysql);
+		mysql_library_end();
+		return exit_status();
+	} else {
+		ok(true, "Prepare succeeded: %s", select_query.c_str());
+	}
+
 	int rc = 0;
 
-	for (int j = 0; j < NUM_EXECUTIONS; j++) {
-		for (int i=0; i<3; i++) {
-			// we run 3 queries:
-			// the 1st should fail
-			// the others should succeed
-			diag("Executing: %s", select_query[i].c_str());
-			rc = mysql_stmt_execute(stmt[i]);
+	for (int i = 0; i < TWO_EXECUTIONS; i++) {
+		diag("Executing: %s", select_query.c_str());
+		rc = mysql_stmt_execute(stmt);
 
-			unsigned int sterrno = mysql_stmt_errno(stmt[i]);
-			const char* strerr = mysql_stmt_error(stmt[i]);
+		unsigned int sterrno = mysql_stmt_errno(stmt);
+		const char* strerr = mysql_stmt_error(stmt);
+		ok(rc == 0, "'mysql_stmt_execute' should succeed. Code: %u, error: %s", sterrno, strerr);
 
-			ok(rc == 0, "'mysql_stmt_execute' should succeed. Code: %u, error: %s", sterrno, strerr);
-			if (rc == 0) {
 #if defined(ASYNC_API) && !defined(LIBMYSQL_HELPER)
-				diag("Using ASYNC API for 'mysql_stmt_store_result'...");
-				int async_exit_status = 0;
+		diag("Using ASYNC API for 'mysql_stmt_store_result'...");
+		int async_exit_status = 0;
 
-				async_exit_status = mysql_stmt_store_result_start(&rc, stmt[i]);
-				while (async_exit_status) {
-					async_exit_status = wait_for_mysql(mysql, async_exit_status);
-					async_exit_status = mysql_stmt_store_result_cont(&rc, stmt[i], async_exit_status);
-				}
+		async_exit_status = mysql_stmt_store_result_start(&rc, stmt);
+		while (async_exit_status) {
+			async_exit_status = wait_for_mysql(mysql, async_exit_status);
+			async_exit_status = mysql_stmt_store_result_cont(&rc, stmt, async_exit_status);
+		}
 #else
-				diag("Using SYNC API for 'mysql_stmt_store_result'...");
-				rc = mysql_stmt_store_result(stmt[i]);
+		diag("Using SYNC API for 'mysql_stmt_store_result'...");
+		rc = mysql_stmt_store_result(stmt);
 #endif
 
-				bool check_res = false;
-				string check_err {};
+		sterrno = mysql_stmt_errno(stmt);
+		strerr = mysql_stmt_error(stmt);
+		bool check_res = rc == 1 && sterrno == 3024;
+		ok(check_res, "'mysql_stmt_store_result' should fail. Code: %u, error: %s", sterrno, strerr);
 
-				sterrno = mysql_stmt_errno(stmt[i]);
-				strerr = mysql_stmt_error(stmt[i]);
-
-				if (i == 0) {
-					check_res = rc == 1 && sterrno == 3024;
-					string check_err_t {
-						"'mysql_stmt_store_result' at line %d should fail with code 3024. Received code: %u, error: %s"
-					};
-					string_format(check_err_t, check_err, __LINE__, sterrno, strerr);
-				} else {
-					check_res = rc == 0;
-					check_err = "'mysql_stmt_store_result' should succeed";
-				}
-
-				ok(check_res, "%s", check_err.c_str());
-				mysql_stmt_free_result(stmt[i]);
-			} else {
-				diag("'mysql_stmt_execute' failed. Continuing with further tests");
-			}
-		}
+		mysql_stmt_free_result(stmt);
 	}
-	for (int i=0; i<3; i++) {
-		if (mysql_stmt_close(stmt[i])) {
-			ok(false, "mysql_stmt_close at line %d failed: %s\n", __LINE__ , mysql_error(mysql));
-		}
+
+	if (mysql_stmt_close(stmt)) {
+		ok(false, "mysql_stmt_close at line %d failed: %s\n", __LINE__ , mysql_error(mysql));
 	}
 
 	mysql_close(mysql);
