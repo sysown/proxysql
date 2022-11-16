@@ -4114,10 +4114,15 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 	}
 	global_stmtid=stmt_info->statement_id;
 	myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
-	if (previous_status.size() == 0)
-	client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
+	// We only perform the generation for a new 'client_stmt_id' when there is no previous status, this
+	// is, when 'PROCESSING_STMT_PREPARE' is reached directly without transitioning from a previous status
+	// like 'PROCESSING_STMT_EXECUTE'. The same condition needs to hold for setting 'stmt_client_id',
+	// otherwise we could be resetting it's current value from the previous state.
+	if (previous_status.size() == 0) {
+		client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
+		CurrentQuery.stmt_client_id=client_stmtid;
+	}
 	CurrentQuery.mysql_stmt=NULL;
-	CurrentQuery.stmt_client_id=client_stmtid;
 	st=status;
 	size_t sts=previous_status.size();
 	if (sts) {
