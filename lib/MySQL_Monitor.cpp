@@ -3679,8 +3679,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 
 				if (std::get<0>(ret_value)) {
 					DNS_Cache_Record dns_record = get<1>(ret_value);
-					dns_records_bookkeeping.emplace_back(dns_record);
-					proxy_error("Hostname: %s IP: %s\n", dns_record.hostname.c_str(), dns_record.ip.c_str());
+					dns_records_bookkeeping.emplace_back(std::move(dns_record));
 				}
 			}
 		
