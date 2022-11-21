@@ -455,6 +455,8 @@ class MySQL_Threads_Handler
 		int monitor_threads_min;
 		int monitor_threads_max;
 		int monitor_threads_queue_maxsize;
+		int monitor_local_dns_cache_ttl;
+		int monitor_local_dns_cache_refresh_interval;
 		char *monitor_username;
 		char *monitor_password;
 		char * monitor_replication_lag_use_percona_heartbeat;

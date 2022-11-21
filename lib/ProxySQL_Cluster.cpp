@@ -100,7 +100,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			//rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, CLIENT_COMPRESS); // FIXME: add optional support for compression
-			rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, MySQL_Monitor::dns_lookup(node->hostname).c_str(), username, password, NULL, node->port, NULL, 0);
 //			if (rc_conn) {
 //			}
 			//char *query = query1;
@@ -881,7 +881,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, MySQL_Monitor::dns_lookup(hostname).c_str(), username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
 				MYSQL_RES *result1 = NULL;
 				MYSQL_RES *result2 = NULL;
@@ -1147,7 +1147,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
 
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, MySQL_Monitor::dns_lookup(hostname).c_str(), username, password, NULL, port, NULL, 0);
 			if (rc_conn == nullptr) {
 				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
@@ -1461,7 +1461,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, MySQL_Monitor::dns_lookup(hostname).c_str(), username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
 				std::vector<MYSQL_RES*> results {};
 
@@ -1825,7 +1825,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching %s variables from peer %s:%d started\n", vars_type_str, hostname, port);
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, MySQL_Monitor::dns_lookup(hostname).c_str(), username, password, NULL, port, NULL, 0);
 
 			if (rc_conn) {
 				std::string s_query = "";
@@ -1974,7 +1974,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 				"Cluster: Fetching ProxySQL Servers from peer %s:%d started. Expected checksum: %s\n",
 				hostname, port, expected_checksum.c_str()
 			);
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, MySQL_Monitor::dns_lookup(hostname).c_str(), username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
 				rc_query = mysql_query(conn,"SELECT hostname, port, weight, comment FROM runtime_proxysql_servers ORDER BY hostname, port");
 				if ( rc_query == 0 ) {

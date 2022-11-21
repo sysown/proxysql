@@ -808,7 +808,7 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 	if (parent->port) {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, MySQL_Monitor::dns_lookup(parent->address).c_str(), userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
