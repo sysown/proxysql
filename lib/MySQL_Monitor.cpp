@@ -3419,7 +3419,6 @@ void* monitor_dns_resolver_thread(void* args) {
 
 	struct addrinfo hints, *res = NULL;
 	int gai_rc;
-	int rc = 0;
 
 	/* set hints for getaddrinfo */
 	memset(&hints, 0, sizeof(hints));
@@ -3496,42 +3495,66 @@ void* MySQL_Monitor::monitor_dns_cache() {
 	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
-	unsigned long long t1;
-	unsigned long long t2;
+	unsigned long long t1 = 0;
+	unsigned long long t2 = 0;
 	unsigned long long next_loop_at = 0;
+	bool dns_cache_enable = true;
 
 	std::list<DNS_Cache_Record> dns_records_bookkeeping;
 	wqueue<WorkItem<DNS_Resolve_Data>*> dns_resolver_queue;
 	
 	while (GloMyMon->shutdown == false) {
+
+		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
+		const unsigned int glover = GloMTH->get_global_version();
+		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover) {
+			MySQL_Monitor__thread_MySQL_Thread_Variables_version = glover;
+			mysql_thr->refresh_variables();
+			next_loop_at = 0;
+
+			// dns cache is disabled
+			if (mysql_thread___monitor_local_dns_cache_ttl == 0 ||
+				mysql_thread___monitor_local_dns_cache_refresh_interval == 0)
+			{
+				dns_cache_enable = false;
+				dns_cache->set_enabled_flag(false);
+				dns_cache->clear();
+				dns_records_bookkeeping.clear();
+
+				/*while (dns_resolver_queue.size()) { 
+					WorkItem<DNS_Resolve_Data>* item = dns_resolver_queue.remove();
+					if (item) {
+						if (item->data) {
+							delete item->data;
+						}
+						delete item;
+					}
+				}*/
+			}
+			else {
+				dns_cache_enable = true;
+				dns_cache->set_enabled_flag(true); //dns cache enabled
+			}
+		}
+
+		if (!dns_cache_enable) {
+			usleep(200000);
+			continue;
+		}
+
 		// update the 'monitor_internal.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
 		{
 			std::lock_guard<std::mutex> mysql_servers_guard(MyHGM->mysql_servers_to_monitor_mutex);
 			update_monitor_mysql_servers(MyHGM->mysql_servers_to_monitor);
 		}
 
-		//if (mysql_thread___monitor_local_dns_cache_ttl == 0 ||
-		//	mysql_thread___monitor_local_dns_cache_refresh_interval == 0
-		//	) {
-		//
-		//	break;
-		//}
-
-		unsigned int glover;
 		char* error = NULL;
 		int cols = 0;
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
-		char* query = (char*)"SELECT DISTINCT trim(hostname) FROM monitor_internal.mysql_servers";
-		t1 = monotonic_time();
+		const char* query = (char*)"SELECT DISTINCT trim(hostname) FROM monitor_internal.mysql_servers";
 
-		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
-		glover = GloMTH->get_global_version();
-		if (MySQL_Monitor__thread_MySQL_Thread_Variables_version < glover) {
-			MySQL_Monitor__thread_MySQL_Thread_Variables_version = glover;
-			mysql_thr->refresh_variables();
-			next_loop_at = 0;
-		}
+		t1 = monotonic_time();
 
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_dns_cache_loop;
@@ -3552,7 +3575,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 
 			constexpr unsigned int num_dns_resolver_threads = 1;
 			constexpr unsigned int num_dns_resolver_max_threads = 16;
-			constexpr unsigned int num_dns_resolver_queue_max_size = 128;
+			constexpr unsigned int num_dns_resolver_queue_max_size = 256;
 
 			std::vector<DNSResolverThread*> dns_resolver_threads(num_dns_resolver_threads);
 			
@@ -3584,7 +3607,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 					else {
 						hostnames.erase(itr->hostname);
 
-						if (current_time >= itr->ttl) {
+						if (current_time > itr->ttl) {
 							std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
 							dns_resolve_data->hostname = itr->hostname;
 							dns_resolve_data->cached_ip = itr->ip;
@@ -5422,6 +5445,9 @@ std::string MySQL_Monitor::dns_lookup(const char* hostname) {
 }
 
 bool DNS_Cache::add(const std::string& hostname, const std::string& ip) {
+
+	if (!enabled) return false;
+
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
 	try {
@@ -5438,6 +5464,8 @@ bool DNS_Cache::add(const std::string& hostname, const std::string& ip) {
 }
 
 std::string DNS_Cache::lookup(const std::string& hostname, bool return_hostname_if_lookup_fails) const {
+	if (!enabled) return "";
+
 	std::string ip;
 	
 	__sync_fetch_and_add(&GloMyMon->dns_cache_queried, 1);
@@ -5474,7 +5502,16 @@ void DNS_Cache::remove(const std::string& hostname) {
 		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
 }
 
+void DNS_Cache::clear() {
+	int rc = pthread_rwlock_wrlock(&rwlock_);
+	assert(rc == 0);
+	records.clear();
+	rc = pthread_rwlock_unlock(&rwlock_);
+	assert(rc == 0);
+}
+
 void DNS_Cache::bulk_update(const std::list<std::pair<DNS_Cache_Record, OPERATION>> bulk_record) {
+	if (!enabled) return;
 
 	pthread_rwlock_wrlock(&rwlock_);
 	for (const auto& dns_record : bulk_record) {

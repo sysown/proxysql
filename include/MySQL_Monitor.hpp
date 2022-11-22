@@ -292,7 +292,7 @@ public:
 	};
 
 
-	DNS_Cache() {
+	DNS_Cache() : enabled(true) {
 		int rc = pthread_rwlock_init(&rwlock_, NULL);
 		assert(rc == 0);
 	}
@@ -301,14 +301,21 @@ public:
 		pthread_rwlock_destroy(&rwlock_);
 	}
 
+	inline 
+	void set_enabled_flag(bool value) {
+		enabled = value;
+	}
+
 	bool add(const std::string& hostname, const std::string& ip);
 	void remove(const std::string& hostname);
+	void clear();
 	std::string lookup(const std::string& hostname, bool return_hostname_if_lookup_fails) const;
 	void bulk_update(const std::list<std::pair<DNS_Cache_Record, OPERATION>> bulk_record);
 
 private:
-	mutable pthread_rwlock_t rwlock_;
 	std::unordered_map<std::string, std::string> records;
+	std::atomic_bool enabled;
+	mutable pthread_rwlock_t rwlock_;
 };
 
 struct DNS_Resolve_Data {

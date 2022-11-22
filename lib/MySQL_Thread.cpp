@@ -2180,8 +2180,8 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_slave_lag_when_null"]   = make_tuple(&variables.monitor_slave_lag_when_null,    0, 604800, false);
 		VariablesPointers_int["monitor_threads_queue_maxsize"] = make_tuple(&variables.monitor_threads_queue_maxsize, 16,   1024, false);
 
-		VariablesPointers_int["monitor_local_dns_cache_ttl"] = make_tuple(&variables.monitor_local_dns_cache_ttl, 100, 7*24*3600*1000, false);
-		VariablesPointers_int["monitor_local_dns_cache_refresh_interval"] = make_tuple(&variables.monitor_local_dns_cache_refresh_interval, 100, 600*1000, false);
+		VariablesPointers_int["monitor_local_dns_cache_ttl"] = make_tuple(&variables.monitor_local_dns_cache_ttl, 0, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_local_dns_cache_refresh_interval"] = make_tuple(&variables.monitor_local_dns_cache_refresh_interval, 0, 7*24*3600*1000, false);
 
 		// mirroring
 		VariablesPointers_int["mirror_max_concurrency"]  = make_tuple(&variables.mirror_max_concurrency, 1,     8*1024, false);
