@@ -5426,6 +5426,11 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 }
 
 std::string MySQL_Monitor::dns_lookup(const std::string& hostname) {
+	
+	// if IP was provided, no need to do lookup
+	if (validate_ip(hostname))
+		return hostname;
+
 	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
 	const std::string& hostname_trim = trim(hostname);
 	std::string ip;
