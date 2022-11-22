@@ -196,6 +196,13 @@ class MyHGC {	// MySQL Host Group Container
 	unsigned int hid;
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
+	uint64_t conns_reqs_waited;
+	uint64_t conns_reqs_waited_time_total;
+	uint64_t conns_reqs_waiting;
+	uint64_t sessions_with_conn;
+	uint64_t conns_total;
+	uint64_t queries_total;
+
 	MySrvList *mysrvs;
 	MyHGC(int);
 	~MyHGC();
@@ -324,6 +331,10 @@ struct p_hg_dyn_counter {
 		gtid_executed,
 		proxysql_mysql_error,
 		mysql_error,
+		hostgroup_conns_reqs_waited,
+		hostgroup_conns_reqs_waited_time_total,
+		hostgroup_conns_total,
+		hostgroup_queries_total,
 		__size
 	};
 };
@@ -339,6 +350,7 @@ struct p_hg_dyn_gauge {
 		connection_pool_conn_used,
 		connection_pool_latency_us,
 		connection_pool_status,
+		hostgroup_conns_reqs_waiting,
 		__size
 	};
 };
@@ -445,6 +457,11 @@ class MySQL_HostGroups_Manager {
 	 */
 	void p_update_mysql_gtid_executed();
 
+  /**
+	 * @brief Update the "stats_mysql_hostgroups" metrics.
+	 */
+	void p_update_hostgroups();
+	
 	void p_update_connection_pool_update_counter(
 		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
 		std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx
@@ -539,6 +556,13 @@ class MySQL_HostGroups_Manager {
 		/// Prometheus mysql_error metrics
 		std::map<std::string, prometheus::Counter*> p_mysql_errors_map {};
 
+		/// Prometheus hostgroups metrics
+		std::map<std::string, prometheus::Counter*> p_hostgroups_conns_reqs_waited_map {};
+		std::map<std::string, prometheus::Counter*> p_hostgroups_conns_reqs_waited_time_total {};
+		std::map<std::string, prometheus::Counter*> p_hostgroups_conns_total {};
+		std::map<std::string, prometheus::Counter*> p_hostgroups_queries_total {};
+		std::map<std::string, prometheus::Gauge*> p_hostgroups_conns_reqs_waiting{};
+
 		//////////////////////////////////////////////////////
 	} status;
 	/**
@@ -616,12 +640,12 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
-
 	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
 	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = NULL);
+	SQLite3_result * SQL3_Hostgroups_Sessions_Metrics(bool _reset);
 	SQLite3_result * SQL3_Free_Connections();
 
 	void push_MyConn_to_pool(MySQL_Connection *, bool _lock=true);

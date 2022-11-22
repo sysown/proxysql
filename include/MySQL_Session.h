@@ -260,6 +260,9 @@ class MySQL_Session
 	int to_process;
 	int pending_connect;
 	enum proxysql_session_type session_type;
+	/* @brief Keeps track in which MyHGCs the session is already registered. */
+	int waiting_in_hg;
+	uint64_t conn_pull_next_wait_start;
 
 	// bool
 	bool autocommit;
@@ -312,6 +315,13 @@ class MySQL_Session
 	void set_unhealthy();
 	
 	void set_status(enum session_status e);
+	/**
+	 * @brief Updates the internal 'waiting_in_hg' field to match the supplied 'hostgroup_id'.
+	 * @details Also responsible for updating the hostgroup metrics contained in the corresponding
+	 *   'myhgc' when 'waiting_in_hg' is either set to a particular hostgroup or reset to '-1'.
+	 * @param hostgroup_id The hostgroup be set as the session waiting hostgroup.
+	 */
+	void set_waiting_in_hg(int hostgroup_id);
 	int handler();
 
 	void (*handler_function) (MySQL_Session *arg, void *, PtrSize_t *pkt);

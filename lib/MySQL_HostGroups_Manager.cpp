@@ -970,6 +970,13 @@ MyHGC::MyHGC(int _hid) {
 	mysrvs=new MySrvList(this);
 	current_time_now = 0;
 	new_connections_now = 0;
+
+	this->sessions_with_conn = 0;
+	this->conns_reqs_waiting = 0;
+	this->conns_reqs_waited = 0;
+	this->conns_reqs_waited_time_total = 0;
+	this->conns_total = 0;
+	this->queries_total = 0;
 }
 
 
@@ -1316,6 +1323,30 @@ hg_metrics_map = std::make_tuple(
 			"mysql_error_total",
 			"Tracks the mysql errors encountered.",
 			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_conns_reqs_waited,
+			"proxysql_hostgroup_conns_reqs_waited_total",
+			"Total number of sessions that have waited to receive a connection for the hostgroup from the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_conns_reqs_waited_time_total,
+			"proxysql_hostgroup_conns_reqs_waited_time_total",
+			"Total time waited by all sessions to receive a connection for the hostgroup from the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_conns_total,
+			"proxysql_hostgroup_conns_total",
+			"Total number of connections requested for the hostgroup from the connection pool.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_counter::hostgroup_queries_total,
+			"proxysql_hostgroup_queries_total",
+			"Total number of queries executed in the hostgroup.",
+			metric_tags {}
 		)
 	},
 	// prometheus dynamic gauges
@@ -1346,6 +1377,12 @@ hg_metrics_map = std::make_tuple(
 			p_hg_dyn_gauge::connection_pool_status,
 			"proxysql_connpool_conns_status",
 			"The status of the backend server (1 - ONLINE, 2 - SHUNNED, 3 - OFFLINE_SOFT, 4 - OFFLINE_HARD).",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::hostgroup_conns_reqs_waiting,
+			"proxysql_hostgroup_conns_reqs_waiting",
+			"Total number of sessions currently waiting for a connection for the hostgroup.",
 			metric_tags {}
 		)
 	}
@@ -3419,8 +3456,11 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 			mysrvc->ConnectionsUsed->add(conn);
 			status.myconnpoll_get_ok++;
 			mysrvc->update_max_connections_used();
+			// Update the total connections get for this particular hostgroup
+			myhgc->conns_total++;
 		}
 	}
+
 	wrunlock();
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, (conn ? conn->parent->address : "") , (conn ? conn->parent->port : 0 ));
 	return conn;
@@ -4156,6 +4196,49 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 	wrunlock();
 }
 
+void MySQL_HostGroups_Manager::p_update_hostgroups() {
+	wrlock();
+
+	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
+		MyHGC *myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+
+		const std::string hostgroup_id = std::to_string(myhgc->hid);
+		const std::map<std::string, std::string> common_labels { { "hostgroup", hostgroup_id } };
+
+		p_update_map_gauge(
+			status.p_hostgroups_conns_reqs_waiting,
+			status.p_dyn_gauge_array[p_hg_dyn_gauge::hostgroup_conns_reqs_waiting],
+			hostgroup_id, common_labels, myhgc->conns_reqs_waiting
+		);
+
+		p_update_map_counter(
+			status.p_hostgroups_conns_reqs_waited_map,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_conns_reqs_waited],
+			hostgroup_id, common_labels, myhgc->conns_reqs_waited
+		);
+
+		p_update_map_counter(
+			status.p_hostgroups_conns_reqs_waited_time_total,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_conns_reqs_waited_time_total],
+			hostgroup_id, common_labels, myhgc->conns_reqs_waited_time_total
+		);
+
+		p_update_map_counter(
+			status.p_hostgroups_conns_total,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_conns_total],
+			hostgroup_id, common_labels, myhgc->conns_total
+		);
+
+		p_update_map_counter(
+			status.p_hostgroups_queries_total,
+			status.p_dyn_counter_array[p_hg_dyn_counter::hostgroup_queries_total],
+			hostgroup_id, common_labels, myhgc->queries_total
+		);
+	}
+
+	wrunlock();
+}
+
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int *hid) {
   const int colnum=14;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
@@ -4277,6 +4360,52 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 		}
 	}
 	wrunlock();
+	return result;
+}
+
+SQLite3_result * MySQL_HostGroups_Manager::SQL3_Hostgroups_Sessions_Metrics(bool _reset) {
+	const int COLNUM = 6;
+
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Hostgroups Session Metrics\n");
+	SQLite3_result *result=new SQLite3_result(COLNUM);
+	result->add_column_definition(SQLITE_TEXT,"hostgroup");
+	result->add_column_definition(SQLITE_TEXT,"conns_reqs_waiting");
+	result->add_column_definition(SQLITE_TEXT,"conns_reqs_waited");
+	result->add_column_definition(SQLITE_TEXT,"conns_reqs_waited_time_total");
+	result->add_column_definition(SQLITE_TEXT,"conns_total");
+	result->add_column_definition(SQLITE_TEXT,"queries_total");
+
+	wrlock();
+	for (uint32_t i = 0; i < MyHostGroups->len; i++) {
+		MyHGC* myhgc = static_cast<MyHGC*>(MyHostGroups->index(i));
+
+		std::string hostgroup_str = std::to_string(myhgc->hid);
+		std::string conns_reqs_waiting_str = std::to_string(myhgc->conns_reqs_waiting);
+		std::string conns_reqs_waited_str = std::to_string(myhgc->conns_reqs_waited);
+		std::string conns_reqs_waited_time_total_str = std::to_string(myhgc->conns_reqs_waited_time_total);
+		std::string conns_total_str = std::to_string(myhgc->conns_total);
+		std::string queries_total_str = std::to_string(myhgc->queries_total);
+
+		std::array<char*, COLNUM> pta {};
+		pta[0] = strdup(hostgroup_str.c_str());
+		pta[1] = strdup(conns_reqs_waiting_str.c_str());
+		pta[2] = strdup(conns_reqs_waited_str.c_str());
+		pta[3] = strdup(conns_reqs_waited_time_total_str.c_str());
+		pta[4] = strdup(conns_total_str.c_str());
+		pta[5] = strdup(queries_total_str.c_str());
+
+		result->add_row(&pta.front());
+
+		if (_reset) {
+			myhgc->conns_reqs_waiting = 0;
+			myhgc->conns_reqs_waited = 0;
+			myhgc->conns_reqs_waited_time_total = 0;
+			myhgc->conns_total = 0;
+			myhgc->queries_total = 0;
+		}
+	}
+	wrunlock();
+
 	return result;
 }
 
@@ -4753,6 +4882,8 @@ void MySQL_HostGroups_Manager::p_update_metrics() {
 	this->p_update_connection_pool();
 	// Update the *gtid_executed* metrics
 	this->p_update_mysql_gtid_executed();
+	// Update the *hostgroups* metrics
+	this->p_update_hostgroups();
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {

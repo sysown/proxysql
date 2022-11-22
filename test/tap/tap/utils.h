@@ -1,6 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <map>
 #include <mysql.h>
 #include <string>
 #include <vector>
@@ -199,6 +200,51 @@ using user_config = std::tuple<std::string, std::string, std::string>;
 int create_extra_users(
 	MYSQL* proxysql_admin, MYSQL* mysql_server, const std::vector<user_config>& users_config
 );
+
+/*
+ * @brief Returns the rows contained in the resulset as a map using columns names as indexes and row values as
+ *   vectors. Missing row values are converted into empty strings.
+ * @param res The 'MYSQL_RES' to be converted into a map.
+ * @return A map holding the column names as indexes and the row values as vectors, or an empty map if
+ *   resulset is NULL.
+ */
+std::map<std::string,std::vector<std::string>> fetch_row_values(MYSQL_RES* res);
+
+/**
+ * @brief Opens the number of specified connections againts ProxySQL and returns them in the supplied vector
+ *   if no error takes place. In case of error, the error is logged to 'stderr'.
+ * @param cl The command line arguments required for connection creation.
+ * @param cons_num The number of connections to create and insert into the received vector.
+ * @param proxy_conns A reference to a vector to update with the created connections.
+ * @return EXIT_SUCCESS in case all the connections could be created, EXIT_FAILURE otherwise.
+ */
+int open_connections(const CommandLine& cl, uint32_t cons_num, std::vector<MYSQL*>& proxy_conns);
+
+/**
+ * @brief Splits the supplied string using the supplied delimiter and returns a vector of strings.
+ * @param s The string to be split into multiple chunks.
+ * @param delimiter The delimiter to be used to split the string.
+ * @return A vector holding the string splits.
+ */
+std::vector<std::string> split(const std::string& s, char delimiter);
+
+/**
+ * @brief Extract the metrics values from the output of the admin command 'SHOW PROMETHEUS METRICS'.
+ * @param metrics_output The output of the command 'SHOW PROMETHEUS METRICS'.
+ * @return A map holding the metrics identifier and its current value.
+ */
+std::map<std::string, double> get_prometheus_metric_values(const std::string& metrics_output);
+
+/**
+ * @brief Helper function for fetching prometheus metrics via Admin interface.
+ *
+ * @param proxysql_admin An already opened connection to ProxySQL Admin.
+ * @param prometheus_metrics The map to be filled with the ids and values of the found metrics.
+ *
+ * @return 'EXIT_SUCCESS' if the metrics could be correctly retrieved, the error reported by `mysql_errno`
+ *   otherwise.
+ */
+int fetch_prometheus_metrics(MYSQL* proxysql_admin, std::map<std::string, double>& prometheus_metrics);
 
 std::string tap_curtime();
 /**

@@ -572,6 +572,10 @@ static int http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO "CREATE TABLE stats_mysql_prepared_statements_info (global_stmt_id INT NOT NULL , schemaname VARCHAR NOT NULL , username VARCHAR NOT NULL , digest VARCHAR NOT NULL , ref_count_client INT NOT NULL , ref_count_server INT NOT NULL , num_columns INT NOT NULL, num_params INT NOT NULL, query VARCHAR NOT NULL)"
 
+#define STATS_SQLITE_TABLE_MYSQL_HOSTGROUPS "CREATE TABLE stats_mysql_hostgroups (hostgroup INT , conns_reqs_waiting INT , conns_reqs_waited INT , conns_reqs_waited_time_total INT , conns_total INT , queries_total INT)"
+
+#define STATS_SQLITE_TABLE_MYSQL_HOSTGROUPS_RESET "CREATE TABLE stats_mysql_hostgroups_reset (hostgroup INT , conns_reqs_waiting INT , conns_reqs_waited INT , conns_reqs_waited_time_total INT , conns_total INT , queries_total INT)"
+
 static char * admin_variables_names[]= {
 	(char *)"admin_credentials",
 	(char *)"stats_credentials",
@@ -3098,6 +3102,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	bool stats_mysql_gtid_executed=false;
 	bool stats_mysql_client_host_cache=false;
 	bool stats_mysql_client_host_cache_reset=false;
+	bool stats_mysql_hostgroups=false;
+	bool stats_mysql_hostgroups_reset=false;
 	bool dump_global_variables=false;
 
 	bool runtime_scheduler=false;
@@ -3177,6 +3183,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		} else {
 			if (strstr(query_no_space,"stats_mysql_connection_pool"))
 				{ stats_mysql_connection_pool=true; refresh=true; }
+		}
+	if (strstr(query_no_space,"stats_mysql_hostgroups_reset"))
+		{
+			stats_mysql_hostgroups_reset=true; refresh=true;
+		} else {
+			if (strstr(query_no_space,"stats_mysql_hostgroups"))
+				{ stats_mysql_hostgroups=true; refresh=true; }
 		}
 	if (strstr(query_no_space,"stats_mysql_free_connections"))
 		{ stats_mysql_free_connections=true; refresh=true; }
@@ -3350,6 +3363,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		}
 		if (stats_mysql_client_host_cache_reset) {
 			stats___mysql_client_host_cache(true);
+		}
+
+		if (stats_mysql_hostgroups_reset) {
+			stats___mysql_hostgroups_sessions_metrics(true);
+		} else {
+			if (stats_mysql_hostgroups)
+				stats___mysql_hostgroups_sessions_metrics(false);
 		}
 
 		if (admin) {
@@ -6078,6 +6098,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_prepared_statements_info", ADMIN_SQLITE_TABLE_STATS_MYSQL_PREPARED_STATEMENTS_INFO);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_client_host_cache_reset", STATS_SQLITE_TABLE_MYSQL_CLIENT_HOST_CACHE_RESET);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_hostgroups", STATS_SQLITE_TABLE_MYSQL_HOSTGROUPS);
+	insert_into_tables_defs(tables_defs_stats,"stats_mysql_hostgroups_reset", STATS_SQLITE_TABLE_MYSQL_HOSTGROUPS_RESET);
 
 	// ProxySQL Cluster
 	insert_into_tables_defs(tables_defs_admin,"proxysql_servers", ADMIN_SQLITE_TABLE_PROXYSQL_SERVERS);
@@ -9145,6 +9167,48 @@ void ProxySQL_Admin::stats___mysql_connection_pool(bool _reset) {
 		statsdb->execute("DELETE FROM stats_mysql_connection_pool_reset");
 		statsdb->execute("INSERT INTO stats_mysql_connection_pool_reset SELECT * FROM stats_mysql_connection_pool");
 	}
+	statsdb->execute("COMMIT");
+	delete resultset;
+}
+
+void ProxySQL_Admin::stats___mysql_hostgroups_sessions_metrics(bool _reset) {
+	if (!MyHGM) return;
+
+	int rc = 0;
+	sqlite3_stmt *statement=NULL;
+	SQLite3_result* resultset=MyHGM->SQL3_Hostgroups_Sessions_Metrics(_reset);
+	if (resultset==NULL) return;
+
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_mysql_hostgroups");
+
+	char* query = (char *)"INSERT INTO stats_mysql_hostgroups VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
+	rc = statsdb->prepare_v2(query, &statement);
+	ASSERT_SQLITE_OK(rc, statsdb);
+
+	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+		SQLite3_row *r1 = *it;
+
+		rc=(*proxy_sqlite3_bind_int64)(statement, 1, atoll(r1->fields[0])); ASSERT_SQLITE_OK(rc, statsdb); // hostgroup_id
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2, atoll(r1->fields[1])); ASSERT_SQLITE_OK(rc, statsdb); // conns_reqs_waiting
+		rc=(*proxy_sqlite3_bind_int64)(statement, 3, atoll(r1->fields[2])); ASSERT_SQLITE_OK(rc, statsdb); // conns_reqs_waited
+		rc=(*proxy_sqlite3_bind_int64)(statement, 4, atoll(r1->fields[3])); ASSERT_SQLITE_OK(rc, statsdb); // conns_reqs_waited_time_total
+		rc=(*proxy_sqlite3_bind_int64)(statement, 5, atoll(r1->fields[4])); ASSERT_SQLITE_OK(rc, statsdb); // conns_total
+		rc=(*proxy_sqlite3_bind_int64)(statement, 6, atoll(r1->fields[5])); ASSERT_SQLITE_OK(rc, statsdb); // queries_total
+
+		SAFE_SQLITE3_STEP2(statement);
+
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, statsdb);
+	}
+
+	(*proxy_sqlite3_finalize)(statement);
+
+	if (_reset) {
+		statsdb->execute("DELETE FROM stats_mysql_hostgroups_reset");
+		statsdb->execute("INSERT INTO stats_mysql_hostgroups_reset SELECT * FROM stats_mysql_hostgroups");
+	}
+
 	statsdb->execute("COMMIT");
 	delete resultset;
 }
