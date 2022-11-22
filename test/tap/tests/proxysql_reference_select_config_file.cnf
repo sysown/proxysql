@@ -190,6 +190,7 @@ mysql_variables =
 	query_digests_max_query_length="mysql"
 	query_digests_no_digits="mysql"
 	query_digests_normalize_digest_text="mysql"
+	query_digests_recent_time_msec="mysql"
 	query_digests_replace_null="mysql"
 	query_digests_track_hostname="mysql"
 	query_processor_iterations="mysql"

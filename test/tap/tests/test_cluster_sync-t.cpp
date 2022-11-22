@@ -1484,6 +1484,7 @@ int main(int, char**) {
 			std::make_tuple("mysql-query_digests_max_digest_length"                        , "2049"                       ),
 			std::make_tuple("mysql-query_digests_max_query_length"                         , "65001"                      ),
 			std::make_tuple("mysql-query_digests_grouping_limit"                           , "4"                          ),
+			std::make_tuple("mysql-query_digests_recent_time_msec"                         , "15000"                      ),
 			std::make_tuple("mysql-wait_timeout"                                           , "28800001"                   ),
 			std::make_tuple("mysql-throttle_max_bytes_per_second_to_client"                , "1"                          ),
 			std::make_tuple("mysql-throttle_ratio_server_to_client"                        , "1"                          ),

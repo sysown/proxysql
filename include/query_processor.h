@@ -27,7 +27,7 @@ typedef std::unordered_map<std::uint64_t, char *> umap_query_digest_text;
 
 
 typedef struct _query_digest_stats_pointers_t {
-	char *pta[14];
+	char *pta[16];
 	char digest[24];
 	char count_star[24];
 	char first_seen[24];
@@ -35,6 +35,8 @@ typedef struct _query_digest_stats_pointers_t {
 	char sum_time[24];
 	char min_time[24];
 	char max_time[24];
+	char recent_min_time[24];
+	char recent_max_time[24];
 	char hid[24];
 	char rows_affected[24];
 	char rows_sent[24];
@@ -53,10 +55,13 @@ class QP_query_digest_stats {
 	char client_address_buf[24];
 	time_t first_seen;
 	time_t last_seen;
+	time_t recent_window_start;
 	unsigned int count_star;
 	unsigned long long sum_time;
 	unsigned long long min_time;
 	unsigned long long max_time;
+	unsigned long long recent_min_time;
+	unsigned long long recent_max_time;
 	unsigned long long rows_affected;
 	unsigned long long rows_sent;
 	int hid;

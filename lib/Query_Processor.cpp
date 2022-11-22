@@ -176,9 +176,12 @@ QP_query_digest_stats::QP_query_digest_stats(char *u, char *s, uint64_t d, char 
 	count_star=0;
 	first_seen=0;
 	last_seen=0;
+	recent_window_start=0;
 	sum_time=0;
 	min_time=0;
 	max_time=0;
+	recent_min_time=0;
+	recent_max_time=0;
 	rows_affected=0;
 	rows_sent=0;
 	hid=h;
@@ -198,6 +201,15 @@ void QP_query_digest_stats::add_time(unsigned long long t, unsigned long long n,
 		first_seen=n;
 	}
 	last_seen=n;
+	if(n > recent_window_start + (mysql_thread___query_digests_recent_time_msec * 1000)) {
+		recent_window_start = n;
+		recent_min_time = t;
+		recent_max_time = t;
+	} else if(t < recent_min_time) {
+		recent_min_time = t;
+	} else if(t > recent_max_time) {
+		recent_max_time = t;
+	}
 }
 QP_query_digest_stats::~QP_query_digest_stats() {
 	if (digest_text) {
@@ -281,18 +293,26 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	//sprintf(qdsp->max_time,"%llu",max_time);
 	my_itoa(qdsp->max_time,max_time);
 	pta[10]=qdsp->max_time;
+	if(curtime - recent_window_start > mysql_thread___query_digests_recent_time_msec * 1000) {
+		recent_min_time=0;
+		recent_max_time=0;
+	}
+	my_itoa(qdsp->recent_min_time,recent_min_time);
+	pta[11]=qdsp->recent_min_time;
+	my_itoa(qdsp->recent_max_time,recent_max_time);
+	pta[12]=qdsp->recent_max_time;
 	// we are reverting this back to the use of sprintf instead of my_itoa
 	// because with my_itoa we are losing the sign
 	// see issue #2285
 	sprintf(qdsp->hid,"%d",hid);
 	//my_itoa(qdsp->hid,hid);
-	pta[11]=qdsp->hid;
+	pta[13]=qdsp->hid;
 	//sprintf(qdsp->rows_affected,"%llu",rows_affected);
 	my_itoa(qdsp->rows_affected,rows_affected);
-	pta[12]=qdsp->rows_affected;
+	pta[14]=qdsp->rows_affected;
 	//sprintf(qdsp->rows_sent,"%llu",rows_sent);
 	my_itoa(qdsp->rows_sent,rows_sent);
-	pta[13]=qdsp->rows_sent;
+	pta[15]=qdsp->rows_sent;
 	return pta;
 }
 
@@ -1178,10 +1198,10 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	unsigned long long curtime2;
 	size_t map_size = digest_umap.size();
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		result = new SQLite3_result(14, true);
+		result = new SQLite3_result(16, true);
 		curtime1 = monotonic_time();
 	} else {
-		result = new SQLite3_result(14);
+		result = new SQLite3_result(16);
 	}
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
@@ -1195,6 +1215,8 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
+	result->add_column_definition(SQLITE_TEXT,"recent_min_time");
+	result->add_column_definition(SQLITE_TEXT,"recent_max_time");
 	result->add_column_definition(SQLITE_TEXT,"rows_affected");
 	result->add_column_definition(SQLITE_TEXT,"rows_sent");
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
@@ -1257,9 +1279,9 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	size_t map_size = digest_umap.size();
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
 		curtime1=monotonic_time();
-		result = new SQLite3_result(14, true);
+		result = new SQLite3_result(16, true);
 	} else {
-		result = new SQLite3_result(14);
+		result = new SQLite3_result(16);
 	}
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");
@@ -1273,6 +1295,8 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	result->add_column_definition(SQLITE_TEXT,"sum_time");
 	result->add_column_definition(SQLITE_TEXT,"min_time");
 	result->add_column_definition(SQLITE_TEXT,"max_time");
+	result->add_column_definition(SQLITE_TEXT,"recent_min_time");
+	result->add_column_definition(SQLITE_TEXT,"recent_max_time");
 	result->add_column_definition(SQLITE_TEXT,"rows_affected");
 	result->add_column_definition(SQLITE_TEXT,"rows_sent");
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
