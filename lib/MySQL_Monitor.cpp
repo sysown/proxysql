@@ -5425,28 +5425,31 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #endif // TEST_AURORA
 }
 
-std::string MySQL_Monitor::dns_lookup(const std::string& hostname) {
+std::string MySQL_Monitor::dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails) {
 	
 	// if IP was provided, no need to do lookup
 	if (validate_ip(hostname))
 		return hostname;
 
 	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
-	const std::string& hostname_trim = trim(hostname);
 	std::string ip;
 
 	if (!dns_cache_thread && GloMyMon)
 		dns_cache_thread = GloMyMon->dns_cache;
 
 	if (dns_cache_thread) {
-		ip = dns_cache_thread->lookup(hostname_trim, false) ;
+		ip = dns_cache_thread->lookup(trim(hostname)) ;
+
+		if (ip.empty() && return_hostname_if_lookup_fails) {
+			ip = hostname;
+		}
 	}
 
-	return !ip.empty() ? ip : hostname_trim;
+	return ip;
 }
 
-std::string MySQL_Monitor::dns_lookup(const char* hostname) {
-	return MySQL_Monitor::dns_lookup(std::string(hostname));
+std::string MySQL_Monitor::dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails) {
+	return MySQL_Monitor::dns_lookup(std::string(hostname), return_hostname_if_lookup_fails);
 }
 
 bool DNS_Cache::add(const std::string& hostname, const std::string& ip) {
@@ -5456,7 +5459,7 @@ bool DNS_Cache::add(const std::string& hostname, const std::string& ip) {
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
 	try {
-		records.emplace(hostname, ip);
+		records[hostname] = ip;
 	}
 	catch (...) {}
 	rc = pthread_rwlock_unlock(&rwlock_);
@@ -5468,7 +5471,7 @@ bool DNS_Cache::add(const std::string& hostname, const std::string& ip) {
 	return true;
 }
 
-std::string DNS_Cache::lookup(const std::string& hostname, bool return_hostname_if_lookup_fails) const {
+std::string DNS_Cache::lookup(const std::string& hostname) const {
 	if (!enabled) return "";
 
 	std::string ip;
@@ -5487,10 +5490,6 @@ std::string DNS_Cache::lookup(const std::string& hostname, bool return_hostname_
 
 	if (!ip.empty() && GloMyMon) {
 		__sync_fetch_and_add(&GloMyMon->dns_cache_lookup_success, 1);
-	}
-
-	if (ip.empty() && return_hostname_if_lookup_fails) {
-		ip = hostname;
 	}
 
 	return ip;

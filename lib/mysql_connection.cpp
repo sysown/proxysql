@@ -808,7 +808,29 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 	if (parent->port) {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, MySQL_Monitor::dns_lookup(parent->address).c_str(), userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
+
+		char* host_ip = NULL;
+		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
+
+		if (!res_ip.empty()) {
+
+			if (parent->resolved_ip) {
+				if (strcmp(parent->resolved_ip, res_ip.c_str()) != 0) {
+					free(parent->resolved_ip);
+					parent->resolved_ip = strdup(res_ip.c_str());
+				}
+			}
+			else {
+				parent->resolved_ip = strdup(res_ip.c_str());
+			}
+
+			host_ip = parent->resolved_ip;
+		}
+		else {
+			host_ip = parent->address;
+		}
+
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}

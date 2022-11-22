@@ -309,7 +309,7 @@ public:
 	bool add(const std::string& hostname, const std::string& ip);
 	void remove(const std::string& hostname);
 	void clear();
-	std::string lookup(const std::string& hostname, bool return_hostname_if_lookup_fails) const;
+	std::string lookup(const std::string& hostname) const;
 	void bulk_update(const std::list<std::pair<DNS_Cache_Record, OPERATION>> bulk_record);
 
 private:
@@ -329,8 +329,8 @@ struct DNS_Resolve_Data {
 
 class MySQL_Monitor {
 	public:
-	static std::string dns_lookup(const std::string& hostname);
-	static std::string dns_lookup(const char* hostname);
+	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true);
+	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true);
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;

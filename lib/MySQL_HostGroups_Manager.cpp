@@ -839,7 +839,7 @@ void MySrvConnList::drop_all_connections() {
 }
 
 
-MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum MySerStatus _status, unsigned int _compression /*, uint8_t _charset */, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment) {
+MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum MySerStatus _status, unsigned int _compression /*, uint8_t _charset */, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment) : resolved_ip(NULL) {
 	address=strdup(add);
 	port=p;
 	gtid_port=gp;
@@ -951,6 +951,7 @@ void MySrvC::shun_and_killall() {
 MySrvC::~MySrvC() {
 	if (address) free(address);
 	if (comment) free(comment);
+	if (resolved_ip) free(resolved_ip);
 	delete ConnectionsUsed;
 	delete ConnectionsFree;
 }
