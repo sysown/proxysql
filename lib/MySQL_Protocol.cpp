@@ -2013,7 +2013,15 @@ __do_auth:
 								password=GloMyAuth->lookup(backend_username, USERNAME_BACKEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 								if (password) {
 									(*myds)->sess->default_hostgroup=default_hostgroup;
+									// Free the previously set 'default_schema' by 'GloMyLdapAuth'
+									if ((*myds)->sess->default_schema) {
+										free((*myds)->sess->default_schema);
+									}
 									(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+									// Free the previously set 'user_attributes' by 'GloMyLdapAuth'
+									if ((*myds)->sess->user_attributes) {
+										free((*myds)->sess->user_attributes);
+									}
 									(*myds)->sess->user_attributes = attributes; // just the pointer is passed
 #ifdef DEBUG
 									proxy_info("Attributes for user %s: %s\n" , user, attributes);
@@ -2024,6 +2032,8 @@ __do_auth:
 									(*myds)->sess->user_max_connections=max_connections;
 									char *tmp_user=strdup((const char *)user);
 									userinfo->set(backend_username, NULL, NULL, NULL);
+									// 'MySQL_Connection_userinfo::set' duplicates the supplied information, 'free' is required.
+									free(backend_username);
 									if (sha1_pass==NULL) {
 										// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 										GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
