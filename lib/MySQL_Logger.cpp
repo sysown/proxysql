@@ -686,11 +686,20 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		default:
 			break;
 	}
+
+	uint64_t query_digest = 0;
+
+	if (sess->status != PROCESSING_STMT_EXECUTE) {
+		query_digest = GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs);
+	} else {
+		query_digest = sess->CurrentQuery.stmt_info->digest;
+	}
+
 	MySQL_Event me(let,
 		sess->thread_session_id,ui->username,ui->schemaname,
 		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
 		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
-		GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs),
+		query_digest,
 		ca, cl
 	);
 	char *c = NULL;
