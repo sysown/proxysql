@@ -2072,7 +2072,7 @@ __do_auth:
 			if (password[0]!='*') { // clear text password
 				if (auth_plugin_id == 1) { // mysql_native_password
 					proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-					if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					if (pass_len != 0 && memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 						ret=true;
 					}
 				} else { // mysql_clear_password
