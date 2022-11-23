@@ -69,7 +69,7 @@ char *sha1_pass_hex(char *sha1_pass) {
 	buff[0]='*';
 	buff[SHA_DIGEST_LENGTH*2+1]='\0';
 	int i;
-	uint8_t a;
+	uint8_t a = 0;
 	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
 		memcpy(&a,sha1_pass+i,1);
 		sprintf(buff+1+2*i, "%02x", a);
@@ -1644,8 +1644,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	unsigned char *auth_plugin = NULL;
 	int auth_plugin_id = 0;
 
-	char reply[SHA_DIGEST_LENGTH+1];
-	reply[SHA_DIGEST_LENGTH]='\0';
+	char reply[SHA_DIGEST_LENGTH+1] = { 0 };
 	int default_hostgroup=-1;
 	char *default_schema = NULL;
 	char *attributes = NULL;
