@@ -11454,7 +11454,7 @@ void ProxySQL_Admin::stats___mysql_users() {
 	for (int i=0; i<num_users; i++) {
 		account_details_t *ad=ads[i];
 		if (ad->default_hostgroup>= 0) { // only not admin/stats
-			cfmt_t q_fmt { cstr_format(buf, q, ad->username, ad->num_connections_used, ad->max_connections) };
+			cfmt_t q_fmt = cstr_format(buf, q, ad->username, ad->num_connections_used, ad->max_connections);
 
 			if (q_fmt.str.size()) {
 				statsdb->execute(q_fmt.str.c_str());
@@ -11474,7 +11474,7 @@ void ProxySQL_Admin::stats___mysql_users() {
 			int f_conns = atoi(row->fields[LDAP_USER_FIELD_IDX::FRONTEND_CONNECTIONS]);
 			int f_max_conns = atoi(row->fields[LDAP_USER_FIELD_IDX::FRONTED_MAX_CONNECTIONS]);
 
-			cfmt_t q_fmt { cstr_format(buf, q, username, f_conns, f_max_conns) };
+			cfmt_t q_fmt = cstr_format(buf, q, username, f_conns, f_max_conns);
 
 			if (q_fmt.str.size()) {
 				statsdb->execute(q_fmt.str.c_str());
