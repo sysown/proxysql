@@ -1251,17 +1251,24 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
+	uint32_t extended_capabilities = CLIENT_MULTI_RESULTS | CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS |
+		CLIENT_PLUGIN_AUTH | CLIENT_SESSION_TRACKING | CLIENT_REMEMBER_OPTIONS;
 	// we conditionally reply the client specifying in 'server_capabilities' that
 	// 'CLIENT_DEPRECATE_EOF' is available if explicitly enabled by 'mysql-enable_client_deprecate_eof'
 	// variable. This is the first step of ensuring that client connections doesn't
 	// enable 'CLIENT_DEPRECATE_EOF' unless explicitly stated by 'mysql-enable_client_deprecate_eof'.
 	// Second step occurs during client handshake response (process_pkt_handshake_response).
 	if (deprecate_eof_active && mysql_thread___enable_client_deprecate_eof) {
-		memcpy(_ptr+l,"\x8f\x81\x15",3); l+=3;
+		extended_capabilities |= CLIENT_DEPRECATE_EOF;
 	}
-	else {
-		memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
-	}
+	// Copy the 'capability_flags_2'
+	uint16_t upper_word = static_cast<uint16_t>(extended_capabilities >> 16);
+	memcpy(_ptr+l, static_cast<void*>(&upper_word), sizeof(upper_word)); l += sizeof(upper_word);
+	// Copy the 'auth_plugin_data_len'. Hardcoded due to 'CLIENT_PLUGIN_AUTH' always enabled and reported
+	// as 'mysql_native_password'.
+	uint8_t auth_plugin_data_len = 21;
+	memcpy(_ptr+l, &auth_plugin_data_len, sizeof(auth_plugin_data_len)); l += sizeof(auth_plugin_data_len);
+
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
 //#ifdef MARIADB_BASE_VERSION
