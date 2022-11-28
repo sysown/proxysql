@@ -66,38 +66,38 @@ int set_max_conns(MYSQL* proxy_admin, int max_conns, int hg_id) {
 	string max_conn_query {};
 	string_format("UPDATE mysql_servers SET max_connections=%d WHERE hostgroup_id=%d", max_conn_query, max_conns, hg_id);
 
-	MYSQL_QUERY(proxy_admin, max_conn_query.c_str());
 	diag("%s: Executing query `%s`...", tap_curtime().c_str(), max_conn_query.c_str());
+	MYSQL_QUERY(proxy_admin, max_conn_query.c_str());
 
-	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL SERVERS TO RUNTIME");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	return EXIT_SUCCESS;
 }
 
 int set_srv_conn_to(MYSQL* proxy_admin, int connect_to) {
 	string srv_conn_to_query {};
-	string_format("SET mysql-connect_timeout_server=%d", srv_conn_to_query, connect_to);
+	string_format("SET mysql-connect_timeout_server_max=%d", srv_conn_to_query, connect_to);
 
-	MYSQL_QUERY(proxy_admin, srv_conn_to_query.c_str());
 	diag("%s: Executing query `%s`...", tap_curtime().c_str(), srv_conn_to_query.c_str());
+	MYSQL_QUERY(proxy_admin, srv_conn_to_query.c_str());
 
-	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	return EXIT_SUCCESS;
 }
 
 
 int set_ff_for_user(MYSQL* proxy_admin, const string& user, bool ff) {
-	string max_conn_query {};
-	string_format("UPDATE mysql_users SET fast_forward=%d WHERE username='%s'", max_conn_query, ff, user.c_str());
+	string upd_ff_query {};
+	string_format("UPDATE mysql_users SET fast_forward=%d WHERE username='%s'", upd_ff_query, ff, user.c_str());
 
-	MYSQL_QUERY(proxy_admin, max_conn_query.c_str());
-	diag("%s: Executing query `%s`...", tap_curtime().c_str(), max_conn_query.c_str());
+	diag("%s: Executing query `%s`...", tap_curtime().c_str(), upd_ff_query.c_str());
+	MYSQL_QUERY(proxy_admin, upd_ff_query.c_str());
 
-	MYSQL_QUERY(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
 	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL USERS TO RUNTIME");
 
 	return EXIT_SUCCESS;
 }
@@ -140,15 +140,18 @@ cleanup:
 	return err;
 }
 
-int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, int srv_conn_to, int max_conns) {
+int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, long srv_conn_to, int max_conns) {
 	// We assume 'regular infra' and use hardcoded hg '0' and username 'sbtest1' for this test
 	const int tg_hg = 0;
 	const string username = "sbtest1";
 
 	string str_poll_timeout {};
 	string str_connect_timeout_server {};
+	string str_connect_timeout_server_max {};
+
 	long poll_timeout = 0;
 	long connect_timeout_server = 0;
+	long connect_timeout = 0;
 
 	vector<MYSQL*> trx_conns {};
 
@@ -168,12 +171,25 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, in
 		goto cleanup;
 	}
 
+	my_err = get_variable_value(proxy_admin, "mysql-connect_timeout_server_max", str_connect_timeout_server_max);
+	if (my_err) {
+		diag("Failed to get 'mysql-connect_timeout_server_max'");
+		res = EXIT_FAILURE;
+		goto cleanup;
+	}
+
 	poll_timeout = std::stol(str_poll_timeout);
 	connect_timeout_server = std::stol(str_connect_timeout_server);
+	connect_timeout = connect_timeout_server < srv_conn_to ? srv_conn_to : connect_timeout_server;
+
+	diag(
+		"Expected timeout value: (connect_timeout_server: %ld, connect_timeout_server_max: %ld, expected_timeout: %ld)",
+		connect_timeout_server, srv_conn_to, connect_timeout
+	);
 
 	my_err = set_srv_conn_to(proxy_admin, srv_conn_to);
 	if (my_err) {
-		diag("Failed to set 'mysql-connect_timeout_server' to '%d'", srv_conn_to);
+		diag("Failed to set 'mysql-connect_timeout_server' to '%ld'", srv_conn_to);
 		res = EXIT_FAILURE;
 		goto cleanup;
 	}
@@ -221,13 +237,14 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, in
 		duration = end - start;
 		double duration_s = duration.count() / pow(10,9);
 
-		const double srv_conn_to_s = srv_conn_to / 1000.0;
+		const double srv_conn_to_s = connect_timeout / 1000.0;
 		const double poll_to_s = poll_timeout / 1000.0;
+		const double grace = 500 / 1000.0;
 
 		ok(
-			q_err != EXIT_SUCCESS && (duration_s > srv_conn_to_s - 1) && (duration_s < (srv_conn_to_s + poll_to_s)),
+			q_err != EXIT_SUCCESS && (duration_s > srv_conn_to_s - 1) && (duration_s < (srv_conn_to_s + poll_to_s + grace)),
 			"Query should have failed due to timeout - Err: %d, ErrMsg: %s, Waited: %lf, Range: (%lf, %lf)",
-			m_errno, m_error, duration_s, srv_conn_to_s - 1, srv_conn_to_s + poll_to_s
+			m_errno, m_error, duration_s, srv_conn_to_s - 1, srv_conn_to_s + poll_to_s + grace
 		);
 
 		mysql_close(proxy_ff);
@@ -246,7 +263,7 @@ cleanup:
 	}
 
 	string reset_conn_to_srv {};
-	string_format("SET mysql-connect_timeout_server=%ld", reset_conn_to_srv, connect_timeout_server);
+	string_format("SET mysql-connect_timeout_server_max=%s", reset_conn_to_srv, str_connect_timeout_server_max.c_str());
 	diag("%s: Executing query `%s`...", tap_curtime().c_str(), reset_conn_to_srv.c_str());
 	MYSQL_QUERY(proxy_admin, reset_conn_to_srv.c_str());
 	diag("%s: Executing query `%s`...", tap_curtime().c_str(), "LOAD MYSQL VARIABLES TO RUNTIME");
@@ -418,6 +435,9 @@ cleanup:
 int main(int argc, char** argv) {
 	CommandLine cl;
 
+	// 'test_ff_sess_exceeds_max_conns' performs '1' check, 'test_ff_only_one_free_conn' performs '2' checks
+	plan(1 * 2 + 2 * 2);
+
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
@@ -430,7 +450,7 @@ int main(int argc, char** argv) {
 	}
 
 	// 1. Test for: '4000' timeout, '1' max_connections
-	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 4000, 1);
+	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 8000, 1);
 	// 2. Test for: '2000' timeout, '3' max_connections
 	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 2000, 3);
 	// 3. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 1
