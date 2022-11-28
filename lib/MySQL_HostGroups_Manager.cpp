@@ -3511,8 +3511,34 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 	}
 }
 
+inline double get_prometheus_counter_val(
+	std::map<std::string, prometheus::Counter*>& counter_map, const std::string& endpoint_id
+) {
+	const auto& counter_entry = counter_map.find(endpoint_id);
+	double current_val = 0;
+
+	if (counter_entry != counter_map.end()) {
+		current_val = counter_entry->second->Value();
+	}
+
+	return current_val;
+}
+
 void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding MySrvC %p (%s:%d) for hostgroup %d\n", mysrvc, mysrvc->address, mysrvc->port, _hid);
+
+	// Since metrics for servers are stored per-endpoint; the metrics for a particular endpoint can live longer than the
+	// 'MySrvC' itself. For example, a failover or a server config change could remove the server from a particular
+	// hostgroup, and a subsequent one bring it back to the original hostgroup. For this reason, everytime a 'mysrvc' is
+	// created and added to a particular hostgroup, we update the endpoint metrics for it.
+	std::string endpoint_id { std::to_string(_hid) + ":" + string { mysrvc->address } + ":" + std::to_string(mysrvc->port) };
+
+	mysrvc->bytes_recv = get_prometheus_counter_val(this->status.p_conn_pool_bytes_data_recv_map, endpoint_id);
+	mysrvc->bytes_sent = get_prometheus_counter_val(this->status.p_conn_pool_bytes_data_sent_map, endpoint_id);
+	mysrvc->connect_ERR = get_prometheus_counter_val(this->status.p_connection_pool_conn_err_map, endpoint_id);
+	mysrvc->connect_OK = get_prometheus_counter_val(this->status.p_connection_pool_conn_ok_map, endpoint_id);
+	mysrvc->queries_sent = get_prometheus_counter_val(this->status.p_connection_pool_queries_map, endpoint_id);
+
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	myhgc->mysrvs->add(mysrvc);
 }
