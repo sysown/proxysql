@@ -123,7 +123,6 @@ deps/libhttpserver/libhttpserver-0.18.1/
 #clickhouse
 deps/clickhouse-cpp/clickhouse-cpp-*
 deps/cityhash/cityhash/
-deps/cityhash/config*
 deps/lz4/lz4-1.7.5/
 deps/lz4/lz4/
 
