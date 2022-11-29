@@ -128,12 +128,6 @@ bool check_result(const std::string& key, const std::map<std::string, double>& p
 }
 
 int main(int argc, char** argv) {
-	putenv("TAP_HOST=127.0.0.1");
-	putenv("TAP_PORT=6033");
-	putenv("TAP_USERNAME=root");  
-	putenv("TAP_PASSWORD=root");
-	putenv("TAP_WORKDIR=./tests/");
-	   
 	CommandLine cl;
 
 	if (cl.getEnv()) {
