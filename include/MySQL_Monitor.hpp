@@ -273,25 +273,24 @@ struct DNS_Cache_Record {
 	DNS_Cache_Record(const DNS_Cache_Record&) = default;
 	DNS_Cache_Record& operator=(DNS_Cache_Record&&) = default;
 	DNS_Cache_Record& operator=(const DNS_Cache_Record&) = default;
-	DNS_Cache_Record(const std::string& hostname, const std::string& ip, unsigned long long ttl = 0) : hostname(hostname), 
-		ip(ip), ttl(ttl)
+	DNS_Cache_Record(const std::string& hostname, const std::vector<std::string>& ips, unsigned long long ttl = 0) : hostname_(hostname), 
+	 ttl_(ttl) { 
+		std::copy(ips.begin(), ips.end(), std::inserter(ips_, ips_.end()));
+	}
+	DNS_Cache_Record(const std::string& hostname, std::set<std::string>&& ips, unsigned long long ttl = 0) : hostname_(hostname),
+		ips_(std::move(ips)), ttl_(ttl)
 	{ }
+
 	~DNS_Cache_Record() = default;
 
-	std::string hostname;
-	std::string ip;
-	unsigned long long ttl = 0;
+	std::string hostname_;
+	std::set<std::string> ips_;
+	unsigned long long ttl_ = 0;
 };
 
 class DNS_Cache {
 
 public:
-	enum class OPERATION {
-		UPDATE,
-		REMOVE
-	};
-
-
 	DNS_Cache() : enabled(true) {
 		int rc = pthread_rwlock_init(&rwlock_, NULL);
 		assert(rc == 0);
@@ -306,14 +305,19 @@ public:
 		enabled = value;
 	}
 
-	bool add(const std::string& hostname, const std::string& ip);
+	bool add(const std::string& hostname, std::vector<std::string>&& ips);
 	void remove(const std::string& hostname);
 	void clear();
 	std::string lookup(const std::string& hostname) const;
-	void bulk_update(const std::list<std::pair<DNS_Cache_Record, OPERATION>> bulk_record);
 
 private:
-	std::unordered_map<std::string, std::string> records;
+	struct IP_ADDR {
+		std::vector<std::string> ips;
+		unsigned long counter = 0;
+	};
+
+	std::string get_next_ip(const IP_ADDR& ip_addr) const;
+	std::unordered_map<std::string, IP_ADDR> records;
 	std::atomic_bool enabled;
 	mutable pthread_rwlock_t rwlock_;
 };
@@ -322,7 +326,7 @@ struct DNS_Resolve_Data {
 	std::promise<std::tuple<bool, DNS_Cache_Record>> result;
 	std::shared_ptr<DNS_Cache> dns_cache;
 	std::string hostname;
-	std::string cached_ip;
+	std::set<std::string> cached_ips;
 	unsigned int ttl;
 };
 

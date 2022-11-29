@@ -449,6 +449,7 @@ MySQL_Connection::MySQL_Connection() {
 	statuses.myconnpoll_get = 0;
 	statuses.myconnpoll_put = 0;
 	memset(gtid_uuid,0,sizeof(gtid_uuid));
+	memset(&connected_host_details, 0, sizeof(connected_host_details));
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -508,6 +509,11 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
+	if (connected_host_details.hostname)
+		free(connected_host_details.hostname);
+
+	if (connected_host_details.ip)
+		free(connected_host_details.ip);
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
@@ -813,18 +819,27 @@ void MySQL_Connection::connect_start() {
 		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
 
 		if (!res_ip.empty()) {
-
-			if (parent->resolved_ip) {
-				if (strcmp(parent->resolved_ip, res_ip.c_str()) != 0) {
-					free(parent->resolved_ip);
-					parent->resolved_ip = strdup(res_ip.c_str());
+			if (connected_host_details.hostname) {
+				if (strcmp(connected_host_details.hostname, parent->address) != 0) {
+					connected_host_details.hostname = (char*)realloc(connected_host_details.hostname, strlen(parent->address) + 1);
+					strcpy(connected_host_details.hostname, parent->address);
 				}
 			}
 			else {
-				parent->resolved_ip = strdup(res_ip.c_str());
+				connected_host_details.hostname = strdup(parent->address);
 			}
 
-			host_ip = parent->resolved_ip;
+			if (connected_host_details.ip) {
+				if (strcmp(connected_host_details.ip, res_ip.c_str()) != 0) {
+					connected_host_details.ip = (char*)realloc(connected_host_details.ip, res_ip.size() * sizeof(char) + 1);
+					strcpy(connected_host_details.ip, res_ip.c_str());
+				}
+			}
+			else {
+				connected_host_details.ip = strdup(res_ip.c_str());
+			}
+
+			host_ip = connected_host_details.ip;
 		}
 		else {
 			host_ip = parent->address;

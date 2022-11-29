@@ -131,7 +131,6 @@ class MySrvC {	// MySQL Server Container
 	public:
 	MyHGC *myhgc;
 	char *address;
-	char* resolved_ip;
 	uint16_t port;
 	uint16_t gtid_port;
 	uint16_t flags;
