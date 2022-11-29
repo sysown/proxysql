@@ -58,6 +58,10 @@ PROMETHEUS_PATH=$(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR=$(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR=$(PROMETHEUS_PATH)/lib
 
+CITYHASH_DIR=$(DEPS_PATH)/cityhash/cityhash/
+CITYHASH_IDIR=$(CITYHASH_DIR)
+CITYHASH_LDIR=$(CITYHASH_DIR)/src/.libs
+
 IDIR=../../../include
 LDIR=../../../lib
 TAP_LIBDIR=../tap
@@ -74,7 +78,7 @@ INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR)
 LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
 MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK) -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
-STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
+STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a $(CITYHASH_LDIR)/libcityhash.a
 
 .PHONY: all
 all: tests
