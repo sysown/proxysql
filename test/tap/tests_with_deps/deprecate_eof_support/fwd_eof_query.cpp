@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
 				"MySQL Error: " + std::string { mysql_error(proxy) }+ ""
 			};
 			std::cerr << "{ Code: Err, Result: " <<  err_msg << " }";
-            res_code = -1;
+			res_code = -1;
 		}
 
 		mysql_free_result(select_res);

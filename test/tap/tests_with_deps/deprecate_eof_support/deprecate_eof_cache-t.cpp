@@ -29,9 +29,9 @@ using std::pair;
 int create_testing_tables(MYSQL* mysql_server) {
 	// Create the testing database
 	int res = mysql_query(mysql_server, "CREATE DATABASE IF NOT EXISTS test");
-    if (res != 0) { return mysql_errno(mysql_server); }
+	if (res != 0) { return mysql_errno(mysql_server); }
 	res = mysql_query(mysql_server, "DROP TABLE IF EXISTS test.ok_packet_cache_test");
-    if (res != 0) { return mysql_errno(mysql_server); }
+	if (res != 0) { return mysql_errno(mysql_server); }
 
 	mysql_query(
 		mysql_server,
