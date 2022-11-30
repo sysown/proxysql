@@ -147,6 +147,11 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id=999"); // just in case
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_users SET default_hostgroup=999");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
+
 	// Initialize ProxySQL connection
 	MYSQL* proxysql = mysql_init(NULL);
 	if (!proxysql) {
@@ -167,13 +172,11 @@ int main(int argc, char** argv) {
 			EXECUTE_QUERY("SET mysql-monitor_local_dns_cache_refresh_interval=1000", proxysql_admin, false),
 			EXECUTE_QUERY("SET mysql-monitor_local_dns_cache_ttl=5000", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL VARIABLES TO RUNTIME", proxysql_admin, false),
-			EXECUTE_QUERY("DELETE FROM mysql_servers", proxysql_admin, false),
-			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
 			DELAY_SEC(2)
 	STEP_END,
 	STEP_START
 			UPDATE_PREV_METRICS(proxysql_admin),
-			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (0,'0.0.0.0',7861,0,1000,'dummy entry')", proxysql_admin, false),
+			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (999,'0.0.0.0',7861,0,1000,'dummy mysql server')", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
 			DELAY_SEC(2),
 			UPDATE_AFTER_METRICS(proxysql_admin),
@@ -201,7 +204,7 @@ int main(int argc, char** argv) {
 	STEP_END,
 	STEP_START
 			UPDATE_PREV_METRICS(proxysql_admin),
-			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (0,'google.com',7861,0,1000,'dummy entry')", proxysql_admin, false),
+			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (999,'google.com',7861,0,1000,'dummy mysql server')", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
 			DELAY_SEC(2),
 			LOOP_FUNC(EXECUTE_QUERY("DO 1", proxysql, true), 2),
@@ -213,7 +216,7 @@ int main(int argc, char** argv) {
 	STEP_END,
 	STEP_START
 			UPDATE_PREV_METRICS(proxysql_admin),
-			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (0,' yahoo.com ',7861,0,1000,'dummy entry')", proxysql_admin, false),
+			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (999,' yahoo.com ',7861,0,1000,'dummy mysql server')", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
 			DELAY_SEC(2),
 			LOOP_FUNC(EXECUTE_QUERY("DO 1", proxysql, true), 2),
@@ -225,7 +228,7 @@ int main(int argc, char** argv) {
 	STEP_END,
 	STEP_START
 			UPDATE_PREV_METRICS(proxysql_admin),
-			EXECUTE_QUERY("DELETE FROM mysql_servers", proxysql_admin, false),
+			EXECUTE_QUERY("DELETE FROM mysql_servers WHERE hostgroup_id=999", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
 			DELAY_SEC(2),
 			UPDATE_AFTER_METRICS(proxysql_admin),
@@ -235,7 +238,7 @@ int main(int argc, char** argv) {
 	STEP_END,
 	STEP_START
 			UPDATE_PREV_METRICS(proxysql_admin),
-			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (0,'INVALID_DOMAIN',7861,0,1000,'dummy entry')", proxysql_admin, false),
+			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (999,'INVALID_DOMAIN',7861,0,1000,'dummy mysql server')", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
 			DELAY_SEC(2),
 			LOOP_FUNC(EXECUTE_QUERY("DO 1", proxysql, true), 2),
