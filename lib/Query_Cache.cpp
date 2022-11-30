@@ -515,8 +515,20 @@ unsigned char* eof_to_ok_packet(QC_entry_t* entry) {
 	// Initialize affected_rows and last_insert_id to zero
 	memset(vp, 0, 2);
 	vp += 2;
-	// Copy the warning an status flags
-	memcpy(vp, it, 4);
+	// Extract warning flags and status from 'EOF_packet'
+	char* eof_packet = entry->value + entry->row_eof_pkt_offset;
+	eof_packet += sizeof(mysql_hdr);
+	// Skip the '0xFE EOF packet header'
+	eof_packet += 1;
+	uint16_t warnings;
+	memcpy(&warnings, eof_packet, sizeof(uint16_t));
+	eof_packet += 2;
+	uint16_t status_flags;
+	memcpy(&status_flags, eof_packet, sizeof(uint16_t));
+	// Copy warnings an status flags
+	memcpy(vp, &status_flags, sizeof(uint16_t));
+	vp += 2;
+	memcpy(vp, &warnings, sizeof(uint16_t));
 	// =======================================
 
 	// Decrement ids after the first EOF
