@@ -5,12 +5,12 @@ FOUND_DEPS := $(shell if [ -d $(MARIADB_TEST_DEP) ]; then echo 1; else echo 0; f
 
 ifeq ($(FOUND_DEPS), 1)
 
+.PHONY: all
+all: build_deps tests
+
 .PHONY: build_deps
 build_deps:
 	cd $(MARIADB_TEST_DEP) && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
-
-.PHONY: all
-all: build_deps tests
 
 OPT=-O2 $(WGCOV) -Wl,--no-as-needed
 debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
@@ -38,8 +38,7 @@ else
 WASAN=
 endif
 
-.PHONY: all
-tests: build_deps $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query reg_test_stmt_resultset_err_no_rows
+tests: build_deps $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TAP_LIBDIR)/libtap.a build_deps
 	$(CXX) -DDEBUG eof_packet_mixed_queries-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -ltap $(MYLIBS) -Wl,--no-as-needed -ldl -lpthread -o ok_packet_mixed_queries-t -DGITVERSION=\"$(GIT_VERSION)\"
