@@ -2,9 +2,15 @@ include ../common_defs.Makefile
 
 MARIADB_BASE_FOLDER=$(TEST_DEPS)/mariadb-client-library-3.1.9/
 MARIADB_TEST_DEP=$(TEST_DEPS)/mariadb-client-library-3.1.9/mariadb-connector-c
-FOUND_DEPS := $(shell if [ -d $(MARIADB_BASE_FOLDER) ]; then echo 1; else echo 0; fi)
 
-ifeq ($(FOUND_DEPS), 1)
+BASE_DIR_EXIST := $(shell if [ -d $(MARIADB_BASE_FOLDER) ]; then echo 1; else echo 0; fi)
+DEP_FOLDER_EMPTY := $(shell if [ -f $(MARIADB_TEST_DEP)/CMakeLists.txt ]; then echo 1; else echo 0; fi)
+
+ifeq ($(BASE_DIR_EXIST), 1)
+
+ifeq ($(DEP_FOLDER_EMPTY), 0)
+    $(error "Dependency folder '$(MARIADB_TEST_DEP)' is empty. Make sure folder is initialized")
+endif
 
 .PHONY: all
 all: build_deps tests
