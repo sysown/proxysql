@@ -141,9 +141,10 @@ int main(int argc, char** argv) {
 	// Load query rules to runtime
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-	for (auto id = 0; id < c_operations; id++) {
+	for (auto i = 0; i < c_operations; i++) {
 		int rnd_op = rand() % c_operations;
 
+		const auto id = i + 1;
 		const std::string& t_select_query = queries[0];
 		std::string select_query {};
 		string_format(t_select_query, select_query, id);
