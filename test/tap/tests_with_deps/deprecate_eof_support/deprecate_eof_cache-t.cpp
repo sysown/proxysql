@@ -194,11 +194,30 @@ int main(int argc, char** argv) {
 			return exit_status();
 		}
 
+		const nlohmann::json ok_query_res_json = nlohmann::json::parse(ok_query_res);
+
+		const std::string ok_res_id = ok_query_res_json["Result"][0]["id"];
 		ok(
-			eof_query_res == ok_query_res,
-			"EOF to OK: ['eof_query_res': %s] should match ['ok_query_res': %s]",
-			eof_query_res.c_str(),
-			ok_query_res.c_str()
+			ok_res_id == std::to_string(id),
+			"EOF to OK -> inserted id: %d // received id: %s",
+			id,
+			ok_res_id.c_str()
+		);
+
+		const std::string ok_res_c = ok_query_res_json["Result"][0]["c"];
+		ok(
+			ok_res_c == stored_pairs[i].first,
+			"EOF to OK -> inserted c: %s // received c: %s",
+			stored_pairs[i].first.c_str(),
+			ok_res_c.c_str()
+		);
+
+		const std::string ok_res_pad = ok_query_res_json["Result"][0]["pad"];
+		ok(
+			ok_res_pad == stored_pairs[i].second,
+			"EOF to OK -> inserted pad: %s // received pad: %s",
+			stored_pairs[i].second.c_str(),
+			ok_res_pad.c_str()
 		);
 
 		// Wait for invalidation of query_cache
@@ -219,11 +238,30 @@ int main(int argc, char** argv) {
 			return exit_status();
 		}
 
+		const nlohmann::json eof_query_res_json = nlohmann::json::parse(eof_query_res);
+
+		const std::string eof_res_id = eof_query_res_json["Result"][0]["id"];
 		ok(
-			eof_query_res == ok_query_res,
-			"OK to EOF: ['eof_query_res': %s] should match ['ok_query_res': %s]",
-			eof_query_res.c_str(),
-			ok_query_res.c_str()
+			eof_res_id == std::to_string(id),
+			"OK to EOF -> inserted id: %d // received id: %s",
+			id,
+			eof_res_id.c_str()
+		);
+
+		const std::string eof_res_c = eof_query_res_json["Result"][0]["c"];
+		ok(
+			eof_res_c == stored_pairs[i].first,
+			"OK to EOF -> inserted c: %s // received c: %s",
+			stored_pairs[i].first.c_str(),
+			eof_res_c.c_str()
+		);
+
+		const std::string eof_res_pad = eof_query_res_json["Result"][0]["pad"];
+		ok(
+			eof_res_pad == stored_pairs[i].second,
+			"OK to EOF -> inserted pad: %s // received pad: %s",
+			stored_pairs[i].second.c_str(),
+			eof_res_pad.c_str()
 		);
 	}
 
