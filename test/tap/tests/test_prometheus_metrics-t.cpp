@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdio.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 #include <mysql.h>
@@ -28,6 +29,7 @@ using std::map;
 using std::vector;
 using std::pair;
 using std::string;
+using std::tuple;
 
 std::vector<std::string> split(const std::string& s, char delimiter) {
 	std::vector<std::string> tokens {};
@@ -39,6 +41,11 @@ std::vector<std::string> split(const std::string& s, char delimiter) {
 	}
 
 	return tokens;
+}
+
+int mysql_query_d(MYSQL* mysql, const char* query) {
+	diag("Query: Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port);
+	return mysql_query(mysql, query);
 }
 
 /**
@@ -68,6 +75,24 @@ std::map<std::string, double> get_metric_values(std::string metrics_output) {
 	}
 
 	return metrics_map;
+}
+
+int get_cur_metrics(MYSQL* admin, map<string,double>& metrics_vals) {
+	MYSQL_QUERY(admin, "SHOW PROMETHEUS METRICS\\G");
+	MYSQL_RES* p_resulset = mysql_store_result(admin);
+	MYSQL_ROW data_row = mysql_fetch_row(p_resulset);
+
+	std::string row_value {};
+	if (data_row[0]) {
+		row_value = data_row[0];
+	} else {
+		row_value = "NULL";
+	}
+
+	mysql_free_result(p_resulset);
+	metrics_vals =  get_metric_values(row_value);
+
+	return EXIT_SUCCESS;
 }
 
 /**
@@ -415,6 +440,125 @@ void check_message_count_parse_failure(const map<string, double>& prev_metrics, 
 	}
 }
 
+int get_target_metrics(
+	const map<string,double>& metrics_map, const vector<string>& metrics_ids, map<string,double>& tg_metrics
+) {
+	map<string,double> metrics_vals {};
+
+	for (const string& metric_id : metrics_ids) {
+		const auto& metric_it = metrics_map.find(metric_id);
+		if (metric_it == metrics_map.end()) {
+			diag("%s: Unable to find target metric '%s'", __func__, metric_id.c_str());
+			return EXIT_FAILURE;
+		} else {
+			metrics_vals.insert({metric_id, metric_it->second});
+		}
+	}
+
+	tg_metrics = metrics_vals;
+
+	return EXIT_SUCCESS;
+}
+
+bool rm_add_server_connpool_setup(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
+	// Exercise some load on the hostgroup 0
+	for (size_t i = 0; i < 10; i++) {
+		int rc = mysql_query_d(proxy, "/* hostgroup=0 */ SELECT 1");
+		if (rc != EXIT_SUCCESS) { return EXIT_FAILURE; }
+		mysql_free_result(mysql_store_result(proxy));
+	}
+
+	// check metric value has been updated
+	return EXIT_SUCCESS;
+}
+
+bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin, const CommandLine& cl) {
+	// Delete server and add it again to hostgroup
+	diag("Removing current 'mysql_servers' for target hostgroup '0'");
+	mysql_query_d(admin, "DELETE FROM mysql_servers WHERE hostgroup_id=0");
+	mysql_query_d(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	diag("Recover original servers for target hostgroup '0'");
+	mysql_query_d(admin, "LOAD MYSQL SERVERS FROM DISK");
+	mysql_query_d(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	// Exercise some load on the hostgroup 0
+	const char* query { "/* hostgroup=0,create_new_connection=1 */ SELECT 1" };
+	int rc = mysql_query_d(proxy, query);
+	if (rc != EXIT_SUCCESS) {
+		diag("Failed to execute query '%s' with error '%s'", query, mysql_error(proxy));
+		return false;
+	}
+	mysql_free_result(mysql_store_result(proxy));
+
+	return true;
+}
+
+void check_server_data_recv(const map<string,double>& prev_metrics, const map<string,double>& after_metrics) {
+	// Endpoint we are going to target
+	const string endpoint_hg { "endpoint=\"127.0.0.1:13306\",hostgroup=\"0\"" };
+
+	// Metrics identifiers
+	const vector<string> metrics_ids {
+		{ "proxysql_connpool_data_bytes_total{" + endpoint_hg + ",traffic_flow=\"sent\"}" },
+		{ "proxysql_connpool_data_bytes_total{" + endpoint_hg + ",traffic_flow=\"recv\"}" },
+		{ "proxysql_connpool_conns_total{" + endpoint_hg + ",status=\"ok\"}" },
+		// TODO: Not trivial to simulate connection error to the server
+		// { "proxysql_connpool_conns_total{" + inv_endpoint_hg + ",status=\"err\"}" },
+		{ "proxysql_connpool_conns_queries_total{" + endpoint_hg + "}" }
+	};
+
+
+	// Get metrics prior to issue some traffic
+	diag("Obtaining metrics prior to issuing traffic to server");
+	bool found_prev_metrics = false;
+	map<string,double> prev_tg_metrics {};
+	int prev_metrics_rc = get_target_metrics(prev_metrics, metrics_ids, prev_tg_metrics);
+	if (prev_metrics_rc == EXIT_SUCCESS) {
+		found_prev_metrics = true;
+	} else {
+		diag("Failed to find metrics prior to sending traffic to server");
+	}
+
+	diag("Obtaining metrics after to issuing traffic to server");
+	bool found_after_metrics = false;
+	map<string,double> after_tg_metrics {};
+	int after_metrics_rc = get_target_metrics(after_metrics, metrics_ids, after_tg_metrics);
+	if (after_metrics_rc == EXIT_SUCCESS) {
+		found_after_metrics = true;
+	} else {
+		diag("Failed to find metrics after sending traffic to server");
+	}
+
+	ok(found_prev_metrics && found_after_metrics, "Metric was present in output from 'SHOW PROMETHEUS METRICS'");
+
+	// Check that all metrics increased from the previous values as expected
+	diag("Checking values have increased after the issued traffic");
+	vector<string> failed_metrics {};
+
+	for (const string& m_id : metrics_ids) {
+		const double pre_val = prev_tg_metrics[m_id];
+		const double post_val = after_tg_metrics[m_id];
+
+		if (pre_val >= post_val) {
+			failed_metrics.push_back(m_id);
+			diag("Error: Metric '%s' failed to be incremented [%lf, %lf]", m_id.c_str(), pre_val, post_val);
+		}
+	}
+
+	ok(failed_metrics.empty(), "All metric values were properly incremented after server rm/add from hostgroup");
+}
+
+using setup = function<bool(MYSQL*, MYSQL*, const CommandLine&)>;
+using metric_trigger = function<bool(MYSQL*, MYSQL*, const CommandLine&)>;
+using metric_check = function<void(const map<string, double>&, const map<string, double>&)>;
+
+struct CHECK {
+	enum funcs { SETUP, TRIGGER, CHECKER, _END };
+};
+
+bool placeholder_setup(MYSQL*, MYSQL*, const CommandLine&) { return true; }
+
 /**
  * @brief Map of test identifier and pair functions holding the metrics tests:
  *   - First function of the pair uses an open connection to ProxySQL and to ProxySQL Admin to perform
@@ -422,92 +566,100 @@ void check_message_count_parse_failure(const map<string, double>& prev_metrics, 
  *   - Second function performs the check to verify that the metric have been incremented properly.
  *     This function should execute **one** 'ok(...)' inside when the values have been properly checked.
  */
-const vector<pair<
-	string,
-	pair<
-		function<bool(MYSQL*, MYSQL*, const CommandLine&)>,
-		function<void(const map<string, double>&, const map<string, double>&)>
-	>
->> metric_tests {
-	{ "proxysql_myhgm_auto_increment_multiplex_total", { trigger_auto_increment_delay_multiplex_metric, check_auto_increment_delay_multiplex_metric } },
-	{ "proxysql_access_denied_wrong_password_total", { trigger_access_denied_wrong_password_total, check_access_denied_wrong_password_total } },
-	{ "proxysql_com_rollback_total", { trigger_transaction_rollback_total, check_transaction_rollback_total } },
-	{ "proxysql_version_info", { get_proxysql_version_info, check_proxysql_version_info } },
+const vector<pair<string, tuple<setup, metric_trigger, metric_check>>> metric_tests {
+	{
+		"proxysql_myhgm_auto_increment_multiplex_total",
+		{ placeholder_setup, trigger_auto_increment_delay_multiplex_metric, check_auto_increment_delay_multiplex_metric }
+	},
+	{
+		"proxysql_access_denied_wrong_password_total",
+		{ placeholder_setup, trigger_access_denied_wrong_password_total, check_access_denied_wrong_password_total }
+	},
+	{
+		"proxysql_com_rollback_total",
+		{ placeholder_setup, trigger_transaction_rollback_total, check_transaction_rollback_total } },
+	{
+		"proxysql_version_info",
+		{ placeholder_setup, get_proxysql_version_info, check_proxysql_version_info }
+	},
+	{
+		"rm_add_server_connpool_counters",
+		{ placeholder_setup, rm_add_server_connpool_counters, { check_server_data_recv } },
+	},
 	// Checks metric creation and initial value
-	{ "proxysql_message_count_parse_failure_init", { trigger_message_count_parse_failure, check_message_count_parse_failure } },
+	{
+		"proxysql_message_count_parse_failure_init",
+		{ placeholder_setup, trigger_message_count_parse_failure, check_message_count_parse_failure } },
 	// Checks metric increment
-	{ "proxysql_message_count_parse_failure_inc", { trigger_message_count_parse_failure, check_message_count_parse_failure } },
+	{
+		"proxysql_message_count_parse_failure_inc",
+		{ placeholder_setup, trigger_message_count_parse_failure, check_message_count_parse_failure }
+	},
 };
+
+using std::map;
+
 
 int main(int argc, char** argv) {
 	CommandLine cl;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
-		return -1;
+		return EXIT_FAILURE;
 	}
 
-	plan(metric_tests.size() * 3);
+	plan(metric_tests.size() * 4);
 
-	for (const auto& metric_checker : metric_tests) {
+	for (const auto& metric_test : metric_tests) {
 		// Initialize Admin connection
 		MYSQL* proxysql_admin = mysql_init(NULL);
 		if (!proxysql_admin) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-			return -1;
+			return EXIT_FAILURE;
 		}
 		// Connnect to ProxySQL Admin
 		if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-			return -1;
+			return EXIT_FAILURE;
 		}
-
 		// Initialize ProxySQL connection
 		MYSQL* proxysql = mysql_init(NULL);
 		if (!proxysql) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
-			return -1;
+			return EXIT_FAILURE;
 		}
 		// Connect to ProxySQL
 		if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
-			return exit_status();
+			return EXIT_FAILURE;
 		}
 
 		// Log test start for metric
-		diag("Started test for metric '%s'", metric_checker.first.c_str());
-
-		// Get the current metrics values
-		MYSQL_QUERY(proxysql_admin, "SHOW PROMETHEUS METRICS\\G");
-		MYSQL_RES* p_resulset = mysql_store_result(proxysql_admin);
-		MYSQL_ROW data_row = mysql_fetch_row(p_resulset);
-		std::string row_value {};
-		if (data_row[0]) {
-			row_value = data_row[0];
-		} else {
-			row_value = "NULL";
-		}
-		mysql_free_result(p_resulset);
-		const std::map<string, double> prev_metrics { get_metric_values(row_value) };
+		diag("Started test for metric '%s'", metric_test.first.c_str());
 
 		// Execute the action triggering the metric update
-		bool action_res = metric_checker.second.first(proxysql, proxysql_admin, cl);
-		ok(action_res, "Action to update the metric was executed properly.");
+		const auto& metric_setup = std::get<CHECK::SETUP>(metric_test.second);
+		bool action_res = metric_setup(proxysql, proxysql_admin, cl);
+		ok(action_res, "Setup action to prepare the env was successful.");
+
+		// Get the current metrics values
+		std::map<string, double> prev_metrics {};
+		int rc = get_cur_metrics(proxysql_admin, prev_metrics);
+		if (rc != EXIT_SUCCESS) { return EXIT_FAILURE; }
+
+		// Execute the action triggering the metric update
+		const auto& metric_trigger = std::get<CHECK::TRIGGER>(metric_test.second);
+		bool trigger_res = metric_trigger(proxysql, proxysql_admin, cl);
+		ok(trigger_res, "Action to update the metric was executed properly.");
 
 		// Get the new updated metrics values
-		MYSQL_QUERY(proxysql_admin, "SHOW PROMETHEUS METRICS\\G");
-		p_resulset = mysql_store_result(proxysql_admin);
-		data_row = mysql_fetch_row(p_resulset);
-		if (data_row[0]) {
-			row_value = data_row[0];
-		} else {
-			row_value = "NULL";
-		}
-		mysql_free_result(p_resulset);
-		const std::map<string, double> after_metrics { get_metric_values(row_value) };
+		std::map<string, double> after_metrics {};
+		rc = get_cur_metrics(proxysql_admin, after_metrics);
+		if (rc != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 		// Check that the new metrics values matches the expected
-		metric_checker.second.second(prev_metrics, after_metrics);
+		const auto& metric_checker = std::get<CHECK::CHECKER>(metric_test.second);
+		metric_checker(prev_metrics, after_metrics);
 
 		// Close the connections used for this test
 		mysql_close(proxysql);

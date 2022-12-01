@@ -22,14 +22,24 @@ extern int gdbg;
 #endif
 
 #ifdef DEBUG
-#ifdef SYS_gettid
+#if defined(__APPLE__) && defined(__MACH__)
+#define proxy_debug(module, verbosity, fmt, ...) \
+	do { \
+	uint64_t tid; \
+	pthread_threadid_np(NULL, &tid); \
+	if (GloVars.global.gdbg) { \
+	proxy_debug_func(module, verbosity, tid, __FILE__, __LINE__, __func__ ,  fmt,  ## __VA_ARGS__); \
+	} \
+	} while (0)
+#elif defined(__linux__)
+//#ifdef SYS_gettid
 #define proxy_debug(module, verbosity, fmt, ...) \
 	do { if (GloVars.global.gdbg) { \
 	proxy_debug_func(module, verbosity, syscall(SYS_gettid), __FILE__, __LINE__, __func__ ,  fmt,  ## __VA_ARGS__); \
 	} } while (0)
 #else
 #define proxy_debug(module, verbosity, fmt, ...)
-#endif /* SYS_gettid */
+#endif /* APPLE || linux */
 #else
 #define proxy_debug(module, verbosity, fmt, ...)
 #endif /* DEBUG */

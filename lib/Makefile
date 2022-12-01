@@ -96,9 +96,6 @@ WGCOV=
 endif
 
 UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
-NOJEM=-DNOJEM
-endif
 
 
 # determine good compiler version for stdc++17
@@ -128,11 +125,6 @@ endif
 endif
 
 
-ifeq ($(UNAME_S),Darwin)
-	IDIRS+= -I/usr/local/opt/openssl/include
-endif
-
-
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
@@ -158,8 +150,8 @@ HEADERS = ../include/*.h ../include/*.hpp
 $(ODIR)/%.oo: %.cpp $(HEADERS)
 	$(CXX) -fPIC -c -o $@ $< $(MYCXXFLAGS) $(CXXFLAGS)
 
-libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(RE2_PATH)/obj/libre2.a $(SQLITE3_DIR)/sqlite3.o
-	ar rcs $@ $(OBJ) $(OBJ_CXX) $(RE2_PATH)/obj/libre2.a $(SQLITE3_DIR)/sqlite3.o
+libproxysql.a: $(ODIR) $(OBJ) $(OBJ_CXX) $(SQLITE3_DIR)/sqlite3.o
+	ar rcs $@ $(OBJ) $(OBJ_CXX) $(SQLITE3_DIR)/sqlite3.o
 
 $(ODIR):
 	mkdir $(ODIR)

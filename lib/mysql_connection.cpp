@@ -801,6 +801,15 @@ void MySQL_Connection::connect_start() {
 						mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
 					}
 				}
+				// In case of 'fast_forward', we only enable compression if both, client and backend matches. Otherwise,
+				// we honor the behavior of a regular connection of when a connection doesn't agree on using compression
+				// during handshake, and we fallback to an uncompressed connection.
+				client_flags &= ~(CLIENT_COMPRESS); // we disable it by default
+				if (c->options.client_flag & CLIENT_COMPRESS) {
+					if (c->options.server_capabilities & CLIENT_COMPRESS) {
+						client_flags |= CLIENT_COMPRESS;
+					}
+				}
 			}
 		}
 	}

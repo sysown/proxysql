@@ -85,8 +85,8 @@ LDIRS=-L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIA
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
-	IDIRS+= -I/usr/local/include -I/usr/local/opt/openssl/include
-	LDIRS+= -L/usr/local/lib
+	IDIRS+= -I/usr/local/include
+	LDIRS+= -L/usr/local/lib -L/opt/homebrew/lib
 endif
 
 
@@ -160,7 +160,7 @@ MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc
 endif
 
 ifeq ($(UNAME_S),Darwin)
-	MYLIBS=-lssl -lre2 -lmariadbclient -lpthread -lm -lz -liconv -lcrypto -lcurl -lgnutls -luuid
+	MYLIBS=-lre2 -lmariadbclient -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 else
 	CURL_DIR=$(DEPS_PATH)/curl/curl
 	IDIRS+= -L$(CURL_DIR)/include
@@ -178,7 +178,7 @@ endif
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
-	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/curl/curl/lib/.libs/libcurl.a ../deps/sqlite3/sqlite3/sqlite3.o ../deps/libinjection/libinjection/src/libinjection.a  ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/libev/libev-4.24/.libs/libev.a
+	LIBPROXYSQLAR=$(LDIR)/libproxysql.a ../deps/jemalloc/jemalloc/lib/libjemalloc.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/curl/curl/lib/.libs/libcurl.a ../deps/sqlite3/sqlite3/sqlite3.o ../deps/libinjection/libinjection/src/libinjection.a  ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/libev/libev-4.24/.libs/libev.a
 endif
 
 LIBPROXYSQLAR+= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a $(CITYHASH_DIR)/libcityhash.a
@@ -198,8 +198,11 @@ ifeq ($(PROXYSQLCLICKHOUSE),1)
 else
 	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
 endif
+ifeq ($(UNAME_S),Darwin)
+	shasum $(EXECUTABLE) > $(EXECUTABLE).sha1
+else
 	sha1sum $(EXECUTABLE) > $(EXECUTABLE).sha1
-
+endif
 $(ODIR):
 	mkdir $(ODIR)
 

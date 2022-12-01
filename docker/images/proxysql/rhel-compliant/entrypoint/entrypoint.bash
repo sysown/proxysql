@@ -50,7 +50,9 @@ touch /opt/proxysql/src/proxysql
 echo "==> Packaging"
 mkdir -p proxysql/usr/bin proxysql/etc
 cp src/proxysql proxysql/usr/bin/
-cp -a etc proxysql
+cp -a systemd proxysql/etc/
+cp -a etc/proxysql.cnf proxysql/etc/
+cp -a etc/logrotate.d proxysql/etc/
 mkdir -p proxysql/usr/share/proxysql/tools
 cp -a tools/proxysql_galera_checker.sh tools/proxysql_galera_writer.pl proxysql/usr/share/proxysql/tools
 mv proxysql "proxysql-${CURVER}"
@@ -69,4 +71,4 @@ sha1sum tmp/proxysql | sed 's|tmp/||' | tee tmp/proxysql.sha1
 cp tmp/proxysql.sha1 ../binaries/proxysql-${CURVER}-1-${PKG_RELEASE}.${ARCH}.id-hash
 popd
 # cleanup
-rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} /opt/proxysql/pkgroot
+rm -fr /root/.pki /root/rpmbuild/{BUILDROOT,RPMS,SRPMS,BUILD,SOURCES,tmp} /opt/proxysql/proxysql /opt/proxysql/proxysql-${CURVER} ./pkgroot
