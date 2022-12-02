@@ -308,6 +308,7 @@ public:
 	bool add(const std::string& hostname, std::vector<std::string>&& ips);
 	void remove(const std::string& hostname);
 	void clear();
+	bool empty() const;
 	std::string lookup(const std::string& hostname) const;
 
 private:

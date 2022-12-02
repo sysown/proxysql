@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <future>
+#include <sstream>
 #include <prometheus/counter.h>
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
@@ -3413,6 +3414,16 @@ bool validate_ip(const std::string& ip) {
 	return false;
 }
 
+template<class T>
+std::string debug_iplisttostring(const T& ips) {
+	std::stringstream sstr;
+
+	for (const std::string& ip : ips)
+		sstr << ip << " ";
+
+	return sstr.str();
+}
+
 void* monitor_dns_resolver_thread(void* args) {
 
 	DNS_Resolve_Data* dns_resolve_data = static_cast<DNS_Resolve_Data*>(args);
@@ -3433,7 +3444,7 @@ void* monitor_dns_resolver_thread(void* args) {
        getaddrinfo() does not return IPv6 socket addresses that would
        always fail in connect or bind. */
 	hints.ai_flags = AI_ADDRCONFIG;
-	
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Resolving hostname:[%s] to its mapped IP address.\n", dns_resolve_data->hostname.c_str());
 	int gai_rc = getaddrinfo(dns_resolve_data->hostname.c_str(), NULL, &hints, &res);
 	
 	if (gai_rc != 0 || !res)
@@ -3484,6 +3495,7 @@ void* monitor_dns_resolver_thread(void* args) {
 
 				// only update dns_records_bookkeeping
 				if (!to_update_cache) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache record already up-to-date. (Hostname:[%s] IP:[%s])\n", dns_resolve_data->hostname.c_str(), debug_iplisttostring(ips).c_str());
 					dns_resolve_data->result.set_value(std::make_tuple<>(true, DNS_Cache_Record(dns_resolve_data->hostname, std::move(dns_resolve_data->cached_ips), monotonic_time() + (1000 * dns_resolve_data->ttl))));
 				}
 			}
@@ -3549,7 +3561,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				dns_cache->set_enabled_flag(false);
 				dns_cache->clear();
 				dns_records_bookkeeping.clear();
-
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache is disabled.\n");
 				/*while (dns_resolver_queue.size()) { 
 					WorkItem<DNS_Resolve_Data>* item = dns_resolver_queue.remove();
 					if (item) {
@@ -3564,18 +3576,13 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				//dns cache enabled
 				dns_cache_enable = true;
 				dns_cache->set_enabled_flag(true); 
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache is enabled.\n");
 			}
 		}
 
 		if (!dns_cache_enable) {
 			usleep(200000);
 			continue;
-		}
-
-		// update the 'monitor_internal.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
-		{
-			std::lock_guard<std::mutex> mysql_servers_guard(MyHGM->mysql_servers_to_monitor_mutex);
-			update_monitor_mysql_servers(MyHGM->mysql_servers_to_monitor);
 		}
 
 		char* error = NULL;
@@ -3591,6 +3598,12 @@ void* MySQL_Monitor::monitor_dns_cache() {
 		}
 		next_loop_at = t1 + (1000 * mysql_thread___monitor_local_dns_cache_refresh_interval);
 
+		// update the 'monitor_internal.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
+		{
+			std::lock_guard<std::mutex> mysql_servers_guard(MyHGM->mysql_servers_to_monitor_mutex);
+			update_monitor_mysql_servers(MyHGM->mysql_servers_to_monitor);
+		}
+
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 		if (error) {
@@ -3601,10 +3614,13 @@ void* MySQL_Monitor::monitor_dns_cache() {
 			if (resultset->rows_count == 0) {
 
 				// Remove orphaned records if any
-				if (dns_records_bookkeeping.empty() == false) {
-					for (const auto& dns_record : dns_records_bookkeeping)
-						dns_cache->remove(dns_record.hostname_);
+				if (dns_cache->empty() == false) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Clearing all orphaned DNS records from cache.\n");
+					dns_cache->clear();
+				}
 
+				if (dns_records_bookkeeping.empty() == false) {
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Clearing all orphaned DNS records from bookkeeper.\n");
 					dns_records_bookkeeping.clear();
 				}
 				goto __end_monitor_dns_cache_loop;
@@ -3636,7 +3652,8 @@ void* MySQL_Monitor::monitor_dns_cache() {
 					itr != dns_records_bookkeeping.cend();) {
 					// remove orphaned records
 					if (hostnames.find(itr->hostname_) == hostnames.end()) {
-						dns_cache->remove(itr->hostname_); 
+						dns_cache->remove(itr->hostname_);
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Removing orphaned DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n", itr->hostname_.c_str(), debug_iplisttostring(itr->ips_).c_str());					
 						itr = dns_records_bookkeeping.erase(itr);
 					}
 					else {
@@ -3650,6 +3667,8 @@ void* MySQL_Monitor::monitor_dns_cache() {
 							dns_resolve_data->ttl = mysql_thread___monitor_local_dns_cache_ttl;
 							dns_resolve_data->dns_cache = dns_cache;
 							dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
+
+							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Removing expired DNS record from bookkeeper. (Hostname:[%s] IP:[%s])\n", itr->hostname_.c_str(), debug_iplisttostring(dns_resolve_data->cached_ips).c_str());
 							dns_resolver_queue.add(new WorkItem<DNS_Resolve_Data>(dns_resolve_data.release(), monitor_dns_resolver_thread));
 							itr = dns_records_bookkeeping.erase(itr);
 							continue;
@@ -3664,7 +3683,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				unsigned int qsize = dns_resolver_queue.size();
 				unsigned int num_threads = dns_resolver_threads.size();
 
-				if (qsize > mysql_thread___monitor_local_dns_resolver_queue_maxsize / 8) {
+				if (qsize > static_cast<unsigned int>(mysql_thread___monitor_local_dns_resolver_queue_maxsize) / 8) {
 					proxy_warning("DNS resolver queue too big: %d\n", qsize);
 
 					unsigned int threads_max = num_dns_resolver_max_threads;
@@ -3692,9 +3711,9 @@ void* MySQL_Monitor::monitor_dns_cache() {
 
 			if (hostnames.empty() == false) {
 
-				for (const std::string& host_name : hostnames) {
+				for (const std::string& hostname : hostnames) {
 					std::unique_ptr<DNS_Resolve_Data> dns_resolve_data(new DNS_Resolve_Data());
-					dns_resolve_data->hostname = host_name;
+					dns_resolve_data->hostname = hostname;
 					dns_resolve_data->ttl = mysql_thread___monitor_local_dns_cache_ttl;
 					dns_resolve_data->dns_cache = dns_cache;
 					dns_resolve_result.emplace_back(dns_resolve_data->result.get_future());
@@ -3706,7 +3725,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				unsigned int qsize = dns_resolver_queue.size();
 				unsigned int num_threads = dns_resolver_threads.size();
 
-				if (qsize > mysql_thread___monitor_local_dns_resolver_queue_maxsize / 8) {
+				if (qsize > static_cast<unsigned int>(mysql_thread___monitor_local_dns_resolver_queue_maxsize) / 8) {
 					proxy_warning("DNS resolver queue too big: %d\n", qsize);
 
 					unsigned int threads_max = num_dns_resolver_max_threads;
@@ -3744,6 +3763,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 
 				if (std::get<0>(ret_value)) {
 					DNS_Cache_Record dns_record = get<1>(ret_value);
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Adding DNS record to bookkeeper. (Hostname:[%s] IP:[%s])\n", dns_record.hostname_.c_str(), debug_iplisttostring(dns_record.ips_).c_str());
 					dns_records_bookkeeping.emplace_back(std::move(dns_record));
 				}
 			}
@@ -5485,6 +5505,7 @@ std::string MySQL_Monitor::dns_lookup(const std::string& hostname, bool return_h
 
 		if (ip.empty() && return_hostname_if_lookup_fails) {
 			ip = hostname;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache lookup was a miss. (Hostname:[%s])\n", hostname.c_str());
 		}
 	}
 
@@ -5499,6 +5520,7 @@ bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips)
 
 	if (!enabled) return false;
 
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Updating DNS cache. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ips).c_str());
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
 	auto& ip_addr = records[hostname];
@@ -5536,6 +5558,7 @@ std::string DNS_Cache::lookup(const std::string& hostname) const {
 
 	if (itr != records.end()) {
 		ip = get_next_ip(itr->second);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache lookup success. (Hostname:[%s] IP returned:[%s])\n", hostname.c_str(), ip.c_str());
 	}
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);
@@ -5554,6 +5577,7 @@ void DNS_Cache::remove(const std::string& hostname) {
 	assert(rc == 0);
 	auto itr = records.find(hostname);
 	if (itr != records.end()) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Removing DNS cache record. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(itr->second.ips).c_str());
 		records.erase(itr);
 		item_removed = true;
 	}
@@ -5573,6 +5597,19 @@ void DNS_Cache::clear() {
 	records.clear();
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache was cleared.\n");
+}
+
+bool DNS_Cache::empty() const {
+	bool result = true;
+
+	int rc = pthread_rwlock_rdlock(&rwlock_);
+	assert(rc == 0);
+	result = records.empty();
+	rc = pthread_rwlock_unlock(&rwlock_);
+	assert(rc == 0);
+
+	return result;
 }
 
 template class WorkItem<MySQL_Monitor_State_Data>;
