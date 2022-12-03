@@ -191,6 +191,7 @@ enum mysql_variable_name {
 	SQL_OPTIMIZER_PRUNE_LEVEL,
 	SQL_OPTIMIZER_SEARCH_DEPTH,
 	SQL_OPTIMIZER_SWITCH,
+	SQL_OPTIMIZER_USE_CONDITION_SELECTIVITY,
 	SQL_PROFILING,
 	SQL_QUERY_CACHE_TYPE,
 	SQL_SORT_BUFFER_SIZE,
@@ -1135,6 +1136,7 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_OPTIMIZER_PRUNE_LEVEL,      SETTING_VARIABLE, false, false, true,  false, (char *)"optimizer_prune_level",      NULL, (char *)"" , false} ,
 	{ SQL_OPTIMIZER_SEARCH_DEPTH,     SETTING_VARIABLE, false, false, true,  false, (char *)"optimizer_search_depth",     NULL, (char *)"" , false} ,
 	{ SQL_OPTIMIZER_SWITCH,           SETTING_VARIABLE, true,  false, false, false, (char *)"optimizer_switch",           NULL, (char *)"" , false} ,
+	{ SQL_OPTIMIZER_USE_CONDITION_SELECTIVITY, SETTING_VARIABLE, false,  false, true, false, (char*)"optimizer_use_condition_selectivity", NULL, (char*)"" , false} ,
 	{ SQL_PROFILING,                  SETTING_VARIABLE, true,  false, false, true, ( char *)"profiling",                  NULL, (char *)"" , false} ,
 	{ SQL_QUERY_CACHE_TYPE,           SETTING_VARIABLE, false, false, true,  true, ( char *)"query_cache_type",           NULL, (char *)"" , false} , // note that this variable can act both as boolean AND a number. See https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_query_cache_type
 	{ SQL_SORT_BUFFER_SIZE,           SETTING_VARIABLE, false, false, true,  false, (char *)"sort_buffer_size",           NULL, (char *)"18446744073709551615" , false} ,

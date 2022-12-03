@@ -234,6 +234,9 @@ int main() {
 	vars["optimizer_switch"]->add(std::vector<std::string> {"'index_merge_union=off'", "`index_merge_union=on`", "\"index_merge_union=off\""});
 	vars["optimizer_switch"]->add(std::vector<std::string> {"'semijoin=off'", "`semijoin=on`", "\"semijoin=off\""});
 
+	vars["optimizer_use_condition_selectivity"] = new variable("optimizer_use_condition_selectivity", true, true, false);
+	vars["optimizer_use_condition_selectivity"]->add({1, 2, 3, 4, 5}, 0);
+
 	vars["lc_time_names"] = new variable("lc_time_names", true, false, false);
 	vars["lc_time_names"]->add(std::vector<std::string> {"en_US", "'en_US'", "`en_US`", "\"en_US\""});
 	vars["lc_time_names"]->add(std::vector<std::string> {"en_GB", "'en_GB'", "`en_GB`", "\"en_GB\""});

@@ -29,6 +29,9 @@ const std::vector<std::string> possible_unknown_variables = {
 	"group_replication_consistency",
 	"query_cache_type",
 	"wsrep_osu_method",
+	"wsrep_sync_wait",
+	"max_execution_time",
+	"optimizer_use_condition_selectivity",
 	};
 
 int readTestCases(const std::string& fileName) {
@@ -187,20 +190,15 @@ void queryVariables(MYSQL *mysql, json& j, std::string& paddress) {
 	// FIXME:
 	// unify the use of wsrep_sync_wait no matter if Galera is used or not
 	std::stringstream query;
-
 	if (is_mariadb) {
 		query << "SELECT /* mysql " << mysql << " " << paddress << " */ lower(variable_name), variable_value FROM information_schema.session_variables WHERE variable_name IN "
 			" ("
-			"'tx_isolation', 'tx_read_only', 'max_statement_time'";
+			"'tx_isolation', 'tx_read_only'";
 	}
 	else {
 		query << "SELECT /* mysql " << mysql << " " << paddress << " */ * FROM performance_schema.session_variables WHERE variable_name IN "
 			" ("
-			"'session_track_gtids', 'transaction_isolation', 'transaction_read_only', 'max_execution_time'";
-	}
-
-	if (is_cluster) {
-		query << ", 'wsrep_sync_wait'";
+			"'session_track_gtids', 'transaction_isolation', 'transaction_read_only'";
 	}
 	
 	query << ", 'sql_safe_updates', 'max_join_size', 'net_write_timeout', 'sql_select_limit', 'character_set_results'";
@@ -476,7 +474,7 @@ bool check_session_track_gtids(const std::string& expVal, const std::string& sVa
 	return res;
 }
 
-int detect_version(CommandLine& cl, bool& is_mariadb, bool& is_cluster) {
+int detect_version(CommandLine& cl, bool& is_mariadb) {
 	MYSQL* mysql = mysql_init(NULL);
 	if (!mysql)
 		return 1;
@@ -497,15 +495,6 @@ int detect_version(CommandLine& cl, bool& is_mariadb, bool& is_cluster) {
 		else {
 			is_mariadb = false;
 		}
-	}
-	mysql_free_result(result);
-	MYSQL_QUERY(mysql, "SHOW VARIABLES LIKE 'wsrep_sync_wait'");
-	result = mysql_store_result(mysql);
-	unsigned long long nr = mysql_num_rows(result);
-	if (nr == 0) {
-		is_cluster = false;
-	} else {
-		is_cluster = true;
 	}
 	mysql_free_result(result);
 	mysql_close(mysql);
