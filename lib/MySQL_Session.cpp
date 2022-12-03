@@ -279,6 +279,7 @@ Query_Info::Query_Info() {
 	rows_sent=0;
 	start_time=0;
 	end_time=0;
+	stmt_client_id=0;
 }
 
 Query_Info::~Query_Info() {
@@ -310,6 +311,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	affected_rows=0;
 	rows_sent=0;
 	sess->gtid_hid=-1;
+	stmt_client_id=0;
 }
 
 void Query_Info::end() {
@@ -548,6 +550,7 @@ MySQL_Session::MySQL_Session() {
 	CurrentQuery.mysql_stmt=NULL;
 	CurrentQuery.stmt_meta=NULL;
 	CurrentQuery.stmt_global_id=0;
+	CurrentQuery.stmt_client_id=0;
 	CurrentQuery.stmt_info=NULL;
 
 	current_hostgroup=-1;
@@ -3211,6 +3214,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// for this reason, we do not need to prepare it again, and we can already reply to the client
 			// we will now generate a unique stmt and send it to the client
 			uint32_t new_stmt_id=client_myds->myconn->local_stmts->generate_new_client_stmt_id(stmt_info->statement_id);
+			CurrentQuery.stmt_client_id=new_stmt_id;
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,new_stmt_id);
 			LogQuery(NULL);
@@ -3260,6 +3264,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		uint32_t client_stmt_id=0;
 		uint64_t stmt_global_id=0;
 		memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+		CurrentQuery.stmt_client_id=client_stmt_id;
 		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
 		if (stmt_global_id == 0) {
 			// FIXME: add error handling
@@ -3930,6 +3935,13 @@ __get_pkts_from_client:
 								}
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
+								if (GloMyLdapAuth) {
+									if (session_type==PROXYSQL_SESSION_MYSQL) {
+										if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
+											add_ldap_comment_to_pkt(&pkt);
+										}
+									}
+								}
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(pkt);
 								break;
 							case _MYSQL_COM_STMT_EXECUTE:
@@ -4096,7 +4108,7 @@ void MySQL_Session::SetQueryTimeout() {
 bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
 	thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
 	GloMyStmt->wrlock();
-	uint32_t client_stmtid;
+	uint32_t client_stmtid=0;
 	uint64_t global_stmtid;
 	//bool is_new;
 	MySQL_STMT_Global_info *stmt_info=NULL;
@@ -4117,8 +4129,14 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 	}
 	global_stmtid=stmt_info->statement_id;
 	myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
-	if (previous_status.size() == 0)
-	client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
+	// We only perform the generation for a new 'client_stmt_id' when there is no previous status, this
+	// is, when 'PROCESSING_STMT_PREPARE' is reached directly without transitioning from a previous status
+	// like 'PROCESSING_STMT_EXECUTE'. The same condition needs to hold for setting 'stmt_client_id',
+	// otherwise we could be resetting it's current value from the previous state.
+	if (previous_status.size() == 0) {
+		client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
+		CurrentQuery.stmt_client_id=client_stmtid;
+	}
 	CurrentQuery.mysql_stmt=NULL;
 	st=status;
 	size_t sts=previous_status.size();
@@ -7486,10 +7504,14 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (idx) {
 		size_t first_word_len = (char *)idx - (char *)_pkt->ptr - 5;
 		if (((char *)_pkt->ptr+5)[0]=='/' && ((char *)_pkt->ptr+5)[1]=='*') {
-			b[1]=' ';
-			b[2]=' ';
-			b[strlen(b)-1] = ' ';
-			b[strlen(b)-2] = ' ';
+			void* comment_endpos = memmem(static_cast<char*>(_pkt->ptr)+7, _pkt->size-7, "*/", strlen("*/"));
+
+			if (comment_endpos == NULL || idx < comment_endpos) {
+				b[1]=' ';
+				b[2]=' ';
+				b[strlen(b)-1] = ' ';
+				b[strlen(b)-2] = ' ';
+			}
 		}
 		memcpy(_c, (char *)_pkt->ptr+5, first_word_len);
 		_c+= first_word_len;

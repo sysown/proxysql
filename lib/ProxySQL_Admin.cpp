@@ -10371,6 +10371,9 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 #if defined(TEST_AURORA) || defined(TEST_GALERA)
 	admindb->execute("DELETE FROM mysql_servers WHERE gtid_port > 0"); // temporary disable add GTID checks
 #endif
+	if (GloMyLdapAuth) {
+		admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
+	}
 }
 
 /* commented in 2.3 , unused
@@ -10959,7 +10962,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 
 			if (sqlite_result != nullptr) {
 				vector<char*> pta(static_cast<size_t>(resultset->columns));
-				for (uint32_t i = 0; i < resultset->columns; i++) {
+				for (int i = 0; i < resultset->columns; i++) {
 					if (i == 1) {
 						pta[i] = password;
 					} else {
@@ -11461,31 +11464,49 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 
 void ProxySQL_Admin::stats___mysql_users() {
 	account_details_t **ads=NULL;
-	int num_users;
-	int i;
 	statsdb->execute("DELETE FROM stats_mysql_users");
-	char *q=(char *)"INSERT INTO stats_mysql_users(username,frontend_connections,frontend_max_connections) VALUES ('%s',%d,%d)";
-	int l=strlen(q);
-	char buf[256];
-	num_users=GloMyAuth->dump_all_users(&ads, false);
+
+	int num_users=GloMyAuth->dump_all_users(&ads, false);
 	if (num_users==0) return;
-	for (i=0; i<num_users; i++) {
+
+	const char q[] {
+		"INSERT INTO stats_mysql_users(username,frontend_connections,frontend_max_connections) VALUES ('%s',%d,%d)"
+	};
+	char buf[256] = { 0 };
+
+	for (int i=0; i<num_users; i++) {
 		account_details_t *ad=ads[i];
 		if (ad->default_hostgroup>= 0) { // only not admin/stats
-			if ( (strlen(ad->username) + l) > 210) {
-				char *query=(char *)malloc(strlen(ad->username)+l+32);
-				sprintf(query,q,ad->username,ad->num_connections_used);
-				sprintf(query,q,ad->username,ad->max_connections);
-				statsdb->execute(query);
-				free(query);
+			cfmt_t q_fmt = cstr_format(buf, q, ad->username, ad->num_connections_used, ad->max_connections);
+
+			if (q_fmt.str.size()) {
+				statsdb->execute(q_fmt.str.c_str());
 			} else {
-				sprintf(buf,q,ad->username,ad->num_connections_used,ad->max_connections);
 				statsdb->execute(buf);
 			}
 		}
 		free(ad->username);
 		free(ad);
 	}
+
+	if (GloMyLdapAuth) {
+		std::unique_ptr<SQLite3_result> ldap_users { GloMyLdapAuth->dump_all_users() };
+
+		for (const SQLite3_row* row : ldap_users->rows) {
+			const char* username = row->fields[LDAP_USER_FIELD_IDX::USERNAME];
+			int f_conns = atoi(row->fields[LDAP_USER_FIELD_IDX::FRONTEND_CONNECTIONS]);
+			int f_max_conns = atoi(row->fields[LDAP_USER_FIELD_IDX::FRONTED_MAX_CONNECTIONS]);
+
+			cfmt_t q_fmt = cstr_format(buf, q, username, f_conns, f_max_conns);
+
+			if (q_fmt.str.size()) {
+				statsdb->execute(q_fmt.str.c_str());
+			} else {
+				statsdb->execute(buf);
+			}
+		}
+	}
+
 	free(ads);
 }
 
