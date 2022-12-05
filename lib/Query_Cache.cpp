@@ -541,8 +541,8 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 	mysql_hdr ok_hdr;
 	memcpy(&ok_hdr, ok_packet, sizeof(mysql_hdr));
 	ok_packet += sizeof(mysql_hdr);
-	// Skipt the 'affected_rows' and 'last_insert_id'
-	ok_packet += 2;
+	// Skip the 'OK packet header', 'affected_rows' and 'last_insert_id'
+	ok_packet += 3;
 	uint16_t status_flags = *reinterpret_cast<uint16_t*>(ok_packet);
 	ok_packet += 2;
 	uint16_t warnings = *reinterpret_cast<uint16_t*>(ok_packet);
