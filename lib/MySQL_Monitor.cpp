@@ -178,6 +178,7 @@ public:
 	MYSQL * get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd);
 	void put_connection(char *hostname, int port, MYSQL *my);
 	void purge_some_connections();
+	void purge_all_connections();
 	MySQL_Monitor_Connection_Pool() {
 		servers = std::unique_ptr<PtrArray>(new PtrArray());
 #ifdef DEBUG
@@ -186,15 +187,10 @@ public:
 #endif // DEBUG
 	};
 	~MySQL_Monitor_Connection_Pool() {
-		if (servers) {
-			while(servers->len) {
-				MonMySrvC *srv = static_cast<MonMySrvC *>(servers->index(0));
-				if (srv) {
-					delete srv;
-				}
-				servers->remove_index_fast(0);
-			}
-		}
+		purge_all_connections();
+#ifdef DEBUG
+		pthread_mutex_destroy(&m2);
+#endif // DEBUG
 	}
 	void conn_register(MySQL_Monitor_State_Data *mmsd) {
 #ifdef DEBUG
@@ -248,6 +244,26 @@ __conn_register_label:
 	};
 };
 
+void MySQL_Monitor_Connection_Pool::purge_all_connections() {
+	std::lock_guard<std::mutex> lock(mutex);
+#ifdef DEBUG
+	pthread_mutex_lock(&m2);
+#endif
+	if (servers) {
+		while (servers->len) {
+			MonMySrvC* srv = static_cast<MonMySrvC*>(servers->index(0));
+			if (srv) {
+				delete srv;
+			}
+			servers->remove_index_fast(0);
+		}
+	}
+#ifdef DEBUG
+	conns->reset();
+	pthread_mutex_unlock(&m2);
+#endif
+}
+
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd) {
 	std::lock_guard<std::mutex> lock(mutex);
 #ifdef DEBUG
@@ -275,11 +291,6 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 #ifdef DEBUG
 				for (unsigned int j=0; j<conns->len; j++) {
 					MYSQL *my1 = (MYSQL *)conns->index(j);
-					assert(my!=my1);
-					assert(my->net.fd!=my1->net.fd);
-				}
-				for (unsigned int l=0; l<conns->len; l++) {
-					MYSQL *my1 = (MYSQL *)conns->index(l);
 					assert(my!=my1);
 					assert(my->net.fd!=my1->net.fd);
 				}
@@ -3527,6 +3538,9 @@ __monitor_run:
 	pthread_join(monitor_galera_thread,NULL);
 	pthread_join(monitor_aws_aurora_thread,NULL);
 	pthread_join(monitor_replication_lag_thread,NULL);
+	
+	bool purged_all_connections = false;
+
 	while (shutdown==false) {
 		unsigned int glover;
 		if (GloMTH) {
@@ -3540,6 +3554,11 @@ __monitor_run:
 		if (mysql_thread___monitor_enabled==true) {
 			goto __monitor_run;
 		}
+		else if (purged_all_connections == false) {
+			My_Conn_Pool->purge_all_connections();
+			purged_all_connections = true;
+		}
+
 		usleep(200000);
 	}
 	if (mysql_thr) {
