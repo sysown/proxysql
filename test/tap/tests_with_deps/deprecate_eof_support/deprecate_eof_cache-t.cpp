@@ -194,7 +194,8 @@ int main(int argc, char** argv) {
 			return exit_status();
 		}
 
-		const nlohmann::json ok_query_res_json = nlohmann::json::parse(ok_query_res);
+		nlohmann::json eof_query_res_json = nlohmann::json::parse(eof_query_res);
+		nlohmann::json ok_query_res_json = nlohmann::json::parse(ok_query_res);
 
 		const std::string ok_res_id = ok_query_res_json["Result"][0]["id"];
 		ok(
@@ -220,6 +221,24 @@ int main(int argc, char** argv) {
 			ok_res_pad.c_str()
 		);
 
+		uint32_t eof_res_status = eof_query_res_json["Status"];
+		uint32_t ok_res_status = ok_query_res_json["Status"];
+		ok(
+			eof_res_status == ok_res_status,
+			"EOF to OK -> EOF received status: %d // OK received status: %d",
+			eof_res_status,
+			ok_res_status
+		);
+
+		uint32_t eof_res_warnings = eof_query_res_json["Warnings"];
+		uint32_t ok_res_warnings = ok_query_res_json["Warnings"];
+		ok(
+			eof_res_warnings == ok_res_warnings,
+			"EOF to OK -> EOF received warnings: %d // OK received warnings: %d",
+			eof_res_warnings,
+			ok_res_warnings
+		);
+
 		// Wait for invalidation of query_cache
 		usleep(110*1000);
 
@@ -238,7 +257,8 @@ int main(int argc, char** argv) {
 			return exit_status();
 		}
 
-		const nlohmann::json eof_query_res_json = nlohmann::json::parse(eof_query_res);
+		ok_query_res_json = nlohmann::json::parse(ok_query_res);
+		eof_query_res_json = nlohmann::json::parse(eof_query_res);
 
 		const std::string eof_res_id = eof_query_res_json["Result"][0]["id"];
 		ok(
@@ -262,6 +282,24 @@ int main(int argc, char** argv) {
 			"OK to EOF -> inserted pad: %s // received pad: %s",
 			stored_pairs[i].second.c_str(),
 			eof_res_pad.c_str()
+		);
+
+		ok_res_status = ok_query_res_json["Status"];
+		eof_res_status = eof_query_res_json["Status"];
+		ok(
+			ok_res_status == eof_res_status,
+			"OK to EOF -> OK received status: %d // EOF received status: %d",
+			ok_res_status,
+			eof_res_status
+		);
+
+		ok_res_warnings = ok_query_res_json["Warnings"];
+		eof_res_warnings = eof_query_res_json["Warnings"];
+		ok(
+			ok_res_warnings == eof_res_warnings,
+			"OK to EOF -> OK received warnings: %d // EOF received warnings: %d",
+			ok_res_warnings,
+			eof_res_warnings
 		);
 	}
 

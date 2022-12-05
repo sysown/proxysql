@@ -131,7 +131,9 @@ int main(int argc, char** argv) {
 		if (select_res != NULL) {
 			json j_res {};
 			MySQL_result_to_JSON(select_res, j_res);
-			std::cout << "{ \"Code\": \"OK\", \"Result\": " << j_res.dump() << " }";
+			std::cout << "{ \"Code\": \"OK\", \"Result\": " << j_res.dump()
+				  << ", \"Status\": " << proxy->server_status
+				  << ", \"Warnings\": " << mysql_warning_count(proxy) << " }";
 		} else {
 			std::string err_msg {
 				"MySQL Error: " + std::string { mysql_error(proxy) }+ ""
