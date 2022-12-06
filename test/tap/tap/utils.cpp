@@ -24,6 +24,11 @@
 
 using std::string;
 
+int mysql_query_t(MYSQL* mysql, const char* query) {
+	diag("%s: Issuing query '%s' to ('%s':%d)", get_formatted_time().c_str(), query, mysql->host, mysql->port);
+	return mysql_query(mysql, query);
+}
+
 int show_variable(MYSQL *mysql, const std::string& var_name, std::string& var_value) {
 	char query[128];
 
@@ -378,6 +383,7 @@ CURLcode perform_simple_post(
 			}
 		}
 
+		free(response.data);
 		curl_easy_cleanup(curl);
 	}
 

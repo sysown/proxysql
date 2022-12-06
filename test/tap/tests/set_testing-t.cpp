@@ -179,6 +179,13 @@ void * my_conn_thread(void *arg) {
 					vars[el.key()] = el.value();
 				}
 			}
+			else if (el.key() == "max_execution_time") {
+				if (is_mariadb) {
+					vars["max_statement_time"] = el.value();
+				} else {
+					vars[el.key()] = el.value();
+				}
+			}
 			else {
 				vars[el.key()] = el.value();
 			}

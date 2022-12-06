@@ -10,6 +10,32 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+__attribute__((__format__ (__printf__, 1, 2)))
+cfmt_t cstr_format(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    int size = vsnprintf(nullptr, 0, fmt, args);
+    va_end(args);
+
+    if (size <= 0) {
+        return { size, {} };
+    } else {
+        size += 1;
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        va_start(args, fmt);
+        size = vsnprintf(buf.get(), size, fmt, args);
+        va_end(args);
+
+        if (size <= 0) {
+            return { size, {} };
+        } else {
+            return { size, std::string(buf.get(), buf.get() + size) };
+        }
+    }
+ }
+
 /**
  * @brief Kills the given process sending an initial 'SIGTERM' to it. If the process doesn't
  *   respond within 'timeout_us' to the initial signal a 'SIGKILL' is issued to it.

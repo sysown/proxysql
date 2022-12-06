@@ -795,6 +795,15 @@ void MySQL_Connection::connect_start() {
 						mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
 					}
 				}
+				// In case of 'fast_forward', we only enable compression if both, client and backend matches. Otherwise,
+				// we honor the behavior of a regular connection of when a connection doesn't agree on using compression
+				// during handshake, and we fallback to an uncompressed connection.
+				client_flags &= ~(CLIENT_COMPRESS); // we disable it by default
+				if (c->options.client_flag & CLIENT_COMPRESS) {
+					if (c->options.server_capabilities & CLIENT_COMPRESS) {
+						client_flags |= CLIENT_COMPRESS;
+					}
+				}
 			}
 		}
 	}
@@ -2344,14 +2353,20 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	} else {
 		return false;
 	}
-	//filter @@session. and @@
+	//filter @@session., @@local. and @@
 	char *match=NULL;
 	char* last_pos=NULL;
 	const int at_session_offset = strlen("@@session.");
+	const int at_local_offset = strlen("@@local."); // Alias of session
 	const int double_at_offset = strlen("@@");
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@session."))) {
 		memmove(match, match + at_session_offset, strlen(match) - at_session_offset);
 		last_pos = match + strlen(match) - at_session_offset;
+		*last_pos = '\0';
+	}
+	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select, "@@local."))) {
+		memmove(match, match + at_local_offset, strlen(match) - at_local_offset);
+		last_pos = match + strlen(match) - at_local_offset;
 		*last_pos = '\0';
 	}
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {

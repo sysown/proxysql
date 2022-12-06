@@ -1,7 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include <mysql.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <random>
@@ -9,8 +9,23 @@
 #include <sstream>
 
 #include <curl/curl.h>
+#include <mysql.h>
 
 #include "command_line.h"
+
+inline std::string get_formatted_time() {
+	time_t __timer;
+	char __buffer[30];
+
+	struct tm __tm_info {};
+	time(&__timer);
+	localtime_r(&__timer, &__tm_info);
+	strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+
+	return std::string(__buffer);
+}
+
+int mysql_query_t(MYSQL* mysql, const char* query);
 
 #define MYSQL_QUERY(mysql, query) \
 	do { \
@@ -26,6 +41,16 @@
 		if (mysql_query(mysql, query)) { \
 			fprintf(stderr, "File %s, line %d, Error: %s\n", \
 					__FILE__, __LINE__, mysql_error(mysql)); \
+		} \
+	} while(0)
+
+#define MYSQL_QUERY_T(mysql, query) \
+	do { \
+		const std::string time { get_formatted_time() }; \
+		fprintf(stderr, "# %s: Issuing query '%s' to ('%s':%d)\n", time.c_str(), query, mysql->host, mysql->port); \
+		if (mysql_query(mysql, query)) { \
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql)); \
+			return EXIT_FAILURE; \
 		} \
 	} while(0)
 
@@ -250,5 +275,26 @@ MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout);
 int get_variable_value(
 	MYSQL* proxysql_admin, const std::string& variable_name, std::string& variable_value, bool runtime=false
 );
+
+/**
+ * @brief Returns all the possible permutations of the supplied generic 'std::vector<T>'.
+ *   This methods holds as long as the generic <T> holds the type requirements for
+ *   'std::next_permutation'.
+ * @param elem_set An 'std::vector<T>' from which to generate all the possible permutations.
+ * @return All the possible permutations of the supplied vector.
+ */
+template <typename T>
+std::vector<std::vector<T>> get_permutations(const std::vector<T>& elem_set) {
+	std::vector<std::vector<T>> result {};
+
+	std::vector<T> c_elem_set(elem_set.begin(), elem_set.end());
+	std::sort(c_elem_set.begin(), c_elem_set.end());
+
+	do {
+		result.push_back(c_elem_set);
+	} while (std::next_permutation(c_elem_set.begin(), c_elem_set.end()));
+
+	return result;
+}
 
 #endif // #define UTILS_H

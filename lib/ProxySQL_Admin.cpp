@@ -4385,6 +4385,16 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			!strncmp("/*!40103 SET ", query_no_space, 13) ||
 			!strncmp("/*!40111 SET ", query_no_space, 13) ||
 			!strncmp("/*!80000 SET ", query_no_space, 13) ||
+			!strncmp("/*!50503 SET ", query_no_space, 13) ||
+			!strncmp("/*!50717 SET ", query_no_space, 13) ||
+			!strncmp("/*!50717 SELECT ", query_no_space, strlen("/*!50717 SELECT ")) ||
+			!strncmp("/*!50717 PREPARE ", query_no_space, strlen("/*!50717 PREPARE ")) ||
+			!strncmp("/*!50717 EXECUTE ", query_no_space, strlen("/*!50717 EXECUTE ")) ||
+			!strncmp("/*!50717 DEALLOCATE ", query_no_space, strlen("/*!50717 DEALLOCATE ")) ||
+			!strncmp("/*!50112 SET ", query_no_space, strlen("/*!50112 SET ")) ||
+			!strncmp("/*!50112 PREPARE ", query_no_space, strlen("/*!50112 PREPARE ")) ||
+			!strncmp("/*!50112 EXECUTE ", query_no_space, strlen("/*!50112 EXECUTE ")) ||
+			!strncmp("/*!50112 DEALLOCATE ", query_no_space, strlen("/*!50112 DEALLOCATE ")) ||
 			!strncmp("/*!40000 ALTER TABLE", query_no_space, strlen("/*!40000 ALTER TABLE"))
 				||
 			!strncmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */"))
@@ -4403,6 +4413,19 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		) {
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			run_query=false;
+			goto __run_query;
+		}
+
+		if (!strncmp("SHOW STATUS LIKE 'binlog_snapshot_gtid_executed'", query_no_space, strlen("SHOW STATUS LIKE 'binlog_snapshot_gtid_executed'"))) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT variable_name AS Variable_name, Variable_value AS Value FROM global_variables WHERE 1=0");
+			query_length = strlen(query)+1;
+			goto __run_query;
+		}
+		if (!strncmp("SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS", query_no_space, strlen("SELECT COLUMN_NAME, JSON_EXTRACT(HISTOGRAM, '$.\"number-of-buckets-specified\"') FROM information_schema.COLUMN_STATISTICS"))) {
+			l_free(query_length, query);
+			query = l_strdup("SELECT variable_name AS COLUMN_NAME, Variable_value AS 'JSON_EXTRACT(HISTOGRAM, ''$.\"number-of-buckets-specified\"'')' FROM global_variables WHERE 1=0");
+			query_length = strlen(query)+1;
 			goto __run_query;
 		}
 		if (!strncmp("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = 'performance_schema' AND table_name = 'session_variables'", query_no_space, strlen("SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = 'performance_schema' AND table_name = 'session_variables'")))  {
@@ -6430,7 +6453,7 @@ int check_port_availability(int port_num, bool* port_free) {
 		close(sfd);
 		ecode = -1;
 	} else {
-		if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+		if (::bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
 			close(sfd);
 		} else {
 			*port_free = true;
@@ -6700,7 +6723,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 									variables.web_port
 								);
 							} else {
-								if (bind(sfd, (struct sockaddr*)&tmp_addr, sizeof(tmp_addr)) == -1) {
+								if (::bind(sfd, (struct sockaddr*)&tmp_addr, (socklen_t)sizeof(tmp_addr)) == -1) {
 									close(sfd);
 									proxy_error(
 										"Unable to start WebInterfacePlugin, port '%d' already in use.\n",
@@ -10348,6 +10371,9 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 #if defined(TEST_AURORA) || defined(TEST_GALERA)
 	admindb->execute("DELETE FROM mysql_servers WHERE gtid_port > 0"); // temporary disable add GTID checks
 #endif
+	if (GloMyLdapAuth) {
+		admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
+	}
 }
 
 /* commented in 2.3 , unused
@@ -10936,7 +10962,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 
 			if (sqlite_result != nullptr) {
 				vector<char*> pta(static_cast<size_t>(resultset->columns));
-				for (uint32_t i = 0; i < resultset->columns; i++) {
+				for (int i = 0; i < resultset->columns; i++) {
 					if (i == 1) {
 						pta[i] = password;
 					} else {
@@ -11438,31 +11464,49 @@ void ProxySQL_Admin::save_clickhouse_users_runtime_to_database(bool _runtime) {
 
 void ProxySQL_Admin::stats___mysql_users() {
 	account_details_t **ads=NULL;
-	int num_users;
-	int i;
 	statsdb->execute("DELETE FROM stats_mysql_users");
-	char *q=(char *)"INSERT INTO stats_mysql_users(username,frontend_connections,frontend_max_connections) VALUES ('%s',%d,%d)";
-	int l=strlen(q);
-	char buf[256];
-	num_users=GloMyAuth->dump_all_users(&ads, false);
+
+	int num_users=GloMyAuth->dump_all_users(&ads, false);
 	if (num_users==0) return;
-	for (i=0; i<num_users; i++) {
+
+	const char q[] {
+		"INSERT INTO stats_mysql_users(username,frontend_connections,frontend_max_connections) VALUES ('%s',%d,%d)"
+	};
+	char buf[256] = { 0 };
+
+	for (int i=0; i<num_users; i++) {
 		account_details_t *ad=ads[i];
 		if (ad->default_hostgroup>= 0) { // only not admin/stats
-			if ( (strlen(ad->username) + l) > 210) {
-				char *query=(char *)malloc(strlen(ad->username)+l+32);
-				sprintf(query,q,ad->username,ad->num_connections_used);
-				sprintf(query,q,ad->username,ad->max_connections);
-				statsdb->execute(query);
-				free(query);
+			cfmt_t q_fmt = cstr_format(buf, q, ad->username, ad->num_connections_used, ad->max_connections);
+
+			if (q_fmt.str.size()) {
+				statsdb->execute(q_fmt.str.c_str());
 			} else {
-				sprintf(buf,q,ad->username,ad->num_connections_used,ad->max_connections);
 				statsdb->execute(buf);
 			}
 		}
 		free(ad->username);
 		free(ad);
 	}
+
+	if (GloMyLdapAuth) {
+		std::unique_ptr<SQLite3_result> ldap_users { GloMyLdapAuth->dump_all_users() };
+
+		for (const SQLite3_row* row : ldap_users->rows) {
+			const char* username = row->fields[LDAP_USER_FIELD_IDX::USERNAME];
+			int f_conns = atoi(row->fields[LDAP_USER_FIELD_IDX::FRONTEND_CONNECTIONS]);
+			int f_max_conns = atoi(row->fields[LDAP_USER_FIELD_IDX::FRONTED_MAX_CONNECTIONS]);
+
+			cfmt_t q_fmt = cstr_format(buf, q, username, f_conns, f_max_conns);
+
+			if (q_fmt.str.size()) {
+				statsdb->execute(q_fmt.str.c_str());
+			} else {
+				statsdb->execute(buf);
+			}
+		}
+	}
+
 	free(ads);
 }
 
