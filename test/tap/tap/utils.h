@@ -297,4 +297,70 @@ std::vector<std::vector<T>> get_permutations(const std::vector<T>& elem_set) {
 	return result;
 }
 
+/**
+ * @brief Struct holding options on how to performs connections for 'EOF' tests.
+ */
+struct conn_cnf_t {
+	bool f_conn_eof;
+	bool b_conn_eof;
+	bool f_conn_compr;
+	bool b_conn_compr;
+	bool fast_forward;
+	std::string fast_forward_user;
+};
+
+/**
+ * @brief Helper function to serialize 'conn_cnf_t' structs.
+ * @return The string representation of the provided 'conn_cnf_t'.
+ */
+std::string to_string(const conn_cnf_t& cnf);
+
+/**
+ * @brief Execute the the test 'deprecate_eof_cache-t' with the 'mysql-variables'
+ *  'mysql-enable_client_deprecate_eof' and 'mysql-enable_server_deprecate_eof'
+ *  with the values suppplied in the parameters.
+ *
+ * @param cl CommandLine arguments supplied to the test.
+ * @param mysql A MYSQL* initialized againt ProxySQL admin interface.
+ * @param test File test name to be executed.
+ * @param cl_depr_eof Bool to set to 'mysql-enable_client_deprecate_eof'
+ * @param srv_depr_eof Bool to set to 'mysql-enable_server_deprecate_eof'
+ *
+ * @return The error code from executing 'deprecate_eof_cache-t' via system, or
+ *  '0' in case of success.
+ */
+int execute_eof_test(
+	const CommandLine& cl, MYSQL* mysql, const std::string& test, bool cl_depr_eof, bool srv_depr_eof
+);
+int execute_eof_test(const CommandLine& cl, MYSQL* mysql, const std::string& test, const conn_cnf_t&);
+
+/**
+ * @brief Waits until either the number of backend connections of the expected type is reached, or the
+ *   timeout expires.
+ *
+ * @param proxy_admin An already oppened connection to ProxySQL Admin.
+ * @param conn_type The type of backend connections to filter from 'stats_mysql_connection' pool. Possible
+ *   values are: 'ConnUsed', 'ConnFree', 'ConnOK', 'ConnERR'.
+ * @param exp_conn_num The target number of connections to reach to end the wait.
+ * @param timeout Maximum waiting time for the connections to reach the expected value.
+ *
+ * @return EXIT_SUCCESS if the target number of connections was reached before timeout, EXIT_FAILURE otherwise.
+ */
+int wait_for_backend_conns(
+	MYSQL* proxy_admin, const std::string& conn_type, uint32_t exp_conn_num, uint32_t timeout
+);
+
+/**
+ * @brief Queries 'stats_mysql_connection_pool' and retrieves the number of connections of the specified type.
+ *
+ * @param proxy_admin An already oppened connection to ProxySQL Admin.
+ * @param conn_type The type of backend connections to filter from 'stats_mysql_connection' pool. Possible
+ *   values are: 'ConnUsed', 'ConnFree', 'ConnOK', 'ConnERR'.
+ * @param found_conn_num The current number of connections of the specified type.
+ *
+ * @return EXIT_SUCCESS in case the conns number was properly retrieved, EXIT_FAILURE and error logged
+ *   otherwise.
+ */
+int get_cur_backend_conns(MYSQL* proxy_admin, const std::string& conn_type, uint32_t& found_conn_num);
+
 #endif // #define UTILS_H
