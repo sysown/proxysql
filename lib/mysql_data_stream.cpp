@@ -1082,9 +1082,13 @@ int MySQL_Data_Stream::buffer2array() {
 					if ((datalength-progress) >= (CompPktIN.pkt.size-CompPktIN.partial)) {
 						// we can copy till the end of the packet
 						memcpy((char *)CompPktIN.pkt.ptr + CompPktIN.partial , _ptr+progress, CompPktIN.pkt.size - CompPktIN.partial);
-						CompPktIN.partial=0;
+						// 'progress' is required to be updated with the actual copied size to the target packet. This
+						// is, taking into account the already copied data, 'CompPktIN.partial', otherwise, in case of
+						// split packets, we could jump over the remaining unprocessed data.
 						progress+= CompPktIN.pkt.size - CompPktIN.partial;
 						PSarrayIN->add(CompPktIN.pkt.ptr, CompPktIN.pkt.size);
+						// Reset partial after full packet datalength has been processed
+						CompPktIN.partial=0;
 						CompPktIN.pkt.ptr=NULL; // sanity
 					} else {
 						// not enough data for the whole packet

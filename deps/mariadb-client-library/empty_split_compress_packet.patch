@@ -1,0 +1,12 @@
+diff --git libmariadb/ma_net.c libmariadb/ma_net.c
+index 15be4fc..39a8138 100644
+--- libmariadb/ma_net.c
++++ libmariadb/ma_net.c
+@@ -498,6 +498,7 @@ ulong ma_net_read(NET *net)
+         {
+           current+= 4; /* length + sequence_id,
+                           no more data will follow */
++          is_multi_packet = 0;
+           break;
+         }
+         if (packet_length + 4 <= buffer_length - current)
