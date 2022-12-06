@@ -3539,7 +3539,7 @@ __monitor_run:
 	pthread_join(monitor_aws_aurora_thread,NULL);
 	pthread_join(monitor_replication_lag_thread,NULL);
 	
-	bool purged_all_connections = false;
+	My_Conn_Pool->purge_all_connections();
 
 	while (shutdown==false) {
 		unsigned int glover;
@@ -3553,10 +3553,6 @@ __monitor_run:
 		monitor_enabled=mysql_thread___monitor_enabled;
 		if (mysql_thread___monitor_enabled==true) {
 			goto __monitor_run;
-		}
-		else if (purged_all_connections == false) {
-			My_Conn_Pool->purge_all_connections();
-			purged_all_connections = true;
 		}
 
 		usleep(200000);
