@@ -142,6 +142,11 @@ static char * main_check_latest_version() {
 		free(chunk.memory);
 		chunk.memory = NULL;
 	}
+	if (chunk.size > 32) {
+		proxy_warning("discarding: not a version string\n");
+		free(chunk.memory);
+		chunk.memory = NULL;
+	}
 	curl_easy_cleanup(curl_handle);
 	curl_global_cleanup();
 	return chunk.memory;
