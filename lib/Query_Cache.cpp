@@ -567,9 +567,11 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 	ok_packet += sizeof(mysql_hdr);
 	// Skip the 'OK packet header', 'affected_rows' and 'last_insert_id'
 	ok_packet += 3;
-	uint16_t status_flags = *reinterpret_cast<uint16_t*>(ok_packet);
+	uint16_t status_flags;
+	memcpy(&status_flags, ok_packet, sizeof(uint16_t));
 	ok_packet += 2;
-	uint16_t warnings = *reinterpret_cast<uint16_t*>(ok_packet);
+	uint16_t warnings;
+	memcpy(&warnings, ok_packet, sizeof(uint16_t));
 
 	// Find the spot in which the first EOF needs to be placed
 	it += sizeof(mysql_hdr);
@@ -599,9 +601,9 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 	// Write 'column_eof_packet' contents
 	*vp = 0xfe;
 	vp++;
-	*reinterpret_cast<uint16_t*>(vp) = warnings;
+	memcpy(vp, &warnings, sizeof(uint16_t));
 	vp += 2;
-	*reinterpret_cast<uint16_t*>(vp) = status_flags;
+	memcpy(vp, &status_flags, sizeof(uint16_t));
 	vp += 2;
 
 	// Find the OK packet
@@ -621,9 +623,9 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 
 			*vp = 0xfe;
 			vp++;
-			*reinterpret_cast<uint16_t*>(vp) = warnings;
+			memcpy(vp, &warnings, sizeof(uint16_t));
 			vp += 2;
-			*reinterpret_cast<uint16_t*>(vp) = status_flags;
+			memcpy(vp, &status_flags, sizeof(uint16_t));
 			break;
 		} else {
 			// Increment the package id by one due to 'column_eof_packet'
