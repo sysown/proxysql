@@ -97,17 +97,17 @@ private:
 		if (nullptr!=result)
 			return result;
 
-		to_opts wexecvp_opts {};
+		to_opts_t wexecvp_opts {};
 		wexecvp_opts.timeout_us = (interval_ms * 1000);
-		wexecvp_opts.select_to_us = 100*1000;
-		wexecvp_opts.it_delay_us = 500*1000;
-		wexecvp_opts.sigkill_timeout_us = 3000 * 1000;
+		wexecvp_opts.poll_to_us = 100*1000;
+		wexecvp_opts.waitpid_delay_us = 500*1000;
+		wexecvp_opts.sigkill_to_us = 3000 * 1000;
 
 		std::string script_stdout {""};
 		std::string script_stderr {""};
 
 		const std::vector<const char*> args { const_cast<const char*>(params.c_str()), NULL};
-		int script_err = wexecvp(script.c_str(), args, &wexecvp_opts, script_stdout, script_stderr);
+		int script_err = wexecvp(script.c_str(), args, wexecvp_opts, script_stdout, script_stderr);
 		int script_errno = errno;
 
 		std::string str_response_err {};

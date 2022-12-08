@@ -128,27 +128,27 @@ cfmt_t cstr_format(char (&out_buf)[N], const char* fmt, ...) {
 /**
  * @brief Simple struct that holds the 'timeout options' for 'wexecvp'.
  */
-struct to_opts {
+struct to_opts_t {
 	/**
 	 * @brief Timeout for the script execution to be completed, in case of being
 	 *   exceeded, the script will be terminated.
 	 */
 	unsigned int timeout_us;
 	/**
-	 * @brief Timeout used for 'select()' non blocking calls.
+	 * @brief Timeout used for 'poll()' non blocking calls.
 	 */
-	suseconds_t select_to_us;
+	suseconds_t poll_to_us;
 	/**
 	 * @brief The duration of the sleeps between the checks being performed
 	 *   on the child process waiting it to exit after being signaled to terminate,
 	 *   before issuing 'SIGKILL'.
 	 */
-	unsigned int it_delay_us;
+	unsigned int waitpid_delay_us;
 	/**
 	 * @brief The timeout to be waited on the child process after being signaled
 	 *   with 'SIGTERM' before being forcely terminated by 'SIGKILL'.
 	 */
-	unsigned int sigkill_timeout_us;
+	unsigned int sigkill_to_us;
 };
 
 /**
@@ -165,17 +165,16 @@ struct to_opts {
  * @return 0 In case of success or one of the following error codes:
  *   - '-1' in case any 'pipe()' creation failed.
  *   - '-2' in case 'fork()' call failed.
- *   - '-3' in case 'fcntl()' call failed .
- *   - '-4' in case of resource exhaustion, file descriptors being used exceeds 'FD_SETSIZE'.
- *   - '-5' in case 'select()' call failed.
- *   - '-6' in case 'read()' from pipes failed with a non-expected error.
+ *   - '-3' in case 'fcntl()' call failed.
+ *   - '-4' in case 'poll()' call failed.
+ *   - '-5' in case 'read()' from pipes failed with a non-expected error.
  *   - 'ETIME' in case the executable has exceeded the timeout supplied in 'opts.timeout_us'.
  *  In all this cases 'errno' is set to the error reported by the failing 'system call'.
  */
 int wexecvp(
 	const std::string& file,
 	const std::vector<const char*>& argv,
-	const to_opts* opts,
+	const to_opts_t& opts,
 	std::string& s_stdout,
 	std::string& s_stderr
 );
