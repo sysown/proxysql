@@ -150,7 +150,8 @@ static char * main_check_latest_version() {
 
 void * main_check_latest_version_thread(void *arg) {
 	char * latest_version = main_check_latest_version();
-	if (latest_version) {
+	// we check for potential invalid data , see issue #4042 
+	if (latest_version != NULL && strlen(latest_version) < 32) {
 		if (
 			(know_latest_version == NULL) // first check
 			|| (strcmp(know_latest_version,latest_version)) // new version detected
