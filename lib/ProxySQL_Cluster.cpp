@@ -313,16 +313,18 @@ void ProxySQL_Node_Metrics::reset() {
 ProxySQL_Node_Entry::ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char * _comment) : 
 	ProxySQL_Node_Entry(_hostname, _port, _weight, _comment, NULL) {
 	// resolving DNS if available in Cache
-	size_t ip_count = 0;
-	const std::string& ip = MySQL_Monitor::dns_lookup(_hostname ? _hostname : "", false, &ip_count);
+	if (_hostname) {
+		size_t ip_count = 0;
+		const std::string& ip = MySQL_Monitor::dns_lookup(_hostname, false, &ip_count);
 
-	if (ip_count > 1) {
-		proxy_error("Proxy cluster node '%s' has more than one ('%ld') mapped IP address. It is recommended to provide IP address or domain with one resolvable IP.\n",
-			_hostname, ip_count);
-	}
+		if (ip_count > 1) {
+			proxy_error("Proxy cluster node '%s' has more than one ('%ld') mapped IP address. It is recommended to provide IP address or domain with one resolvable IP.\n",
+				_hostname, ip_count);
+		}
 
-	if (ip.empty() == false) {
-		ip_addr = strdup(ip.c_str());
+		if (ip.empty() == false) {
+			ip_addr = strdup(ip.c_str());
+		}
 	}
 }
 
