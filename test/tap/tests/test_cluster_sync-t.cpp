@@ -470,7 +470,7 @@ int main(int, char**) {
 		std::string proxy_stdout {};
 		std::string proxy_stderr {};
 		int exec_res = wexecvp(
-			std::string(cl.workdir) + "../../../src/proxysql", { "-f", "-M", "-c", fmt_config_file.c_str() }, NULL,
+			std::string(cl.workdir) + "../../../src/proxysql", { "-f", "-M", "-c", fmt_config_file.c_str() }, {},
 			proxy_stdout, proxy_stderr
 		);
 

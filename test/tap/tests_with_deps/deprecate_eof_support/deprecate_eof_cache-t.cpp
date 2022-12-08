@@ -148,14 +148,14 @@ int main(int argc, char** argv) {
 		std::string select_query {};
 		string_format(t_select_query, select_query, id);
 
-		to_opts opts { 10000*1000, 100*1000, 500*1000, 2000*1000 };
+		to_opts_t opts { 10000*1000, 100*1000, 500*1000, 2000*1000 };
 
 		// Query *without* support for EOF deprecation
 		auto eof_query = [&] (std::string& query_res, std::string& eof_query_err) -> int {
 			int exec_res = wexecvp(
 				std::string(cl.workdir) + "fwd_eof_query",
 				{ select_query.c_str() },
-				&opts,
+				opts,
 				query_res,
 				eof_query_err
 			);
@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
 			int exec_res = wexecvp(
 				std::string(cl.workdir) + "fwd_eof_ok_query",
 				{ select_query.c_str() },
-				&opts,
+				opts,
 				query_res,
 				ok_query_err
 			);

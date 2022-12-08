@@ -116,9 +116,11 @@ std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res);
  * @return '0' in case the endpoint became available before the timeout, or
  *   '-1' in case the timeout expired.
  */
-int wait_until_enpoint_ready(
+int wait_post_enpoint_ready(
 	std::string endpoint, std::string post_params, uint32_t timeout, uint32_t delay=100
 );
+
+int wait_get_enpoint_ready(std::string endpoint, uint32_t timeout, uint32_t delay=100);
 
 /**
  * @brief Perform a simple POST query to the specified endpoint using the supplied
@@ -129,15 +131,16 @@ int wait_until_enpoint_ready(
  * @param curl_out_err A uint64_t reference returning the result code of the
  *   query in case it has been performed. In case the query couldn't be
  *   performed, this value is never initialized.
- * @param curl_out_err A string reference to collect the error as a string reported
+ * @param curl_res_err A string reference to collect the error as a string reported
  *   by 'libcurl' in case of failure.
  *
  * @return The response code of the query in case of the query.
  */
 CURLcode perform_simple_post(
-	const std::string& endpoint, const std::string& post_params,
-	uint64_t& curl_res_code, std::string& curl_out_err
+	const std::string& endpoint, const std::string& params, uint64_t& curl_res_code, std::string& curl_res_data
 );
+
+CURLcode perform_simple_get(const std::string& endpoint, uint64_t& curl_res_code, std::string& curl_res_data);
 
 /**
  * @brief Generates a random string of the length of the provider 'strSize'
@@ -362,5 +365,70 @@ int wait_for_backend_conns(
  *   otherwise.
  */
 int get_cur_backend_conns(MYSQL* proxy_admin, const std::string& conn_type, uint32_t& found_conn_num);
+
+/**
+ * @brief Join two string paths. Appends '/' to the first supplied string if doesn't already finish with one.
+ * @param p1 First part of the path to be joined.
+ * @param p2 Second string to append to the first path.
+ * @return A string holding at least one '/' between the two previously supplied strings.
+ */
+std::string join_path(const std::string& p1, const std::string& p2);
+
+/**
+ * @brief Holds the required info for the definition of a RESTAPI endpoint.
+ */
+struct ept_info_t {
+	std::string name;
+	std::string file;
+	std::string method;
+	uint64_t timeout;
+};
+
+/**
+ * @brief Represents a RESTAPI endpoint request expected to succeed.
+ */
+struct honest_req_t {
+	ept_info_t ept_info;
+	std::vector<std::string> params;
+};
+
+/**
+ * @brief Holds the test payload information for faulty requests.
+ */
+struct ept_pl_t {
+	/* @brief Params to be issued in the request against the endpoint */
+	std::string params;
+	/* @brief Expected code to be returned by CURL */
+	uint64_t curl_rc;
+	/* @brief Expected response output returned by CURL */
+	uint64_t script_err;
+};
+
+/**
+ * @brief Represents a RESTAPI endpoint request expected to fail.
+ */
+struct faulty_req_t {
+	ept_info_t ept_info;
+	std::vector<ept_pl_t> ept_pls;
+};
+
+/**
+ * @brief Configure the supplied endpoints using the provided information
+ *
+ * @param admin Opened connection to ProxySQL admin interface.
+ * @param script_base_path Common base path for the scripts location.
+ * @param epts_info Information of the endpoints to be configured.
+ * @param dummy_ept Dummy endpoint used to check when interface is ready.
+ * @param prevent_dups Prevent duplicates when inserting the provided info.
+ *
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise. Errors are logged.
+ */
+int configure_endpoints(
+	MYSQL* admin,
+	const std::string& script_base_path,
+	const std::vector<ept_info_t>& epts_info,
+	const ept_info_t& dummy_ept,
+	bool prevent_dups = true
+);
 
 #endif // #define UTILS_H

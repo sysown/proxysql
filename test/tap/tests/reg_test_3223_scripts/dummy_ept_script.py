@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 
-"""Simple script returning a valid empty result for RESTAPI."""
-
-random_dic = {}
+"""Dummy script to check RESTAPI is ready."""
 
 if __name__ == "__main__":
     # Return minimal JSON

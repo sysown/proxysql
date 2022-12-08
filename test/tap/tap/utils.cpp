@@ -357,8 +357,7 @@ static size_t write_callback(void *data, size_t size, size_t nmemb, void *userp)
 }
 
 CURLcode perform_simple_post(
-	const string& endpoint, const string& post_params,
-	uint64_t& curl_res_code, string& curl_out_err
+	const string& endpoint, const string& params, uint64_t& curl_res_code, string& curl_res_data
 ) {
 	CURL *curl;
 	CURLcode res;
@@ -368,7 +367,7 @@ CURLcode perform_simple_post(
 	curl = curl_easy_init();
 	if(curl) {
 		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
-		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_params.c_str());
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, params.c_str());
 		struct memory response = { 0 };
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
@@ -376,13 +375,10 @@ CURLcode perform_simple_post(
 		res = curl_easy_perform(curl);
 
 		if(res != CURLE_OK) {
-			curl_out_err = string { curl_easy_strerror(res) };
+			curl_res_data = string { curl_easy_strerror(res) };
 		} else {
 			curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &curl_res_code);
-
-			if (curl_res_code != 200) {
-				curl_out_err = string(response.data, response.size);
-			}
+			curl_res_data = string(response.data, response.size);
 		}
 
 		free(response.data);
@@ -392,23 +388,71 @@ CURLcode perform_simple_post(
 	return res;
 }
 
-int wait_until_enpoint_ready(
-	string endpoint, string post_params, uint32_t timeout, uint32_t delay
+CURLcode perform_simple_get(
+	const string& endpoint, uint64_t& curl_res_code, string& curl_res_data
 ) {
+	CURL *curl;
+	CURLcode res;
+
+	curl_global_init(CURL_GLOBAL_ALL);
+
+	curl = curl_easy_init();
+	if(curl) {
+		curl_easy_setopt(curl, CURLOPT_URL, endpoint.c_str());
+		struct memory response = { 0 };
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
+
+		res = curl_easy_perform(curl);
+
+		if(res != CURLE_OK) {
+			curl_res_data = string { curl_easy_strerror(res) };
+		} else {
+			curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &curl_res_code);
+			curl_res_data = string(response.data, response.size);
+		}
+
+		free(response.data);
+		curl_easy_cleanup(curl);
+	}
+
+	return res;
+}
+
+int wait_post_enpoint_ready(string endpoint, string post_params, uint32_t timeout, uint32_t delay) {
 	double waited = 0;
 	int res = -1;
 
 	while (waited < timeout) {
-		string curl_str_err {};
+		string curl_resp_err {};
 		uint64_t curl_res_code = 0;
-		int curl_err = perform_simple_post(endpoint, post_params, curl_res_code, curl_str_err);
+		int curl_res = perform_simple_post(endpoint, post_params, curl_res_code, curl_resp_err);
 
-		if (curl_err != CURLE_OK) {
-			diag(
-				"'curl_err_code': %d, 'curl_err': '%s', waiting for '%d'ms...",
-				curl_err, curl_str_err.c_str(), delay
-			);
-			waited += static_cast<double>(delay) / 1000;
+		if (curl_res != CURLE_OK || curl_res_code != 200) {
+			diag("'curl_res': %d, 'curl_err': '%s', waiting for '%d'ms...", curl_res, curl_resp_err.c_str(), delay);
+			waited += static_cast<double>(delay);
+			usleep(delay * 1000);
+		} else {
+			res = 0;
+			break;
+		}
+	}
+
+	return res;
+}
+
+int wait_get_enpoint_ready(string endpoint, uint32_t timeout, uint32_t delay) {
+	double waited = 0;
+	int res = -1;
+
+	while (waited < timeout) {
+		string curl_resp_err {};
+		uint64_t curl_res_code = 0;
+		int curl_res = perform_simple_get(endpoint, curl_res_code, curl_resp_err);
+
+		if (curl_res != CURLE_OK || curl_res_code != 200) {
+			diag("'curl_res': %d, 'curl_err': '%s', waiting for '%d'ms...", curl_res, curl_resp_err.c_str(), delay);
+			waited += static_cast<double>(delay);
 			usleep(delay * 1000);
 		} else {
 			res = 0;
@@ -921,4 +965,95 @@ int wait_for_backend_conns(
 	} else {
 		return EXIT_SUCCESS;
 	}
+}
+
+string join_path(const string& p1, const string& p2) {
+	if (p1.back() == '/') {
+		return p1 + p2;
+	} else {
+		return p1 + '/' + p2;
+	}
+}
+
+int check_endpoint_exists(MYSQL* admin, const ept_info_t& ept, bool& exists) {
+	const string select_query {
+		"SELECT count(*) FROM restapi_routes WHERE uri='" + ept.name + "' AND method='" + ept.method + "'"
+	};
+	MYSQL_QUERY(admin, select_query.c_str());
+	MYSQL_RES* myres = mysql_store_result(admin);
+	MYSQL_ROW myrow = mysql_fetch_row(myres);
+	bool res = EXIT_FAILURE;
+
+	if (myrow && myrow[0]) {
+		int entry_num = std::atoi(myrow[0]);
+		exists = entry_num != 0;
+
+		res = EXIT_SUCCESS;
+	} else {
+		diag("Invalid resultset returned from query '%s'", select_query.c_str());
+
+		res = EXIT_FAILURE;
+	}
+
+	mysql_free_result(myres);
+
+	return res;
+}
+
+const char t_restapi_insert[] {
+	"INSERT INTO restapi_routes (active, timeout_ms, method, uri, script, comment) "
+		"VALUES (1,%ld,'%s','%s','%s','comm')",
+};
+
+const string base_address { "http://localhost:6070/sync/" };
+
+int configure_endpoints(
+	MYSQL* admin,
+	const string& script_base_path,
+	const vector<ept_info_t>& epts_info,
+	const ept_info_t& dummy_ept,
+	bool prevent_dups
+) {
+	MYSQL_QUERY(admin, "DELETE FROM restapi_routes");
+
+	vector<ept_info_t> _epts_info { epts_info };
+	_epts_info.push_back(dummy_ept);
+
+	for (const ept_info_t& ept : _epts_info) {
+		string f_exe_name {};
+		string_format(ept.file, f_exe_name, ept.name.c_str());
+
+		const string script_path { join_path(script_base_path, f_exe_name) };
+		string insert_query {};
+		string_format(
+			t_restapi_insert, insert_query, ept.timeout, ept.method.c_str(), ept.name.c_str(), script_path.c_str()
+		);
+
+		bool duplicate_entry = false;
+		if (check_endpoint_exists(admin, ept, duplicate_entry)) {
+			return EXIT_FAILURE;
+		}
+
+		if (!(prevent_dups && duplicate_entry)) {
+			MYSQL_QUERY(admin, insert_query.c_str());
+		} else {
+			diag(
+				"Warning: Test payload trying to insert invalid duplicated entry - uri: '%s', method: '%s'",
+				ept.name.c_str(), ept.method.c_str()
+			);
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	MYSQL_QUERY(admin, "LOAD RESTAPI TO RUNTIME");
+
+	const string full_endpoint { join_path(base_address, dummy_ept.name) };
+	int endpoint_timeout = wait_post_enpoint_ready(full_endpoint, "{}", 1000, 100);
+
+	if (endpoint_timeout) {
+		diag("Timeout while trying to reach first valid enpoint");
+		return EXIT_FAILURE;
+	}
+
+	return EXIT_SUCCESS;
 }

@@ -53,13 +53,13 @@ int main(int argc, char** argv) {
 	int launch_res = -1;
 
 	std::thread launch_sec_proxy = std::thread([&WORKSPACE,&cl] (int& err_code) -> void {
-		to_opts wexecvp_opts {};
-		wexecvp_opts.select_to_us = 100*1000;
-		wexecvp_opts.it_delay_us = 500*1000;
+		to_opts_t wexecvp_opts {};
+		wexecvp_opts.poll_to_us = 100*1000;
+		wexecvp_opts.waitpid_delay_us = 500*1000;
 		// Stop launched process after 20s
 		wexecvp_opts.timeout_us = 20000 * 1000;
 		// Send sigkill 3s after timeout
-		wexecvp_opts.sigkill_timeout_us = 3000 * 1000;
+		wexecvp_opts.sigkill_to_us = 3000 * 1000;
 
 		const string sec_cfg_file = string { cl.workdir } + "reg_test_3847_node_datadir/proxysql_sec.cfg";
 		const string sec_log_file = string { cl.workdir } + "reg_test_3847_node_datadir/proxysql_sec.log";
@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
 		string s_stdout {};
 		string s_stderr {};
 
-		int w_res = wexecvp(proxysql_path, proxy_args, &wexecvp_opts, s_stdout, s_stderr);
+		int w_res = wexecvp(proxysql_path, proxy_args, wexecvp_opts, s_stdout, s_stderr);
 		if (w_res != EXIT_SUCCESS) {
 			diag("'wexecvp' failed with error: %d", w_res);
 		}

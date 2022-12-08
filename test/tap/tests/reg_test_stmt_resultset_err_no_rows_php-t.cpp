@@ -32,8 +32,8 @@ int main(int argc, char** argv) {
 	string php_stderr {};
 	const string php_path { string{ cl.workdir } + "./reg_test_stmt_resultset_err_no_rows.php" };
 
-	to_opts opts {2 * 1000 * 1000, 0, 0, 0};
-	int exec_res = wexecvp(php_path, {}, &opts, php_stdout, php_stderr);
+	to_opts_t opts {2 * 1000 * 1000, 0, 0, 0};
+	int exec_res = wexecvp(php_path, {}, opts, php_stdout, php_stderr);
 
 	diag("Output from executed test: '%s'", php_path.c_str());
 	diag("========================================================================");
