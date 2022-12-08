@@ -2678,6 +2678,8 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
 	if (lock) {
 		wrunlock();
 	}
+
+	MySQL_Monitor::trigger_dns_cache_update();
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_replication_hostgroups() {
@@ -3478,7 +3480,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 								auth_password=ui->password;
 							}
 						}
-						KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->parent->myhgc->hid, c->mysql->thread_id, KILL_CONNECTION, NULL);
+						KillArgs *ka = new KillArgs(ui->username, auth_password, c->parent->address, c->parent->port, c->parent->myhgc->hid, c->mysql->thread_id, KILL_CONNECTION, NULL, c->connected_host_details.ip);
 						pthread_attr_t attr;
 						pthread_attr_init(&attr);
 						pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

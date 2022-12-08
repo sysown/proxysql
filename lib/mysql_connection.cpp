@@ -830,8 +830,8 @@ void MySQL_Connection::connect_start() {
 		if (!res_ip.empty()) {
 			if (connected_host_details.hostname) {
 				if (strcmp(connected_host_details.hostname, parent->address) != 0) {
-					connected_host_details.hostname = (char*)realloc(connected_host_details.hostname, strlen(parent->address) + 1);
-					strcpy(connected_host_details.hostname, parent->address);
+					free(connected_host_details.hostname);
+					connected_host_details.hostname = strdup(parent->address);
 				}
 			}
 			else {
@@ -840,8 +840,8 @@ void MySQL_Connection::connect_start() {
 
 			if (connected_host_details.ip) {
 				if (strcmp(connected_host_details.ip, res_ip.c_str()) != 0) {
-					connected_host_details.ip = (char*)realloc(connected_host_details.ip, res_ip.size() * sizeof(char) + 1);
-					strcpy(connected_host_details.ip, res_ip.c_str());
+					free(connected_host_details.ip);
+					connected_host_details.ip = strdup(res_ip.c_str());
 				}
 			}
 			else {
@@ -1137,6 +1137,7 @@ handler_again:
 				//vio_blocking(mysql->net.vio, FALSE, 0);
 				//fcntl(mysql->net.vio->sd, F_SETFL, O_RDWR|O_NONBLOCK);
 			//}
+			MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
 			break;
 		case ASYNC_CONNECT_FAILED:
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(mysql));

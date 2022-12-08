@@ -13164,7 +13164,10 @@ void ProxySQL_Admin::load_proxysql_servers_to_runtime(bool _lock, const std::str
 			);
 //		}
 	}
-	if (resultset) delete resultset;
+
+	GloProxyCluster->update_table_proxysql_servers_for_monitor(resultset);
+	// no need to release resultset
+	
 	resultset=NULL;
 }
 

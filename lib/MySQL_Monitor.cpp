@@ -16,6 +16,7 @@
 #include "MySQL_Protocol.h"
 #include "MySQL_HostGroups_Manager.h"
 #include "MySQL_Monitor.hpp"
+#include "ProxySQL_Cluster.hpp"
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_utils.h"
@@ -34,7 +35,7 @@
 
 extern ProxySQL_Admin *GloAdmin;
 extern MySQL_Threads_Handler *GloMTH;
-
+extern ProxySQL_Cluster* GloProxyCluster;
 
 static MySQL_Monitor *GloMyMon;
 
@@ -753,6 +754,7 @@ MySQL_Monitor::MySQL_Monitor() {
 
 	pthread_mutex_init(&aws_aurora_mutex,NULL);
 	pthread_mutex_init(&mysql_servers_mutex,NULL);
+	pthread_mutex_init(&proxysql_servers_mutex, NULL);
 	AWS_Aurora_Hosts_resultset=NULL;
 	AWS_Aurora_Hosts_resultset_checksum = 0;
 	shutdown=false;
@@ -784,6 +786,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_check_status", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_CHECK_STATUS);
 	insert_into_tables_defs(tables_defs_monitor,"mysql_server_aws_aurora_failovers", MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_FAILOVERS);
 	insert_into_tables_defs(tables_defs_monitor_internal,"mysql_servers", MONITOR_SQLITE_TABLE_MYSQL_SERVERS);
+	insert_into_tables_defs(tables_defs_monitor_internal, "proxysql_servers", MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS);
 	// create monitoring tables
 	check_and_build_standard_tables(monitordb, tables_defs_monitor);
 	check_and_build_standard_tables(monitor_internal_db, tables_defs_monitor_internal);
@@ -810,7 +813,7 @@ MySQL_Monitor::MySQL_Monitor() {
 	dns_cache_queried = 0;
 	dns_cache_lookup_success = 0;
 	dns_cache_record_updated = 0;
-
+	force_dns_cache_update = false;
 /*
 	if (GloMTH) {
 		if (GloMTH->num_threads) {
@@ -971,6 +974,66 @@ void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
 	}
 
 	pthread_mutex_unlock(&GloMyMon->mysql_servers_mutex);
+}
+
+void MySQL_Monitor::update_monitor_proxysql_servers(SQLite3_result* resultset) {
+	pthread_mutex_lock(&GloMyMon->proxysql_servers_mutex);
+
+	if (resultset != nullptr) {
+		int rc = 0;
+
+		monitordb->execute("DELETE FROM monitor_internal.proxysql_servers");
+
+		sqlite3_stmt* statement1 = NULL;
+		sqlite3_stmt* statement32 = NULL;
+
+		std::string query32s = "INSERT INTO monitor_internal.proxysql_servers VALUES " + generate_multi_rows_query(32, 4);
+		char* query1 = const_cast<char*>("INSERT INTO monitor_internal.proxysql_servers VALUES (?1,?2,?3,?4)");
+		char* query32 = (char*)query32s.c_str();
+
+		rc = monitordb->prepare_v2(query1, &statement1);
+		ASSERT_SQLITE_OK(rc, monitordb);
+		rc = monitordb->prepare_v2(query32, &statement32);
+		ASSERT_SQLITE_OK(rc, monitordb);
+
+		int row_idx = 0;
+		int max_bulk_row_idx = resultset->rows_count / 32;
+		max_bulk_row_idx = max_bulk_row_idx * 32;
+
+		for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+			SQLite3_row* r1 = *it;
+			int idx = row_idx % 32;
+
+			if (row_idx < max_bulk_row_idx) { // bulk
+				rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 4) + 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 4) + 2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, monitordb);
+				rc = (*proxy_sqlite3_bind_int64)(statement32, (idx * 4) + 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, monitordb);
+				rc = (*proxy_sqlite3_bind_text)(statement32, (idx * 4) + 4, r1->fields[3], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+
+				if (idx == 31) {
+					SAFE_SQLITE3_STEP2(statement32);
+					rc = (*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, monitordb);
+					rc = (*proxy_sqlite3_reset)(statement32); ASSERT_SQLITE_OK(rc, monitordb);
+				}
+			}
+			else { // single row
+				rc = (*proxy_sqlite3_bind_text)(statement1, 1, r1->fields[0], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+				rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atoi(r1->fields[1])); ASSERT_SQLITE_OK(rc, monitordb);
+				rc = (*proxy_sqlite3_bind_int64)(statement1, 3, atoi(r1->fields[2])); ASSERT_SQLITE_OK(rc, monitordb);
+				rc = (*proxy_sqlite3_bind_text)(statement1, 4, r1->fields[3], - 1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, monitordb);
+
+				SAFE_SQLITE3_STEP2(statement1);
+				rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+				rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, monitordb);
+			}
+			row_idx++;
+		}
+
+		(*proxy_sqlite3_finalize)(statement1);
+		(*proxy_sqlite3_finalize)(statement32);
+	}
+
+	pthread_mutex_unlock(&GloMyMon->proxysql_servers_mutex);
 }
 
 void * monitor_connect_thread(void *arg) {
@@ -1257,6 +1320,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 #else
 			fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK);
 #endif /* FD_CLOEXEC */
+			MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
 	}
 	return true;
 }
@@ -3414,6 +3478,39 @@ bool validate_ip(const std::string& ip) {
 	return false;
 }
 
+std::string get_connected_peer_ip_from_socket(int socket_fd) {
+	std::string result;
+	char ip_addr[INET6_ADDRSTRLEN];
+
+	union {
+		struct sockaddr_in in;
+		struct sockaddr_in6 in6;
+	} custom_sockaddr;
+
+	struct sockaddr* addr = (struct sockaddr*)malloc(sizeof(custom_sockaddr));
+	socklen_t addrlen = sizeof(custom_sockaddr);
+	memset(addr, 0, sizeof(custom_sockaddr));
+
+	int rc = getpeername(socket_fd, addr, &addrlen);
+
+	if (rc == 0) {
+		if (addr->sa_family == AF_INET) {
+			struct sockaddr_in* ipv4 = (struct sockaddr_in*)addr;
+			inet_ntop(addr->sa_family, &ipv4->sin_addr, ip_addr, INET_ADDRSTRLEN);
+		}
+		else if (addr->sa_family == AF_INET6) {
+			struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)addr;
+			inet_ntop(addr->sa_family, &ipv6->sin6_addr, ip_addr, INET6_ADDRSTRLEN);
+		}
+
+		result = ip_addr;
+	}
+
+	free(addr);
+
+	return result;
+}
+
 template<class T>
 std::string debug_iplisttostring(const T& ips) {
 	std::stringstream sstr;
@@ -3544,7 +3641,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 
 	// Queue for DNS resolver request
 	wqueue<WorkItem<DNS_Resolve_Data>*> dns_resolver_queue;
-	
+
 	while (GloMyMon->shutdown == false) {
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -3562,7 +3659,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				dns_cache->clear();
 				dns_records_bookkeeping.clear();
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache is disabled.\n");
-				/*while (dns_resolver_queue.size()) { 
+				/*while (dns_resolver_queue.size()) {
 					WorkItem<DNS_Resolve_Data>* item = dns_resolver_queue.remove();
 					if (item) {
 						if (item->data) {
@@ -3575,7 +3672,7 @@ void* MySQL_Monitor::monitor_dns_cache() {
 			else {
 				//dns cache enabled
 				dns_cache_enable = true;
-				dns_cache->set_enabled_flag(true); 
+				dns_cache->set_enabled_flag(true);
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache is enabled.\n");
 			}
 		}
@@ -3589,19 +3686,25 @@ void* MySQL_Monitor::monitor_dns_cache() {
 		int cols = 0;
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
-		const char* query = (char*)"SELECT DISTINCT trim(hostname) FROM monitor_internal.mysql_servers";
+		const char* query = (char*)"SELECT trim(hostname) FROM monitor_internal.mysql_servers UNION SELECT trim(hostname) FROM monitor_internal.proxysql_servers";
 
 		t1 = monotonic_time();
 
-		if (t1 < next_loop_at) {
+		if (t1 < next_loop_at && !force_dns_cache_update) {
 			goto __sleep_monitor_dns_cache_loop;
 		}
+		force_dns_cache_update = false;
 		next_loop_at = t1 + (1000 * mysql_thread___monitor_local_dns_cache_refresh_interval);
 
 		// update the 'monitor_internal.mysql_servers' table with the latest 'mysql_servers' from 'MyHGM'
 		{
 			std::lock_guard<std::mutex> mysql_servers_guard(MyHGM->mysql_servers_to_monitor_mutex);
 			update_monitor_mysql_servers(MyHGM->mysql_servers_to_monitor);
+		}
+
+		if (GloProxyCluster) {
+			std::lock_guard<std::mutex> proxysql_servers_guard(GloProxyCluster->proxysql_servers_to_monitor_mutex);
+			update_monitor_proxysql_servers(GloProxyCluster->proxysql_servers_to_monitor);
 		}
 
 		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
@@ -5487,12 +5590,12 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 #endif // TEST_AURORA
 }
 
-std::string MySQL_Monitor::dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails) {
+std::string MySQL_Monitor::dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails, size_t* ip_count) {
 	
 	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
 
 	// if IP was provided, no need to do lookup
-	if (validate_ip(hostname))
+	if (hostname.empty() || validate_ip(hostname))
 		return hostname;
 
 	if (!dns_cache_thread && GloMyMon)
@@ -5501,7 +5604,7 @@ std::string MySQL_Monitor::dns_lookup(const std::string& hostname, bool return_h
 	std::string ip;
 
 	if (dns_cache_thread) {
-		ip = dns_cache_thread->lookup(trim(hostname)) ;
+		ip = dns_cache_thread->lookup(trim(hostname), ip_count) ;
 
 		if (ip.empty() && return_hostname_if_lookup_fails) {
 			ip = hostname;
@@ -5512,8 +5615,48 @@ std::string MySQL_Monitor::dns_lookup(const std::string& hostname, bool return_h
 	return ip;
 }
 
-std::string MySQL_Monitor::dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails) {
-	return MySQL_Monitor::dns_lookup(std::string(hostname), return_hostname_if_lookup_fails);
+std::string MySQL_Monitor::dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails, size_t* ip_count) {
+	return MySQL_Monitor::dns_lookup(std::string(hostname), return_hostname_if_lookup_fails, ip_count);
+}
+
+bool MySQL_Monitor::dns_cache_update_socket(const std::string& hostname, int socket_fd)
+{
+	// if IP was provided, no need to update dns cache
+	if (hostname.empty() || validate_ip(hostname))
+		return false;
+
+	bool result = false;
+
+	const std::string& ip_addr = get_connected_peer_ip_from_socket(socket_fd);
+	
+	if (ip_addr.empty() == false) {
+		result = _dns_cache_update(hostname, { ip_addr });
+	}
+
+	return result;
+}
+
+bool MySQL_Monitor::_dns_cache_update(const std::string &hostname, std::vector<std::string>&& ip_address) {
+	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
+
+	if (!dns_cache_thread && GloMyMon)
+		dns_cache_thread = GloMyMon->dns_cache;
+
+	if (dns_cache_thread) {
+		if (dns_cache_thread->add_if_not_exist(trim(hostname), std::move(ip_address))) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Direct DNS cache update. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ip_address).c_str());
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void MySQL_Monitor::trigger_dns_cache_update() {
+	if (GloMyMon) {
+		GloMyMon->force_dns_cache_update = true;
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Triggering DNS cache update sequence.\n");
+	}
 }
 
 bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips) {
@@ -5535,6 +5678,26 @@ bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips)
 	return true;
 }
 
+bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips) {
+	if (!enabled) return false;
+
+	int rc = pthread_rwlock_wrlock(&rwlock_);
+	assert(rc == 0);
+	if (records.find(hostname) == records.end()) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Updating DNS cache. (Hostname:[%s] IP:[%s])\n", hostname.c_str(), debug_iplisttostring(ips).c_str());
+		auto& ip_addr = records[hostname];
+		ip_addr.ips = std::move(ips);
+		__sync_fetch_and_and(&ip_addr.counter, 0);
+	}
+	rc = pthread_rwlock_unlock(&rwlock_);
+	assert(rc == 0);
+
+	if (GloMyMon)
+		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, 1);
+
+	return true;
+}
+
 std::string DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
 
 	if (ip_addr.ips.empty())
@@ -5545,7 +5708,7 @@ std::string DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
 	return ip_addr.ips[counter_val%ip_addr.ips.size()];
 }
 
-std::string DNS_Cache::lookup(const std::string& hostname) const {
+std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) const {
 	if (!enabled) return "";
 
 	std::string ip;
@@ -5558,7 +5721,15 @@ std::string DNS_Cache::lookup(const std::string& hostname) const {
 
 	if (itr != records.end()) {
 		ip = get_next_ip(itr->second);
+
+		if (ip_count)
+			*ip_count = itr->second.ips.size();
+
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache lookup success. (Hostname:[%s] IP returned:[%s])\n", hostname.c_str(), ip.c_str());
+	}
+	else {
+		if (ip_count) 
+			*ip_count = 0;
 	}
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);

@@ -39,6 +39,8 @@
 
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port) )"
 
+#define MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS "CREATE TABLE proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
+
 /*
 struct cmp_str {
   bool operator()(char const *a, char const *b) const
@@ -306,10 +308,11 @@ public:
 	}
 
 	bool add(const std::string& hostname, std::vector<std::string>&& ips);
+	bool add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips);
 	void remove(const std::string& hostname);
 	void clear();
 	bool empty() const;
-	std::string lookup(const std::string& hostname) const;
+	std::string lookup(const std::string& hostname, size_t* ip_count) const;
 
 private:
 	struct IP_ADDR {
@@ -334,8 +337,11 @@ struct DNS_Resolve_Data {
 
 class MySQL_Monitor {
 	public:
-	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true);
-	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true);
+	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
+	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
+	static bool dns_cache_update_socket(const std::string& hostname, int socket_fd);
+	static void trigger_dns_cache_update();
+
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
@@ -343,12 +349,14 @@ class MySQL_Monitor {
 	void insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
+	static bool _dns_cache_update(const std::string& hostname, std::vector<std::string>&& ip_address);
+
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t aws_aurora_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t mysql_servers_mutex; // for simplicity, a mutex instead of a rwlock
-
+	pthread_mutex_t proxysql_servers_mutex; 
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
 	std::map<std::string, MyGR_monitor_node *> Group_Replication_Hosts_Map;
 	SQLite3_result *Group_Replication_Hosts_resultset;
@@ -371,6 +379,7 @@ class MySQL_Monitor {
 	unsigned long long dns_cache_queried;
 	unsigned long long dns_cache_lookup_success; //cache hit
 	unsigned long long dns_cache_record_updated;
+	std::atomic_bool force_dns_cache_update;
 	struct {
 		/// Prometheus metrics arrays
 		std::array<prometheus::Counter*, p_mon_counter::__size> p_counter_array {};
@@ -411,6 +420,7 @@ class MySQL_Monitor {
 	 * @param SQLite3_result The resulset to be used for updating 'monitor_internal.mysql_servers'.
 	 */
 	void update_monitor_mysql_servers(SQLite3_result*);
+	void update_monitor_proxysql_servers(SQLite3_result* resultset);
 	char * galera_find_last_node(int);
 	std::vector<string> * galera_find_possible_last_nodes(int);
 	bool server_responds_to_ping(char *address, int port);
