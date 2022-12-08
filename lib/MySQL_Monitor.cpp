@@ -270,6 +270,7 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 	pthread_mutex_lock(&m2);
 #endif // DEBUG
 	MYSQL *my = NULL;
+	unsigned long long now = monotonic_time();
 	for (unsigned int i=0; i<servers->len; i++) {
 		MonMySrvC *srv = (MonMySrvC *)servers->index(i);
 		if (srv->port == port && strcmp(hostname,srv->address)==0) {
@@ -286,8 +287,24 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 					}
 				}
 #endif // DEBUG
-				unsigned int idx = rand()%srv->conns->len;
-				my = (MYSQL *)srv->conns->remove_index_fast(idx);
+				while (srv->conns->len) {
+					unsigned int idx = rand() % srv->conns->len;
+					MYSQL* mysql = (MYSQL*)srv->conns->remove_index_fast(idx);
+
+					if (!mysql) continue;
+
+					// close connection if not used for a while
+					unsigned long long then = *(unsigned long long*)mysql->net.buff;
+					if (now > (then + mysql_thread___monitor_ping_interval * 1000 * 10)) {
+						MySQL_Monitor_State_Data* mmsd = new MySQL_Monitor_State_Data((char*)"", 0, NULL, false);
+						mmsd->mysql = mysql;
+						GloMyMon->queue->add(new WorkItem(mmsd, NULL));
+						continue;
+					}
+
+					my = mysql;
+					break;
+				}
 #ifdef DEBUG
 				for (unsigned int j=0; j<conns->len; j++) {
 					MYSQL *my1 = (MYSQL *)conns->index(j);
@@ -295,7 +312,8 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 					assert(my->net.fd!=my1->net.fd);
 				}
 				//proxy_info("Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, my);
-				conns->add(my);
+				if (my)
+					conns->add(my);
 #endif // DEBUG
 			}
 #ifdef DEBUG
