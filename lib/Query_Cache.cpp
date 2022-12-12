@@ -97,7 +97,7 @@ KV_BtreeArray::KV_BtreeArray() {
 };
 
 KV_BtreeArray::~KV_BtreeArray() {
-	proxy_debug(PROXY_DEBUG_QUERY_CACHE, 3, "Size of  KVBtreeArray:%d , ptrArray:%llu\n", cnt() , ptrArray->len);
+	proxy_debug(PROXY_DEBUG_QUERY_CACHE, 3, "Size of  KVBtreeArray:%d , ptrArray:%u\n", cnt() , ptrArray->len);
 	empty();
 	QC_entry_t *qce=NULL;
 	while (ptrArray->len) {

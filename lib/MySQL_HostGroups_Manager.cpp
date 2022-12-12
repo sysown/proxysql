@@ -831,7 +831,7 @@ void MySrvList::remove(MySrvC *s) {
 }
 
 void MySrvConnList::drop_all_connections() {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Dropping all connections (%lu total) on MySrvConnList %p for server %s:%d , hostgroup=%d , status=%d\n", conns_length(), this, mysrvc->address, mysrvc->port, mysrvc->myhgc->hid, mysrvc->status);
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Dropping all connections (%u total) on MySrvConnList %p for server %s:%d , hostgroup=%d , status=%d\n", conns_length(), this, mysrvc->address, mysrvc->port, mysrvc->myhgc->hid, mysrvc->status);
 	while (conns_length()) {
 		MySQL_Connection *conn=(MySQL_Connection *)conns->remove_index_fast(0);
 		delete conn;
@@ -1776,7 +1776,7 @@ bool MySQL_HostGroups_Manager::commit(
 				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, mydb);
 				if (mysrvc->gtid_port) {
 					// this server has gtid_port configured, we set use_gtid
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address);
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address, mysrvc->port);
 					use_gtid = true;
 				}
 			} else {
@@ -1860,7 +1860,7 @@ bool MySQL_HostGroups_Manager::commit(
 				}
 				if (mysrvc->gtid_port) {
 					// this server has gtid_port configured, we set use_gtid
-					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address);
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid , mysrvc->address, mysrvc->port);
 					use_gtid = true;
 				}
 			}
@@ -2005,7 +2005,7 @@ bool MySQL_HostGroups_Manager::commit(
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_servers", hash1_);
+					proxy_info("Checksum for table %s is %lu\n", "mysql_servers", hash1_);
 				}
 				delete resultset;
 			}
@@ -2025,7 +2025,7 @@ bool MySQL_HostGroups_Manager::commit(
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_replication_hostgroups", hash1_);
+					proxy_info("Checksum for table %s is %lu\n", "mysql_replication_hostgroups", hash1_);
 				}
 				delete resultset;
 			}
@@ -2045,7 +2045,7 @@ bool MySQL_HostGroups_Manager::commit(
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_group_replication_hostgroups", hash1_);
+					proxy_info("Checksum for table %s is %lu\n", "mysql_group_replication_hostgroups", hash1_);
 				}
 				delete resultset;
 			}
@@ -2065,7 +2065,7 @@ bool MySQL_HostGroups_Manager::commit(
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_galera_hostgroups", hash1_);
+					proxy_info("Checksum for table %s is %lu\n", "mysql_galera_hostgroups", hash1_);
 				}
 				delete resultset;
 			}
@@ -2085,7 +2085,7 @@ bool MySQL_HostGroups_Manager::commit(
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %llu\n", "mysql_aws_aurora_hostgroups", hash1_);
+					proxy_info("Checksum for table %s is %lu\n", "mysql_aws_aurora_hostgroups", hash1_);
 				}
 				delete resultset;
 			}
@@ -3002,7 +3002,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 				last_hg_log = time(NULL);
 
 				if (gtid_trxid) {
-					proxy_error("Hostgroup %u has no servers ready for GTID '%s:%d'. Waiting for replication...\n", hid, gtid_uuid, gtid_trxid);
+					proxy_error("Hostgroup %u has no servers ready for GTID '%s:%ld'. Waiting for replication...\n", hid, gtid_uuid, gtid_trxid);
 				} else {
 					proxy_error("Hostgroup %u has no servers available%s! Checking servers shunned for more than %u second%s\n", hid,
 						(max_connections_reached ? " or max_connections reached for all servers" : ""), max_wait_sec, max_wait_sec == 1 ? "" : "s");
@@ -3379,7 +3379,7 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 		} else {
 			sprintf(buf,"%u", *skip_hid);
 		}
-		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %llu , %d , %s\n" , address, port, t, max_wait_sec, buf);
+		proxy_info("Calling unshun_server_all_hostgroups() for server %s:%d . Arguments: %lu , %d , %s\n" , address, port, t, max_wait_sec, buf);
 	}
 	int i, j;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -3407,7 +3407,7 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 							(mysrvc->shunned_and_kill_all_connections==true && mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) // if shunned_and_kill_all_connections is set, ensure all connections are already dropped
 						) {
 							if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
-								proxy_info("Unshunning server %d:%s:%d . time_last_detected_error=%llu\n", mysrvc->myhgc->hid, address, port, mysrvc->time_last_detected_error);
+								proxy_info("Unshunning server %d:%s:%d . time_last_detected_error=%lu\n", mysrvc->myhgc->hid, address, port, mysrvc->time_last_detected_error);
 							}
 							mysrvc->status=MYSQL_SERVER_STATUS_ONLINE;
 							mysrvc->shunned_automatic=false;
@@ -4362,7 +4362,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 			s += r->fields[1];
 			read_only_set1.insert(s);
 		}
-		proxy_info("Regenerating read_only_set1 with %d servers\n", read_only_set1.size());
+		proxy_info("Regenerating read_only_set1 with %lu servers\n", read_only_set1.size());
 		if (read_only_set1.empty()) {
 			// to avoid regenerating this set always with 0 entries, we generate a fake entry
 			read_only_set1.insert("----:::----");

@@ -2241,7 +2241,7 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
         unsigned long long curtime2=monotonic_time();
         curtime1 = curtime1/1000;
         curtime2 = curtime2/1000;
-		proxy_info("Saved stats_mysql_query_digest to disk: %llums to write %llu entries\n", curtime2-curtime1, r1);
+		proxy_info("Saved stats_mysql_query_digest to disk: %llums to write %u entries\n", curtime2-curtime1, r1);
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 		return false;
 	}
@@ -5643,7 +5643,7 @@ __end_while_pool:
 				unsigned long long curtime2=monotonic_time();
 				curtime1 = curtime1/1000;
 				curtime2 = curtime2/1000;
-				proxy_info("Automatically saved stats_mysql_query_digest to disk: %llums to write %llu entries\n", curtime2-curtime1, r1);
+				proxy_info("Automatically saved stats_mysql_query_digest to disk: %llums to write %d entries\n", curtime2-curtime1, r1);
 			}
 			if (GloProxyStats->system_cpu_timetoget(curtime)) {
 				GloProxyStats->system_cpu_sets();
@@ -6618,7 +6618,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			proxy_info(
-				"Computed checksum for 'LOAD ADMIN VARIABLES TO RUNTIME' was '%s', with epoch '%d'\n",
+				"Computed checksum for 'LOAD ADMIN VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
 				GloVars.checksums_values.admin_variables.checksum, GloVars.checksums_values.admin_variables.epoch
 			);
 			delete resultset;
@@ -6719,7 +6719,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 							if (setsockopt(sfd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuseaddr, sizeof(reuseaddr)) == -1) {
 								close(sfd);
 								proxy_error(
-									"Unable to start WebInterfacePlugin, failed to set 'SO_REUSEADDR' to check port availability.\n",
+									"Unable to start WebInterfacePlugin, failed to set 'SO_REUSEADDR' to check port '%d' availability.\n",
 									variables.web_port
 								);
 							} else {
@@ -6969,7 +6969,7 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 			delete resultset;
 		}
 		proxy_info(
-			"Computed checksum for 'LOAD MYSQL VARIABLES TO RUNTIME' was '%s', with epoch '%d'\n",
+			"Computed checksum for 'LOAD MYSQL VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
 			GloVars.checksums_values.mysql_variables.checksum, GloVars.checksums_values.mysql_variables.epoch
 		);
 	}
@@ -7632,7 +7632,7 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 			delete resultset;
 		}
 		proxy_info(
-			"Computed checksum for 'LOAD LDAP VARIABLES TO RUNTIME' was '%s', with epoch '%d'\n",
+			"Computed checksum for 'LOAD LDAP VARIABLES TO RUNTIME' was '%s', with epoch '%llu'\n",
 			GloVars.checksums_values.ldap_variables.checksum, GloVars.checksums_values.ldap_variables.epoch
 		);
 	}
@@ -10742,7 +10742,7 @@ void ProxySQL_Admin::__refresh_users(
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}
 	proxy_info(
-		"Computed checksum for 'LOAD MYSQL USERS TO RUNTIME' was '%s', with epoch '%d'\n",
+		"Computed checksum for 'LOAD MYSQL USERS TO RUNTIME' was '%s', with epoch '%llu'\n",
 		GloVars.checksums_values.mysql_users.checksum, GloVars.checksums_values.mysql_users.epoch
 	);
 }
@@ -12254,7 +12254,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			proxy_info(
-				"Computed checksum for 'LOAD MYSQL QUERY RULES TO RUNTIME' was '%s', with epoch '%d'\n",
+				"Computed checksum for 'LOAD MYSQL QUERY RULES TO RUNTIME' was '%s', with epoch '%llu'\n",
 				GloVars.checksums_values.mysql_query_rules.checksum, GloVars.checksums_values.mysql_query_rules.epoch
 			);
 		}
@@ -13180,7 +13180,7 @@ void ProxySQL_Admin::load_proxysql_servers_to_runtime(bool _lock, const std::str
 			GloVars.checksums_values.updates_cnt++;
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
 			proxy_info(
-				"Computed checksum for 'LOAD PROXYSQL SERVERS TO RUNTIME' was '%s', with epoch '%d'\n",
+				"Computed checksum for 'LOAD PROXYSQL SERVERS TO RUNTIME' was '%s', with epoch '%llu'\n",
 				GloVars.checksums_values.proxysql_servers.checksum, GloVars.checksums_values.proxysql_servers.epoch
 			);
 //		}

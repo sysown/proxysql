@@ -1341,22 +1341,22 @@ int main(int argc, const char * argv[]) {
 	{
 		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
 		if (rc == 0) {
-			proxy_info("Current RLIMIT_NOFILE: %d\n", nlimit.rlim_cur);
+			proxy_info("Current RLIMIT_NOFILE: %lu\n", nlimit.rlim_cur);
 			if (nlimit.rlim_cur <= 1024) {
-				proxy_error("Current RLIMIT_NOFILE is very low: %d .  Tune RLIMIT_NOFILE correctly before running ProxySQL\n", nlimit.rlim_cur);
+				proxy_error("Current RLIMIT_NOFILE is very low: %lu .  Tune RLIMIT_NOFILE correctly before running ProxySQL\n", nlimit.rlim_cur);
 				if (nlimit.rlim_max > nlimit.rlim_cur) {
 					if (nlimit.rlim_max >= 102400) {
 						nlimit.rlim_cur = 102400;
 					} else {
 						nlimit.rlim_cur = nlimit.rlim_max;
 					}
-					proxy_warning("Automatically setting RLIMIT_NOFILE to %d\n", nlimit.rlim_cur);
+					proxy_warning("Automatically setting RLIMIT_NOFILE to %lu\n", nlimit.rlim_cur);
 					rc = setrlimit(RLIMIT_NOFILE, &nlimit);
 					if (rc) {
 						proxy_error("Unable to increase RLIMIT_NOFILE: %s: \n", strerror(errno));
 					}
 				} else {
-					proxy_error("Unable to increase RLIMIT_NOFILE because rlim_max is low: %d\n", nlimit.rlim_max);
+					proxy_error("Unable to increase RLIMIT_NOFILE because rlim_max is low: %lu\n", nlimit.rlim_max);
 				}
 			}
 		} else {
