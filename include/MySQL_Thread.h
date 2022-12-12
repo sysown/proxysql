@@ -501,6 +501,7 @@ class MySQL_Threads_Handler
 		bool query_digests_keep_comment;
 		int query_digests_grouping_limit;
 		int query_digests_groups_grouping_limit;
+		bool parse_failure_logs_digest;
 		bool default_reconnect;
 		bool have_compress;
 		bool have_ssl;

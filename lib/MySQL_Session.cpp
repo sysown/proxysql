@@ -5833,7 +5833,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}
 #endif
 			if (index(dig,';') && (index(dig,';') != dig + strlen(dig)-1)) {
-				string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+				string nqn;
+				if (mysql_thread___parse_failure_logs_digest)
+					nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+				else
+					nqn = string(CurrentQuery.get_digest_text());
 				proxy_warning(
 					"Unable to parse multi-statements command with SET statement from client"
 					" %s:%d: setting lock hostgroup. Command: %s\n", client_myds->addr.addr,
@@ -5876,12 +5880,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
 					if (it->second.size() < 1 || it->second.size() > 2) {
 						// error not enough arguments
-						string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+						string query_str = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+						string digest_str = string(CurrentQuery.get_digest_text());
+						string nqn;
+						if (mysql_thread___parse_failure_logs_digest)
+							nqn = digest_str;
+						else
+							nqn = query_str;
 						// PMC-10002: A query has failed to be parsed. This can be due a incorrect query or
 						// due to ProxySQL not being able to properly parse it. In case the query is correct a
 						// bug report should be filed including the offending query.
 						proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n",
+									query_str.c_str());
 						unable_to_parse_set_statement(lock_hostgroup);
 						return false;
 					}
@@ -5905,9 +5916,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							||
 							( strcasecmp(value1.c_str(),(char *)"IFNULL") == 0 )
 						) {
-							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+							string query_str = string((char *)CurrentQuery.QueryPointer,
+														CurrentQuery.QueryLength);
+							string digest_str = string(CurrentQuery.get_digest_text());
+							string nqn;
+							if (mysql_thread___parse_failure_logs_digest)
+								nqn = digest_str;
+							else
+								nqn = query_str;
 							proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
-							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+										"Locking hostgroup for query %s\n", query_str.c_str());
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
 						}
@@ -6346,7 +6365,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if (kq != 0) {
 							kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */" , CurrentQuery.QueryLength);
 							if (kq != 0) {
-								string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+								string nqn;
+								if (mysql_thread___parse_failure_logs_digest)
+									nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+								else
+									nqn = string(CurrentQuery.get_digest_text());
 								proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 								return false;
 							}
@@ -7669,8 +7692,10 @@ bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 
 void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	// we couldn't parse the query
-	string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+	string query_str = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+	string digest_str = string(CurrentQuery.get_digest_text());
+	string& nqn = ( mysql_thread___parse_failure_logs_digest == true ? digest_str : query_str );
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
 	if (qpo->multiplex == -1) {
 		// we have no rule about this SET statement. We set hostgroup locking
 		if (locked_on_hostgroup < 0) {
@@ -7698,7 +7723,8 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 			}
 		}
 	} else {
-		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Unable to parse SET query but NOT setting lock_hostgroup %s\n", nqn.c_str());
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"Unable to parse SET query but NOT setting lock_hostgroup %s\n", query_str.c_str());
 	}
 }
 
