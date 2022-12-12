@@ -4,11 +4,42 @@
 #include <sstream>
 
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <string.h>
 #include <unistd.h>
+
+using std::string;
+using std::vector;
+
+__attribute__((__format__ (__printf__, 1, 2)))
+cfmt_t cstr_format(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    int size = vsnprintf(nullptr, 0, fmt, args);
+    va_end(args);
+
+    if (size <= 0) {
+        return { size, {} };
+    } else {
+        size += 1;
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        va_start(args, fmt);
+        size = vsnprintf(buf.get(), size, fmt, args);
+        va_end(args);
+
+        if (size <= 0) {
+            return { size, {} };
+        } else {
+            return { size, std::string(buf.get(), buf.get() + size) };
+        }
+    }
+ }
 
 /**
  * @brief Kills the given process sending an initial 'SIGTERM' to it. If the process doesn't
@@ -21,7 +52,7 @@
  *
  * @return The error returned by 'kill' in case of it failing.
  */
-int kill_child_proc(pid_t child_pid, const uint timeout_us, const uint it_sleep_us) {
+int kill_child_proc(pid_t child_pid, const uint timeout_us, const uint waitpid_sleep_us) {
 	uint err = 0;
 	uint waited = 0;
 	int child_status = 0;
@@ -33,10 +64,10 @@ int kill_child_proc(pid_t child_pid, const uint timeout_us, const uint it_sleep_
 			kill(child_pid, SIGKILL);
 			waited = 0;
 		} else {
-			waited += it_sleep_us;
+			waited += waitpid_sleep_us;
 		}
 
-		usleep(it_sleep_us);
+		usleep(waitpid_sleep_us);
 	}
 
 	return err;
@@ -60,7 +91,7 @@ int read_pipe(int pipe_fd, std::string& sbuffer) {
 	for (;;) {
 		count = read(pipe_fd, (void*)buffer, sizeof(buffer) - 1);
 		if (count > 0) {
-		buffer[count] = 0;
+			buffer[count] = 0;
 			sbuffer += buffer;
 		} else if (count == 0){
 			res = 0;
@@ -84,12 +115,80 @@ uint64_t get_timestamp_us() {
 	return start_timestamp;
 }
 
+/**
+ * @brief Verifies if the supplied process 'pid' exists within the supplied 'timeout'.
+ *
+ * @param pid The pid of the process to monitor.
+ * @param status A point to an int to be updated with the child status reported by 'waitpid'.
+ * @param timeout The maximum timeout to wait for the child to exit.
+ *
+ * @return 'True' in case the child exited before the timeout, 'false' otherwise.
+ */
+bool check_child_exit(pid_t pid, int* status, uint32_t timeout) {
+	uint32_t check_delay = 100;
+	uint32_t cur_waited = 0;
+
+	bool proc_exit = false;
+
+	while (cur_waited < timeout) {
+		pid_t w_res = waitpid(pid, status, WNOHANG);
+
+		if (w_res == -1 && errno == ECHILD) {
+			proc_exit = true;
+			break;
+		}
+
+		usleep(check_delay * 1000);
+		cur_waited += check_delay;
+	}
+
+	return proc_exit;
+}
+
+/**
+ * @brief Struct for holding an error code and current 'errno' after failed syscall.
+ */
+struct syserr_t {
+	int err;
+	int _errno;
+};
+
+/**
+ * @brief Struct holding information about the child status.
+ */
+struct child_status_t {
+	/* @brief Holds the state of the 'stdout' reading pipe */
+	bool stdout_eof;
+	/* @brief Holds the state of the 'stderr' reading pipe */
+	bool stderr_eof;
+	/* @brief Holds the error state from last syscall used to interact with child */
+	syserr_t syserr;
+};
+
+/**
+ * @brief Reads from 'pipe_fd' into 'buf' and updates the provided 'child_status_t'.
+ *
+ * @param pipe_fd The pipe fd from which to read.
+ * @param buf The buffer to be udpated with the read contents.
+ * @param st The child status to be updated with possible 'read' errors.
+ *
+ * @return 'True' in case 'read' returned '0', meaning pipe has been closed, 'false' otherwise.
+ */
+bool read_pipe(int pipe_fd, string& buf, child_status_t& st) {
+	int read_res = read_pipe(pipe_fd, buf);
+
+	// Unexpected error while reading pipe
+	if (read_res < 0) {
+		st.syserr = { -5, errno };
+	} else {
+		st.syserr = { 0, 0 };
+	}
+
+	return read_res == 0;
+}
+
 int wexecvp(
-	const std::string& file,
-	const std::vector<const char*>& argv,
-	const to_opts* opts,
-	std::string& s_stdout,
-	std::string& s_stderr
+	const string& file, const vector<const char*>& argv, const to_opts_t& opts, string& s_stdout, string& s_stderr
 ) {
 	// Pipes definition
 	constexpr uint8_t NUM_PIPES = 3;
@@ -109,15 +208,13 @@ int wexecvp(
 	const auto& CHILD_WRITE_FD  = pipes[PARENT_READ_PIPE][WRITE_FD];
 	const auto& CHILD_WRITE_ERR = pipes[PARENT_ERR_PIPE][WRITE_FD];
 
-	int err = 0;
-	to_opts to_opts { 0, 100*1000, 500*1000, 2000*1000 };
+	int child_err = 0;
+	to_opts_t to_opts { 0, 100*1000, 500*1000, 2000*1000 };
 
-	if (opts) {
-		to_opts.timeout_us = opts->timeout_us;
-		to_opts.it_delay_us = opts->it_delay_us;
-		to_opts.select_to_us = opts->select_to_us;
-		to_opts.sigkill_timeout_us = opts->sigkill_timeout_us;
-	}
+	if (opts.timeout_us != 0) to_opts.timeout_us = opts.timeout_us;
+	if (opts.poll_to_us != 0) to_opts.poll_to_us = opts.poll_to_us;
+	if (opts.waitpid_delay_us != 0) to_opts.waitpid_delay_us = opts.waitpid_delay_us;
+	if (opts.sigkill_to_us != 0) to_opts.sigkill_to_us = opts.sigkill_to_us;
 
 	// Pipes for parent to write and read
 	int read_p_err = pipe(pipes[PARENT_READ_PIPE]);
@@ -169,148 +266,100 @@ int wexecvp(
 			exit(0);
 		}
 	} else {
-		int errno_cpy = 0;
-		int pipe_err = 0;
-
-		std::string stdout_ = "";
-		std::string stderr_ = "";
+		std::string stdout_ {};
+		std::string stderr_ {};
 
 		// Close no longer needed pipes
 		close(CHILD_READ_FD);
 		close(CHILD_WRITE_FD);
 		close(CHILD_WRITE_ERR);
 
+		// Record the start timestamp
+		uint64_t start_timestamp = get_timestamp_us();
+
+		// Declare the two pollfd to be used for the pipes
+		struct pollfd read_fds[2] = { { 0 } };
+
 		// Set the pipes in non-blocking mode
 		int cntl_non_err = fcntl(PARENT_READ_FD, F_SETFL, fcntl(PARENT_READ_FD, F_GETFL) | O_NONBLOCK);
 		int cntl_err_err = fcntl(PARENT_READ_ERR, F_SETFL, fcntl(PARENT_READ_ERR, F_GETFL) | O_NONBLOCK);
 
-		fd_set read_fds;
-		int maxfd = PARENT_READ_FD > PARENT_READ_ERR ? PARENT_READ_FD : PARENT_READ_ERR;
+		child_status_t st { 0 };
 
-		bool stdout_eof = false;
-		bool stderr_eof = false;
-
-		// Record the start timestamp
-		uint64_t start_timestamp = get_timestamp_us();
-
-		if ((cntl_err_err || cntl_non_err) || maxfd >= FD_SETSIZE) {
-			close(PARENT_READ_FD);
-			close(PARENT_READ_ERR);
-			close(PARENT_WRITE_FD);
-
-			if (cntl_err_err || cntl_non_err) {
-				pipe_err = -3;
-			} else {
-				pipe_err = -4;
-			}
-
-			// Kill child and return error
-			kill_child_proc(child_pid, to_opts.sigkill_timeout_us, to_opts.it_delay_us);
-			// Recover errno before return
-			errno = errno_cpy;
-			// Avoid loop
-			goto loop_exit;
+		if (cntl_err_err || cntl_non_err) {
+			st.syserr = { -3, errno };
 		}
 
-		while (!stdout_eof || !stderr_eof) {
-			FD_ZERO(&read_fds);
-			FD_SET(PARENT_READ_FD, &read_fds);
-			FD_SET(PARENT_READ_ERR, &read_fds);
+		while ((!st.stdout_eof || !st.stderr_eof) && !st.syserr.err) {
+			memset(&read_fds, 0, sizeof(read_fds));
+
+			// Ignore the already closed FDs
+			read_fds[0].fd = st.stdout_eof == false ? PARENT_READ_FD : -1;
+			read_fds[0].events = POLLIN;
+			read_fds[1].fd = st.stderr_eof == false ? PARENT_READ_ERR : -1;
+			read_fds[1].events = POLLIN;
 
 			// Wait for the pipes to be ready
-			timeval select_to = { 0, to_opts.select_to_us };
-			int select_err = select(maxfd + 1, &read_fds, NULL, NULL, &select_to);
+			uint poll_to = to_opts.poll_to_us / 1000;
+			poll_to = poll_to == 0 ? 1 : poll_to;
+			int poll_err = poll(read_fds, sizeof(read_fds)/sizeof(pollfd), poll_to);
 
-			// Unexpected error while executing 'select'
-			if (select_err < 0 && errno != EINTR) {
-				pipe_err = -5;
-				// Backup read errno
-				errno_cpy = errno;
-				// Kill child and return error
-				kill_child_proc(child_pid, to_opts.sigkill_timeout_us, to_opts.it_delay_us);
-				// Recover errno before return
-				errno = errno_cpy;
-				// Exit the loop
-				break;
+			// Unexpected error while executing 'poll'
+			if (poll_err < 0 && errno != EINTR) {
+				st.syserr = { -4, errno };
+				continue;
 			}
 
-			if (FD_ISSET(PARENT_READ_FD, &read_fds) && stdout_eof == false) {
-				int read_res = read_pipe(PARENT_READ_FD, stdout_);
-
-				if (read_res == 0) {
-					stdout_eof = true;
-				}
-				// Unexpected error while reading pipe
-				if (read_res < 0) {
-					pipe_err = -6;
-					// Backup read errno
-					errno_cpy = errno;
-					// Kill child and return error
-					kill_child_proc(child_pid, to_opts.sigkill_timeout_us, to_opts.it_delay_us);
-					// Recover errno before return
-					errno = errno_cpy;
-					// Exit the loop
-					break;
-				}
+			if ((read_fds[0].revents & POLLIN) && st.stdout_eof == false) {
+				st.stdout_eof = read_pipe(PARENT_READ_FD, stdout_, st);
+				if (st.syserr.err) { continue; }
 			}
 
-			if(FD_ISSET(PARENT_READ_ERR, &read_fds) && stderr_eof == false) {
-				int read_res = read_pipe(PARENT_READ_ERR, stderr_);
-
-				if (read_res == 0) {
-					stderr_eof = true;
-				}
-				// Unexpected error while reading pipe
-				if (read_res < 0) {
-					pipe_err = -6;
-					// Backup read errno
-					errno_cpy = errno;
-					// Kill child and return error
-					kill_child_proc(child_pid, to_opts.sigkill_timeout_us, to_opts.it_delay_us);
-					// Recover errno before return
-					errno = errno_cpy;
-					// Exit the loop
-					break;
-				}
+			if ((read_fds[1].revents & POLLIN) && st.stderr_eof == false) {
+				st.stderr_eof = read_pipe(PARENT_READ_ERR, stderr_, st);
+				if (st.syserr.err) { continue; }
 			}
 
-			// Check that the execution hasn't execeed the specified timeout
+			// Update the closed state for the pipes
+			st.stdout_eof = st.stdout_eof == false ? read_fds[0].revents & POLLHUP : true;
+			st.stderr_eof = st.stderr_eof == false ? read_fds[1].revents & POLLHUP : true;
+
+			// Check that execution hasn't exceed the specified timeout
 			if (to_opts.timeout_us != 0) {
 				uint64_t current_timestamp = get_timestamp_us();
 				if ((start_timestamp + to_opts.timeout_us) < current_timestamp) {
-					// Backup read errno
-					errno_cpy = errno;
-					kill_child_proc(child_pid, to_opts.sigkill_timeout_us, to_opts.it_delay_us);
-					// Recover errno before return
-					errno = errno_cpy;
-					// Set 'pipe_err' to 'ETIME' to reflect timeout
-					pipe_err = ETIME;
-					// Exit the loop
-					break;
+					st.syserr = { ETIME, errno };
+					continue;
 				}
 			}
 		}
-
-loop_exit:
 
 		// Close no longer needed pipes
 		close(PARENT_READ_FD);
 		close(PARENT_READ_ERR);
 		close(PARENT_WRITE_FD);
 
-		if (pipe_err == 0) {
-			waitpid(child_pid, &err, 0);
-		} else {
-			err = pipe_err;
-		}
-
-		if (pipe_err == 0 || pipe_err == ETIME) {
+		// In a best effort, we return read data also for expired timeouts
+		if (st.syserr.err == 0 || st.syserr.err == ETIME) {
 			s_stdout = stdout_;
 			s_stderr = stderr_;
 		}
+
+		if (st.syserr.err == 0) {
+			bool child_exited = check_child_exit(child_pid, &child_err, 1000);
+
+			if (child_exited == false) {
+				kill_child_proc(child_pid, to_opts.sigkill_to_us, to_opts.waitpid_delay_us);
+			}
+		} else {
+			kill_child_proc(child_pid, to_opts.sigkill_to_us, to_opts.waitpid_delay_us);
+
+			child_err = st.syserr.err;
+			errno = st.syserr._errno;
+		}
 	}
 
-	return err;
+	return child_err;
 }
 
 std::string replace_str(const std::string& str, const std::string& match, const std::string& repl) {

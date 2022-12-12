@@ -1,6 +1,15 @@
 #ifndef CLASS_MYSQL_LDAP_AUTHENTICATION_H
 #define CLASS_MYSQL_LDAP_AUTHENTICATION_H
 
+struct LDAP_USER_FIELD_IDX {
+	enum index {
+		USERNAME = 0,
+		FRONTEND_CONNECTIONS = 1,
+		FRONTED_MAX_CONNECTIONS = 2,
+		__SIZE
+	};
+};
+
 class MySQL_LDAP_Authentication {
 public:
 	virtual char * lookup(char *username, char *pass, 
@@ -11,6 +20,7 @@ public:
 
 	virtual int increase_frontend_user_connections(char *username, int *max_connections = NULL) { return 0; };
 	virtual void decrease_frontend_user_connections(char *username) {};
+	virtual std::unique_ptr<SQLite3_result> dump_all_users() { return 0; };
 
 	virtual void wrlock() {};
 	virtual void wrunlock() {};

@@ -334,41 +334,11 @@ int count_stmt_rows(MYSQL_STMT* stmt) {
 
 int NUM_ROWS = 100;
 
-int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(2);
-	diag("Testing PS async store result");
-
-	MYSQL* mysqladmin = mysql_init(NULL);
-	if (!mysqladmin)
-		return exit_status();
-
-	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysqladmin));
-		return exit_status();
-	}
-
-	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql)
-		return exit_status();
-	// configure the connection as not blocking
-	diag("Setting mysql connection non blocking");
-	mysql_options(mysql, MYSQL_OPT_NONBLOCK, 0);
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysql));
-		return exit_status();
-	}
-
+int test_ps_async(MYSQL* proxy, MYSQL* admin) {
 	// we drastically reduce the receive buffer to make sure that
 	// mysql_stmt_store_result_[start|continue] doesn't complete
 	// in a single call
-	int s = mysql_get_socket(mysql);
+	int s = mysql_get_socket(proxy);
 	int rcvbuf = 10240;
 
 	diag("Setting mysql connection RCVBUF to %d bytes", rcvbuf);
@@ -377,16 +347,16 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	MYSQL_QUERY(mysqladmin, "delete from mysql_query_rules");
-	MYSQL_QUERY(mysqladmin, "load mysql query rules to runtime");
+	MYSQL_QUERY(admin, "delete from mysql_query_rules");
+	MYSQL_QUERY(admin, "load mysql query rules to runtime");
 
-	MYSQL_QUERY(mysqladmin, "delete from mysql_servers where hostgroup_id=1");
-	MYSQL_QUERY(mysqladmin, "load mysql servers to runtime");
+	MYSQL_QUERY(admin, "delete from mysql_servers where hostgroup_id=1");
+	MYSQL_QUERY(admin, "load mysql servers to runtime");
 
-	MYSQL_QUERY(mysqladmin, "set mysql-threshold_resultset_size=5000");
-	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
+	MYSQL_QUERY(admin, "set mysql-threshold_resultset_size=5000");
+	MYSQL_QUERY(admin, "load mysql variables to runtime");
 
-	if (create_table_test_sbtest1(NUM_ROWS,mysql)) {
+	if (create_table_test_sbtest1(NUM_ROWS,proxy)) {
 		fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);
 		return exit_status();
 	}
@@ -403,10 +373,10 @@ int main(int argc, char** argv) {
 
 	NUM_ROWS_READ = 1000;
 
-	stmt2a = mysql_stmt_init(mysql);
+	stmt2a = mysql_stmt_init(proxy);
 	if (!stmt2a) {
 		ok(false, " mysql_stmt_init(), out of memory\n");
-		return restore_admin(mysqladmin);
+		return restore_admin(admin);
 	}
 
 	// NOTE: the first 2 columns we select are 3 ids, so we can later print and verify
@@ -414,7 +384,7 @@ int main(int argc, char** argv) {
 	//query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 LIMIT " + std::to_string(IT_NUM_ROWS_READ);
 	//query = "SELECT t1.id id1, t2.id id2, t1.id+t2.id id3 FROM test.sbtest1 t1 JOIN test.sbtest1 t2 ORDER BY t1.id, t2.id LIMIT " + std::to_string(IT_NUM_ROWS_READ);
 
-	rows_read = mysql_stmt_store_result_cont_poc(query, mysql, stmt2a, true);
+	rows_read = mysql_stmt_store_result_cont_poc(query, proxy, stmt2a, true);
 	row_count2a = count_stmt_rows(stmt2a);
 
 	ok(
@@ -428,8 +398,8 @@ int main(int argc, char** argv) {
 
 	if (mysql_stmt_close(stmt2a)) {
 		fprintf(stderr, " failed while closing the statement\n");
-		ok(false, " %s\n", mysql_error(mysql));
-		restore_admin(mysqladmin);
+		ok(false, " %s\n", mysql_error(proxy));
+		restore_admin(admin);
 
 		return -1;
 	}
@@ -440,10 +410,10 @@ int main(int argc, char** argv) {
 	// ************************************************************************
 	NUM_ROWS_READ = 10;
 
-	stmt2a = mysql_stmt_init(mysql);
+	stmt2a = mysql_stmt_init(proxy);
 	if (!stmt2a) {
 		ok(false, " mysql_stmt_init(), out of memory\n");
-		return restore_admin(mysqladmin);
+		return restore_admin(admin);
 	}
 
 	// Original query: For testing purposes
@@ -456,7 +426,7 @@ int main(int argc, char** argv) {
 	query = "(SELECT id, k, REPEAT(c,2000) cc FROM test.sbtest1 LIMIT " + std::to_string(NUM_ROWS_READ) + ")";
 	query += "UNION (SELECT id, k, REPEAT(c,10) cc FROM test.sbtest1 LIMIT " + std::to_string(NUM_ROWS_READ) + ")";
 
-	rows_read = mysql_stmt_store_result_cont_poc(query, mysql, stmt2a, false);
+	rows_read = mysql_stmt_store_result_cont_poc(query, proxy, stmt2a, false);
 	row_count2a = count_stmt_rows(stmt2a);
 
 	ok(
@@ -470,15 +440,77 @@ int main(int argc, char** argv) {
 
 	if (mysql_stmt_close(stmt2a)) {
 		fprintf(stderr, " failed while closing the statement\n");
-		ok(false, " %s\n", mysql_error(mysql));
-		restore_admin(mysqladmin);
+		ok(false, " %s\n", mysql_error(proxy));
+		restore_admin(admin);
 
 		return -1;
 	}
 
-	restore_admin(mysqladmin);
+	restore_admin(admin);
 
-	mysql_close(mysql);
+
+	return EXIT_SUCCESS;
+}
+
+int main(int argc, char** argv) {
+	CommandLine cl;
+
+	if(cl.getEnv())
+		return exit_status();
+
+	plan(4);
+	diag("Testing PS async store result");
+
+	MYSQL* admin = mysql_init(NULL);
+	if (!admin)
+		return EXIT_FAILURE;
+
+	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return EXIT_FAILURE;
+	}
+
+	MYSQL* proxy = mysql_init(NULL);
+	if (!proxy) {
+		return EXIT_FAILURE;
+	}
+
+	// First test without 'CLIENT_DEPRECATE_EOF' support
+	{
+		// configure the connection as not blocking
+		diag("Setting mysql connection non blocking");
+		mysql_options(proxy, MYSQL_OPT_NONBLOCK, 0);
+
+		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+			return EXIT_FAILURE;
+		}
+
+		test_ps_async(proxy, admin);
+	}
+
+	mysql_close(proxy);
+	proxy = mysql_init(NULL);
+	if (!proxy) {
+		return EXIT_FAILURE;
+	}
+
+	// Enable 'CLIENT_DEPRECATE_EOF' support and retest
+	{
+		// configure the connection as not blocking
+		diag("Setting mysql connection non blocking");
+		mysql_options(proxy, MYSQL_OPT_NONBLOCK, 0);
+		proxy->options.client_flag |= CLIENT_DEPRECATE_EOF;
+
+		if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+			return EXIT_FAILURE;
+		}
+
+		test_ps_async(proxy, admin);
+	}
+
+	mysql_close(proxy);
 	mysql_library_end();
 
 	return exit_status();

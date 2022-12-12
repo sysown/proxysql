@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """Simple script to produce a 1MB output to be processed by the RESTAPI."""
 

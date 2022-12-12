@@ -69,7 +69,7 @@ char *sha1_pass_hex(char *sha1_pass) {
 	buff[0]='*';
 	buff[SHA_DIGEST_LENGTH*2+1]='\0';
 	int i;
-	uint8_t a;
+	uint8_t a = 0;
 	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
 		memcpy(&a,sha1_pass+i,1);
 		sprintf(buff+1+2*i, "%02x", a);
@@ -1653,8 +1653,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	unsigned char *auth_plugin = NULL;
 	int auth_plugin_id = 0;
 
-	char reply[SHA_DIGEST_LENGTH+1];
-	reply[SHA_DIGEST_LENGTH]='\0';
+	char reply[SHA_DIGEST_LENGTH+1] = { 0 };
 	int default_hostgroup=-1;
 	char *default_schema = NULL;
 	char *attributes = NULL;
@@ -2023,7 +2022,15 @@ __do_auth:
 								password=GloMyAuth->lookup(backend_username, USERNAME_BACKEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 								if (password) {
 									(*myds)->sess->default_hostgroup=default_hostgroup;
+									// Free the previously set 'default_schema' by 'GloMyLdapAuth'
+									if ((*myds)->sess->default_schema) {
+										free((*myds)->sess->default_schema);
+									}
 									(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+									// Free the previously set 'user_attributes' by 'GloMyLdapAuth'
+									if ((*myds)->sess->user_attributes) {
+										free((*myds)->sess->user_attributes);
+									}
 									(*myds)->sess->user_attributes = attributes; // just the pointer is passed
 #ifdef DEBUG
 									proxy_info("Attributes for user %s: %s\n" , user, attributes);
@@ -2034,6 +2041,8 @@ __do_auth:
 									(*myds)->sess->user_max_connections=max_connections;
 									char *tmp_user=strdup((const char *)user);
 									userinfo->set(backend_username, NULL, NULL, NULL);
+									// 'MySQL_Connection_userinfo::set' duplicates the supplied information, 'free' is required.
+									free(backend_username);
 									if (sha1_pass==NULL) {
 										// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 										GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
@@ -2072,7 +2081,7 @@ __do_auth:
 			if (password[0]!='*') { // clear text password
 				if (auth_plugin_id == 1) { // mysql_native_password
 					proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-					if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					if (pass_len != 0 && memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 						ret=true;
 					}
 				} else { // mysql_clear_password
@@ -2848,10 +2857,24 @@ void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 		// and replace it with an ERR
 		// note that EOF is added on a packet on its own, instead of using a buffer,
 		// so that can be removed
+		//
+		// NOTE: After 2.4.5 previous behavior is modified in favor of the following:
+		//
+		// When CLIENT_DEPRECATE_EOF two EOF packets are two be expected in the response:
+		//   1. After the columns definitions (This is added directly by 'MySQL_ResultSet::init').
+		//   2. After the rows values, this can either be and EOF packet or a ERR packet in case of error.
+		//
+		// First EOF packet isn't optional, and it's just the second the one that is optionaly either an EOF
+		// or an ERR packet. The following code adds either the final EOF or ERR packet. This is equally valid
+		// for when CLIENT_DEPRECATE_EOF is enabled or not. If CLIENT_DEPRECATE_EOF is:
+		//   * DISABLED: The behavior is as described before.
+		//   * ENABLED: Code is identical for this case. The initial EOF packet is conditionally added by
+		//     'MySQL_ResultSet::init', thus, this packet should not be present if not needed at this point.
+		//     In case of error an ERR packet needs to be added, otherwise `add_eof` handles the generation of
+		//     the equivalent OK packet replacing the final EOF packet.
 		int myerr = mysql_stmt_errno(_stmt);
 		if (myerr) {
 			PROXY_TRACE2();
-			remove_last_eof();
 			add_err(myconn->myds);
 		} else {
 			PROXY_TRACE2();

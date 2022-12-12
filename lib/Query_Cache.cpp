@@ -515,9 +515,33 @@ unsigned char* eof_to_ok_packet(QC_entry_t* entry) {
 	// Initialize affected_rows and last_insert_id to zero
 	memset(vp, 0, 2);
 	vp += 2;
-	// Copy the warning an status flags
-	memcpy(vp, it, 4);
+	// Extract warning flags and status from 'EOF_packet'
+	char* eof_packet = entry->value + entry->row_eof_pkt_offset;
+	eof_packet += sizeof(mysql_hdr);
+	// Skip the '0xFE EOF packet header'
+	eof_packet += 1;
+	uint16_t warnings;
+	memcpy(&warnings, eof_packet, sizeof(uint16_t));
+	eof_packet += 2;
+	uint16_t status_flags;
+	memcpy(&status_flags, eof_packet, sizeof(uint16_t));
+	// Copy warnings an status flags
+	memcpy(vp, &status_flags, sizeof(uint16_t));
+	vp += 2;
+	memcpy(vp, &warnings, sizeof(uint16_t));
 	// =======================================
+
+	// Decrement ids after the first EOF
+	unsigned char* dp = result + entry->column_eof_pkt_offset;
+	mysql_hdr decrement_hdr;
+	for (;;) {
+		memcpy(&decrement_hdr, dp, sizeof(mysql_hdr));
+		decrement_hdr.pkt_id--;
+		memcpy(dp, &decrement_hdr, sizeof(mysql_hdr));
+		dp += sizeof(mysql_hdr) + decrement_hdr.pkt_length;
+		if (dp >= vp)
+			break;
+	}
 
 	return result;
 }
@@ -541,11 +565,13 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 	mysql_hdr ok_hdr;
 	memcpy(&ok_hdr, ok_packet, sizeof(mysql_hdr));
 	ok_packet += sizeof(mysql_hdr);
-	// Skipt the 'affected_rows' and 'last_insert_id'
+	// Skip the 'OK packet header', 'affected_rows' and 'last_insert_id'
+	ok_packet += 3;
+	uint16_t status_flags;
+	memcpy(&status_flags, ok_packet, sizeof(uint16_t));
 	ok_packet += 2;
-	uint16_t status_flags = *reinterpret_cast<uint16_t*>(ok_packet);
-	ok_packet += 2;
-	uint16_t warnings = *reinterpret_cast<uint16_t*>(ok_packet);
+	uint16_t warnings;
+	memcpy(&warnings, ok_packet, sizeof(uint16_t));
 
 	// Find the spot in which the first EOF needs to be placed
 	it += sizeof(mysql_hdr);
@@ -575,9 +601,9 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 	// Write 'column_eof_packet' contents
 	*vp = 0xfe;
 	vp++;
-	*reinterpret_cast<uint16_t*>(vp) = warnings;
+	memcpy(vp, &warnings, sizeof(uint16_t));
 	vp += 2;
-	*reinterpret_cast<uint16_t*>(vp) = status_flags;
+	memcpy(vp, &status_flags, sizeof(uint16_t));
 	vp += 2;
 
 	// Find the OK packet
@@ -597,9 +623,9 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 
 			*vp = 0xfe;
 			vp++;
-			*reinterpret_cast<uint16_t*>(vp) = warnings;
+			memcpy(vp, &warnings, sizeof(uint16_t));
 			vp += 2;
-			*reinterpret_cast<uint16_t*>(vp) = status_flags;
+			memcpy(vp, &status_flags, sizeof(uint16_t));
 			break;
 		} else {
 			// Increment the package id by one due to 'column_eof_packet'

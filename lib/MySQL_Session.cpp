@@ -97,6 +97,7 @@ static const std::set<std::string> mysql_variables_numeric = {
 	"max_sort_length",
 	"optimizer_prune_level",
 	"optimizer_search_depth",
+	"optimizer_use_condition_selectivity",
 	"query_cache_type",
 	"sort_buffer_size",
 	"sql_select_limit",
@@ -170,11 +171,25 @@ bool Session_Regex::match(char *m) {
 	return rc;
 }
 
+KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread* _mt) :
+	KillArgs(u, p, h, P, _hid, i, kt, _mt, NULL) {
+	// resolving DNS if available in Cache
+	if (h) {
+		const std::string& ip = MySQL_Monitor::dns_lookup(h, false);
 
-KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread *_mt) {
+		if (ip.empty() == false) {
+			ip_addr = strdup(ip.c_str());
+		}
+	}
+}
+
+KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread *_mt, char *ip) {
 	username=strdup(u);
 	password=strdup(p);
 	hostname=strdup(h);
+	ip_addr = NULL;
+	if (ip)
+		ip_addr = strdup(ip);
 	port=P;
 	hid=_hid;
 	id=i;
@@ -186,9 +201,18 @@ KillArgs::~KillArgs() {
 	free(username);
 	free(password);
 	free(hostname);
+	if (ip_addr)
+		free(ip_addr);
 }
 
-
+const char* KillArgs::get_host_address() const {
+	const char* host_address = hostname;
+	
+	if (ip_addr)
+		host_address = ip_addr;
+	
+	return host_address;
+}
 
 void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
@@ -218,7 +242,7 @@ void * kill_query_thread(void *arg) {
 			default:
 				break;
 		}
-		ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
+		ret=mysql_real_connect(mysql, ka->get_host_address(), ka->username, ka->password, NULL, ka->port, NULL, 0);
 	} else {
 		switch (ka->kill_type) {
 			case KILL_QUERY:
@@ -237,6 +261,9 @@ void * kill_query_thread(void *arg) {
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, ka->hid, ka->hostname, ka->port, mysql_errno(mysql));
 		goto __exit_kill_query_thread;
 	}
+
+	MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
+
 	char buf[100];
 	switch (ka->kill_type) {
 		case KILL_QUERY:
@@ -278,6 +305,7 @@ Query_Info::Query_Info() {
 	rows_sent=0;
 	start_time=0;
 	end_time=0;
+	stmt_client_id=0;
 }
 
 Query_Info::~Query_Info() {
@@ -309,6 +337,7 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	affected_rows=0;
 	rows_sent=0;
 	sess->gtid_hid=-1;
+	stmt_client_id=0;
 }
 
 void Query_Info::end() {
@@ -547,6 +576,7 @@ MySQL_Session::MySQL_Session() {
 	CurrentQuery.mysql_stmt=NULL;
 	CurrentQuery.stmt_meta=NULL;
 	CurrentQuery.stmt_global_id=0;
+	CurrentQuery.stmt_client_id=0;
 	CurrentQuery.stmt_info=NULL;
 
 	current_hostgroup=-1;
@@ -1729,7 +1759,8 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 					auth_password=ui->password;
 				}
 			}
-			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->mysql->thread_id, KILL_QUERY, thread);
+
+			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->mysql->thread_id, KILL_QUERY, thread, myds->myconn->connected_host_details.ip);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -2757,28 +2788,30 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
 		pause_until=0;
 	}
-	// If this is a 'fast_forward' session, we impose the 'connect_timeout' prior to actually getting the
-	// connection from the 'connection_pool'. This is used to ensure that we kill the session if
-	// 'CONNECTING_SERVER' isn't completed before this timeout expiring. For example, if 'max_connections'
-	// is reached for the target hostgroup.
-	if (session_fast_forward && mybe->server_myds->wait_until == 0) {
-		mybe->server_myds->wait_until=thread->curtime+mysql_thread___connect_timeout_server*1000;
-	}
 	if (mybe->server_myds->max_connect_time) {
 		if (thread->curtime >= mybe->server_myds->max_connect_time) {
 			if (mirror) {
 				PROXY_TRACE();
 			}
-			char buf[256];
-			sprintf(buf,"Max connect timeout reached while reaching hostgroup %d after %llums", current_hostgroup, (thread->curtime - CurrentQuery.start_time)/1000 );
+
+			string errmsg {};
+			const string session_info { session_fast_forward ? "for 'fast_forward' session " : "" };
+			const uint64_t query_time = (thread->curtime - CurrentQuery.start_time)/1000;
+
+			string_format(
+				"Max connect timeout reached while reaching hostgroup %d %safter %llums",
+				errmsg, current_hostgroup, session_info.c_str(), query_time
+			);
+
 			if (thread) {
 				thread->status_variables.stvar[st_var_max_connect_timeout_err]++;
 			}
-			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000",buf, true);
+			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000", errmsg.c_str(), true);
 			RequestEnd(mybe->server_myds);
-			std::string errmsg;
-			generate_status_one_hostgroup(current_hostgroup, errmsg);
-			proxy_error("%s . HG status: %s\n", buf, errmsg.c_str());
+
+			string hg_status {};
+			generate_status_one_hostgroup(current_hostgroup, hg_status);
+			proxy_error("%s . HG status: %s\n", errmsg.c_str(), hg_status.c_str());
 
 			while (previous_status.size()) {
 				previous_status.pop();
@@ -2800,37 +2833,6 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 			NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
 		}
 	}
-	if (session_fast_forward && mybe->server_myds->wait_until && mybe->server_myds->wait_until <= thread->curtime) {
-		std::string errmsg {};
-		string_format(
-			"Connect timeout reached while reaching hostgroup %d for 'fast_forward' session",
-			errmsg, current_hostgroup
-		);
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,9001,(char *)"HY000", errmsg.c_str(), true);
-
-		std::string hosgroup_st {};
-		generate_status_one_hostgroup(current_hostgroup, hosgroup_st);
-		proxy_error("%s. HG status: %s\n", errmsg.c_str(), hosgroup_st.c_str());
-
-		RequestEnd(mybe->server_myds);
-		while (previous_status.size()) {
-			previous_status.pop();
-		}
-
-		if (mybe->server_myds->myconn) {
-			// See NOTE-3404.
-			mybe->server_myds->myconn->connect_cont(MYSQL_WAIT_TIMEOUT);
-			mybe->server_myds->destroy_MySQL_Connection_From_Pool(false);
-			if (mirror) {
-				PROXY_TRACE();
-				NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
-			}
-		}
-
-		mybe->server_myds->wait_until=0;
-		NEXT_IMMEDIATE_NEW(WAITING_CLIENT_DATA);
-	}
-
 	if (mybe->server_myds->myconn==NULL) {
 		handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();
 	}
@@ -2893,6 +2895,19 @@ bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
 					myds->DSS=STATE_SLEEP;
 					myds->myconn->send_quit = false;
 					myds->myconn->reusable = false;
+					// In a 'fast_forward' session after we disable compression for the fronted connection
+					// after we have adquired a backend connection, this is, the 'FAST_FORWARD' session status
+					// is reached, and the 1-1 connection relationship is established. We can safely do this
+					// due two main reasons:
+					//   1. The client and backend have to agree on compression, i.e. if the client connected without
+					//   compression using fast-forward to a backend connections expected to have compression, it results
+					//   in a fallback to a connection without compression, as it's expected by protocol. In this case we do
+					//   not require to compress the data received from the backend.
+					//   2. The client and backend have agreed in using compression, in this case, the data received from
+					//   the backend is already compressed, so we are only required to forward the data to the client.
+					// In both cases, we do not require to perform any specials actions for the received data,
+					// so we completely disable the compression flag for the client connection.
+					client_myds->myconn->set_status(false, STATUS_MYSQL_CONNECTION_COMPRESSION);
 				}
 				NEXT_IMMEDIATE_NEW(st);
 				break;
@@ -3226,6 +3241,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			// for this reason, we do not need to prepare it again, and we can already reply to the client
 			// we will now generate a unique stmt and send it to the client
 			uint32_t new_stmt_id=client_myds->myconn->local_stmts->generate_new_client_stmt_id(stmt_info->statement_id);
+			CurrentQuery.stmt_client_id=new_stmt_id;
 			client_myds->setDSS_STATE_QUERY_SENT_NET();
 			client_myds->myprot.generate_STMT_PREPARE_RESPONSE(client_myds->pkt_sid+1,stmt_info,new_stmt_id);
 			LogQuery(NULL);
@@ -3275,6 +3291,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		uint32_t client_stmt_id=0;
 		uint64_t stmt_global_id=0;
 		memcpy(&client_stmt_id,(char *)pkt.ptr+5,sizeof(uint32_t));
+		CurrentQuery.stmt_client_id=client_stmt_id;
 		stmt_global_id=client_myds->myconn->local_stmts->find_global_stmt_id_from_client(client_stmt_id);
 		if (stmt_global_id == 0) {
 			// FIXME: add error handling
@@ -3701,10 +3718,40 @@ __get_pkts_from_client:
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , client_myds=%p . Statuses: WAITING_CLIENT_DATA - STATE_SLEEP\n", this, client_myds);
 						if (session_fast_forward==true) { // if it is fast forward
+							// If this is a 'fast_forward' session that hasn't yet received a backend connection, we don't
+							// forward 'COM_QUIT' packets, since this will make the act of obtaining a connection pointless.
+							// Instead, we intercept the 'COM_QUIT' packet and end the 'MySQL_Session'.
+							unsigned char command = *(static_cast<unsigned char*>(pkt.ptr)+sizeof(mysql_hdr));
+							if (command == _MYSQL_COM_QUIT) {
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
+								if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
+								l_free(pkt.size,pkt.ptr);
+								handler_ret = -1;
+								return handler_ret;
+							}
+
 							mybe=find_or_create_backend(current_hostgroup); // set a backend
 							mybe->server_myds->reinit_queues();             // reinitialize the queues in the myds . By default, they are not active
 							mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size); // move the first packet
 							previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD . Now we need a connection
+
+							// If this is a 'fast_forward' session, we impose the 'connect_timeout' prior to actually getting the
+							// connection from the 'connection_pool'. This is used to ensure that we kill the session if
+							// 'CONNECTING_SERVER' isn't completed before this timeout expiring. For example, if 'max_connections'
+							// is reached for the target hostgroup.
+							if (mybe->server_myds->max_connect_time == 0) {
+								uint64_t connect_timeout =
+									mysql_thread___connect_timeout_server < mysql_thread___connect_timeout_server_max ?
+										mysql_thread___connect_timeout_server_max : mysql_thread___connect_timeout_server;
+								mybe->server_myds->max_connect_time = thread->curtime + connect_timeout * 1000;
+							}
+							// Impose the same connection retrying policy as done for regular connections during
+							// 'MYSQL_CON_QUERY'.
+							mybe->server_myds->connect_retries_on_failure = mysql_thread___connect_retries_on_failure;
+							// 'CurrentQuery' isn't used for 'FAST_FORWARD' but we update it for using it as a session
+							// startup time for when a fast_forward session has attempted to obtain a connection.
+							CurrentQuery.start_time=thread->curtime;
+
 							{
 								//NEXT_IMMEDIATE(CONNECTING_SERVER);  // we create a connection . next status will be FAST_FORWARD
 								// we can't use NEXT_IMMEDIATE() inside get_pkts_from_client()
@@ -3915,6 +3962,13 @@ __get_pkts_from_client:
 								}
 								break;
 							case _MYSQL_COM_STMT_PREPARE:
+								if (GloMyLdapAuth) {
+									if (session_type==PROXYSQL_SESSION_MYSQL) {
+										if (mysql_thread___add_ldap_user_comment && strlen(mysql_thread___add_ldap_user_comment)) {
+											add_ldap_comment_to_pkt(&pkt);
+										}
+									}
+								}
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_PREPARE(pkt);
 								break;
 							case _MYSQL_COM_STMT_EXECUTE:
@@ -4081,7 +4135,7 @@ void MySQL_Session::SetQueryTimeout() {
 bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st, MySQL_Data_Stream *myds, bool& prepared_stmt_with_no_params) {
 	thread->status_variables.stvar[st_var_backend_stmt_prepare]++;
 	GloMyStmt->wrlock();
-	uint32_t client_stmtid;
+	uint32_t client_stmtid=0;
 	uint64_t global_stmtid;
 	//bool is_new;
 	MySQL_STMT_Global_info *stmt_info=NULL;
@@ -4102,8 +4156,14 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 	}
 	global_stmtid=stmt_info->statement_id;
 	myds->myconn->local_stmts->backend_insert(global_stmtid,CurrentQuery.mysql_stmt);
-	if (previous_status.size() == 0)
-	client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
+	// We only perform the generation for a new 'client_stmt_id' when there is no previous status, this
+	// is, when 'PROCESSING_STMT_PREPARE' is reached directly without transitioning from a previous status
+	// like 'PROCESSING_STMT_EXECUTE'. The same condition needs to hold for setting 'stmt_client_id',
+	// otherwise we could be resetting it's current value from the previous state.
+	if (previous_status.size() == 0) {
+		client_stmtid=client_myds->myconn->local_stmts->generate_new_client_stmt_id(global_stmtid);
+		CurrentQuery.stmt_client_id=client_stmtid;
+	}
 	CurrentQuery.mysql_stmt=NULL;
 	st=status;
 	size_t sts=previous_status.size();
@@ -5773,7 +5833,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			}
 #endif
 			if (index(dig,';') && (index(dig,';') != dig + strlen(dig)-1)) {
-				string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+				string nqn;
+				if (mysql_thread___parse_failure_logs_digest)
+					nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+				else
+					nqn = string(CurrentQuery.get_digest_text());
 				proxy_warning(
 					"Unable to parse multi-statements command with SET statement from client"
 					" %s:%d: setting lock hostgroup. Command: %s\n", client_myds->addr.addr,
@@ -5816,12 +5880,19 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
 					if (it->second.size() < 1 || it->second.size() > 2) {
 						// error not enough arguments
-						string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+						string query_str = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+						string digest_str = string(CurrentQuery.get_digest_text());
+						string nqn;
+						if (mysql_thread___parse_failure_logs_digest)
+							nqn = digest_str;
+						else
+							nqn = query_str;
 						// PMC-10002: A query has failed to be parsed. This can be due a incorrect query or
 						// due to ProxySQL not being able to properly parse it. In case the query is correct a
 						// bug report should be filed including the offending query.
 						proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
-						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+						proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n",
+									query_str.c_str());
 						unable_to_parse_set_statement(lock_hostgroup);
 						return false;
 					}
@@ -5845,9 +5916,17 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							||
 							( strcasecmp(value1.c_str(),(char *)"IFNULL") == 0 )
 						) {
-							string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+							string query_str = string((char *)CurrentQuery.QueryPointer,
+														CurrentQuery.QueryLength);
+							string digest_str = string(CurrentQuery.get_digest_text());
+							string nqn;
+							if (mysql_thread___parse_failure_logs_digest)
+								nqn = digest_str;
+							else
+								nqn = query_str;
 							proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
-							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+							proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+										"Locking hostgroup for query %s\n", query_str.c_str());
 							unable_to_parse_set_statement(lock_hostgroup);
 							return false;
 						}
@@ -6286,7 +6365,11 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						if (kq != 0) {
 							kq = strncmp((const char *)CurrentQuery.QueryPointer, (const char *)"/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */" , CurrentQuery.QueryLength);
 							if (kq != 0) {
-								string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+								string nqn;
+								if (mysql_thread___parse_failure_logs_digest)
+									nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+								else
+									nqn = string(CurrentQuery.get_digest_text());
 								proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 								return false;
 							}
@@ -7471,10 +7554,14 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	if (idx) {
 		size_t first_word_len = (char *)idx - (char *)_pkt->ptr - 5;
 		if (((char *)_pkt->ptr+5)[0]=='/' && ((char *)_pkt->ptr+5)[1]=='*') {
-			b[1]=' ';
-			b[2]=' ';
-			b[strlen(b)-1] = ' ';
-			b[strlen(b)-2] = ' ';
+			void* comment_endpos = memmem(static_cast<char*>(_pkt->ptr)+7, _pkt->size-7, "*/", strlen("*/"));
+
+			if (comment_endpos == NULL || idx < comment_endpos) {
+				b[1]=' ';
+				b[2]=' ';
+				b[strlen(b)-1] = ' ';
+				b[strlen(b)-2] = ' ';
+			}
 		}
 		memcpy(_c, (char *)_pkt->ptr+5, first_word_len);
 		_c+= first_word_len;
@@ -7605,8 +7692,10 @@ bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 
 void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	// we couldn't parse the query
-	string nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", nqn.c_str());
+	string query_str = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
+	string digest_str = string(CurrentQuery.get_digest_text());
+	string& nqn = ( mysql_thread___parse_failure_logs_digest == true ? digest_str : query_str );
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
 	if (qpo->multiplex == -1) {
 		// we have no rule about this SET statement. We set hostgroup locking
 		if (locked_on_hostgroup < 0) {
@@ -7634,7 +7723,8 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 			}
 		}
 	} else {
-		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Unable to parse SET query but NOT setting lock_hostgroup %s\n", nqn.c_str());
+		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5,
+					"Unable to parse SET query but NOT setting lock_hostgroup %s\n", query_str.c_str());
 	}
 }
 

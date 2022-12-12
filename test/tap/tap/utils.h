@@ -1,7 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-#include <mysql.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <random>
@@ -9,8 +9,23 @@
 #include <sstream>
 
 #include <curl/curl.h>
+#include <mysql.h>
 
 #include "command_line.h"
+
+inline std::string get_formatted_time() {
+	time_t __timer;
+	char __buffer[30];
+
+	struct tm __tm_info {};
+	time(&__timer);
+	localtime_r(&__timer, &__tm_info);
+	strftime(__buffer, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+
+	return std::string(__buffer);
+}
+
+int mysql_query_t(MYSQL* mysql, const char* query);
 
 #define MYSQL_QUERY(mysql, query) \
 	do { \
@@ -26,6 +41,16 @@
 		if (mysql_query(mysql, query)) { \
 			fprintf(stderr, "File %s, line %d, Error: %s\n", \
 					__FILE__, __LINE__, mysql_error(mysql)); \
+		} \
+	} while(0)
+
+#define MYSQL_QUERY_T(mysql, query) \
+	do { \
+		const std::string time { get_formatted_time() }; \
+		fprintf(stderr, "# %s: Issuing query '%s' to ('%s':%d)\n", time.c_str(), query, mysql->host, mysql->port); \
+		if (mysql_query(mysql, query)) { \
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql)); \
+			return EXIT_FAILURE; \
 		} \
 	} while(0)
 
@@ -91,9 +116,11 @@ std::vector<mysql_res_row> extract_mysql_rows(MYSQL_RES* my_res);
  * @return '0' in case the endpoint became available before the timeout, or
  *   '-1' in case the timeout expired.
  */
-int wait_until_enpoint_ready(
+int wait_post_enpoint_ready(
 	std::string endpoint, std::string post_params, uint32_t timeout, uint32_t delay=100
 );
+
+int wait_get_enpoint_ready(std::string endpoint, uint32_t timeout, uint32_t delay=100);
 
 /**
  * @brief Perform a simple POST query to the specified endpoint using the supplied
@@ -104,15 +131,16 @@ int wait_until_enpoint_ready(
  * @param curl_out_err A uint64_t reference returning the result code of the
  *   query in case it has been performed. In case the query couldn't be
  *   performed, this value is never initialized.
- * @param curl_out_err A string reference to collect the error as a string reported
+ * @param curl_res_err A string reference to collect the error as a string reported
  *   by 'libcurl' in case of failure.
  *
  * @return The response code of the query in case of the query.
  */
 CURLcode perform_simple_post(
-	const std::string& endpoint, const std::string& post_params,
-	uint64_t& curl_res_code, std::string& curl_out_err
+	const std::string& endpoint, const std::string& params, uint64_t& curl_res_code, std::string& curl_res_data
 );
+
+CURLcode perform_simple_get(const std::string& endpoint, uint64_t& curl_res_code, std::string& curl_res_data);
 
 /**
  * @brief Generates a random string of the length of the provider 'strSize'
@@ -249,6 +277,158 @@ MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout);
  */
 int get_variable_value(
 	MYSQL* proxysql_admin, const std::string& variable_name, std::string& variable_value, bool runtime=false
+);
+
+/**
+ * @brief Returns all the possible permutations of the supplied generic 'std::vector<T>'.
+ *   This methods holds as long as the generic <T> holds the type requirements for
+ *   'std::next_permutation'.
+ * @param elem_set An 'std::vector<T>' from which to generate all the possible permutations.
+ * @return All the possible permutations of the supplied vector.
+ */
+template <typename T>
+std::vector<std::vector<T>> get_permutations(const std::vector<T>& elem_set) {
+	std::vector<std::vector<T>> result {};
+
+	std::vector<T> c_elem_set(elem_set.begin(), elem_set.end());
+	std::sort(c_elem_set.begin(), c_elem_set.end());
+
+	do {
+		result.push_back(c_elem_set);
+	} while (std::next_permutation(c_elem_set.begin(), c_elem_set.end()));
+
+	return result;
+}
+
+/**
+ * @brief Struct holding options on how to performs connections for 'EOF' tests.
+ */
+struct conn_cnf_t {
+	bool f_conn_eof;
+	bool b_conn_eof;
+	bool f_conn_compr;
+	bool b_conn_compr;
+	bool fast_forward;
+	std::string fast_forward_user;
+};
+
+/**
+ * @brief Helper function to serialize 'conn_cnf_t' structs.
+ * @return The string representation of the provided 'conn_cnf_t'.
+ */
+std::string to_string(const conn_cnf_t& cnf);
+
+/**
+ * @brief Execute the the test 'deprecate_eof_cache-t' with the 'mysql-variables'
+ *  'mysql-enable_client_deprecate_eof' and 'mysql-enable_server_deprecate_eof'
+ *  with the values suppplied in the parameters.
+ *
+ * @param cl CommandLine arguments supplied to the test.
+ * @param mysql A MYSQL* initialized againt ProxySQL admin interface.
+ * @param test File test name to be executed.
+ * @param cl_depr_eof Bool to set to 'mysql-enable_client_deprecate_eof'
+ * @param srv_depr_eof Bool to set to 'mysql-enable_server_deprecate_eof'
+ *
+ * @return The error code from executing 'deprecate_eof_cache-t' via system, or
+ *  '0' in case of success.
+ */
+int execute_eof_test(
+	const CommandLine& cl, MYSQL* mysql, const std::string& test, bool cl_depr_eof, bool srv_depr_eof
+);
+int execute_eof_test(const CommandLine& cl, MYSQL* mysql, const std::string& test, const conn_cnf_t&);
+
+/**
+ * @brief Waits until either the number of backend connections of the expected type is reached, or the
+ *   timeout expires.
+ *
+ * @param proxy_admin An already oppened connection to ProxySQL Admin.
+ * @param conn_type The type of backend connections to filter from 'stats_mysql_connection' pool. Possible
+ *   values are: 'ConnUsed', 'ConnFree', 'ConnOK', 'ConnERR'.
+ * @param exp_conn_num The target number of connections to reach to end the wait.
+ * @param timeout Maximum waiting time for the connections to reach the expected value.
+ *
+ * @return EXIT_SUCCESS if the target number of connections was reached before timeout, EXIT_FAILURE otherwise.
+ */
+int wait_for_backend_conns(
+	MYSQL* proxy_admin, const std::string& conn_type, uint32_t exp_conn_num, uint32_t timeout
+);
+
+/**
+ * @brief Queries 'stats_mysql_connection_pool' and retrieves the number of connections of the specified type.
+ *
+ * @param proxy_admin An already oppened connection to ProxySQL Admin.
+ * @param conn_type The type of backend connections to filter from 'stats_mysql_connection' pool. Possible
+ *   values are: 'ConnUsed', 'ConnFree', 'ConnOK', 'ConnERR'.
+ * @param found_conn_num The current number of connections of the specified type.
+ *
+ * @return EXIT_SUCCESS in case the conns number was properly retrieved, EXIT_FAILURE and error logged
+ *   otherwise.
+ */
+int get_cur_backend_conns(MYSQL* proxy_admin, const std::string& conn_type, uint32_t& found_conn_num);
+
+/**
+ * @brief Join two string paths. Appends '/' to the first supplied string if doesn't already finish with one.
+ * @param p1 First part of the path to be joined.
+ * @param p2 Second string to append to the first path.
+ * @return A string holding at least one '/' between the two previously supplied strings.
+ */
+std::string join_path(const std::string& p1, const std::string& p2);
+
+/**
+ * @brief Holds the required info for the definition of a RESTAPI endpoint.
+ */
+struct ept_info_t {
+	std::string name;
+	std::string file;
+	std::string method;
+	uint64_t timeout;
+};
+
+/**
+ * @brief Represents a RESTAPI endpoint request expected to succeed.
+ */
+struct honest_req_t {
+	ept_info_t ept_info;
+	std::vector<std::string> params;
+};
+
+/**
+ * @brief Holds the test payload information for faulty requests.
+ */
+struct ept_pl_t {
+	/* @brief Params to be issued in the request against the endpoint */
+	std::string params;
+	/* @brief Expected code to be returned by CURL */
+	uint64_t curl_rc;
+	/* @brief Expected response output returned by CURL */
+	uint64_t script_err;
+};
+
+/**
+ * @brief Represents a RESTAPI endpoint request expected to fail.
+ */
+struct faulty_req_t {
+	ept_info_t ept_info;
+	std::vector<ept_pl_t> ept_pls;
+};
+
+/**
+ * @brief Configure the supplied endpoints using the provided information
+ *
+ * @param admin Opened connection to ProxySQL admin interface.
+ * @param script_base_path Common base path for the scripts location.
+ * @param epts_info Information of the endpoints to be configured.
+ * @param dummy_ept Dummy endpoint used to check when interface is ready.
+ * @param prevent_dups Prevent duplicates when inserting the provided info.
+ *
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise. Errors are logged.
+ */
+int configure_endpoints(
+	MYSQL* admin,
+	const std::string& script_base_path,
+	const std::vector<ept_info_t>& epts_info,
+	const ept_info_t& dummy_ept,
+	bool prevent_dups = true
 );
 
 #endif // #define UTILS_H

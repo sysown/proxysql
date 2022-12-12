@@ -100,11 +100,13 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			//rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, CLIENT_COMPRESS); // FIXME: add optional support for compression
-			rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, node->get_host_address(), username, password, NULL, node->port, NULL, 0);
 //			if (rc_conn) {
 //			}
 			//char *query = query1;
 			if (rc_conn) {
+				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+
 				rc_query = mysql_query(conn,(char *)"SELECT @@version");
 				if (rc_query == 0) {
 					query_error = NULL;
@@ -308,10 +310,28 @@ void ProxySQL_Node_Metrics::reset() {
 	memset(this, 0, sizeof(ProxySQL_Node_Metrics));
 }
 
+ProxySQL_Node_Entry::ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char * _comment) : 
+	ProxySQL_Node_Entry(_hostname, _port, _weight, _comment, NULL) {
+	// resolving DNS if available in Cache
+	if (_hostname) {
+		size_t ip_count = 0;
+		const std::string& ip = MySQL_Monitor::dns_lookup(_hostname, false, &ip_count);
 
-ProxySQL_Node_Entry::ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char * _comment) {
+		if (ip_count > 1) {
+			proxy_warning("ProxySQL Cluster node '%s' has more than one (%ld) mapped IP address: under some circumstances this may lead to undefined behavior. It is recommended to provide IP address or hostname with only one resolvable IP.\n",
+				_hostname, ip_count);
+		}
+
+		if (ip.empty() == false) {
+			ip_addr = strdup(ip.c_str());
+		}
+	}
+}
+
+ProxySQL_Node_Entry::ProxySQL_Node_Entry(char* _hostname, uint16_t _port, uint64_t _weight, char* _comment, char* ip) {
 	hash = 0;
 	global_checksum = 0;
+	ip_addr = NULL;
 	hostname = NULL;
 	if (_hostname) {
 		hostname = strdup(_hostname);
@@ -319,18 +339,24 @@ ProxySQL_Node_Entry::ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64
 	port = _port;
 	weight = _weight;
 	if (_comment == NULL) {
-		comment = strdup((char *)"");
-	} else {
+		comment = strdup((char*)"");
+	}
+	else {
 		comment = strdup(_comment);
 	}
+
+	if (ip) {
+		ip_addr = strdup(ip);
+	}
+
 	active = false;
 	hash = generate_hash_proxysql_node(_hostname, _port);
 	metrics_idx = 0;
-	metrics = (ProxySQL_Node_Metrics **)malloc(sizeof(ProxySQL_Node_Metrics *)*PROXYSQL_NODE_METRICS_LEN);
-	for (int i = 0; i < PROXYSQL_NODE_METRICS_LEN ; i++) {
+	metrics = (ProxySQL_Node_Metrics**)malloc(sizeof(ProxySQL_Node_Metrics*) * PROXYSQL_NODE_METRICS_LEN);
+	for (int i = 0; i < PROXYSQL_NODE_METRICS_LEN; i++) {
 		metrics[i] = new ProxySQL_Node_Metrics();
 	}
-	proxy_info("Created new Cluster Node Entry for host %s:%d\n",hostname,port);
+	proxy_info("Created new Cluster Node Entry for host %s:%d\n", hostname, port);
 }
 
 ProxySQL_Node_Entry::~ProxySQL_Node_Entry() {
@@ -342,6 +368,10 @@ ProxySQL_Node_Entry::~ProxySQL_Node_Entry() {
 	if (comment) {
 		free(comment);
 		comment = NULL;
+	}
+	if (ip_addr) {
+		free(ip_addr);
+		ip_addr = NULL;
 	}
 	for (int i = 0; i < PROXYSQL_NODE_METRICS_LEN ; i++) {
 		delete metrics[i];
@@ -857,9 +887,10 @@ uint64_t mysql_raw_checksum(MYSQL_RES* resultset) {
 
 void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
+	char * ip_address = NULL;
 	uint16_t port = 0;
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_query_rules_mutex);
-	nodes.get_peer_to_sync_mysql_query_rules(&hostname, &port);
+	nodes.get_peer_to_sync_mysql_query_rules(&hostname, &port, &ip_address);
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
@@ -881,8 +912,10 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
+				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+
 				MYSQL_RES *result1 = NULL;
 				MYSQL_RES *result2 = NULL;
 				//rc_query = mysql_query(conn,"SELECT rule_id, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment FROM runtime_mysql_query_rules");
@@ -1049,6 +1082,9 @@ __exit_pull_mysql_query_rules_from_peer:
 			}
 		}
 		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
 	} else {
 		proxy_info("No hostname found\n");
 	}
@@ -1124,9 +1160,10 @@ void update_ldap_mappings(MYSQL_RES* result) {
 
 void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
+	char * ip_address = NULL;
 	uint16_t port = 0;
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_users_mutex);
-	nodes.get_peer_to_sync_mysql_users(&hostname, &port);
+	nodes.get_peer_to_sync_mysql_users(&hostname, &port, &ip_address);
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
@@ -1147,7 +1184,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
 
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn == nullptr) {
 				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
@@ -1159,6 +1196,8 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 
 				goto __exit_pull_mysql_users_from_peer;
 			}
+			
+			MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
 
 			rc_query = mysql_query(conn, CLUSTER_QUERY_MYSQL_USERS);
 			if (rc_query == 0) {
@@ -1264,6 +1303,9 @@ __exit_pull_mysql_users_from_peer:
 			}
 		}
 		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_users_mutex);
 }
@@ -1438,10 +1480,11 @@ incoming_servers_t convert_servers_resultsets(const std::vector<MYSQL_RES*>& res
 
 void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum, const time_t epoch) {
 	char * hostname = NULL;
+	char * ip_address = NULL;
 	uint16_t port = 0;
 	char * peer_checksum = NULL;
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_servers_mutex);
-	nodes.get_peer_to_sync_mysql_servers(&hostname, &port, &peer_checksum);
+	nodes.get_peer_to_sync_mysql_servers(&hostname, &port, &peer_checksum, &ip_address);
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
@@ -1461,8 +1504,10 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
+				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+
 				std::vector<MYSQL_RES*> results {};
 
 				// servers messages
@@ -1763,12 +1808,16 @@ __exit_pull_mysql_servers_from_peer:
 			}
 		}
 		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_servers_mutex);
 }
 
 void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, const string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
+	char * ip_address = NULL;
 	uint16_t port = 0;
 	char* vars_type_str = nullptr;
 	p_cluster_counter::metric success_metric = p_cluster_counter::metric(-1);
@@ -1793,11 +1842,11 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_variables_mutex);
 	if (var_type == "mysql") {
-		nodes.get_peer_to_sync_mysql_variables(&hostname, &port);
+		nodes.get_peer_to_sync_mysql_variables(&hostname, &port, &ip_address);
 	} else if (var_type == "admin") {
-		nodes.get_peer_to_sync_admin_variables(&hostname, &port);
+		nodes.get_peer_to_sync_admin_variables(&hostname, &port, &ip_address);
 	} else if (var_type == "ldap"){
-		nodes.get_peer_to_sync_ldap_variables(&hostname, &port);
+		nodes.get_peer_to_sync_ldap_variables(&hostname, &port, &ip_address);
 	} else {
 		proxy_error("Invalid parameter supplied to 'pull_global_variables_from_peer': var_type=%s\n", var_type.c_str());
 		assert(0);
@@ -1825,9 +1874,11 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
 			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
 			proxy_info("Cluster: Fetching %s variables from peer %s:%d started\n", vars_type_str, hostname, port);
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 
 			if (rc_conn) {
+				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+
 				std::string s_query = "";
 				string_format("SELECT * FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", s_query, var_type.c_str());
 				if (var_type == "mysql") {
@@ -1942,15 +1993,19 @@ __exit_pull_mysql_variables_from_peer:
 			}
 		}
 		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_variables_mutex);
 }
 
 void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
+	char * ip_address = NULL;
 	uint16_t port = 0;
 	pthread_mutex_lock(&GloProxyCluster->update_proxysql_servers_mutex);
-	nodes.get_peer_to_sync_proxysql_servers(&hostname, &port);
+	nodes.get_peer_to_sync_proxysql_servers(&hostname, &port, &ip_address);
 	if (hostname) {
 		char *username = NULL;
 		char *password = NULL;
@@ -1974,8 +2029,10 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 				"Cluster: Fetching ProxySQL Servers from peer %s:%d started. Expected checksum: %s\n",
 				hostname, port, expected_checksum.c_str()
 			);
-			rc_conn = mysql_real_connect(conn, hostname, username, password, NULL, port, NULL, 0);
+			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
+				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+
 				rc_query = mysql_query(conn,"SELECT hostname, port, weight, comment FROM runtime_proxysql_servers ORDER BY hostname, port");
 				if ( rc_query == 0 ) {
 					MYSQL_RES* result = mysql_store_result(conn);
@@ -2051,6 +2108,9 @@ __exit_pull_proxysql_servers_from_peer:
 			}
 		}
 		free(hostname);
+
+		if (ip_address)
+			free(ip_address);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_proxysql_servers_mutex);
 }
@@ -2289,7 +2349,7 @@ void ProxySQL_Cluster_Nodes::load_servers_list(SQLite3_result *resultset, bool _
 			node = new ProxySQL_Node_Entry(h_, p_, w_ , c_);
 			node->set_active(true);
 			umap_proxy_nodes.insert(std::make_pair(hash_, node));
-			ProxySQL_Node_Address * a = new ProxySQL_Node_Address(h_, p_);
+			ProxySQL_Node_Address * a = new ProxySQL_Node_Address(h_, p_, node->get_ipaddress());
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -2373,11 +2433,12 @@ bool ProxySQL_Cluster_Nodes::Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_R
 	return ret;
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
+	char *ip_addr = NULL;
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
@@ -2394,7 +2455,15 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uin
 					if (hostname) {
 						free(hostname);
 					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
 					hostname=strdup(node->get_hostname());
+
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr= strdup(ip);
+
 					p = node->get_port();
 				}
 			}
@@ -2409,20 +2478,26 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uin
 				free(hostname);
 				hostname = NULL;
 			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
 		}
 	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		*ip_address = ip_addr;
 		proxy_info("Cluster: detected peer %s:%d with mysql_query_rules version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_t *port, char **peer_checksum) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
+	char *ip_addr = NULL;
 	uint16_t p = 0;
 	char *pc = NULL;
 //	pthread_mutex_lock(&mutex);
@@ -2443,8 +2518,14 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_
 					if (hostname) {
 						free(hostname);
 					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
 					pc = strdup(v->checksum);
 					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr=strdup(ip);
 					p = node->get_port();
 				}
 			}
@@ -2463,21 +2544,27 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_
 				free(pc);
 				pc = NULL;
 			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
 		}
 	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		*ip_address = ip_addr;
 		proxy_info("Cluster: detected peer %s:%d with mysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
 		*peer_checksum = pc;
 	}
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t *port) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
+	char *ip_addr = NULL;
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
@@ -2494,7 +2581,13 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t 
 					if (hostname) {
 						free(hostname);
 					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
 					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
 					p = node->get_port();
 				}
 			}
@@ -2509,20 +2602,26 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t 
 				free(hostname);
 				hostname = NULL;
 			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
 		}
 	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		*ip_address = ip_addr;
 		proxy_info("Cluster: detected peer %s:%d with mysql_users version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint16_t *port) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
+	char* ip_addr = NULL;
 	uint16_t p = 0;
 	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync,0);
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
@@ -2537,7 +2636,13 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint1
 					if (hostname) {
 						free(hostname);
 					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
 					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
 					p = node->get_port();
 				}
 			}
@@ -2551,21 +2656,27 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint1
 				free(hostname);
 				hostname = NULL;
 			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
 		}
 	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		*ip_address = ip_addr;
 		proxy_info("Cluster: detected peer %s:%d with mysql_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
 }
 
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint16_t *port) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
+	char *ip_addr = NULL;
 	uint16_t p = 0;
 	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_admin_variables_diffs_before_sync,0);
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
@@ -2580,7 +2691,13 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint1
 					if (hostname) {
 						free(hostname);
 					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
 					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
 					p = node->get_port();
 				}
 			}
@@ -2594,20 +2711,26 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint1
 				free(hostname);
 				hostname = NULL;
 			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
 		}
 	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		*ip_address = ip_addr;
 		proxy_info("Cluster: detected peer %s:%d with admin_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16_t *port) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
+	char* ip_addr = NULL;
 	uint16_t p = 0;
 	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync,0);
 	for (std::unordered_map<uint64_t, ProxySQL_Node_Entry *>::iterator it = umap_proxy_nodes.begin(); it != umap_proxy_nodes.end();) {
@@ -2622,7 +2745,13 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16
 					if (hostname) {
 						free(hostname);
 					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
 					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
 					p = node->get_port();
 				}
 			}
@@ -2636,20 +2765,26 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16
 				free(hostname);
 				hostname = NULL;
 			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
 		}
 	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		*ip_address = ip_addr;
 		proxy_info("Cluster: detected peer %s:%d with ldap_variables version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
 }
 
-void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port) {
+void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint16_t *port, char** ip_address) {
 	unsigned long long version = 0;
 	unsigned long long epoch = 0;
 	unsigned long long max_epoch = 0;
 	char *hostname = NULL;
+	char *ip_addr = NULL;
 	uint16_t p = 0;
 //	pthread_mutex_lock(&mutex);
 	//unsigned long long curtime = monotonic_time();
@@ -2666,7 +2801,13 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
 					if (hostname) {
 						free(hostname);
 					}
+					if (ip_addr) {
+						free(ip_addr);
+					}
 					hostname=strdup(node->get_hostname());
+					const char* ip = node->get_ipaddress();
+					if (ip)
+						ip_addr = strdup(ip);
 					p = node->get_port();
 				}
 			}
@@ -2681,11 +2822,16 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
 				free(hostname);
 				hostname = NULL;
 			}
+			if (ip_addr) {
+				free(ip_addr);
+				ip_addr = NULL;
+			}
 		}
 	}
 	if (hostname) {
 		*host = hostname;
 		*port = p;
+		*ip_address = ip_addr;
 		proxy_info("Cluster: detected peer %s:%d with proxysql_servers version %llu, epoch %llu\n", hostname, p, version, epoch);
 	}
 }
@@ -3475,7 +3621,7 @@ cluster_metrics_map = std::make_tuple(
 	cluster_gauge_vector {}
 );
 
-ProxySQL_Cluster::ProxySQL_Cluster() {
+ProxySQL_Cluster::ProxySQL_Cluster() : proxysql_servers_to_monitor(NULL) {
 	pthread_mutex_init(&mutex,NULL);
 	pthread_mutex_init(&update_mysql_query_rules_mutex,NULL);
 	pthread_mutex_init(&update_mysql_servers_mutex,NULL);

@@ -45,48 +45,50 @@ int main(int argc, char** argv) {
 	setrlimit(RLIMIT_NOFILE, &limits);
 	diag("New process limits: { %ld, %ld }", limits.rlim_cur, limits.rlim_max);
 
-	MYSQL* proxysql_admin = mysql_init(NULL);
+	MYSQL* admin = mysql_init(NULL);
 
 	// Initialize connections
-	if (!proxysql_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+	if (!admin) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return -1;
 	}
 
-	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return -1;
 	}
 
 	// Enable 'RESTAPI'
-	MYSQL_QUERY(proxysql_admin, "SET admin-restapi_enabled='true'");
-	MYSQL_QUERY(proxysql_admin, "SET admin-restapi_port=6070");
-	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	MYSQL_QUERY(admin, "SET admin-restapi_enabled='true'");
+	MYSQL_QUERY(admin, "SET admin-restapi_port=6070");
+	MYSQL_QUERY(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	std::vector<MYSQL*> mysql_connections {};
 
 	for (int i = 0; i < NUM_CONNECTIONS; i++) {
-		MYSQL* proxysql_mysql = mysql_init(NULL);
+		MYSQL* proxy = mysql_init(NULL);
 		if (
 			!mysql_real_connect(
-				proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0
+				proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0
 			)
 		) {
 			fprintf(
 				stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-				mysql_error(proxysql_mysql)
+				mysql_error(proxy)
 			);
 			return EXIT_FAILURE;
 		}
-		mysql_connections.push_back(proxysql_mysql);
+		mysql_connections.push_back(proxy);
 	}
 
-	int endpoint_timeout = wait_until_enpoint_ready("http://localhost:6070/metrics/", "{}", 10, 500);
+	int endpoint_timeout = wait_get_enpoint_ready("http://localhost:6070/metrics/", 1000, 100);
 	ok(endpoint_timeout == 0, "The endpoint should be available instead of timing out.");
 
 	for (int i = 0; i < NUM_CONNECTIONS; i++) {
 		mysql_close(mysql_connections[i]);
 	}
+
+	mysql_close(admin);
 
 	return exit_status();
 }

@@ -128,6 +128,7 @@ enum debug_module {
 	PROXY_DEBUG_IPC,
 	PROXY_DEBUG_QUERY_CACHE,
 	PROXY_DEBUG_QUERY_STATISTICS,
+	PROXY_DEBUG_RESTAPI,
 	PROXY_DEBUG_UNKNOWN // this module doesn't exist. It is used only to define the last possible module
 };
 
@@ -191,6 +192,7 @@ enum mysql_variable_name {
 	SQL_OPTIMIZER_PRUNE_LEVEL,
 	SQL_OPTIMIZER_SEARCH_DEPTH,
 	SQL_OPTIMIZER_SWITCH,
+	SQL_OPTIMIZER_USE_CONDITION_SELECTIVITY,
 	SQL_PROFILING,
 	SQL_QUERY_CACHE_TYPE,
 	SQL_SORT_BUFFER_SIZE,
@@ -822,6 +824,7 @@ __thread bool mysql_thread___query_digests_track_hostname;
 __thread bool mysql_thread___query_digests_keep_comment;
 __thread int mysql_thread___query_digests_max_digest_length;
 __thread int mysql_thread___query_digests_max_query_length;
+__thread bool mysql_thread___parse_failure_logs_digest;
 __thread int mysql_thread___show_processlist_extended;
 __thread int mysql_thread___session_idle_ms;
 __thread int mysql_thread___hostgroup_manager_verbose;
@@ -893,6 +896,9 @@ __thread int mysql_thread___monitor_slave_lag_when_null;
 __thread int mysql_thread___monitor_threads_min;
 __thread int mysql_thread___monitor_threads_max;
 __thread int mysql_thread___monitor_threads_queue_maxsize;
+__thread int mysql_thread___monitor_local_dns_cache_ttl;
+__thread int mysql_thread___monitor_local_dns_cache_refresh_interval;
+__thread int mysql_thread___monitor_local_dns_resolver_queue_maxsize;
 __thread char * mysql_thread___monitor_username;
 __thread char * mysql_thread___monitor_password;
 __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
@@ -983,6 +989,7 @@ extern __thread bool mysql_thread___query_digests_track_hostname;
 extern __thread bool mysql_thread___query_digests_keep_comment;
 extern __thread int mysql_thread___query_digests_max_digest_length;
 extern __thread int mysql_thread___query_digests_max_query_length;
+extern __thread bool mysql_thread___parse_failure_logs_digest;
 extern __thread int mysql_thread___show_processlist_extended;
 extern __thread int mysql_thread___session_idle_ms;
 extern __thread int mysql_thread___hostgroup_manager_verbose;
@@ -1054,6 +1061,9 @@ extern __thread int mysql_thread___monitor_slave_lag_when_null;
 extern __thread int mysql_thread___monitor_threads_min;
 extern __thread int mysql_thread___monitor_threads_max;
 extern __thread int mysql_thread___monitor_threads_queue_maxsize;
+extern __thread int mysql_thread___monitor_local_dns_cache_ttl;
+extern __thread int mysql_thread___monitor_local_dns_cache_refresh_interval;
+extern __thread int mysql_thread___monitor_local_dns_resolver_queue_maxsize;
 extern __thread char * mysql_thread___monitor_username;
 extern __thread char * mysql_thread___monitor_password;
 extern __thread char * mysql_thread___monitor_replication_lag_use_percona_heartbeat;
@@ -1135,6 +1145,7 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_OPTIMIZER_PRUNE_LEVEL,      SETTING_VARIABLE, false, false, true,  false, (char *)"optimizer_prune_level",      NULL, (char *)"" , false} ,
 	{ SQL_OPTIMIZER_SEARCH_DEPTH,     SETTING_VARIABLE, false, false, true,  false, (char *)"optimizer_search_depth",     NULL, (char *)"" , false} ,
 	{ SQL_OPTIMIZER_SWITCH,           SETTING_VARIABLE, true,  false, false, false, (char *)"optimizer_switch",           NULL, (char *)"" , false} ,
+	{ SQL_OPTIMIZER_USE_CONDITION_SELECTIVITY, SETTING_VARIABLE, false,  false, true, false, (char*)"optimizer_use_condition_selectivity", NULL, (char*)"" , false} ,
 	{ SQL_PROFILING,                  SETTING_VARIABLE, true,  false, false, true, ( char *)"profiling",                  NULL, (char *)"" , false} ,
 	{ SQL_QUERY_CACHE_TYPE,           SETTING_VARIABLE, false, false, true,  true, ( char *)"query_cache_type",           NULL, (char *)"" , false} , // note that this variable can act both as boolean AND a number. See https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_query_cache_type
 	{ SQL_SORT_BUFFER_SIZE,           SETTING_VARIABLE, false, false, true,  false, (char *)"sort_buffer_size",           NULL, (char *)"18446744073709551615" , false} ,

@@ -401,6 +401,7 @@ void init_debug_struct() {
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_IPC].name=(char *)"debug_ipc";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_QUERY_CACHE].name=(char *)"debug_query_cache";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_QUERY_STATISTICS].name=(char *)"debug_query_statistics";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_RESTAPI].name=(char *)"debug_restapi";
 
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		// if this happen, the above table is not populated correctly

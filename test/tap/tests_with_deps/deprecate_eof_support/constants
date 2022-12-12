@@ -1,0 +1,13 @@
+# This file should be modified locally according to proxysql configuration.
+# All TAP tests depend on these environment variables.
+#
+# Usage: source this file before running TAP tests
+# $ . constants
+# or
+# $ source constants
+#
+export TAP_HOST=127.0.0.1
+export TAP_PORT=6033
+export TAP_USERNAME=root
+export TAP_PASSWORD=REDACTED
+export TAP_WORKDIR=./tests_with_deps/deprecate_eof_support

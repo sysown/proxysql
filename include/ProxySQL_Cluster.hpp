@@ -84,15 +84,35 @@ class ProxySQL_Node_Metrics {
 };
 
 class ProxySQL_Node_Address {
-	public:
+public:
 	pthread_t thrid;
 	uint64_t hash; // unused for now
 	char *uuid;
 	char *hostname;
 	char *admin_mysql_ifaces;
 	uint16_t port;
-	ProxySQL_Node_Address(char *h, uint16_t p) {
+	ProxySQL_Node_Address(char *h, uint16_t p) : ProxySQL_Node_Address(h, p, NULL) {
+		// resolving DNS if available in Cache
+		if (h) {
+			size_t ip_count = 0;
+			const std::string& ip = MySQL_Monitor::dns_lookup(h, false, &ip_count);
+
+			if (ip_count > 1) {
+				proxy_error("Proxy cluster node '%s' has more than one ('%ld') mapped IP address. It is recommended to provide IP address or domain with one resolvable IP address.\n",
+					h, ip_count);
+			}
+
+			if (ip.empty() == false) {
+				ip_addr = strdup(ip.c_str());
+			}
+		}
+	}
+	ProxySQL_Node_Address(char* h, uint16_t p, char* ip) {
 		hostname = strdup(h);
+		ip_addr = NULL;
+		if (ip) {
+			ip_addr = strdup(ip);
+		}
 		admin_mysql_ifaces = NULL;
 		port = p;
 		uuid = NULL;
@@ -102,7 +122,18 @@ class ProxySQL_Node_Address {
 		if (hostname) free(hostname);
 		if (uuid) free(uuid);
 		if (admin_mysql_ifaces) free(admin_mysql_ifaces);
+		if (ip_addr) free(ip_addr);
 	}
+	const char* get_host_address() const {
+		const char* host_address = hostname;
+
+		if (ip_addr)
+			host_address = ip_addr;
+
+		return host_address;
+	}
+private:
+	char* ip_addr;
 };
 
 class ProxySQL_Node_Entry {
@@ -112,6 +143,7 @@ class ProxySQL_Node_Entry {
 	uint16_t port;
 	uint64_t weight;
 	char *comment;
+	char* ip_addr;
 	uint64_t generate_hash();
 	bool active;
 	int metrics_idx_prev;
@@ -124,6 +156,7 @@ class ProxySQL_Node_Entry {
 	public:
 	uint64_t get_hash();
 	ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char *_comment);
+	ProxySQL_Node_Entry(char* _hostname, uint16_t _port, uint64_t _weight, char* _comment, char* ip);
 	~ProxySQL_Node_Entry();
 	bool get_active();
 	void set_active(bool a);
@@ -137,6 +170,9 @@ class ProxySQL_Node_Entry {
 	void set_checksums(MYSQL_RES *_r);
 	char *get_hostname() { // note, NO strdup()
 		return hostname;
+	}
+	char* get_ipaddress() const {
+		return ip_addr;
 	}
 	uint16_t get_port() {
 		return port;
@@ -239,13 +275,13 @@ class ProxySQL_Cluster_Nodes {
 	SQLite3_result * dump_table_proxysql_servers();
 	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
-	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port);
-	void get_peer_to_sync_mysql_servers(char **host, uint16_t *port, char **peer_checksum);
-	void get_peer_to_sync_mysql_users(char **host, uint16_t *port);
-	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port);
-	void get_peer_to_sync_admin_variables(char **host, uint16_t* port);
-	void get_peer_to_sync_ldap_variables(char **host, uint16_t *port);
-	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port);
+	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address);
+	void get_peer_to_sync_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
+	void get_peer_to_sync_mysql_users(char **host, uint16_t *port, char** ip_address);
+	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address);
+	void get_peer_to_sync_admin_variables(char **host, uint16_t* port, char** ip_address);
+	void get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address);
+	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port, char ** ip_address);
 };
 
 struct p_cluster_counter {
@@ -357,6 +393,15 @@ class ProxySQL_Cluster {
 	pthread_mutex_t update_proxysql_servers_mutex;
 	// this records the interface that Admin is listening to
 	pthread_mutex_t admin_mysql_ifaces_mutex;
+
+	std::mutex proxysql_servers_to_monitor_mutex;
+	/**
+	 * @brief Resulset containing the latest 'proxysql_servers' present in 'mydb'.
+	 * @details This resulset should be updated via 'update_table_proxysql_servers_for_monitor' each time actions
+	 *   that modify the 'proxysql_servers' table are performed.
+	 */
+	SQLite3_result* proxysql_servers_to_monitor;
+
 	char *admin_mysql_ifaces;
 	int cluster_check_interval_ms;
 	int cluster_check_status_frequency;
@@ -380,6 +425,15 @@ class ProxySQL_Cluster {
 	void print_version();
 	void load_servers_list(SQLite3_result *r, bool _lock = true) {
 		nodes.load_servers_list(r, _lock);
+	}
+	void update_table_proxysql_servers_for_monitor(SQLite3_result* resultset) {
+		std::lock_guard<std::mutex> proxysql_servers_lock(this->proxysql_servers_to_monitor_mutex);
+		if (resultset != nullptr) {
+			delete this->proxysql_servers_to_monitor;
+			this->proxysql_servers_to_monitor = resultset;
+		}
+
+		MySQL_Monitor::trigger_dns_cache_update();
 	}
 	void get_credentials(char **, char **);
 	void set_username(char *);

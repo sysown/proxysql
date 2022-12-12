@@ -61,6 +61,14 @@
 
 #include "jemalloc.h"
 
+#ifndef NOJEM
+#if defined(__APPLE__) && defined(__MACH__)
+#ifndef mallctl
+#define mallctl(a, b, c, d, e) je_mallctl(a, b, c, d, e)
+#endif
+#endif // __APPLE__ and __MACH__
+#endif // NOJEM
+
 #ifdef DEBUG
 //#define VALGRIND_ENABLE_ERROR_REPORTING
 //#define VALGRIND_DISABLE_ERROR_REPORTING

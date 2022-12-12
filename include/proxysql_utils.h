@@ -1,10 +1,13 @@
 #ifndef __PROXYSQL_UTILS_H
 #define __PROXYSQL_UTILS_H
 
+#include <cstdarg>
 #include <type_traits>
 #include <memory>
 #include <string>
 #include <vector>
+#include <sys/time.h>
+
 
 #ifdef CXX17
 template<class...> struct conjunction : std::true_type { };
@@ -38,44 +41,114 @@ template<
 #endif // CXX17
 >
 int string_format(const std::string& str, std::string& result, Args... args) {
-	int err = 0;
-	size_t size = snprintf(nullptr, 0, str.c_str(), args... ) + 1;
+	int size = snprintf(nullptr, 0, str.c_str(), args...);
 
-	if(size <= 0) {
-		err = size;
+	if (size <= 0) {
+		return size;
 	} else {
+		size += 1;
 		std::unique_ptr<char[]> buf(new char[size]);
-		snprintf(buf.get(), size, str.c_str(), args...);
-		result = std::string(buf.get(), buf.get() + size - 1);
+		size = snprintf(buf.get(), size, str.c_str(), args...);
+		result = std::string(buf.get(), buf.get() + size);
 	}
 
-	return err;
+	return size;
+}
+
+/**
+ * @brief Output struct of 'cstr_format' functions family.
+ */
+struct cfmt_t {
+	// @brief If negative, the error returned from 'snprintf' while formatting. Otherwise the number of bytes
+	// copied into the resulting formatted string.
+    int size;
+	// @brief In case of success the resulting formatted string, empty otherwise.
+    std::string str;
+};
+
+/**
+ * @brief Formats the provided string literal with the extra variadic arguments.
+ * @details This is an improved version on 'string_format' function. When used against an string literal,
+ *   allows the compiler to issue the proper warnings in case the format parameters are ill-formed.
+ * @param fmt The string literal to be formatted with variadic arguments.
+ * @param ... The variadic arguments to use for formatting.
+ * @return An 'cfmt_t' holding the number of bytes copied to the resulting string and the formatted string
+ *   itself. In case of error the 'size' field will hold 'snprintf' returned error and 'str' will be empty.
+ */
+__attribute__((__format__ (__printf__, 1, 2)))
+cfmt_t cstr_format(const char* fmt, ...);
+
+/**
+ * @brief Formats the provided string literal with the extra variadic arguments, and place the formatted
+ *   string either in the returned 'cfmt_t::string' or in the supplied buffer.
+ * @details This is an improved version on 'string_format' function. When used against an string literal,
+ *   allows the compiler to issue the proper warnings in case the format parameters are ill-formed.
+ * @param out_buf The output buffer in which to place the resulting formatted string in case it fits.
+ * @param fmt The string literal to be formatted with variadic arguments.
+ * @param ... The variadic arguments to use for formatting.
+ * @return On success, an 'cfmt_t' holding the number of bytes copied to the resulting string, in case this
+ *   result fits in the provided buffer, this buffer is directly written and the returned 'cfmt_t::str' will
+ *   be empty. In case of error the 'size' field will hold 'snprintf' returned error and 'str' will be empty.
+ */
+template <int N> __attribute__((__format__ (__printf__, 2, 3)))
+cfmt_t cstr_format(char (&out_buf)[N], const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    int size = vsnprintf(nullptr, 0, fmt, args);
+    va_end(args);
+
+    if (size <= 0) {
+        return { size, {} };
+    } else {
+        size += 1;
+
+        if (size <= N) {
+            va_start(args, fmt);
+            size = vsnprintf(out_buf, size, fmt, args);
+            va_end(args);
+
+            return { size, {} };
+        } else {
+            std::unique_ptr<char[]> buf(new char[size]);
+
+            va_start(args, fmt);
+            size = vsnprintf(buf.get(), size, fmt, args);
+            va_end(args);
+
+            if (size <= 0) {
+                return { size, {} };
+            } else {
+                return { size, std::string(buf.get(), buf.get() + size) };
+            }
+        }
+    }
 }
 
 /**
  * @brief Simple struct that holds the 'timeout options' for 'wexecvp'.
  */
-struct to_opts {
+struct to_opts_t {
 	/**
 	 * @brief Timeout for the script execution to be completed, in case of being
 	 *   exceeded, the script will be terminated.
 	 */
-	uint timeout_us;
+	unsigned int timeout_us;
 	/**
-	 * @brief Timeout used for 'select()' non blocking calls.
+	 * @brief Timeout used for 'poll()' non blocking calls.
 	 */
-	uint select_to_us;
+	suseconds_t poll_to_us;
 	/**
 	 * @brief The duration of the sleeps between the checks being performed
 	 *   on the child process waiting it to exit after being signaled to terminate,
 	 *   before issuing 'SIGKILL'.
 	 */
-	uint it_delay_us;
+	unsigned int waitpid_delay_us;
 	/**
 	 * @brief The timeout to be waited on the child process after being signaled
 	 *   with 'SIGTERM' before being forcely terminated by 'SIGKILL'.
 	 */
-	uint sigkill_timeout_us;
+	unsigned int sigkill_to_us;
 };
 
 /**
@@ -92,17 +165,16 @@ struct to_opts {
  * @return 0 In case of success or one of the following error codes:
  *   - '-1' in case any 'pipe()' creation failed.
  *   - '-2' in case 'fork()' call failed.
- *   - '-3' in case 'fcntl()' call failed .
- *   - '-4' in case of resource exhaustion, file descriptors being used exceeds 'FD_SETSIZE'.
- *   - '-5' in case 'select()' call failed.
- *   - '-6' in case 'read()' from pipes failed with a non-expected error.
+ *   - '-3' in case 'fcntl()' call failed.
+ *   - '-4' in case 'poll()' call failed.
+ *   - '-5' in case 'read()' from pipes failed with a non-expected error.
  *   - 'ETIME' in case the executable has exceeded the timeout supplied in 'opts.timeout_us'.
  *  In all this cases 'errno' is set to the error reported by the failing 'system call'.
  */
 int wexecvp(
 	const std::string& file,
 	const std::vector<const char*>& argv,
-	const to_opts* opts,
+	const to_opts_t& opts,
 	std::string& s_stdout,
 	std::string& s_stderr
 );

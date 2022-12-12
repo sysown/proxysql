@@ -449,6 +449,7 @@ MySQL_Connection::MySQL_Connection() {
 	statuses.myconnpoll_get = 0;
 	statuses.myconnpoll_put = 0;
 	memset(gtid_uuid,0,sizeof(gtid_uuid));
+	memset(&connected_host_details, 0, sizeof(connected_host_details));
 };
 
 MySQL_Connection::~MySQL_Connection() {
@@ -508,6 +509,11 @@ MySQL_Connection::~MySQL_Connection() {
 		}
 	}
 
+	if (connected_host_details.hostname)
+		free(connected_host_details.hostname);
+
+	if (connected_host_details.ip)
+		free(connected_host_details.ip);
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
@@ -795,6 +801,15 @@ void MySQL_Connection::connect_start() {
 						mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
 					}
 				}
+				// In case of 'fast_forward', we only enable compression if both, client and backend matches. Otherwise,
+				// we honor the behavior of a regular connection of when a connection doesn't agree on using compression
+				// during handshake, and we fallback to an uncompressed connection.
+				client_flags &= ~(CLIENT_COMPRESS); // we disable it by default
+				if (c->options.client_flag & CLIENT_COMPRESS) {
+					if (c->options.server_capabilities & CLIENT_COMPRESS) {
+						client_flags |= CLIENT_COMPRESS;
+					}
+				}
 			}
 		}
 	}
@@ -808,7 +823,38 @@ void MySQL_Connection::connect_start() {
 		}
 	}
 	if (parent->port) {
-		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, parent->address, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
+
+		char* host_ip = NULL;
+		const std::string& res_ip = MySQL_Monitor::dns_lookup(parent->address, false);
+
+		if (!res_ip.empty()) {
+			if (connected_host_details.hostname) {
+				if (strcmp(connected_host_details.hostname, parent->address) != 0) {
+					free(connected_host_details.hostname);
+					connected_host_details.hostname = strdup(parent->address);
+				}
+			}
+			else {
+				connected_host_details.hostname = strdup(parent->address);
+			}
+
+			if (connected_host_details.ip) {
+				if (strcmp(connected_host_details.ip, res_ip.c_str()) != 0) {
+					free(connected_host_details.ip);
+					connected_host_details.ip = strdup(res_ip.c_str());
+				}
+			}
+			else {
+				connected_host_details.ip = strdup(res_ip.c_str());
+			}
+
+			host_ip = connected_host_details.ip;
+		}
+		else {
+			host_ip = parent->address;
+		}
+
+		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
@@ -1091,6 +1137,7 @@ handler_again:
 				//vio_blocking(mysql->net.vio, FALSE, 0);
 				//fcntl(mysql->net.vio->sd, F_SETFL, O_RDWR|O_NONBLOCK);
 			//}
+			MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
 			break;
 		case ASYNC_CONNECT_FAILED:
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(mysql));
@@ -2344,14 +2391,20 @@ bool MySQL_Connection::IsKeepMultiplexEnabledVariables(char *query_digest_text) 
 	} else {
 		return false;
 	}
-	//filter @@session. and @@
+	//filter @@session., @@local. and @@
 	char *match=NULL;
 	char* last_pos=NULL;
 	const int at_session_offset = strlen("@@session.");
+	const int at_local_offset = strlen("@@local."); // Alias of session
 	const int double_at_offset = strlen("@@");
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@session."))) {
 		memmove(match, match + at_session_offset, strlen(match) - at_session_offset);
 		last_pos = match + strlen(match) - at_session_offset;
+		*last_pos = '\0';
+	}
+	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select, "@@local."))) {
+		memmove(match, match + at_local_offset, strlen(match) - at_local_offset);
+		last_pos = match + strlen(match) - at_local_offset;
 		*last_pos = '\0';
 	}
 	while (query_digest_text_filter_select && (match = strcasestr(query_digest_text_filter_select,"@@"))) {

@@ -58,6 +58,11 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	affected_rows=0;
 	have_rows_sent=false;
 	rows_sent=0;
+	client_stmt_id=0;
+}
+
+void MySQL_Event::set_client_stmt_id(uint32_t client_stmt_id) {
+	this->client_stmt_id = client_stmt_id;
 }
 
 void MySQL_Event::set_affected_rows(uint64_t ar) {
@@ -257,6 +262,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 
 	total_bytes+=mysql_encode_length(start_time,NULL);
 	total_bytes+=mysql_encode_length(end_time,NULL);
+	total_bytes+=mysql_encode_length(client_stmt_id,NULL);
 	total_bytes+=mysql_encode_length(affected_rows,NULL);
 	total_bytes+=mysql_encode_length(rows_sent,NULL);
 
@@ -313,6 +319,12 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	len=mysql_encode_length(end_time,buf);
 	write_encoded_length(buf,end_time,len,buf[0]);
 	f->write((char *)buf,len);
+
+	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
+		len=mysql_encode_length(client_stmt_id,buf);
+		write_encoded_length(buf,client_stmt_id,len,buf[0]);
+		f->write((char *)buf,len);
+	}
 
 	len=mysql_encode_length(affected_rows,buf);
 	write_encoded_length(buf,affected_rows,len,buf[0]);
@@ -405,6 +417,10 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	char digest_hex[20];
 	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
+
+	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
+		j["client_stmt_id"] = client_stmt_id;
+	}
 
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
@@ -670,11 +686,20 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		default:
 			break;
 	}
+
+	uint64_t query_digest = 0;
+
+	if (sess->status != PROCESSING_STMT_EXECUTE) {
+		query_digest = GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs);
+	} else {
+		query_digest = sess->CurrentQuery.stmt_info->digest;
+	}
+
 	MySQL_Event me(let,
 		sess->thread_session_id,ui->username,ui->schemaname,
 		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
 		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
-		GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs),
+		query_digest,
 		ca, cl
 	);
 	char *c = NULL;
@@ -683,11 +708,18 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		case PROCESSING_STMT_EXECUTE:
 			c = (char *)sess->CurrentQuery.stmt_info->query;
 			ql = sess->CurrentQuery.stmt_info->query_length;
+			me.set_client_stmt_id(sess->CurrentQuery.stmt_client_id);
 			break;
 		case PROCESSING_STMT_PREPARE:
 		default:
 			c = (char *)sess->CurrentQuery.QueryPointer;
 			ql = sess->CurrentQuery.QueryLength;
+			// NOTE: This needs to be located in the 'default' case because otherwise will miss state
+			// 'WAITING_CLIENT_DATA'. This state is possible when the prepared statement is found in the
+			// global cache and due to that we immediately reply to the client and session doesn't reach
+			// 'PROCESSING_STMT_PREPARE' state. 'stmt_client_id' is expected to be '0' for anything that isn't
+			// a prepared statement, still, logging should rely 'log_event_type' instead of this value.
+			me.set_client_stmt_id(sess->CurrentQuery.stmt_client_id);
 			break;
 	}
 	if (c) {

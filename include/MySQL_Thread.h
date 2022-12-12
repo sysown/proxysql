@@ -455,6 +455,9 @@ class MySQL_Threads_Handler
 		int monitor_threads_min;
 		int monitor_threads_max;
 		int monitor_threads_queue_maxsize;
+		int monitor_local_dns_cache_ttl;
+		int monitor_local_dns_cache_refresh_interval;
+		int monitor_local_dns_resolver_queue_maxsize;
 		char *monitor_username;
 		char *monitor_password;
 		char * monitor_replication_lag_use_percona_heartbeat;
@@ -498,6 +501,7 @@ class MySQL_Threads_Handler
 		bool query_digests_keep_comment;
 		int query_digests_grouping_limit;
 		int query_digests_groups_grouping_limit;
+		bool parse_failure_logs_digest;
 		bool default_reconnect;
 		bool have_compress;
 		bool have_ssl;
