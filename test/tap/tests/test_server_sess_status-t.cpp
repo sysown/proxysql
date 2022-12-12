@@ -117,7 +117,7 @@ int main(int argc, char** argv) {
 		int exp_mysql_srv_st = SERVER_STATUS_AUTOCOMMIT;
 
 		ok(
-			exp_mysql_srv_st == SERVER_STATUS_AUTOCOMMIT,
+			exp_mysql_srv_st == mysql->server_status,
 			"MySQL init server status should match expected - exp: '%d', act:'%d'",
 			exp_mysql_srv_st, mysql->server_status
 		);
