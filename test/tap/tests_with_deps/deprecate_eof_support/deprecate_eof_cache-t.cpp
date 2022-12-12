@@ -141,9 +141,10 @@ int main(int argc, char** argv) {
 	// Load query rules to runtime
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-	for (auto id = 0; id < c_operations; id++) {
+	for (auto i = 0; i < c_operations; i++) {
 		int rnd_op = rand() % c_operations;
 
+		const auto id = i + 1;
 		const std::string& t_select_query = queries[0];
 		std::string select_query {};
 		string_format(t_select_query, select_query, id);
@@ -193,11 +194,49 @@ int main(int argc, char** argv) {
 			return exit_status();
 		}
 
+		nlohmann::json eof_query_res_json = nlohmann::json::parse(eof_query_res);
+		nlohmann::json ok_query_res_json = nlohmann::json::parse(ok_query_res);
+
+		const std::string ok_res_id = ok_query_res_json["Result"][0]["id"];
 		ok(
-			eof_query_res == ok_query_res,
-			"EOF to OK: ['eof_query_res': %s] should match ['ok_query_res': %s]",
-			eof_query_res.c_str(),
-			ok_query_res.c_str()
+			ok_res_id == std::to_string(id),
+			"EOF to OK -> inserted id: %d // received id: %s",
+			id,
+			ok_res_id.c_str()
+		);
+
+		const std::string ok_res_c = ok_query_res_json["Result"][0]["c"];
+		ok(
+			ok_res_c == stored_pairs[i].first,
+			"EOF to OK -> inserted c: %s // received c: %s",
+			stored_pairs[i].first.c_str(),
+			ok_res_c.c_str()
+		);
+
+		const std::string ok_res_pad = ok_query_res_json["Result"][0]["pad"];
+		ok(
+			ok_res_pad == stored_pairs[i].second,
+			"EOF to OK -> inserted pad: %s // received pad: %s",
+			stored_pairs[i].second.c_str(),
+			ok_res_pad.c_str()
+		);
+
+		uint32_t eof_res_status = eof_query_res_json["Status"];
+		uint32_t ok_res_status = ok_query_res_json["Status"];
+		ok(
+			eof_res_status == ok_res_status,
+			"EOF to OK -> EOF received status: %d // OK received status: %d",
+			eof_res_status,
+			ok_res_status
+		);
+
+		uint32_t eof_res_warnings = eof_query_res_json["Warnings"];
+		uint32_t ok_res_warnings = ok_query_res_json["Warnings"];
+		ok(
+			eof_res_warnings == ok_res_warnings,
+			"EOF to OK -> EOF received warnings: %d // OK received warnings: %d",
+			eof_res_warnings,
+			ok_res_warnings
 		);
 
 		// Wait for invalidation of query_cache
@@ -218,11 +257,49 @@ int main(int argc, char** argv) {
 			return exit_status();
 		}
 
+		ok_query_res_json = nlohmann::json::parse(ok_query_res);
+		eof_query_res_json = nlohmann::json::parse(eof_query_res);
+
+		const std::string eof_res_id = eof_query_res_json["Result"][0]["id"];
 		ok(
-			eof_query_res == ok_query_res,
-			"OK to EOF: ['eof_query_res': %s] should match ['ok_query_res': %s]",
-			eof_query_res.c_str(),
-			ok_query_res.c_str()
+			eof_res_id == std::to_string(id),
+			"OK to EOF -> inserted id: %d // received id: %s",
+			id,
+			eof_res_id.c_str()
+		);
+
+		const std::string eof_res_c = eof_query_res_json["Result"][0]["c"];
+		ok(
+			eof_res_c == stored_pairs[i].first,
+			"OK to EOF -> inserted c: %s // received c: %s",
+			stored_pairs[i].first.c_str(),
+			eof_res_c.c_str()
+		);
+
+		const std::string eof_res_pad = eof_query_res_json["Result"][0]["pad"];
+		ok(
+			eof_res_pad == stored_pairs[i].second,
+			"OK to EOF -> inserted pad: %s // received pad: %s",
+			stored_pairs[i].second.c_str(),
+			eof_res_pad.c_str()
+		);
+
+		ok_res_status = ok_query_res_json["Status"];
+		eof_res_status = eof_query_res_json["Status"];
+		ok(
+			ok_res_status == eof_res_status,
+			"OK to EOF -> OK received status: %d // EOF received status: %d",
+			ok_res_status,
+			eof_res_status
+		);
+
+		ok_res_warnings = ok_query_res_json["Warnings"];
+		eof_res_warnings = eof_query_res_json["Warnings"];
+		ok(
+			ok_res_warnings == eof_res_warnings,
+			"OK to EOF -> OK received warnings: %d // EOF received warnings: %d",
+			ok_res_warnings,
+			eof_res_warnings
 		);
 	}
 

@@ -246,6 +246,9 @@ int main(int argc, char** argv) {
 		MYSQL_QUERY(proxy, "/* create_new_connection=1 */ DO 1");
 	}
 
+	// Impose a timeout to avoid race conditions
+	wait_for_backend_conns(admin, "ConnFree", 50, 1);
+
 	// Check there are 'N' backend connections
 	uint32_t cur_free_conns = 0;
 	int get_conns_err = get_cur_backend_conns(admin, "ConnFree", cur_free_conns);

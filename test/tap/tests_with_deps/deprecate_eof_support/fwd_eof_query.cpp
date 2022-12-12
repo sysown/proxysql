@@ -12,7 +12,6 @@
 
 #include "tap.h"
 #include "command_line.h"
-#include "utils.h"
 
 #include "json.hpp"
 
@@ -114,14 +113,14 @@ int main(int argc, char** argv) {
 
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		std::string err_msg { "MySQL Error:" + std::string { mysql_error(proxy) }+ "" };
-		std::cerr << "{ Code: Err, Result: " <<  err_msg << " }";
+		std::cerr << "{ \"Code\": \"Err\", \"Result\": \"" <<  err_msg << "\" }";
 		return -1;
 	}
 
 	int query_res = mysql_query(proxy, query.c_str());
 	if (query_res != 0) {
 		std::string err_msg { "MySQL Error:" + std::string { mysql_error(proxy) }+ "" };
-		std::cerr << "{ Code: Err, Result: " <<  err_msg << " }";
+		std::cerr << "{ \"Code\": \"Err\", \"Result\": \"" <<  err_msg << "\" }";
 		return -1;
 	}
 
@@ -131,19 +130,21 @@ int main(int argc, char** argv) {
 		if (select_res != NULL) {
 			json j_res {};
 			MySQL_result_to_JSON(select_res, j_res);
-			std::cout << "{ Code: OK, Result: " << j_res.dump() << " }";
+			std::cout << "{ \"Code\": \"OK\", \"Result\": " << j_res.dump()
+				  << ", \"Status\": " << proxy->server_status
+				  << ", \"Warnings\": " << mysql_warning_count(proxy) << " }";
 		} else {
 			std::string err_msg {
 				"MySQL Error: " + std::string { mysql_error(proxy) }+ ""
 			};
-			std::cerr << "{ Code: Err, Result: " <<  err_msg << " }";
+			std::cerr << "{ \"Code\": \"Err\", \"Result\": \"" <<  err_msg << "\" }";
 			res_code = -1;
 		}
 
 		mysql_free_result(select_res);
 	} else {
 		std::string err_msg { "MySQL Error:" + std::string { mysql_error(proxy) }+ "" };
-		std::cerr << "{ Code: OK, Result: 0 }";
+		std::cerr << "{ \"Code\": \"OK\", \"Result\": 0 }";
 	}
 
 	mysql_close(proxy);
