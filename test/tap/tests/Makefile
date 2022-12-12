@@ -105,8 +105,10 @@ OPT=-O2 $(WGCOV) -Wl,--no-as-needed
 debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
-tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper set_testing-240.csv test_clickhouse_server_libmysql clickhouse_php_conn-t \
-	reg_test_stmt_resultset_err_no_rows_libmysql prepare_statement_err3024_libmysql prepare_statement_err3024_async reg_test_mariadb_stmt_store_result_libmysql reg_test_mariadb_stmt_store_result_async
+tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper \
+	set_testing-240.csv test_clickhouse_server_libmysql-t clickhouse_php_conn-t reg_test_stmt_resultset_err_no_rows_libmysql-t \
+	prepare_statement_err3024_libmysql-t prepare_statement_err3024_async-t reg_test_mariadb_stmt_store_result_libmysql-t \
+	reg_test_mariadb_stmt_store_result_async-t
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
@@ -159,20 +161,23 @@ reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cp
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
 	$(CXX) -DLIBMYSQL_HELPER -DDEBUG reg_test_3504-change_user_helper.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"
 
-test_clickhouse_server_libmysql: test_clickhouse_server-t.cpp
+test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp
 	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o test_clickhouse_server_libmysql-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-reg_test_stmt_resultset_err_no_rows_libmysql: reg_test_stmt_resultset_err_no_rows-t.cpp
+reg_test_stmt_resultset_err_no_rows_libmysql-t: reg_test_stmt_resultset_err_no_rows-t.cpp
 	$(CXX) -DLIBMYSQL_HELPER reg_test_stmt_resultset_err_no_rows-t.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap $(OPT) -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_stmt_resultset_err_no_rows_libmysql-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-reg_test_mariadb_stmt_store_result_libmysql: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.a
+reg_test_mariadb_stmt_store_result_libmysql-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) -DLIBMYSQL_HELPER reg_test_mariadb_stmt_store_result-t.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap $(OPT) -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_mariadb_stmt_store_result_libmysql-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-reg_test_mariadb_stmt_store_result_async: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.a
+reg_test_mariadb_stmt_store_result_async-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) -DASYNC_API reg_test_mariadb_stmt_store_result-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_mariadb_stmt_store_result_async-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-prepare_statement_err3024_libmysql: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.a
+prepare_statement_err3024_libmysql-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) -DLIBMYSQL_HELPER prepare_statement_err3024-t.cpp -I/usr/include/mysql -I$(IDIR) -I$(JSON_IDIR) -I../tap $(OPT) -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o prepare_statement_err3024_libmysql-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-prepare_statement_err3024_async: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.a
+prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) -DASYNC_API prepare_statement_err3024-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o prepare_statement_err3024_async-t -DGITVERSION=\"$(GIT_VERSION)\"
+
+test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LIBDIR)/libtap.a
+	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -std=c++11 -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll -lpthread -ldl -ltap $(STATIC_LIBS) -o $@

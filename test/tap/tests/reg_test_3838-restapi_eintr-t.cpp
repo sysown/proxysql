@@ -42,10 +42,10 @@ using signal_t = int;
 using rescode_t = long;
 
 vector<std::tuple<string, params, rescode_t, signal_t, int>> endpoint_requests {
-	std::make_tuple("simple_sleep", "1", 200, 18, 0),
-	std::make_tuple("simple_sleep_timeout", "4", 424, 18, ETIME),
-	std::make_tuple("simple_sleep_timeout", "4", 424, 19, ETIME),
-	std::make_tuple("simple_sleep", "2", 424, 15, 15),
+	std::make_tuple("simple_sleep", "1", 200, SIGCONT, 0),
+	std::make_tuple("simple_sleep_timeout", "4", 424, SIGCONT, ETIME),
+	std::make_tuple("simple_sleep_timeout", "4", 424, SIGSTOP, ETIME),
+	std::make_tuple("simple_sleep", "2", 424, SIGTERM, SIGTERM),
 };
 
 int main(int argc, char** argv) {
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
 	const string full_endpoint {
 		base_address + std::get<0>(first_request_tuple) + "/"
 	};
-	int endpoint_timeout = wait_until_enpoint_ready(full_endpoint, std::get<1>(first_request_tuple), 10, 500);
+	int endpoint_timeout = wait_post_enpoint_ready(full_endpoint, std::get<1>(first_request_tuple), 10, 500);
 
 	if (endpoint_timeout) {
 		diag(
@@ -165,14 +165,14 @@ int main(int argc, char** argv) {
 			int pid = std::stol(s_pid);
 			int k_res = 0;
 
-			if (signal == 18) {
+			if (signal == SIGCONT) {
 				for (int i = 0; i < SIGNAL_NUM; i++) {
-					k_res = kill(pid, 19);
+					k_res = kill(pid, SIGSTOP);
 					if (k_res != 0) { break; }
 
 					usleep(100*1000);
 
-					k_res = kill(pid, 18);
+					k_res = kill(pid, SIGCONT);
 					if (k_res != 0) { break; }
 				}
 			} else {
@@ -193,14 +193,14 @@ int main(int argc, char** argv) {
 			int signaled = 0;
 			int exp_signaled = 0;
 
-			if (post_out_err.empty() == false) {
-				nlohmann::json j_curl_err = nlohmann::json::parse(post_out_err);
+			nlohmann::json j_curl_err = nlohmann::json::parse(post_out_err);
+			if (j_curl_err.contains("error_code")) {
 				child_exit_st = std::stol(j_curl_err["error_code"].get<string>());
 			}
 
 			// NOTE: This is pointless because the value doesn't change, but it's a demonstration on how to
 			// recover child process exit statuses for debugging purposes.
-			if (exp_child_exit_st == 15) {
+			if (exp_child_exit_st == SIGTERM) {
 				exp_signaled = 1;
 				signaled = WIFSIGNALED(child_exit_st);
 				child_exit_st = WTERMSIG(child_exit_st);
@@ -217,7 +217,7 @@ int main(int argc, char** argv) {
 				endpoint.c_str(), exp_rc, post_err, curl_res_code, signaled, child_exit_st, post_out_err.c_str()
 			);
 		} catch (const std::exception& ex) {
-			diag("Invalid error kind returned by ProxySQL, JSON parsing failed with error: %s", ex.what());
+			diag("Invalid error kind returned by ProxySQL, JSON '%s' parsing failed with error: %s", post_out_err.c_str(), ex.what());
 		}
 	}
 
