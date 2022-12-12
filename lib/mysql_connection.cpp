@@ -1548,7 +1548,21 @@ handler_again:
 				async_fetch_row_start=false;
 				if (mysql_row) {
 					if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS) {
-						proxy_warning("MySQL Warning. Level: [%s], Code: [%s], Message: [%s]\n", mysql_row[0], mysql_row[1], mysql_row[2]);
+						if (mysql_thread___verbose_query_error)
+							proxy_warning("Warning during query on (%d,%s,%d,%lu). User '%s@%s', schema '%s',"
+											" digest_text '%s', level '%s', code '%s', message '%s'\n",
+											parent->myhgc->hid, parent->address, parent->port,
+											mysql->thread_id,
+											myds->sess->client_myds->myconn->userinfo->username,
+											(myds->sess->client_myds->addr.addr ? myds->sess->client_myds->addr.addr : (char *)"unknown"),
+											myds->sess->client_myds->myconn->userinfo->schemaname,
+											myds->sess->CurrentQuery.get_digest_text(),
+											mysql_row[0], mysql_row[1], mysql_row[2]);
+						else
+							proxy_warning("Warning during query on (%d,%s,%d,%lu). "
+											"Level '%s', code '%s',"" message '%s'\n",
+											parent->myhgc->hid, parent->address, parent->port,
+											mysql->thread_id, mysql_row[0], mysql_row[1], mysql_row[2]);
 					}
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);
