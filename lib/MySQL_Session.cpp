@@ -171,11 +171,25 @@ bool Session_Regex::match(char *m) {
 	return rc;
 }
 
+KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread* _mt) :
+	KillArgs(u, p, h, P, _hid, i, kt, _mt, NULL) {
+	// resolving DNS if available in Cache
+	if (h) {
+		const std::string& ip = MySQL_Monitor::dns_lookup(h, false);
 
-KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread *_mt) {
+		if (ip.empty() == false) {
+			ip_addr = strdup(ip.c_str());
+		}
+	}
+}
+
+KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread *_mt, char *ip) {
 	username=strdup(u);
 	password=strdup(p);
 	hostname=strdup(h);
+	ip_addr = NULL;
+	if (ip)
+		ip_addr = strdup(ip);
 	port=P;
 	hid=_hid;
 	id=i;
@@ -187,9 +201,18 @@ KillArgs::~KillArgs() {
 	free(username);
 	free(password);
 	free(hostname);
+	if (ip_addr)
+		free(ip_addr);
 }
 
-
+const char* KillArgs::get_host_address() const {
+	const char* host_address = hostname;
+	
+	if (ip_addr)
+		host_address = ip_addr;
+	
+	return host_address;
+}
 
 void * kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
@@ -219,7 +242,7 @@ void * kill_query_thread(void *arg) {
 			default:
 				break;
 		}
-		ret=mysql_real_connect(mysql,ka->hostname,ka->username,ka->password,NULL,ka->port,NULL,0);
+		ret=mysql_real_connect(mysql, ka->get_host_address(), ka->username, ka->password, NULL, ka->port, NULL, 0);
 	} else {
 		switch (ka->kill_type) {
 			case KILL_QUERY:
@@ -238,6 +261,9 @@ void * kill_query_thread(void *arg) {
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, ka->hid, ka->hostname, ka->port, mysql_errno(mysql));
 		goto __exit_kill_query_thread;
 	}
+
+	MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
+
 	char buf[100];
 	switch (ka->kill_type) {
 		case KILL_QUERY:
@@ -1733,7 +1759,8 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 					auth_password=ui->password;
 				}
 			}
-			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->mysql->thread_id, KILL_QUERY, thread);
+
+			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->mysql->thread_id, KILL_QUERY, thread, myds->myconn->connected_host_details.ip);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);

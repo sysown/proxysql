@@ -1,6 +1,6 @@
 #ifndef __CLASS_MYSQL_MONITOR_H
 #define __CLASS_MYSQL_MONITOR_H
-
+#include <future>
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 
@@ -38,6 +38,8 @@
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVER_AWS_AURORA_FAILOVERS "CREATE TABLE mysql_server_aws_aurora_failovers (writer_hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , inserted_at VARCHAR NOT NULL)"
 
 #define MONITOR_SQLITE_TABLE_MYSQL_SERVERS "CREATE TABLE mysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , status INT CHECK (status IN (0, 1, 2, 3, 4)) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , PRIMARY KEY (hostname, port) )"
+
+#define MONITOR_SQLITE_TABLE_PROXYSQL_SERVERS "CREATE TABLE proxysql_servers (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 6032 , weight INT CHECK (weight >= 0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port) )"
 
 /*
 struct cmp_str {
@@ -222,12 +224,13 @@ class MySQL_Monitor_State_Data {
 	bool set_wait_timeout();
 };
 
+template<typename T>
 class WorkItem {
 	public:
-	MySQL_Monitor_State_Data *mmsd;
+	T *data;
 	void *(*routine) (void *);
-	WorkItem(MySQL_Monitor_State_Data *_mmsd, void *(*start_routine) (void *)) {
-		mmsd=_mmsd;
+	WorkItem(T*_data, void *(*start_routine) (void *)) {
+		data=_data;
 		routine=start_routine;
 		}
 	~WorkItem() {}
@@ -244,6 +247,9 @@ struct p_mon_counter {
 		mysql_monitor_read_only_check_err,
 		mysql_monitor_replication_lag_check_ok,
 		mysql_monitor_replication_lag_check_err,
+		mysql_monitor_dns_cache_queried,
+		mysql_monitor_dns_cache_lookup_success,
+		mysql_monitor_dns_cache_record_updated, 
 		__size
 	};
 };
@@ -263,19 +269,94 @@ struct mon_metrics_map_idx {
 	};
 };
 
+struct DNS_Cache_Record {
+	DNS_Cache_Record() = default;
+	DNS_Cache_Record(DNS_Cache_Record&&) = default;
+	DNS_Cache_Record(const DNS_Cache_Record&) = default;
+	DNS_Cache_Record& operator=(DNS_Cache_Record&&) = default;
+	DNS_Cache_Record& operator=(const DNS_Cache_Record&) = default;
+	DNS_Cache_Record(const std::string& hostname, const std::vector<std::string>& ips, unsigned long long ttl = 0) : hostname_(hostname), 
+	 ttl_(ttl) { 
+		std::copy(ips.begin(), ips.end(), std::inserter(ips_, ips_.end()));
+	}
+	DNS_Cache_Record(const std::string& hostname, std::set<std::string>&& ips, unsigned long long ttl = 0) : hostname_(hostname),
+		ips_(std::move(ips)), ttl_(ttl)
+	{ }
+
+	~DNS_Cache_Record() = default;
+
+	std::string hostname_;
+	std::set<std::string> ips_;
+	unsigned long long ttl_ = 0;
+};
+
+class DNS_Cache {
+
+public:
+	DNS_Cache() : enabled(true) {
+		int rc = pthread_rwlock_init(&rwlock_, NULL);
+		assert(rc == 0);
+	}
+
+	~DNS_Cache() {
+		pthread_rwlock_destroy(&rwlock_);
+	}
+
+	inline 
+	void set_enabled_flag(bool value) {
+		enabled = value;
+	}
+
+	bool add(const std::string& hostname, std::vector<std::string>&& ips);
+	bool add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips);
+	void remove(const std::string& hostname);
+	void clear();
+	bool empty() const;
+	std::string lookup(const std::string& hostname, size_t* ip_count) const;
+
+private:
+	struct IP_ADDR {
+		std::vector<std::string> ips;
+		unsigned long counter = 0;
+	};
+
+	std::string get_next_ip(const IP_ADDR& ip_addr) const;
+	std::unordered_map<std::string, IP_ADDR> records;
+	std::atomic_bool enabled;
+	mutable pthread_rwlock_t rwlock_;
+};
+
+struct DNS_Resolve_Data {
+	std::promise<std::tuple<bool, DNS_Cache_Record>> result;
+	std::shared_ptr<DNS_Cache> dns_cache;
+	std::string hostname;
+	std::set<std::string> cached_ips;
+	unsigned int ttl;
+};
+
+
 class MySQL_Monitor {
+	public:
+	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
+	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
+	static bool dns_cache_update_socket(const std::string& hostname, int socket_fd);
+	static void trigger_dns_cache_update();
+
+
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
 	std::vector<table_def_t *> *tables_defs_monitor_internal;
 	void insert_into_tables_defs(std::vector<table_def_t *> *tables_defs, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
+	static bool _dns_cache_update(const std::string& hostname, std::vector<std::string>&& ip_address);
+
 	public:
 	pthread_mutex_t group_replication_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t galera_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t aws_aurora_mutex; // for simplicity, a mutex instead of a rwlock
 	pthread_mutex_t mysql_servers_mutex; // for simplicity, a mutex instead of a rwlock
-
+	pthread_mutex_t proxysql_servers_mutex; 
 	//std::map<char *, MyGR_monitor_node *, cmp_str> Group_Replication_Hosts_Map;
 	std::map<std::string, MyGR_monitor_node *> Group_Replication_Hosts_Map;
 	SQLite3_result *Group_Replication_Hosts_resultset;
@@ -295,13 +376,17 @@ class MySQL_Monitor {
 	unsigned long long read_only_check_ERR;
 	unsigned long long replication_lag_check_OK;
 	unsigned long long replication_lag_check_ERR;
+	unsigned long long dns_cache_queried;
+	unsigned long long dns_cache_lookup_success; //cache hit
+	unsigned long long dns_cache_record_updated;
+	std::atomic_bool force_dns_cache_update;
 	struct {
 		/// Prometheus metrics arrays
 		std::array<prometheus::Counter*, p_mon_counter::__size> p_counter_array {};
 		std::array<prometheus::Gauge*, p_mon_gauge::__size> p_gauge_array {};
 	} metrics;
 	void p_update_metrics();
-	std::unique_ptr<wqueue<WorkItem*>> queue;
+	std::unique_ptr<wqueue<WorkItem<MySQL_Monitor_State_Data>*>> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
 	bool shutdown;
 	pthread_mutex_t mon_en_mutex;
@@ -309,6 +394,9 @@ class MySQL_Monitor {
 	SQLite3DB *admindb;	// internal database
 	SQLite3DB *monitordb;	// internal database
 	SQLite3DB *monitor_internal_db;	// internal database
+
+	std::shared_ptr<DNS_Cache> dns_cache;
+
 	MySQL_Monitor();
 	~MySQL_Monitor();
 	void print_version();
@@ -319,6 +407,7 @@ class MySQL_Monitor {
 	void * monitor_galera();
 	void * monitor_aws_aurora();
 	void * monitor_replication_lag();
+	void * monitor_dns_cache();
 	void * run();
 	void populate_monitor_mysql_server_group_replication_log();
 	void populate_monitor_mysql_server_galera_log();
@@ -331,6 +420,7 @@ class MySQL_Monitor {
 	 * @param SQLite3_result The resulset to be used for updating 'monitor_internal.mysql_servers'.
 	 */
 	void update_monitor_mysql_servers(SQLite3_result*);
+	void update_monitor_proxysql_servers(SQLite3_result* resultset);
 	char * galera_find_last_node(int);
 	std::vector<string> * galera_find_possible_last_nodes(int);
 	bool server_responds_to_ping(char *address, int port);

@@ -108,6 +108,11 @@ class MySQL_Connection {
 	MySrvC *parent;
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;
+
+	struct {
+		char* hostname;
+		char* ip;
+	} connected_host_details;
 	/**
 	 * @brief Keeps tracks of the 'server_status'. Do not confuse with the 'server_status' from the
 	 *  'MYSQL' connection itself. This flag keeps track of the configured server status from the

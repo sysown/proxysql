@@ -244,6 +244,7 @@ int remove_spaces(const char *);
 char *trim_spaces_in_place(char *str);
 char *trim_spaces_and_quotes_in_place(char *str);
 bool mywildcmp(const char *p, const char *str);
+std::string trim(const std::string& s);
 
 /**
  * @brief Helper function that converts a MYSQL_RES into a 'SQLite3_result'.

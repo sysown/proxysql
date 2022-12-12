@@ -480,6 +480,9 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"monitor_threads_min",
 	(char *)"monitor_threads_max",
 	(char *)"monitor_threads_queue_maxsize",
+	(char *)"monitor_local_dns_cache_ttl",
+	(char *)"monitor_local_dns_cache_refresh_interval",
+	(char *)"monitor_local_dns_resolver_queue_maxsize",
 	(char *)"monitor_wait_timeout",
 	(char *)"monitor_writer_is_also_reader",
 	(char *)"max_allowed_packet",
@@ -1090,6 +1093,9 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.monitor_threads_min = 8;
 	variables.monitor_threads_max = 128;
 	variables.monitor_threads_queue_maxsize = 128;
+	variables.monitor_local_dns_cache_ttl = 300000;
+	variables.monitor_local_dns_cache_refresh_interval = 60000;
+	variables.monitor_local_dns_resolver_queue_maxsize = 128;
 	variables.monitor_username=strdup((char *)"monitor");
 	variables.monitor_password=strdup((char *)"monitor");
 	variables.monitor_replication_lag_use_percona_heartbeat=strdup((char *)"");
@@ -2176,6 +2182,9 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["monitor_slave_lag_when_null"]   = make_tuple(&variables.monitor_slave_lag_when_null,    0, 604800, false);
 		VariablesPointers_int["monitor_threads_queue_maxsize"] = make_tuple(&variables.monitor_threads_queue_maxsize, 16,   1024, false);
 
+		VariablesPointers_int["monitor_local_dns_cache_ttl"] = make_tuple(&variables.monitor_local_dns_cache_ttl, 0, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_local_dns_cache_refresh_interval"] = make_tuple(&variables.monitor_local_dns_cache_refresh_interval, 0, 7*24*3600*1000, false);
+		VariablesPointers_int["monitor_local_dns_resolver_queue_maxsize"] = make_tuple(&variables.monitor_local_dns_resolver_queue_maxsize, 16, 1024, false);
 		// mirroring
 		VariablesPointers_int["mirror_max_concurrency"]  = make_tuple(&variables.mirror_max_concurrency, 1,     8*1024, false);
 		VariablesPointers_int["mirror_max_queue_length"] = make_tuple(&variables.mirror_max_queue_length, 0, 1024*1024, false);
@@ -3994,6 +4003,9 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___monitor_threads_min = GloMTH->get_variable_int((char *)"monitor_threads_min");
 	mysql_thread___monitor_threads_max = GloMTH->get_variable_int((char *)"monitor_threads_max");
 	mysql_thread___monitor_threads_queue_maxsize = GloMTH->get_variable_int((char *)"monitor_threads_queue_maxsize");
+	mysql_thread___monitor_local_dns_cache_ttl = GloMTH->get_variable_int((char*)"monitor_local_dns_cache_ttl");
+	mysql_thread___monitor_local_dns_cache_refresh_interval = GloMTH->get_variable_int((char*)"monitor_local_dns_cache_refresh_interval");
+	mysql_thread___monitor_local_dns_resolver_queue_maxsize = GloMTH->get_variable_int((char*)"monitor_local_dns_resolver_queue_maxsize");
 
 	if (mysql_thread___firewall_whitelist_errormsg) free(mysql_thread___firewall_whitelist_errormsg);
 	mysql_thread___firewall_whitelist_errormsg=GloMTH->get_variable_string((char *)"firewall_whitelist_errormsg");
@@ -4570,6 +4582,24 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 			pta[0]=(char *)"MySQL_Monitor_replication_lag_check_ERR";
 			sprintf(buf,"%llu", GloMyMon->replication_lag_check_ERR);
 			pta[1]=buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"MySQL_Monitor_dns_cache_queried";
+			sprintf(buf, "%llu", GloMyMon->dns_cache_queried);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"MySQL_Monitor_dns_cache_lookup_success";
+			sprintf(buf, "%llu", GloMyMon->dns_cache_lookup_success);
+			pta[1] = buf;
+			result->add_row(pta);
+		}
+		{
+			pta[0] = (char*)"MySQL_Monitor_dns_cache_record_updated";
+			sprintf(buf, "%llu", GloMyMon->dns_cache_record_updated);
+			pta[1] = buf;
 			result->add_row(pta);
 		}
 	}

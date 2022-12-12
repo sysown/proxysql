@@ -361,7 +361,7 @@ class MySQL_Session
 #define KILL_CONNECTION  2
 
 class KillArgs {
-	public:
+public:
 	MySQL_Thread *mt;
 	char *username;
 	char *password;
@@ -370,8 +370,14 @@ class KillArgs {
 	unsigned long id;
 	int kill_type;
 	unsigned int hid;
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread *_mt);
+
+	KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread* _mt);
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread *_mt, char *ip);
 	~KillArgs();
+	const char* get_host_address() const;
+
+private:
+	char* ip_addr;
 };
 
 void * kill_query_thread(void *arg);

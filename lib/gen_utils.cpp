@@ -112,7 +112,6 @@ char *trim_spaces_and_quotes_in_place(char *str) {
 	return str;
 }
 
-
 bool mywildcmp(const char *p, const char *str) {
 	if (*p == '\0') {
 		if (*str == '\0') {
@@ -144,6 +143,18 @@ bool mywildcmp(const char *p, const char *str) {
 	return false;
 }
 
+std::string trim(const std::string& s)
+{
+	if (s.length() == 0)
+		return s;
+
+	std::string::size_type b = s.find_first_not_of(" \t\n");
+	std::string::size_type e = s.find_last_not_of(" \t\n");
+	if (b == std::string::npos)
+		return "";
+
+	return std::string(s, b, e - b + 1);
+}
 
 void * PtrSizeArray::operator new(size_t size) {
 	return l_alloc(size);
