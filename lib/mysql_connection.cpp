@@ -1548,21 +1548,34 @@ handler_again:
 				async_fetch_row_start=false;
 				if (mysql_row) {
 					if (myds && myds->sess && myds->sess->status == SHOW_WARNINGS) {
-						if (mysql_thread___verbose_query_error)
-							proxy_warning("Warning during query on (%d,%s,%d,%lu). User '%s@%s', schema '%s',"
-											" digest_text '%s', level '%s', code '%s', message '%s'\n",
-											parent->myhgc->hid, parent->address, parent->port,
-											mysql->thread_id,
-											myds->sess->client_myds->myconn->userinfo->username,
-											(myds->sess->client_myds->addr.addr ? myds->sess->client_myds->addr.addr : (char *)"unknown"),
-											myds->sess->client_myds->myconn->userinfo->schemaname,
-											myds->sess->CurrentQuery.get_digest_text(),
-											mysql_row[0], mysql_row[1], mysql_row[2]);
-						else
-							proxy_warning("Warning during query on (%d,%s,%d,%lu). "
-											"Level '%s', code '%s',"" message '%s'\n",
-											parent->myhgc->hid, parent->address, parent->port,
-											mysql->thread_id, mysql_row[0], mysql_row[1], mysql_row[2]);
+						if (mysql_thread___verbose_query_error) {
+							MySQL_Data_Stream* client_myds = myds->sess->client_myds;
+							const char* username = "";
+							const char* schema = "";
+							const char* client_addr = "";
+							const char* digest_text = myds->sess->CurrentQuery.show_warnings_prev_query_digest.c_str();
+
+							if (client_myds) {
+								client_addr = client_myds->addr.addr ? client_myds->addr.addr : (char *)"unknown";
+
+								if (client_myds->myconn && client_myds->myconn->userinfo) {
+									username = client_myds->myconn->userinfo->username;
+									schema = client_myds->myconn->userinfo->schemaname;
+								}
+							}
+
+							proxy_warning(
+								"Warning during query on (%d,%s,%d,%lu). User '%s@%s', schema '%s', digest_text '%s', level '%s', code '%s', message '%s'\n",
+								parent->myhgc->hid, parent->address, parent->port, get_mysql_thread_id(), username, client_addr,
+								schema, digest_text, mysql_row[0], mysql_row[1], mysql_row[2]
+							);
+						} else {
+							proxy_warning(
+								"Warning during query on (%d,%s,%d,%lu). Level '%s', code '%s', message '%s'\n",
+								parent->myhgc->hid, parent->address, parent->port, get_mysql_thread_id(), mysql_row[0], mysql_row[1],
+								mysql_row[2]
+							);
+						}
 					}
 					unsigned int br=MyRS->add_row(mysql_row);
 					__sync_fetch_and_add(&parent->bytes_recv,br);

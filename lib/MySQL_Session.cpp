@@ -4901,6 +4901,10 @@ handler_again:
 					if (mysql_thread___log_mysql_warnings_enabled) {
 						auto warn_no = mysql_warning_count(myconn->mysql);
 						if (warn_no > 0) {
+							// Backup actual digest causing the warning before it's destroyed by finishing the request
+							const char* digest_text = CurrentQuery.get_digest_text();
+							CurrentQuery.show_warnings_prev_query_digest = digest_text == NULL ? "" : digest_text;
+
 							RequestEnd(myds);
 							writeout();
 
