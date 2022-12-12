@@ -7667,11 +7667,7 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	// we couldn't parse the query
 	string query_str = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 	string digest_str = string(CurrentQuery.get_digest_text());
-	string nqn;
-	if (mysql_thread___parse_failure_logs_digest)
-		nqn = digest_str;
-	else
-		nqn = query_str;
+	string& nqn = ( mysql_thread___parse_failure_logs_digest == true ? digest_str : query_str );
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
 	if (qpo->multiplex == -1) {
 		// we have no rule about this SET statement. We set hostgroup locking
