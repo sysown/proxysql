@@ -309,7 +309,7 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 					if (now > (then + mysql_thread___monitor_ping_interval * 1000 * 10)) {
 						MySQL_Monitor_State_Data* mmsd = new MySQL_Monitor_State_Data((char*)"", 0, NULL, false);
 						mmsd->mysql = mysql;
-						GloMyMon->queue->add(new WorkItem(mmsd, NULL));
+						GloMyMon->queue->add(new WorkItem<MySQL_Monitor_State_Data>(mmsd, NULL));
 						continue;
 					}
 
