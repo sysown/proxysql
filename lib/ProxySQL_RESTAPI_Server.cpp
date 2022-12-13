@@ -118,7 +118,7 @@ private:
 		}
 
 		std::string script;
-		int interval_ms;
+		int interval_ms = 1;
 		auto result=find_script(req, script, interval_ms);
 
 		// result == nullpts means that script was found and we can execute it. continue.
