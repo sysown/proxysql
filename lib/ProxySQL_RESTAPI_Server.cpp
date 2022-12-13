@@ -290,19 +290,25 @@ public:
 			input_params.push_back({arg.first, arg.second});
 		}
 
-		const char* req_path { req.get_path().c_str() };
 		const string s_params { input_params.dump() };
+
+#ifdef DEBUG
+		const char* req_path { req.get_path().c_str() };
 		const char* p_params { s_params.c_str() };
 		proxy_debug(PROXY_DEBUG_RESTAPI, 1, "Processing GET - req: '%s', params: `%s`\n", req_path, p_params);
+#endif
 
 		return process_request(req, s_params);
 	}
 
 	const std::shared_ptr<http_response> render_POST(const http_request& req) {
 		std::string params=req.get_content();
+
+#ifdef DEBUG
 		const char* req_path { req.get_path().c_str() };
 		const char* p_params { params.c_str() };
 		proxy_debug(PROXY_DEBUG_RESTAPI, 1, "Processing POST - req: '%s', params: `%s`\n", req_path, p_params);
+#endif
 
 		return process_request(req, params);
 	}

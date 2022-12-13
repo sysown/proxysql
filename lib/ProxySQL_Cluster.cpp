@@ -87,7 +87,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
+			// unsigned int timeout_long = 60;
 			if (conn == NULL) {
 				conn = mysql_init(NULL);
 				if (conn==NULL) {
@@ -906,7 +906,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
+			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
@@ -1177,7 +1177,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
+			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
@@ -1498,7 +1498,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
+			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
@@ -1868,7 +1868,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
+			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
@@ -2020,7 +2020,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 		GloProxyCluster->get_credentials(&username, &password);
 		if (strlen(username)) { // do not monitor if the username is empty
 			unsigned int timeout = 1;
-			unsigned int timeout_long = 60;
+			// unsigned int timeout_long = 60;
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);

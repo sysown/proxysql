@@ -3662,7 +3662,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 	wrlock();
 
 	int reader_hostgroup = 0;
-	bool writer_is_also_reader = false;
+	// bool writer_is_also_reader = false;
 
 	// Get the reader_hostgroup for the supplied writter hostgroup
 	const std::string t_reader_hostgroup_query {
@@ -3688,7 +3688,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 
 	rhid_row = rhid_res->rows[0];
 	reader_hostgroup = atoi(rhid_row->fields[0]);
-	writer_is_also_reader = atoi(rhid_row->fields[1]);
+	// writer_is_also_reader = atoi(rhid_row->fields[1]);
 
 	{
 		MyHGC* myhgc = nullptr;
