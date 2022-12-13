@@ -5835,9 +5835,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			if (index(dig,';') && (index(dig,';') != dig + strlen(dig)-1)) {
 				string nqn;
 				if (mysql_thread___parse_failure_logs_digest)
-					nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-				else
 					nqn = string(CurrentQuery.get_digest_text());
+				else
+					nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 				proxy_warning(
 					"Unable to parse multi-statements command with SET statement from client"
 					" %s:%d: setting lock hostgroup. Command: %s\n", client_myds->addr.addr,
@@ -5916,8 +5916,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							||
 							( strcasecmp(value1.c_str(),(char *)"IFNULL") == 0 )
 						) {
-							string query_str = string((char *)CurrentQuery.QueryPointer,
-														CurrentQuery.QueryLength);
+							string query_str = string((char *)CurrentQuery.QueryPointer, CurrentQuery.QueryLength);
 							string digest_str = string(CurrentQuery.get_digest_text());
 							string nqn;
 							if (mysql_thread___parse_failure_logs_digest)
@@ -6367,9 +6366,9 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							if (kq != 0) {
 								string nqn;
 								if (mysql_thread___parse_failure_logs_digest)
-									nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
-								else
 									nqn = string(CurrentQuery.get_digest_text());
+								else
+									nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 								proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
 								return false;
 							}
