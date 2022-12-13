@@ -533,8 +533,10 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 		}
 	}
-	// Always remove 'SERVER_SESSION_STATE_CHANGED', since we don't track this information right now
-	internal_status &= ~SERVER_SESSION_STATE_CHANGED;
+	if (gtid_len == 0) {
+		// Remove 'SERVER_SESSION_STATE_CHANGED', since we don't track this info unless GTID related
+		internal_status &= ~SERVER_SESSION_STATE_CHANGED;
+	}
 	memcpy(_ptr+l, &internal_status, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l, &warnings, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	if (msg && strlen(msg)) {
