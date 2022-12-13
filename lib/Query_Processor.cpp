@@ -1057,7 +1057,7 @@ unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
 	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
-		proxy_info("Purging stats_mysql_query_digest: locked for %llums to remove %llu entries\n", curtime2-curtime1, map1_size);
+		proxy_info("Purging stats_mysql_query_digest: locked for %llums to remove %lu entries\n", curtime2-curtime1, map1_size);
 	}
 	char buf[128];
 	sprintf(buf, "Query digest map locked for %llums", curtime2-curtime1);
@@ -1232,7 +1232,7 @@ SQLite3_result * Query_Processor::get_query_digests() {
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
 		curtime2 = curtime2/1000;
-		proxy_info("Running query on stats_mysql_query_digest: locked for %llums to retrieve %llu entries\n", curtime2-curtime1, map_size);
+		proxy_info("Running query on stats_mysql_query_digest: locked for %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
 	}
 	return result;
 }
@@ -1323,7 +1323,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
 		curtime2 = curtime2/1000;
-		proxy_info("Running query on stats_mysql_query_digest_reset: locked for %llums to retrieve %llu entries\n", curtime2-curtime1, map_size);
+		proxy_info("Running query on stats_mysql_query_digest_reset: locked for %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
 		if (free_me) {
 			if (defer_free) {
 				for (int i=0; i<n; i++) {
@@ -1418,11 +1418,11 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					qr1->comment);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: \n", qr2->rule_id, qr2->match_digest);
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: %s\n", qr2->rule_id, qr2->match_digest);
 					qr2->regex_engine1=(void *)compile_query_rule(qr2,1);
 				}
 				if (qr2->match_pattern) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: \n", qr2->rule_id, qr2->match_pattern);
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: %s\n", qr2->rule_id, qr2->match_pattern);
 					qr2->regex_engine2=(void *)compile_query_rule(qr2,2);
 				}
 				_thr_SQP_rules->push_back(qr2);
@@ -1606,7 +1606,7 @@ __internal_loop:
 		}
 	    if (qr->retries >= 0) {
 			// Note: negative retries means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will%s be re-executed %d times in case of failure\n", qr->rule_id, qr->retries);
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will be re-executed %d times in case of failure\n", qr->rule_id, qr->retries, qr->retries);
 			ret->retries=qr->retries;
 		}
 		if (qr->delay >= 0) {

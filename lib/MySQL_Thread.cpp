@@ -3179,14 +3179,14 @@ __run_skip_1a:
 #endif
 		}
 
-		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);
+		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
 		if (mysql_thread___wait_timeout==0) {
 			// we should be going into PAUSE mode
 			if (mypolls.poll_timeout==0 || mypolls.poll_timeout > 100000) {
 				mypolls.poll_timeout=100000;
 			}
 		}
-		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%llu\n", mypolls.poll_timeout);
+		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
 
 
 		// flush mysql log file
@@ -5642,7 +5642,7 @@ void MySQL_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds) {
 	if (myds->wait_until > curtime) {
 		if (mypolls.poll_timeout==0 || (myds->wait_until - curtime < mypolls.poll_timeout) ) {
 			mypolls.poll_timeout= myds->wait_until - curtime;
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , wait_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->wait_until, curtime);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , wait_until=%llu , curtime=%llu\n", myds->sess, mypolls.poll_timeout, myds->wait_until, curtime);
 		}
 	}
 }
@@ -5650,7 +5650,7 @@ void MySQL_Thread::tune_timeout_for_myds_needs_pause(MySQL_Data_Stream *myds) {
 void MySQL_Thread::tune_timeout_for_session_needs_pause(MySQL_Data_Stream *myds) {
 	if (mypolls.poll_timeout==0 || (myds->sess->pause_until - curtime < mypolls.poll_timeout) ) {
 		mypolls.poll_timeout= myds->sess->pause_until - curtime;
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%llu , pause_until=%llu , curtime=%llu\n", mypolls.poll_timeout, myds->sess->pause_until, curtime);
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , poll_timeout=%u , pause_until=%llu , curtime=%llu\n", myds->sess, mypolls.poll_timeout, myds->sess->pause_until, curtime);
 	}
 }
 

@@ -212,7 +212,7 @@ enum sslstatus MySQL_Data_Stream::do_ssl_handshake() {
 		if (x509_subject_alt_name != NULL) {
 			long rc = SSL_get_verify_result(ssl);
 			if (rc != X509_V_OK) {
-				proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%d:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
+				proxy_error("Disconnecting %s:%d: X509 client SSL certificate verify error: (%ld:%s)\n" , addr.addr, addr.port, rc, X509_verify_cert_error_string(rc));
 				return SSLSTATUS_FAIL;
 			}
 		}
@@ -555,7 +555,7 @@ int MySQL_Data_Stream::read_from_net() {
 		//ssize_t n = read(fd, buf, sizeof(buf));
 		int n = recv(fd, buf, sizeof(buf), 0);
 		//proxy_info("SSL recv of %d bytes\n", n);
-		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %u ,  num_read: %u\n", sess, n,  rbio_ssl->num_write , rbio_ssl->num_read);
+		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p: recv() read %d bytes. num_write: %lu ,  num_read: %lu\n", sess, n,  rbio_ssl->num_write , rbio_ssl->num_read);
 		if (n > 0 || rbio_ssl->num_write > rbio_ssl->num_read) {
 			//on_read_cb(buf, (size_t)n);
 

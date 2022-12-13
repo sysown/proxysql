@@ -257,7 +257,7 @@ void * kill_query_thread(void *arg) {
 		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
 	}
 	if (!ret) {
-		proxy_error("Failed to connect to server %s:%d to run KILL %s %llu: Error: %s\n" , ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id, mysql_error(mysql));
+		proxy_error("Failed to connect to server %s:%d to run KILL %s %lu: Error: %s\n" , ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id, mysql_error(mysql));
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, ka->hid, ka->hostname, ka->port, mysql_errno(mysql));
 		goto __exit_kill_query_thread;
 	}
@@ -1514,7 +1514,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			if (mysql_thread___verbose_query_error) {
 				proxy_warning(
 					"Command '%.*s' refers to file in ProxySQL instance, NOT on client side!\n",
-					pkt->size - sizeof(mysql_hdr) - 1,
+					static_cast<int>(pkt->size - sizeof(mysql_hdr) - 1),
 					static_cast<char*>(pkt->ptr) + 5
 				);
 			} else {
@@ -2426,7 +2426,10 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 			);
 			if (myerr >= 2000 || myerr == 0) {
 				if (myerr == 2019) {
-					proxy_error("Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %u\n", charset, myconn->parent->address, myconn->parent->port, mysql_tracked_variables[SQL_CHARACTER_SET].default_value);
+					proxy_error(
+						"Client trying to set a charset/collation (%u) not supported by backend (%s:%d). Changing it to %s\n",
+						charset, myconn->parent->address, myconn->parent->port, mysql_tracked_variables[SQL_CHARACTER_SET].default_value
+					);
 				}
 				bool retry_conn=false;
 				// client error, serious
@@ -4898,6 +4901,10 @@ handler_again:
 					if (mysql_thread___log_mysql_warnings_enabled) {
 						auto warn_no = mysql_warning_count(myconn->mysql);
 						if (warn_no > 0) {
+							// Backup actual digest causing the warning before it's destroyed by finishing the request
+							const char* digest_text = CurrentQuery.get_digest_text();
+							CurrentQuery.show_warnings_prev_query_digest = digest_text == NULL ? "" : digest_text;
+
 							RequestEnd(myds);
 							writeout();
 
@@ -6951,11 +6958,11 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 		// we couldn't get a connection for whatever reason, ex: no backends, or too busy
 		if (thread->mypolls.poll_timeout==0) { // tune poll timeout
 				thread->mypolls.poll_timeout = mysql_thread___poll_timeout_on_failure * 1000;
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , DS=%p , poll_timeout=%llu\n", mybe->server_myds, thread->mypolls.poll_timeout);
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , DS=%p , poll_timeout=%u\n", mybe->server_myds->sess, mybe->server_myds, thread->mypolls.poll_timeout);
 		} else {
 			if (thread->mypolls.poll_timeout > (unsigned int)mysql_thread___poll_timeout_on_failure * 1000) {
 				thread->mypolls.poll_timeout = mysql_thread___poll_timeout_on_failure * 1000;
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , DS=%p , poll_timeout=%llu\n", mybe->server_myds, thread->mypolls.poll_timeout);
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Session=%p , DS=%p , poll_timeout=%u\n", mybe->server_myds->sess, mybe->server_myds, thread->mypolls.poll_timeout);
 			}
 		}
 		return;

@@ -1222,10 +1222,10 @@ __fast_exit_monitor_ping_thread:
 		mmsd->t2=monotonic_time();
 		if (mmsd->mysql_error_msg) {
 #ifdef DEBUG
-			proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 #else
-			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+			proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
@@ -1248,7 +1248,7 @@ __fast_exit_monitor_ping_thread:
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
-				proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				proxy_error("Error after %lldms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
@@ -2445,7 +2445,7 @@ void * monitor_replication_lag_thread(void *arg) {
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 #ifdef DEBUG
 		unsigned long long now=monotonic_time();
-		proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (now-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+		proxy_error("Error after %lldms: mmsd %p , MYSQL %p , FD %d : %s\n", (now-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 #endif // DEBUG
 		if (mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
@@ -2544,10 +2544,10 @@ __exit_monitor_replication_lag_thread:
 	if (mmsd->interr || mmsd->mysql_error_msg) { // check failed
 		if (mmsd->mysql) {
 #ifdef DEBUG
-			proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 #else
-			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+			proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			mysql_close(mmsd->mysql);
@@ -2566,10 +2566,10 @@ __fast_exit_monitor_replication_lag_thread:
 		// if we reached here we didn't put the connection back
 		if (mmsd->mysql_error_msg) {
 #ifdef DEBUG
-			proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 #else
-			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+			proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
@@ -2582,10 +2582,10 @@ __fast_exit_monitor_replication_lag_thread:
 					//GloMyMon->My_Conn_Pool->conn_unregister(mmsd->mysql);
 				} else {
 #ifdef DEBUG
-					proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+					proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 #else
-					proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+					proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
@@ -2593,10 +2593,10 @@ __fast_exit_monitor_replication_lag_thread:
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
 #ifdef DEBUG
-				proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 #else
-				proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+				proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				mysql_close(mmsd->mysql);
@@ -5220,11 +5220,11 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 		// if we reached here we didn't put the connection back
 		if (mmsd->mysql_error_msg) {
 #ifdef DEBUG
-			proxy_error("Error after %dms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+			proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 #else
-			proxy_error("Error after %dms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
+			proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd->hostname, mmsd->port, mmsd->mysql_error_msg);
 #endif // DEBUG
 			mysql_close(mmsd->mysql); // if we reached here we should destroy it
 			mmsd->mysql=NULL;
@@ -5234,14 +5234,14 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 				if (rc) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 				} else {
-					proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+					proxy_error("Error after %lldms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql); // set_wait_timeout failed
 				}
 				mmsd->mysql=NULL;
 			} else { // really not sure how we reached here, drop it
-				proxy_error("Error after %dms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
+				proxy_error("Error after %lldms: mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2-mmsd->t1)/1000, mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg);
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
