@@ -243,6 +243,15 @@ class MySQL_Data_Stream
 		statuses.myconnpoll_put++;
 		myconn->myds=NULL;
 		myconn=NULL;
+		if (encrypted == true) {
+			if (sess != NULL && sess->session_fast_forward == true) {
+				// it seems we are a connection with SSL on a fast_forward session.
+				// See attach_connection() for more details .
+				// We now disable SSL metadata from the Data Stream
+				encrypted = false;
+				ssl = NULL;
+			}
+		}
 	}
 
 	void return_MySQL_Connection_To_Pool();

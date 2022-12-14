@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(3);
+	plan(5);
 	diag("Testing SSL and fast_forward");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
@@ -154,7 +154,6 @@ int main(int argc, char** argv) {
 	mysql_free_result(result);
 	mysql_close(mysql_1);
 
-/*
 	diag("We now create a connection using SSL for both client or backend");
 	{
 		std::vector<std::string> queries = {
@@ -184,7 +183,6 @@ int main(int argc, char** argv) {
 	mysql_free_result(result);
 	mysql_close(mysql_1);
 
-*/
 
 	mysql_close(mysqladmin);
 

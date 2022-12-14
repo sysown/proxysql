@@ -385,15 +385,6 @@ MySQL_Data_Stream::~MySQL_Data_Stream() {
 			SSL_shutdown(ssl);
 		}
 		if (ssl) SSL_free(ssl);
-/*
-		SSL_free() should also take care of these
-		if (rbio_ssl) {
-			BIO_free(rbio_ssl);
-		}
-		if (wbio_ssl) {
-			BIO_free(wbio_ssl);
-		}
-*/
 	}
 	if (multi_pkt.ptr) {
 		l_free(multi_pkt.size,multi_pkt.ptr);
