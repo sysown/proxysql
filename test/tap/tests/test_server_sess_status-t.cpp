@@ -81,7 +81,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 
 	// TODO: Harcoded for now, this is an initial version of the test.
-	plan(4);
+	plan(6);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -138,6 +138,47 @@ int main(int argc, char** argv) {
 		ok(
 			exp_proxy_srv_st == proxy->server_status,
 			"ProxySQL init server status should match expected - exp: '%d', act:'%d'",
+			exp_proxy_srv_st, proxy->server_status
+		);
+
+		int err_code = mysql_reset_connection(proxy);
+		if (err_code != EXIT_SUCCESS) {
+			diag(
+				"'mysql_reset_connection' failed with error: (%d,'%s') at ('%s':'%d')",
+				mysql_errno(proxy), mysql_error(proxy), __FILE__, __LINE__
+			);
+			return EXIT_FAILURE;
+		}
+
+		ok(
+			exp_proxy_srv_st == proxy->server_status,
+			"ProxySQL server status after reset connection should match expected - exp: '%d', act:'%d'",
+			exp_proxy_srv_st, proxy->server_status
+		);
+
+		const string username = { "sbtest_reset_conn_1" };
+		const string password = { "sbtest_reset_conn_1" };
+		const string attributes = { "" };
+		err_code = create_proxysql_user(admin, username, password, attributes);
+		if (err_code) {
+			diag("'create_proxysql_user' failed at ('%s':'%d') with error '%d'", __FILE__, __LINE__, err_code);
+			return EXIT_FAILURE;
+		}
+
+		MYSQL_QUERY(admin, "LOAD MYSQL USERS TO RUNTIME");
+
+		err_code = mysql_change_user(proxy, username.c_str(), password.c_str(), NULL);
+		if (err_code != EXIT_SUCCESS) {
+			diag(
+				"'mysql_change_user' failed with error: (%d,'%s') at ('%s':'%d')",
+				mysql_errno(proxy), mysql_error(proxy), __FILE__, __LINE__
+			);
+			return EXIT_FAILURE;
+		}
+
+		ok(
+			exp_proxy_srv_st == proxy->server_status,
+			"ProxySQL server status after change user should match expected - exp: '%d', act:'%d'",
 			exp_proxy_srv_st, proxy->server_status
 		);
 
