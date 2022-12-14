@@ -133,18 +133,18 @@ int main(int argc, char** argv) {
 			exp_mysql_srv_st, mysql->server_status
 		);
 
-		// TODO-FIXME: We are setting here '0' as expecting to see 'SERVER_STATUS_AUTOCOMMIT' to be false.
-		// This is a bug that should be addressed, and this test revisited.
+		uint32_t exp_proxy_srv_st = SERVER_STATUS_AUTOCOMMIT;
+
 		ok(
-			proxy->server_status == 0,
+			exp_proxy_srv_st == proxy->server_status,
 			"ProxySQL init server status should match expected - exp: '%d', act:'%d'",
-			0, proxy->server_status
+			exp_proxy_srv_st, proxy->server_status
 		);
 
 		mysql_query(proxy, "SET SESSION session_track_transaction_info=\"CHARACTERISTICS\"");
 		mysql_query(proxy, "START TRANSACTION");
 
-		uint32_t exp_proxy_srv_st = SERVER_STATUS_AUTOCOMMIT | SERVER_STATUS_IN_TRANS;
+		exp_proxy_srv_st = SERVER_STATUS_AUTOCOMMIT | SERVER_STATUS_IN_TRANS;
 
 		ok(
 			exp_proxy_srv_st == proxy->server_status,
