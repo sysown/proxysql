@@ -1123,15 +1123,21 @@ handler_again:
 					if (myds)
 						if (myds->sess != NULL)
 							if (myds->sess->session_fast_forward == true) {
-								myds->encrypted = true;
 								assert(myds->ssl==NULL);
 								if (myds->ssl == NULL) {
 									// check the definition of P_MARIADB_TLS
 									P_MARIADB_TLS * matls = (P_MARIADB_TLS *)mysql->net.pvio->ctls;
-									myds->ssl = (SSL *)matls->ssl;
-									myds->rbio_ssl = BIO_new(BIO_s_mem());
-									myds->wbio_ssl = BIO_new(BIO_s_mem());
-									SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+									if (matls != NULL) {
+										myds->encrypted = true;
+										myds->ssl = (SSL *)matls->ssl;
+										myds->rbio_ssl = BIO_new(BIO_s_mem());
+										myds->wbio_ssl = BIO_new(BIO_s_mem());
+										SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+									} else {
+										// if mysql->options.use_ssl == 1 but matls == NULL
+										// it means that ProxySQL tried to use SSL to connect to the backend
+										// but the backend didn't support SSL
+									}
 								}
 							}
 			}
