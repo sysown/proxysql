@@ -1947,7 +1947,10 @@ __do_auth:
 #endif
 		(*myds)->sess->schema_locked=schema_locked;
 		(*myds)->sess->transaction_persistent=transaction_persistent;
-		(*myds)->sess->session_fast_forward=fast_forward;
+		(*myds)->sess->session_fast_forward=false; // default
+		if ((*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL) {
+			(*myds)->sess->session_fast_forward=fast_forward;
+		}
 		(*myds)->sess->user_max_connections=max_connections;
 	}
 	if (password == NULL) {
