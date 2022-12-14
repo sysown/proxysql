@@ -3780,8 +3780,8 @@ void* MySQL_Monitor::monitor_dns_cache() {
 			if (dns_records_bookkeeping.empty() == false) {
 				unsigned long long current_time = monotonic_time();
 
-				for (auto itr = dns_records_bookkeeping.cbegin();
-					itr != dns_records_bookkeeping.cend();) {
+				for (auto itr = dns_records_bookkeeping.begin();
+					itr != dns_records_bookkeeping.end();) {
 					// remove orphaned records
 					if (hostnames.find(itr->hostname_) == hostnames.end()) {
 						dns_cache->remove(itr->hostname_);
