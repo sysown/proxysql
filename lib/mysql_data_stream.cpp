@@ -532,7 +532,7 @@ int MySQL_Data_Stream::read_from_net() {
 				r = recv(fd, queue_w_ptr(queueIN), s, 0);
 			}
 		}
-	} else {
+	} else { // encrypted == true
 /*
 		if (!SSL_is_init_finished(ssl)) {
 			int ret = SSL_do_handshake(ssl);

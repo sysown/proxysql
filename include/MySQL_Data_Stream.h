@@ -207,12 +207,19 @@ class MySQL_Data_Stream
 		myconn=mc;
 		myconn->statuses.myconnpoll_get++;
 		mc->myds=this;
+		encrypted = false; // this is the default
 		// we handle encryption for backend
 		//
 		// we have a similar code in MySQL_Connection
 		// in case of ASYNC_CONNECT_SUCCESSFUL
-		encrypted = false;
 		if (sess != NULL && sess->session_fast_forward == true) {
+			// if frontend and backend connection use SSL we will set
+			// encrypted = true and we will start using the SSL structure
+			// directly from P_MARIADB_TLS structure.
+			//
+			// For futher details:
+			// - without ssl: we use the file descriptor from mysql connection
+			// - with ssl: we use the SSL structure from mysql connection
 			if (myconn->mysql && myconn->ret_mysql) {
 				if (myconn->mysql->options.use_ssl == 1) {
 					encrypted = true;

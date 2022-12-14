@@ -1118,6 +1118,7 @@ handler_again:
 				// we handle encryption for backend
 				//
 				// we have a similar code in MySQL_Data_Stream::attach_connection()
+				// see there for further details
 				if (mysql->options.use_ssl == 1)
 					if (myds)
 						if (myds->sess != NULL)
