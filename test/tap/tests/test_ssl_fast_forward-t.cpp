@@ -142,6 +142,7 @@ int main(int argc, char** argv) {
 	if (!mysqls[1])
 		return exit_status();
 
+	mysql_ssl_set(mysqls[1], NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysqls[1], cl.host, username, password, NULL, cl.port, NULL, CLIENT_SSL)) {
 	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
 	              mysql_error(mysqls[1]));
@@ -200,6 +201,7 @@ int main(int argc, char** argv) {
 	if (!mysqls[4])
 		return exit_status();
 
+	mysql_ssl_set(mysqls[4], NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysqls[4], cl.host, username, password, NULL, cl.port, NULL, CLIENT_SSL)) {
 	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
 	              mysql_error(mysqls[4]));
