@@ -67,7 +67,7 @@ std::vector<std::string> queries_SQL2 = {
 
 std::vector<unsigned long long int> queries_limits = {
 	1, 10, 20, 27, 103, 169, 320, 450, 512, 619, 915, 1022,
-//	1033, 1145, 1516, 1920, 2034, 5014, 9932, 10111
+	1033, 1145, // 1516, 1920, 2034, 5014, 9932, 10111
 };
 
 
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(5*ITER+5*queries_limits.size());
+	plan(5*ITER+5*ITER*queries_limits.size());
 	diag("Testing SSL and fast_forward");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
@@ -213,7 +213,6 @@ int main(int argc, char** argv) {
 
 	if (it != ITER - 1) {
 		for (int i = 0 ; i<5 ; i++) {
-			mysqls[i] = NULL;
 			mysql_close(mysqls[i]);
 		}
 	}
@@ -229,17 +228,19 @@ int main(int argc, char** argv) {
 			return exit_status();
 	}
 
-	// we now run each SELECT FROM tbl1459 on each connections
-	// we intentionally have the connections in the inner loop so to use all the connection through the test
-	for (auto it = queries_limits.begin(); it != queries_limits.end(); it++) {
-		unsigned long long int l = *it;
-		std::string q = "SELECT * FROM tbl1459 LIMIT " + std::to_string(l);
-		for (int i=0; i<5; i++) {
-			MYSQL_QUERY(mysqls[i], q.c_str());
-			MYSQL_RES* result = mysql_store_result(mysqls[i]);
-			unsigned long long int rr = mysql_num_rows(result);
-			ok(rr == l, "Select statement expects %llu rows. Returned %llu", l, rr);
-			mysql_free_result(result);
+	for (int it = 0 ; it<ITER ; it++) {
+		// we now run each SELECT FROM tbl1459 on each connections
+		// we intentionally have the connections in the inner loop so to use all the connection through the test
+		for (auto it = queries_limits.begin(); it != queries_limits.end(); it++) {
+			unsigned long long int l = *it;
+			std::string q = "SELECT * FROM tbl1459 LIMIT " + std::to_string(l);
+			for (int i=0; i<5; i++) {
+				MYSQL_QUERY(mysqls[i], q.c_str());
+				MYSQL_RES* result = mysql_store_result(mysqls[i]);
+				unsigned long long int rr = mysql_num_rows(result);
+				ok(rr == l, "Select statement on connection %d: expects %llu rows, returned %llu", i, l, rr);
+				mysql_free_result(result);
+			}
 		}
 	}
 
