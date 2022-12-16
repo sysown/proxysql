@@ -1,0 +1,11 @@
+--- a/src/libinjection_sqli.c	2017-05-21 20:44:26.000000000 +0000
++++ b/src/libinjection_sqli.c	2022-12-16 10:36:23.632259768 +0000
+@@ -1197,7 +1197,7 @@
+  * without having to regenerated the SWIG (or other binding) in minor
+  * releases.
+  */
+-const char* libinjection_version()
++const char* libinjection_version(void)
+ {
+     return LIBINJECTION_VERSION;
+ }
