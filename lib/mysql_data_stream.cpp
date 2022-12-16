@@ -629,11 +629,20 @@ int MySQL_Data_Stream::read_from_net() {
 			}
 		} else {
 			int ssl_ret=SSL_get_error(ssl, r);
+			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error(): %d , errno: %d\n", sess, this, ssl_ret, errno);
 			if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
-			if (r==0 && revents==1) {
-				// revents returns 1 , but recv() returns 0 , so there is no data.
-				// Therefore the socket is already closed
-				shut_soft();
+			if (r==0) { // we couldn't read any data
+				if (ssl_ret == SSL_ERROR_SYSCALL && (errno == EINTR || errno == EAGAIN)) {
+					proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error() is SSL_ERROR_SYSCALL, errno: %d\n", sess, this, errno);
+					// the read was interrupted, do nothing
+				} else {
+					if (revents==1) {
+						// revents returns 1 , but recv() returns 0 , so there is no data.
+						// Therefore the socket is already closed
+						proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft\n", sess, this);
+						shut_soft();
+					}
+				}
 			}
 		}
 	} else {

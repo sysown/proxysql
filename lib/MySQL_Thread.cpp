@@ -3578,17 +3578,36 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 
 							if (rb > 0 && myds->myds_type == MYDS_BACKEND) {
 								if (myds->sess->session_fast_forward) {
-									struct pollfd _fds;
-									nfds_t _nfds = 1;
-									_fds.fd = mypolls.fds[n].fd;
-									_fds.events = POLLIN;
-									_fds.revents = 0;
-									int _rc = poll(&_fds, _nfds, 0);
-									if ((_rc > 0) && _fds.revents == POLLIN) {
-										// there is more data
-										myds->revents = _fds.revents;
-									} else {
+									if (myds->encrypted == true) { // we are in fast_forward mode and encrypted == true
+										// we probably should use SSL_pending() and/or SSL_has_pending() to determine
+										// if there is more data to be read, but it doesn't seem to be working.
+										// Therefore we hardcored the value 16384 (16KB) as a special case and
+										// we try to call read_from_net() again
+/*
+										int sslp = SSL_pending(myds->ssl);
+										int sslhp = SSL_has_pending(myds->ssl);
+										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: in fast_forward mode and SSL read %d bytes , SSL_pending: %d bytes , SSL_has_pending: %d\n", myds->sess, rb, sslp, sslhp);
+*/
+										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, rb);
+										while (rb == 16384) {
+											rb = myds->read_from_net();
+											proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, rb);
+											myds->read_pkts();
+										}
 										rb = 0; // exit loop
+									} else { // we are in fast_forward mode and encrypted == false
+										struct pollfd _fds;
+										nfds_t _nfds = 1;
+										_fds.fd = mypolls.fds[n].fd;
+										_fds.events = POLLIN;
+										_fds.revents = 0;
+										int _rc = poll(&_fds, _nfds, 0);
+										if ((_rc > 0) && _fds.revents == POLLIN) {
+											// there is more data
+											myds->revents = _fds.revents;
+										} else {
+											rb = 0; // exit loop
+										}
 									}
 								} else {
 									rb = 0; // exit loop
