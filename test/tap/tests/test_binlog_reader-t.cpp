@@ -96,10 +96,10 @@ const uint32_t NUM_ROWS = 3000;
 const uint32_t NUM_CHECKS = 500;
 
 map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mysql_res_row>& conn_pool_stats) {
-	uint32_t hg_50_queries = 0;
-	uint32_t hg_50_sync_queries = 0;
-	uint32_t hg_60_queries = 0;
-	uint32_t hg_60_sync_queries = 0;
+	uint32_t hg_1900_queries = 0;
+	uint32_t hg_1900_sync_queries = 0;
+	uint32_t hg_1901_queries = 0;
+	uint32_t hg_1901_sync_queries = 0;
 
 	for (const auto& conn_pool_stats_row : conn_pool_stats) {
 		if (conn_pool_stats_row.size() < 3) {
@@ -112,16 +112,16 @@ map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mys
 		const uint32_t queries = std::stol(conn_pool_stats_row[1]);
 		const uint32_t queries_gtid_sync = std::stol(conn_pool_stats_row[2]);
 
-		if (hg == 50) {
-			hg_50_queries += queries;
-			hg_50_sync_queries += queries_gtid_sync;
-		} else if (hg == 60) {
-			hg_60_queries += queries;
-			hg_60_sync_queries += queries_gtid_sync;
+		if (hg == 1900) {
+			hg_1900_queries += queries;
+			hg_1900_sync_queries += queries_gtid_sync;
+		} else if (hg == 1901) {
+			hg_1901_queries += queries;
+			hg_1901_sync_queries += queries_gtid_sync;
 		}
 	}
 
-	return { { 50, { hg_50_queries, hg_50_sync_queries } }, { 60, { hg_60_queries, hg_60_sync_queries } } };
+	return { { 1900, { hg_1900_queries, hg_1900_sync_queries } }, { 1901, { hg_1901_queries, hg_1901_sync_queries } } };
 }
 
 int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
@@ -168,28 +168,28 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 	}
 
 	auto hg_stats { extract_hosgtroups_stats(conn_pool_stats) };
-	uint32_t hg_50_queries = hg_stats.at(50).first;
-	uint32_t hg_50_sync_queries = hg_stats.at(50).second;;
-	uint32_t hg_60_queries = hg_stats.at(60).first;
-	uint32_t hg_60_sync_queries = hg_stats.at(60).second;;
+	uint32_t hg_1900_queries = hg_stats.at(1900).first;
+	uint32_t hg_1900_sync_queries = hg_stats.at(1900).second;;
+	uint32_t hg_1901_queries = hg_stats.at(1901).first;
+	uint32_t hg_1901_sync_queries = hg_stats.at(1901).second;;
 
-	uint32_t hg_50_exp_queries =
+	uint32_t hg_1900_exp_queries =
 		3 +            // Database creation + Table DROP + Table creation
 		NUM_ROWS +     // Initial data load
 		NUM_CHECKS;    // Updates (matching number of checks)
-	uint32_t hg_50_exp_sync_queries = NUM_CHECKS - 1;
+	uint32_t hg_1900_exp_sync_queries = NUM_CHECKS - 1;
 
-	bool hg_50_checks = hg_50_exp_queries == hg_50_queries && hg_50_sync_queries == hg_50_exp_sync_queries;
-	bool hg_60_checks = hg_60_queries == NUM_CHECKS && hg_60_sync_queries == NUM_CHECKS;
+	bool hg_1900_checks = hg_1900_exp_queries == hg_1900_queries && hg_1900_sync_queries == hg_1900_exp_sync_queries;
+	bool hg_1901_checks = hg_1901_queries == NUM_CHECKS && hg_1901_sync_queries == NUM_CHECKS;
 
 	ok(
-		hg_50_checks && hg_60_checks,
+		hg_1900_checks && hg_1901_checks,
 		"GTID based query routing: {"
-			" hg_50: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d },"
-			" hg_60: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d }"
+			" hg_1900: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d },"
+			" hg_1901: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d }"
 		" }",
-		hg_50_exp_queries, hg_50_queries, hg_50_exp_sync_queries, hg_50_sync_queries,
-		NUM_CHECKS, hg_60_queries, NUM_CHECKS, hg_60_queries
+		hg_1900_exp_queries, hg_1900_queries, hg_1900_exp_sync_queries, hg_1900_sync_queries,
+		NUM_CHECKS, hg_1901_queries, NUM_CHECKS, hg_1901_queries
 	);
 
 	// Reset connection pool stats
@@ -209,19 +209,19 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 
 	// Extract stats
 	hg_stats = extract_hosgtroups_stats(conn_pool_stats);
-	hg_50_queries = hg_stats.at(50).first;
-	hg_50_sync_queries = hg_stats.at(50).second;;
-	hg_60_queries = hg_stats.at(60).first;
-	hg_60_sync_queries = hg_stats.at(60).second;;
+	hg_1900_queries = hg_stats.at(1900).first;
+	hg_1900_sync_queries = hg_stats.at(1900).second;;
+	hg_1901_queries = hg_stats.at(1901).first;
+	hg_1901_sync_queries = hg_stats.at(1901).second;;
 
-	uint32_t hg_60_exp_queries = NUM_CHECKS / 5;
+	uint32_t hg_1901_exp_queries = NUM_CHECKS / 5;
 	ok(
-		hg_50_queries == 0 && hg_50_sync_queries == 0 && hg_60_queries == hg_60_exp_queries && hg_60_sync_queries == 0,
-		"Queries should only be executed in 'HG 60' and no GTID sync should take place: {"
-		" hg_50: { exp_queries: 0, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
-		" hg_60: { exp_queries: %d, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
+		hg_1900_queries == 0 && hg_1900_sync_queries == 0 && hg_1901_queries == hg_1901_exp_queries && hg_1901_sync_queries == 0,
+		"Queries should only be executed in 'HG 1901' and no GTID sync should take place: {"
+		" hg_1900: { exp_queries: 0, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
+		" hg_1901: { exp_queries: %d, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
 		" }",
-		hg_50_queries, hg_50_sync_queries, hg_60_exp_queries, hg_60_queries, hg_60_sync_queries
+		hg_1900_queries, hg_1900_sync_queries, hg_1901_exp_queries, hg_1901_queries, hg_1901_sync_queries
 	);
 
 	return EXIT_SUCCESS;

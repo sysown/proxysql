@@ -237,9 +237,8 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 	if (
-		!mysql_real_connect(
-			mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0
-		)
+//		!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)
+		!mysql_real_connect(mysql_server, "mysql1.infra-mysql57", "root", "root", NULL, 3306, NULL, 0)
 	) {
 		fprintf(
 			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,

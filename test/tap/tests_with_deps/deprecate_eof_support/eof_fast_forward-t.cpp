@@ -56,7 +56,8 @@ int create_testing_tables(MYSQL* mysql_server) {
 
 int perform_workload_on_connection(MYSQL* proxy, MYSQL* admin) {
 	// Change default query rules to avoid replication issues
-	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET destination_hostgroup=0 WHERE rule_id=2");
+//	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET destination_hostgroup=0 WHERE rule_id=2");
+	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET active=0");
 	MYSQL_QUERY(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	int c_err = create_testing_tables(proxy);
@@ -173,7 +174,8 @@ int perform_workload_on_connection(MYSQL* proxy, MYSQL* admin) {
 	ok(ops_err_msg.empty() == true, "Operations should complete successfully - '%s'", ops_err_msg.c_str());
 
 	// Recover default query rules
-	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET destination_hostgroup=0 WHERE rule_id=2");
+//	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET destination_hostgroup=0 WHERE rule_id=2");
+	MYSQL_QUERY(admin, "UPDATE mysql_query_rules SET active=1");
 	MYSQL_QUERY(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	return EXIT_SUCCESS;
