@@ -871,6 +871,7 @@ void MySQL_Session::writeout() {
 }
 
 bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
+	if (pkt->size <= 5) { return false; }
 	char c=((char *)pkt->ptr)[5];
 	bool ret=false;
 	if (c=='c' || c=='C') {
