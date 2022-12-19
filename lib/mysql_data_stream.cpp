@@ -629,13 +629,12 @@ int MySQL_Data_Stream::read_from_net() {
 			}
 		} else {
 			int ssl_ret=SSL_get_error(ssl, r);
-			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error(): %d , errno: %d\n", sess, this, ssl_ret, errno);
-			if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
-			if (r==0) { // we couldn't read any data
-				if (ssl_ret == SSL_ERROR_SYSCALL && (errno == EINTR || errno == EAGAIN)) {
-					proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error() is SSL_ERROR_SYSCALL, errno: %d\n", sess, this, errno);
-					// the read was interrupted, do nothing
-				} else {
+			proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- session_id: %u , SSL_get_error(): %d , errno: %d\n", sess, this, sess->thread_session_id, ssl_ret, errno);
+			if (ssl_ret == SSL_ERROR_SYSCALL && (errno == EINTR || errno == EAGAIN)) {
+				// the read was interrupted, do nothing
+				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error() is SSL_ERROR_SYSCALL, errno: %d\n", sess, this, errno);
+			} else {
+				if (r==0) { // we couldn't read any data
 					if (revents==1) {
 						// revents returns 1 , but recv() returns 0 , so there is no data.
 						// Therefore the socket is already closed
@@ -643,6 +642,8 @@ int MySQL_Data_Stream::read_from_net() {
 						shut_soft();
 					}
 				}
+				if (ssl_ret!=SSL_ERROR_WANT_READ && ssl_ret!=SSL_ERROR_WANT_WRITE) shut_soft();
+				// it seems we end in shut_soft() anyway
 			}
 		}
 	} else {
@@ -673,11 +674,13 @@ int MySQL_Data_Stream::write_to_net() {
 	if (encrypted) {
 		bytes_io = SSL_write (ssl, queue_r_ptr(queueOUT), s);
 		//proxy_info("Used SSL_write to write %d bytes\n", bytes_io);
+		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p, Datastream=%p: SSL_write() wrote %d bytes . queueOUT before: %u\n", sess, this, bytes_io, queue_data(queueOUT));
 		if (ssl_write_len || wbio_ssl->num_write > wbio_ssl->num_read) {
 			//proxy_info("ssl_write_len = %d , num_write = %d , num_read = %d\n", ssl_write_len , wbio_ssl->num_write , wbio_ssl->num_read);
 			char buf[MY_SSL_BUFFER];
 			do {
 				n = BIO_read(wbio_ssl, buf, sizeof(buf));
+				proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p, Datastream=%p: BIO_read() read %d bytes\n", sess, this, n);
 				//proxy_info("BIO read = %d\n", n);
 				if (n > 0) {
 					//proxy_info("Setting %d byte in queue encrypted\n", n);
@@ -690,8 +693,10 @@ int MySQL_Data_Stream::write_to_net() {
 				}
 			} while (n>0);
 		}
+		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p, Datastream=%p: current ssl_write_len is %lu bytes\n", sess, this, ssl_write_len);
 		if (ssl_write_len) {
 			n = write(fd, ssl_write_buf, ssl_write_len);
+			proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p, Datastream=%p: write() wrote %d bytes in FD %d\n", sess, this, n, fd);
 			//proxy_info("Calling write() on SSL: %d\n", n);
 			if (n>0) {
 				if ((size_t)n < ssl_write_len) {
@@ -722,6 +727,7 @@ int MySQL_Data_Stream::write_to_net() {
 #else
 		bytes_io = send(fd, queue_r_ptr(queueOUT), s, MSG_NOSIGNAL);
 #endif
+		proxy_debug(PROXY_DEBUG_NET, 7, "Session=%p, Datastream=%p: send() wrote %d bytes in FD %d\n", sess, this, bytes_io, fd);
 	}
 	if (encrypted) {
 		//proxy_info("bytes_io: %d\n", bytes_io);

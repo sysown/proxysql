@@ -372,6 +372,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		query_no_space[query_no_space_length]=0;
 	}
 
+	proxy_debug(PROXY_DEBUG_SQLITE, 4, "Received query on Session %p , thread_session_id %u : %s\n", sess, sess->thread_session_id, query_no_space);
 
 	{
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;

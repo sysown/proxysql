@@ -3588,7 +3588,7 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 										int sslhp = SSL_has_pending(myds->ssl);
 										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: in fast_forward mode and SSL read %d bytes , SSL_pending: %d bytes , SSL_has_pending: %d\n", myds->sess, rb, sslp, sslhp);
 */
-										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, rb);
+										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p , thread_session_id=%u -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, myds->sess->thread_session_id, rb);
 										while (rb == 16384) {
 											rb = myds->read_from_net();
 											proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, rb);

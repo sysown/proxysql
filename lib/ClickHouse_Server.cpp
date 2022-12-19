@@ -567,6 +567,8 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		query_no_space[query_no_space_length]=0;
 	}
 
+	proxy_debug(PROXY_DEBUG_SQLITE, 4, "Received query on Session %p , thread_session_id %u : %s\n", sess, sess->thread_session_id, query_no_space);
+
 
 	if (sess->session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 		if (!strncasecmp("SET ", query_no_space, 4)) {
