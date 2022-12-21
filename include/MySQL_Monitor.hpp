@@ -178,6 +178,7 @@ class MyGR_monitor_node {
 class MySQL_Monitor_Connection_Pool;
 
 enum MySQL_Monitor_State_Data_Task_Type {
+	MON_CLOSE_CONNECTION,
 	MON_CONNECT,
 	MON_PING,
 	MON_READ_ONLY,
@@ -185,18 +186,28 @@ enum MySQL_Monitor_State_Data_Task_Type {
 	MON_READ_ONLY__AND__INNODB_READ_ONLY,
 	MON_READ_ONLY__OR__INNODB_READ_ONLY,
 	MON_SUPER_READ_ONLY,
-	MON_REPLICATION_LAG
+	MON_GROUP_REPLICATION,
+	MON_REPLICATION_LAG,
+	MON_GALERA,
+	MON_AWS_AURORA
 };
 
+enum class MySQL_Monitor_State_Data_Task_Result {
+	TASK_RESULT_UNKNOWN,
+	TASK_RESULT_TIMEOUT,
+	TASK_RESULT_FAILED,
+	TASK_RESULT_SUCCESS,
+	TASK_RESULT_PENDING
+};
+
+
 class MySQL_Monitor_State_Data {
-  public:
-  MySQL_Monitor_State_Data_Task_Type task_id;
-  struct timeval tv_out;
-  unsigned long long t1;
-  unsigned long long t2;
-  int ST;
-  char *hostname;
-  int port;
+ public:
+	struct timeval tv_out;
+	unsigned long long t1;
+	unsigned long long t2;
+	char *hostname;
+	int port;
 	int writer_hostgroup; // used only by group replication
 	bool writer_is_also_reader; // used only by group replication
 	int  max_transactions_behind; // used only by group replication
@@ -206,22 +217,74 @@ class MySQL_Monitor_State_Data {
 	int aws_aurora_add_lag_ms;
 	int aws_aurora_min_lag_ms;
 	int aws_aurora_lag_num_checks;
-  bool use_ssl;
-  MYSQL *mysql;
-  MYSQL_RES *result;
-  MYSQL *ret;
-  int interr;
-  char * mysql_error_msg;
-  MYSQL_ROW *row;
-  unsigned int repl_lag;
-  unsigned int hostgroup_id;
-	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0, int g=0);
+	bool use_ssl;
+	MYSQL *mysql;
+	MYSQL_RES *result;
+	MYSQL *ret;
+	int interr;
+	char *mysql_error_msg;
+	MYSQL_ROW *row;
+	unsigned int repl_lag;
+	unsigned int hostgroup_id;
+	bool use_percona_heartbeat;
+	
+	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, MYSQL* _mysql, char* h, int p, bool _use_ssl = 0, int g = 0);
+	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();
 	SQLite3DB *mondb;
 	bool create_new_connection();
-	MDB_ASYNC_ST async_state_machine;
+	
 	int async_exit_status;
 	bool set_wait_timeout();
+
+	
+	MySQL_Monitor_State_Data_Task_Result task_handler(short event_, short& wait_event) {
+		assert(task_handler_);
+		task_result_ = (this->*task_handler_)(event_, wait_event);
+		return task_result_;
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Type get_task_type() const {
+		return task_id_;
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result get_task_result() const {
+		return task_result_;
+	}
+
+private:
+	std::string query_;
+	unsigned long long timeout_;
+	MySQL_Monitor_State_Data_Task_Type task_id_;
+	MySQL_Monitor_State_Data_Task_Result task_result_;
+	MDB_ASYNC_ST async_state_machine_;
+
+	short next_event(MDB_ASYNC_ST new_st, int status);
+	MySQL_Monitor_State_Data_Task_Result (MySQL_Monitor_State_Data::*task_handler_)(short event_, short& wait_event);
+	MySQL_Monitor_State_Data_Task_Result ping_handler(short event_, short& wait_event);
+	MySQL_Monitor_State_Data_Task_Result generic_handler(short event_, short& wait_event);
+	
+	inline
+	MySQL_Monitor_State_Data_Task_Result read_only_handler(short event_, short& wait_event) {
+		return generic_handler(event_, wait_event);
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result group_replication_handler(short event_, short& wait_event) {
+		return generic_handler(event_, wait_event);
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result replication_lag_handler(short event_, short& wait_event) {
+		return generic_handler(event_, wait_event);
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result galera_handler(short event_, short& wait_event) {
+		return generic_handler(event_, wait_event);
+	}
 };
 
 template<typename T>
@@ -388,7 +451,7 @@ class MySQL_Monitor {
 	void p_update_metrics();
 	std::unique_ptr<wqueue<WorkItem<MySQL_Monitor_State_Data>*>> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
-	bool shutdown;
+	std::atomic_bool shutdown;
 	pthread_mutex_t mon_en_mutex;
 	bool monitor_enabled;
 	SQLite3DB *admindb;	// internal database
@@ -428,6 +491,13 @@ class MySQL_Monitor {
 	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 	unsigned int estimate_lag(char* server_id, AWS_Aurora_status_entry** ase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);
+
+private:
+	void monitor_ping_async(SQLite3DB* monitordb, SQLite3_result* resultset);
+	void monitor_read_only_async(SQLite3DB* monitordb, SQLite3_result* resultset);	
+	void monitor_replication_lag_async(SQLite3DB* monitordb, SQLite3_result* resultset);
+	void monitor_group_replication_async(SQLite3DB* monitordb);
+	void monitor_galera_async(SQLite3DB* monitordb);
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */
