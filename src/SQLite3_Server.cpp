@@ -936,11 +936,23 @@ static void *child_mysql(void *arg) {
 		// FIXME: CI test test_sqlite3_server-t or test_sqlite3_server_and_fast_routing-t
 		// seems to result in fds->fd = -1
 		// it needs investigation
-		myds->read_from_net();
+		int rb = 0;
+		rb = myds->read_from_net();
 		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
+		if (myds->encrypted == true) {
+			// PMC-10004
+			// we probably should use SSL_pending() and/or SSL_has_pending() to determine
+			// if there is more data to be read, but it doesn't seem to be working.
+			// Therefore we hardcored the value 16384 (16KB) as a special case and
+			// we try to call read_from_net() again
+			while (rb == 16384) {
+				rb = myds->read_from_net();
+				if (myds->net_failure) goto __exit_child_mysql;
+				myds->read_pkts();
+			}
+		}
 		sess->to_process=1;
-
 		// Get and set the client address before the sesion is processed.
 		union {
 			struct sockaddr_in in;
