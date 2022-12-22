@@ -203,7 +203,6 @@ enum class MySQL_Monitor_State_Data_Task_Result {
 
 class MySQL_Monitor_State_Data {
  public:
-	struct timeval tv_out;
 	unsigned long long t1;
 	unsigned long long t2;
 	char *hostname;
@@ -220,18 +219,16 @@ class MySQL_Monitor_State_Data {
 	bool use_ssl;
 	MYSQL *mysql;
 	MYSQL_RES *result;
-	MYSQL *ret;
 	int interr;
 	char *mysql_error_msg;
-	MYSQL_ROW *row;
 	unsigned int repl_lag;
 	unsigned int hostgroup_id;
 	bool use_percona_heartbeat;
-	
-	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, MYSQL* _mysql, char* h, int p, bool _use_ssl = 0, int g = 0);
+	SQLite3DB* mondb;
+
 	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();
-	SQLite3DB *mondb;
+	void init_async();
 	bool create_new_connection();
 	
 	int async_exit_status;
@@ -451,7 +448,7 @@ class MySQL_Monitor {
 	void p_update_metrics();
 	std::unique_ptr<wqueue<WorkItem<MySQL_Monitor_State_Data>*>> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
-	std::atomic_bool shutdown;
+	volatile bool shutdown;
 	pthread_mutex_t mon_en_mutex;
 	bool monitor_enabled;
 	SQLite3DB *admindb;	// internal database
