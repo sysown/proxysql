@@ -317,14 +317,16 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 					break;
 				}
 #ifdef DEBUG
-				for (unsigned int j=0; j<conns->len; j++) {
-					MYSQL *my1 = (MYSQL *)conns->index(j);
-					assert(my!=my1);
-					assert(my->net.fd!=my1->net.fd);
-				}
+				if (my) {
+					for (unsigned int j=0; j<conns->len; j++) {
+						MYSQL *my1 = (MYSQL *)conns->index(j);
+						assert(my!=my1);
+						assert(my->net.fd!=my1->net.fd);
+					}
 				//proxy_info("Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, my);
-				if (my)
+				
 					conns->add(my);
+				}
 #endif // DEBUG
 			}
 #ifdef DEBUG
