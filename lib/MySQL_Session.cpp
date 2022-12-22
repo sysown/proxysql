@@ -3988,9 +3988,41 @@ __get_pkts_from_client:
 							case _MYSQL_COM_STMT_SEND_LONG_DATA:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
 								break;
+							case _MYSQL_COM_BINLOG_DUMP:
+							case _MYSQL_COM_REGISTER_SLAVE:
 							case _MYSQL_COM_BINLOG_DUMP_GTID:
-								proxy_warning("COM_BINLOG_DUMP_GTID received. Changing session fast foward to true");
+								// In this switch we handle commands that download binlog events from MySQL
+								// servers. For this commands a lot of the features provided by ProxySQL
+								// aren't useful, like multiplexing, query parsing, etc. For this reason,
+								// ProxySQL enable fast_forward when it receives these commands. 
+								proxy_info(
+									"COM_REGISTER_SLAVE, COM_BINLOG_DUMP or COM_BINLOG_DUMP_GTID received. "
+									"Changing session fast foward to true\n"
+								);
 								session_fast_forward = true;
+
+								if (client_myds->PSarrayIN->len) {
+									proxy_error("UNEXPECTED PACKET FROM CLIENT -- PLEASE REPORT A BUG\n");
+									assert(0);
+								}
+								client_myds->PSarrayIN->add(pkt.ptr, pkt.size);
+
+								// The following code prepares the session as if it was configured with fast
+								// forward before receiving the command. This way the state machine will
+								// handle the command automatically.
+								mybe = find_or_create_backend(current_hostgroup); // set a backend
+								mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
+								mybe->server_myds->wait_until = 0;
+								if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
+									// we don't have a connection
+									previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD
+									set_status(CONNECTING_SERVER); // now we need a connection
+								} else {
+									// we have a connection
+									mybe->server_myds->DSS = STATE_READY;
+									set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
+								}
+
 								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
