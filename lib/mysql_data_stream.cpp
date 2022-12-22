@@ -118,7 +118,9 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 }
 
 #define queue_zero(_q) { \
-  memcpy(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
+  if (_q.tail != 0) { \
+    memcpy(_q.buffer, (unsigned char *)_q.buffer + _q.tail, _q.head - _q.tail); \
+  } \
   _q.head-=_q.tail; \
   _q.tail=0; \
 }
