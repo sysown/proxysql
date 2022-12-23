@@ -229,6 +229,7 @@ class MySQL_Monitor_State_Data {
 	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();
 	void init_async();
+	void mark_task_as_timeout();
 	bool create_new_connection();
 	
 	int async_exit_status;
