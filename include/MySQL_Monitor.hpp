@@ -228,17 +228,45 @@ class MySQL_Monitor_State_Data {
 
 	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();
+
+	// This class will be used by monitor_*_async and it's counterpart monitor_*_thread version of task handler. 
+	// The working of monitor_*_thread version will remain same, as for async version, init_async needs
+	// to be called before calling task_handler to initialize required data.
 	void init_async();
-	void mark_task_as_timeout();
 	bool create_new_connection();
 	
 	int async_exit_status;
 	bool set_wait_timeout();
 
-	
+	/*
+	Task handler for async tasks. 
+	For ping, ping_handler will be executed and for rest of the tasks generic_handler.
+	@Param event_: fd.events - check poll manual
+	@Param wait_event: fd.revents - check poll manual
+	@Return MySQL_Monitor_State_Data_Task_Result
+		TASK_RESULT_TIMEOUT = Task timeout has occurred.
+		TASK_RESULT_FAILED = Task execution has failed.
+		TASK_RESULT_SUCCESS = Task executed successfully.
+		TASK_RESULT_PENDING = Task is in pending state.
+	*/
 	MySQL_Monitor_State_Data_Task_Result task_handler(short event_, short& wait_event) {
 		assert(task_handler_);
-		task_result_ = (this->*task_handler_)(event_, wait_event);
+
+		if (event_ != -1) {
+
+			if (task_result_ == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT)
+				return MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
+
+			const unsigned long long now = monotonic_time();
+			if (now > task_expiry_time_) {
+				mark_task_as_timeout(now);
+				return MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
+			}
+		}
+
+		task_result_ = (event_ != 0) ? (this->*task_handler_)(event_, wait_event) : 
+			MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING;
+		
 		return task_result_;
 	}
 
@@ -254,7 +282,9 @@ class MySQL_Monitor_State_Data {
 
 private:
 	std::string query_;
-	unsigned long long timeout_;
+	unsigned long long task_expiry_time_; // task expiry time (t1 + task_timeout_ * 1000)
+	int task_timeout_; // task timout in ms
+
 	MySQL_Monitor_State_Data_Task_Type task_id_;
 	MySQL_Monitor_State_Data_Task_Result task_result_;
 	MDB_ASYNC_ST async_state_machine_;
@@ -263,7 +293,8 @@ private:
 	MySQL_Monitor_State_Data_Task_Result (MySQL_Monitor_State_Data::*task_handler_)(short event_, short& wait_event);
 	MySQL_Monitor_State_Data_Task_Result ping_handler(short event_, short& wait_event);
 	MySQL_Monitor_State_Data_Task_Result generic_handler(short event_, short& wait_event);
-	
+	void mark_task_as_timeout(unsigned long long time = monotonic_time());
+
 	inline
 	MySQL_Monitor_State_Data_Task_Result read_only_handler(short event_, short& wait_event) {
 		return generic_handler(event_, wait_event);
@@ -449,7 +480,7 @@ class MySQL_Monitor {
 	void p_update_metrics();
 	std::unique_ptr<wqueue<WorkItem<MySQL_Monitor_State_Data>*>> queue;
 	MySQL_Monitor_Connection_Pool *My_Conn_Pool;
-	volatile bool shutdown;
+	bool shutdown;
 	pthread_mutex_t mon_en_mutex;
 	bool monitor_enabled;
 	SQLite3DB *admindb;	// internal database
@@ -491,11 +522,19 @@ class MySQL_Monitor {
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);
 
 private:
-	void monitor_ping_async(SQLite3DB* monitordb, SQLite3_result* resultset);
-	void monitor_read_only_async(SQLite3DB* monitordb, SQLite3_result* resultset);	
-	void monitor_replication_lag_async(SQLite3DB* monitordb, SQLite3_result* resultset);
-	void monitor_group_replication_async(SQLite3DB* monitordb);
-	void monitor_galera_async(SQLite3DB* monitordb);
+	// All monitor_*_async methods basic workflow is same.
+	// * Finding mysql connection in My_Conn_Pool (get_connection).
+	// * Delegate task to Consumer Thread if connection is not available (same as before), else execute task asynchronously (add task to monitor_poll)
+	// * After execution of task finished, it will return any one of the following result:
+	// ** TASK_RESULT_SUCCESS = mysql connection will be returned back to My_Conn_Pool (put_connection)
+	// ** TASK_RESULT_TIMEOUT = mysql connection will be closed and error log will be generated.
+	// ** TASK_RESULT_FAILED =  mysql connection will be closed and error log will be generated.
+	// Note: calling init_async is mandatory before executing tasks asynchronously.
+	void monitor_ping_async(SQLite3_result* resultset);
+	void monitor_read_only_async(SQLite3_result* resultset);	
+	void monitor_replication_lag_async(SQLite3_result* resultset);
+	void monitor_group_replication_async();
+	void monitor_galera_async();
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */
