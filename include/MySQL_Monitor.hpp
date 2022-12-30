@@ -249,26 +249,7 @@ class MySQL_Monitor_State_Data {
 		TASK_RESULT_SUCCESS = Task executed successfully.
 		TASK_RESULT_PENDING = Task is in pending state.
 	*/
-	MySQL_Monitor_State_Data_Task_Result task_handler(short event_, short& wait_event) {
-		assert(task_handler_);
-
-		if (event_ != -1) {
-
-			if (task_result_ == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT)
-				return MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
-
-			const unsigned long long now = monotonic_time();
-			if (now > task_expiry_time_) {
-				mark_task_as_timeout(now);
-				return MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
-			}
-		}
-
-		task_result_ = (event_ != 0) ? (this->*task_handler_)(event_, wait_event) : 
-			MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING;
-		
-		return task_result_;
-	}
+	MySQL_Monitor_State_Data_Task_Result task_handler(short event_, short& wait_event);
 
 	inline
 	MySQL_Monitor_State_Data_Task_Type get_task_type() const {
