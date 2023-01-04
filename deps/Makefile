@@ -64,6 +64,7 @@ endif
 .PHONY: default
 
 
+
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
@@ -77,7 +78,9 @@ else
 	sed -i 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
 endif
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
+
 libinjection: libinjection/libinjection/src/libinjection.a
+
 
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
@@ -87,12 +90,13 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
+
 libssl: libssl/openssl/libssl.a
+
 
 GCC_VERSION := $(shell gcc -dumpversion)
 MIN_VERSION := 4.9.0
 REQUIRE_PATCH = false
-
 ifeq ($(MIN_VERSION),$(lastword $(sort $(GCC_VERSION) $(MIN_VERSION))))
 	REQUIRE_PATCH = true
 endif
@@ -119,7 +123,9 @@ endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
 	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
+
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
+
 
 libev/libev/.libs/libev.a:
 	cd libev && rm -rf libev-*/ || true
@@ -127,6 +133,7 @@ libev/libev/.libs/libev.a:
 	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
 	cd libev/libev  && ./configure
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
+
 ev: libev/libev/.libs/libev.a
 
 
@@ -139,6 +146,7 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
 
 curl: curl/curl/lib/.libs/libcurl.a
+
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
@@ -155,6 +163,7 @@ ifeq ($(UNAME_S),Darwin)
 	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
 endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
+
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
 
@@ -201,6 +210,7 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
+
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-*/ || true
 	cd jemalloc && tar --no-same-owner -jxf jemalloc-5.2.0.tar.bz2
@@ -211,6 +221,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
+
 
 WITHASAN := $(shell echo $(WITHASAN))
 
@@ -268,6 +279,7 @@ sqlite3/sqlite3/sqlite3.o:
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
+
 libconfig/libconfig/lib/.libs/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-1.7.2.tar.gz
@@ -275,6 +287,7 @@ libconfig/libconfig/lib/.libs/libconfig++.a:
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 
 libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
+
 
 prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
@@ -287,6 +300,7 @@ prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
+
 
 re2/re2/obj/libre2.a:
 	cd re2 && rm -rf re2-*/ || true
@@ -305,6 +319,7 @@ endif
 
 re2: re2/re2/obj/libre2.a
 
+
 pcre/pcre/.libs/libpcre.a:
 	cd pcre && rm -rf pcre-*/ || true
 	cd pcre && tar -zxf pcre-*.tar.gz
@@ -313,6 +328,8 @@ pcre/pcre/.libs/libpcre.a:
 	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
 
 pcre: pcre/pcre/.libs/libpcre.a
+
+
 
 cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
@@ -339,6 +356,6 @@ cleanall:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
-	cd cityhash && rm -rf cityhash/ || true
+	cd cityhash && rm -rf cityhash-*/ || true
 .PHONY: cleanall
 
