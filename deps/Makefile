@@ -307,10 +307,11 @@ re2: re2/re2/obj/libre2.a
 
 pcre/pcre/.libs/libpcre.a:
 	cd pcre && rm -rf pcre-*/ || true
-	cd pcre && tar -zxf pcre-8.44.tar.gz
-	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
+	cd pcre && tar -zxf pcre-*.tar.gz
+#	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
 	cd pcre/pcre && ./configure
 	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+
 pcre: pcre/pcre/.libs/libpcre.a
 
 cleanpart:
