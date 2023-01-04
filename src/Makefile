@@ -45,10 +45,9 @@ PCRE_LDIR=$(PCRE_PATH)/.libs
 
 SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
 
-
-CLICKHOUSE_CPP_DIR=$(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
 CITYHASH_DIR=$(DEPS_PATH)/cityhash/cityhash/src/.libs
-LZ4_DIR=$(DEPS_PATH)/lz4/lz4
+
+LZ4_DIR=$(DEPS_PATH)/lz4/lz4/lib
 
 CLICKHOUSE_CPP_DIR=$(DEPS_PATH)/clickhouse-cpp/clickhouse-cpp
 

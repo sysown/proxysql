@@ -166,10 +166,12 @@ cityhash/cityhash/src/.libs/libcityhash.a:
 
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
+
 lz4/lz4/liblz4.a:
 	cd lz4 && rm -rf lz4-*/ || true
-	cd lz4 && tar -zxf lz4-1.7.5.tar.gz
+	cd lz4 && tar -zxf lz4-*.tar.gz
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
+
 lz4: lz4/lz4/liblz4.a
 
 
