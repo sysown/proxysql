@@ -171,15 +171,14 @@ lz4: lz4/lz4/liblz4.a
 
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
+	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 ifeq ($(IS_CXX17), 1)
 	echo ">>> Clickhouse CXX17"
-	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.1.0 clickhouse-cpp
-	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-	cd clickhouse-cpp && tar -zxf v2.1.0.tar.gz && sync
+	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
+	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 else
 	echo ">>> Clickhouse CXX11"
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
-	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
 	cd clickhouse-cpp && sed -i 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
 endif
