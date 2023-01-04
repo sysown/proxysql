@@ -5861,8 +5861,7 @@ short MySQL_Monitor_State_Data::next_event(MDB_ASYNC_ST new_st, int status) {
 
 	if (wait_events) {
 		fd = mysql_get_socket(mysql);
-	}
-	else {
+	} else {
 		fd = -1;
 	}
 	proxy_debug(PROXY_DEBUG_NET, 8, "fd=%d, wait_events=%d , old_ST=%d, new_ST=%d\n", fd, wait_events, async_state_machine_, new_st);
@@ -5886,6 +5885,34 @@ mysql_status(short event) {
 
 class Monitor_Poll {
 public:
+	class Process_Ready_Task_Callback_Args {
+	public:
+		using process_ready_tasks_cb = bool (MySQL_Monitor::*)(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+
+		Process_Ready_Task_Callback_Args(unsigned int min_tasks_to_process, float percentage,
+			process_ready_tasks_cb callback, MySQL_Monitor* mysql_monitor) :
+			min_task_to_process_(min_tasks_to_process), process_task_percentage_(percentage / 100.00), process_ready_tasks_cb_(callback),
+			mysql_monitor_(mysql_monitor) {
+			assert(mysql_monitor_);
+			assert(process_ready_tasks_cb_);
+			assert(process_task_percentage_ != 0);
+			assert(min_tasks_to_process != 0);
+		}
+		~Process_Ready_Task_Callback_Args() = default;
+
+	private:
+		inline
+		bool process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
+			return (mysql_monitor_->*process_ready_tasks_cb_)(mmsds);
+		}
+
+		friend class Monitor_Poll;
+		unsigned int min_task_to_process_;
+		float process_task_percentage_;
+		process_ready_tasks_cb process_ready_tasks_cb_;
+		MySQL_Monitor* mysql_monitor_;
+	};
+
 	Monitor_Poll(unsigned int capacity) {
 		len_ = 0;
 		capacity_ = capacity;
@@ -5908,6 +5935,7 @@ public:
 	}
 
 	void add(short _events, MySQL_Monitor_State_Data* mmsd) {
+		assert(mmsd);
 		assert(mmsd->mysql);
 
 		if (len_ == capacity_) {
@@ -5945,20 +5973,28 @@ public:
 		return -1;
 	}
 
+	bool event_loop(int poll_timeout_ms, Process_Ready_Task_Callback_Args& process_ready_task_callback_arg) {
 
-	bool event_loop(int poll_timeout_ms) {
-		
 		if (len_ == 0)
 			return false;
 
 		int rc = 0;
-		bool result = true;
+
+		// number of tasks to process based on provided percentage
+		unsigned int tasks_to_process_count = len_ * process_ready_task_callback_arg.process_task_percentage_;
+
+		// if number of task to process is less than minimum task to process, overwrite it
+		if (tasks_to_process_count < process_ready_task_callback_arg.min_task_to_process_) {
+			tasks_to_process_count = process_ready_task_callback_arg.min_task_to_process_;
+		}
+
+		std::vector<MySQL_Monitor_State_Data*> ready_tasks;
+		ready_tasks.reserve(tasks_to_process_count);
 
 		while (len_) {
 
 			if (GloMyMon->shutdown) {
-				result = false;
-				break;
+				return false;
 			}
 
 			rc = poll(fds_, len_, poll_timeout_ms);
@@ -5967,18 +6003,34 @@ public:
 				if (errno == EINTR) {
 					continue;
 				} else {
-					result = false;
-					break;
+					return false;
 				}
 			}
 
 			for (unsigned int i = 0; i < len_;) {
 
 				if (mmsds_[i]->task_handler(fds_[i].revents, fds_[i].events) != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING) {
+					ready_tasks.push_back(mmsds_[i]);
 					remove_index_fast(i);
+
+					tasks_to_process_count--;
+
+					if (tasks_to_process_count == 0 || len_ == 0) {
+						
+						if (process_ready_task_callback_arg.process_ready_tasks(ready_tasks) == false) {
+							return false;
+						}
+
+						ready_tasks.clear();
+
+						tasks_to_process_count = len_ * process_ready_task_callback_arg.process_task_percentage_;
+
+						if (tasks_to_process_count < process_ready_task_callback_arg.min_task_to_process_) {
+							tasks_to_process_count = process_ready_task_callback_arg.min_task_to_process_;
+						}
+					}
 					continue; 
-				}
-				else {
+				} else {
 					assert(fds_[i].events != 0);
 				}
 
@@ -5988,7 +6040,7 @@ public:
 
 		}
 
-		return result;
+		return true;
 	}
 
 	inline 
@@ -6087,6 +6139,62 @@ __again:
 	return result;
 }
 
+bool MySQL_Monitor::monitor_ping_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
+	
+	for (auto& mmsd : mmsds) {
+
+		const auto task_result = mmsd->get_task_result();
+
+		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
+
+		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
+			__sync_fetch_and_add(&ping_check_OK, 1);
+			My_Conn_Pool->put_connection(mmsd->hostname, mmsd->port, mmsd->mysql);
+			mmsd->mysql = NULL;
+		} else {
+			__sync_fetch_and_add(&ping_check_ERR, 1);
+			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_PING_TIMEOUT);
+				proxy_error("Timeout on ping check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_ping_timeout.\n", mmsd->hostname, mmsd->port, (mmsd->t2 - mmsd->t1) / 1000);
+			} else {
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+#ifdef DEBUG
+				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+#else
+				proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+#endif // DEBUG
+			}
+#ifdef DEBUG
+			My_Conn_Pool->conn_unregister(mmsd);
+#endif // DEBUG
+			mysql_close(mmsd->mysql);
+			mmsd->mysql = NULL;
+		}
+
+		if (shutdown == true) {
+			return false;
+		}
+
+		sqlite3_stmt* statement = NULL;
+		const char* query = "INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
+		int rc = mmsd->mondb->prepare_v2(query, &statement);
+		ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc = (*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc = (*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		unsigned long long time_now = realtime_time();
+		time_now = time_now - (mmsd->t2 - mmsd->t1);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc = (*proxy_sqlite3_bind_int64)(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2 - mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc = (*proxy_sqlite3_bind_text)(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		SAFE_SQLITE3_STEP2(statement);
+		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
+		(*proxy_sqlite3_finalize)(statement);
+	}
+
+	return true;
+}
+
 void MySQL_Monitor::monitor_ping_async(SQLite3_result* resultset) {
 	assert(resultset);
 
@@ -6114,57 +6222,10 @@ void MySQL_Monitor::monitor_ping_async(SQLite3_result* resultset) {
 		if (shutdown) return;
 	}
 
-	if (monitor_poll.event_loop(mysql_thread___monitor_ping_timeout) == false) {
+	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 50, &MySQL_Monitor::monitor_ping_process_ready_tasks, this);
+
+	if (monitor_poll.event_loop(mysql_thread___monitor_ping_timeout, args) == false) {
 		return;
-	}
-
-	for (auto& mmsd : mmsds) {
-
-		const auto task_result = mmsd->get_task_result();
-
-		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
-			__sync_fetch_and_add(&ping_check_OK, 1);
-			My_Conn_Pool->put_connection(mmsd->hostname, mmsd->port, mmsd->mysql);
-			mmsd->mysql = NULL;
-		} else {
-			__sync_fetch_and_add(&ping_check_ERR, 1);
-			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_PING_TIMEOUT);
-				proxy_error("Timeout on ping check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_ping_timeout.\n", mmsd->hostname, mmsd->port, (mmsd->t2 - mmsd->t1) / 1000);
-			} else {
-				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
-#ifdef DEBUG
-				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
-#else
-				proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
-#endif // DEBUG
-			}
-#ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd.get());
-#endif // DEBUG
-			mysql_close(mmsd->mysql);
-			mmsd->mysql = NULL;
-		}
-
-		if (shutdown == true) {
-			return;
-		}
-
-		sqlite3_stmt* statement = NULL;
-		const char* query = "INSERT OR REPLACE INTO mysql_server_ping_log VALUES (?1 , ?2 , ?3 , ?4 , ?5)";
-		int rc = mmsd->mondb->prepare_v2(query, &statement);
-		ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc = (*proxy_sqlite3_bind_text)(statement, 1, mmsd->hostname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc = (*proxy_sqlite3_bind_int)(statement, 2, mmsd->port); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		unsigned long long time_now = realtime_time();
-		time_now = time_now - (mmsd->t2 - mmsd->t1);
-		rc = (*proxy_sqlite3_bind_int64)(statement, 3, time_now); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc = (*proxy_sqlite3_bind_int64)(statement, 4, (mmsd->mysql_error_msg ? 0 : mmsd->t2 - mmsd->t1)); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc = (*proxy_sqlite3_bind_text)(statement, 5, mmsd->mysql_error_msg, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		SAFE_SQLITE3_STEP2(statement);
-		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		(*proxy_sqlite3_finalize)(statement);
 	}
 }
 
@@ -6266,57 +6327,13 @@ __again:
 	return result_ret;
 }
 
-void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset) {
-	assert(resultset);
-
-	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
-	mmsds.reserve(resultset->rows_count);
-	Monitor_Poll monitor_poll(resultset->rows_count);
-
-	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
-		const SQLite3_row* r = *it;
-		bool rc_ping = server_responds_to_ping(r->fields[0], atoi(r->fields[1]));
-		if (rc_ping) { // only if server is responding to pings
-			MySQL_Monitor_State_Data_Task_Type task_type = MON_READ_ONLY;
-
-			if (r->fields[3]) {
-				if (strcasecmp(r->fields[3], (char*)"innodb_read_only") == 0) {
-					task_type = MON_INNODB_READ_ONLY;
-				} else if (strcasecmp(r->fields[3], (char*)"super_read_only") == 0) {
-					task_type = MON_SUPER_READ_ONLY;
-				} else if (strcasecmp(r->fields[3], (char*)"read_only&innodb_read_only") == 0) {
-					task_type = MON_READ_ONLY__AND__INNODB_READ_ONLY;
-				} else if (strcasecmp(r->fields[3], (char*)"read_only|innodb_read_only") == 0) {
-					task_type = MON_READ_ONLY__OR__INNODB_READ_ONLY;
-				}
-			}
-
-			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(
-				new MySQL_Monitor_State_Data(task_type, r->fields[0], atoi(r->fields[1]), atoi(r->fields[2])));
-
-			mmsd->mondb = monitordb;
-			mmsd->mysql = My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd.get());
-
-			if (mmsd->mysql) {
-				monitor_poll.add((POLLIN|POLLOUT|POLLPRI), mmsd.get());
-				mmsds.push_back(std::move(mmsd));
-			} else {
-				WorkItem<MySQL_Monitor_State_Data>* item = 
-					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_read_only_thread);
-				queue->add(item);
-			}
-		}
-
-		if (shutdown) return;
-	}
-
-	if (monitor_poll.event_loop(mysql_thread___monitor_read_only_timeout) == false) {
-		return;
-	}
+bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 
 	for (auto& mmsd : mmsds) {
 
 		const auto task_result = mmsd->get_task_result();
+
+		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
 
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			__sync_fetch_and_add(&read_only_check_OK, 1);
@@ -6330,22 +6347,22 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset) {
 			} else {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 #ifdef DEBUG
-				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #else
-				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
 #ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd.get());
+			My_Conn_Pool->conn_unregister(mmsd);
 #endif // DEBUG
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
 
 		if (shutdown == true) {
-			return;
+			return false;
 		}
-		
+
 		sqlite3_stmt* statement = NULL;
 		const char* query = (char*)"INSERT OR REPLACE INTO mysql_server_read_only_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
 		int rc = mmsd->mondb->prepare_v2(query, &statement);
@@ -6434,27 +6451,38 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			free(buff);
 		}
 	}
+
+	return true;
 }
 
-void MySQL_Monitor::monitor_group_replication_async() {
+void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset) {
+	assert(resultset);
+
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
+	mmsds.reserve(resultset->rows_count);
+	Monitor_Poll monitor_poll(resultset->rows_count);
 
-	pthread_mutex_lock(&group_replication_mutex);
-	assert(Group_Replication_Hosts_resultset);
-	mmsds.reserve(Group_Replication_Hosts_resultset->rows_count);
-	Monitor_Poll monitor_poll(Group_Replication_Hosts_resultset->rows_count);
-
-	for (std::vector<SQLite3_row*>::iterator it = Group_Replication_Hosts_resultset->rows.begin(); it != Group_Replication_Hosts_resultset->rows.end(); ++it) {
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		const SQLite3_row* r = *it;
-		bool rc_ping = server_responds_to_ping(r->fields[1], atoi(r->fields[2]));
+		bool rc_ping = server_responds_to_ping(r->fields[0], atoi(r->fields[1]));
 		if (rc_ping) { // only if server is responding to pings
-			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(
-				new MySQL_Monitor_State_Data(MON_GROUP_REPLICATION, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3])));
+			MySQL_Monitor_State_Data_Task_Type task_type = MON_READ_ONLY;
 
-			mmsd->writer_hostgroup = atoi(r->fields[0]);
-			mmsd->writer_is_also_reader = atoi(r->fields[4]);
-			mmsd->max_transactions_behind = atoi(r->fields[5]);
-			mmsd->max_transactions_behind_count = mysql_thread___monitor_groupreplication_max_transactions_behind_count;
+			if (r->fields[3]) {
+				if (strcasecmp(r->fields[3], (char*)"innodb_read_only") == 0) {
+					task_type = MON_INNODB_READ_ONLY;
+				} else if (strcasecmp(r->fields[3], (char*)"super_read_only") == 0) {
+					task_type = MON_SUPER_READ_ONLY;
+				} else if (strcasecmp(r->fields[3], (char*)"read_only&innodb_read_only") == 0) {
+					task_type = MON_READ_ONLY__AND__INNODB_READ_ONLY;
+				} else if (strcasecmp(r->fields[3], (char*)"read_only|innodb_read_only") == 0) {
+					task_type = MON_READ_ONLY__OR__INNODB_READ_ONLY;
+				}
+			}
+
+			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(
+				new MySQL_Monitor_State_Data(task_type, r->fields[0], atoi(r->fields[1]), atoi(r->fields[2])));
+
 			mmsd->mondb = monitordb;
 			mmsd->mysql = My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd.get());
 
@@ -6462,25 +6490,29 @@ void MySQL_Monitor::monitor_group_replication_async() {
 				monitor_poll.add((POLLIN|POLLOUT|POLLPRI), mmsd.get());
 				mmsds.push_back(std::move(mmsd));
 			} else {
-				WorkItem<MySQL_Monitor_State_Data>* item =
-					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_group_replication_thread);
+				WorkItem<MySQL_Monitor_State_Data>* item = 
+					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_read_only_thread);
 				queue->add(item);
 			}
 		}
 
-		if (shutdown) {
-			pthread_mutex_unlock(&group_replication_mutex);
-			return;
-		}
+		if (shutdown) return;
 	}
-	pthread_mutex_unlock(&group_replication_mutex);
 
-	if (monitor_poll.event_loop(mysql_thread___monitor_groupreplication_healthcheck_timeout) == false) {
+	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 50, &MySQL_Monitor::monitor_read_only_process_ready_tasks, this);
+
+	if (monitor_poll.event_loop(mysql_thread___monitor_read_only_timeout, args) == false) {
 		return;
 	}
+}
+
+bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 
 	for (auto& mmsd : mmsds) {
+
 		const auto task_result = mmsd->get_task_result();
+		
+		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
 
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			My_Conn_Pool->put_connection(mmsd->hostname, mmsd->port, mmsd->mysql);
@@ -6493,22 +6525,22 @@ void MySQL_Monitor::monitor_group_replication_async() {
 			} else {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 #ifdef DEBUG
-				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #else
-				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
 #ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd.get());
+			My_Conn_Pool->conn_unregister(mmsd);
 #endif // DEBUG
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
 
 		if (shutdown == true) {
-			return;
+			return false;
 		}
-		
+
 		// TODO : complete this
 		char buf[128];
 		char* s = NULL;
@@ -6569,13 +6601,13 @@ void MySQL_Monitor::monitor_group_replication_async() {
 			node->add_entry(time_now, (mmsd->mysql_error_msg ? 0 : mmsd->t2 - mmsd->t1), transactions_behind, viable_candidate, read_only, mmsd->mysql_error_msg);
 			Group_Replication_Hosts_Map.insert(std::make_pair(s, node));
 		}
-		
+
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
 			num_timeouts = node->get_timeout_count();
 			proxy_warning("%s:%d : group replication health check timeout count %d. Max threshold %d.\n",
 				mmsd->hostname, mmsd->port, num_timeouts, mmsd->max_transactions_behind_count);
 		}
-			
+
 		// NOTE: Previously 'lag_counts' was only updated for 'read_only'
 		// because 'writers' were never selected for being set 'OFFLINE' due to
 		// replication lag. Since the change of this behavior to 'SHUNNING'
@@ -6634,24 +6666,29 @@ void MySQL_Monitor::monitor_group_replication_async() {
 			free(s);
 		}
 	}
+
+	return true;
 }
 
-void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
-	assert(resultset);
-
+void MySQL_Monitor::monitor_group_replication_async() {
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
-	mmsds.reserve(resultset->rows_count);
-	Monitor_Poll monitor_poll(resultset->rows_count);
 
-	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
+	pthread_mutex_lock(&group_replication_mutex);
+	assert(Group_Replication_Hosts_resultset);
+	mmsds.reserve(Group_Replication_Hosts_resultset->rows_count);
+	Monitor_Poll monitor_poll(Group_Replication_Hosts_resultset->rows_count);
+
+	for (std::vector<SQLite3_row*>::iterator it = Group_Replication_Hosts_resultset->rows.begin(); it != Group_Replication_Hosts_resultset->rows.end(); ++it) {
 		const SQLite3_row* r = *it;
 		bool rc_ping = server_responds_to_ping(r->fields[1], atoi(r->fields[2]));
 		if (rc_ping) { // only if server is responding to pings
-
 			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(
-				new MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type::MON_REPLICATION_LAG, 
-					r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), atoi(r->fields[0])));
+				new MySQL_Monitor_State_Data(MON_GROUP_REPLICATION, r->fields[1], atoi(r->fields[2]), atoi(r->fields[3])));
 
+			mmsd->writer_hostgroup = atoi(r->fields[0]);
+			mmsd->writer_is_also_reader = atoi(r->fields[4]);
+			mmsd->max_transactions_behind = atoi(r->fields[5]);
+			mmsd->max_transactions_behind_count = mysql_thread___monitor_groupreplication_max_transactions_behind_count;
 			mmsd->mondb = monitordb;
 			mmsd->mysql = My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd.get());
 
@@ -6660,22 +6697,33 @@ void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
 				mmsds.push_back(std::move(mmsd));
 			} else {
 				WorkItem<MySQL_Monitor_State_Data>* item =
-					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_replication_lag_thread);
+					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_group_replication_thread);
 				queue->add(item);
 			}
 		}
 
-		if (shutdown) return;
+		if (shutdown) {
+			pthread_mutex_unlock(&group_replication_mutex);
+			return;
+		}
 	}
+	pthread_mutex_unlock(&group_replication_mutex);
 
-	if (monitor_poll.event_loop(mysql_thread___monitor_replication_lag_timeout) == false) {
+	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 50, &MySQL_Monitor::monitor_group_replication_process_ready_tasks, this);
+
+	if (monitor_poll.event_loop(mysql_thread___monitor_groupreplication_healthcheck_timeout, args) == false) {
 		return;
 	}
+}
+
+bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 
 	for (auto& mmsd : mmsds) {
 
 		const auto task_result = mmsd->get_task_result();
-		
+
+		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
+
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			__sync_fetch_and_add(&replication_lag_check_OK, 1);
 			My_Conn_Pool->put_connection(mmsd->hostname, mmsd->port, mmsd->mysql);
@@ -6684,25 +6732,26 @@ void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
 			__sync_fetch_and_add(&replication_lag_check_ERR, 1);
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
 				proxy_error("Timeout on replication lag health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_replication_lag_timeout. Assuming viable_candidate=NO and read_only=YES\n", mmsd->hostname, mmsd->port, (mmsd->t2 - mmsd->t1) / 1000);
-			} else if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_FAILED) {
+			}
+			else if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_FAILED) {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 #ifdef DEBUG
-				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #else
 				proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
 #ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd.get());
+			My_Conn_Pool->conn_unregister(mmsd);
 #endif
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
 
 		if (shutdown == true) {
-			return;
+			return false;
 		}
-		
+
 		sqlite3_stmt* statement = NULL;
 		const char* query = (char*)"INSERT OR REPLACE INTO mysql_server_replication_lag_log VALUES (?1 , ?2 , ?3 , ?4 , ?5 , ?6)";
 		int rc = mmsd->mondb->prepare_v2(query, &statement);
@@ -6743,8 +6792,7 @@ void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
 						repl_lag = mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
 						if (row[j]) { // if Seconds_Behind_Master is not NULL
 							repl_lag = atoi(row[j]);
-						}
-						else {
+						} else {
 							proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
 							MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
 						}
@@ -6773,60 +6821,62 @@ void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
 		MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
 		(*proxy_sqlite3_finalize)(statement);
 	}
+
+	return true;
 }
 
-void MySQL_Monitor::monitor_galera_async() {
+void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
+	assert(resultset);
 
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
+	mmsds.reserve(resultset->rows_count);
+	Monitor_Poll monitor_poll(resultset->rows_count);
 
-	pthread_mutex_lock(&galera_mutex);
-	assert(Galera_Hosts_resultset);
-	mmsds.reserve(Galera_Hosts_resultset->rows_count);
-	Monitor_Poll monitor_poll(Galera_Hosts_resultset->rows_count);
-
-	for (std::vector<SQLite3_row*>::iterator it = Galera_Hosts_resultset->rows.begin(); it != Galera_Hosts_resultset->rows.end(); ++it) {
+	for (std::vector<SQLite3_row*>::iterator it = resultset->rows.begin(); it != resultset->rows.end(); ++it) {
 		const SQLite3_row* r = *it;
 		bool rc_ping = server_responds_to_ping(r->fields[1], atoi(r->fields[2]));
 		if (rc_ping) { // only if server is responding to pings
 
-			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(new MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type::MON_GALERA,
-				r->fields[1], atoi(r->fields[2]), atoi(r->fields[3])));
-			
-			mmsd->mysql = My_Conn_Pool->get_connection(r->fields[1], atoi(r->fields[2]), NULL);
-			mmsd->writer_hostgroup = atoi(r->fields[0]);
-			mmsd->writer_is_also_reader = atoi(r->fields[4]);
-			mmsd->max_transactions_behind = atoi(r->fields[5]);
+			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(
+				new MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type::MON_REPLICATION_LAG, 
+					r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]), atoi(r->fields[0])));
+
 			mmsd->mondb = monitordb;
+			mmsd->mysql = My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd.get());
 
 			if (mmsd->mysql) {
 				monitor_poll.add((POLLIN|POLLOUT|POLLPRI), mmsd.get());
 				mmsds.push_back(std::move(mmsd));
 			} else {
 				WorkItem<MySQL_Monitor_State_Data>* item =
-					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_galera_thread);
+					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_replication_lag_thread);
 				queue->add(item);
 			}
 		}
 
-		if (shutdown) {
-			pthread_mutex_unlock(&galera_mutex);
-			return;
-		}
+		if (shutdown) return;
 	}
-	pthread_mutex_unlock(&galera_mutex);
 
-	if (monitor_poll.event_loop(mysql_thread___monitor_galera_healthcheck_timeout) == false) {
+	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 50, &MySQL_Monitor::monitor_replication_lag_process_ready_tasks, this);
+
+	if (monitor_poll.event_loop(mysql_thread___monitor_replication_lag_timeout, args) == false) {
 		return;
 	}
+}
+
+bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 
 	for (auto& mmsd : mmsds) {
+
 		const auto task_result = mmsd->get_task_result();
+
+		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
 
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 
 #ifdef TEST_GALERA
 			if (rand() % 3 == 0) { // drop the connection once every 3 checks
-				My_Conn_Pool->conn_unregister(mmsd.get());
+				My_Conn_Pool->conn_unregister(mmsd);
 				mysql_close(mmsd->mysql);
 				mmsd->mysql = NULL;
 			} else {
@@ -6841,25 +6891,26 @@ void MySQL_Monitor::monitor_galera_async() {
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_GALERA_HEALTH_CHECK_CONN_TIMEOUT);
 				proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (mmsd->t2 - mmsd->t1) / 1000);
-			} else if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_FAILED) {
+			}
+			else if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_FAILED) {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
 #ifdef DEBUG
-				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+				proxy_error("Error after %lldms: server %s:%d , mmsd %p , MYSQL %p , FD %d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #else
-				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
+				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
 #ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd.get());
+			My_Conn_Pool->conn_unregister(mmsd);
 #endif // DEBUG
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
 
 		if (shutdown == true) {
-			return;
+			return false;
 		}
-		
+
 		// TODO : complete this
 		char buf[128];
 		char* s = NULL;
@@ -6891,7 +6942,7 @@ void MySQL_Monitor::monitor_galera_async() {
 				if (mmsd->mysql_error_msg == NULL) {
 					mmsd->mysql_error_msg = strdup("Unknown error");
 				}
-					
+
 				if (mmsd->result) {
 					mysql_free_result(mmsd->result);
 					mmsd->result = NULL;
@@ -7053,8 +7104,7 @@ void MySQL_Monitor::monitor_galera_async() {
 						}
 					}
 				}
-			}
-			else {
+			} else {
 				proxy_error("mysql_fetch_fields returns NULL. Server %s:%d . See bug #1994\n", mmsd->hostname, mmsd->port);
 			}
 		}
@@ -7064,11 +7114,60 @@ void MySQL_Monitor::monitor_galera_async() {
 		} else {
 			free(s);
 		}
-		
+
 		if (mmsd->result) {
 			mysql_free_result(mmsd->result);
 			mmsd->result = NULL;
 		}
+	}
+
+	return true;
+}
+
+void MySQL_Monitor::monitor_galera_async() {
+
+	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
+
+	pthread_mutex_lock(&galera_mutex);
+	assert(Galera_Hosts_resultset);
+	mmsds.reserve(Galera_Hosts_resultset->rows_count);
+	Monitor_Poll monitor_poll(Galera_Hosts_resultset->rows_count);
+
+	for (std::vector<SQLite3_row*>::iterator it = Galera_Hosts_resultset->rows.begin(); it != Galera_Hosts_resultset->rows.end(); ++it) {
+		const SQLite3_row* r = *it;
+		bool rc_ping = server_responds_to_ping(r->fields[1], atoi(r->fields[2]));
+		if (rc_ping) { // only if server is responding to pings
+
+			std::unique_ptr<MySQL_Monitor_State_Data> mmsd(new MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type::MON_GALERA,
+				r->fields[1], atoi(r->fields[2]), atoi(r->fields[3])));
+			
+			mmsd->mysql = My_Conn_Pool->get_connection(r->fields[1], atoi(r->fields[2]), NULL);
+			mmsd->writer_hostgroup = atoi(r->fields[0]);
+			mmsd->writer_is_also_reader = atoi(r->fields[4]);
+			mmsd->max_transactions_behind = atoi(r->fields[5]);
+			mmsd->mondb = monitordb;
+
+			if (mmsd->mysql) {
+				monitor_poll.add((POLLIN|POLLOUT|POLLPRI), mmsd.get());
+				mmsds.push_back(std::move(mmsd));
+			} else {
+				WorkItem<MySQL_Monitor_State_Data>* item =
+					new WorkItem<MySQL_Monitor_State_Data>(mmsd.release(), monitor_galera_thread);
+				queue->add(item);
+			}
+		}
+
+		if (shutdown) {
+			pthread_mutex_unlock(&galera_mutex);
+			return;
+		}
+	}
+	pthread_mutex_unlock(&galera_mutex);
+
+	Monitor_Poll::Process_Ready_Task_Callback_Args args(5, 50, &MySQL_Monitor::monitor_galera_process_ready_tasks, this);
+
+	if (monitor_poll.event_loop(mysql_thread___monitor_galera_healthcheck_timeout, args) == false) {
+		return;
 	}
 }
 

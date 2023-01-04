@@ -516,6 +516,13 @@ private:
 	void monitor_replication_lag_async(SQLite3_result* resultset);
 	void monitor_group_replication_async();
 	void monitor_galera_async();
+
+	// bulk processing of ready taks
+	bool monitor_ping_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	bool monitor_read_only_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	bool monitor_replication_lag_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	bool monitor_group_replication_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	bool monitor_galera_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */
