@@ -154,10 +154,13 @@ endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
+
 cityhash/cityhash/src/.libs/libcityhash.a:
-	cd cityhash && rm -rf cityhash/ || true
-	cd cityhash && tar -zxf cityhash.tar.gz
-	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+	cd cityhash && rm -rf cityhash-*/ || true
+	cd cityhash && tar -zxf cityhash-*.tar.gz && sync
+#	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+	cd cityhash/cityhash && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
 lz4/lz4/liblz4.a:
