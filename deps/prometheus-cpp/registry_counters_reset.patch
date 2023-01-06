@@ -1,7 +1,7 @@
-diff --git core/include/prometheus/counter.h core/include/prometheus/counter.h
-index 6ec01dd..6223106 100644
---- core/include/prometheus/counter.h
-+++ core/include/prometheus/counter.h
+diff --git a/core/include/prometheus/counter.h b/core/include/prometheus/counter.h
+index 9b2ad19..4fa1fba 100644
+--- a/core/include/prometheus/counter.h
++++ b/core/include/prometheus/counter.h
 @@ -46,6 +46,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Counter {
    /// Collect is called by the Registry when collecting metrics.
    ClientMetric Collect() const;
@@ -15,11 +15,11 @@ index 6ec01dd..6223106 100644
   private:
    Gauge gauge_{0.0};
  };
-diff --git core/include/prometheus/family.h core/include/prometheus/family.h
-index aa94683..925445a 100644
---- core/include/prometheus/family.h
-+++ core/include/prometheus/family.h
-@@ -135,6 +135,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Family : public Collectable {
+diff --git a/core/include/prometheus/family.h b/core/include/prometheus/family.h
+index 0bc0723..4f62fda 100644
+--- a/core/include/prometheus/family.h
++++ b/core/include/prometheus/family.h
+@@ -141,6 +141,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Family : public Collectable {
    /// \return Zero or more samples for each dimensional data.
    std::vector<MetricFamily> Collect() const override;
  
@@ -30,15 +30,15 @@ index aa94683..925445a 100644
 +  void ResetMetrics();
 +
   private:
-   std::unordered_map<std::size_t, std::unique_ptr<T>> metrics_;
-   std::unordered_map<std::size_t, std::map<std::string, std::string>> labels_;
-diff --git core/include/prometheus/registry.h core/include/prometheus/registry.h
-index c8fdeb2..e8a58c5 100644
---- core/include/prometheus/registry.h
-+++ core/include/prometheus/registry.h
-@@ -73,6 +73,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Registry : public Collectable {
-   /// \return Zero or more metrics and their samples.
-   std::vector<MetricFamily> Collect() const override;
+   std::unordered_map<Labels, std::unique_ptr<T>, detail::LabelHasher> metrics_;
+ 
+diff --git a/core/include/prometheus/registry.h b/core/include/prometheus/registry.h
+index 6603f6c..877c085 100644
+--- a/core/include/prometheus/registry.h
++++ b/core/include/prometheus/registry.h
+@@ -94,6 +94,12 @@ class PROMETHEUS_CPP_CORE_EXPORT Registry : public Collectable {
+   template <typename T>
+   bool Remove(const Family<T>& family);
  
 +  /// \brief Reset all the counters hold within the registry to a value of zero.
 +  ///
@@ -49,11 +49,11 @@ index c8fdeb2..e8a58c5 100644
   private:
    template <typename T>
    friend class detail::Builder;
-diff --git core/src/counter.cc core/src/counter.cc
-index fc5b6f3..82fb8ae 100644
---- core/src/counter.cc
-+++ core/src/counter.cc
-@@ -8,6 +8,8 @@ void Counter::Increment(const double val) { gauge_.Increment(val); }
+diff --git a/core/src/counter.cc b/core/src/counter.cc
+index 2a93463..a12885d 100644
+--- a/core/src/counter.cc
++++ b/core/src/counter.cc
+@@ -13,6 +13,8 @@ void Counter::Increment(const double val) {
  
  double Counter::Value() const { return gauge_.Value(); }
  
@@ -62,33 +62,35 @@ index fc5b6f3..82fb8ae 100644
  ClientMetric Counter::Collect() const {
    ClientMetric metric;
    metric.counter.value = Value();
-diff --git core/src/family.cc core/src/family.cc
-index 83631ab..aa25edb 100644
---- core/src/family.cc
-+++ core/src/family.cc
-@@ -97,6 +97,17 @@ ClientMetric Family<T>::CollectMetric(std::size_t hash, T* metric) const {
+diff --git a/core/src/family.cc b/core/src/family.cc
+index f087586..8f9d276 100644
+--- a/core/src/family.cc
++++ b/core/src/family.cc
+@@ -122,6 +122,19 @@ ClientMetric Family<T>::CollectMetric(const Labels& metric_labels,
    return collected;
  }
  
-+
 +template <>
 +void Family<Counter>::ResetMetrics() {
-+  auto reset_metric =
-+      [](std::pair<const std::size_t, std::unique_ptr<Counter>>& metric) {
-+          metric.second->Reset();
-+      };
-+
-+  std::for_each(metrics_.begin(), metrics_.end(), reset_metric);
++//  const auto reset_metric =
++//      [](std::pair<const std::size_t, std::unique_ptr<Counter>>& metric) {
++//          metric.second->Reset();
++//      };
++//
++//  std::for_each(metrics_.begin(), metrics_.end(), reset_metric);
++  for (const auto& m : metrics_) {
++    m.second->Reset();
++  }
 +}
 +
  template class PROMETHEUS_CPP_CORE_EXPORT Family<Counter>;
  template class PROMETHEUS_CPP_CORE_EXPORT Family<Gauge>;
  template class PROMETHEUS_CPP_CORE_EXPORT Family<Histogram>;
-diff --git core/src/registry.cc core/src/registry.cc
-index 1a30a23..d3a660d 100644
---- core/src/registry.cc
-+++ core/src/registry.cc
-@@ -50,6 +50,12 @@ std::vector<MetricFamily> Registry::Collect() const {
+diff --git a/core/src/registry.cc b/core/src/registry.cc
+index 267bf92..7a365ed 100644
+--- a/core/src/registry.cc
++++ b/core/src/registry.cc
+@@ -56,6 +56,12 @@ std::vector<MetricFamily> Registry::Collect() const {
    return results;
  }
  
