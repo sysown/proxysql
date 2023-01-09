@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 		return exit_status();
 	}
-	MYSQL_QUERY(proxysql, "DROP DATABASE testdb");
+	MYSQL_QUERY(proxysql, "DROP DATABASE IF EXISTS testdb");
 	MYSQL_QUERY(proxysql, "CREATE DATABASE testdb");
 	MYSQL_QUERY(proxysql, "CREATE TABLE testdb.`tmp` ( " \
 		"`id` bigint(20) NOT NULL AUTO_INCREMENT, " \
