@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string>
+#include <thread>
 #include <mysql.h>
 #include <mysql/mysqld_error.h>
 #include "tap.h"
@@ -62,11 +63,13 @@ int main(int argc, char** argv) {
 	diag("Inserting rows...");
 	MYSQL_QUERY(proxysql, "INSERT INTO testdb.tmp(text1, text2, time) values('dummy text1', 'dummy text2', now())");
 
-	for (int i = 0; i < 20; i++) {
+	for (int i = 0; i < 7; i++) {
 		MYSQL_QUERY(proxysql, "INSERT INTO testdb.tmp(text1, text2, time) SELECT text1, text2, time FROM testdb.tmp");
 	}
 
-	MYSQL_QUERY(proxysql, "SELECT COUNT(*) FROM testdb.tmp");
+	std::this_thread::sleep_for(std::chrono::seconds(2));
+
+	MYSQL_QUERY(proxysql, "SELECT COUNT(*) FROM testdb.tmp a JOIN testdb.tmp b JOIN testdb.tmp c");
 
 	auto mysql_result = mysql_use_result(proxysql);
 
@@ -83,9 +86,9 @@ int main(int argc, char** argv) {
 		mysql_result = NULL;
 	}
 
-	diag("Done... Total rows added:'%lu'", add_row_count);
+	diag("Done... Total rows to fetch:'%lu'", add_row_count);
 	diag("Fetching all rows...");
-	MYSQL_QUERY(proxysql, "SELECT * FROM testdb.tmp WHERE 1/0 OR 1=1");
+	MYSQL_QUERY(proxysql, "SELECT a.* FROM testdb.tmp a JOIN testdb.tmp b JOIN testdb.tmp c WHERE 1/0 OR 1=1");
 
 	mysql_result = mysql_use_result(proxysql);
 		
@@ -101,6 +104,13 @@ int main(int argc, char** argv) {
 		usleep(10);
 	}
 	
+	int _errorno = mysql_errno(proxysql);
+		
+	if (_errorno) {
+		diag("An error occurred. Error Code:%d, Message:%s", _errorno, mysql_error(proxysql));
+		return exit_status();
+	}
+
 	if (mysql_result) {
 		mysql_free_result(mysql_result);
 		mysql_result = NULL;
