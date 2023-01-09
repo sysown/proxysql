@@ -103,19 +103,11 @@ endif
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
-	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
+	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
 ifeq ($(REQUIRE_PATCH), true)
-	cd libhttpserver/libhttpserver && patch src/httpserver/basic_auth_fail_response.hpp < ../basic_auth_fail_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/create_webserver.hpp < ../create_webserver.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/deferred_response.hpp < ../deferred_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/digest_auth_fail_response.hpp < ../digest_auth_fail_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/file_response.hpp < ../file_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/http_request.hpp < ../http_request.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/http_resource.hpp < ../http_resource.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/http_response.hpp < ../http_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/string_response.hpp < ../string_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch -p0 < ../re2_regex.patch
-	cd libhttpserver/libhttpserver && patch -p0 < ../final_val_post_process.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../re2_regex.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process.patch
 endif
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
@@ -155,9 +147,9 @@ ifeq ($(CENTOSVER),6)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
 else
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.68 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.68.tar.gz
-	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
+	cd libmicrohttpd && ln -s libmicrohttpd-0.9.75 libmicrohttpd
+	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
+#	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 endif
 ifeq ($(UNAME_S),Darwin)
 	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch

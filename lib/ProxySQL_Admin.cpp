@@ -323,8 +323,9 @@ pthread_mutex_t test_mysql_firewall_whitelist_mutex = PTHREAD_MUTEX_INITIALIZER;
 std::unordered_map<std::string, void *> map_test_mysql_firewall_whitelist_rules;
 char rand_del[6];
 
-static int http_handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr) {
-	return GloAdmin->AdminHTTPServer->handler(cls, connection, url, method, version, upload_data, upload_data_size, ptr);
+//static int http_handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, size_t *upload_data_size, void **ptr) {
+MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char *url, const char *method, const char *version, const char *upload_data, long unsigned int *upload_data_size, void **ptr) {
+	return (MHD_Result) GloAdmin->AdminHTTPServer->handler(cls, connection, url, method, version, upload_data, upload_data_size, ptr);
 }
 
 #define LINESIZE	2048
