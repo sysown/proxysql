@@ -1,34 +1,18 @@
 /**
- * @file test_dns_cache-t.cpp
- * @brief This test will verify dns cache is working properly.
+ * @file reg_test_4072-show-warnings-t.cpp
+ * @brief This test will confirm ProxySQL does not crash if large records are fetched, having warning producing condition in the query.
  */
 
 #include <stdio.h>
 #include <unistd.h>
-
 #include <string>
-#include <algorithm>
-#include <functional>
-#include <map>
-#include <vector>
-#include <chrono>
-#include <thread>
-
 #include <mysql.h>
 #include <mysql/mysqld_error.h>
-
 #include "tap.h"
 #include "command_line.h"
-#include "utils.h"
-#include <proxysql_admin.h>
+#include "utils.h" 
 
 int main(int argc, char** argv) {
-	putenv("TAP_HOST=127.0.0.1");
-	putenv("TAP_PORT=6033");
-	putenv("TAP_USERNAME=root");
-	putenv("TAP_PASSWORD=root");
-	putenv("TAP_WORKDIR=./tests/");
-
 	CommandLine cl;
 
 	if (cl.getEnv()) {
