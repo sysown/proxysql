@@ -1,6 +1,6 @@
---- sqlite3.c	2017-05-26 00:15:22.000000000 +0200
-+++ /tmp/sqlite3.c	2017-05-29 20:12:54.644378605 +0200
-@@ -19772,6 +19772,44 @@
+--- sqlite-amalgamation-3400100/sqlite3.c	2022-12-28 14:26:39.000000000 +0000
++++ sqlite-amalgamation.patch/sqlite3.c	2023-01-10 16:48:54.793689411 +0000
+@@ -24454,6 +24454,44 @@
  }
  
  /*
@@ -31,7 +31,7 @@
 +      return;
 +    }
 +  }
-+  if( z==0 || parseModifier(context, (char*)"unixepoch", 9, &p) ) return;
++  if( z==0 || parseModifier(context, (char*)"unixepoch", 9, &p, 0) ) return;
 +  computeJD(&p);
 +  if( p.isError || !validJulianDay(p.iJD) ) return;
 +    char zBuf[100];
@@ -45,11 +45,11 @@
  **    time( TIMESTRING, MOD, MOD, ...)
  **
  ** Return HH:MM:SS
-@@ -20061,6 +20099,7 @@
-     DFUNCTION(date,             -1, 0, 0, dateFunc      ),
-     DFUNCTION(time,             -1, 0, 0, timeFunc      ),
-     DFUNCTION(datetime,         -1, 0, 0, datetimeFunc  ),
+@@ -24742,6 +24780,7 @@
+     PURE_DATE(time,             -1, 0, 0, timeFunc      ),
+     PURE_DATE(datetime,         -1, 0, 0, datetimeFunc  ),
+     PURE_DATE(strftime,         -1, 0, 0, strftimeFunc  ),
 +    DFUNCTION(from_unixtime,    -1, 0, 0, from_unixtimeFunc  ),
-     DFUNCTION(strftime,         -1, 0, 0, strftimeFunc  ),
      DFUNCTION(current_time,      0, 0, 0, ctimeFunc     ),
      DFUNCTION(current_timestamp, 0, 0, 0, ctimestampFunc),
+     DFUNCTION(current_date,      0, 0, 0, cdateFunc     ),
