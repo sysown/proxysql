@@ -25,6 +25,18 @@
 using std::string;
 using std::vector;
 
+std::size_t count_matches(const string& str, const string& substr) {
+	std::size_t result = 0;
+	std::size_t pos = 0;
+
+	while ((pos = str.find(substr, pos)) != string::npos) {
+		result += 1;
+		pos += substr.length();
+	}
+
+	return result;
+}
+
 int mysql_query_t(MYSQL* mysql, const char* query) {
 	diag("%s: Issuing query '%s' to ('%s':%d)", get_formatted_time().c_str(), query, mysql->host, mysql->port);
 	return mysql_query(mysql, query);

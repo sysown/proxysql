@@ -1,0 +1,13 @@
+diff --git src/webserver.cpp src/webserver.cpp
+index 5ae7381..04a5a28 100644
+--- src/webserver.cpp
++++ src/webserver.cpp
+@@ -443,7 +443,7 @@ int policy_callback (void *cls, const struct sockaddr* addr, socklen_t addrlen)
+ void* uri_log(void* cls, const char* uri)
+ {
+     struct details::modded_request* mr = new details::modded_request();
+-    mr->complete_uri = new string(uri);
++    mr->complete_uri = new string(uri == NULL ? "" : uri);
+     mr->second = false;
+     return ((void*)mr);
+ }

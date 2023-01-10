@@ -89,11 +89,12 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
 
-GCC_VERSION := $(shell gcc -dumpversion)
 MIN_VERSION := 4.9.0
-REQUIRE_PATCH = false
+GCC_VERSION := $(shell gcc -dumpversion)
+SORTED_VERSIONS := $(shell echo -e "$(GCC_VERSION)\n$(MIN_VERSION)" | sort -V)
 
-ifeq ($(MIN_VERSION),$(lastword $(sort $(GCC_VERSION) $(MIN_VERSION))))
+REQUIRE_PATCH = false
+ifeq ($(MIN_VERSION),$(lastword $(SORTED_VERSIONS)))
 	REQUIRE_PATCH = true
 endif
 
@@ -111,8 +112,9 @@ ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch src/httpserver/http_response.hpp < ../http_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/string_response.hpp < ../string_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../re2_regex.patch
-	cd libhttpserver/libhttpserver && patch -p0 < ../final_val_post_process.patch
 endif
+	cd libhttpserver/libhttpserver && patch -p0 < ../final_val_post_process.patch
+	cd libhttpserver/libhttpserver && patch -p0 < ../empty_uri_log_crash.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
