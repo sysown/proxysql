@@ -69,6 +69,7 @@ libinjection/libinjection/src/libinjection.a:
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
 ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
+	cd libinjection/libinjection && patch -p1 < ../libinjection_sqli.c.patch
 endif
 ifeq ($(UNAME_S),Darwin)
 	sed -i '' 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
