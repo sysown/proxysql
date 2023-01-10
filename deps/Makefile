@@ -121,9 +121,9 @@ libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
 
 libev/libev/.libs/libev.a:
 	cd libev && rm -rf libev-*/ || true
-	cd libev && tar -zxf libev-4.24.tar.gz
-	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
-	cd libev/libev  && ./configure
+	cd libev && tar -zxf libev-*.tar.gz
+#	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
+	cd libev/libev && ./configure
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
 
 ev: libev/libev/.libs/libev.a
