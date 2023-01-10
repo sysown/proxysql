@@ -35,8 +35,12 @@ class MyDS_real_query {
 */
 		pkt.ptr=_pkt->ptr;
 		pkt.size=_pkt->size;
-		QueryPtr=(char *)pkt.ptr+5;
 		QuerySize=pkt.size-5;
+		if (QuerySize == 0) {
+			QueryPtr=const_cast<char*>("");
+		} else {
+			QueryPtr=(char *)pkt.ptr+5;
+		}
 	}
 	void end() {
 		l_free(pkt.size,pkt.ptr);
