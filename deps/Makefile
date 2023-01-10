@@ -168,12 +168,12 @@ cityhash/cityhash/src/.libs/libcityhash.a:
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
 
-lz4/lz4/liblz4.a:
+lz4/lz4/lib/liblz4.a:
 	cd lz4 && rm -rf lz4-*/ || true
 	cd lz4 && tar -zxf lz4-*.tar.gz
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
 
-lz4: lz4/lz4/liblz4.a
+lz4: lz4/lz4/lib/liblz4.a
 
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
