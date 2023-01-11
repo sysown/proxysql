@@ -22,6 +22,7 @@ void ma_free_root(MA_MEM_ROOT *root, myf MyFLAGS);
 void *ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size);
 #define MAX(a,b) (((a) > (b)) ? (a) : (b))
 
+
 void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
 {
   size_t get_size;
@@ -1113,6 +1114,33 @@ handler_again:
 			}
     	break;
 		case ASYNC_CONNECT_SUCCESSFUL:
+			if (mysql && ret_mysql) {
+				// we handle encryption for backend
+				//
+				// we have a similar code in MySQL_Data_Stream::attach_connection()
+				// see there for further details
+				if (mysql->options.use_ssl == 1)
+					if (myds)
+						if (myds->sess != NULL)
+							if (myds->sess->session_fast_forward == true) {
+								assert(myds->ssl==NULL);
+								if (myds->ssl == NULL) {
+									// check the definition of P_MARIADB_TLS
+									P_MARIADB_TLS * matls = (P_MARIADB_TLS *)mysql->net.pvio->ctls;
+									if (matls != NULL) {
+										myds->encrypted = true;
+										myds->ssl = (SSL *)matls->ssl;
+										myds->rbio_ssl = BIO_new(BIO_s_mem());
+										myds->wbio_ssl = BIO_new(BIO_s_mem());
+										SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+									} else {
+										// if mysql->options.use_ssl == 1 but matls == NULL
+										// it means that ProxySQL tried to use SSL to connect to the backend
+										// but the backend didn't support SSL
+									}
+								}
+							}
+			}
 			__sync_fetch_and_add(&MyHGM->status.server_connections_connected,1);
 			__sync_fetch_and_add(&parent->connect_OK,1);
 			options.client_flag = mysql->client_flag;
