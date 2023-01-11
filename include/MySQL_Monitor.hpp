@@ -467,6 +467,9 @@ class MySQL_Monitor {
 	SQLite3DB *admindb;	// internal database
 	SQLite3DB *monitordb;	// internal database
 	SQLite3DB *monitor_internal_db;	// internal database
+#ifdef DEBUG
+	bool proxytest_forced_timeout;
+#endif
 
 	std::shared_ptr<DNS_Cache> dns_cache;
 

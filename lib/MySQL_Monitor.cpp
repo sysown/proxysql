@@ -981,6 +981,10 @@ MySQL_Monitor::MySQL_Monitor() {
 	dns_cache_lookup_success = 0;
 	dns_cache_record_updated = 0;
 	force_dns_cache_update = false;
+
+#ifdef DEBUG
+	proxytest_forced_timeout = false;
+#endif
 /*
 	if (GloMTH) {
 		if (GloMTH->num_threads) {
@@ -1298,7 +1302,11 @@ void * monitor_ping_thread(void *arg) {
 	mmsd->async_exit_status=mysql_ping_start(&mmsd->interr,mmsd->mysql);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mysql_thread___monitor_ping_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout during ping");
 			goto __exit_monitor_ping_thread;
@@ -1544,7 +1552,11 @@ void * monitor_read_only_thread(void *arg) {
 	}
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
@@ -1574,7 +1586,11 @@ void * monitor_read_only_thread(void *arg) {
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on read_only check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
@@ -1793,7 +1809,11 @@ void * monitor_group_replication_thread(void *arg) {
 #endif
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=NO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
@@ -1823,7 +1843,11 @@ void * monitor_group_replication_thread(void *arg) {
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=NO and read_only=YES\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
@@ -2166,7 +2190,11 @@ void * monitor_galera_thread(void *arg) {
 	}
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		 if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
@@ -2183,7 +2211,11 @@ void * monitor_galera_thread(void *arg) {
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mysql_thread___monitor_galera_healthcheck_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on Galera health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_galera_healthcheck_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
@@ -2545,7 +2577,11 @@ void * monitor_replication_lag_thread(void *arg) {
 	}
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			goto __exit_monitor_replication_lag_thread;
@@ -2563,7 +2599,11 @@ void * monitor_replication_lag_thread(void *arg) {
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mysql_thread___monitor_replication_lag_timeout * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			goto __exit_monitor_replication_lag_thread;
@@ -5111,7 +5151,11 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 #endif // TEST_AURORA
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
@@ -5128,7 +5172,11 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	mmsd->async_exit_status=mysql_store_result_start(&mmsd->result,mmsd->mysql);
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-		unsigned long long now=monotonic_time();
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
+		const unsigned long long now = monotonic_time();
+#endif
 		if (now > mmsd->t1 + mmsd->aws_aurora_check_timeout_ms * 1000) {
 			mmsd->mysql_error_msg=strdup("timeout check");
 			proxy_error("Timeout on AWS Aurora health check for %s:%d after %lldms. If the server is overload, increase mysql_aws_aurora_hostgroups.check_timeout_ms\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
@@ -6068,10 +6116,17 @@ MySQL_Monitor_State_Data_Task_Result MySQL_Monitor_State_Data::task_handler(shor
 
 		if (task_result_ == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT)
 			return MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
-
+#ifdef DEBUG
+		const unsigned long long now = (GloMyMon->proxytest_forced_timeout == false) ? monotonic_time() : ULLONG_MAX;
+#else
 		const unsigned long long now = monotonic_time();
+#endif
 		if (now > task_expiry_time_) {
+#ifdef DEBUG
+			mark_task_as_timeout((GloMyMon->proxytest_forced_timeout == false) ? now : monotonic_time());
+#else
 			mark_task_as_timeout(now);
+#endif
 			return MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
 		}
 	}
