@@ -18,6 +18,11 @@
 
 #include "ev.h"
 
+#ifndef SPOOKYV2
+#include "SpookyV2.h"
+#define SPOOKYV2
+#endif
+
 #ifdef DEBUG
 /* */
 //	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
@@ -570,6 +575,8 @@ class MySQL_HostGroups_Manager {
 	void wrunlock();
 	int servers_add(SQLite3_result *resultset);
 	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void commit_update_checksums_from_tables(SpookyHash& myhash, bool& init);
+	void CUCFT1(SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName); // used by commit_update_checksums_from_tables()
 
 	/**
 	 * @brief Store the resultset for the 'runtime_mysql_servers' table set that have been loaded to runtime.
@@ -583,23 +590,13 @@ class MySQL_HostGroups_Manager {
 	 *  Cluster to propagate current config.
 	 * @param The resulset to be stored replacing the current one.
 	 */
-	void save_incoming_replication_hostgroups(SQLite3_result *);
-	void save_incoming_group_replication_hostgroups(SQLite3_result *);
-	void save_incoming_galera_hostgroups(SQLite3_result *);
-	void save_incoming_aws_aurora_hostgroups(SQLite3_result *);
 
-	SQLite3_result* get_current_mysql_servers_inner();
-	SQLite3_result* get_current_mysql_replication_hostgroups_inner();
-	SQLite3_result* get_current_mysql_group_replication_hostgroups_inner();
-	SQLite3_result* get_current_mysql_galera_hostgroups();
-	SQLite3_result* get_current_mysql_aws_aurora_hostgroups();
+	void save_incoming_mysql_table(SQLite3_result *, const string&);
+	SQLite3_result* get_current_mysql_table(const string& name);
 
 	SQLite3_result * execute_query(char *query, char **error);
-	SQLite3_result *dump_table_mysql_servers();
-	SQLite3_result *dump_table_mysql_replication_hostgroups();
-	SQLite3_result *dump_table_mysql_group_replication_hostgroups();
-	SQLite3_result *dump_table_mysql_galera_hostgroups();
-	SQLite3_result *dump_table_mysql_aws_aurora_hostgroups();
+	SQLite3_result *dump_table_mysql(const string&);
+
 	/**
 	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
 	 *   'mysql_servers' present in 'MySQL_HostGroups_Manager' db, which are not 'OFFLINE_HARD'. The resulset

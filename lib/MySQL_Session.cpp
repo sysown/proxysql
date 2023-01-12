@@ -5,7 +5,6 @@
 #include "proxysql_utils.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
-#include "SpookyV2.h"
 #include "mysqld_error.h"
 #include "set_parser.h"
 

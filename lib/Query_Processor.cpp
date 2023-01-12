@@ -10,7 +10,10 @@
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include "pcrecpp.h"
 

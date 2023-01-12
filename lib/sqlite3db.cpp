@@ -1,6 +1,6 @@
 #include "proxysql.h"
 #include "cpp.h"
-#include "SpookyV2.h"
+//#include "SpookyV2.h"
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>

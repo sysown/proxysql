@@ -42,7 +42,10 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include <fcntl.h>
 #include <sys/utsname.h>
@@ -3716,35 +3719,27 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
-	if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS))) {
-		if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
-			GloAdmin->mysql_servers_wrlock();
-			resultset = MyHGM->get_current_mysql_servers_inner();
-			GloAdmin->mysql_servers_wrunlock();
 
-			if (resultset == nullptr) {
-				resultset=MyHGM->dump_table_mysql_servers();
-				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-					delete resultset;
-					run_query=false;
-					goto __run_query;
-				}
-			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-				run_query=false;
-				goto __run_query;
-			}
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+		string tn = "";
+		if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS))) {
+			tn = "mysql_servers";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
+			tn = "mysql_replication_hostgroups";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS))) {
+			tn = "mysql_group_replication_hostgroups";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GALERA, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GALERA))) {
+			tn = "mysql_galera_hostgroups";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_AURORA, query_no_space, strlen(CLUSTER_QUERY_MYSQL_AWS_AURORA))) {
+			tn = "mysql_aws_aurora_hostgroups";
 		}
-	}
-
-	if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
-		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
+		if (tn != "") {
 			GloAdmin->mysql_servers_wrlock();
-			resultset = MyHGM->get_current_mysql_replication_hostgroups_inner();
+			resultset = MyHGM->get_current_mysql_table(tn);
 			GloAdmin->mysql_servers_wrunlock();
+
 			if (resultset == nullptr) {
-				resultset=MyHGM->dump_table_mysql_replication_hostgroups();
+				resultset=MyHGM->dump_table_mysql(tn);
 				if (resultset) {
 					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 					delete resultset;
@@ -3756,69 +3751,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 				run_query=false;
 				goto __run_query;
 			}
-		}
-	}
-
-	if (!strncasecmp(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS))) {
-		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
-			GloAdmin->mysql_servers_wrlock();
-			resultset = MyHGM->get_current_mysql_group_replication_hostgroups_inner();
-			GloAdmin->mysql_servers_wrunlock();
-			if (resultset == nullptr) {
-				resultset=MyHGM->dump_table_mysql_group_replication_hostgroups();
-				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-					delete resultset;
-					run_query=false;
-					goto __run_query;
-				}
-			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-				run_query=false;
-				goto __run_query;
-			}
-		}
-	}
-
-	if (!strncasecmp(CLUSTER_QUERY_MYSQL_GALERA, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GALERA))) {
-		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
-			GloAdmin->mysql_servers_wrlock();
-			resultset = MyHGM->get_current_mysql_galera_hostgroups();
-			GloAdmin->mysql_servers_wrunlock();
-			if (resultset == nullptr) {
-				resultset=MyHGM->dump_table_mysql_galera_hostgroups();
-				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-					delete resultset;
-					run_query=false;
-					goto __run_query;
-				}
-			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-				run_query=false;
-				goto __run_query;
-			}
-		}
-	}
-
-	if (!strncasecmp(CLUSTER_QUERY_MYSQL_AWS_AURORA, query_no_space, strlen(CLUSTER_QUERY_MYSQL_AWS_AURORA))) {
-		if (sess->session_type == PROXYSQL_SESSION_ADMIN) {
-			GloAdmin->mysql_servers_wrlock();
-			resultset = MyHGM->get_current_mysql_aws_aurora_hostgroups();
-			GloAdmin->mysql_servers_wrunlock();
-			if (resultset == nullptr) {
-				resultset=MyHGM->dump_table_mysql_aws_aurora_hostgroups();
-				if (resultset) {
-					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-					delete resultset;
-					run_query=false;
-					goto __run_query;
-				}
-			} else {
-				sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
-				run_query=false;
-				goto __run_query;
-			}
+			
 		}
 	}
 
@@ -11676,7 +11609,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
-	resultset=MyHGM->dump_table_mysql_servers();
+	resultset=MyHGM->dump_table_mysql("mysql_servers");
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement1=NULL;
@@ -11757,7 +11690,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
-	resultset=MyHGM->dump_table_mysql_replication_hostgroups();
+	resultset=MyHGM->dump_table_mysql("mysql_replication_hostgroups");
 	if (resultset) {
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -11795,7 +11728,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
-	resultset=MyHGM->dump_table_mysql_group_replication_hostgroups();
+	resultset=MyHGM->dump_table_mysql("mysql__group_replication_hostgroups");
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement=NULL;
@@ -11839,7 +11772,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
-	resultset=MyHGM->dump_table_mysql_galera_hostgroups();
+	resultset=MyHGM->dump_table_mysql("mysql_galera_hostgroups");
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement=NULL;
@@ -11884,7 +11817,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
-	resultset=MyHGM->dump_table_mysql_aws_aurora_hostgroups();
+	resultset=MyHGM->dump_table_mysql("mysql_aws_aurora_hostgroups");
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement=NULL;
@@ -12004,7 +11937,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_replication_hostgroups(resultset_replication);
+		MyHGM->save_incoming_mysql_table(resultset_replication,"mysql_replication_hostgroups");
 	}
 	//if (resultset) delete resultset;
 	//resultset=NULL;
@@ -12038,7 +11971,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_group_replication_hostgroups(resultset_group_replication);
+		MyHGM->save_incoming_mysql_table(resultset_group_replication,"mysql_group_replication_hostgroups");
 	}
 
 	// support for Galera, table mysql_galera_hostgroups
@@ -12069,7 +12002,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_galera_hostgroups(resultset_galera);
+		MyHGM->save_incoming_mysql_table(resultset_galera, "mysql_galera_hostgroups");
 	}
 
 	// support for AWS Aurora, table mysql_aws_aurora_hostgroups
@@ -12104,7 +12037,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		// Pass the resultset to MyHGM
-		MyHGM->save_incoming_aws_aurora_hostgroups(resultset_aws_aurora);
+		MyHGM->save_incoming_mysql_table(resultset_aws_aurora,"mysql_aws_aurora_hostgroups");
 	}
 	// commit all the changes
 	MyHGM->commit(runtime_mysql_servers, checksum, epoch);

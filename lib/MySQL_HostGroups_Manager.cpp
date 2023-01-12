@@ -1,7 +1,6 @@
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
-#include "SpookyV2.h"
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -1560,6 +1559,34 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 	return resultset;
 }
 
+void MySQL_HostGroups_Manager::CUCFT1(SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName) {
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+	string query = "SELECT * FROM " + TableName + " ORDER BY " + ColumnName;
+	mydb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
+	if (resultset) {
+		if (resultset->rows_count) {
+			if (init == false) {
+				init = true;
+				myhash.Init(19,3);
+			}
+			uint64_t hash1_ = resultset->raw_checksum();
+			myhash.Update(&hash1_, sizeof(hash1_));
+			proxy_info("Checksum for table %s is %lu\n", TableName.c_str(), hash1_);
+		}
+		delete resultset;
+	}
+}
+
+void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& myhash, bool& init) {
+	CUCFT1(myhash,init,"mysql_replication_hostgroups","writer_hostgroup");
+	CUCFT1(myhash,init,"mysql_group_replication_hostgroups","writer_hostgroup");
+	CUCFT1(myhash,init,"mysql_galera_hostgroups","writer_hostgroup");
+	CUCFT1(myhash,init,"mysql_aws_aurora_hostgroups","writer_hostgroup");
+}
+
 bool MySQL_HostGroups_Manager::commit(
 	SQLite3_result* runtime_mysql_servers, const std::string& checksum, const time_t epoch
 ) {
@@ -1861,86 +1888,9 @@ bool MySQL_HostGroups_Manager::commit(
 				delete resultset;
 			}
 		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_replication_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %lu\n", "mysql_replication_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_group_replication_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %lu\n", "mysql_group_replication_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_galera_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %lu\n", "mysql_galera_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
-		{
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT * FROM mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %lu\n", "mysql_aws_aurora_hostgroups", hash1_);
-				}
-				delete resultset;
-			}
-		}
+
+		commit_update_checksums_from_tables(myhash, init);
+
 		if (init == true) {
 			myhash.Final(&hash1, &hash2);
 		}
@@ -2481,26 +2431,6 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 	pthread_mutex_unlock(&Galera_Info_mutex);
 }
 
-SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_servers() {
-	wrlock();
-
-	// purge table
-	purge_mysql_servers_table();
-
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
-	mydb->execute("DELETE FROM mysql_servers");
-	generate_mysql_servers_table();
-
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", MYHGM_GEN_ADMIN_RUNTIME_SERVERS);
-	mydb->execute_statement(MYHGM_GEN_ADMIN_RUNTIME_SERVERS, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
-}
-
 void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock) {
 	if (lock) {
 		wrlock();
@@ -2533,58 +2463,39 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
 	MySQL_Monitor::trigger_dns_cache_update();
 }
 
-SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_replication_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
-}
-
-SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_group_replication_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_group_replication_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
-}
-
-SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_galera_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-	wrunlock();
-	return resultset;
-}
-
-SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql_aws_aurora_hostgroups() {
-	wrlock();
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	char *query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
+SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) {
+	char * query = (char *)"";
+	if (name == "mysql_aws_aurora_hostgroups") {
+		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
 					    "check_interval_ms,check_timeout_ms,writer_is_also_reader,new_reader_weight,add_lag_ms,min_lag_ms,lag_num_checks,comment FROM mysql_aws_aurora_hostgroups";
+	} else if (name == "mysql_galera_hostgroups") {
+		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_galera_hostgroups";
+	} else if (name == "mysql_group_replication_hostgroups") {
+		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_group_replication_hostgroups";
+	} else if (name == "mysql_replication_hostgroups") {
+		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
+	} else if (name == "mysql_servers") {
+		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;	
+	} else {
+		assert(0);
+	}
+	wrlock();
+	if (name == "mysql_servers") {
+		purge_mysql_servers_table();
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+		mydb->execute("DELETE FROM mysql_servers");
+		generate_mysql_servers_table();
+	}
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 	mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	wrunlock();
 	return resultset;
 }
+
 
 MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
 	MyHGC *myhgc=new MyHGC(_hid);
@@ -3735,6 +3646,26 @@ __exit_get_multiple_idle_connections:
 	return num_conn_current;
 }
 
+void MySQL_HostGroups_Manager::save_incoming_mysql_table(SQLite3_result *s, const string& name) {
+	SQLite3_result ** inc = NULL;
+	if (name == "mysql_aws_aurora_hostgroups") {
+		inc = &incoming_aws_aurora_hostgroups;
+	} else if (name == "mysql_galeran_hostgroups") {
+		inc = &incoming_galera_hostgroups;
+	} else if (name == "mysql_group_replication_hostgroups") {
+		inc = &incoming_group_replication_hostgroups;
+	} else if (name == "mysql_replication_hostgroups") {
+		inc = &incoming_replication_hostgroups;
+	} else {
+		assert(0);
+	}
+	if (*inc != nullptr) {
+		delete *inc;
+		*inc = nullptr;
+	}
+	*inc = s;
+}
+
 void MySQL_HostGroups_Manager::save_runtime_mysql_servers(SQLite3_result *s) {
 	if (runtime_mysql_servers) {
 		delete runtime_mysql_servers;
@@ -3743,57 +3674,24 @@ void MySQL_HostGroups_Manager::save_runtime_mysql_servers(SQLite3_result *s) {
 	runtime_mysql_servers=s;
 }
 
-void MySQL_HostGroups_Manager::save_incoming_replication_hostgroups(SQLite3_result *s) {
-	if (incoming_replication_hostgroups) {
-		delete incoming_replication_hostgroups;
-		incoming_replication_hostgroups = nullptr;
+SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& name) {
+	if (name == "mysql_aws_aurora_hostgroups") {
+		return this->incoming_aws_aurora_hostgroups;
+	} else if (name == "mysql_galera_hostgroups") {
+		return this->incoming_galera_hostgroups;
+	} else if (name == "mysql_group_replication_hostgroups") {
+		return this->incoming_group_replication_hostgroups;
+	} else if (name == "mysql_replication_hostgroups") {
+		return this->incoming_replication_hostgroups;
+	} else if (name == "mysql_serverss") {
+		return this->runtime_mysql_servers;
+	} else {
+		assert(0);
 	}
-	incoming_replication_hostgroups=s;
+	return NULL;
 }
 
-void MySQL_HostGroups_Manager::save_incoming_group_replication_hostgroups(SQLite3_result *s) {
-	if (incoming_group_replication_hostgroups) {
-		delete incoming_group_replication_hostgroups;
-		incoming_group_replication_hostgroups = NULL;
-	}
-	incoming_group_replication_hostgroups=s;
-}
 
-void MySQL_HostGroups_Manager::save_incoming_galera_hostgroups(SQLite3_result *s) {
-	if (incoming_galera_hostgroups) {
-		delete incoming_galera_hostgroups;
-		incoming_galera_hostgroups = NULL;
-	}
-	incoming_galera_hostgroups=s;
-}
-
-void MySQL_HostGroups_Manager::save_incoming_aws_aurora_hostgroups(SQLite3_result *s) {
-	if (incoming_aws_aurora_hostgroups) {
-		delete incoming_aws_aurora_hostgroups;
-		incoming_aws_aurora_hostgroups = NULL;
-	}
-	incoming_aws_aurora_hostgroups=s;
-}
-
-SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_servers_inner() {
-	return this->runtime_mysql_servers;
-}
-
-SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_replication_hostgroups_inner() {
-	return this->incoming_replication_hostgroups;
-}
-
-SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_group_replication_hostgroups_inner() {
-	return this->incoming_group_replication_hostgroups;
-}
-
-SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_galera_hostgroups() {
-	return this->incoming_galera_hostgroups;
-}
-
-SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_aws_aurora_hostgroups() {
-	return this->incoming_aws_aurora_hostgroups;
-}
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
 	const int colnum=13;

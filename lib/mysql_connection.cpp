@@ -1,7 +1,7 @@
 #include "MySQL_HostGroups_Manager.h"
 #include "proxysql.h"
 #include "cpp.h"
-#include "SpookyV2.h"
+//#include "SpookyV2.h"
 #include <fcntl.h>
 #include <sstream>
 

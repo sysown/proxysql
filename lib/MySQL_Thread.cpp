@@ -9,7 +9,6 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "MySQL_Thread.h"
-#include "SpookyV2.h"
 #include <dirent.h>
 #include <libgen.h>
 #include "re2/re2.h"

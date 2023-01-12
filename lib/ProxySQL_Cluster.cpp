@@ -3,7 +3,11 @@
 #include "proxysql.h"
 #include "proxysql_utils.h"
 #include "cpp.h"
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
+
 #include "prometheus_helpers.h"
 
 #include "ProxySQL_Cluster.hpp"
