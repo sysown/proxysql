@@ -105,21 +105,29 @@ OPT=-O2 $(WGCOV) -Wl,--no-as-needed
 debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
-tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper \
-	set_testing-240.csv test_clickhouse_server_libmysql-t clickhouse_php_conn-t reg_test_stmt_resultset_err_no_rows_libmysql-t \
+tests: tests-cpp tests-php tests-py \
+	setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper \
+	set_testing-240.csv test_clickhouse_server_libmysql-t reg_test_stmt_resultset_err_no_rows_libmysql-t \
 	prepare_statement_err3024_libmysql-t prepare_statement_err3024_async-t reg_test_mariadb_stmt_store_result_libmysql-t \
 	reg_test_mariadb_stmt_store_result_async-t
+tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
+tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
+tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
 
 set_testing-240.csv: generate_set_session_csv
 	./generate_set_session_csv > set_testing-240.csv
 
-clickhouse_php_conn-t: clickhouse_php_conn-t.php
-	cp clickhouse_php_conn-t.php clickhouse_php_conn-t
-	chmod +x clickhouse_php_conn-t
+php-%:
+	cp $(patsubst php-%,%,$@) $(patsubst php-%.php,%,$@)
+	chmod +x $(patsubst php-%.php,%,$@)
 
-%-t:%-t.cpp $(TAP_LIBDIR)/libtap.a
+py-%:
+	cp $(patsubst py-%,%,$@) $(patsubst py-%.py,%,$@)
+	chmod +x $(patsubst py-%.py,%,$@)
+
+%-t: %-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
