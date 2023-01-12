@@ -101,7 +101,7 @@ endif
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
-ifeq ($(REQUIRE_PATCH), true)
+#ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch src/httpserver/basic_auth_fail_response.hpp < ../basic_auth_fail_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/create_webserver.hpp < ../create_webserver.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/deferred_response.hpp < ../deferred_response.hpp.patch
@@ -112,7 +112,7 @@ ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch src/httpserver/http_response.hpp < ../http_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/string_response.hpp < ../string_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../re2_regex.patch
-endif
+#endif
 	cd libhttpserver/libhttpserver && patch -p0 < ../final_val_post_process.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../empty_uri_log_crash.patch
 ifeq ($(UNAME_S),FreeBSD)
