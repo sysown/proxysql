@@ -8,6 +8,9 @@
 #include <vector>
 #include <sys/time.h>
 
+#ifdef __FreeBSD__
+#define	ETIME	ETIMEDOUT
+#endif
 
 #ifdef CXX17
 template<class...> struct conjunction : std::true_type { };
