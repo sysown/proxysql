@@ -3627,56 +3627,28 @@ SQLite3_result * ProxySQL_Admin::generate_show_table_status(const char *tablenam
 }
 
 /**
- * @brief Helper function to format the received hours into a string
- *   in the format ('HH'|'0H'|'-0H'|'-HH'). Depending on the supplied
- *   number digit count and sign.
- * @param num A number to be converted to described format.
- * @return std::string holding the converted number.
- */
-const std::string format_timezone_hours(const int num) {
-	std::string result {};
-
-	const std::string base_num = std::to_string(num);
-
-	if (num < 10 && num >= 0) {
-		result = "0" + base_num;
-	} else if (num > -10 && num < 0) {
-		result = base_num.substr(0, 1) + "0" + base_num.substr(1);
-	} else if (num <= -10) {
-		result = base_num;
-	}
-
-	return result;
-}
-
-/**
  * @brief Helper function that converts the current timezone
  *   expressed in seconds into a string of the format:
- *     - 'hours' + ':00:00'.
+ *     - '[-]HH:MM:00'.
  *   Following the same pattern as the possible values returned by the SQL query
  *   'SELECT TIMEDIFF(NOW(), UTC_TIMESTAMP())' in a MySQL server.
  * @return A string holding the specified representation of the
  *   supplied timezone.
  */
 std::string timediff_timezone_offset() {
-	// explecitly call 'tzset' to make sure '::timezone' is set
-	tzset();
+    std::string time_zone_offset {};
+    char result[8];
+    time_t rawtime;
+    struct tm *info;
+    int offset;
 
-	// get the global variable
-	long int timezone = ::timezone;
+    time(&rawtime);
+    info = localtime(&rawtime);
+    strftime(result, 8, "%z", info);
+    offset = (result[0] == '+') ? 1 : 0; 
+    time_zone_offset = ((std::string)(result)).substr(offset, 3-offset) + ":" + ((std::string)(result)).substr(3, 2) + ":00";
 
-	// first negate the received number
-	timezone = -timezone;
-
-	// transform into hours
-	int timezone_offset_hours = timezone / 3600;
-
-	// create an string with the resulting 'hours' + ':00:00'
-	std::string time_zone_offset {
-		format_timezone_hours(timezone_offset_hours) + ":00:00"
-	};
-
-	return time_zone_offset;
+    return time_zone_offset;
 }
 
 void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
