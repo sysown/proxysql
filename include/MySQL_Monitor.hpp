@@ -200,7 +200,7 @@ class MySQL_Monitor_State_Data {
 	int writer_hostgroup; // used only by group replication
 	bool writer_is_also_reader; // used only by group replication
 	int  max_transactions_behind; // used only by group replication
-	int max_transactions_behind_count; // used only by group replication
+	//int max_transactions_behind_count; // used only by group replication
 	int aws_aurora_max_lag_ms;
 	int aws_aurora_check_timeout_ms;
 	int aws_aurora_add_lag_ms;
