@@ -192,7 +192,9 @@ class MySQL_Monitor_State_Data {
   public:
   MySQL_Monitor_State_Data_Task_Type task_id;
   struct timeval tv_out;
+  /* @brief Time prior fetch operations. 'Start time' of the monitoring check. */
   unsigned long long t1;
+  /* @brief Time post fetch operations. Current time before peforming local monitoring actions. */
   unsigned long long t2;
   int ST;
   char *hostname;
@@ -404,6 +406,7 @@ class MySQL_Monitor {
 	void * monitor_ping();
 	void * monitor_read_only();
 	void * monitor_group_replication();
+	void * monitor_group_replication_2();
 	void * monitor_galera();
 	void * monitor_aws_aurora();
 	void * monitor_replication_lag();

@@ -3632,9 +3632,18 @@ void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, u
  */
 void MySQL_HostGroups_Manager::group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable) {
 	if (myhgc == NULL || address == NULL) return;
+	proxy_debug(
+		PROXY_DEBUG_MONITOR, 5, "Params - address: %s, port: %d, lag_count: %d, enable: %d\n", address, port,
+		lag_count, enable
+	);
 
 	for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
+		proxy_debug(
+			PROXY_DEBUG_MONITOR, 6, "Server 'MySrvC' - address: %s, port: %d, status: %d\n", mysrvc->address,
+			mysrvc->port, mysrvc->status
+		);
+
 		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
 
 			if (enable == true) {
@@ -3692,7 +3701,6 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 
 	rhid_row = rhid_res->rows[0];
 	reader_hostgroup = atoi(rhid_row->fields[0]);
-	// writer_is_also_reader = atoi(rhid_row->fields[1]);
 
 	{
 		MyHGC* myhgc = nullptr;
