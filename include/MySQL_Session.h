@@ -246,6 +246,7 @@ class MySQL_Session
 	int user_max_connections;
 	int current_hostgroup;
 	int default_hostgroup;
+	int previous_hostgroup;
 	/**
 	 * @brief Charset directly specified by the client. Supplied and updated via 'HandshakeResponse'
 	 *   and 'COM_CHANGE_USER' packets.
