@@ -5466,11 +5466,11 @@ void *child_mysql(void *arg) {
 			// PMC-10004
 			// we probably should use SSL_pending() and/or SSL_has_pending() to determine
 			// if there is more data to be read, but it doesn't seem to be working.
-			// Therefore we hardcored the values 4096 (4K) as a special case and
-			// we try to call read_from_net() again.
+			// Therefore we try to call read_from_net() again as long as there is data.
 			// Previously we hardcoded 16KB but it seems that it can return in smaller
 			// chunks of 4KB.
-			while (rb > 0 && rb%4096 == 0) {
+			// We finally removed the chunk size as it seems that any size is possible.
+			while (rb > 0) {
 				rb = myds->read_from_net();
 				if (myds->net_failure) goto __exit_child_mysql;
 				myds->read_pkts();
