@@ -1001,7 +1001,7 @@ static void generate_load_save_disk_commands(std::vector<std::string>& vec1, std
 static void generate_load_save_disk_commands(const string& name, const string& command) {
 	std::vector<std::string> vec1;
 	std::vector<std::string> vec2;
-	generate_load_save_disk_commands(vec1, vec2, name);
+	generate_load_save_disk_commands(vec1, vec2, command);
 	std::tuple<string, vector<string>, vector<string>> a = tuple<string, vector<string>, vector<string>>{command, vec1, vec2};
 	load_save_disk_commands[name] = a;
 }
