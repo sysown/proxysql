@@ -357,14 +357,11 @@ class ProxySQL_Admin {
 	int load_debug_to_runtime();
 	void save_debug_from_runtime();
 #endif // DEBUG
+
+	void flush_GENERIC__from_to(const std::string&, const std::string&);
+
 	void flush_mysql_users__from_memory_to_disk();
 	void flush_mysql_users__from_disk_to_memory();
-	void flush_mysql_servers__from_memory_to_disk();
-	void flush_mysql_servers__from_disk_to_memory();
-	void flush_mysql_query_rules__from_memory_to_disk();
-	void flush_mysql_query_rules__from_disk_to_memory();
-	void flush_mysql_firewall__from_memory_to_disk();
-	void flush_mysql_firewall__from_disk_to_memory();
 
 //	void flush_mysql_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_mysql_variables__from_memory_to_disk();
@@ -408,8 +405,6 @@ class ProxySQL_Admin {
 
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
-	void flush_scheduler__from_memory_to_disk();
-	void flush_scheduler__from_disk_to_memory();
 
 	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
@@ -463,8 +458,6 @@ class ProxySQL_Admin {
 
 	// Cluster
 	void load_proxysql_servers_to_runtime(bool _lock=true, const std::string& checksum = "", const time_t epoch = 0);
-	void flush_proxysql_servers__from_memory_to_disk();
-	void flush_proxysql_servers__from_disk_to_memory();
 	void save_proxysql_servers_runtime_to_database(bool);
 	void dump_checksums_values_table();
 

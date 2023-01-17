@@ -98,6 +98,47 @@ char * proxysql_version = NULL;
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
+
+static const vector<string> mysql_servers_tablenames = {
+	"mysql_servers",
+	"mysql_replication_hostgroups",
+	"mysql_group_replication_hostgroups",
+	"mysql_galera_hostgroups",
+	"mysql_aws_aurora_hostgroups",
+};
+
+static const vector<string> mysql_firewall_tablenames = {
+	"mysql_firewall_whitelist_users",
+	"mysql_firewall_whitelist_rules",
+	"mysql_firewall_whitelist_sqli_fingerprints",
+};
+
+static const vector<string> mysql_query_rules_tablenames = { "mysql_query_rules", "mysql_query_rules_fast_routing" };
+static const vector<string> scheduler_tablenames = { "scheduler" };
+static const vector<string> proxysql_servers_tablenames = { "proxysql_servers" };
+
+static unordered_map<string, const vector<string>&> module_tablenames = {
+	{ "mysql_servers", mysql_servers_tablenames },
+	{ "mysql_firewall", mysql_firewall_tablenames },
+	{ "mysql_query_rules", mysql_query_rules_tablenames },
+	{ "scheduler", scheduler_tablenames },
+	{ "proxysql_servers", proxysql_servers_tablenames },
+};
+
+static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, const string& p2, const string& p3) {
+	string query;
+	for (auto it = tbs.begin(); it != tbs.end(); it++) {
+		if (p1 != "") {
+			query = p1 + *it;
+			db->execute(query.c_str());
+		}
+		if (p2 != "" && p3 != "") {
+			query = p2 + *it + p3 + *it;
+			db->execute(query.c_str());
+		}
+	}
+}
+
 /*
 static long
 get_file_size (const char *filename) {
@@ -904,16 +945,6 @@ const std::vector<std::string> SAVE_ADMIN_VARIABLES_TO_MEMORY = {
 	"SAVE ADMIN VARIABLES FROM RUNTIME" ,
 	"SAVE ADMIN VARIABLES FROM RUN" };
 
-const std::vector<std::string> LOAD_MYSQL_SERVERS_TO_MEMORY = {
-	"LOAD MYSQL SERVERS TO MEMORY" ,
-	"LOAD MYSQL SERVERS TO MEM" ,
-	"LOAD MYSQL SERVERS FROM DISK" };
-
-const std::vector<std::string> SAVE_MYSQL_SERVERS_FROM_MEMORY = {
-	"SAVE MYSQL SERVERS FROM MEMORY" ,
-	"SAVE MYSQL SERVERS FROM MEM" ,
-	"SAVE MYSQL SERVERS TO DISK" };
-
 const std::vector<std::string> LOAD_MYSQL_SERVERS_FROM_MEMORY = {
 	"LOAD MYSQL SERVERS FROM MEMORY" ,
 	"LOAD MYSQL SERVERS FROM MEM" ,
@@ -926,16 +957,6 @@ const std::vector<std::string> SAVE_MYSQL_SERVERS_TO_MEMORY = {
 	"SAVE MYSQL SERVERS FROM RUNTIME" ,
 	"SAVE MYSQL SERVERS FROM RUN" };
 
-const std::vector<std::string> LOAD_MYSQL_USERS_TO_MEMORY = {
-	"LOAD MYSQL USERS TO MEMORY" ,
-	"LOAD MYSQL USERS TO MEM" ,
-	"LOAD MYSQL USERS FROM DISK" };
-
-const std::vector<std::string> SAVE_MYSQL_USERS_FROM_MEMORY = {
-	"SAVE MYSQL USERS FROM MEMORY" ,
-	"SAVE MYSQL USERS FROM MEM" ,
-	"SAVE MYSQL USERS TO DISK" };
-
 const std::vector<std::string> LOAD_MYSQL_USERS_FROM_MEMORY = {
 	"LOAD MYSQL USERS FROM MEMORY" ,
 	"LOAD MYSQL USERS FROM MEM" ,
@@ -947,16 +968,6 @@ const std::vector<std::string> SAVE_MYSQL_USERS_TO_MEMORY = {
 	"SAVE MYSQL USERS TO MEM" ,
 	"SAVE MYSQL USERS FROM RUNTIME" ,
 	"SAVE MYSQL USERS FROM RUN" };
-
-const std::vector<std::string> LOAD_MYSQL_VARIABLES_TO_MEMORY = {
-	"LOAD MYSQL VARIABLES TO MEMORY" ,
-	"LOAD MYSQL VARIABLES TO MEM" ,
-	"LOAD MYSQL VARIABLES FROM DISK" };
-
-const std::vector<std::string> SAVE_MYSQL_VARIABLES_FROM_MEMORY = {
-	"SAVE MYSQL VARIABLES FROM MEMORY" ,
-	"SAVE MYSQL VARIABLES FROM MEM" ,
-	"SAVE MYSQL VARIABLES TO DISK" };
 
 const std::vector<std::string> LOAD_MYSQL_VARIABLES_FROM_MEMORY = {
 	"LOAD MYSQL VARIABLES FROM MEMORY" ,
@@ -971,6 +982,31 @@ const std::vector<std::string> SAVE_MYSQL_VARIABLES_TO_MEMORY = {
 	"SAVE MYSQL VARIABLES FROM RUN" };
 
 
+static unordered_map<string,std::tuple<string, vector<string>, vector<string>>> load_save_disk_commands;
+
+static void generate_load_save_disk_commands(std::vector<std::string>& vec1, std::vector<std::string>& vec2, const string& name) {
+	string s;
+	if (vec1.size() == 0) {
+		s = "LOAD " + name + " TO MEMORY"; vec1.push_back(s);
+		s = "LOAD " + name + " TO MEM"; vec1.push_back(s);
+		s = "LOAD " + name + " FROM DISK"; vec1.push_back(s);
+	}
+	if (vec2.size() == 0) {
+		s = "SAVE " + name + " FROM MEMORY"; vec2.push_back(s);
+		s = "SAVE " + name + " FROM MEM"; vec2.push_back(s);
+		s = "SAVE " + name + " TO DISK"; vec2.push_back(s);
+	}
+}
+
+static void generate_load_save_disk_commands(const string& name, const string& command) {
+	std::vector<std::string> vec1;
+	std::vector<std::string> vec2;
+	generate_load_save_disk_commands(vec1, vec2, name);
+	std::tuple<string, vector<string>, vector<string>> a = tuple<string, vector<string>, vector<string>>{command, vec1, vec2};
+	load_save_disk_commands[name] = a;
+}
+
+
 bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length) {
 	for (std::vector<std::string>::const_iterator it=cmds.begin(); it!=cmds.end(); ++it) {
 		if ((unsigned int)query_no_space_length==it->length() && !strncasecmp(it->c_str(), query_no_space, query_no_space_length)) {
@@ -978,6 +1014,36 @@ bool is_admin_command_or_alias(const std::vector<std::string>& cmds, char *query
 			return true;
 		}
 	}
+	return false;
+}
+
+bool FlushCommandWrapper(MySQL_Session *sess, const std::vector<std::string>& cmds, char *query_no_space, int query_no_space_length, const string& name, const string& direction) {
+	if ( is_admin_command_or_alias(cmds, query_no_space, query_no_space_length) ) {
+		ProxySQL_Admin *SPA = GloAdmin;
+		SPA->flush_GENERIC__from_to(name, direction);
+#ifdef DEBUG
+		string msg = "Loaded " + name + " ";
+		if (direction == "memory_to_disk")
+			msg += "from MEMORY to DISK";
+		else if (direction == "disk_to_memory")
+			msg += "from DISK to MEMORY";
+		else
+			assert(0);
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to MEMORY\n");
+#endif // DEBUG
+		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		return true;
+	}
+	return false;
+}
+
+bool FlushCommandWrapper(MySQL_Session *sess, const string& modname, char *query_no_space, int query_no_space_length) {
+	assert(load_save_disk_commands.find(modname) != load_save_disk_commands.end());
+	tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
+	if (FlushCommandWrapper(sess, get<1>(t), query_no_space, query_no_space_length, modname, "disk_to_memory") == true)
+		return true;
+	if (FlushCommandWrapper(sess, get<2>(t), query_no_space, query_no_space_length, modname, "memory_to_disk") == true)
+		return true;
 	return false;
 }
 
@@ -2031,35 +2097,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>15) && ( (!strncasecmp("SAVE SCHEDULER ", query_no_space, 15)) || (!strncasecmp("LOAD SCHEDULER ", query_no_space, 15))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD SCHEDULER TO MEMORY") && !strncasecmp("LOAD SCHEDULER TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD SCHEDULER TO MEM") && !strncasecmp("LOAD SCHEDULER TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD SCHEDULER FROM DISK") && !strncasecmp("LOAD SCHEDULER FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_scheduler__from_disk_to_memory();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading scheduler to to MEMORY\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		if (FlushCommandWrapper(sess, "scheduler", query_no_space, query_no_space_length) == true)
 			return false;
-		}
-
-		if (
-			(query_no_space_length==strlen("SAVE SCHEDULER FROM MEMORY") && !strncasecmp("SAVE SCHEDULER FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE SCHEDULER FROM MEM") && !strncasecmp("SAVE SCHEDULER FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE SCHEDULER TO DISK") && !strncasecmp("SAVE SCHEDULER TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_scheduler__from_memory_to_disk();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saving scheduler to DISK\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-			return false;
-		}
 
 		if (
 			(query_no_space_length==strlen("LOAD SCHEDULER FROM MEMORY") && !strncasecmp("LOAD SCHEDULER FROM MEMORY",query_no_space, query_no_space_length))
@@ -2250,22 +2289,22 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 	}
 	if ((query_no_space_length>17) && ( (!strncasecmp("SAVE MYSQL USERS ", query_no_space, 17)) || (!strncasecmp("LOAD MYSQL USERS ", query_no_space, 17))) ) {
 
-		if ( is_admin_command_or_alias(LOAD_MYSQL_USERS_TO_MEMORY, query_no_space, query_no_space_length) ) {
+		string modname = "mysql_users";
+		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
+		if ( is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_users__from_disk_to_memory();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading mysql users to MEMORY\n");
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading %s to MEMORY\n", modname.c_str());
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
-
-		if ( is_admin_command_or_alias(SAVE_MYSQL_USERS_FROM_MEMORY, query_no_space, query_no_space_length) ) {
+		if ( is_admin_command_or_alias(get<2>(t), query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->flush_mysql_users__from_memory_to_disk();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saving mysql users to DISK\n");
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saving %s to DISK\n", modname.c_str());
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
-
 		if ( is_admin_command_or_alias(LOAD_MYSQL_USERS_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
 			SPA->init_users();
@@ -2511,14 +2550,16 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>21) && ( (!strncasecmp("SAVE MYSQL VARIABLES ", query_no_space, 21)) || (!strncasecmp("LOAD MYSQL VARIABLES ", query_no_space, 21))) ) {
 
-		if ( is_admin_command_or_alias(LOAD_MYSQL_VARIABLES_TO_MEMORY, query_no_space, query_no_space_length) ) {
+		string modname = "mysql_variables";
+		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
+		if ( is_admin_command_or_alias(get<1>(t), query_no_space, query_no_space_length) ) {
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
 			*ql=strlen(*q)+1;
 			return true;
 		}
 
-		if ( is_admin_command_or_alias(SAVE_MYSQL_VARIABLES_FROM_MEMORY, query_no_space, query_no_space_length) ) {
+		if ( is_admin_command_or_alias(get<2>(t), query_no_space, query_no_space_length) ) {
 			l_free(*ql,*q);
 			*q=l_strdup("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables WHERE variable_name LIKE 'mysql-%'");
 			*ql=strlen(*q)+1;
@@ -2573,21 +2614,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>19) && ( (!strncasecmp("SAVE MYSQL SERVERS ", query_no_space, 19)) || (!strncasecmp("LOAD MYSQL SERVERS ", query_no_space, 19))) ) {
 
-		if ( is_admin_command_or_alias(LOAD_MYSQL_SERVERS_TO_MEMORY, query_no_space, query_no_space_length) ) {
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_mysql_servers__from_disk_to_memory();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to MEMORY\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		if (FlushCommandWrapper(sess, "mysql_servers", query_no_space, query_no_space_length) == true)
 			return false;
-		}
-
-		if ( is_admin_command_or_alias(SAVE_MYSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length) ) {
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_mysql_servers__from_memory_to_disk();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql servers to DISK\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-			return false;
-		}
 
 		if ( is_admin_command_or_alias(LOAD_MYSQL_SERVERS_FROM_MEMORY, query_no_space, query_no_space_length) ) {
 			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
@@ -2640,35 +2668,17 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>22) && ( (!strncasecmp("SAVE PROXYSQL SERVERS ", query_no_space, 22)) || (!strncasecmp("LOAD PROXYSQL SERVERS ", query_no_space, 22))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS TO MEMORY") && !strncasecmp("LOAD PROXYSQL SERVERS TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS TO MEM") && !strncasecmp("LOAD PROXYSQL SERVERS TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS FROM DISK") && !strncasecmp("LOAD PROXYSQL SERVERS FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_proxysql_servers__from_disk_to_memory();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded ProxySQL servers to MEMORY\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		if (FlushCommandWrapper(sess, "proxysql_servers", query_no_space, query_no_space_length) == true)
 			return false;
-		}
-		if (
-			(query_no_space_length==strlen("SAVE PROXYSQL SERVERS FROM MEMORY") && !strncasecmp("SAVE PROXYSQL SERVERS FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE PROXYSQL SERVERS FROM MEM") && !strncasecmp("SAVE PROXYSQL SERVERS FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE PROXYSQL SERVERS TO DISK") && !strncasecmp("SAVE PROXYSQL SERVERS TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_proxysql_servers__from_memory_to_disk();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved ProxySQL servers to DISK\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+/*
+		string modname = "proxysql_servers";
+		tuple<string, vector<string>, vector<string>>& t = load_save_disk_commands[modname];
+		if (FlushCommandWrapper(sess, get<1>(t), query_no_space, query_no_space_length, modname, "disk_to_memory") == true)
 			return false;
-		}
 
+		if (FlushCommandWrapper(sess, get<2>(t), query_no_space, query_no_space_length, modname, "memory_to_disk") == true)
+			return false;
+*/
 		if (
 			(query_no_space_length==strlen("LOAD PROXYSQL SERVERS FROM MEMORY") && !strncasecmp("LOAD PROXYSQL SERVERS FROM MEMORY",query_no_space, query_no_space_length))
 			||
@@ -2754,20 +2764,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>20) && ( (!strncasecmp("SAVE MYSQL FIREWALL ", query_no_space, 20)) || (!strncasecmp("LOAD MYSQL FIREWALL ", query_no_space, 20))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO MEMORY") && !strncasecmp("LOAD MYSQL FIREWALL TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL FIREWALL TO MEM") && !strncasecmp("LOAD MYSQL FIREWALL TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM DISK") && !strncasecmp("LOAD MYSQL FIREWALL FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_mysql_firewall__from_disk_to_memory();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql firewall to MEMORY\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		if (FlushCommandWrapper(sess, "mysql_firewall", query_no_space, query_no_space_length) == true)
 			return false;
-		}
 
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL FIREWALL FROM CONFIG") && !strncasecmp("LOAD MYSQL FIREWALL FROM CONFIG",query_no_space, query_no_space_length))
@@ -2795,21 +2793,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
 				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
 			}
-			return false;
-		}
-
-		if (
-			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM MEMORY") && !strncasecmp("SAVE MYSQL FIREWALL FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL FIREWALL FROM MEM") && !strncasecmp("SAVE MYSQL FIREWALL FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL FIREWALL TO DISK") && !strncasecmp("SAVE MYSQL FIREWALL TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_mysql_firewall__from_memory_to_disk();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql firewall to DISK\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -2854,20 +2837,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>23) && ( (!strncasecmp("SAVE MYSQL QUERY RULES ", query_no_space, 23)) || (!strncasecmp("LOAD MYSQL QUERY RULES ", query_no_space, 23))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO MEMORY") && !strncasecmp("LOAD MYSQL QUERY RULES TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES TO MEM") && !strncasecmp("LOAD MYSQL QUERY RULES TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM DISK") && !strncasecmp("LOAD MYSQL QUERY RULES FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_mysql_query_rules__from_disk_to_memory();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql query rules to MEMORY\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		if (FlushCommandWrapper(sess, "mysql_query_rules", query_no_space, query_no_space_length) == true)
 			return false;
-		}
 
 		if (
 			(query_no_space_length==strlen("LOAD MYSQL QUERY RULES FROM CONFIG") && !strncasecmp("LOAD MYSQL QUERY RULES FROM CONFIG",query_no_space, query_no_space_length))
@@ -2894,21 +2865,6 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Unknown config file\n");
 				SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Config file unknown");
 			}
-			return false;
-		}
-
-		if (
-			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM MEMORY") && !strncasecmp("SAVE MYSQL QUERY RULES FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES FROM MEM") && !strncasecmp("SAVE MYSQL QUERY RULES FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE MYSQL QUERY RULES TO DISK") && !strncasecmp("SAVE MYSQL QUERY RULES TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->flush_mysql_query_rules__from_memory_to_disk();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saved mysql query rules to DISK\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 			return false;
 		}
 
@@ -5742,6 +5698,25 @@ ProxySQL_Admin::ProxySQL_Admin() :
 #endif
 
 	pthread_mutex_init(&sql_query_global_mutex, NULL);
+
+	generate_load_save_disk_commands("mysql_firewall",    "MYSQL FIREWALL");
+	generate_load_save_disk_commands("mysql_query_rules", "MYSQL QUERY RULES");
+	generate_load_save_disk_commands("mysql_users",       "MYSQL USERS");
+	generate_load_save_disk_commands("mysql_servers",     "MYSQL SERVERS");
+	generate_load_save_disk_commands("mysql_variables",   "MYSQL VARIABLES");
+	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
+	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");
+
+	{
+		// we perform some sanity check
+		assert(load_save_disk_commands.size() > 0);
+		for (auto it = load_save_disk_commands.begin(); it != load_save_disk_commands.end(); it++) {
+			vector<string>& vec1 = get<1>(it->second);
+			assert(vec1.size() == 3);
+			vector<string>& vec2 = get<2>(it->second);
+			assert(vec2.size() == 3);
+		}
+	}
 
 
 	variables.admin_credentials=strdup("admin:admin");
@@ -10267,17 +10242,10 @@ void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
 
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
+	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
+	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.mysql_users SELECT * FROM disk.mysql_users");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
-	admindb->execute("INSERT OR REPLACE INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
+	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	{
 		// online upgrade of mysql-session_idle_ms
 		char *error=NULL;
@@ -10303,7 +10271,7 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 		if (resultset) delete resultset;
 	}
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
-	admindb->execute("INSERT OR REPLACE INTO main.scheduler SELECT * FROM disk.scheduler");
+	BQE1(admindb, scheduler_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 	admindb->execute("INSERT OR REPLACE INTO main.restapi_routes SELECT * FROM disk.restapi_routes");
 	admindb->execute("INSERT OR REPLACE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
 #ifdef DEBUG
@@ -10353,19 +10321,12 @@ void ProxySQL_Admin::__delete_disktable() {
 */
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_aws_aurora_hostgroups SELECT * FROM main.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
+	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	BQE1(admindb, mysql_query_rules_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.mysql_users SELECT * FROM main.mysql_users");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_users SELECT * FROM main.mysql_firewall_whitelist_users");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_rules SELECT * FROM main.mysql_firewall_whitelist_rules");
-	admindb->execute("INSERT OR REPLACE INTO disk.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM main.mysql_firewall_whitelist_sqli_fingerprints");
+	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
-	admindb->execute("INSERT OR REPLACE INTO disk.scheduler SELECT * FROM main.scheduler");
+	BQE1(admindb, scheduler_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.proxysql_servers SELECT * FROM main.proxysql_servers");
 #ifdef DEBUG
 	admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
@@ -10428,98 +10389,19 @@ void ProxySQL_Admin::flush_clickhouse_users__from_memory_to_disk() {
 }
 #endif /* PROXYSQLCLICKHOUSE */
 
-void ProxySQL_Admin::flush_scheduler__from_disk_to_memory() {
-	admindb->wrlock();
-	admindb->execute("DELETE FROM main.scheduler");
-	admindb->execute("INSERT INTO main.scheduler SELECT * FROM disk.scheduler");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Admin::flush_scheduler__from_memory_to_disk() {
-	admindb->wrlock();
-	admindb->execute("DELETE FROM disk.scheduler");
-	admindb->execute("INSERT INTO disk.scheduler SELECT * FROM main.scheduler");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Admin::flush_mysql_servers__from_disk_to_memory() {
+void ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& direction) {
+	assert(direction == "disk_to_memory" || direction == "memory_to_disk");
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM main.mysql_servers");
-	admindb->execute("DELETE FROM main.mysql_replication_hostgroups");
-	admindb->execute("DELETE FROM main.mysql_group_replication_hostgroups");
-	admindb->execute("DELETE FROM main.mysql_galera_hostgroups");
-	admindb->execute("DELETE FROM main.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-	admindb->execute("INSERT INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
-	admindb->execute("INSERT INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
-	admindb->execute("INSERT INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Admin::flush_mysql_servers__from_memory_to_disk() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM disk.mysql_servers");
-	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
-	admindb->execute("DELETE FROM disk.mysql_group_replication_hostgroups");
-	admindb->execute("DELETE FROM disk.mysql_galera_hostgroups");
-	admindb->execute("DELETE FROM disk.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_servers SELECT * FROM main.mysql_servers");
-	admindb->execute("INSERT INTO disk.mysql_replication_hostgroups SELECT * FROM main.mysql_replication_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_group_replication_hostgroups SELECT * FROM main.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_galera_hostgroups SELECT * FROM main.mysql_galera_hostgroups");
-	admindb->execute("INSERT INTO disk.mysql_aws_aurora_hostgroups SELECT * FROM main.mysql_aws_aurora_hostgroups");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Admin::flush_mysql_firewall__from_disk_to_memory() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM main.mysql_firewall_whitelist_rules");
-	admindb->execute("INSERT INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
-	admindb->execute("DELETE FROM main.mysql_firewall_whitelist_users");
-	admindb->execute("INSERT INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
-	admindb->execute("DELETE FROM main.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("INSERT INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Admin::flush_mysql_firewall__from_memory_to_disk() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_rules");
-	admindb->execute("INSERT INTO disk.mysql_firewall_whitelist_rules SELECT * FROM main.mysql_firewall_whitelist_rules");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_users");
-	admindb->execute("INSERT INTO disk.mysql_firewall_whitelist_users SELECT * FROM main.mysql_firewall_whitelist_users");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("INSERT INTO disk.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM main.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Admin::flush_mysql_query_rules__from_disk_to_memory() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM main.mysql_query_rules");
-	admindb->execute("INSERT INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
-	admindb->execute("DELETE FROM main.mysql_query_rules_fast_routing");
-	admindb->execute("INSERT INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Admin::flush_mysql_query_rules__from_memory_to_disk() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM disk.mysql_query_rules");
-	admindb->execute("INSERT INTO disk.mysql_query_rules SELECT * FROM main.mysql_query_rules");
-	admindb->execute("DELETE FROM disk.mysql_query_rules_fast_routing");
-	admindb->execute("INSERT INTO disk.mysql_query_rules_fast_routing SELECT * FROM main.mysql_query_rules_fast_routing");
+	auto it = module_tablenames.find(name);
+	assert(it != module_tablenames.end());
+	if (direction == "disk_to_memory") {
+		BQE1(admindb, it->second, "DELETE FROM main.", "INSERT INTO main.", " SELECT * FROM disk.");
+	} else if (direction == "memory_to_disk") {
+		BQE1(admindb, it->second, "DELETE FROM disk.", "INSERT INTO disk.", " SELECT * FROM man.");
+	} else {
+		assert(0);
+	}
 	admindb->execute("PRAGMA foreign_keys = ON");
 	admindb->wrunlock();
 }
@@ -11728,7 +11610,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 	}
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
 	admindb->execute(query);
-	resultset=MyHGM->dump_table_mysql("mysql__group_replication_hostgroups");
+	resultset=MyHGM->dump_table_mysql("mysql_group_replication_hostgroups");
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement=NULL;
@@ -13138,24 +13020,6 @@ void ProxySQL_Admin::load_proxysql_servers_to_runtime(bool _lock, const std::str
 	// no need to release resultset
 	
 	resultset=NULL;
-}
-
-void ProxySQL_Admin::flush_proxysql_servers__from_memory_to_disk() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM disk.proxysql_servers");
-	admindb->execute("INSERT INTO disk.proxysql_servers SELECT * FROM main.proxysql_servers");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Admin::flush_proxysql_servers__from_disk_to_memory() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("DELETE FROM main.proxysql_servers");
-	admindb->execute("INSERT INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
 }
 
 void ProxySQL_Admin::save_proxysql_servers_runtime_to_database(bool _runtime) {

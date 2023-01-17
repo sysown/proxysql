@@ -1046,7 +1046,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 						);
 						if (GloProxyCluster->cluster_mysql_query_rules_save_to_disk == true) {
 							proxy_info("Cluster: Saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
-							GloAdmin->flush_mysql_query_rules__from_memory_to_disk();
+							GloAdmin->flush_GENERIC__from_to("mysql_query_rules", "memory_to_disk");
 						} else {
 							proxy_info("Cluster: NOT saving to disk MySQL Query Rules from peer %s:%d\n", hostname, port);
 						}
@@ -1774,7 +1774,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 						GloAdmin->load_mysql_servers_to_runtime(incoming_servers, checksum, epoch);
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
 							proxy_info("Cluster: Saving to disk MySQL Servers from peer %s:%d\n", hostname, port);
-							GloAdmin->flush_mysql_servers__from_memory_to_disk();
+							GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
 						} else {
 							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d failed.\n", hostname, port);
 						}
@@ -2077,7 +2077,7 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 						GloAdmin->load_proxysql_servers_to_runtime(false, expected_checksum, epoch);
 						if (GloProxyCluster->cluster_proxysql_servers_save_to_disk == true) {
 							proxy_info("Cluster: Saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
-							GloAdmin->flush_proxysql_servers__from_memory_to_disk();
+							GloAdmin->flush_GENERIC__from_to("proxysql_servers","memory_to_disk");
 						} else {
 							proxy_info("Cluster: NOT saving to disk ProxySQL Servers from peer %s:%d\n", hostname, port);
 						}
