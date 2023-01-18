@@ -66,6 +66,11 @@ std::vector<std::string> queries_SQL2 = {
 	"INSERT INTO tbl1459 SELECT NULL , i1 + id, i2 + id FROM tbl1459",
 };
 
+std::vector<std::string> queries_SQL4 = {
+	"DROP TABLE IF EXISTS tbl1459",
+	"VACUUM",
+};
+
 std::vector<unsigned long long int> queries_limits = {
 	1, 10, 20, 27, 103, 169, 320, 450, 512, 619, 915, 1022,
 	1033, 1145, 1516, 1920, 2034, 5014, 9932, 10111,
@@ -254,6 +259,10 @@ int main(int argc, char** argv) {
 	}
 
 
+
+	// clean up
+	if (run_queries_sets(queries_SQL4, mysqls[0], "Running on SQLite3"))
+		return exit_status();
 
 
 	for (int i=0; i<5; i++) {
