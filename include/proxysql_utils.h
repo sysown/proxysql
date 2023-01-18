@@ -8,7 +8,10 @@
 #include <vector>
 #include <sys/time.h>
 
-#ifdef __FreeBSD__
+#ifndef ETIME
+// ETIME is not defined on FreeBSD
+// ETIME is used internaly to report API timer expired
+// replace with ETIMEDOUT as closest alternative
 #define	ETIME	ETIMEDOUT
 #endif
 
