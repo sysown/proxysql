@@ -55,6 +55,11 @@ std::vector<std::string> queries_SQL3 = {
 	"CREATE TABLE tbl1459v (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , t1 VARCHAR)",
 };
 
+std::vector<std::string> queries_SQL4 = {
+	"DROP TABLE IF EXISTS tbl1459v",
+	"VACUUM",
+};
+
 
 int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::string& message_prefix) {
 	for (std::vector<std::string>::iterator it = queries.begin(); it != queries.end(); it++) {
@@ -246,6 +251,9 @@ int main(int argc, char** argv) {
 			}
 		}
 	}
+	// clean up
+	if (run_queries_sets(queries_SQL4, mysqls[0], "Running on SQLite3"))
+		return exit_status();
 
 
 	mysql_close(mysqladmin);
