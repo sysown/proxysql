@@ -29,7 +29,7 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 #ifdef IPV6_V6ONLY
                 if (next->ai_family == AF_INET6) {
                         if(setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&arg_on, sizeof(arg_on)) == -1) 
-				proxy_error("setsockopt() IPV6_V6ONLY: %d\n", gai_strerror(errno));
+				proxy_error("setsockopt() IPV6_V6ONLY: %s\n", gai_strerror(errno));
                 }
 #endif
 
@@ -43,7 +43,7 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 #ifdef SO_REUSEPORT
   		if (reuseport) {
 			if (setsockopt(sd, SOL_SOCKET, SO_REUSEPORT, (char *)&arg_on, sizeof(arg_on)) == -1) {
-				proxy_error("setsockopt() SO_REUSEPORT: %d\n", gai_strerror(errno));
+				proxy_error("setsockopt() SO_REUSEPORT: %s\n", gai_strerror(errno));
 			}
 		}
 #endif /* SO_REUSEPORT */
@@ -125,7 +125,9 @@ int listen_on_unix(char *path, int backlog) {
 
 
 
-
+/*
+// THIS CODE IS BEING COMMENTED BECAUSED UNUSED (probably since 2015)
+//
 int connect_socket(char *address, int connect_port)
 {
 	struct sockaddr_in a;
@@ -155,3 +157,4 @@ int connect_socket(char *address, int connect_port)
 	}
 	return s;
 }
+*/

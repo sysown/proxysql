@@ -198,9 +198,6 @@ class Query_Processor_Output {
 		if (comment) { // #643
 			free(comment);
 		}
-		if (comment) { // #643
-			free(comment);
-		}
 	}
 };
 
@@ -331,10 +328,16 @@ class Query_Processor {
 	unsigned long long get_rules_mem_used();
 	unsigned long long get_new_req_conns_count();
 
+	SQLite3_result * query_rules_resultset; // here we save a copy of resultset for query rules
+	void save_query_rules(SQLite3_result *resultset);
+	SQLite3_result * get_current_query_rules_inner();
+
 	// fast routing
-	SQLite3_result * fast_routing_resultset;
+	SQLite3_result * fast_routing_resultset; // here we save a copy of resultset for query rules fast routing
 	void load_fast_routing(SQLite3_result *resultset);
 	SQLite3_result * get_current_query_rules_fast_routing();
+	SQLite3_result * get_current_query_rules_fast_routing_inner();
+	int get_current_query_rules_fast_routing_count();
 	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
 	int testing___find_HG_in_mysql_query_rules_fast_routing_dual(char *username, char *schemaname, int flagIN);
 

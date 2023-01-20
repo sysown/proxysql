@@ -30,12 +30,14 @@ class MySQL_Event {
 	bool have_rows_sent;
 	uint64_t affected_rows;
 	uint64_t rows_sent;
+	uint32_t client_stmt_id;
 	public:
 	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
 	uint64_t write(std::fstream *f, MySQL_Session *sess);
 	uint64_t write_query_format_1(std::fstream *f);
 	uint64_t write_query_format_2_json(std::fstream *f);
 	void write_auth(std::fstream *f, MySQL_Session *sess);
+	void set_client_stmt_id(uint32_t client_stmt_id);
 	void set_query(const char *ptr, int len);
 	void set_server(int _hid, const char *ptr, int len);
 	void set_extra_info(char *);

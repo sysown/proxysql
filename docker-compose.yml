@@ -1,41 +1,36 @@
 version: "2.0"
 services:
-  centos67_build:
-    image: proxysql/packaging:build-centos6.7
+
+####################################################################################################
+####################################################################################################
+  centos6_build:
+    image: proxysql/packaging:build-centos6
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rhel6/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rhel6/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
-      - APPLY_PATCH=rhel6
       - MAKE
       - MAKEOPT
       - CURVER
-      - PKG_RELEASE=centos67
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  centos67_dbg_build:
-    image: proxysql/packaging:build-centos6.7
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/rhel6/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+      - PKG_RELEASE=centos6
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  centos6_dbg_build:
+    extends:
+      service: centos6_build
     environment:
-      - APPLY_PATCH=rhel6
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=dbg-centos67
+      - PKG_RELEASE=dbg-centos6
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
   centos7_build:
     image: proxysql/packaging:build-centos7
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -43,44 +38,22 @@ services:
       - CURVER
       - PKG_RELEASE=centos7
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  centos7_arm64_build:
-    image: proxysql/packaging-arm64:build-centos7
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=centos7
-      - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=aarch64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   centos7_dbg_build:
-    image: proxysql/packaging:build-centos7
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: centos7_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-centos7
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
   centos8_build:
     image: proxysql/packaging:build-centos8
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
@@ -88,73 +61,31 @@ services:
       - CURVER
       - PKG_RELEASE=centos8
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  centos8_arm64_build:
-    image: proxysql/packaging-arm64:build-centos8
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  centos8_clang_build:
+    extends:
+      service: centos8_build
+    image: proxysql/packaging:build-clang-centos8
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=centos8
+      - PKG_RELEASE=centos8-clang
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=aarch64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
   centos8_dbg_build:
-    image: proxysql/packaging:build-centos8
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rhel7/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/rhel7/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: centos8_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-centos8
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  fedora24_build:
-    image: proxysql/packaging:build-fedora24
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=fedora24
-      - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  fedora24_dbg_build:
-    image: proxysql/packaging:build-fedora24
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=dbg-fedora24
-      - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+
+####################################################################################################
+####################################################################################################
   fedora27_build:
     image: proxysql/packaging:build-fedora27
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -163,28 +94,21 @@ services:
       - CURVER
       - PKG_RELEASE=fedora27
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   fedora27_dbg_build:
-    image: proxysql/packaging:build-fedora27
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: fedora27_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-fedora27
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
   fedora28_build:
     image: proxysql/packaging:build-fedora28
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
@@ -193,39 +117,134 @@ services:
       - CURVER
       - PKG_RELEASE=fedora28
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   fedora28_dbg_build:
-    image: proxysql/packaging:build-fedora28
-    volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
-      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: fedora28_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-fedora28
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=x86_64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  fedora32_arm64_build:
-    image: proxysql/packaging-arm64:build-fedora32
+
+####################################################################################################
+  fedora33_build:
+    image: proxysql/packaging:build-fedora33
     volumes:
-      - ./docker/images/proxysql/rhel-compliant/rpmmacros/:/root/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
       - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
       - ./:/opt/proxysql/
     environment:
       - MAKE
       - MAKEOPT
       - CURVER
-      - PKG_RELEASE=fedora32
+      - PKG_RELEASE=fedora33
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=aarch64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  fedora33_dbg_build:
+    extends:
+      service: fedora33_build
+    environment:
+      - PKG_RELEASE=dbg-fedora33
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+  fedora34_build:
+    image: proxysql/packaging:build-fedora34
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=fedora34
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  fedora34_clang_build:
+    extends:
+      service: fedora34_build
+    image: proxysql/packaging:build-clang-fedora34
+    environment:
+      - PKG_RELEASE=fedora34-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora34_dbg_build:
+    image: proxysql/packaging:build-fedora34
+    extends:
+      service: fedora34_build
+    environment:
+      - PKG_RELEASE=dbg-fedora34
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+  fedora36_build:
+    image: proxysql/packaging:build-fedora36
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=fedora36
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  fedora36_clang_build:
+    extends:
+      service: fedora36_build
+    image: proxysql/packaging:build-clang-fedora36
+    environment:
+      - PKG_RELEASE=fedora36-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora36_dbg_build:
+    extends:
+      service: fedora36_build
+    environment:
+      - PKG_RELEASE=dbg-fedora36
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+  fedora37_build:
+    image: proxysql/packaging:build-fedora37
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=fedora37
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  fedora37_clang_build:
+    extends:
+      service: fedora37_build
+    image: proxysql/packaging:build-clang-fedora37
+    environment:
+      - PKG_RELEASE=fedora37-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora37_dbg_build:
+    extends:
+      service: fedora37_build
+    environment:
+      - PKG_RELEASE=dbg-fedora37
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+####################################################################################################
   debian8_build:
     image: proxysql/packaging:build-debian8
     volumes:
@@ -237,24 +256,16 @@ services:
       - MAKEOPT
       - CURVER
       - PKG_RELEASE=debian8
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   debian8_dbg_build:
-    image: proxysql/packaging:build-debian8
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: debian8_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-debian8
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
   debian9_build:
     image: proxysql/packaging:build-debian9
     volumes:
@@ -267,69 +278,16 @@ services:
       - CURVER
       - PKG_RELEASE=debian9
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  debian9_arm64_build:
-    image: proxysql/packaging-arm64:build-debian9
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=debian9
-      - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=arm64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   debian9_dbg_build:
-    image: proxysql/packaging:build-debian9
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: debian9_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-debian9
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  debian9.4_build:
-    image: proxysql/packaging:build-debian9.4
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=debian9.4
-      - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  debian9.4_dbg_build:
-    image: proxysql/packaging:build-debian9.4
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=dbg-debian9.4
-      - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
   debian10_build:
     image: proxysql/packaging:build-debian10
     volumes:
@@ -342,39 +300,48 @@ services:
       - CURVER
       - PKG_RELEASE=debian10
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  debian10_arm64_build:
-    image: proxysql/packaging-arm64:build-debian10
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=debian10
-      - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=arm64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   debian10_dbg_build:
-    image: proxysql/packaging:build-debian10
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: debian10_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-debian10
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
+  debian11_build:
+    image: proxysql/packaging:build-debian11
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=debian11
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  debian11_clang_build:
+    extends:
+      service: debian11_build
+    image: proxysql/packaging:build-clang-debian11
+    environment:
+      - PKG_RELEASE=debian11-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  debian11_dbg_build:
+    extends:
+      service: debian11_build
+    environment:
+      - PKG_RELEASE=dbg-debian11
+      - PROXYSQL_BUILD_TYPE=debug
+
+
+####################################################################################################
+####################################################################################################
   ubuntu14_build:
     image: proxysql/packaging:build-ubuntu14
     volumes:
@@ -386,24 +353,16 @@ services:
       - MAKEOPT
       - CURVER
       - PKG_RELEASE=ubuntu14
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   ubuntu14_dbg_build:
-    image: proxysql/packaging:build-ubuntu14
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: ubuntu14_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-ubuntu14
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
   ubuntu16_build:
     image: proxysql/packaging:build-ubuntu16
     volumes:
@@ -416,24 +375,16 @@ services:
       - CURVER
       - PKG_RELEASE=ubuntu16
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   ubuntu16_dbg_build:
-    image: proxysql/packaging:build-ubuntu16
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/pre-systemd/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: ubuntu16_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-ubuntu16
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
   ubuntu18_build:
     image: proxysql/packaging:build-ubuntu18
     volumes:
@@ -446,39 +397,16 @@ services:
       - CURVER
       - PKG_RELEASE=ubuntu18
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  ubuntu18_arm64_build:
-    image: proxysql/packaging-arm64:build-ubuntu18
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
-    environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=ubuntu18
-      - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=arm64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
   ubuntu18_dbg_build:
-    image: proxysql/packaging:build-ubuntu18
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: ubuntu18_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-ubuntu18
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
   ubuntu20_build:
     image: proxysql/packaging:build-ubuntu20
     volumes:
@@ -491,36 +419,150 @@ services:
       - CURVER
       - PKG_RELEASE=ubuntu20
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
-  ubuntu20_arm64_build:
-    image: proxysql/packaging-arm64:build-ubuntu20
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  ubuntu20_clang_build:
+    extends:
+      service: ubuntu20_build
+    image: proxysql/packaging:build-clang-ubuntu20
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
-      - PKG_RELEASE=ubuntu20
+      - PKG_RELEASE=ubuntu20-clang
       - PROXYSQL_BUILD_TYPE=clickhouse
-      - PROXYSQL_BUILD_ARCH=arm64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
   ubuntu20_dbg_build:
-    image: proxysql/packaging:build-ubuntu20
-    volumes:
-      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
-      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
-      - ./:/opt/proxysql/
+    extends:
+      service: ubuntu20_build
     environment:
-      - MAKE
-      - MAKEOPT
-      - CURVER
       - PKG_RELEASE=dbg-ubuntu20
       - PROXYSQL_BUILD_TYPE=debug
-      - PROXYSQL_BUILD_ARCH=amd64
-    command:
-      - /opt/entrypoint/entrypoint.bash
+
+####################################################################################################
+  ubuntu22_build:
+    image: proxysql/packaging:build-ubuntu22
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=ubuntu22
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  ubuntu22_clang_build:
+    extends:
+      service: ubuntu22_build
+    image: proxysql/packaging:build-clang-ubuntu22
+    environment:
+      - PKG_RELEASE=ubuntu22-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  ubuntu22_dbg_build:
+    extends:
+      service: ubuntu22_build
+    environment:
+      - PKG_RELEASE=dbg-ubuntu22
+      - PROXYSQL_BUILD_TYPE=debug
+
+
+####################################################################################################
+####################################################################################################
+  opensuse15_build:
+    image: proxysql/packaging:build-opensuse15
+    volumes:
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/suse-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/suse-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=opensuse15
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  opensuse15_clang_build:
+    extends:
+      service: opensuse15_build
+    image: proxysql/packaging:build-clang-opensuse15
+    environment:
+      - PKG_RELEASE=opensuse15-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  opensuse15_dbg_build:
+    extends:
+      service: opensuse15_build
+    environment:
+      - PKG_RELEASE=dbg-opensuse15
+      - PROXYSQL_BUILD_TYPE=debug
+
+
+####################################################################################################
+####################################################################################################
+  almalinux8_build:
+    image: proxysql/packaging:build-almalinux8
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=almalinux8
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  almalinux8_clang_build:
+    extends:
+      service: almalinux8_build
+    image: proxysql/packaging:build-clang-almalinux8
+    environment:
+      - PKG_RELEASE=almalinux8-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  almalinux8_dbg_build:
+    extends:
+      service: almalinux8_build
+    environment:
+      - PKG_RELEASE=dbg-almalinux8
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
+  almalinux9_build:
+    image: proxysql/packaging:build-almalinux9
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=almalinux9
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  almalinux9_clang_build:
+    extends:
+      service: almalinux9_build
+    image: proxysql/packaging:build-clang-almalinux9
+    environment:
+      - PKG_RELEASE=almalinux9-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  almalinux9_dbg_build:
+    extends:
+      service: almalinux9_build
+    environment:
+      - PKG_RELEASE=dbg-almalinux9
+      - PROXYSQL_BUILD_TYPE=debug
+
+
+####################################################################################################
+####################################################################################################

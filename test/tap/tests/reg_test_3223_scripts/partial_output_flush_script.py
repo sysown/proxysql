@@ -1,9 +1,11 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """Simple script to produce a 1MB output flushed in two times to be processed by the RESTAPI."""
 
 import json
+import textwrap
 import time
+import sys
 
 random_dic = {}
 
@@ -13,11 +15,8 @@ if __name__ == "__main__":
         random_dic["id_" + str(i)] = "0000000000"
 
     j_random_dic = json.dumps(random_dic)
+    parts = textwrap.wrap(j_random_dic, len(j_random_dic)//10)
 
-    # Split the string in half
-    firstpart, secondpart = j_random_dic[:len(j_random_dic)//2], j_random_dic[len(j_random_dic)//2:]
-
-    # Partial flush script
-    print(firstpart, end='', flush=True)
-    time.sleep(1)
-    print(secondpart, end='', flush=True)
+    for part in parts:
+        print(part, file=sys.stdout, flush=True, end='')
+        time.sleep(0.5)

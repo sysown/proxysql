@@ -25,8 +25,8 @@ bool verify_set_names(MySQL_Session* session);
 bool logbin_update_server_variable(MySQL_Session* session, int idx, int &_rc);
 
 class MySQL_Variables {
-	static verify_var verifiers[SQL_NAME_LAST];
-	static update_var updaters[SQL_NAME_LAST];
+	static verify_var verifiers[SQL_NAME_LAST_HIGH_WM];
+	static update_var updaters[SQL_NAME_LAST_HIGH_WM];
 
 public:
 	std::string variables_regexp;
@@ -49,7 +49,6 @@ public:
 
 	bool verify_variable(MySQL_Session* session, int idx) const;
 	bool update_variable(MySQL_Session* session, session_status status, int &_rc);
-	bool on_connect_to_backend(MySQL_Connection *myconn);
 	bool parse_variable_boolean(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
 	bool parse_variable_number(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
 };

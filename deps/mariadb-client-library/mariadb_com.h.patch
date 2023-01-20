@@ -1,3 +1,14 @@
+@@ -178,8 +178,8 @@
+ 
+ #define MARIADB_CLIENT_SUPPORTED_FLAGS (MARIADB_CLIENT_PROGRESS |\
+                                        MARIADB_CLIENT_COM_MULTI |\
+-                                       MARIADB_CLIENT_STMT_BULK_OPERATIONS|\
+-                                       MARIADB_CLIENT_EXTENDED_METADATA)
++                                       MARIADB_CLIENT_STMT_BULK_OPERATIONS\
++                                       )
+ 
+ #define CLIENT_SUPPORTED_FLAGS  (CLIENT_MYSQL |\
+                                  CLIENT_FOUND_ROWS |\
 @@ -210,8 +210,6 @@
                                   CLIENT_LONG_FLAG |\
                                   CLIENT_TRANSACTIONS |\
