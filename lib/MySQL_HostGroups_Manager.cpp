@@ -5056,6 +5056,21 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
 	}
 }
 
+/**
+ * @brief Set the server specified by the supplied 'hostname:port' and hostgroup as 'reader'.
+ * @details Tries to find the server in any hostgroup other than in the desired on, in case of not
+ *  finding it:
+ *    1. Move the server to the reader hostgroup, preserving status if required.
+ *    2. Deletes the server from other hostgroups in the cluster (determined by 'writer_hostgroup').
+ *    3. Converge the current configuration and rebuild the hostgroups.
+ *
+ *  PRESERVE-OFFLINE_SOFT: When moving the target server, always preserve the OFFLINE_SOFT state.
+ *
+ * @param _hostname Hostname of the target server to be set as writer.
+ * @param _port Port of the target server to be set as writer.
+ * @param _writer_hostgroup 'writer_hostgroup' of the cluster in which server is going to be placed as writer.
+ * @param _error Reason why the server has beens et as 'read_only'.
+ */
 void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
 	int cols=0;
 	int affected_rows=0;
@@ -5143,6 +5158,36 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 	}
 }
 
+/**
+ * @brief Set the server specified by the supplied 'hostname:port' and hostgroup as 'writer'.
+ * @details Tries to find the server as an already present 'writer' in the desired hostgroup, in case of not
+ *  finding it:
+ *    1. Move the server to target writer, preserving status if required.
+ *    2. Deletes the server from other hostgroups in the cluster (determined by 'writer_hostgroup').
+ *    3. If 'writer_is_also_reader', place the server also in the 'reader_hostgroup'.
+ *    4. Converge the current configuration and rebuild the hostgroups.
+ *
+ *  If the server is already found, no action should be taken, and no reconfiguration triggered.
+ *
+ *  FOUND_AS_SHUNNED: If writer is found as SHUNNED is considered as a found writer, since we don't take
+ *  reconfiguration actions based on SHUNNED state.
+ *
+ *  FOUND_AS_BACKUP_WRITER: If server is found in the 'backup_writer_hostgroup' is because the server has been
+ *  previously considered as a writer, and due to an exceeding number of writers, the server
+ *  ended in the 'backup_writer_hostgroup'. If the server is to be removed from this hostgroup
+ *  and placed in other one, is something that should be done when converging to the final state
+ *  after other actions 'set_offline|set_read_only' (via 'converge_group_replication_config'),
+ *  otherwise, we will continously trying to place the already WRITER server as WRITER and
+ *  constantly retriggering a servers reconfiguration everytime the available number of writers
+ *  exceeds 'max_writers'.
+ *
+ *  PRESERVE-OFFLINE_SOFT: When server is not found as writer, but is found as 'OFFLINE_SOFT' this state is
+ *  present when setting this server in the 'writer_hostgroup'.
+ *
+ * @param _hostname Hostname of the target server to be set as writer.
+ * @param _port Port of the target server to be set as writer.
+ * @param _writer_hostgroup 'writer_hostgroup' of the cluster in which server is going to be placed as writer.
+ */
 void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
 	int cols=0;
 	int affected_rows=0;
@@ -5212,8 +5257,13 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 						found_reader=true;
 					}
 				}
+				// NOTE: See 'FOUND_AS_BACKUP_WRITER' on function documentation.
+				if (hostgroup == backup_writer_HG) {
+					found_writer = true;
+				}
 			}
 		}
+
 		// NOTE: In case of a writer not being found but a 'OFFLINE_SOFT' status
 		// is found in a hostgroup, 'OFFLINE_SOFT' status should be preserved.
 		if (found_writer == false) {
@@ -5306,11 +5356,23 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	}
 }
 
-// this function completes the tuning of mysql_servers_incoming
-// it assumes that before calling converge_group_replication_config()
-// * GloAdmin->mysql_servers_wrlock() was already called
-// * mysql_servers_incoming has already entries copied from mysql_servers and ready to be loaded
-// at this moment, it is only used to check if there are more than one writer
+/**
+ * @brief Completes the tuning of 'mysql_servers_incoming', dealing with final writers placing.
+ * @details This functions assumes this pre-conditions:
+ *   - GloAdmin->mysql_servers_wrlock() was already called.
+ *   - mysql_servers_incoming has already entries copied from mysql_servers and ready to be loaded.
+ *
+ *  Checks that the following conditions are met over the supplied hostgroup:
+ *   1. Number of placed writers exceeds the max number of writers.
+ *   2. Not enough writers are placed in the hostgroup, place 'backup_writers' if any.
+ *   3. In case 'writer_is_also_reader' is '2', place *ONLY* 'backup_writers' as readers.
+ *
+ *  NOTE: Right now we consider 'SHUNNED' and 'ONLINE' writers equivalent in terms of server placement. This
+ *  means that when counting writers for either placement or removal from 'backup_writer_hostgroup', we
+ *  require taking into account 'SHUNNED' and 'ONLINE' writers.
+ *
+ * @param _writer_hostgroup Target hostgroup on which perform the final server placement.
+ */
 void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hostgroup) {
 
 	// we first gather info about the cluster
@@ -5326,7 +5388,9 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 		char *query=NULL;
 		char *q=NULL;
 		char *error=NULL;
-		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
+		// We are required to consider both 'ONLINE' and 'SHUNNED' servers for 'backup_writer_hostgroup'
+		// placement since they are equivalent for server placement. Check 'NOTE' at function @details.
+		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 OR status=1 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 		query=(char *)malloc(strlen(q)+256);
 		sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
