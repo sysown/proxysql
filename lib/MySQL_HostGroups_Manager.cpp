@@ -5198,6 +5198,14 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 					if (status == 0 || status == 2) {
 						found_writer=true;
 					}
+					// NOTE: 'SHUNNED' state is possible if server has reached 'myhgm.mysql_servers' table.
+					// This can occur due to a reconfiguration that triggered a call to 'generate_mysql_servers_table'
+					// (e.g. selecting from 'runtime_mysql_servers' would have this effect). In this case, we
+					// don't want to trigger any reconfiguration as the server is indeed found and we don't perform
+					// reconfigurations based on 'SHUNNED' state.
+					if (status == 1) {
+						found_writer=true;
+					}
 				}
 				if (read_HG>=0) {
 					if (hostgroup==read_HG) {
