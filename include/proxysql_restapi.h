@@ -12,7 +12,7 @@ class Restapi_Row {
 public:
 	unsigned int id;
 	bool is_active;
-	unsigned int interval_ms;
+	unsigned int timeout_ms;
 	std::string method;
 	std::string uri;
 	std::string script;
@@ -22,8 +22,8 @@ public:
 };
 
 class ProxySQL_Restapi {
-	SQLite3DB* admindb;
 public:
+	SQLite3DB* admindb;
 	ProxySQL_Restapi(SQLite3DB* db);
 	virtual ~ProxySQL_Restapi();
 

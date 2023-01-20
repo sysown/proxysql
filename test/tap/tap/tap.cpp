@@ -28,6 +28,7 @@ typedef char my_bool;
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#include <unistd.h>
 
 static ulong start_timer(void);
 static void end_timer(ulong start_time,char *buff);
@@ -350,13 +351,13 @@ int exit_status()
 #include <time.h>
 #else
 #include <sys/times.h>
-#ifdef _SC_CLK_TCK				// For mit-pthreads
-#undef CLOCKS_PER_SEC
+//#ifdef _SC_CLK_TCK				// For mit-pthreads
+//#undef CLOCKS_PER_SEC
 #define CLOCKS_PER_SEC (sysconf(_SC_CLK_TCK))
-#endif
+//#endif
 #endif
 
-#define CLOCKS_PER_SEC 1000000
+//#define CLOCKS_PER_SEC 1000000
 
 static ulong start_timer(void)
 {
@@ -410,6 +411,9 @@ static void end_timer(ulong start_time,char *buff)
 	    CLOCKS_PER_SEC,buff,1);
 }
 
+int tests_failed() {
+  return g_test.failed;
+}
 
 /**
    @mainpage Testing C and C++ using MyTAP

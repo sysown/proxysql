@@ -117,6 +117,7 @@ int main() {
 #ifndef __AC_KHASH_H
 #define __AC_KHASH_H
 
+#include "../deps/cityhash/cityhash/src/city.h"
 /*!
   @header
 
@@ -399,11 +400,22 @@ static kh_inline khint_t __ac_X31_hash_string(const char *s)
 	return h;
 }
 /*! @function
+  @abstract     const char* hash function
+  @param  s     Pointer to a null terminated string
+  @return       The hash value
+ */
+static kh_inline khint_t __cityhash_hash_string(const char *s)
+{
+	size_t l = strlen(s);
+	return CityHash32(s,l);
+}
+/*! @function
   @abstract     Another interface to const char* hash function
   @param  key   Pointer to a null terminated string [const char*]
   @return       The hash value [khint_t]
  */
-#define kh_str_hash_func(key) __ac_X31_hash_string(key)
+//#define kh_str_hash_func(key) __ac_X31_hash_string(key)
+#define kh_str_hash_func(key) __cityhash_hash_string(key)
 /*! @function
   @abstract     Const char* comparison function
  */

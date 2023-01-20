@@ -1,6 +1,10 @@
 #ifndef __CLASS_PTR_ARRAY_H
 #define __CLASS_PTR_ARRAY_H
+
+#include <memory>
+
 #include "proxysql.h"
+#include "sqlite3db.h"
 
 #define MIN_ARRAY_LEN 8
 #define MIN_ARRAY_DELETE_RATIO  8
@@ -41,9 +45,9 @@ class PtrArray {
 		size=new_size;
 	}
 	public:
-	void **pdata;
 	unsigned int len;
 	unsigned int size;
+	void **pdata;
 	PtrArray(unsigned int __size=0) {
 		len=0;
 		pdata=NULL;
@@ -88,7 +92,7 @@ class PtrArray {
 	void * remove_index(unsigned int i) {
 		void *r=pdata[i];
 		if (i != (len-1)) {
-			memmove(pdata+(i)*sizeof(void *),pdata+(i+1)*sizeof(void *),(len-i-1)*sizeof(void *));
+			memmove((void **)pdata+i,(void **)pdata+i+1,(len-i-1)*sizeof(void *));
 		}
 		len--;
 		if ( ( len>MIN_ARRAY_LEN ) && ( size > len*MIN_ARRAY_DELETE_RATIO ) ) {
@@ -128,9 +132,9 @@ class PtrSizeArray {
 	public:
 	void * operator new(size_t);
 	void operator delete(void *);
-	PtrSize_t *pdata;
 	unsigned int len;
 	unsigned int size;
+	PtrSize_t *pdata;
 	PtrSizeArray(unsigned int __size=0);
 	~PtrSizeArray();
 
@@ -229,6 +233,7 @@ inline unsigned long long realtime_time() {
   clock_gettime(CLOCK_REALTIME, &ts);
   return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
+
 #endif /* __GEN_FUNCTIONS */
 
 bool Proxy_file_exists(const char *);
@@ -239,3 +244,11 @@ int remove_spaces(const char *);
 char *trim_spaces_in_place(char *str);
 char *trim_spaces_and_quotes_in_place(char *str);
 bool mywildcmp(const char *p, const char *str);
+std::string trim(const std::string& s);
+
+/**
+ * @brief Helper function that converts a MYSQL_RES into a 'SQLite3_result'.
+ * @param resultset The resultset to be converted into a 'SQLite3_result'.
+ * @return An 'unique_ptr' holding the resulting 'SQLite3_result'.
+ */
+std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset);

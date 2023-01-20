@@ -57,12 +57,12 @@ int main(int argc, char** argv) {
 	const auto NUM_REPS=3;
 	char query[1024] = {0};
 	for (auto i=0; i<NUM_REPS; i++) {
-		int gen_rows = dis(gen);
+		unsigned long long gen_rows = dis(gen);
 		MYSQL_QUERY(mysqlAdmin, "DELETE FROM mysql_query_rules_fast_routing");
-		snprintf(query, sizeof(query), "PROXYSQLTEST 11 %d", gen_rows);
+		snprintf(query, sizeof(query), "PROXYSQLTEST 11 %llu", gen_rows);
 		MYSQL_QUERY(mysqlAdmin, query);
 		auto affected_rows = mysql_affected_rows(mysqlAdmin);
-		ok(affected_rows == affected_rows, "Number of affected rows expected [%d], actual [%d]", gen_rows, affected_rows);
+		ok(gen_rows == affected_rows, "Number of affected rows expected [%llu], actual [%llu]", gen_rows, affected_rows);
 
 		if (mysql_query(mysqlAdmin, "LOAD MYSQL QUERY RULES TO RUNTIME")) return exit_status();
 
@@ -73,10 +73,10 @@ int main(int argc, char** argv) {
 
 		MYSQL_QUERY(mysqlAdmin, "DELETE FROM mysql_query_rules_fast_routing");
 		gen_rows = dis(gen);
-		snprintf(query, sizeof(query), "PROXYSQLTEST 15 %d", gen_rows);
+		snprintf(query, sizeof(query), "PROXYSQLTEST 15 %llu", gen_rows);
 		MYSQL_QUERY(mysqlAdmin, query);
 		affected_rows = mysql_affected_rows(mysqlAdmin);
-		ok(affected_rows == affected_rows, "Number of affected rows expected [%d], actual [%d]", gen_rows, affected_rows);
+		ok(gen_rows == affected_rows, "Number of affected rows expected [%llu], actual [%llu]", gen_rows, affected_rows);
 
 		if (mysql_query(mysqlAdmin, "LOAD MYSQL QUERY RULES TO RUNTIME")) return exit_status();
 

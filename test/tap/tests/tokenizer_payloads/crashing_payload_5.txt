@@ -1,0 +1,2 @@
+createtable-9-- tib------- -----reatetable---- ty key,\n`col_bigint_undef_snÿned` bigint ,\n`# WeirdFirstNSERT /* fst_comment */ INTComment\nINSGRT /* fst_comment */ INTO /*!db.t@ble ( ÿl1, col2,'), ('va        ('val2', 5,BxB2391oo2'), ('val2', 7,NULL,4,'foo2'),              (1.1E+9, 2.E-ÿÿÿÿx2:91993, 928.2939123), ('v4+2,'fo&'), ('vxl2'
+ 9('val2',3*3.293192öIC9T555555555555555555555555593419foo2'), ('v"foo"),                     9N DUPLIC9T

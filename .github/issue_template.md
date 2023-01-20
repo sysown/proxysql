@@ -1,17 +1,23 @@
-This is the place for paid support and community users to report a **reproducible bug** in ProxySQL, suggest enhancements or make feature requests. This also includes documentation errors and/or missing documentation. 
+This is the place to report a **reproducible bug**, **documentation error** or **feature request** for ProxySQL.
 
-* Remember, this is the place for fixing and improving ProxySQL rather than the place to get free support. 
-* If you do not have a paid support contract please try https://groups.google.com/forum/#!forum/proxysql. Due to the high volume of requests, we are unable to always provide timely support for community users.
+Support questions will not be answered here. For community support, use the Google forum: https://groups.google.com/forum/#!forum/proxysql
+* Note that due to time constraints ProxySQL engineers may be slow to respond to forum posts
+* For information on paid support contracts: https://proxysql.com/services/support/
 
 If you are submitting a reproducible bug report, please provide:
-[ ] A clear description of your issue
-[ ] The version of OS and ProxySQL
-[ ] Every step to reproduce the issue
-[ ] The FULL error log (not just the last few lines)
-[ ] If it is a crashing bug, please check here: https://github.com/sysown/proxysql/wiki/How-to-report-a-crash-bug
+- [ ] A clear description of the issue
+- [ ] ProxySQL version
+- [ ] OS version
+- [ ] The steps to reproduce the issue
+- [ ] The **full** ProxySQL error log (default location: `/var/lib/proxysql/proxysql.log`)
 
-If the above is not provided, the issue is likely to be closed.
+If this is a crashing bug, please also include:
+- [ ] The package used to install ProxySQL
+- [ ] The compressed proxysql binary
+- [ ] The compressed core dump (Note: if you're worried it may contain sensitive data, please contact us for information on sharing it securely: https://proxysql.com/contact-us/)
 
-Please use markdown to format code or SQL: https://guides.github.com/features/mastering-markdown/
+If the above information is not provided, this issue is likely to be closed.
+
+Please use markdown to format any code or SQL: https://guides.github.com/features/mastering-markdown/
 
 Thank you!

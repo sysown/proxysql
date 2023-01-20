@@ -3,6 +3,7 @@
 #include <stack>
 
 #include <algorithm>
+#include <set>
 
 #ifndef EZOPTION
 #define EZOPTION
@@ -49,10 +50,6 @@
 
 #include <sys/ioctl.h>
 
-#if !defined(__FreeBSD__) && !defined(__APPLE__)
-#define HAVE_BOOL
-//#include "my_pthread.h"
-#endif
 #include "mysql.h"
 #include "mariadb_com.h"
 
@@ -63,6 +60,14 @@
 #include "proxysql_macros.h"
 
 #include "jemalloc.h"
+
+#ifndef NOJEM
+#if defined(__APPLE__) && defined(__MACH__)
+#ifndef mallctl
+#define mallctl(a, b, c, d, e) je_mallctl(a, b, c, d, e)
+#endif
+#endif // __APPLE__ and __MACH__
+#endif // NOJEM
 
 #ifdef DEBUG
 //#define VALGRIND_ENABLE_ERROR_REPORTING
@@ -103,13 +108,18 @@ int pkt_end(unsigned char *, unsigned int);
 int pkt_com_query(unsigned char *, unsigned int);
 enum MySQL_response_type mysql_response(unsigned char *, unsigned int);
 
-void proxy_error_func(const char *, ...);
+__attribute__((__format__ (__printf__, 2, 3)))
+void proxy_error_func(int errcode, const char *, ...);
 void print_backtrace(void);
+void proxy_info_(const char* msg, ...);
 
 #ifdef DEBUG
 void init_debug_struct();
 void init_debug_struct_from_cmdline();
+__attribute__((__format__ (__printf__, 7, 8)))
 void proxy_debug_func(enum debug_module, int, int, const char *, int, const char *, const char *, ...);
+void proxy_debug_get_filters(std::set<std::string>&);
+void proxy_debug_load_filters(std::set<std::string>&);
 #endif
 
 #ifdef __cplusplus

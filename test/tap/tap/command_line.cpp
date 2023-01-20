@@ -1,3 +1,4 @@
+#include <climits>
 #include <string>
 #include <fstream>
 
@@ -12,8 +13,7 @@
 
 using nlohmann::json;
 
-CommandLine::CommandLine() :
-	host(NULL), username(NULL), password(NULL), admin_username(NULL), admin_password(NULL), workdir(NULL) {}
+CommandLine::CommandLine() {}
 
 CommandLine::~CommandLine() {
 	if (host)
@@ -38,15 +38,24 @@ int CommandLine::parse(int argc, char** argv) {
 				checksum = true;
 				break;
 			case 'u':
+				if (username) {
+					free(username);
+				}
 				username = strdup(optarg);
 				break;
 			case 'p':
+				if (password) {
+					free(password);
+				}
 				password = strdup(optarg);
 				break;
 			case 'A':
 				admin_port = atoi(optarg);
 				break;
 			case 'h':
+				if (host) {
+					free(host);
+				}
 				host = strdup(optarg);
 				break;
 			case 'P':
@@ -59,12 +68,18 @@ int CommandLine::parse(int argc, char** argv) {
 				no_write = true;
 				break;
 			case 'U':
+				if (admin_username) {
+					free(admin_username);
+				}
 				admin_username = strdup(optarg);
 				break;
 			case 'W':
 				workdir = strdup(optarg);
 				break;
 			case 'S':
+				if (admin_password) {
+					free(admin_password);
+				}
 				admin_password = strdup(optarg);
 				break;
 			default: /* '?' */
@@ -72,79 +87,45 @@ int CommandLine::parse(int argc, char** argv) {
 				return 0;
 		}
 	}
-	if (
-			(username == NULL) ||
-			(password == NULL)
-	   ) {
-	   	return read("");
-	}
-	return 0;
-
-}
-
-int CommandLine::read(const std::string& file) {
-/*	const char* config_file = NULL;
-
-	if (file.empty())
-		config_file = getenv("MYTAPCONFIG");
-
-	std::ifstream ifs(config_file);
-	if (ifs.fail()) {
-		fprintf(stderr, "Error openning config file\n");
-		return -1;
-	}
-	json j = json::parse(ifs);
-
-	host = strdup(j["host"].get<std::string>().c_str());
-	checksum = j["checksum"].get<bool>();
-	username = strdup(j["username"].get<std::string>().c_str());
-	password = strdup(j["password"].get<std::string>().c_str());
-	port = j["port"].get<int>();*/
-
-	host = strdup("127.0.0.1");
-	port = 6033;
-	admin_port = 6032;
-	username = strdup("root");
-	password = strdup("a");
-	workdir = strdup("./tests/");
 	return 0;
 }
 
 int CommandLine::getEnv() {
-	char* value;
+	char* value = NULL;
+
+	const auto replace_str_field = [] (char** field, char* value) -> void {
+		if (field && *field) {
+			free(*field);
+		}
+		*field = strdup(value);
+	};
 
 	value=getenv("TAP_HOST");
 	if(!value) return -1;
-	host = strdup(value);
+	replace_str_field(&this->host, value);
 
 	value=getenv("TAP_USERNAME");
 	if(!value) return -1;
-	username=strdup(value);
+	replace_str_field(&this->username, value);
 
 	value=getenv("TAP_PASSWORD");
 	if(!value) return -1;
-	password=strdup(value);
+	replace_str_field(&this->password, value);
 
 	value=getenv("TAP_ADMINUSERNAME");
-	if(!value)
-		admin_username=strdup("admin");
-	else
-		admin_username=strdup(value);
+	if (value) {
+		replace_str_field(&this->admin_username, value);
+	}
 
 	value=getenv("TAP_ADMINPASSWORD");
-	if(!value)
-		admin_password=strdup("admin");
-	else
-		admin_password=strdup(value);
-
-	port=6033;
-	checksum=true;
+	if (value) {
+		replace_str_field(&this->admin_password, value);
+	}
 
 	int env_port=0;
-	char* endstr;
 	value=getenv("TAP_PORT");
 	if(value)
-		env_port=strtol(value, &endstr, 10);
+		env_port=strtol(value, NULL, 10);
 	else
 		env_port=6033;
 	if(env_port>0 && env_port<65536)
@@ -152,7 +133,7 @@ int CommandLine::getEnv() {
 
 	value=getenv("TAP_ADMINPORT");
 	if(value)
-		env_port=strtol(value, &endstr, 10);
+		env_port=strtol(value, NULL, 10);
 	else
 		env_port=6032;
 	if(env_port>0 && env_port<65536)
@@ -160,7 +141,28 @@ int CommandLine::getEnv() {
 
 	value=getenv("TAP_WORKDIR");
 	if(!value) return -1;
-	workdir = strdup(value);
+	replace_str_field(&this->workdir, value);
+
+	value=getenv("TAP_CLIENT_FLAGS");
+	if (value) {
+		char* end = NULL;
+		uint64_t env_c_flags = strtoul(value, &end, 10);
+
+		const char* errmsg { NULL };
+
+		if (env_c_flags == 0 && value == end)  {
+			errmsg = "Invalid string to parse";
+		} else if (env_c_flags == ULONG_MAX && errno == ERANGE) {
+			errmsg = strerror(errno);
+		}
+
+		if (errmsg) {
+			fprintf(stderr, "Failed to parse env variable 'CLIENT_FLAGS' with error: '%s'\n", strerror(errno));
+			return -1;
+		} else {
+			this->client_flags = env_c_flags;
+		}
+	}
 
 	return 0;
 }

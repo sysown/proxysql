@@ -1,0 +1,13 @@
+diff --git a/src/httpserver/create_webserver.hpp b/src/httpserver/create_webserver.hpp
+index 678a161..cb14ac9 100644
+--- a/src/httpserver/create_webserver.hpp
++++ b/src/httpserver/create_webserver.hpp
+@@ -48,7 +48,7 @@ class create_webserver
+     public:
+         create_webserver() = default;
+         create_webserver(const create_webserver& b) = default;
+-        create_webserver(create_webserver&& b) noexcept = default;
++        create_webserver(create_webserver&& b) = default;
+         create_webserver& operator=(const create_webserver& b) = default;
+         create_webserver& operator=(create_webserver&& b) = default;
+

@@ -84,9 +84,12 @@ static char * check_latest_version() {
 
 	curl_handle = curl_easy_init();
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0L);
+	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYSTATUS, 0L);
+	curl_easy_setopt(curl_handle, CURLOPT_RANGE, "0-31");
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
-	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0);
 
 	string s = "proxysql-agent/";
 	s += PROXYSQL_VERSION;
@@ -390,7 +393,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		bool _ret_use_ssl = false;
 		int max_connections;
 		void *sha1_pass = NULL;
-		password=GloMyAuth->lookup(username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass);
+		password=GloMyAuth->lookup(username, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, NULL);
 		if (default_schema) { // unused
 			free(default_schema);
 		}

@@ -67,7 +67,7 @@ class ClickHouse_Authentication {
 	         bool set_lock = true);
 	bool reset();
 	void print_version();
-	bool exists(char *username);
+//	bool exists(char *username);
 	char *lookup(char *username, enum cred_username_type usertype,
 	             bool *use_ssl, int *default_hostgroup, char **default_schema,
 	             bool *schema_locked, bool *transaction_persistent,
@@ -77,8 +77,8 @@ class ClickHouse_Authentication {
 	void decrease_frontend_user_connections(char *username);
 	void set_all_inactive(enum cred_username_type usertype);
 	void remove_inactives(enum cred_username_type usertype);
-	bool set_SHA1(char *username, enum cred_username_type usertype,
-	              void *sha_pass);
+//	bool set_SHA1(char *username, enum cred_username_type usertype,
+//	              void *sha_pass);
 };
 
 #endif  // CLASS_PROXYSQL_CLICKHOUSE_AUTHENTICATION_H

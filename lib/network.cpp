@@ -29,7 +29,7 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 #ifdef IPV6_V6ONLY
                 if (next->ai_family == AF_INET6) {
                         if(setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&arg_on, sizeof(arg_on)) == -1) 
-				proxy_error("setsockopt() IPV6_V6ONLY: %d\n", gai_strerror(errno));
+				proxy_error("setsockopt() IPV6_V6ONLY: %s\n", gai_strerror(errno));
                 }
 #endif
 
@@ -43,7 +43,7 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 #ifdef SO_REUSEPORT
   		if (reuseport) {
 			if (setsockopt(sd, SOL_SOCKET, SO_REUSEPORT, (char *)&arg_on, sizeof(arg_on)) == -1) {
-				proxy_error("setsockopt() SO_REUSEPORT: %d\n", gai_strerror(errno));
+				proxy_error("setsockopt() SO_REUSEPORT: %s\n", gai_strerror(errno));
 			}
 		}
 #endif /* SO_REUSEPORT */
@@ -51,6 +51,13 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
                 if (bind(sd, next->ai_addr, next->ai_addrlen) == -1) {
                         //if (errno != EADDRINUSE) {
                                 proxy_error("bind(): %s\n", strerror(errno));
+                                // in case of 'EADDRNOTAVAIL' suggest a solution to user. See #1614.
+                                if (errno == EADDRNOTAVAIL) {
+                                    proxy_info(
+                                       "Trying to 'bind()' failed due to 'EADDRNOTAVAIL'. If trying to bind to a "
+                                       "non-local IP address, make sure 'net.ipv4.ip_nonlocal_bind' is set to '1'\n"
+                                    );
+                                }
                                 close(sd);
                                 freeaddrinfo(ai);
                                 return -1;
@@ -118,7 +125,9 @@ int listen_on_unix(char *path, int backlog) {
 
 
 
-
+/*
+// THIS CODE IS BEING COMMENTED BECAUSED UNUSED (probably since 2015)
+//
 int connect_socket(char *address, int connect_port)
 {
 	struct sockaddr_in a;
@@ -148,3 +157,4 @@ int connect_socket(char *address, int connect_port)
 	}
 	return s;
 }
+*/

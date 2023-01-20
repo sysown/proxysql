@@ -1,14 +1,29 @@
 #define PROXYSQL_EXTERN
-
+#define MAIN_PROXY_SQLITE3
 #include <stdlib.h>
 #include "tap.h"
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <openssl/ssl.h>
+
+#include "proxysql_structs.h"
 #include "sqlite3db.h"
+#include "MySQL_LDAP_Authentication.hpp"
+
+MySQL_LDAP_Authentication* GloMyLdapAuth = nullptr;
 
 int main() {
-	plan(8);
+	SQLite3DB::LoadPlugin(NULL);
+	plan(9);
+
+	{
+		int i=sqlite3_config(SQLITE_CONFIG_URI, 1);
+		if (i!=SQLITE_OK) {
+			fprintf(stderr,"SQLITE: Error on sqlite3_config(SQLITE_CONFIG_URI,1)\n");
+		}
+		ok(i==SQLITE_OK, "Setting SQLITE_CONFIG_URI");
+	}
 
 	SQLite3DB *db;	// in memory
 	db = new SQLite3DB();

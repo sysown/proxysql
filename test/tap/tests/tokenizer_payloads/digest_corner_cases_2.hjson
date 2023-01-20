@@ -1,0 +1,16 @@
+[
+	{
+		// Testing the compression limits of number parsing when buffer is exceeded.
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES  (   -106884.372400,   Null,   96967.675019, "uOkKFcQuotJLSsXHnlrRkMjkOHbnLL",  nUll  ,   0xfffffffffffe2fa4,-98747,'FHnJDcaJuHYKrcLQjmPRgBPeEMVqHG',   0xfffffffffffe5f92   )   ,  (-65981.543813 , 0x18a51  ,  -63726 ,   -40277   ,   'RZLWNxLKntCNvKyywPcuWWDkunJDzi'  ,  95651.912060 , -120483.104736  ,  'zoMQmSNOsvEMwhAupPPxSdjGlpIwUF',   -92653 )  ,( 79071.944789  ,   29637 ,Null   , 0xa3e3  ,   69742.506092   ,   nuLl ,   nUlL ,   32587 ,    nuLL ),( NUll  ,   193562   , NuLl,nUll   ,51124 ,63407.690405,12880.173141  ,  -42003.235292  ,  nULl   )   , (  14465,   0xd769, 35866, -71474 , 238970.003674  ,   49471.298925,nULl   , 196468.485221,     'OQWWhgSLBQWiPGkidCLtmcJVjccXhT' )  ,   (15979.107082 ,   0xffffffffffffdecb, 'yAsavJoqsYcdRnqzuionGLUcgKzptM' , 52201.974227   ,  nUll  ,0xfffffffffffec75a , 152701.076362,  'vmWBqXdCYmBiZgIkQxPlMKkJzwoIjl'   ,   "TzKdJzIgwVycdGJjnYiKVhYOVLhuHO"  ) ,   ( 0x12a   ,   'wlbxzkxigeNkGceygISXGXHwHpNJfL', "MjoQpMZYZlelqYyYFQQoXXvgMLxxIB"   ,-14336.956478 ,79770.092506  , 0x8a19,   -209691 ,  -142530,    NuLl  )  , (  7107 ,   48803.646634   ,   nuLl ,"RxqHnGFqRGECSvsXmdfPutRczeoBWM"   ,   4707.102185  ,   -123755.871365   ,   0x3803a ,0x892e ,     0x7334   )   ,   (  Null ,  "BwQbhYkWShweQqlAgdiJjZVNkghTFt",   27725.575520   , 0x7363  , 0x21ca2   ,   null   ,  "rSBYTyRDrmKCgMEKvLeDeMmGJrEWto"   ,"mpuVGXNeZsbPgbpKVUREyQBVpbsmLq"   ,0xffffffffffff5b11 )    ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+		],
+		"mz": [
+			{
+				"digest_max_size": 300,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,...),(?,?,?,...),(?,?,?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			}
+		]
+	}
+]

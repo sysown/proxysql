@@ -1,4 +1,5 @@
 #include "proxysql_config.h"
+#include "re2/re2.h"
 #include "proxysql.h"
 #include "cpp.h"
 
@@ -47,7 +48,12 @@ ProxySQL_Config:: ~ProxySQL_Config() {
 void ProxySQL_Config::addField(std::string& data, const char* name, const char* value, const char* dq) {
 	std::stringstream ss;
 	if (!value || !strlen(value)) return;
-	ss << "\t\t" << name << "=" << dq << value << dq << "\n";
+
+	// Escape the double quotes in all the fields contents
+	std::string esc_value { value };
+	RE2::GlobalReplace(&esc_value, "\"", "\\\\\"");
+
+	ss << "\t\t" << name << "=" << dq << esc_value.c_str() << dq << "\n";
 	data += ss.str();
 }
 
@@ -123,7 +129,8 @@ int ProxySQL_Config::Write_MySQL_Users_to_configfile(std::string& data) {
 				addField(data, "backend", r->fields[9], "");
 				addField(data, "frontend", r->fields[10], "");
 				addField(data, "max_connections", r->fields[11], "");
-				addField(data, "comment", r->fields[12]);
+				addField(data, "attributes", r->fields[12]);
+				addField(data, "comment", r->fields[13]);
 				data += "\t}";
 				isNext = true;
 			}
@@ -146,7 +153,7 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s')";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_users (username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, transaction_persistent, fast_forward, max_connections, attributes, comment) VALUES ('%s', '%s', %d, %d, %d, '%s', %d, %d, %d, %d, '%s','%s')";
 	for (i=0; i< count; i++) {
 		const Setting &user = mysql_users[i];
 		std::string username;
@@ -160,6 +167,7 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile() {
 		int fast_forward=0;
 		int max_connections=10000;
 		std::string comment="";
+		std::string attributes="";
 		if (user.lookupValue("username", username)==false) {
 			proxy_error("Admin: detected a mysql_users in config file without a mandatory username\n");
 			continue;
@@ -174,11 +182,12 @@ int ProxySQL_Config::Read_MySQL_Users_from_configfile() {
 		user.lookupValue("transaction_persistent", transaction_persistent);
 		user.lookupValue("fast_forward", fast_forward);
 		user.lookupValue("max_connections", max_connections);
+		user.lookupValue("attributes", attributes);
 		user.lookupValue("comment", comment);
 		char *o1=strdup(comment.c_str());
 		char *o=escape_string_single_quotes(o1, false);
-		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+128);
-		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, o);
+		char *query=(char *)malloc(strlen(q)+strlen(username.c_str())+strlen(password.c_str())+strlen(o)+strlen(attributes.c_str())+128);
+		sprintf(query,q, username.c_str(), password.c_str(), active, use_ssl, default_hostgroup, default_schema.c_str(), schema_locked, transaction_persistent, fast_forward, max_connections, attributes.c_str(), o);
 		admindb->execute(query);
 		if (o!=o1) free(o);
 		free(o1);
@@ -359,7 +368,7 @@ int ProxySQL_Config::Write_Restapi_to_configfile(std::string& data) {
 				data += "\t{\n";
 				addField(data, "id", r->fields[0], "");
 				addField(data, "active", r->fields[1], "");
-				addField(data, "interval_ms", r->fields[2], "");
+				addField(data, "timeout_ms", r->fields[2], "");
 				addField(data, "method", r->fields[3], "");
 				addField(data, "uri", r->fields[4]);
 				addField(data, "script", r->fields[5]);
@@ -387,13 +396,13 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO restapi VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
+	char *q=(char *)"INSERT OR REPLACE INTO restapi_routes VALUES (%d, %d, %d, '%s', '%s', '%s', '%s')";
 	for (i=0; i< count; i++) {
 		const Setting &route = routes[i];
 		int id;
 		int active=1;
-		// variable for parsing interval_ms
-		int interval_ms=0;
+		// variable for parsing timeout_ms
+		int timeout_ms=0;
 
 		std::string method;
 		std::string uri;
@@ -406,7 +415,9 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 			continue;
 		}
 		route.lookupValue("active", active);
-		route.lookupValue("interval_ms", interval_ms);
+		if (route.lookupValue("interval_ms", timeout_ms) == false) {
+			route.lookupValue("timeout_ms", timeout_ms);
+		}
 		if (route.lookupValue("method", method)==false) {
 			proxy_error("Admin: detected a restapi route in config file without a mandatory method\n");
 			continue;
@@ -425,7 +436,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		query_len+=strlen(q) +
 			strlen(std::to_string(id).c_str()) +
 			strlen(std::to_string(active).c_str()) +
-			strlen(std::to_string(interval_ms).c_str()) +
+			strlen(std::to_string(timeout_ms).c_str()) +
 			strlen(method.c_str()) +
 			strlen(uri.c_str()) +
 			strlen(script.c_str()) +
@@ -434,7 +445,7 @@ int ProxySQL_Config::Read_Restapi_from_configfile() {
 		char *query=(char *)malloc(query_len);
 		sprintf(query, q,
 			id, active,
-			interval_ms,
+			timeout_ms,
 			method.c_str(),
 			uri.c_str(),
 			script.c_str(),
@@ -501,7 +512,8 @@ int ProxySQL_Config::Write_MySQL_Query_Rules_to_configfile(std::string& data) {
 				addField(data, "gtid_from_hostgroup", r->fields[30], "");
 				addField(data, "log", r->fields[31], "");
 				addField(data, "apply", r->fields[32], "");
-				addField(data, "comment", r->fields[33]);
+				addField(data, "attributes", r->fields[33]);
+				addField(data, "comment", r->fields[34]);
 
 				data += "\t}";
 				isNext = true;
@@ -525,7 +537,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 	int i;
 	int rows=0;
 	admindb->execute("PRAGMA foreign_keys = OFF");
-	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s)";
+	char *q=(char *)"INSERT OR REPLACE INTO mysql_query_rules (rule_id, active, username, schemaname, flagIN, client_addr, proxy_addr, proxy_port, digest, match_digest, match_pattern, negate_match_pattern, re_modifiers, flagOUT, replace_pattern, destination_hostgroup, cache_ttl, cache_empty_result, cache_timeout, reconnect, timeout, retries, delay, next_query_flagIN, mirror_flagOUT, mirror_hostgroup, error_msg, ok_msg, sticky_conn, multiplex, gtid_from_hostgroup, log, apply, attributes, comment) VALUES (%d, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %d, %s, %s)";
 	for (i=0; i< count; i++) {
 		const Setting &rule = mysql_query_rules[i];
 		int rule_id;
@@ -589,6 +601,10 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 
 		int apply=0;
 
+		// attributes
+		bool attributes_exists=false;
+		std::string attributes {};
+
 		bool comment_exists=false;
 		std::string comment;
 
@@ -640,6 +656,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 
 		rule.lookupValue("apply", apply);
 		if (rule.lookupValue("comment", comment)) comment_exists=true;
+		if (rule.lookupValue("attributes", attributes)) attributes_exists=true;
 
 
 		//if (user.lookupValue("default_schema", default_schema)==false) default_schema="";
@@ -679,6 +696,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			strlen(std::to_string(gtid_from_hostgroup).c_str()) + 4 +
 			strlen(std::to_string(log).c_str()) + 4 +
 			strlen(std::to_string(apply).c_str()) + 4 +
+			( attributes_exists ? strlen(attributes.c_str()) : 0 ) + 4 +
 			( comment_exists ? strlen(comment.c_str()) : 0 ) + 4 +
 			64;
 		char *query=(char *)malloc(query_len);
@@ -728,8 +746,12 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			re_modifiers="\"" + re_modifiers + "\"";
 		else
 			re_modifiers = "NULL";
+		if (attributes_exists)
+			attributes="'" + attributes + "'";
+		else
+			attributes = "NULL";
 		if (comment_exists)
-			comment="\"" + comment + "\"";
+			comment="'" + comment + "'";
 		else
 			comment = "NULL";
 
@@ -767,6 +789,7 @@ int ProxySQL_Config::Read_MySQL_Query_Rules_from_configfile() {
 			( gtid_from_hostgroup >= 0 ? std::to_string(gtid_from_hostgroup).c_str() : "NULL") ,
 			( log >= 0 ? std::to_string(log).c_str() : "NULL") ,
 			( apply == 0 ? 0 : 1) ,
+			attributes.c_str(),
 			comment.c_str()
 		);
 		//fprintf(stderr, "%s\n", query);

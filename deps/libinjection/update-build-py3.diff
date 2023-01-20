@@ -1,0 +1,210 @@
+diff --git a/php/gentests.py b/php/gentests.py
+index 141e0c3..0f8a7c1 100755
+--- a/php/gentests.py
++++ b/php/gentests.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ 
+ """
+ Takes testing files and turns them PHP module tests
+diff --git a/php/json2php.py b/php/json2php.py
+index ce66183..1f2cf87 100755
+--- a/php/json2php.py
++++ b/php/json2php.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ #
+ #  Copyright 2012, 2013 Nick Galbreath
+ #  nickg@client9.com
+@@ -12,7 +12,7 @@
+ def toc(obj):
+     """ main routine """
+ 
+-    print """<?php
++    print("""<?php
+ function lookup($state, $stype, $keyword) {
+     $keyword = struper(keyword);
+     if ($stype == libinjection.LOOKUP_FINGERPRINT) {
+@@ -24,24 +24,24 @@ def toc(obj):
+     }
+     return $words.get(keyword, chr(0));
+ }
+-"""
++""")
+ 
+     words = {}
+     keywords = obj['keywords']
+-    for k,v in keywords.iteritems():
++    for k,v in keywords.items():
+         words[str(k)] = str(v)
+ 
+-    print '$words = array('
++    print('$words = array(')
+     for k in sorted(words.keys()):
+-        print "'{0}' => '{1}',".format(k, words[k])
+-    print ');\n'
++        print("'{0}' => '{1}',".format(k, words[k]))
++    print(');\n')
+ 
+ 
+     keywords = obj['fingerprints']
+-    print '$fingerprints = array('
++    print('$fingerprints = array(')
+     for k in sorted(keywords):
+-        print "'{0}',".format(k.upper())
+-    print ');'
++        print("'{0}',".format(k.upper()))
++    print(');')
+ 
+     return 0
+ 
+diff --git a/src/fingerprints2sqli.py b/src/fingerprints2sqli.py
+index 0c80ed1..534131f 100755
+--- a/src/fingerprints2sqli.py
++++ b/src/fingerprints2sqli.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ """
+ Small script to convert fingerprints back to SQL or SQLi
+ """
+@@ -47,12 +47,12 @@ def fingerprint_to_sqli():
+ 
+         sqlstr = ' '.join(sql)
+         if mode == 'print':
+-            print fingerprint, ' '.join(sql)
++            print(fingerprint, ' '.join(sql))
+         else:
+             args = ['./fptool', '-0', sqlstr]
+             actualfp = subprocess.check_output(args).strip()
+             if fingerprint != actualfp:
+-                print fingerprint, actualfp, ' '.join(sql)
++                print(fingerprint, actualfp, ' '.join(sql))
+ 
+ 
+ if __name__ == '__main__':
+diff --git a/src/make_parens.py b/src/make_parens.py
+index 8d610b7..edf0d01 100755
+--- a/src/make_parens.py
++++ b/src/make_parens.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ # pylint: disable=C0103,R0911,R0912,R0915
+ # disable short-variable-names, too many branches, returns, statements
+ """
+@@ -412,7 +412,7 @@ def main():
+         mutator.permute(line.strip())
+ 
+     for fingerprint in mutator.aslist():
+-        print fingerprint
++        print(fingerprint)
+ 
+ 
+ if __name__ == '__main__':
+diff --git a/src/sqlparse2c.py b/src/sqlparse2c.py
+index d705dbe..7a79367 100755
+--- a/src/sqlparse2c.py
++++ b/src/sqlparse2c.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ #
+ #  Copyright 2012, 2013 Nick Galbreath
+ #  nickg@client9.com
+@@ -14,7 +14,7 @@
+ def toc(obj):
+     """ main routine """
+ 
+-    print """
++    print("""
+ #ifndef LIBINJECTION_SQLI_DATA_H
+ #define LIBINJECTION_SQLI_DATA_H
+ 
+@@ -48,7 +48,7 @@ def toc(obj):
+ static size_t parse_bstring(sfilter * sf);
+ static size_t parse_estring(sfilter * sf);
+ static size_t parse_bword(sfilter * sf);
+-"""
++""")
+ 
+     #
+     # Mapping of character to function
+@@ -85,26 +85,26 @@ def toc(obj):
+         'CHAR_ESTRING'   : 'parse_estring',
+         'CHAR_BWORD'     : 'parse_bword'
+         }
+-    print
+-    print "typedef size_t (*pt2Function)(sfilter *sf);"
+-    print "static const pt2Function char_parse_map[] = {"
++    print()
++    print("typedef size_t (*pt2Function)(sfilter *sf);")
++    print("static const pt2Function char_parse_map[] = {")
+     pos = 0
+     for character in obj['charmap']:
+-        print "   &%s, /* %d */" % (fnmap[character], pos)
++        print("   &%s, /* %d */" % (fnmap[character], pos))
+         pos += 1
+-    print "};"
+-    print
++    print("};")
++    print()
+ 
+     # keywords
+     #  load them
+     keywords = obj['keywords']
+ 
+-    for  fingerprint in list(obj[u'fingerprints']):
++    for  fingerprint in list(obj['fingerprints']):
+         fingerprint = '0' + fingerprint.upper()
+         keywords[fingerprint] = 'F'
+ 
+     needhelp = []
+-    for key  in keywords.iterkeys():
++    for key  in keywords.keys():
+         if key != key.upper():
+             needhelp.append(key)
+ 
+@@ -113,17 +113,17 @@ def toc(obj):
+         del keywords[key]
+         keywords[key.upper()] = tmpv
+ 
+-    print "static const keyword_t sql_keywords[] = {"
++    print("static const keyword_t sql_keywords[] = {")
+     for k in sorted(keywords.keys()):
+         if len(k) > 31:
+             sys.stderr.write("ERROR: keyword greater than 32 chars\n")
+             sys.exit(1)
+ 
+-        print "    {\"%s\", '%s'}," % (k, keywords[k])
+-    print "};"
+-    print "static const size_t sql_keywords_sz = %d;" % (len(keywords), )
++        print("    {\"%s\", '%s'}," % (k, keywords[k]))
++    print("};")
++    print("static const size_t sql_keywords_sz = %d;" % (len(keywords), ))
+ 
+-    print "#endif"
++    print("#endif")
+     return 0
+ 
+ if __name__ == '__main__':
+diff --git a/src/sqlparse_map.py b/src/sqlparse_map.py
+index 67aa040..4bd69c2 100755
+--- a/src/sqlparse_map.py
++++ b/src/sqlparse_map.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python
++#!/usr/bin/env python3
+ # pylint: disable=C0301,C0302
+ # Turn off line-too-long, and too-many-lines warnings
+ #
+@@ -1564,6 +1564,6 @@ def dump():
+     if len(CHARMAP) != 256:
+         sys.stderr.write("Assert failed: charmap is %d characters\n" % len(CHARMAP))
+         sys.exit(1)
+-    print dump()
++    print(dump())
+ 
+ # pylint: disable=C0301,C0302

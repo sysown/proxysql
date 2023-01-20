@@ -6,6 +6,11 @@
 #include <prometheus/registry.h>
 #include "SpookyV2.h"
 #include <cxxabi.h>
+#include <uuid/uuid.h>
+
+#include "MySQL_LDAP_Authentication.hpp"
+
+extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
 static void term_handler(int sig) {
   proxy_warning("Received TERM signal: shutdown in progress...\n");
@@ -46,6 +51,8 @@ void crash_handler(int sig) {
 		}
 		//free(strings); // we don't free, we are crashing anyway
 	}
+	fprintf(stderr, "To report a crashing bug visit: https://github.com/sysown/proxysql/issues\n");
+	fprintf(stderr, "For support visit: https://proxysql.com/services/support/\n");
 
 
 #endif /* __GLIBC__ */
@@ -74,13 +81,16 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;
 	__cmd_proxysql_datadir=NULL;
+	__cmd_proxysql_uuid=NULL;
 
 	config_file=NULL;
 	datadir=NULL;
+	uuid=NULL;
 	configfile_open=false;
 
 	__cmd_proxysql_initial=false;
 	__cmd_proxysql_reload=false;
+	cluster_sync_interfaces=false;
 
 	statuses.stack_memory_mysql_threads = 0;
 	statuses.stack_memory_admin_threads = 0;
@@ -100,12 +110,15 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 //	global.use_proxysql_mem=false;
 	pthread_mutex_init(&global.start_mutex,NULL);
 	pthread_mutex_init(&checksum_mutex,NULL);
+	pthread_mutex_init(&global.ext_glomth_mutex,NULL);
 	epoch_version = 0;
 	checksums_values.updates_cnt = 0;
 	checksums_values.dumped_at = 0;
 	checksums_values.global_checksum = 0;
 	execute_on_exit_failure = NULL;
 	ldap_auth_plugin = NULL;
+	web_interface_plugin = NULL;
+	sqlite3_plugin = NULL;
 #ifdef DEBUG
 	global.gdb=0;
 #endif
@@ -118,7 +131,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->overview="High Performance Advanced Proxy for MySQL";
 	opt->syntax="proxysql [OPTIONS]";
 	std::string s = "\n\nProxySQL " ;
-	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2019 ProxySQL LLC\nThis program is free and without warranty\n";
+	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2022 ProxySQL LLC\nThis program is free and without warranty\n";
 	opt->footer =s.c_str();
 
 	opt->add((const char *)"",0,0,0,(const char *)"Display usage instructions.",(const char *)"-h",(const char *)"-help",(const char *)"--help",(const char *)"--usage");
@@ -135,6 +148,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuration file",(const char *)"-c",(const char *)"--config");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
+	opt->add((const char *)"",0,1,0,(const char *)"UUID",(const char *)"-U",(const char *)"--uuid");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
 #ifdef IDLE_THREADS
@@ -155,6 +169,7 @@ void ProxySQL_GlobalVariables::install_signal_handler() {
 	signal(SIGTERM, term_handler);
 	signal(SIGSEGV, crash_handler);
 	signal(SIGABRT, crash_handler);
+	signal(SIGFPE, crash_handler);
 	signal(SIGPIPE, SIG_IGN);
 }
 
@@ -198,6 +213,19 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		opt->get("-D")->getString(datadir);
 		if (GloVars.__cmd_proxysql_datadir) free(GloVars.__cmd_proxysql_datadir);
 		GloVars.__cmd_proxysql_datadir=strdup(datadir.c_str());
+	}
+
+	if (opt->isSet("-U")) {
+		std::string uuid;
+		opt->get("-U")->getString(uuid);
+		uuid_t uu;
+		if (uuid_parse(uuid.c_str(), uu)==0) {
+			// we successfully parsed an UUID
+			if (GloVars.__cmd_proxysql_uuid) free(GloVars.__cmd_proxysql_uuid);
+			GloVars.__cmd_proxysql_uuid=strdup(uuid.c_str());
+		} else {
+			fprintf(stderr,"The UUID specified in the command line is invalid, ignoring it: %s\n", uuid.c_str());
+		}
 	}
 
 	if (opt->isSet("--initial")) {
@@ -316,6 +344,10 @@ void ProxySQL_GlobalVariables::process_opts_post() {
 		free(glovars.proxy_datadir);
 		glovars.proxy_datadir=strdup(GloVars.__cmd_proxysql_datadir);
 	}
+	if (GloVars.__cmd_proxysql_uuid) {
+		free(GloVars.uuid);
+		GloVars.uuid=strdup(GloVars.__cmd_proxysql_uuid);
+	}
 	if (GloVars.__cmd_proxysql_admin_socket) {
 		free(glovars.proxy_admin_socket);
 		glovars.proxy_admin_socket=strdup(GloVars.__cmd_proxysql_admin_socket);
@@ -363,6 +395,13 @@ uint64_t ProxySQL_GlobalVariables::generate_global_checksum() {
 	if (v->version) {
 		myhash.Update(v->checksum,strlen(v->checksum));
 		myhash.Update(&v->version,sizeof(v->version));
+	}
+	if (GloMyLdapAuth) {
+		v = &checksums_values.ldap_variables;
+		if (v->version) {
+			myhash.Update(v->checksum,strlen(v->checksum));
+			myhash.Update(&v->version,sizeof(v->version));
+		}
 	}
 	uint64_t h1, h2;
 	myhash.Final(&h1, &h2);
