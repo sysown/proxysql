@@ -573,6 +573,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_crl;
 		char * ssl_p2s_crlpath;
 		int query_cache_size_MB;
+		int query_cache_soft_ttl_percentage;
 		int min_num_servers_lantency_awareness;
 		int aurora_max_lag_ms_only_read_from_replicas;
 		bool stats_time_backend_query;

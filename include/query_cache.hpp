@@ -30,6 +30,7 @@ struct __QC_entry_t {
 	unsigned long long create_ms; // when the entry was created, monotonic, millisecond granularity
 	unsigned long long expire_ms; // when the entry will expire, monotonic , millisecond granularity
 	unsigned long long access_ms; // when the entry was read last , monotonic , millisecond granularity
+	bool refreshing; // true when a client will hit the backend to refresh the entry
 	uint32_t column_eof_pkt_offset = 0;
 	uint32_t row_eof_pkt_offset = 0;
 	uint32_t ok_pkt_offset = 0;
