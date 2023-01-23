@@ -3675,11 +3675,11 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 	wrlock();
 
 	int reader_hostgroup = 0;
-	// bool writer_is_also_reader = false;
+	int backup_writer_hostgroup = 0;
 
 	// Get the reader_hostgroup for the supplied writter hostgroup
 	const std::string t_reader_hostgroup_query {
-		"SELECT reader_hostgroup,writer_is_also_reader FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
+		"SELECT reader_hostgroup,backup_writer_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d"
 	};
 	std::string reader_hostgroup_query {};
 	string_format(t_reader_hostgroup_query, reader_hostgroup_query, _hid);
@@ -3701,6 +3701,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 
 	rhid_row = rhid_res->rows[0];
 	reader_hostgroup = atoi(rhid_row->fields[0]);
+	backup_writer_hostgroup = atoi(rhid_row->fields[1]);
 
 	{
 		MyHGC* myhgc = nullptr;
@@ -3712,6 +3713,9 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 		) {
 			if (read_only == false) {
 				myhgc = MyHGM->MyHGC_find(_hid);
+				group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
+
+				myhgc = MyHGM->MyHGC_find(backup_writer_hostgroup);
 				group_replication_lag_action_set_server_status(myhgc, address, port, lag_counts, enable);
 			}
 		}
@@ -5065,6 +5069,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
  *    3. Converge the current configuration and rebuild the hostgroups.
  *
  *  PRESERVE-OFFLINE_SOFT: When moving the target server, always preserve the OFFLINE_SOFT state.
+ *  PRESERVE-SHUNNED: When moving the target server, always preserve the SHUNNED state.
  *
  * @param _hostname Hostname of the target server to be set as writer.
  * @param _port Port of the target server to be set as writer.
@@ -5114,7 +5119,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
 			// NOTE: In case of the server being 'OFFLINE_SOFT' we preserve this status. Otherwise we set the server as 'ONLINE'.
 			q=(char *)"UPDATE mysql_servers_incoming SET status=(CASE "
 				" (SELECT status FROM mysql_servers_incoming WHERE hostname='%s' AND port=%d AND"
-					" hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)) WHEN 2 THEN 2 ELSE 0 END)"
+					" hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)) WHEN 2 THEN 2 WHEN 1 THEN 1 ELSE 0 END)"
 				" WHERE hostname='%s' AND port=%d AND hostgroup_id=(SELECT reader_hostgroup FROM mysql_group_replication_hostgroups WHERE writer_hostgroup=%d)";
 			sprintf(query,q,_hostname,_port,_writer_hostgroup,_hostname,_port,_writer_hostgroup);
 			mydb->execute(query);
@@ -5184,6 +5189,11 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
  *  PRESERVE-OFFLINE_SOFT: When server is not found as writer, but is found as 'OFFLINE_SOFT' this state is
  *  present when setting this server in the 'writer_hostgroup'.
  *
+ *  PRESERVE-SHUNNED: When placing a new server as a new writer status is dependent on variable
+ *   'monitor_groupreplication_max_transaction_behind_for_read_only':
+ *    + 1: We always set the server as 'ONLINE' as 'SHUNNING' is only exercised for readers.
+ *    + 2-0: We preserve the status, as 'SHUNNING' takes place for readers and writers.
+ *
  * @param _hostname Hostname of the target server to be set as writer.
  * @param _port Port of the target server to be set as writer.
  * @param _writer_hostgroup 'writer_hostgroup' of the cluster in which server is going to be placed as writer.
@@ -5213,6 +5223,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 	int backup_writer_HG=-1;
 	bool need_converge=false;
 	int status=0;
+	int reader_status=0;
 	bool offline_soft_found=false;
 
 	if (resultset) {
@@ -5255,6 +5266,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				if (read_HG>=0) {
 					if (hostgroup==read_HG) {
 						found_reader=true;
+						reader_status = atoi(r->fields[1]);
 					}
 				}
 				// NOTE: See 'FOUND_AS_BACKUP_WRITER' on function documentation.
@@ -5271,6 +5283,18 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 				status = 2;
 			}
 		}
+
+		// PRESERVE-SHUNNED: In case a writer isn't found, but reader is, the status to be considered in case
+		// this server is going to be promoted as a writer would be this 'reader_status', if only 'readers'
+		// are to be SHUNNED consider status ONLINE.
+		if (found_writer == false) {
+			if (mysql_thread___monitor_groupreplication_max_transaction_behind_for_read_only == 1) {
+				status = 0;
+			} else {
+				status = reader_status;
+			}
+		}
+
 		if (need_converge==false) {
 			if (found_writer) { // maybe no-op
 				if (
@@ -5305,7 +5329,9 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
 			q=(char *)"UPDATE mysql_servers_incoming SET status=%d WHERE hostname='%s' AND port=%d AND hostgroup_id=%d";
 			// NOTE: In case of the server being 'OFFLINE_SOFT' we preserve this status. Otherwise
 			// we set the server as 'ONLINE'.
-			sprintf(query, q, (status == 2 ? 2 : 0 ), _hostname, _port, _writer_hostgroup);
+			// PRESERVE-SHUNNED: Preserve either 'OFFLINE_SOFT' or 'SHUNNED' states
+			status = (status == 2 || status == 1) ? status : 0;
+			sprintf(query, q, status, _hostname, _port, _writer_hostgroup);
 			mydb->execute(query);
 			//free(query);
 			if (writer_is_also_reader && read_HG>=0) {
@@ -5371,6 +5397,9 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
  *  means that when counting writers for either placement or removal from 'backup_writer_hostgroup', we
  *  require taking into account 'SHUNNED' and 'ONLINE' writers.
  *
+ *  PRESERVE-SHUNNED: Preserve shunned state when:
+ *    - Server moved to|from 'backup_writer_hostgroup' to|from 'writer_hostgroup'.
+ *    - When server moved from 'backup_writer' to 'reader' for 'writer_is_also_reader=2'.
  * @param _writer_hostgroup Target hostgroup on which perform the final server placement.
  */
 void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hostgroup) {
@@ -5390,7 +5419,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 		char *error=NULL;
 		// We are required to consider both 'ONLINE' and 'SHUNNED' servers for 'backup_writer_hostgroup'
 		// placement since they are equivalent for server placement. Check 'NOTE' at function @details.
-		q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 OR status=1 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
+		q=(char *)"SELECT hostgroup_id,hostname,port,status FROM mysql_servers_incoming WHERE status=0 OR status=1 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 		query=(char *)malloc(strlen(q)+256);
 		sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 		mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
@@ -5419,10 +5448,11 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 						SQLite3_row *r=*it;
 						if (to_move) {
 							int hostgroup=atoi(r->fields[0]);
+							int status=atoi(r->fields[3]);
 							if (hostgroup==info->writer_hostgroup) {
-								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+								q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=%d, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 								query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
-								sprintf(query,q,info->backup_writer_hostgroup,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+								sprintf(query,q,status,info->backup_writer_hostgroup,info->writer_hostgroup,r->fields[1],atoi(r->fields[2]));
 								mydb->execute(query);
 								free(query);
 								to_move--;
@@ -5439,10 +5469,11 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 							SQLite3_row *r=*it;
 							if (to_move) {
 								int hostgroup=atoi(r->fields[0]);
+								int status=atoi(r->fields[3]);
 								if (hostgroup==info->backup_writer_hostgroup) {
-									q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=0, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
+									q=(char *)"UPDATE OR REPLACE mysql_servers_incoming SET status=%d, hostgroup_id=%d WHERE hostgroup_id=%d AND hostname='%s' AND port=%d";
 									query=(char *)malloc(strlen(q)+strlen(r->fields[1])+128);
-									sprintf(query,q,info->writer_hostgroup,info->backup_writer_hostgroup,r->fields[1],atoi(r->fields[2]));
+									sprintf(query,q,status,info->writer_hostgroup,info->backup_writer_hostgroup,r->fields[1],atoi(r->fields[2]));
 									mydb->execute(query);
 									free(query);
 									to_move--;
@@ -5458,7 +5489,7 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 			resultset=NULL;
 		}
 		if (info->writer_is_also_reader==2) {
-			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
+			q=(char *)"SELECT hostgroup_id,hostname,port FROM mysql_servers_incoming WHERE status=0 OR status=1 AND hostgroup_id IN (%d, %d, %d, %d) ORDER BY weight DESC, hostname DESC, port DESC";
 			query=(char *)malloc(strlen(q)+256);
 			sprintf(query, q, info->writer_hostgroup, info->backup_writer_hostgroup, info->reader_hostgroup, info->offline_hostgroup);
 			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset);
