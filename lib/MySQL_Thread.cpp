@@ -2847,8 +2847,16 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		// received from the network.
 		// The only modules that seems to be affected by this issue are Admin, SQLite3 Server
 		// and Clickhouse Server
-		int nb = fcntl(_fd, F_SETFL, fcntl(_fd, F_GETFL, 0) | O_NONBLOCK);
-		assert (nb != -1);
+		int prevflags = fcntl(_fd, F_GETFL, 0);
+		if (prevflags == -1) {
+			proxy_error("For FD %d fcntl() returned -1 errno %d\n", _fd, errno);
+			assert (prevflags != -1);
+		}
+		int nb = fcntl(_fd, F_SETFL, prevflags | O_NONBLOCK);
+		if (nb == -1) {
+			proxy_error("For FD %d fcntl() returned -1 , previous flags %d , errno %d\n", _fd, prevflags, errno);
+			assert (nb != -1);
+		}
 	}
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
 
