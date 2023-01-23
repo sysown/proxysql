@@ -85,7 +85,7 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora generate_set_session_csv set_testing-240.csv clickhouse_php_conn-t || true
+	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora generate_set_session_csv set_testing-240.csv clickhouse_php_conn-t reg_test_3992_fast_forward_malformed_packet-pymysql-t || true
 
 WITHGCOVVAR := $(shell echo $(WITHGCOV))
 ifeq ($(WITHGCOVVAR),1)

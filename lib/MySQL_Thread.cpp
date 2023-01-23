@@ -21,6 +21,8 @@
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Logger.hpp"
 
+#include <fcntl.h>
+
 using std::vector;
 using std::function;
 
@@ -2834,6 +2836,20 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	register_session(sess); // register session
 	sess->client_myds = new MySQL_Data_Stream();
 	sess->client_myds->fd=_fd;
+
+	// set not blocking for client connections too!
+	{
+		// PMC-10004
+		// While implementing SSL and fast_forward it was noticed that all frontend connections
+		// are in blocking, although this was never a problem because we call poll() before reading.
+		// Although it became a problem with fast_forward, SSL and large packets because SSL handled
+		// data in chunks of 16KB and there may be data inside SSL even when there is no data
+		// received from the network.
+		// The only modules that seems to be affected by this issue are Admin, SQLite3 Server
+		// and Clickhouse Server
+		int nb = fcntl(_fd, F_SETFL, fcntl(_fd, F_GETFL, 0) | O_NONBLOCK);
+		assert (nb != -1);
+	}
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
 
 	if (mysql_thread___use_tcp_keepalive) {
@@ -3578,17 +3594,42 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 
 							if (rb > 0 && myds->myds_type == MYDS_BACKEND) {
 								if (myds->sess->session_fast_forward) {
-									struct pollfd _fds;
-									nfds_t _nfds = 1;
-									_fds.fd = mypolls.fds[n].fd;
-									_fds.events = POLLIN;
-									_fds.revents = 0;
-									int _rc = poll(&_fds, _nfds, 0);
-									if ((_rc > 0) && _fds.revents == POLLIN) {
-										// there is more data
-										myds->revents = _fds.revents;
-									} else {
+									if (myds->encrypted == true) { // we are in fast_forward mode and encrypted == true
+										// PMC-10004
+										// we probably should use SSL_pending() and/or SSL_has_pending() to determine
+										// if there is more data to be read, but it doesn't seem to be working.
+										// Therefore we try to call read_from_net() again as long as there is data.
+										// Previously we hardcoded 16KB but it seems that it can return in smaller
+										// chunks of 4KB.
+										// We finally removed the chunk size as it seems that any size is possible.
+/*
+										int sslp = SSL_pending(myds->ssl);
+										int sslhp = SSL_has_pending(myds->ssl);
+										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: in fast_forward mode and SSL read %d bytes , SSL_pending: %d bytes , SSL_has_pending: %d\n", myds->sess, rb, sslp, sslhp);
+*/
+										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p , thread_session_id=%u -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, myds->sess->thread_session_id, rb);
+										while (rb > 0) {
+											rb = myds->read_from_net();
+											if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
+												status_variables.stvar[st_var_queries_frontends_bytes_recv] += rb;
+											}
+											proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, rb);
+											myds->read_pkts();
+										}
 										rb = 0; // exit loop
+									} else { // we are in fast_forward mode and encrypted == false
+										struct pollfd _fds;
+										nfds_t _nfds = 1;
+										_fds.fd = mypolls.fds[n].fd;
+										_fds.events = POLLIN;
+										_fds.revents = 0;
+										int _rc = poll(&_fds, _nfds, 0);
+										if ((_rc > 0) && _fds.revents == POLLIN) {
+											// there is more data
+											myds->revents = _fds.revents;
+										} else {
+											rb = 0; // exit loop
+										}
 									}
 								} else {
 									rb = 0; // exit loop

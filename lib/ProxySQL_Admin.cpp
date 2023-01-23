@@ -5459,9 +5459,24 @@ void *child_mysql(void *arg) {
 		}
 		mysql_thr->curtime = monotonic_time();
 		myds->revents=fds[0].revents;
-		myds->read_from_net();
+		int rb = 0;
+		rb = myds->read_from_net();
 		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
+		if (myds->encrypted == true) {
+			// PMC-10004
+			// we probably should use SSL_pending() and/or SSL_has_pending() to determine
+			// if there is more data to be read, but it doesn't seem to be working.
+			// Therefore we try to call read_from_net() again as long as there is data.
+			// Previously we hardcoded 16KB but it seems that it can return in smaller
+			// chunks of 4KB.
+			// We finally removed the chunk size as it seems that any size is possible.
+			while (rb > 0) {
+				rb = myds->read_from_net();
+				if (myds->net_failure) goto __exit_child_mysql;
+				myds->read_pkts();
+			}
+		}
 		sess->to_process=1;
 		int rc=sess->handler();
 		if (rc==-1) goto __exit_child_mysql;
