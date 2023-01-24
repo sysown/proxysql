@@ -10399,7 +10399,7 @@ void ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& di
 	if (direction == "disk_to_memory") {
 		BQE1(admindb, it->second, "DELETE FROM main.", "INSERT INTO main.", " SELECT * FROM disk.");
 	} else if (direction == "memory_to_disk") {
-		BQE1(admindb, it->second, "DELETE FROM disk.", "INSERT INTO disk.", " SELECT * FROM man.");
+		BQE1(admindb, it->second, "DELETE FROM disk.", "INSERT INTO disk.", " SELECT * FROM main.");
 	} else {
 		assert(0);
 	}

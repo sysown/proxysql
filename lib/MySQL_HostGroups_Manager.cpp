@@ -3683,7 +3683,7 @@ SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& 
 		return this->incoming_group_replication_hostgroups;
 	} else if (name == "mysql_replication_hostgroups") {
 		return this->incoming_replication_hostgroups;
-	} else if (name == "mysql_serverss") {
+	} else if (name == "mysql_servers") {
 		return this->runtime_mysql_servers;
 	} else {
 		assert(0);
