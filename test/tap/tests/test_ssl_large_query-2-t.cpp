@@ -24,12 +24,6 @@ std::vector<std::string> queries_set1 = {
 	"LOAD MYSQL USERS TO RUNTIME",
 };
 
-std::vector<std::string> queries_SQL1 = {
-	"DROP TABLE IF EXISTS tbl1459",
-	"CREATE TABLE tbl1459 (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , t1 VARCHAR)",
-};
-
-
 int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::string& message_prefix) {
 	for (std::vector<std::string>::iterator it = queries.begin(); it != queries.end(); it++) {
 		std::string q = *it;
