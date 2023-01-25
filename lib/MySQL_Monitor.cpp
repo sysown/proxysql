@@ -4980,6 +4980,9 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			found_pingable_host = true;
 			cur_host_idx = rnd;
 		} else {
+			MyHGM->p_update_mysql_error_counter(
+				p_mysql_error_type::proxysql, wHG, hpa[rnd].host, hpa[rnd].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+			);
 			// the randomly picked host didn't work work
 			shuffle_hosts(hpa,num_hosts);
 			for (unsigned int i=0; (found_pingable_host == false && i<num_hosts ) ; i++) {
@@ -4987,6 +4990,10 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 				if (rc_ping) {
 					found_pingable_host = true;
 					cur_host_idx = i;
+				} else {
+					MyHGM->p_update_mysql_error_counter(
+						p_mysql_error_type::proxysql, wHG, hpa[i].host, hpa[i].port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV
+					);
 				}
 			}
 		}
@@ -4998,9 +5005,8 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		}
 #endif // TEST_AURORA
 
-		if (found_pingable_host == false&&mmsd) {
+		if (found_pingable_host == false) {
 			proxy_error("No node is pingable for AWS Aurora cluster with writer HG %u\n", wHG);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_AWS_NO_PINGABLE_SRV);
 			next_loop_at = t1 + check_interval_ms * 1000;
 			continue;
 		}
