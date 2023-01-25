@@ -431,4 +431,14 @@ int configure_endpoints(
 	bool prevent_dups = true
 );
 
+/**
+ * @brief Returns the matches found of the 'substr' provided in the provided string.
+ *
+ * @param str String from which to count the matches.
+ * @param substr The substring which matches needs to be counted.
+ *
+ * @return Number of matches of the 'substr' in the provided string.
+ */
+std::size_t count_matches(const std::string& str, const std::string& substr);
+
 #endif // #define UTILS_H

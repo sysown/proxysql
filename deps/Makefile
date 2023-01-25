@@ -69,6 +69,7 @@ libinjection/libinjection/src/libinjection.a:
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
 ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
+	cd libinjection/libinjection && patch -p1 < ../libinjection_sqli.c.patch
 endif
 ifeq ($(UNAME_S),Darwin)
 	sed -i '' 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
@@ -88,18 +89,19 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ln -s . lib # curl wants this path
 libssl: libssl/openssl/libssl.a
 
-GCC_VERSION := $(shell gcc -dumpversion)
 MIN_VERSION := 4.9.0
-REQUIRE_PATCH = false
+GCC_VERSION := $(shell gcc -dumpversion)
+SORTED_VERSIONS := $(shell echo -e "$(GCC_VERSION)\n$(MIN_VERSION)" | sort -V)
 
-ifeq ($(MIN_VERSION),$(lastword $(sort $(GCC_VERSION) $(MIN_VERSION))))
+REQUIRE_PATCH = false
+ifeq ($(MIN_VERSION),$(lastword $(SORTED_VERSIONS)))
 	REQUIRE_PATCH = true
 endif
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
-ifeq ($(REQUIRE_PATCH), true)
+#ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch src/httpserver/basic_auth_fail_response.hpp < ../basic_auth_fail_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/create_webserver.hpp < ../create_webserver.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/deferred_response.hpp < ../deferred_response.hpp.patch
@@ -110,8 +112,9 @@ ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch src/httpserver/http_response.hpp < ../http_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch src/httpserver/string_response.hpp < ../string_response.hpp.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../re2_regex.patch
+#endif
 	cd libhttpserver/libhttpserver && patch -p0 < ../final_val_post_process.patch
-endif
+	cd libhttpserver/libhttpserver && patch -p0 < ../empty_uri_log_crash.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif

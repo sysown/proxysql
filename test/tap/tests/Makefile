@@ -85,7 +85,7 @@ all: tests
 
 .PHONY: clean
 clean:
-	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora generate_set_session_csv set_testing-240.csv clickhouse_php_conn-t || true
+	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora generate_set_session_csv set_testing-240.csv clickhouse_php_conn-t reg_test_3992_fast_forward_malformed_packet-pymysql-t || true
 
 WITHGCOVVAR := $(shell echo $(WITHGCOV))
 ifeq ($(WITHGCOVVAR),1)
@@ -118,6 +118,10 @@ set_testing-240.csv: generate_set_session_csv
 clickhouse_php_conn-t: clickhouse_php_conn-t.php
 	cp clickhouse_php_conn-t.php clickhouse_php_conn-t
 	chmod +x clickhouse_php_conn-t
+
+reg_test_3992_fast_forward_malformed_packet-pymysql-t: reg_test_3992_fast_forward_malformed_packet-pymysql-t.py
+	cp reg_test_3992_fast_forward_malformed_packet-pymysql-t.py reg_test_3992_fast_forward_malformed_packet-pymysql-t
+	chmod +x reg_test_3992_fast_forward_malformed_packet-pymysql-t
 
 %-t:%-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o $@

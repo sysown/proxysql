@@ -317,16 +317,15 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 					break;
 				}
 #ifdef DEBUG
-				// Safety check
 				// 'my' can be NULL due to connection cleanup, and can cause crash
 				if (my) {
 					for (unsigned int j=0; j<conns->len; j++) {
 						MYSQL *my1 = (MYSQL *)conns->index(j);
 						assert(my!=my1);
-						assert(my->net.fd!=my1->net.fd); // will crash if my is null (in Debug mode)
+						assert(my->net.fd!=my1->net.fd);
 					}
-				//proxy_info("Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, my);
-				
+					//proxy_info("Registering MYSQL with FD %d from mmsd %p and MYSQL %p\n", my->net.fd, mmsd, my);
+
 					conns->add(my);
 				}
 #endif // DEBUG
