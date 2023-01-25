@@ -318,6 +318,7 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 				}
 #ifdef DEBUG
 				// Safety check
+				// 'my' can be NULL due to connection cleanup, and can cause crash
 				if (my) {
 					for (unsigned int j=0; j<conns->len; j++) {
 						MYSQL *my1 = (MYSQL *)conns->index(j);

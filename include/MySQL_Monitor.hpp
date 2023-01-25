@@ -229,7 +229,7 @@ class MySQL_Monitor_State_Data {
 	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();
 
-	// This class will be used by monitor_*_async and it's counterpart monitor_*_thread version of task handler. 
+	// Note: This class will be used by monitor_*_async and it's counterpart monitor_*_thread version of task handler. 
 	// The working of monitor_*_thread version will remain same, as for async version, init_async needs
 	// to be called before calling task_handler to initialize required data.
 	void init_async();
@@ -238,17 +238,8 @@ class MySQL_Monitor_State_Data {
 	int async_exit_status;
 	bool set_wait_timeout();
 
-	/*
-	Task handler for async tasks. 
-	For ping, ping_handler will be executed and for rest of the tasks generic_handler.
-	@Param event_: fd.events - check poll manual
-	@Param wait_event: fd.revents - check poll manual
-	@Return MySQL_Monitor_State_Data_Task_Result
-		TASK_RESULT_TIMEOUT = Task timeout has occurred.
-		TASK_RESULT_FAILED = Task execution has failed.
-		TASK_RESULT_SUCCESS = Task executed successfully.
-		TASK_RESULT_PENDING = Task is in pending state.
-	*/
+	// Note: For ping, ping_handler will be executed and for rest of the tasks generic_handler.
+	// check poll manual for fd.events(event_) and fd.revents(wait_event)
 	MySQL_Monitor_State_Data_Task_Result task_handler(short event_, short& wait_event);
 
 	inline
@@ -506,14 +497,19 @@ class MySQL_Monitor {
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);
 
 private:
-	// All monitor_*_async methods basic workflow is same.
-	// * Finding mysql connection in My_Conn_Pool (get_connection).
-	// * Delegate task to Consumer Thread if connection is not available (same as before), else execute task asynchronously (add task to monitor_poll)
-	// * After execution of task finished, it will return any one of the following result:
-	// ** TASK_RESULT_SUCCESS = mysql connection will be returned back to My_Conn_Pool (put_connection)
-	// ** TASK_RESULT_TIMEOUT = mysql connection will be closed and error log will be generated.
-	// ** TASK_RESULT_FAILED =  mysql connection will be closed and error log will be generated.
-	// Note: calling init_async is mandatory before executing tasks asynchronously.
+	/**
+	 * @brief Handling of monitor tasks asyncronously
+	 * @details Basic workflow is same for all monitor_*_async methods:
+	 *	- Finding mysql connection in My_Conn_Pool (get_connection)
+	 *	- Delegate task to Consumer Thread if connection is not available, else execute task asynchronously (add task to monitor_poll)
+	 * 	- On task completion, one of the following status will be returned and will be processed by monitor_*_process_ready_tasks.
+	 *		- TASK_RESULT_SUCCESS = mysql connection will be returned back to My_Conn_Pool (put_connection)
+	 *		- TASK_RESULT_TIMEOUT = mysql connection will be closed and error log will be generated.		
+	 *		- TASK_RESULT_FAILED =  mysql connection will be closed and error log will be generated.
+	 * @param SQLite3_result The resulset contains backend servers on which respective operation needs to be performed.
+	 *
+	 * Note: Calling init_async is mandatory before executing tasks asynchronously.
+	*/
 	void monitor_ping_async(SQLite3_result* resultset);
 	void monitor_read_only_async(SQLite3_result* resultset);	
 	void monitor_replication_lag_async(SQLite3_result* resultset);
