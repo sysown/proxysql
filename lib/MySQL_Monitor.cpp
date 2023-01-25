@@ -3425,9 +3425,9 @@ srv_mmsd_t init_mmsd_with_conn(const gr_host_def_t srv_def, uint32_t writer_hg, 
 			);
 
 			// Update 'mmsd' error message to report connection creating failure
-			cfmt_t conn_err_msg {
-				cstr_format("timeout or error in creating new connection: %s", mmsd->mysql_error_msg)
-			};
+			cfmt_t conn_err_msg = cstr_format(
+				"timeout or error in creating new connection: %s", mmsd->mysql_error_msg
+			);
 			mmsd->mysql_error_msg = strdup(conn_err_msg.str.c_str());
 		}
 	}
@@ -3533,7 +3533,7 @@ const char MYSQL_8_GR_QUERY[] {
 };
 
 void gr_fetch_srv_status(srv_mmsd_t& ini_mmsd) {
-	unique_ptr<MySQL_Monitor_State_Data>& mmsd { ini_mmsd.mmsd };
+	unique_ptr<MySQL_Monitor_State_Data>& mmsd = ini_mmsd.mmsd;
 
 	if (ini_mmsd.mmsd->mysql == nullptr) {
 		proxy_warning(
@@ -3658,7 +3658,7 @@ gr_node_info_t gr_update_hosts_map(
 	// Consider 'time_now' to be 'now - fetch_duration'
 	unsigned long long time_now=realtime_time();
 	time_now=time_now-(mmsd->t2 - start_time);
-	cfmt_t fmt_srv_addr { cstr_format("%s:%d", mmsd->hostname, mmsd->port) };
+	cfmt_t fmt_srv_addr = cstr_format("%s:%d", mmsd->hostname, mmsd->port);
 
 	pthread_mutex_lock(&GloMyMon->group_replication_mutex);
 
