@@ -178,6 +178,7 @@ class MyGR_monitor_node {
 class MySQL_Monitor_Connection_Pool;
 
 enum MySQL_Monitor_State_Data_Task_Type {
+	MON_CLOSE_CONNECTION,
 	MON_CONNECT,
 	MON_PING,
 	MON_READ_ONLY,
@@ -185,18 +186,27 @@ enum MySQL_Monitor_State_Data_Task_Type {
 	MON_READ_ONLY__AND__INNODB_READ_ONLY,
 	MON_READ_ONLY__OR__INNODB_READ_ONLY,
 	MON_SUPER_READ_ONLY,
-	MON_REPLICATION_LAG
+	MON_GROUP_REPLICATION,
+	MON_REPLICATION_LAG,
+	MON_GALERA,
+	MON_AWS_AURORA
 };
 
+enum class MySQL_Monitor_State_Data_Task_Result {
+	TASK_RESULT_UNKNOWN,
+	TASK_RESULT_TIMEOUT,
+	TASK_RESULT_FAILED,
+	TASK_RESULT_SUCCESS,
+	TASK_RESULT_PENDING
+};
+
+
 class MySQL_Monitor_State_Data {
-  public:
-  MySQL_Monitor_State_Data_Task_Type task_id;
-  struct timeval tv_out;
-  unsigned long long t1;
-  unsigned long long t2;
-  int ST;
-  char *hostname;
-  int port;
+ public:
+	unsigned long long t1;
+	unsigned long long t2;
+	char *hostname;
+	int port;
 	int writer_hostgroup; // used only by group replication
 	bool writer_is_also_reader; // used only by group replication
 	int  max_transactions_behind; // used only by group replication
@@ -206,22 +216,76 @@ class MySQL_Monitor_State_Data {
 	int aws_aurora_add_lag_ms;
 	int aws_aurora_min_lag_ms;
 	int aws_aurora_lag_num_checks;
-  bool use_ssl;
-  MYSQL *mysql;
-  MYSQL_RES *result;
-  MYSQL *ret;
-  int interr;
-  char * mysql_error_msg;
-  MYSQL_ROW *row;
-  unsigned int repl_lag;
-  unsigned int hostgroup_id;
-	MySQL_Monitor_State_Data(char *h, int p, struct event_base *b, bool _use_ssl=0, int g=0);
+	bool use_ssl;
+	MYSQL *mysql;
+	MYSQL_RES *result;
+	int interr;
+	char *mysql_error_msg;
+	unsigned int repl_lag;
+	unsigned int hostgroup_id;
+	bool use_percona_heartbeat;
+	SQLite3DB* mondb;
+
+	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();
-	SQLite3DB *mondb;
+
+	// Note: This class will be used by monitor_*_async and it's counterpart monitor_*_thread version of task handler. 
+	// The working of monitor_*_thread version will remain same, as for async version, init_async needs
+	// to be called before calling task_handler to initialize required data.
+	void init_async();
 	bool create_new_connection();
-	MDB_ASYNC_ST async_state_machine;
+	
 	int async_exit_status;
 	bool set_wait_timeout();
+
+	// Note: For ping, ping_handler will be executed and for rest of the tasks generic_handler.
+	// check poll manual for fd.events(event_) and fd.revents(wait_event)
+	MySQL_Monitor_State_Data_Task_Result task_handler(short event_, short& wait_event);
+
+	inline
+	MySQL_Monitor_State_Data_Task_Type get_task_type() const {
+		return task_id_;
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result get_task_result() const {
+		return task_result_;
+	}
+
+private:
+	std::string query_;
+	unsigned long long task_expiry_time_; // task expiry time (t1 + task_timeout_ * 1000)
+	int task_timeout_; // task timout in ms
+
+	MySQL_Monitor_State_Data_Task_Type task_id_;
+	MySQL_Monitor_State_Data_Task_Result task_result_;
+	MDB_ASYNC_ST async_state_machine_;
+
+	short next_event(MDB_ASYNC_ST new_st, int status);
+	MySQL_Monitor_State_Data_Task_Result (MySQL_Monitor_State_Data::*task_handler_)(short event_, short& wait_event);
+	MySQL_Monitor_State_Data_Task_Result ping_handler(short event_, short& wait_event);
+	MySQL_Monitor_State_Data_Task_Result generic_handler(short event_, short& wait_event);
+	void mark_task_as_timeout(unsigned long long time = monotonic_time());
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result read_only_handler(short event_, short& wait_event) {
+		return generic_handler(event_, wait_event);
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result group_replication_handler(short event_, short& wait_event) {
+		return generic_handler(event_, wait_event);
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result replication_lag_handler(short event_, short& wait_event) {
+		return generic_handler(event_, wait_event);
+	}
+
+	inline
+	MySQL_Monitor_State_Data_Task_Result galera_handler(short event_, short& wait_event) {
+		return generic_handler(event_, wait_event);
+	}
 };
 
 template<typename T>
@@ -394,6 +458,9 @@ class MySQL_Monitor {
 	SQLite3DB *admindb;	// internal database
 	SQLite3DB *monitordb;	// internal database
 	SQLite3DB *monitor_internal_db;	// internal database
+#ifdef DEBUG
+	bool proxytest_forced_timeout;
+#endif
 
 	std::shared_ptr<DNS_Cache> dns_cache;
 
@@ -428,6 +495,33 @@ class MySQL_Monitor {
 	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 	unsigned int estimate_lag(char* server_id, AWS_Aurora_status_entry** ase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);
+
+private:
+	/**
+	 * @brief Handling of monitor tasks asyncronously
+	 * @details Basic workflow is same for all monitor_*_async methods:
+	 *	- Finding mysql connection in My_Conn_Pool (get_connection)
+	 *	- Delegate task to Consumer Thread if connection is not available, else execute task asynchronously (add task to monitor_poll)
+	 * 	- On task completion, one of the following status will be returned and will be processed by monitor_*_process_ready_tasks.
+	 *		- TASK_RESULT_SUCCESS = mysql connection will be returned back to My_Conn_Pool (put_connection)
+	 *		- TASK_RESULT_TIMEOUT = mysql connection will be closed and error log will be generated.		
+	 *		- TASK_RESULT_FAILED =  mysql connection will be closed and error log will be generated.
+	 * @param SQLite3_result The resulset contains backend servers on which respective operation needs to be performed.
+	 *
+	 * Note: Calling init_async is mandatory before executing tasks asynchronously.
+	*/
+	void monitor_ping_async(SQLite3_result* resultset);
+	void monitor_read_only_async(SQLite3_result* resultset);	
+	void monitor_replication_lag_async(SQLite3_result* resultset);
+	void monitor_group_replication_async();
+	void monitor_galera_async();
+
+	// bulk processing of ready taks
+	bool monitor_ping_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	bool monitor_read_only_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	bool monitor_replication_lag_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	bool monitor_group_replication_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	bool monitor_galera_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
 };
 
 #endif /* __CLASS_MYSQL_MONITOR_H */
