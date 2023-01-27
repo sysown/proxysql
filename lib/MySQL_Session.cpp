@@ -4012,6 +4012,8 @@ __get_pkts_from_client:
 								// handle the command automatically.
 								mybe = find_or_create_backend(current_hostgroup); // set a backend
 								mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
+								// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
+								// we are now transitioning to 'FAST_FORWARD'.
 								mybe->server_myds->wait_until = 0;
 								if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
 									// NOTE: This section is entirely borrowed from 'STATE_SLEEP' for 'session_fast_forward'.
@@ -4031,7 +4033,10 @@ __get_pkts_from_client:
 									previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD
 									set_status(CONNECTING_SERVER); // now we need a connection
 								} else {
-									// we have a connection
+									// In case of having a connection, we need to make user to reset the state machine
+									// for current server 'MySQL_Data_Stream', setting it outside of any state handled
+									// by 'mariadb' library. Otherwise 'MySQL_Thread' will threat this
+									// 'MySQL_Data_Stream' as library handled.
 									mybe->server_myds->DSS = STATE_READY;
 									set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 								}
