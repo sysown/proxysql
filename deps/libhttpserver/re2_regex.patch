@@ -1,7 +1,13 @@
-diff --git examples/Makefile.am examples/Makefile.am
-index 318a7a8..2f5e1fb 100644
---- examples/Makefile.am
-+++ examples/Makefile.am
+commit ff6527c6b71fd1d33c39b8dca2a89170de5c2263
+Author: Miro Stauder <miro@proxysql.com>
+Date:   Mon Jan 9 12:05:55 2023 +0000
+
+    re2_regex.patch
+
+diff --git a/examples/Makefile.am b/examples/Makefile.am
+index 318a7a8..0da1879 100644
+--- a/examples/Makefile.am
++++ b/examples/Makefile.am
 @@ -16,8 +16,12 @@
  #     License along with this library; if not, write to the Free Software
  #     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
@@ -17,10 +23,10 @@ index 318a7a8..2f5e1fb 100644
  METASOURCES = AUTO
  noinst_PROGRAMS = hello_world service minimal_hello_world custom_error allowing_disallowing_methods handlers hello_with_get_arg setting_headers custom_access_log basic_authentication digest_authentication minimal_https minimal_file_response minimal_deferred url_registration minimal_ip_ban benchmark_select benchmark_threads benchmark_nodelay deferred_with_accumulator
  
-diff --git src/Makefile.am src/Makefile.am
-index 5e549bb..ddb05ea 100644
---- src/Makefile.am
-+++ src/Makefile.am
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 5e549bb..1fcc59e 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
 @@ -16,7 +16,11 @@
  #     License along with this library; if not, write to the Free Software
  #     Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
@@ -43,11 +49,11 @@ index 5e549bb..ddb05ea 100644
  
  install-data-hook:
  	(mkdir -p $(DESTDIR)$(includedir) && cd $(DESTDIR)$(includedir) && $(LN_S) -f httpserver.hpp httpserverpp)
-diff --git src/details/http_endpoint.cpp src/details/http_endpoint.cpp
-index be76ddd..b6738a0 100644
---- src/details/http_endpoint.cpp
-+++ src/details/http_endpoint.cpp
-@@ -46,6 +46,7 @@ http_endpoint::http_endpoint
+diff --git a/src/details/http_endpoint.cpp b/src/details/http_endpoint.cpp
+index 584fb50..01292d5 100644
+--- a/src/details/http_endpoint.cpp
++++ b/src/details/http_endpoint.cpp
+@@ -52,6 +52,7 @@ http_endpoint::http_endpoint
      bool registration,
      bool use_regex
  ):
@@ -55,7 +61,7 @@ index be76ddd..b6738a0 100644
      family_url(family),
      reg_compiled(false)
  {
-@@ -124,9 +125,19 @@ http_endpoint::http_endpoint
+@@ -130,9 +131,19 @@ http_endpoint::http_endpoint
          url_normalized += "$";
          try
          {
@@ -77,7 +83,7 @@ index be76ddd..b6738a0 100644
          {
              throw std::invalid_argument("Not a valid regex in URL: " + url_normalized);
          }
-@@ -140,7 +151,7 @@ http_endpoint::http_endpoint(const http_endpoint& h):
+@@ -146,7 +157,7 @@ http_endpoint::http_endpoint(const http_endpoint& h):
      url_pars(h.url_pars),
      url_pieces(h.url_pieces),
      chunk_positions(h.chunk_positions),
@@ -86,7 +92,7 @@ index be76ddd..b6738a0 100644
      family_url(h.family_url),
      reg_compiled(h.reg_compiled)
  {
-@@ -152,7 +163,7 @@ http_endpoint& http_endpoint::operator =(const http_endpoint& h)
+@@ -158,7 +169,7 @@ http_endpoint& http_endpoint::operator =(const http_endpoint& h)
      url_normalized = h.url_normalized;
      family_url = h.family_url;
      reg_compiled = h.reg_compiled;
@@ -95,7 +101,7 @@ index be76ddd..b6738a0 100644
      url_pars = h.url_pars;
      url_pieces = h.url_pieces;
      chunk_positions = h.chunk_positions;
-@@ -170,7 +181,7 @@ bool http_endpoint::match(const http_endpoint& url) const
+@@ -176,7 +187,7 @@ bool http_endpoint::match(const http_endpoint& url) const
  
      if(!family_url || url.url_pieces.size() < url_pieces.size())
      {
@@ -104,7 +110,7 @@ index be76ddd..b6738a0 100644
      }
  
      string nn = "/";
-@@ -180,7 +191,7 @@ bool http_endpoint::match(const http_endpoint& url) const
+@@ -186,7 +197,7 @@ bool http_endpoint::match(const http_endpoint& url) const
          nn += (first ? "" : "/") + url.url_pieces[i];
          first = false;
      }
@@ -113,10 +119,10 @@ index be76ddd..b6738a0 100644
  }
  
  };
-diff --git src/httpserver/details/http_endpoint.hpp src/httpserver/details/http_endpoint.hpp
-index 147956a..2afd42f 100644
---- src/httpserver/details/http_endpoint.hpp
-+++ src/httpserver/details/http_endpoint.hpp
+diff --git a/src/httpserver/details/http_endpoint.hpp b/src/httpserver/details/http_endpoint.hpp
+index 37fd0d8..ae92782 100644
+--- a/src/httpserver/details/http_endpoint.hpp
++++ b/src/httpserver/details/http_endpoint.hpp
 @@ -25,11 +25,12 @@
  #ifndef _HTTP_ENDPOINT_HPP_
  #define _HTTP_ENDPOINT_HPP_

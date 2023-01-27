@@ -64,6 +64,7 @@ endif
 .PHONY: default
 
 
+
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
@@ -77,7 +78,9 @@ else
 	sed -i 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
 endif
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
+
 libinjection: libinjection/libinjection/src/libinjection.a
+
 
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
@@ -87,57 +90,47 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
 	cd libssl/openssl && ln -s . lib # curl wants this path
+
 libssl: libssl/openssl/libssl.a
 
-MIN_VERSION := 4.9.0
-GCC_VERSION := $(shell gcc -dumpversion)
-SORTED_VERSIONS := $(shell echo -e "$(GCC_VERSION)\n$(MIN_VERSION)" | sort -V)
-
-REQUIRE_PATCH = false
-ifeq ($(MIN_VERSION),$(lastword $(SORTED_VERSIONS)))
-	REQUIRE_PATCH = true
-endif
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
-	cd libhttpserver && tar -zxf libhttpserver-0.18.1.tar.gz
-#ifeq ($(REQUIRE_PATCH), true)
-	cd libhttpserver/libhttpserver && patch src/httpserver/basic_auth_fail_response.hpp < ../basic_auth_fail_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/create_webserver.hpp < ../create_webserver.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/deferred_response.hpp < ../deferred_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/digest_auth_fail_response.hpp < ../digest_auth_fail_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/file_response.hpp < ../file_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/http_request.hpp < ../http_request.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/http_resource.hpp < ../http_resource.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/http_response.hpp < ../http_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch src/httpserver/string_response.hpp < ../string_response.hpp.patch
-	cd libhttpserver/libhttpserver && patch -p0 < ../re2_regex.patch
-#endif
-	cd libhttpserver/libhttpserver && patch -p0 < ../final_val_post_process.patch
-	cd libhttpserver/libhttpserver && patch -p0 < ../empty_uri_log_crash.patch
+	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
+	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../re2_regex.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
 	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
+
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
+
 
 libev/libev/.libs/libev.a:
 	cd libev && rm -rf libev-*/ || true
-	cd libev && tar -zxf libev-4.24.tar.gz
-	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
-	cd libev/libev  && ./configure
+	cd libev && tar -zxf libev-*.tar.gz
+#	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
+	cd libev/libev && ./configure
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
+
 ev: libev/libev/.libs/libev.a
+
 
 curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && rm -rf curl-*/ || true
 	cd curl && tar -zxf curl-*.tar.gz
-	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
-	cd curl/curl && patch configure < ../configure.patch
+#	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
+#	cd curl/curl && patch configure < ../configure.patch
+	cd curl/curl && autoreconf -fi
 	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
+
 curl: curl/curl/lib/.libs/libcurl.a
+
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
@@ -146,39 +139,44 @@ ifeq ($(CENTOSVER),6)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
 else
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.68 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.68.tar.gz
-	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
+	cd libmicrohttpd && ln -s libmicrohttpd-0.9.75 libmicrohttpd
+	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
+#	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 endif
 ifeq ($(UNAME_S),Darwin)
 	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
 endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
+
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
 
+
 cityhash/cityhash/src/.libs/libcityhash.a:
-	cd cityhash && rm -rf cityhash/ || true
-	cd cityhash && tar -zxf cityhash.tar.gz
-	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+	cd cityhash && rm -rf cityhash-*/ || true
+	cd cityhash && tar -zxf cityhash-*.tar.gz && sync
+	cd cityhash/cityhash && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub
+	cd cityhash/cityhash && ./configure && CC=${CC} CXX=${CXX} ${MAKE}
+
 cityhash: cityhash/cityhash/src/.libs/libcityhash.a
 
-lz4/lz4/liblz4.a:
+
+lz4/lz4/lib/liblz4.a:
 	cd lz4 && rm -rf lz4-*/ || true
-	cd lz4 && tar -zxf lz4-1.7.5.tar.gz
+	cd lz4 && tar -zxf lz4-*.tar.gz
 	cd lz4/lz4 && CC=${CC} CXX=${CXX} ${MAKE}
-lz4: lz4/lz4/liblz4.a
+
+lz4: lz4/lz4/lib/liblz4.a
 
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
+	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 ifeq ($(IS_CXX17), 1)
 	echo ">>> Clickhouse CXX17"
-	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.1.0 clickhouse-cpp
-	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-	cd clickhouse-cpp && tar -zxf v2.1.0.tar.gz && sync
+	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
+	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 else
 	echo ">>> Clickhouse CXX11"
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
-	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
 	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
 	cd clickhouse-cpp && sed -i 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
 endif
@@ -196,6 +194,7 @@ libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 
 libdaemon: libdaemon/libdaemon/libdaemon/.libs/libdaemon.a
 
+
 jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc && rm -rf jemalloc-*/ || true
 	cd jemalloc && tar --no-same-owner -jxf jemalloc-5.2.0.tar.bz2
@@ -206,6 +205,7 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 	cd jemalloc/jemalloc && CC=${CC} CXX=${CXX} ${MAKE}
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
+
 
 WITHASAN := $(shell echo $(WITHASAN))
 
@@ -255,58 +255,65 @@ mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclien
 
 sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
-	cd sqlite3 && tar -zxf sqlite-amalgamation-3190200.tar.gz
-	cd sqlite3/sqlite3 && patch sqlite3.c < ../from_unixtime.patch
-	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
+	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
+	cd sqlite3/sqlite3 && patch -p1 < ../from_unixtime.patch
+#	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
+
 libconfig/libconfig/lib/.libs/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
-	cd libconfig && tar -zxf libconfig-1.7.2.tar.gz
+	cd libconfig && tar -zxf libconfig-*.tar.gz
 	cd libconfig/libconfig && ./configure --disable-examples
 	cd libconfig/libconfig && CC=${CC} CXX=${CXX} ${MAKE}
 
 libconfig: libconfig/libconfig/lib/.libs/libconfig++.a
 
+
 prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a:
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
-	cd prometheus-cpp && tar -zxf v0.9.0.tar.gz
-	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-v1.11.tar.gz -C prometheus-cpp/3rdparty/civetweb
+	cd prometheus-cpp && tar -zxf prometheus-cpp-*.tar.gz
+	cd prometheus-cpp && tar --strip-components=1 -zxf civetweb-*.tar.gz -C prometheus-cpp/3rdparty/civetweb
 	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../serial_exposer.patch
-	cd prometheus-cpp/prometheus-cpp && patch -p0 < ../registry_counters_reset.patch
-	cd prometheus-cpp/prometheus-cpp && patch -p0 < ../include_limits.patch
+	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../registry_counters_reset.patch
+	cd prometheus-cpp/prometheus-cpp && patch -p1 < ../fix_old_distros.patch
 	cd prometheus-cpp/prometheus-cpp && cmake . -DBUILD_SHARED_LIBS=OFF -DENABLE_TESTING=OFF -DENABLE_PUSH=OFF
 	cd prometheus-cpp/prometheus-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
 prometheus-cpp: prometheus-cpp/prometheus-cpp/lib/libprometheus-cpp-core.a
 
+
 re2/re2/obj/libre2.a:
 	cd re2 && rm -rf re2-*/ || true
-	cd re2 && tar -zxf re2.tar.gz
+	cd re2 && tar -zxf re2-*.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
-	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
+#	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
 ifeq ($(UNAME_S),Darwin)
-	cd re2/re2 && sed -i '' -e 's/-O3 /-O3 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
-	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
+	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -std=c++11 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
+#	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 else
-	cd re2/re2 && sed -i -e 's/-O3 /-O3 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
-	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
+	cd re2/re2 && sed -i -e 's/-O3 -g/-O3 -g -std=c++11 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
+#	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 endif
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
 
 re2: re2/re2/obj/libre2.a
 
+
 pcre/pcre/.libs/libpcre.a:
 	cd pcre && rm -rf pcre-*/ || true
-	cd pcre && tar -zxf pcre-8.44.tar.gz
-	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
+	cd pcre && tar -zxf pcre-*.tar.gz
+#	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
 	cd pcre/pcre && ./configure
 	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
+
 pcre: pcre/pcre/.libs/libpcre.a
+
+
 
 cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
@@ -333,6 +340,6 @@ cleanall:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
-	cd cityhash && rm -rf cityhash/ || true
+	cd cityhash && rm -rf cityhash-*/ || true
 .PHONY: cleanall
 

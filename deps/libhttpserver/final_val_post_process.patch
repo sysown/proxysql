@@ -1,8 +1,14 @@
-diff --git src/webserver.cpp src/webserver.cpp
-index a3104e9..5ae7381 100644
---- src/webserver.cpp
-+++ src/webserver.cpp
-@@ -676,6 +676,14 @@ int webserver::finalize_answer(
+commit 3dab3a696e61c341029ad459608f2626e6e5547f
+Author: Miro Stauder <miro@proxysql.com>
+Date:   Mon Jan 9 12:06:29 2023 +0000
+
+    final_val_post_process.patch
+
+diff --git a/src/webserver.cpp b/src/webserver.cpp
+index 38542f2..e6ef554 100644
+--- a/src/webserver.cpp
++++ b/src/webserver.cpp
+@@ -674,6 +674,14 @@ MHD_Result webserver::finalize_answer(
          {
              if(hrm->is_allowed(method))
              {
