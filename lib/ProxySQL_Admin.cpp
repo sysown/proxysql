@@ -4233,6 +4233,17 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							run_query=false;
 						}
 						break;
+					case 53:
+						{
+							// Test monitor tasks timeout
+							// test_arg1: 1 = ON, 0 = OFF
+							char msg[256];
+							GloMyMon->proxytest_forced_timeout = (test_arg1) ? true : false;
+							sprintf(msg, "Monitor task timeout flag is:%s\n", GloMyMon->proxytest_forced_timeout ? "ON" : "OFF");
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
+							run_query = false;
+						}
+						break;
 #endif // DEBUG
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
