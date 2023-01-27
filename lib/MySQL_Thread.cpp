@@ -3670,9 +3670,37 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					} else {
 						// if this is a backend with fast_forward, set unhealthy
 						// if this is a backend without fast_forward, do not set unhealthy: it will be handled by client library
+						// For flagging the session as 'unhealthy' for a 'fast_forward' session, we shouldn't only take into
+						// account the backend 'MySQL_Data_Stream::active' status, doing this could result in client not being
+						// forwarded data already sent by a backend server which connection is closed (by any reason).
+						// Flow of this faulty scenario would be the following:
+						//  1. Backend server sends ProxySQL data.
+						//  2. ProxySQL receives the data and starts forwarding to the client.
+						//  3. Backend server closes connection / network error / etc... Connection is closed.
+						//  4. ProxySQL flags the session unhealthy (here) based only on the closed backend connection.
+						//  5. Session is killed and client never receives the final data received by ProxySQL.
 						if (myds->sess->session_fast_forward) { // if fast forward
-							if (myds->myds_type==MYDS_BACKEND) { // and backend
-								myds->sess->set_unhealthy(); // set unhealthy
+							if (myds->sess->client_myds->active == 1) {
+								proxy_debug(
+									PROXY_DEBUG_NET, 1, "Session=%p, DataStream=%p -- Deleting FD %d for fast-forward session\n",
+									myds->sess, myds, myds->fd
+								);
+								// If the frontend connection is still active, we are required to:
+								//   1. Invalidate the polling file descriptor for the backend conection. Not doing so
+								//   will result in a constant `POLLIN` event for which `read` will return '0'. This
+								//   will invalidate any waiting in `poll` and put ProxySQL in a constant loop.
+								//
+								//   2. Make sure to flag the 'MySQL_Data_Stream' with a 'net_failure'. Flagging this
+								//   here is a 'best-effort' since 'MySQL_Session' should itself do this when failed to
+								//   read from the `fd` (shut_soft). This should be later check by `MySQL_Session` to
+								//   ensure we don't try to forward data to a backend 'MySQL_Data_Stream' with
+								//   'net_failure'. See 'get_pkts_from_client'.
+								mypolls.fds[n].fd = -1;
+								myds->set_net_failure();
+							} else {
+								if (myds->myds_type==MYDS_BACKEND) { // and backend
+									myds->sess->set_unhealthy(); // set unhealthy
+								}
 							}
 						}
 					}

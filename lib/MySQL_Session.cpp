@@ -4072,7 +4072,15 @@ __get_pkts_from_client:
 				}	
 				break;
 			case FAST_FORWARD:
-				mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+				// Avoid sending any data to backend 'MySQL_Data_Stream' flagged with 'net_failure'. Backend connection
+				// is most probably closed, only action left is inform the client. See
+				// "MySQL_Thread::process_data_on_data_stream" for more context.
+				if (mybe->server_myds->net_failure) {
+					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
+					handler_ret = -1;
+				} else {
+					mybe->server_myds->PSarrayOUT->add(pkt.ptr, pkt.size);
+				}
 				break;
 			// This state is required because it covers the following situation:
 			//  1. A new connection is created by a client and the 'FAST_FORWARD' mode is enabled.
