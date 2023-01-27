@@ -654,15 +654,15 @@ unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, co
 		unsigned long long t=curtime_ms;
 		if (entry->expire_ms > t && entry->create_ms + cache_ttl > t) {
 			if (
-				mysql_thread___query_cache_soft_ttl_percentage && !entry->refreshing &&
-				entry->create_ms + cache_ttl * mysql_thread___query_cache_soft_ttl_percentage / 100 <= t
+				mysql_thread___query_cache_soft_ttl_pct && !entry->refreshing &&
+				entry->create_ms + cache_ttl * mysql_thread___query_cache_soft_ttl_pct / 100 <= t
 			) {
 				// If the Query Cache entry reach the soft_ttl but do not reach
 				// the cache_ttl, the next query hit the backend and refresh
 				// the entry, including ResultSet and TTLs. While the
 				// refreshing is in process, other queries keep using the "old"
 				// Query Cache entry.
-				// soft_ttl_percentage with value 0 and 100 disables the functionality.
+				// soft_ttl_pct with value 0 and 100 disables the functionality.
 				entry->refreshing = true;
 			} else {
 				THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);

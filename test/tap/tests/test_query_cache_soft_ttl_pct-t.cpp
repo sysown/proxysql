@@ -1,9 +1,9 @@
 /**
- * @file test_query_cache_soft_ttl_percentage-t.cpp
+ * @file test_query_cache_soft_ttl_pct-t.cpp
  * @brief This test that query cache entries are refreshed when soft ttl is
  * reached.
  * @details This test configures a query rule with cache and configures the
- * global variable mysql-query_cache_soft_ttl_percentage. Then, caches a
+ * global variable mysql-query_cache_soft_ttl_pct. Then, caches a
  * "SELECT SLEEP(1) and creates 4 threads to send this same query when the soft
  * ttl have been reached. Finally, checks that only one of the threads has hit
  * the hostgroup looking at how long it has taken for each thread to execute
@@ -121,7 +121,7 @@ int main(int argc, char** argv) {
 	vector<string> admin_queries = {
 		"UPDATE mysql_query_rules SET cache_ttl = 4000 WHERE rule_id = 2",
 		"LOAD MYSQL QUERY RULES TO RUNTIME",
-		"UPDATE global_variables SET variable_value=50 WHERE variable_name='mysql-query_cache_soft_ttl_percentage'",
+		"UPDATE global_variables SET variable_value=50 WHERE variable_name='mysql-query_cache_soft_ttl_pct'",
 		"LOAD MYSQL VARIABLES TO RUNTIME",
 	};
 
