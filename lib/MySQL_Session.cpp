@@ -4014,6 +4014,19 @@ __get_pkts_from_client:
 								mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
 								mybe->server_myds->wait_until = 0;
 								if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
+									// NOTE: This section is entirely borrowed from 'STATE_SLEEP' for 'session_fast_forward'.
+									// Check comments there for extra information.
+									// =============================================================================
+									if (mybe->server_myds->max_connect_time == 0) {
+										uint64_t connect_timeout =
+											mysql_thread___connect_timeout_server < mysql_thread___connect_timeout_server_max ?
+												mysql_thread___connect_timeout_server_max : mysql_thread___connect_timeout_server;
+										mybe->server_myds->max_connect_time = thread->curtime + connect_timeout * 1000;
+									}
+									mybe->server_myds->connect_retries_on_failure = mysql_thread___connect_retries_on_failure;
+									CurrentQuery.start_time=thread->curtime;
+									// =============================================================================
+
 									// we don't have a connection
 									previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD
 									set_status(CONNECTING_SERVER); // now we need a connection
