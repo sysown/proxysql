@@ -75,7 +75,7 @@ endif
 ifeq ($(UNAME_S),Darwin)
 	sed -i '' 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
 else
-	sed -i 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
+	sed -i -e 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
 endif
 	cd libinjection/libinjection && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -178,7 +178,7 @@ else
 	echo ">>> Clickhouse CXX11"
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
 	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
-	cd clickhouse-cpp && sed -i 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
+	cd clickhouse-cpp && sed -i -e 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
 endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
