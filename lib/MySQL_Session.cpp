@@ -3988,6 +3988,60 @@ __get_pkts_from_client:
 							case _MYSQL_COM_STMT_SEND_LONG_DATA:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
 								break;
+							case _MYSQL_COM_BINLOG_DUMP:
+							case _MYSQL_COM_REGISTER_SLAVE:
+							case _MYSQL_COM_BINLOG_DUMP_GTID:
+								// In this switch we handle commands that download binlog events from MySQL
+								// servers. For this commands a lot of the features provided by ProxySQL
+								// aren't useful, like multiplexing, query parsing, etc. For this reason,
+								// ProxySQL enable fast_forward when it receives these commands. 
+								proxy_info(
+									"COM_REGISTER_SLAVE, COM_BINLOG_DUMP or COM_BINLOG_DUMP_GTID received. "
+									"Changing session fast foward to true\n"
+								);
+								session_fast_forward = true;
+
+								if (client_myds->PSarrayIN->len) {
+									proxy_error("UNEXPECTED PACKET FROM CLIENT -- PLEASE REPORT A BUG\n");
+									assert(0);
+								}
+								client_myds->PSarrayIN->add(pkt.ptr, pkt.size);
+
+								// The following code prepares the session as if it was configured with fast
+								// forward before receiving the command. This way the state machine will
+								// handle the command automatically.
+								mybe = find_or_create_backend(current_hostgroup); // set a backend
+								mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
+								// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
+								// we are now transitioning to 'FAST_FORWARD'.
+								mybe->server_myds->wait_until = 0;
+								if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
+									// NOTE: This section is entirely borrowed from 'STATE_SLEEP' for 'session_fast_forward'.
+									// Check comments there for extra information.
+									// =============================================================================
+									if (mybe->server_myds->max_connect_time == 0) {
+										uint64_t connect_timeout =
+											mysql_thread___connect_timeout_server < mysql_thread___connect_timeout_server_max ?
+												mysql_thread___connect_timeout_server_max : mysql_thread___connect_timeout_server;
+										mybe->server_myds->max_connect_time = thread->curtime + connect_timeout * 1000;
+									}
+									mybe->server_myds->connect_retries_on_failure = mysql_thread___connect_retries_on_failure;
+									CurrentQuery.start_time=thread->curtime;
+									// =============================================================================
+
+									// we don't have a connection
+									previous_status.push(FAST_FORWARD); // next status will be FAST_FORWARD
+									set_status(CONNECTING_SERVER); // now we need a connection
+								} else {
+									// In case of having a connection, we need to make user to reset the state machine
+									// for current server 'MySQL_Data_Stream', setting it outside of any state handled
+									// by 'mariadb' library. Otherwise 'MySQL_Thread' will threat this
+									// 'MySQL_Data_Stream' as library handled.
+									mybe->server_myds->DSS = STATE_READY;
+									set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
+								}
+
+								break;
 							case _MYSQL_COM_QUIT:
 								proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
 								if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
