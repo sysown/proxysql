@@ -1,0 +1,70 @@
+diff --git a/core/include/prometheus/family.h b/core/include/prometheus/family.h
+index 4f62fda..09cfbb5 100644
+--- a/core/include/prometheus/family.h
++++ b/core/include/prometheus/family.h
+@@ -110,7 +110,7 @@ class PROMETHEUS_CPP_CORE_EXPORT Family : public Collectable {
+   /// \throw std::runtime_exception on invalid label names.
+   template <typename... Args>
+   T& Add(const Labels& labels, Args&&... args) {
+-    return Add(labels, std::make_unique<T>(args...));
++    return Add(labels, std::unique_ptr<T>(new T(args...)));
+   }
+ 
+   /// \brief Remove the given dimensional data.
+diff --git a/core/src/registry.cc b/core/src/registry.cc
+index 7a365ed..60aa010 100644
+--- a/core/src/registry.cc
++++ b/core/src/registry.cc
+@@ -147,7 +147,7 @@ Family<T>& Registry::Add(const std::string& name, const std::string& help,
+     throw std::invalid_argument("Family name already exists");
+   }
+ 
+-  auto family = std::make_unique<Family<T>>(name, help, labels);
++  auto family = std::unique_ptr<Family<T>>(new Family<T>(name, help, labels));
+   auto& ref = *family;
+   families.push_back(std::move(family));
+   return ref;
+diff --git a/pull/src/endpoint.cc b/pull/src/endpoint.cc
+index 5c44bee..b0a3e69 100644
+--- a/pull/src/endpoint.cc
++++ b/pull/src/endpoint.cc
+@@ -21,7 +21,7 @@ Endpoint::Endpoint(CivetServer& server, std::string uri)
+     : server_(server),
+       uri_(std::move(uri)),
+       endpoint_registry_(std::make_shared<Registry>()),
+-      metrics_handler_(std::make_unique<MetricsHandler>(*endpoint_registry_)) {
++      metrics_handler_(std::unique_ptr<MetricsHandler>(new MetricsHandler(*endpoint_registry_))) {
+   RegisterCollectable(endpoint_registry_);
+   server_.addHandler(uri_, metrics_handler_.get());
+ }
+@@ -46,7 +46,7 @@ void Endpoint::RegisterAuth(
+   // split creating, assigning, and storing to avoid a race-condition when
+   // being called the second time and the handler is replaced
+   auto new_handler =
+-      std::make_unique<BasicAuthHandler>(std::move(authCB), realm);
++      std::unique_ptr<BasicAuthHandler>(new BasicAuthHandler(std::move(authCB), realm));
+   server_.addAuthHandler(uri_, new_handler.get());
+   auth_handler_ = std::move(new_handler);
+ }
+diff --git a/pull/src/exposer.cc b/pull/src/exposer.cc
+index 0d62bf3..1fce973 100644
+--- a/pull/src/exposer.cc
++++ b/pull/src/exposer.cc
+@@ -21,7 +21,7 @@ Exposer::Exposer(const std::string& bind_address, const std::size_t num_threads,
+ 
+ Exposer::Exposer(std::vector<std::string> options,
+                  const CivetCallbacks* callbacks)
+-    : server_(std::make_unique<CivetServer>(std::move(options), callbacks)) {}
++    : server_(std::unique_ptr<CivetServer>(new CivetServer(std::move(options), callbacks))) {}
+ 
+ Exposer::~Exposer() = default;
+ 
+@@ -60,7 +60,7 @@ detail::Endpoint& Exposer::GetEndpointForUri(const std::string& uri) {
+     return *it->get();
+   }
+ 
+-  endpoints_.emplace_back(std::make_unique<detail::Endpoint>(*server_, uri));
++  endpoints_.emplace_back(std::unique_ptr<detail::Endpoint>(new detail::Endpoint(*server_, uri)));
+   return *endpoints_.back().get();
+ }
+ 

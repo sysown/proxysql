@@ -2847,8 +2847,18 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		// received from the network.
 		// The only modules that seems to be affected by this issue are Admin, SQLite3 Server
 		// and Clickhouse Server
-		int nb = fcntl(_fd, F_SETFL, fcntl(_fd, F_GETFL, 0) | O_NONBLOCK);
-		assert (nb != -1);
+		int prevflags = fcntl(_fd, F_GETFL, 0);
+		if (prevflags == -1) {
+			proxy_error("For FD %d fcntl() returned -1 errno %d\n", _fd, errno);
+			if (shutdown == 0)
+				assert (prevflags != -1);
+		}
+		int nb = fcntl(_fd, F_SETFL, prevflags | O_NONBLOCK);
+		if (nb == -1) {
+			proxy_error("For FD %d fcntl() returned -1 , previous flags %d , errno %d\n", _fd, prevflags, errno);
+			if (shutdown == 0)
+				assert (nb != -1);
+		}
 	}
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
 
@@ -3598,15 +3608,17 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 										// PMC-10004
 										// we probably should use SSL_pending() and/or SSL_has_pending() to determine
 										// if there is more data to be read, but it doesn't seem to be working.
-										// Therefore we hardcored the value 16384 (16KB) as a special case and
-										// we try to call read_from_net() again
+										// Therefore we try to call read_from_net() again as long as there is data.
+										// Previously we hardcoded 16KB but it seems that it can return in smaller
+										// chunks of 4KB.
+										// We finally removed the chunk size as it seems that any size is possible.
 /*
 										int sslp = SSL_pending(myds->ssl);
 										int sslhp = SSL_has_pending(myds->ssl);
 										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: in fast_forward mode and SSL read %d bytes , SSL_pending: %d bytes , SSL_has_pending: %d\n", myds->sess, rb, sslp, sslhp);
 */
 										proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, DataStream=%p , thread_session_id=%u -- in fast_forward mode and SSL read %d bytes\n", myds->sess, myds, myds->sess->thread_session_id, rb);
-										while (rb == 16384) {
+										while (rb > 0) {
 											rb = myds->read_from_net();
 											if (rb > 0 && myds->myds_type == MYDS_FRONTEND) {
 												status_variables.stvar[st_var_queries_frontends_bytes_recv] += rb;

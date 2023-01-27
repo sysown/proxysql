@@ -32,6 +32,11 @@ std::vector<std::string> queries_SQL1 = {
 	"CREATE TABLE tbl1459 (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , t1 VARCHAR)",
 };
 
+std::vector<std::string> queries_SQL4 = {
+	"DROP TABLE IF EXISTS tbl1459",
+	"VACUUM",
+};
+
 
 int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::string& message_prefix) {
 	for (std::vector<std::string>::iterator it = queries.begin(); it != queries.end(); it++) {
@@ -97,6 +102,9 @@ int main(int argc, char** argv) {
 			ok(i, "Executed INSERT with id=%d", i); // this can be a simple diag, but we use ok() to track progress
 		}
 	}
+
+	if (run_queries_sets(queries_SQL4, mysql, "Running on SQLite3"))
+		return exit_status();
 
 	mysql_close(mysql);
 	mysql_close(mysqladmin);
