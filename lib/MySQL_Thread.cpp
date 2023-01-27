@@ -3582,6 +3582,10 @@ bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned
 					return true;
 				}
 				if (mypolls.fds[n].revents) {
+					proxy_debug(
+						PROXY_DEBUG_NET, 6, "Events for Session=%p, DataStream=%p, thread_session_id=%u, status=%d\n",
+						myds->sess, myds, myds->sess->thread_session_id, mypolls.myds[n]->DSS
+					);
 					if (mypolls.myds[n]->DSS < STATE_MARIADB_BEGIN || mypolls.myds[n]->DSS > STATE_MARIADB_END) {
 						// only if we aren't using MariaDB Client Library
 						int rb = 0;
