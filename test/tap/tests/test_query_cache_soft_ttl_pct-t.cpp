@@ -27,12 +27,13 @@
 using std::vector;
 using std::string;
 
-double timer_result_one = 0;
-double timer_result_two = 0;
-double timer_result_three = 0;
-double timer_result_four = 0;
+#define NUM_QUERIES	3
+#define NUM_THREADS 8
 
-const string DUMMY_QUERY = "SELECT SLEEP(1)";
+CommandLine cl;
+double timer_results[NUM_THREADS];
+
+const char * DUMMY_QUERY = (const char *)"SELECT SLEEP(1)";
 
 class timer {
 public:
@@ -46,26 +47,27 @@ public:
 	}
 };
 
-void run_dummy_query(
-	const char* host, const char* username, const char* password, const int port, double* timer_result
-) {
+void run_dummy_query(double* timer_result) {
 	MYSQL* proxy_mysql = mysql_init(NULL);
 
-	if (!mysql_real_connect(proxy_mysql, host, username, password, NULL, port, NULL, 0)) {
+	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		*timer_result = -1.0;
 		return;
 	}
 
-	int soft_ttl_seconds = 2;
-
-	for (int i = 0; i < 2; i++) {
-		sleep(1);
+	for (int i = 0; i < NUM_QUERIES; i++) {
+		// execute the query at 1.4 , 2.8 and 4.2 second
+		// Running 3 queries we verify:
+		// 1. the cache before the threshold
+		// 2. the cache after the threshold
+		// 3. that the cache has been refreshed
+		usleep(1400000);
 
 		timer stopwatch;
-		int err = mysql_query(proxy_mysql, DUMMY_QUERY.c_str());
+		int err = mysql_query(proxy_mysql, DUMMY_QUERY);
 		if (err) {
-			diag("Failed to executed query `%s`", DUMMY_QUERY.c_str());
+			diag("Failed to executed query `%s`", DUMMY_QUERY);
 			*timer_result = -1.0;
 			mysql_close(proxy_mysql);
 			return;
@@ -99,18 +101,21 @@ std::map<string, int> get_digest_stats_dummy_query(MYSQL* proxy_admin) {
 		else
 			stats["hostgroups"] += atoi(row[1]);
 	}
+	diag("Queries hitting the cache:     %d", stats["cache"]);
+	diag("Queries NOT hitting the cache: %d", stats["hostgroups"]);
 	mysql_free_result(res);
 
 	return stats;
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	plan(3); // always specify the number of tests that are going to be performed
 
 	MYSQL* proxy_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -119,7 +124,8 @@ int main(int argc, char** argv) {
 	}
 
 	vector<string> admin_queries = {
-		"UPDATE mysql_query_rules SET cache_ttl = 4000 WHERE rule_id = 2",
+		"DELETE FROM mysql_query_rules",
+		"INSERT INTO mysql_query_rules (rule_id,active,match_digest,cache_ttl) VALUES (2,1,'^SELECT',4000)",
 		"LOAD MYSQL QUERY RULES TO RUNTIME",
 		"UPDATE global_variables SET variable_value=50 WHERE variable_name='mysql-query_cache_soft_ttl_pct'",
 		"LOAD MYSQL VARIABLES TO RUNTIME",
@@ -139,48 +145,40 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	diag("Running: %s", DUMMY_QUERY.c_str());
-	MYSQL_QUERY(proxy_mysql, DUMMY_QUERY.c_str()); // We want to cache query "SELECT SLEEP(1)"
+	diag("Running: %s", DUMMY_QUERY);
+	MYSQL_QUERY(proxy_mysql, DUMMY_QUERY); // We want to cache query "SELECT SLEEP(1)"
 
 	MYSQL_RES* res = NULL;
 	res = mysql_store_result(proxy_mysql);
 	mysql_free_result(res);
 	mysql_close(proxy_mysql);
 
-	std::thread client_one(
-		run_dummy_query, cl.host, cl.username, cl.password, cl.port, &timer_result_one
-	);
-	std::thread client_two(
-		run_dummy_query, cl.host, cl.username, cl.password, cl.port, &timer_result_two
-	);
-	std::thread client_three(
-		run_dummy_query, cl.host, cl.username, cl.password, cl.port, &timer_result_three
-	);
-	std::thread client_four(
-		run_dummy_query, cl.host, cl.username, cl.password, cl.port, &timer_result_four
-	);
-	client_one.join();
-	client_two.join();
-	client_three.join();
-	client_four.join();
+	std::thread * mythreads[NUM_THREADS];
 
-	if (
-		timer_result_one == -1.0 ||
-		timer_result_two == -1.0 ||
-		timer_result_three == -1.0 ||
-		timer_result_four == -1.0
-	) {
+	// start all threads
+	for (unsigned int i = 0; i < NUM_THREADS; i++)
+		mythreads[i] = new std::thread(run_dummy_query, &timer_results[i]);
+
+	// wait all threads to complete
+	for (unsigned int i = 0; i < NUM_THREADS; i++)
+		mythreads[i]->join();
+
+	for (unsigned int i = 0; i < NUM_THREADS; i++) {
+	if (timer_results[i] == -1.0) {
 		fprintf(
 			stderr, "File %s, line %d, Error: one or more threads finished with errors", __FILE__, __LINE__
 		);
 		mysql_close(proxy_admin);
 		return EXIT_FAILURE;
 	}
+	}
 
 	// Get the number of clients that take more 1 second or more to execute the
 	// query by casting double to int.
-	int num_slow_clients =
-		(int)(timer_result_one + timer_result_two + timer_result_three + timer_result_four);
+	int num_slow_clients = 0;
+	for (unsigned int i = 0; i < NUM_THREADS; i++) {
+		num_slow_clients += (int)timer_results[i];
+	}
 	int expected_num_slow_clients = 1;
 	ok(
 		num_slow_clients == expected_num_slow_clients,
@@ -191,7 +189,7 @@ int main(int argc, char** argv) {
 
 	std::map<string, int> stats_after = get_digest_stats_dummy_query(proxy_admin);
 
-	std::map<string, int> expected_stats {{"cache", 7}, {"hostgroups", 2}};
+	std::map<string, int> expected_stats {{"cache", NUM_THREADS*NUM_QUERIES-1}, {"hostgroups", 2}};
 	ok(
 		expected_stats["cache"] == stats_after["cache"] - stats_before["cache"],
 		"Query cache should have been hit %d times. Number of hits - Exp:'%d', Act:'%d'",
