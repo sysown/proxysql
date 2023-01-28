@@ -653,22 +653,35 @@ unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, co
 	if (entry!=NULL) {
 		unsigned long long t=curtime_ms;
 		if (entry->expire_ms > t && entry->create_ms + cache_ttl > t) {
-			THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);
-			THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,1);
-
-			if (deprecate_eof_active && entry->column_eof_pkt_offset) {
-				result = eof_to_ok_packet(entry);
-				*lv = entry->length + eof_to_ok_dif;
-			} else if (!deprecate_eof_active && entry->ok_pkt_offset){
-				result = ok_to_eof_packet(entry);
-				*lv = entry->length + ok_to_eof_dif;
+			if (
+				mysql_thread___query_cache_soft_ttl_pct && !entry->refreshing &&
+				entry->create_ms + cache_ttl * mysql_thread___query_cache_soft_ttl_pct / 100 <= t
+			) {
+				// If the Query Cache entry reach the soft_ttl but do not reach
+				// the cache_ttl, the next query hit the backend and refresh
+				// the entry, including ResultSet and TTLs. While the
+				// refreshing is in process, other queries keep using the "old"
+				// Query Cache entry.
+				// soft_ttl_pct with value 0 and 100 disables the functionality.
+				entry->refreshing = true;
 			} else {
-				result = (unsigned char *)malloc(entry->length);
-				memcpy(result, entry->value, entry->length);
-				*lv = entry->length;
-			}
+				THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);
+				THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,1);
 
-			if (t > entry->access_ms) entry->access_ms=t;
+				if (deprecate_eof_active && entry->column_eof_pkt_offset) {
+					result = eof_to_ok_packet(entry);
+					*lv = entry->length + eof_to_ok_dif;
+				} else if (!deprecate_eof_active && entry->ok_pkt_offset){
+					result = ok_to_eof_packet(entry);
+					*lv = entry->length + ok_to_eof_dif;
+				} else {
+					result = (unsigned char *)malloc(entry->length);
+					memcpy(result, entry->value, entry->length);
+					*lv = entry->length;
+				}
+
+				if (t > entry->access_ms) entry->access_ms=t;
+			}
 		}
 		__sync_fetch_and_sub(&entry->ref_count,1);
 	}
@@ -683,6 +696,7 @@ bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, 
 	entry->column_eof_pkt_offset=0;
 	entry->row_eof_pkt_offset=0;
 	entry->ok_pkt_offset=0;
+	entry->refreshing=false;
 
 	// Find the first EOF location
 	unsigned char* it = vp;
