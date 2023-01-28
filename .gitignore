@@ -83,6 +83,7 @@ deps/libev/libev-*/
 deps/libhttpserver/libhttpserver-*/
 deps/libinjection/libinjection-*/
 deps/libmicrohttpd/libmicrohttpd-*/
+deps/libmicrohttpd/libmicrohttpd
 deps/libssl/openssl-openssl-*/
 deps/lz4/lz4-*/
 deps/mariadb-client-library/mariadb-connector-c-*/
