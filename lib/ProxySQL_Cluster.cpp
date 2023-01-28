@@ -1431,6 +1431,7 @@ uint64_t mysql_servers_raw_checksum(MYSQL_RES* resultset) {
  *   - CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS.
  *   - CLUSTER_QUERY_MYSQL_GALERA.
  *   - CLUSTER_QUERY_MYSQL_AWS_AURORA.
+ *   - CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES.
  *
  *  IMPORTANT: It's assumed that the previous queries were successful and that the resultsets are received in
  *  the specified order.
@@ -1477,7 +1478,8 @@ incoming_servers_t convert_servers_resultsets(const std::vector<MYSQL_RES*>& res
 			get_SQLite3_resulset(results[1]).release(),
 			get_SQLite3_resulset(results[2]).release(),
 			get_SQLite3_resulset(results[3]).release(),
-			get_SQLite3_resulset(results[4]).release()
+			get_SQLite3_resulset(results[4]).release(),
+			get_SQLite3_resulset(results[5]).release()
 		};
 	}
 }
@@ -1538,6 +1540,12 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 				std::string fetch_galera_err = "";
 				string_format("Cluster: Fetching 'MySQL Galera Hostgroups' from peer %s:%d failed: \n", fetch_galera_err, hostname, port);
 
+				// hostgroup attributes messages
+				std::string fetch_hostgroup_attributes_start = "";
+				string_format("Cluster: Fetching 'MySQL Hostgroup Attributes' from peer %s:%d\n", fetch_hostgroup_attributes_start, hostname, port);
+				std::string fetch_hostgroup_attributes_err = "";
+				string_format("Cluster: Fetching 'MySQL Hostgroup Attributes' from peer %s:%d failed: \n", fetch_hostgroup_attributes_err, hostname, port);
+
 				// Create fetching queries
 
 				/**
@@ -1574,6 +1582,12 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 						p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_success,
 						p_cluster_counter::pulled_mysql_servers_aws_aurora_hostgroups_failure,
 						{ fetch_aws_aurora_start, "", fetch_aws_aurora_err }
+					},
+					{
+						CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES,
+						p_cluster_counter::pulled_mysql_servers_hostgroup_attributes_success,
+						p_cluster_counter::pulled_mysql_servers_hostgroup_attributes_failure,
+						{ fetch_hostgroup_attributes_start, "", fetch_hostgroup_attributes_err }
 					}
 				};
 
@@ -1767,6 +1781,42 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 						}
 						proxy_info("Dumping fetched 'mysql_aws_aurora_hostgroups'\n");
 						GloAdmin->admindb->execute_statement((char *)"SELECT * FROM mysql_aws_aurora_hostgroups", &error , &cols , &affected_rows , &resultset);
+						resultset->dump_to_stderr();
+						delete resultset;
+
+						// sync mysql_hostgroup_attributes
+						proxy_info("Cluster: Writing mysql_hostgroup_attributes table\n");
+						GloAdmin->admindb->execute("DELETE FROM mysql_hostgroup_attributes");
+						{
+							const char * q=(const char *)"INSERT INTO mysql_hostgroup_attributes ( "
+								"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
+								"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
+								"ignore_session_variables, comment) VALUES "
+								"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?10)";
+							sqlite3_stmt *statement1 = NULL;
+							int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
+							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+							while ((row = mysql_fetch_row(results[5]))) {
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostgroup_id
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_num_online_servers
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // autocommit
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // free_connections_pct
+								rc=(*proxy_sqlite3_bind_text)(statement1, 5, row[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // variable_name
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atol(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // multiplex
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // connection_warming
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // throttle_connections_per_sec
+								rc=(*proxy_sqlite3_bind_text)(statement1, 9, row[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ignore_session_variables
+								rc=(*proxy_sqlite3_bind_text)(statement1, 10, row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+								SAFE_SQLITE3_STEP2(statement1);
+								rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							}
+							(*proxy_sqlite3_finalize)(statement1);
+						}
+
+						proxy_info("Dumping fetched 'mysql_hostgroup_attributes'\n");
+						GloAdmin->admindb->execute_statement((char *)"SELECT * FROM mysql_hostgroup_attributes", &error , &cols , &affected_rows , &resultset);
 						resultset->dump_to_stderr();
 						delete resultset;
 
@@ -3336,6 +3386,27 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' have been pulled from a peer.",
 			metric_tags {
 				{ "module_name", "mysql_servers_aws_aurora_hostgroups" },
+				{ "status", "failure" }
+			}
+		),
+		// ====================================================================
+
+		// ====================================================================
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_hostgroup_attributes_success,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_servers_hostgroup_attributes" },
+				{ "status", "success" }
+			}
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_hostgroup_attributes_failure,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_servers_hostgroup_attributes" },
 				{ "status", "failure" }
 			}
 		),

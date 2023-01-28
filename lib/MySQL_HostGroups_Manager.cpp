@@ -884,8 +884,29 @@ MyHGC::MyHGC(int _hid) {
 	mysrvs=new MySrvList(this);
 	current_time_now = 0;
 	new_connections_now = 0;
+	attributes.initialized = false;
+	reset_attributes();
 }
 
+void MyHGC::reset_attributes() {
+	if (attributes.initialized == false) {
+		attributes.init_connect = NULL;
+		attributes.comment = NULL;
+		attributes.ignore_session_variables_text = NULL;
+	}
+	attributes.initialized = true;
+	attributes.configured = false;
+	attributes.max_num_online_servers = 1000000;
+	attributes.throttle_connections_per_sec = 1000000;
+	attributes.autocommit = -1;
+	attributes.free_connections_pct = 10;
+	attributes.multiplex = true;
+	attributes.connection_warming = false;
+	free(attributes.init_connect);
+	free(attributes.comment);
+	free(attributes.ignore_session_variables_text);
+	attributes.ignore_session_variables_json = json();
+}
 
 MyHGC::~MyHGC() {
 	delete mysrvs;
@@ -1322,6 +1343,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_GROUP_REPLICATION_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_GALERA_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
+	mydb->execute(MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
 	MyHostGroups=new PtrArray();
 	runtime_mysql_servers=NULL;
@@ -1329,6 +1351,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	incoming_group_replication_hostgroups=NULL;
 	incoming_galera_hostgroups=NULL;
 	incoming_aws_aurora_hostgroups = NULL;
+	incoming_hostgroup_attributes = NULL;
 	pthread_rwlock_init(&gtid_rwlock, NULL);
 	gtid_missing_nodes = false;
 	gtid_ev_loop=NULL;
@@ -1585,6 +1608,7 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	CUCFT1(myhash,init,"mysql_group_replication_hostgroups","writer_hostgroup");
 	CUCFT1(myhash,init,"mysql_galera_hostgroups","writer_hostgroup");
 	CUCFT1(myhash,init,"mysql_aws_aurora_hostgroups","writer_hostgroup");
+	CUCFT1(myhash,init,"mysql_hostgroup_attributes","hostgroup_id");
 }
 
 bool MySQL_HostGroups_Manager::commit(
@@ -1827,6 +1851,13 @@ bool MySQL_HostGroups_Manager::commit(
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_aws_aurora_hostgroups\n");
 		mydb->execute("DELETE FROM mysql_aws_aurora_hostgroups");
 		generate_mysql_aws_aurora_hostgroups_table();
+	}
+
+	// hostgroup attributes
+	if (incoming_hostgroup_attributes) {
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_hostgroup_attributes\n");
+		mydb->execute("DELETE FROM mysql_hostgroup_attributes");
+		generate_mysql_hostgroup_attributes_table();
 	}
 
 
@@ -2474,6 +2505,8 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 		query=(char *)"SELECT writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,writer_is_also_reader,max_transactions_behind,comment FROM mysql_group_replication_hostgroups";
 	} else if (name == "mysql_replication_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
+	} else if (name == "mysql_hostgroup_attributes") {
+		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
 	} else if (name == "mysql_servers") {
 		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;	
 	} else {
@@ -3656,6 +3689,8 @@ void MySQL_HostGroups_Manager::save_incoming_mysql_table(SQLite3_result *s, cons
 		inc = &incoming_group_replication_hostgroups;
 	} else if (name == "mysql_replication_hostgroups") {
 		inc = &incoming_replication_hostgroups;
+	} else if (name == "mysql_hostgroup_attributes") {
+		inc = &incoming_hostgroup_attributes;
 	} else {
 		assert(0);
 	}
@@ -3683,6 +3718,8 @@ SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& 
 		return this->incoming_group_replication_hostgroups;
 	} else if (name == "mysql_replication_hostgroups") {
 		return this->incoming_replication_hostgroups;
+	} else if (name == "mysql_hostgroup_attributes") {
+		return this->incoming_hostgroup_attributes;
 	} else if (name == "mysql_servers") {
 		return this->runtime_mysql_servers;
 	} else {
@@ -6404,6 +6441,118 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
 		}
 	}
 	return ret;
+}
+
+void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
+// TODO TODO TODO
+	if (incoming_hostgroup_attributes==NULL) {
+		return;
+	}
+	int rc;
+	sqlite3_stmt *statement=NULL;
+
+	const char * query=(const char *)"INSERT INTO mysql_hostgroup_attributes ( "
+		"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
+		"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
+		"ignore_session_variables, comment) VALUES "
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?10)";
+
+	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
+	rc = mydb->prepare_v2(query, &statement);
+	ASSERT_SQLITE_OK(rc, mydb);
+	proxy_info("New mysql_hostgroup_attributes table\n");
+	// set configured = false to all
+	// in this way later we can known which HG were updated
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		myhgc->attributes.configured = false;
+	}
+
+	/**
+	 * @brief We iterate the whole resultset incoming_hostgroup_attributes and configure
+	 * both the hostgroup in memory, but also pupulate table mysql_hostgroup_attributes
+	 *   connection errors.
+	 * @details for each row in incoming_hostgroup_attributes:
+	 *   1. it finds (or create) the hostgroup
+	 *   2. it writes the in mysql_hostgroup_attributes
+	 *   3. it finds (or create) the attributes of the hostgroup
+	*/
+	for (std::vector<SQLite3_row *>::iterator it = incoming_hostgroup_attributes->rows.begin() ; it != incoming_hostgroup_attributes->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		unsigned int hid = (unsigned int)atoi(r->fields[0]);
+		MyHGC *myhgc = MyHGC_lookup(hid); // note: MyHGC_lookup() will create the HG if doesn't exist!
+		int max_num_online_servers       = atoi(r->fields[1]);
+		int autocommit                   = atoi(r->fields[2]);
+		int free_connections_pct         = atoi(r->fields[3]);
+		char * init_connect              = r->fields[4];
+		int multiplex                    = atoi(r->fields[5]);
+		int connection_warming           = atoi(r->fields[6]);
+		int throttle_connections_per_sec = atoi(r->fields[7]);
+		char * ignore_session_variables  = r->fields[8];
+		char * comment                   = r->fields[9];
+		proxy_info("Loading MySQL Hostgroup Attributes info for (%d,%d,%d,%d,\"%s\",%d,%d,%d,\"%s\",\"%s\")\n",
+			hid, max_num_online_servers, autocommit, free_connections_pct,
+			init_connect, multiplex, connection_warming, throttle_connections_per_sec,
+			ignore_session_variables, comment
+		);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 1, hid);                          ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2, max_num_online_servers);       ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 3, autocommit);                   ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 4, free_connections_pct);         ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement,  5, init_connect,              -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 6, multiplex);                    ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 7, connection_warming);           ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_int64)(statement, 8, throttle_connections_per_sec); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement,  9, ignore_session_variables,  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 10, comment,                   -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
+		myhgc->attributes.configured                   = true;
+		myhgc->attributes.max_num_online_servers       = max_num_online_servers;
+		myhgc->attributes.autocommit                   = autocommit;
+		myhgc->attributes.free_connections_pct         = free_connections_pct;
+		myhgc->attributes.multiplex                    = multiplex;
+		myhgc->attributes.connection_warming           = connection_warming;
+		myhgc->attributes.throttle_connections_per_sec = throttle_connections_per_sec;
+		if (myhgc->attributes.init_connect != NULL)
+			free(myhgc->attributes.init_connect);
+		myhgc->attributes.init_connect = strdup(init_connect);
+		if (myhgc->attributes.comment != NULL)
+			free(myhgc->attributes.comment);
+		myhgc->attributes.init_connect = strdup(comment);
+		// for ignore_session_variables we store 2 versions:
+		// 1. the text
+		// 2. the JSON
+		// Because calling JSON functions is expensive, we first verify if it changes
+		if (myhgc->attributes.ignore_session_variables_text == NULL) {
+			myhgc->attributes.ignore_session_variables_text = strdup(ignore_session_variables);
+			if (strlen(ignore_session_variables) != 0) { // only if there is a valid JSON
+				myhgc->attributes.ignore_session_variables_json = json::parse(ignore_session_variables);
+			}
+		} else {
+			if (strcmp(myhgc->attributes.ignore_session_variables_text, ignore_session_variables) != 0) {
+				free(myhgc->attributes.ignore_session_variables_text);
+				myhgc->attributes.ignore_session_variables_text = strdup(ignore_session_variables);
+				if (strlen(ignore_session_variables) != 0) { // only if there is a valid JSON
+					myhgc->attributes.ignore_session_variables_json = json::parse(ignore_session_variables);
+				}
+				// TODO: assign the variables
+			}
+		}
+		break;
+	}
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		if (myhgc->attributes.configured == false) {
+			// if configured == false reset to defaults
+			proxy_info("Resetting hostgroup attributes for hostgroup %u\n", myhgc->hid);
+			myhgc->reset_attributes();
+		}
+	}
+
+	delete incoming_hostgroup_attributes;
+	incoming_hostgroup_attributes=NULL;
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
