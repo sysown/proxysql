@@ -4200,6 +4200,7 @@ MySQL_Thread::MySQL_Thread() {
 	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		mysql_thread___default_variables[i] = NULL;
 	}
+	shutdown=0;
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {

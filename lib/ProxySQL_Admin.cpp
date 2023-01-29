@@ -11863,8 +11863,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	} else {
 		MyHGM->servers_add(resultset_servers);
 	}
-	// memory leak detected here
-	if (runtime_mysql_servers == nullptr) {
+	// memory leak was detected here. The following few lines fix that
+	if (runtime_mysql_servers == nullptr) {   
 		if (resultset_servers != nullptr) {
 			delete resultset_servers;
 			resultset_servers = nullptr;
