@@ -3061,9 +3061,16 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 	// 2 : tracked options are OK , CHANGE USER is not required, but some SET statement or INIT_DB needs to be executed
 	// 3 : tracked options are OK , CHANGE USER is not required, and it seems that SET statements or INIT_DB ARE not required
 	unsigned int number_of_matching_session_variables = 0; // this includes session variables AND schema
-	if (mysql_thread___connection_warming) {
+	bool connection_warming = mysql_thread___connection_warming;
+	int free_connections_pct = mysql_thread___free_connections_pct;
+	if (mysrvc->myhgc->attributes.configured == true) {
+		// mysql_hostgroup_attributes takes priority
+		connection_warming = mysrvc->myhgc->attributes.connection_warming;
+		free_connections_pct = mysrvc->myhgc->attributes.free_connections_pct;
+	}
+	if (connection_warming == true) {
 		unsigned int total_connections = mysrvc->ConnectionsFree->conns_length()+mysrvc->ConnectionsUsed->conns_length();
-		unsigned int expected_warm_connections = mysql_thread___free_connections_pct*mysrvc->max_connections/100;
+		unsigned int expected_warm_connections = free_connections_pct*mysrvc->max_connections/100;
 		if (total_connections < expected_warm_connections) {
 			needs_warming = true;
 		}
@@ -3550,7 +3557,12 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
 
 			//PtrArray *pa=mysrvc->ConnectionsFree->conns;
 			MySrvConnList *mscl=mysrvc->ConnectionsFree;
-			while (mscl->conns_length() > mysql_thread___free_connections_pct*mysrvc->max_connections/100) {
+			int free_connections_pct = mysql_thread___free_connections_pct;
+			if (mysrvc->myhgc->attributes.configured == true) {
+				// mysql_hostgroup_attributes takes priority
+				free_connections_pct = mysrvc->myhgc->attributes.free_connections_pct;
+			}
+			while (mscl->conns_length() > free_connections_pct*mysrvc->max_connections/100) {
 				MySQL_Connection *mc=mscl->remove(0);
 				delete mc;
 			}
