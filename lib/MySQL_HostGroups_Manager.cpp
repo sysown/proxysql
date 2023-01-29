@@ -3169,7 +3169,12 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 			_myhgc->new_connections_now = 0;
 		}
 		_myhgc->new_connections_now++;
-		if (_myhgc->new_connections_now > (unsigned int) mysql_thread___throttle_connections_per_sec_to_hostgroup) {
+		unsigned int throttle_connections_per_sec_to_hostgroup = (unsigned int) mysql_thread___throttle_connections_per_sec_to_hostgroup;
+		if (_myhgc->attributes.configured == true) {
+			// mysql_hostgroup_attributes takes priority
+			throttle_connections_per_sec_to_hostgroup = _myhgc->attributes.throttle_connections_per_sec;
+		}
+		if (_myhgc->new_connections_now > (unsigned int) throttle_connections_per_sec_to_hostgroup) {
 			__sync_fetch_and_add(&MyHGM->status.server_connections_delayed, 1);
 			return NULL;
 		} else {
