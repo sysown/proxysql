@@ -1792,7 +1792,7 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 								"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 								"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
 								"ignore_session_variables, comment) VALUES "
-								"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?10)";
+								"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 							sqlite3_stmt *statement1 = NULL;
 							int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
 							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);

@@ -903,12 +903,16 @@ void MyHGC::reset_attributes() {
 	attributes.multiplex = true;
 	attributes.connection_warming = false;
 	free(attributes.init_connect);
+	attributes.init_connect = NULL;
 	free(attributes.comment);
+	attributes.comment = NULL;
 	free(attributes.ignore_session_variables_text);
+	attributes.ignore_session_variables_text = NULL;
 	attributes.ignore_session_variables_json = json();
 }
 
 MyHGC::~MyHGC() {
+	reset_attributes(); // free all memory
 	delete mysrvs;
 }
 
@@ -1597,9 +1601,11 @@ void MySQL_HostGroups_Manager::CUCFT1(SpookyHash& myhash, bool& init, const stri
 			}
 			uint64_t hash1_ = resultset->raw_checksum();
 			myhash.Update(&hash1_, sizeof(hash1_));
-			proxy_info("Checksum for table %s is %lu\n", TableName.c_str(), hash1_);
+			proxy_info("Checksum for table %s is 0x%lX\n", TableName.c_str(), hash1_);
 		}
 		delete resultset;
+	} else {
+		proxy_info("Checksum for table %s is 0x%lX\n", TableName.c_str(), (long unsigned int)0);
 	}
 }
 
@@ -1914,9 +1920,11 @@ bool MySQL_HostGroups_Manager::commit(
 					}
 					uint64_t hash1_ = resultset->raw_checksum();
 					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is %lu\n", "mysql_servers", hash1_);
+					proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", hash1_);
 				}
 				delete resultset;
+			} else {
+				proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
 			}
 		}
 
@@ -6444,7 +6452,6 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
-// TODO TODO TODO
 	if (incoming_hostgroup_attributes==NULL) {
 		return;
 	}
@@ -6455,7 +6462,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 		"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
 		"ignore_session_variables, comment) VALUES "
-		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?10)";
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
 	rc = mydb->prepare_v2(query, &statement);
@@ -6520,7 +6527,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		myhgc->attributes.init_connect = strdup(init_connect);
 		if (myhgc->attributes.comment != NULL)
 			free(myhgc->attributes.comment);
-		myhgc->attributes.init_connect = strdup(comment);
+		myhgc->attributes.comment = strdup(comment);
 		// for ignore_session_variables we store 2 versions:
 		// 1. the text
 		// 2. the JSON
@@ -6540,7 +6547,6 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 				// TODO: assign the variables
 			}
 		}
-		break;
 	}
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);

@@ -4814,11 +4814,14 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			SPA->send_MySQL_ERR(&sess->client_myds->myprot, buf);
 			run_query=false;
 		} else if (resultset) {
+			l_free(query_length,query);
 			char *q=(char *)"SELECT '%s' AS 'table', '%s' AS 'checksum'";
 			char *checksum=(char *)resultset->checksum();
 			query=(char *)malloc(strlen(q)+strlen(tablename)+strlen(checksum)+1);
 			sprintf(query,q,tablename,checksum);
+			query_length = strlen(query);
 			free(checksum);
+			delete resultset;
 		}
 		goto __run_query;
 	}
@@ -11781,7 +11784,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		StrQuery = "INSERT INTO ";
 		if (_runtime)
 			StrQuery += "runtime_";
-		StrQuery += "mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?10)";
+		StrQuery += "mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
 		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
 		ASSERT_SQLITE_OK(rc, admindb);
 		//proxy_info("New mysql_aws_aurora_hostgroups table\n");
@@ -11859,6 +11862,13 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		proxy_error("Error on %s : %s\n", query, error);
 	} else {
 		MyHGM->servers_add(resultset_servers);
+	}
+	// memory leak detected here
+	if (runtime_mysql_servers == nullptr) {
+		if (resultset_servers != nullptr) {
+			delete resultset_servers;
+			resultset_servers = nullptr;
+		}
 	}
 	resultset=NULL;
 
