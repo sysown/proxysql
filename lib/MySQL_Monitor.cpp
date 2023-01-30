@@ -489,6 +489,26 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 	}
 }
 */
+
+/**
+ * @brief MySQL 8 status query for Group Replication members.
+ * @details Since 'MySQL 8' we rely on 'COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE', deprecating the previously
+ *  required 'sys.gr_member_routing_candidate_status' view.
+ */
+const char MYSQL_8_GR_QUERY[] {
+	"SELECT (SELECT IF ("
+			"MEMBER_STATE='ONLINE' AND ("
+				"(SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE MEMBER_STATE != 'ONLINE') >="
+					" ((SELECT COUNT(*) FROM performance_schema.replication_group_members)/2) = 0)"
+			", 'YES', 'NO')) AS viable_candidate,"
+		" (SELECT IF (@@read_only, 'YES', 'NO')) as read_only,"
+		" COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE AS transactions_behind "
+	"FROM "
+		"performance_schema.replication_group_members "
+		"JOIN performance_schema.replication_group_member_stats rgms USING(member_id)"
+	"WHERE rgms.MEMBER_ID=@@SERVER_UUID"
+};
+
 MySQL_Monitor_State_Data::MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl, int g) {
 	task_id_ = task_type;
 	task_handler_ = NULL;
@@ -584,7 +604,14 @@ void MySQL_Monitor_State_Data::init_async() {
 			query_ += std::string(hostname) + ":" + std::to_string(port);
 		}
 #else
-		query_ = "SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status";
+		// MySQL-8: Query dependent on 'COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE'; deprecating the previously
+		// used `sys.gr_member_routing_candidate_status` view.
+		if (strncasecmp(this->mysql->server_version, "8", 1) == 0) {
+			query_ = MYSQL_8_GR_QUERY;
+		} else {
+			// If not MySQL 8 we default back to the old check
+			query_ = "SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status";
+		}
 #endif
 		task_timeout_ = mysql_thread___monitor_groupreplication_healthcheck_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::group_replication_handler;
@@ -3360,14 +3387,6 @@ vector<gr_host_def_t> find_resp_srvs(const vector<gr_host_def_t>& hosts_defs) {
 	return resp_srvs;
 }
 
-/**
- * @brief Simple wrapper struct holding a 'mmsd' and extra information about it's creation.
- */
-struct srv_mmsd_t {
-	bool created_conn;
-	unique_ptr<MySQL_Monitor_State_Data> mmsd;
-};
-
 string create_conn_err_msg(const unique_ptr<MySQL_Monitor_State_Data>& mmsd) {
 	const char ACCESS_DENIED_MSG[] { "Access denied for user" };
 
@@ -3392,25 +3411,27 @@ string create_conn_err_msg(const unique_ptr<MySQL_Monitor_State_Data>& mmsd) {
  *
  * @return A wrapper over the created 'mmsd' with the conn creation info.
  */
-srv_mmsd_t init_mmsd_with_conn(const gr_host_def_t srv_def, uint32_t writer_hg, uint64_t start_time) {
+unique_ptr<MySQL_Monitor_State_Data> init_mmsd_with_conn(
+	const gr_host_def_t srv_def, uint32_t writer_hg, uint64_t start_time
+) {
 	char* c_hostname = const_cast<char*>(srv_def.host.c_str());
 	unique_ptr<MySQL_Monitor_State_Data> mmsd {
 		new MySQL_Monitor_State_Data { MON_GROUP_REPLICATION, c_hostname, srv_def.port, static_cast<bool>(srv_def.use_ssl) }
 	};
 	mmsd->t1 = start_time;
+	mmsd->init_time = start_time;
 	mmsd->writer_hostgroup = writer_hg;
 	mmsd->writer_is_also_reader = srv_def.writer_is_also_reader;
 	mmsd->max_transactions_behind = srv_def.max_transactions_behind;
 	mmsd->max_transactions_behind_count = srv_def.max_transactions_behind_count;
 	mmsd->mysql = GloMyMon->My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd.get());
-	bool created_conn = false;
 
 	if (mmsd->mysql == NULL) {
 		bool rc = mmsd->create_new_connection();
 
 		if (rc && mmsd->mysql) {
 			GloMyMon->My_Conn_Pool->conn_register(mmsd.get());
-			created_conn = true;
+			mmsd->created_conn = true;
 		} else {
 			uint64_t now = monotonic_time();
 			string err_msg = create_conn_err_msg(mmsd);
@@ -3432,153 +3453,7 @@ srv_mmsd_t init_mmsd_with_conn(const gr_host_def_t srv_def, uint32_t writer_hg, 
 		}
 	}
 
-	return { created_conn, std::move(mmsd) };
-}
-
-/// TODO: TO BE REPLACED BY ASYNC IMPL
-/// ///////////////////////////////////////////////////////////////////////////
-
-struct async_mysql_action {
-	enum action {
-		query,
-		store
-	};
-};
-
-int cont_async_mysql_action(
-	async_mysql_action::action action, unique_ptr<MySQL_Monitor_State_Data>& mmsd
-) {
-	while (mmsd->async_exit_status) {
-		mmsd->async_exit_status = wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
-
-		// Check if 'shutdown' have been received after blocking actions
-		if (GloMyMon->shutdown == true) {
-			return -2;
-		}
-
-		uint64_t now = monotonic_time();
-		if (now > mmsd->t1 + mysql_thread___monitor_groupreplication_healthcheck_timeout * 1000) {
-			mmsd->mysql_error_msg = strdup("timeout check");
-			proxy_error(
-				"Timeout on group replication health check for %s:%d after %lldms. If the server is overload, increase"
-					" mysql-monitor_groupreplication_healthcheck_timeout. Assuming viable_candidate=NO and read_only=YES\n",
-				mmsd->hostname, mmsd->port, (now - mmsd->t1)/1000
-			);
-			MyHGM->p_update_mysql_error_counter(
-				p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port,
-				ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT
-			);
-
-			return -1;
-		}
-
-		if (mmsd->interr) {
-			mmsd->mysql_error_msg = strdup(mysql_error(mmsd->mysql));
-			MyHGM->p_update_mysql_error_counter(
-				p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
-			);
-
-			return -1;
-		}
-
-		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
-			if (action == async_mysql_action::query) {
-				mmsd->async_exit_status = mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
-			} else {
-				mmsd->async_exit_status = mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
-			}
-		}
-	}
-
-	if (action == async_mysql_action::query) {
-		if (mmsd->interr) {
-			mmsd->mysql_error_msg = strdup(mysql_error(mmsd->mysql));
-			MyHGM->p_update_mysql_error_counter(
-				p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
-			);
-			return -1;
-		}
-	} else {
-		if (mysql_errno(mmsd->mysql)) {
-			mmsd->mysql_error_msg = strdup(mysql_error(mmsd->mysql));
-			MyHGM->p_update_mysql_error_counter(
-				p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
-			);
-			return -1;
-		}
-	}
-
-	return EXIT_SUCCESS;
-}
-
-/// ///////////////////////////////////////////////////////////////////////////
-
-/**
- * @brief MySQL 8 status query for Group Replication members.
- * @details Since 'MySQL 8' we rely on 'COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE', deprecating the previously
- *  required 'sys.gr_member_routing_candidate_status' view.
- */
-const char MYSQL_8_GR_QUERY[] {
-	"SELECT (SELECT IF ("
-			"MEMBER_STATE='ONLINE' AND ("
-				"(SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE MEMBER_STATE != 'ONLINE') >="
-					" ((SELECT COUNT(*) FROM performance_schema.replication_group_members)/2) = 0)"
-			", 'YES', 'NO')) AS viable_candidate,"
-		" (SELECT IF (@@read_only, 'YES', 'NO')) as read_only,"
-		" COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE AS transactions_behind "
-	"FROM "
-		"performance_schema.replication_group_members "
-		"JOIN performance_schema.replication_group_member_stats rgms USING(member_id)"
-	"WHERE rgms.MEMBER_ID=@@SERVER_UUID"
-};
-
-void gr_fetch_srv_status(srv_mmsd_t& ini_mmsd) {
-	unique_ptr<MySQL_Monitor_State_Data>& mmsd = ini_mmsd.mmsd;
-
-	if (ini_mmsd.mmsd->mysql == nullptr) {
-		proxy_warning(
-			"Skipping fetching for server %s:%d due to error '%s'\n",
-			ini_mmsd.mmsd->hostname, ini_mmsd.mmsd->port, ini_mmsd.mmsd->mysql_error_msg
-		);
-		return;
-	}
-
-#ifdef TEST_GROUPREP
-	string query { "SELECT viable_candidate,read_only,transactions_behind FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS" };
-	query += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
-#else
-	string query {};
-
-	// MySQL-8: Query dependent on 'COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE'; deprecating the previously
-	// used `sys.gr_member_routing_candidate_status` view.
-	if (strncasecmp(mmsd->mysql->server_version, "8", 1) == 0) {
-		query = MYSQL_8_GR_QUERY;
-	} else {
-		// If not MySQL 8 we default back to the old check
-		query = "SELECT viable_candidate,read_only,transactions_behind FROM sys.gr_member_routing_candidate_status";
-	}
-#endif
-
-	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, query.c_str());
-	int my_async_rc = cont_async_mysql_action(async_mysql_action::query, mmsd);
-
-	if (my_async_rc != EXIT_SUCCESS) {
-		proxy_error(
-			"Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd,
-			mmsd->mysql_error_msg
-		);
-		return;
-	}
-
-	mmsd->async_exit_status = mysql_store_result_start(&mmsd->result, mmsd->mysql);
-	my_async_rc = cont_async_mysql_action(async_mysql_action::store, mmsd);
-
-	if (my_async_rc != EXIT_SUCCESS) {
-		proxy_error(
-			"Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd,
-			mmsd->mysql_error_msg
-		);
-	}
+	return mmsd;
 }
 
 struct gr_srv_st_t {
@@ -3588,7 +3463,7 @@ struct gr_srv_st_t {
 	bool inv_srv_state = false;
 };
 
-gr_srv_st_t extract_gr_srv_st(unique_ptr<MySQL_Monitor_State_Data>& mmsd) {
+gr_srv_st_t extract_gr_srv_st(MySQL_Monitor_State_Data* mmsd) {
 	gr_srv_st_t gr_srv_st {};
 
 	if (mmsd->interr == 0 && mmsd->result) {
@@ -3649,11 +3524,12 @@ struct gr_node_info_t {
 };
 
 gr_node_info_t gr_update_hosts_map(
-	uint64_t start_time, const gr_srv_st_t& gr_srv_st, unique_ptr<MySQL_Monitor_State_Data>& mmsd
+	uint64_t start_time, const gr_srv_st_t& gr_srv_st, MySQL_Monitor_State_Data* mmsd
 ) {
 	// NOTE: This isn't specified in the initializer list due to current standard limitations
 	gr_node_info_t node_info {};
 	node_info.srv_st = gr_srv_st;
+	MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
 
 	// Consider 'time_now' to be 'now - fetch_duration'
 	unsigned long long time_now=realtime_time();
@@ -3703,7 +3579,7 @@ gr_node_info_t gr_update_hosts_map(
  * @param mmsd The 'mmsd' holding info about fetching errors.
  * @param node_info The fetched server information itself.
  */
-void gr_mon_action_over_resp_srv(unique_ptr<MySQL_Monitor_State_Data>& mmsd, const gr_node_info_t& node_info) {
+void gr_mon_action_over_resp_srv(MySQL_Monitor_State_Data* mmsd, const gr_node_info_t& node_info) {
 	// NOTE: We update MyHGM outside the mutex group_replication_mutex
 	if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
 		if (node_info.num_timeouts == 0) {
@@ -3775,30 +3651,29 @@ void gr_handle_actions_over_unresp_srvs(const vector<gr_host_def_t>& hosts_defs,
  * @details Connections are returned to the 'ConnectionPool' if no errors took place during the fetching. If
  *  the connection is a new created connection, we try to configured it with the proper 'set_wait_timeout'
  *  before placing the connection back into the 'ConnectionPool', on failure, we discard the connection.
- * @param srv_mmsd The mmsd wrapper holding all information for returning the connection.
+ * @param mmsd The mmsd wrapper holding all information for returning the connection.
  */
-void handle_mmsd_mysql_conn(srv_mmsd_t& srv_mmsd) {
-	if (srv_mmsd.mmsd == nullptr) return;
-	unique_ptr<MySQL_Monitor_State_Data>& mmsd = srv_mmsd.mmsd;
+void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
+	if (mmsd == nullptr) return;
 
 	if (mmsd->mysql) {
 		if (mmsd->interr || mmsd->mysql_error_msg) {
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd.get());
+			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			mysql_close(mmsd->mysql);
 		} else {
-			if (srv_mmsd.created_conn) {
+			if (mmsd->created_conn) {
 				bool rc = mmsd->set_wait_timeout();
 				if (rc) {
 					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname,mmsd->port,mmsd->mysql);
 				} else {
 					proxy_error(
 						"Error by 'set_wait_timeout' for new connection. mmsd %p , MYSQL %p , FD %d : %s\n",
-						mmsd.get(), mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg
+						mmsd, mmsd->mysql, mmsd->mysql->net.fd, mmsd->mysql_error_msg
 					);
 					MyHGM->p_update_mysql_error_counter(
 						p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
 					);
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd.get());
+					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					mysql_close(mmsd->mysql);
 				}
 			} else {
@@ -3812,15 +3687,13 @@ void handle_mmsd_mysql_conn(srv_mmsd_t& srv_mmsd) {
 
 /**
  * @brief Report the fetching errors of the supplied 'mmsd' and increase the corresponding counter.
- * @param srv_mmsd The 'mmsd' which failures are to be reported.
+ * @param mmsd The 'mmsd' which failures are to be reported.
  */
-void gr_report_fetching_errs(srv_mmsd_t& srv_mmsd) {
-	unique_ptr<MySQL_Monitor_State_Data>& mmsd = srv_mmsd.mmsd;
-
+void gr_report_fetching_errs(MySQL_Monitor_State_Data* mmsd) {
 	if (mmsd->mysql) {
 		if (mmsd->interr || mmsd->mysql_error_msg) {
 			proxy_error(
-				"Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd.get(), mmsd->mysql,
+				"Got error. mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql,
 				mmsd->mysql->net.fd, mmsd->mysql_error_msg
 			);
 			MyHGM->p_update_mysql_error_counter(
@@ -3844,17 +3717,24 @@ void gr_report_fetching_errs(srv_mmsd_t& srv_mmsd) {
  *  by monitoring PING actions, and no further monitoring actions should be performed on them.
  *
  * @param start_time The time at which this complete 'fetch + actions' monitoring cycle started.
- * @param srv_mmsd The server 'MySQL_Monitor_State_Data' after the fetching is completed. It should either
+ * @param mmsd The server 'MySQL_Monitor_State_Data' after the fetching is completed. It should either
  *  hold a valid 'MYSQL_RES' or an error.
  */
-void async_gr_mon_actions_handler(uint64_t start_time, srv_mmsd_t& srv_mmsd) {
-	unique_ptr<MySQL_Monitor_State_Data>& mmsd = srv_mmsd.mmsd;
+void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
+	// We base 'start_time' on the conn init for 'MySQL_Monitor_State_Data'. If a conn creation was
+	// required, we take into account this time into account, otherwise we asume that 'start_time=t1'.
+	uint64_t start_time = 0;
+	if (mmsd->created_conn) {
+		start_time = mmsd->init_time;
+	} else {
+		start_time = mmsd->t1;
+	}
 
 	// Extract the server status from the 'mmsd'. Reports if invalid data is received
-	gr_srv_st_t gr_srv_st { extract_gr_srv_st(srv_mmsd.mmsd) };
+	gr_srv_st_t gr_srv_st { extract_gr_srv_st(mmsd) };
 
 	// Report fetch errors; logs should report 'cause -> effect'
-	gr_report_fetching_errs(srv_mmsd);
+	gr_report_fetching_errs(mmsd);
 
 	// Perform monitoring actions; only if the response wasn't illformed
 	if (gr_srv_st.inv_srv_state == false) {
@@ -3863,7 +3743,7 @@ void async_gr_mon_actions_handler(uint64_t start_time, srv_mmsd_t& srv_mmsd) {
 	}
 
 	// Handle 'mmsd' MySQL conn return to 'ConnectionPool'
-	handle_mmsd_mysql_conn(srv_mmsd);
+	handle_mmsd_mysql_conn(mmsd);
 }
 
 /**
@@ -3954,35 +3834,48 @@ void* monitor_GR_thread_HG(void *arg) {
 		}
 
 		// Initialize the 'MMSD' for data fetching for responsive servers
-		vector<srv_mmsd_t> srvs_mmsds {};
-		for (const gr_host_def_t& host_def : resp_srvs) {
-			srvs_mmsds.push_back(init_mmsd_with_conn(host_def, wr_hg, curtime));
-		}
+		vector<unique_ptr<MySQL_Monitor_State_Data>> conn_mmsds {};
+		vector<unique_ptr<MySQL_Monitor_State_Data>> fail_mmsds {};
 
-		// Update 't1' for subsequent fetch operations and reset errors
-		for (const srv_mmsd_t& srv_mmsd : srvs_mmsds) {
-			if (srv_mmsd.mmsd->mysql) {
-				srv_mmsd.mmsd->t1 = monotonic_time();
-				srv_mmsd.mmsd->interr = 0;
+		// Separate the 'mmsds' based on success of obtaining a conn
+		for (const gr_host_def_t& host_def : resp_srvs) {
+			unique_ptr<MySQL_Monitor_State_Data> mmsd = init_mmsd_with_conn(host_def, wr_hg, curtime);
+
+			if (mmsd->mysql_error_msg) {
+				fail_mmsds.push_back(std::move(mmsd));
+			} else {
+				conn_mmsds.push_back(std::move(mmsd));
 			}
 		}
 
-		// TODO: This section will be replaced by 'async' operations
-		// //////////////////////////////////////////////////////////////////////////
-		// Perform the fetching operations, all the info is contained within the 'MMSD' themselves.
-		for (srv_mmsd_t& srv_mmsd : srvs_mmsds) {
-			// NOTE: Just required due the sync nature of the operations. To be replaced.
-			srv_mmsd.mmsd->t1 = monotonic_time();
-			gr_fetch_srv_status(srv_mmsd);
-			srv_mmsd.mmsd->t2 = monotonic_time();
-		}
-		// //////////////////////////////////////////////////////////////////////////
+		// TODO: This needs to be reworked once we change the way monitoring actions work on clusters, taking
+		// the full cluster fetch data to avoid transient states. For now, since we perform the monitoring
+		// actions independently, we workaround the limitation of 'Monitor_Poll' of only handling
+		// 'MySQL_Monitor_State_Data' which hold valid connections, by:
+		//  1. Separate the 'MySQL_Monitor_State_Data' between failed to obtain conn and not.
+		//  2. Perform the required monitoring actions over the servers that failed to obtain conns.
+		//  3. Delegate the async fetching + actions of 'MySQL_Monitor_State_Data' with conns on 'Monitor_Poll'.
+		///////////////////////////////////////////////////////////////////////////////////////
 
-		// Extract the fetched data from resp servers and perform monitoring actions
-		for (srv_mmsd_t& srv_mmsd : srvs_mmsds) {
-			// TODO: This is the idea for the async handler to be used when fetching is rewritten
-			async_gr_mon_actions_handler(curtime, srv_mmsd);
+		// Handle 'mmsds' that failed to optain conns
+		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : fail_mmsds) {
+			async_gr_mon_actions_handler(mmsd.get());
 		}
+
+		// Update 't1' for subsequent fetch operations and reset errors
+		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : conn_mmsds) {
+			if (mmsd->mysql) {
+				mmsd->t1 = monotonic_time();
+				mmsd->interr = 0;
+			}
+		}
+
+		// Perform the async fetch + actions over the 'MySQL_Monitor_State_Data'
+		if (conn_mmsds.empty() == false) {
+			GloMyMon->monitor_gr_async_actions_handler(conn_mmsds);
+		}
+
+		///////////////////////////////////////////////////////////////////////////////////////
 
 		// Set the time for the next iteration
 		next_check_time = curtime + mysql_thread___monitor_groupreplication_healthcheck_interval * 1000;
@@ -7582,6 +7475,37 @@ void MySQL_Monitor::monitor_group_replication_async() {
 		return;
 	}
 }
+
+bool MySQL_Monitor::monitor_group_replication_process_ready_tasks_2(
+	const vector<MySQL_Monitor_State_Data*>& mmsds
+) {
+	for (MySQL_Monitor_State_Data* mmsd : mmsds) {
+		const MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
+		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
+		async_gr_mon_actions_handler(mmsd);
+	}
+
+	return true;
+}
+
+void MySQL_Monitor::monitor_gr_async_actions_handler(
+	const vector<unique_ptr<MySQL_Monitor_State_Data>>& mmsds
+) {
+	Monitor_Poll monitor_poll(mmsds.size());
+
+	for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : mmsds) {
+		monitor_poll.add((POLLIN|POLLOUT|POLLPRI), mmsd.get());
+	}
+
+	Monitor_Poll::Process_Ready_Task_Callback_Args args(
+		mmsds.size(), 100, &MySQL_Monitor::monitor_group_replication_process_ready_tasks_2, this
+	);
+
+	if (monitor_poll.event_loop(mysql_thread___monitor_groupreplication_healthcheck_timeout, args) == false) {
+		return;
+	}
+}
+
 
 bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 
