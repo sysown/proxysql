@@ -6792,7 +6792,7 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 		} else {
 			__sync_fetch_and_add(&replication_lag_check_ERR, 1);
 			if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT) {
-				proxy_error("Timeout on replication lag health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_replication_lag_timeout. Assuming viable_candidate=NO and read_only=YES\n", mmsd->hostname, mmsd->port, (mmsd->t2 - mmsd->t1) / 1000);
+				proxy_error("Timeout on replication lag health check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_replication_lag_timeout.\n", mmsd->hostname, mmsd->port, (mmsd->t2 - mmsd->t1) / 1000);
 			}
 			else if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_FAILED) {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
