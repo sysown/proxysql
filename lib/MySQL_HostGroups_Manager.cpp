@@ -2253,6 +2253,7 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 				if (mysrvc->ConnectionsUsed->conns_length()==0 && mysrvc->ConnectionsFree->conns_length()==0) {
 					// no more connections for OFFLINE_HARD server, removing it
 					mysrvc=(MySrvC *)myhgc->mysrvs->servers->remove_index_fast(j);
+					j--;
 					delete mysrvc;
 				}
 			}
