@@ -139,6 +139,7 @@ enum debug_module {
 	PROXY_DEBUG_QUERY_CACHE,
 	PROXY_DEBUG_QUERY_STATISTICS,
 	PROXY_DEBUG_RESTAPI,
+	PROXY_DEBUG_MONITOR,
 	PROXY_DEBUG_UNKNOWN // this module doesn't exist. It is used only to define the last possible module
 };
 
@@ -448,6 +449,7 @@ enum PROXYSQL_MYSQL_ERR {
 	ER_PROXYSQL_LAGGING_SRV                           = 9005,
 	ER_PROXYSQL_PING_TIMEOUT                          = 9006,
 	ER_PROXYSQL_CHANGE_USER_TIMEOUT                   = 9007,
+	ER_PROXYSQL_GR_HEALTH_CONN_CHECK_TIMEOUT          = 9020,
 	ER_PROXYSQL_GR_HEALTH_CHECK_TIMEOUT               = 9008,
 	ER_PROXYSQL_GR_HEALTH_CHECKS_MISSED               = 9009,
 	ER_PROXYSQL_READ_ONLY_CHECK_CONN_TIMEOUT          = 9010,

@@ -202,8 +202,10 @@ enum class MySQL_Monitor_State_Data_Task_Result {
 
 
 class MySQL_Monitor_State_Data {
- public:
+public:
+	/* @brief Time prior fetch operations. 'Start time' of the monitoring check. */
 	unsigned long long t1;
+	/* @brief Time post fetch operations. Current time before peforming local monitoring actions. */
 	unsigned long long t2;
 	char *hostname;
 	int port;
@@ -225,6 +227,16 @@ class MySQL_Monitor_State_Data {
 	unsigned int hostgroup_id;
 	bool use_percona_heartbeat;
 	SQLite3DB* mondb;
+	/**
+	 * @brief 'True' if it was succesfully initialized with a new created connection, 'false' otherwise.
+	 * @details Currently only used by 'group_replication'.
+	 */
+	bool created_conn = false;
+	/**
+	 * @brief Time of object was creation before being initalized with a connection.
+	 * @details Currently only used by 'group_replication'.
+	 */
+	uint64_t init_time = 0;
 
 	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();
@@ -471,6 +483,7 @@ class MySQL_Monitor {
 	void * monitor_ping();
 	void * monitor_read_only();
 	void * monitor_group_replication();
+	void * monitor_group_replication_2();
 	void * monitor_galera();
 	void * monitor_aws_aurora();
 	void * monitor_replication_lag();
@@ -495,6 +508,11 @@ class MySQL_Monitor {
 	void evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 	unsigned int estimate_lag(char* server_id, AWS_Aurora_status_entry** ase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks);
 //	void gdb_dump___monitor_mysql_server_aws_aurora_log(char *hostname);
+	/**
+	 * @brief Encapsulates the async fetching, and later monitoring actions for a group replication cluster.
+	 * @param mmsds Vector of 'MySQL_Monitor_State_Data' from which to perform the async data fetching.
+	 */
+	void monitor_gr_async_actions_handler(const vector<unique_ptr<MySQL_Monitor_State_Data>>& mmsds);
 
 private:
 	/**
@@ -521,6 +539,12 @@ private:
 	bool monitor_read_only_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
 	bool monitor_replication_lag_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
 	bool monitor_group_replication_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
+	/**
+	 * @brief Process the 'MySQL_Monitor_State_Data' after all cluster data is fetched.
+	 * @param mmsds Holds all the fetched cluster info for the performing the monitoring actions.
+	 * @return Since none of the handlers is allowed to fail, always 'true'.
+	 */
+	bool monitor_group_replication_process_ready_tasks_2(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
 	bool monitor_galera_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds);
 };
 
