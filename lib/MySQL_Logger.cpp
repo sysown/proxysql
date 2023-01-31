@@ -124,7 +124,7 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 }
 
 void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
-	json j;
+	json j = {};
 	j["timestamp"] = start_time/1000;
 	{
 		time_t timer=start_time/1000/1000;
@@ -349,7 +349,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 }
 
 uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
-	json j;
+	json j = {};
 	uint64_t total_bytes=0;
 	if (hid!=UINT64_MAX) {
 		j["hostgroup_id"] = hid;

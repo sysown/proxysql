@@ -20,7 +20,7 @@
  * also represent the actual resultset being received when issuing them, since this resultset is used for computing the
  * 'expected checksum' for the fetched config before loading it to runtime. This is done for the following modules:
  *   - 'runtime_mysql_servers': tables 'mysql_servers', 'mysql_replication_hostgroups', 'mysql_group_replication_hostroups',
- *     'mysql_galera_hostgroups', 'mysql_aws_aurora_hostgroups'.
+ *     'mysql_galera_hostgroups', 'mysql_aws_aurora_hostgroups', 'mysql_hostgroup_attributes'.
  *   - 'runtime_mysql_users'.
  *   - 'runtime_mysql_query_rules'.
  *
@@ -36,6 +36,9 @@
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_group_replication_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup, offline_hostgroup, active, max_writers, writer_is_also_reader, max_transactions_behind, comment FROM runtime_mysql_group_replication_hostgroups ORDER BY writer_hostgroup"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_hostgroup_attributes'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES "PROXY_SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, comment FROM runtime_mysql_hostgroup_attributes ORDER BY hostgroup_id"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_aurora_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_AWS_AURORA "PROXY_SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment FROM runtime_mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup"
@@ -299,6 +302,8 @@ struct p_cluster_counter {
 		pulled_mysql_servers_galera_hostgroups_failure,
 		pulled_mysql_servers_aws_aurora_hostgroups_success,
 		pulled_mysql_servers_aws_aurora_hostgroups_failure,
+		pulled_mysql_servers_hostgroup_attributes_success,
+		pulled_mysql_servers_hostgroup_attributes_failure,
 		pulled_mysql_servers_runtime_checks_success,
 		pulled_mysql_servers_runtime_checks_failure,
 

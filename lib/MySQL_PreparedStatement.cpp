@@ -1,7 +1,10 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Protocol.h"

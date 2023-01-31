@@ -5,7 +5,10 @@
 
 #include "MySQL_Authentication.hpp"
 
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 MySQL_Authentication::MySQL_Authentication() {
 #ifdef DEBUG

@@ -4,7 +4,11 @@
 #include <string>
 #include <sys/utsname.h>
 #include <prometheus/registry.h>
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
+
 #include <cxxabi.h>
 #include <uuid/uuid.h>
 

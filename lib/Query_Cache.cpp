@@ -4,7 +4,7 @@
 #include "cpp.h"
 #include "query_cache.hpp"
 #include "proxysql_atomic.h"
-#include "SpookyV2.h"
+//#include "SpookyV2.h"
 #include "prometheus_helpers.h"
 #include "MySQL_Protocol.h"
 

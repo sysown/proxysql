@@ -3,7 +3,10 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_atomic.h"
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 ClickHouse_Authentication::ClickHouse_Authentication() {
 #ifdef DEBUG

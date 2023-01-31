@@ -18,6 +18,14 @@
 
 #include "ev.h"
 
+#ifndef SPOOKYV2
+#include "SpookyV2.h"
+#define SPOOKYV2
+#endif
+
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+
 #ifdef DEBUG
 /* */
 //	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
@@ -55,6 +63,9 @@
 										  "UNIQUE (reader_hostgroup))"
 
 #define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
+
+#define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
+
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
@@ -197,6 +208,21 @@ class MyHGC {	// MySQL Host Group Container
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
 	MySrvList *mysrvs;
+	struct { // this is a series of attributes specific for each hostgroup
+		char * init_connect;
+		char * comment;
+		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
+		uint32_t max_num_online_servers;
+		uint32_t throttle_connections_per_sec;
+		int8_t autocommit;
+		int8_t free_connections_pct;
+		bool multiplex;
+		bool connection_warming;
+		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
+		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
+		json ignore_session_variables_json; // the JSON format of ignore_session_variables
+	} attributes;
+	void reset_attributes();
 	MyHGC(int);
 	~MyHGC();
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
@@ -404,6 +430,7 @@ class MySQL_HostGroups_Manager {
 	 *   - 'CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS'
 	 *   - 'CLUSTER_QUERY_MYSQL_GALERA'
 	 *   - 'CLUSTER_QUERY_MYSQL_AWS_AURORA'
+	 *   - 'CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES'
 	 *  Issued by 'Cluster' are intercepted by 'ProxySQL_Admin' and return the content of these resultsets.
 	 */
 	SQLite3_result *incoming_replication_hostgroups;
@@ -425,6 +452,9 @@ class MySQL_HostGroups_Manager {
 
 	pthread_mutex_t AWS_Aurora_Info_mutex;
 	std::map<int , AWS_Aurora_Info *> AWS_Aurora_Info_Map;
+
+	void generate_mysql_hostgroup_attributes_table();
+	SQLite3_result *incoming_hostgroup_attributes;
 
 	std::thread *HGCU_thread;
 
@@ -570,6 +600,8 @@ class MySQL_HostGroups_Manager {
 	void wrunlock();
 	int servers_add(SQLite3_result *resultset);
 	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void commit_update_checksums_from_tables(SpookyHash& myhash, bool& init);
+	void CUCFT1(SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName); // used by commit_update_checksums_from_tables()
 
 	/**
 	 * @brief Store the resultset for the 'runtime_mysql_servers' table set that have been loaded to runtime.
@@ -583,23 +615,13 @@ class MySQL_HostGroups_Manager {
 	 *  Cluster to propagate current config.
 	 * @param The resulset to be stored replacing the current one.
 	 */
-	void save_incoming_replication_hostgroups(SQLite3_result *);
-	void save_incoming_group_replication_hostgroups(SQLite3_result *);
-	void save_incoming_galera_hostgroups(SQLite3_result *);
-	void save_incoming_aws_aurora_hostgroups(SQLite3_result *);
 
-	SQLite3_result* get_current_mysql_servers_inner();
-	SQLite3_result* get_current_mysql_replication_hostgroups_inner();
-	SQLite3_result* get_current_mysql_group_replication_hostgroups_inner();
-	SQLite3_result* get_current_mysql_galera_hostgroups();
-	SQLite3_result* get_current_mysql_aws_aurora_hostgroups();
+	void save_incoming_mysql_table(SQLite3_result *, const string&);
+	SQLite3_result* get_current_mysql_table(const string& name);
 
 	SQLite3_result * execute_query(char *query, char **error);
-	SQLite3_result *dump_table_mysql_servers();
-	SQLite3_result *dump_table_mysql_replication_hostgroups();
-	SQLite3_result *dump_table_mysql_group_replication_hostgroups();
-	SQLite3_result *dump_table_mysql_galera_hostgroups();
-	SQLite3_result *dump_table_mysql_aws_aurora_hostgroups();
+	SQLite3_result *dump_table_mysql(const string&);
+
 	/**
 	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
 	 *   'mysql_servers' present in 'MySQL_HostGroups_Manager' db, which are not 'OFFLINE_HARD'. The resulset

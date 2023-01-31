@@ -3,7 +3,10 @@
 
 #include "MySQL_Session.h"
 #include "MySQL_Data_Stream.h"
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include <sstream>
 
