@@ -12092,7 +12092,9 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	}
 	// commit all the changes
 	MyHGM->commit(runtime_mysql_servers, checksum, epoch);
-	GloAdmin->save_mysql_servers_runtime_to_database(true);
+	
+	// quering runtime table will update and return latest records, so this is not needed.
+	// GloAdmin->save_mysql_servers_runtime_to_database(true);
 
 	// clean up
 	if (resultset) delete resultset;
