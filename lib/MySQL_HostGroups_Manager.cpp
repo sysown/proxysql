@@ -3548,6 +3548,11 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 		}
 	}
 
+	if (rhid_res != nullptr) {
+		delete rhid_res;
+		rhid_res = nullptr;
+	}
+
 __exit_replication_lag_action:
 
 	wrunlock();
