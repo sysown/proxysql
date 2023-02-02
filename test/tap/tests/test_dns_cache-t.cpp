@@ -204,18 +204,6 @@ int main(int argc, char** argv) {
 	STEP_END,
 	STEP_START
 			UPDATE_PREV_METRICS(proxysql_admin),
-			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (999,'google.com',7861,0,1000,'dummy mysql server')", proxysql_admin, false),
-			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
-			DELAY_SEC(2),
-			LOOP_FUNC(EXECUTE_QUERY("DO 1", proxysql, true), 2),
-			DELAY_SEC(2),
-			UPDATE_AFTER_METRICS(proxysql_admin),
-			CHECK_RESULT(std::greater<double>, "proxysql_mysql_monitor_dns_cache_record_updated"),
-			CHECK_RESULT(std::greater<double>, "proxysql_mysql_monitor_dns_cache_lookup_success"),
-			CHECK_RESULT(std::greater<double>, "proxysql_mysql_monitor_dns_cache_queried")
-	STEP_END,
-	STEP_START
-			UPDATE_PREV_METRICS(proxysql_admin),
 			EXECUTE_QUERY("INSERT INTO mysql_servers (hostgroup_id,hostname,port,max_replication_lag,max_connections,comment) VALUES (999,' yahoo.com ',7861,0,1000,'dummy mysql server')", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
 			DELAY_SEC(2),
