@@ -1347,6 +1347,103 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	return result;
 }
 
+SQLite3_result * Query_Processor::get_query_digests_reset_v2() {
+	SQLite3_result *result = NULL;
+	umap_query_digest digest_umap_aux;
+	umap_query_digest_text digest_text_umap_aux;
+	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_umap.swap(digest_umap_aux);
+	digest_text_umap.swap(digest_text_umap_aux);
+	pthread_rwlock_unlock(&digest_rwlock);
+	unsigned long long curtime1;
+	unsigned long long curtime2;
+	bool free_me = true;
+	bool defer_free = true;
+	int n=DIGEST_STATS_FAST_THREADS;
+	get_query_digests_parallel_args args[n];
+	size_t map_size = digest_umap_aux.size();
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		curtime1=monotonic_time();
+		result = new SQLite3_result(14, true);
+	} else {
+		result = new SQLite3_result(14);
+	}
+	result->add_column_definition(SQLITE_TEXT,"hid");
+	result->add_column_definition(SQLITE_TEXT,"schemaname");
+	result->add_column_definition(SQLITE_TEXT,"username");
+	result->add_column_definition(SQLITE_TEXT,"client_address");
+	result->add_column_definition(SQLITE_TEXT,"digest");
+	result->add_column_definition(SQLITE_TEXT,"digest_text");
+	result->add_column_definition(SQLITE_TEXT,"count_star");
+	result->add_column_definition(SQLITE_TEXT,"first_seen");
+	result->add_column_definition(SQLITE_TEXT,"last_seen");
+	result->add_column_definition(SQLITE_TEXT,"sum_time");
+	result->add_column_definition(SQLITE_TEXT,"min_time");
+	result->add_column_definition(SQLITE_TEXT,"max_time");
+	result->add_column_definition(SQLITE_TEXT,"rows_affected");
+	result->add_column_definition(SQLITE_TEXT,"rows_sent");
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		for (int i=0; i<n; i++) {
+			args[i].m=i;
+			//args[i].ret=0;
+			args[i].gu = &digest_umap_aux;
+			args[i].gtu = &digest_text_umap_aux;
+			args[i].result = result;
+			args[i].free_me = free_me;
+			args[i].defer_free = defer_free;
+		}
+		for (int i=0; i<n; i++) {
+			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
+				assert(0);
+				// LCOV_EXCL_STOP
+			}
+		}
+		for (int i=0; i<n; i++) {
+			pthread_join(args[i].thr, NULL);
+		}
+		if (free_me == false) {
+			for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap_aux.begin(); it!=digest_umap_aux.end(); ++it) {
+				QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+				delete qds;
+			}
+		}
+	} else {
+		for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap_aux.begin(); it!=digest_umap_aux.end(); ++it) {
+			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+			query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
+			char **pta=qds->get_row(&digest_text_umap_aux, a);
+			result->add_row(pta);
+			//qds->free_row(pta);
+			free(a);
+			delete qds;
+		}
+	}
+	digest_umap_aux.clear();
+	// this part is always single-threaded
+	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap_aux.begin(); it!=digest_text_umap_aux.end(); ++it) {
+		free(it->second);
+	}
+	digest_text_umap_aux.clear();
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		curtime2=monotonic_time();
+		curtime1 = curtime1/1000;
+		curtime2 = curtime2/1000;
+		proxy_info("Running query on stats_mysql_query_digest_reset: %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
+		if (free_me) {
+			if (defer_free) {
+				for (int i=0; i<n; i++) {
+					for (unsigned long long r = 0; r < args[i].ret; r++) {
+						QP_query_digest_stats *qds = args[i].array_qds[r];
+						delete qds;
+					}
+					free(args[i].array_qds);
+				}
+			}
+		}
+	}
+	return result;
+}
 
 void Query_Processor::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
 	pthread_rwlock_wrlock(&digest_rwlock);
