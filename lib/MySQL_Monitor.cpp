@@ -7560,6 +7560,8 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 			int k = 0;
 			MYSQL_FIELD* fields = NULL;
 			int j = -1;
+			int slave_io_running_idx=-1;
+			int slave_sql_running_idx=-1;
 			num_fields = mysql_num_fields(mmsd->result);
 			fields = mysql_fetch_fields(mmsd->result);
 			if (
@@ -7574,18 +7576,25 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 						if (strcmp("Seconds_Behind_Master", fields[k].name) == 0) {
 							j = k;
 						}
+						if (strcmp("Slave_IO_Running", fields[k].name)==0) {
+							slave_io_running_idx=k;
+						}
+						if (strcmp("Slave_SQL_Running", fields[k].name)==0) {
+							slave_sql_running_idx=k;
+						}
 					}
 				}
-				if (j > -1) {
-					MYSQL_ROW row = mysql_fetch_row(mmsd->result);
+				if (j>-1 && slave_io_running_idx>-1 && slave_sql_running_idx>-1) {
+					MYSQL_ROW row=mysql_fetch_row(mmsd->result);
 					if (row) {
-						repl_lag = -1; // this is old behavior
-						repl_lag = mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
-						if (row[j]) { // if Seconds_Behind_Master is not NULL
-							repl_lag = atoi(row[j]);
-						} else {
-							proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
-							MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
+						repl_lag=mysql_thread___monitor_slave_lag_when_null; // new behavior, see 669
+						if (row[j] && row[slave_sql_running_idx] && row[slave_io_running_idx]) { // if Seconds_Behind_Master Slave_SQL_Running and Slave_IO_Running are not NULL
+							if (strcmp(row[slave_sql_running_idx], "Yes") ==0 && strcmp(row[slave_io_running_idx], "Yes")==0) { // if both Slave_SQL_Running and Slave_IO_Running are Yes
+								repl_lag=atoi(row[j]); // then repl_lag is the value from SHOW SLAVE STATUS
+							} else {
+								proxy_error("Replication lag on server %s:%d is NULL, using the value %d (mysql-monitor_slave_lag_when_null)\n", mmsd->hostname, mmsd->port, mysql_thread___monitor_slave_lag_when_null);
+								MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_SRV_NULL_REPLICATION_LAG);
+							}
 						}
 					}
 				}
