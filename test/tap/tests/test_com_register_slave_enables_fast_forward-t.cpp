@@ -7,13 +7,18 @@
  * listen binlog events. It listen two times, one after sending a query that do
  * not disable multiplexing and the other after sending a query that disables
  * multiplexing.
+ *
+ * The repository for test_binlog_reader-t is:
+ * https://github.com/ProxySQL/proxysql_binlog_test
  */
 
 #include <string>
 
+
 #include "tap.h"
 
 int main(int argc, char** argv) {
+	plan(1);
 	const std::string test_deps_path = getenv("TEST_DEPS");
 
 	const int test_binlog_reader_res = system((test_deps_path + "/test_binlog_reader-t").c_str());
