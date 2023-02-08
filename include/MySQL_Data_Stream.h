@@ -212,6 +212,7 @@ class MySQL_Data_Stream
 		myconn->statuses.myconnpoll_get++;
 		mc->myds=this;
 		encrypted = false; // this is the default
+		// PMC-10005
 		// we handle encryption for backend
 		//
 		// we have a similar code in MySQL_Connection
