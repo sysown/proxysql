@@ -218,6 +218,9 @@ ubuntu16: binaries/proxysql_${CURVER}-ubuntu16_amd64.deb
 ubuntu18: binaries/proxysql_${CURVER}-ubuntu18_amd64.deb
 .PHONY: ubuntu18
 
+ubuntu20: binaries/proxysql_${CURVER}-ubuntu20_amd64.deb
+.PHONY: ubuntu18
+
 debian7: binaries/proxysql_${CURVER}-debian7_amd64.deb
 .PHONY: debian7
 
@@ -377,6 +380,10 @@ binaries/proxysql_${CURVER}-ubuntu16_amd64.deb:
 
 binaries/proxysql_${CURVER}-ubuntu18_amd64.deb:
 	docker-compose up ubuntu18_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-ubuntu20_amd64.deb:
+	docker-compose up ubuntu20_build
 	docker-compose rm -f
 
 binaries/proxysql_${CURVER}-debian7_amd64.deb:

@@ -1,0 +1,10 @@
+--- setopt.c	2017-11-27 07:50:21.000000000 +0000
++++ setoptv2.c	2023-02-08 00:53:47.855535701 +0000
+@@ -27,6 +27,7 @@
+ #endif
+ 
+ #ifdef HAVE_LINUX_TCP_H
++#include <netinet/in.h>
+ #include <linux/tcp.h>
+ #endif
+

@@ -1,0 +1,10 @@
+--- sendf.c	2023-02-08 00:46:56.197557837 +0000
++++ sendfv2.c	2023-02-08 00:49:01.739721072 +0000
+@@ -23,6 +23,7 @@
+ #include "curl_setup.h"
+ 
+ #ifdef HAVE_LINUX_TCP_H
++#include <netinet/in.h>
+ #include <linux/tcp.h>
+ #endif
+

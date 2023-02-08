@@ -493,3 +493,15 @@ services:
       - PROXYSQL_BUILD_TYPE=clickhouse
     command:
       - /opt/entrypoint/entrypoint.bash
+  ubuntu20_build:
+    image: proxysql/packaging:build-ubuntu20
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=ubuntu20
+    command: /opt/entrypoint/entrypoint.bash

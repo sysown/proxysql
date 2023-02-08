@@ -60,6 +60,8 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && rm -rf curl-7.57.0 || true
 	cd curl && tar -zxf curl-7.57.0.tar.gz
 	#cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && patch lib/sendf.c < ../sendf.c.patch
+	cd curl/curl && patch lib/setopt.c < ../setopt.c.patch
 	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
 curl: curl/curl/lib/.libs/libcurl.a
 
@@ -122,6 +124,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library && rm -rf mariadb-connector-c-3.1.4-src
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.4-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
+	 cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
 	 cd mariadb-client-library/mariadb_client && patch ./CMakeLists.txt < ../CMakeLists.txt.patch
 #	cd mariadb-client-library/mariadb_client && cmake . -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
 	cd mariadb-client-library/mariadb_client && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ .
