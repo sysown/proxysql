@@ -232,6 +232,30 @@ QP_query_digest_stats::~QP_query_digest_stats() {
 		client_address=NULL;
 	}
 }
+
+// Funtion to get the digest text associated to a QP_query_digest_stats.
+// QP_query_digest_stats member type "char *digest_text" may by NULL, so we
+// have to get the digest text from "digest_text_umap".
+char *QP_query_digest_stats::get_digest_text(const umap_query_digest_text *digest_text_umap) {
+	char *digest_text_str = NULL;
+
+	if (digest_text) {
+		digest_text_str = digest_text;
+	} else {
+		std::unordered_map<uint64_t, char *>::const_iterator it;
+		it = digest_text_umap->find(digest);
+		if (it != digest_text_umap->end()) {
+			digest_text_str = it->second;
+		} else {
+			// LCOV_EXCL_START
+			assert(0);
+			// LCOV_EXCL_STOP
+		}
+	}
+
+	return digest_text_str;
+}
+
 char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp) {
 	char **pta=qdsp->pta;
 
@@ -247,19 +271,7 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
 	pta[3]=qdsp->digest;
 
-	if (digest_text) {
-		pta[4]=digest_text;
-	} else {
-		std::unordered_map<uint64_t, char *>::iterator it;
-		it=digest_text_umap->find(digest);
-		if (it != digest_text_umap->end()) {
-			pta[4] = it->second;
-		} else {
-			// LCOV_EXCL_START
-			assert(0);
-			// LCOV_EXCL_STOP
-		}
-	}
+	pta[4] = get_digest_text(digest_text_umap);
 
 	//sprintf(qdsp->count_star,"%u",count_star);
 	my_itoa(qdsp->count_star, count_star);
