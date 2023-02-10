@@ -2037,13 +2037,13 @@ void stage_2_parsing(shared_st* shared_st, stage_1_st* stage_1_st, stage_2_st* s
 			if (lc == ' ') {
 				if (is_normal_char(llc)) {
 					shared_st->res_cur_pos++;
-				} else if (is_token_char(llc) && llc != '?' && (rc == '?' || rc == ' ')) {
+				} else if (is_token_char(llc) && (llc != '?' && llc != ')') && (rc == '?' || rc == ' ')) {
 					shared_st->res_cur_pos++;
 				} else {
 					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;
 				}
 			} else {
-				if (is_token_char(lc) && lc != '?' && (rc == '?' || rc == ' ')) {
+				if (is_token_char(lc) && (lc != '?' && lc != ')') && (rc == '?' || rc == ' ')) {
 					shared_st->res_cur_pos++;
 				} else {
 					*shared_st->res_pre_pos++ = *shared_st->res_cur_pos++;

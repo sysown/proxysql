@@ -159,6 +159,20 @@
 		"s3": "select ?%?",
 		"s4": "select ?%?"
 	},
+	{
+		"q":  "select NOW()-1",
+		"s1": "select NOW()-?",
+		"s2": "select NOW()-?",
+		"s3": "select NOW()-?",
+		"s4": "select NOW()-?"
+	},
+	{
+		"q":  "select NOW() - 1",
+		"s1": "select NOW() - ?",
+		"s2": "select NOW() -?",
+		"s3": "select NOW() -?",
+		"s4": "select NOW() -?"
+	},
 	// operators and commas
 	{
 		"q":  "select 1+ 1, 1 -1, 1 * 1 , 1/1 , 100 % 3",
@@ -166,6 +180,13 @@
 		"s2": "select ?+?,?-?,?*?,?/?,?%?",
 		"s3": "select ?+?,?-?,?*?,?/?,?%?",
 		"s4": "select ?+?,?-?,?*?,?/?,?%?"
+	},
+	{
+		"q":  "select 1+ 1, 1 -1,NOW()+1,1 * 1 , 1/1 , 100 % 3, NOW() - 1",
+		"s1": "select ?+ ?, ? -?,NOW()+?,? * ? , ?/? , ? % ?, NOW() - ?",
+		"s2": "select ?+?,?-?,NOW()+?,?*?,?/?,?%?,NOW() -?",
+		"s3": "select ?+?,?-?,NOW()+?,?*?,?/?,?%?,NOW() -?",
+		"s4": "select ?+?,?-?,NOW()+?,?*?,?/?,?%?,NOW() -?"
 	},
 	{
 		"q":  "SELECT * FROM t t1, t t2 ,t t3,t t4 LIMIT 0",
