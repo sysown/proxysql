@@ -1,4 +1,5 @@
 #include <iostream>     // std::cout
+#include <sstream>      // std::stringstream
 #include <fstream>
 #include <algorithm>    // std::sort
 #include <memory>
@@ -9410,6 +9411,105 @@ void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
 
 	statsdb->execute("COMMIT");
 	delete resultset;
+}
+
+void ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
+	const bool reset, const bool copy, const SQLite3_result *resultset, const umap_query_digest *digest_umap,
+	const umap_query_digest_text *digest_text_umap
+) {
+	statsdb->execute("BEGIN");
+	int rc;
+	sqlite3_stmt *statement1=NULL;
+	sqlite3_stmt *statement32=NULL;
+	char *query1=NULL;
+	char *query32=NULL;
+	std::string query32s = "";
+	statsdb->execute("DELETE FROM stats_mysql_query_digest_reset");
+	statsdb->execute("DELETE FROM stats_mysql_query_digest");
+	if (reset) {
+		query1=(char *)"INSERT INTO stats_mysql_query_digest_reset VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		query32s = "INSERT INTO stats_mysql_query_digest_reset VALUES " + generate_multi_rows_query(32,14);
+		query32 = (char *)query32s.c_str();
+	} else {
+		query1=(char *)"INSERT INTO stats_mysql_query_digest VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)";
+		query32s = "INSERT INTO stats_mysql_query_digest VALUES " + generate_multi_rows_query(32,14);
+		query32 = (char *)query32s.c_str();
+	}
+
+	rc = statsdb->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, statsdb);
+	rc = statsdb->prepare_v2(query32, &statement32);
+	ASSERT_SQLITE_OK(rc, statsdb);
+	int row_idx=0;
+	int num_rows = resultset ? resultset->rows_count : digest_umap->size();
+	int max_bulk_row_idx = num_rows/32;
+	max_bulk_row_idx=max_bulk_row_idx*32;
+	auto it = digest_umap->cbegin();
+	int i = 0;
+	// If the function do not receives a resultset, it gets the values directly from the digest_umap
+	while (resultset ? i != resultset->rows_count : it != digest_umap->end()) {
+		QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
+		SQLite3_row *row  = resultset ? resultset->rows[i] : NULL; i++;
+		string digest_hex_str;
+		if (!resultset) {
+			std::ostringstream digest_stream;
+			digest_stream << "0x" << std::hex << qds->digest;
+			digest_hex_str = digest_stream.str();
+		}
+		int idx=row_idx%32;
+		if (row_idx<max_bulk_row_idx) { // bulk
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+1, resultset ? atoll(row->fields[11]) : qds->hid); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+2, resultset ? row->fields[0] : qds->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+3, resultset ? row->fields[1] : qds->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+4, resultset ? row->fields[2] : qds->client_address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+5, resultset ? row->fields[3] : digest_hex_str.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+6, resultset ? row->fields[4] : qds->get_digest_text(digest_text_umap), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+7, resultset ? atoll(row->fields[5]) : qds->count_star); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+8, resultset ? atoll(row->fields[6]) : qds->first_seen); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+9, resultset ? atoll(row->fields[7]) : qds->last_seen); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+10, resultset ? atoll(row->fields[8]) : qds->sum_time); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+11, resultset ? atoll(row->fields[9]) : qds->min_time); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+12, resultset ? atoll(row->fields[10]) : qds->max_time); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+13, resultset ? atoll(row->fields[12]) : qds->rows_affected); ASSERT_SQLITE_OK(rc, statsdb); // rows affected
+			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+14, resultset ? atoll(row->fields[13]) : qds->rows_sent); ASSERT_SQLITE_OK(rc, statsdb); // rows sent
+			if (idx==31) {
+				SAFE_SQLITE3_STEP2(statement32);
+				rc=(*proxy_sqlite3_clear_bindings)(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+				rc=(*proxy_sqlite3_reset)(statement32); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+		} else { // single row
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 1, resultset ? atoll(row->fields[11]) : qds->hid); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 2, resultset ? row->fields[0] : qds->schemaname, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 3, resultset ? row->fields[1] : qds->username, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 4, resultset ? row->fields[2] : qds->client_address, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 5, resultset ? row->fields[3] : digest_hex_str.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 6, resultset ? row->fields[4] : qds->get_digest_text(digest_text_umap), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, resultset ? atoll(row->fields[5]) : qds->count_star); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 8, resultset ? atoll(row->fields[6]) : qds->first_seen); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 9, resultset ? atoll(row->fields[7]) : qds->last_seen); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 10, resultset ? atoll(row->fields[8]) : qds->sum_time); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 11, resultset ? atoll(row->fields[9]) : qds->min_time); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 12, resultset ? atoll(row->fields[10]) : qds->max_time); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 13, resultset ? atoll(row->fields[12]) : qds->rows_affected); ASSERT_SQLITE_OK(rc, statsdb); // rows affected
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 14, resultset ? atoll(row->fields[13]) : qds->rows_sent); ASSERT_SQLITE_OK(rc, statsdb); // rows sent
+			SAFE_SQLITE3_STEP2(statement1);
+			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+		}
+		row_idx++;
+		if (resultset)
+			i++;
+		else
+			it++;
+	}
+	(*proxy_sqlite3_finalize)(statement1);
+	(*proxy_sqlite3_finalize)(statement32);
+	if (reset) {
+		if (copy) {
+			statsdb->execute("INSERT INTO stats_mysql_query_digest SELECT * FROM stats_mysql_query_digest_reset");
+		}
+	}
+	statsdb->execute("COMMIT");
 }
 
 void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {

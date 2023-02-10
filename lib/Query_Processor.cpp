@@ -31,6 +31,7 @@
 #include <thread>
 #include <future>
 extern MySQL_Threads_Handler *GloMTH;
+extern ProxySQL_Admin *GloAdmin;
 
 static int int_cmp(const void *a, const void *b) {
 	const unsigned long long *ia = (const unsigned long long *)a;
@@ -1188,7 +1189,7 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 	return ret;
 }
 
-SQLite3_result * Query_Processor::get_query_digests_v2() {
+SQLite3_result * Query_Processor::get_query_digests_v2(const bool use_resultset) {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
 	SQLite3_result *result = NULL;
 	// Create two auxiliary maps and swap its content with the main maps. This
@@ -1203,60 +1204,64 @@ SQLite3_result * Query_Processor::get_query_digests_v2() {
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	size_t map_size = digest_umap_aux.size();
-	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		result = new SQLite3_result(14, true);
-		curtime1 = monotonic_time();
-	} else {
-		result = new SQLite3_result(14);
-	}
-	result->add_column_definition(SQLITE_TEXT,"hid");
-	result->add_column_definition(SQLITE_TEXT,"schemaname");
-	result->add_column_definition(SQLITE_TEXT,"username");
-	result->add_column_definition(SQLITE_TEXT,"client_address");
-	result->add_column_definition(SQLITE_TEXT,"digest");
-	result->add_column_definition(SQLITE_TEXT,"digest_text");
-	result->add_column_definition(SQLITE_TEXT,"count_star");
-	result->add_column_definition(SQLITE_TEXT,"first_seen");
-	result->add_column_definition(SQLITE_TEXT,"last_seen");
-	result->add_column_definition(SQLITE_TEXT,"sum_time");
-	result->add_column_definition(SQLITE_TEXT,"min_time");
-	result->add_column_definition(SQLITE_TEXT,"max_time");
-	result->add_column_definition(SQLITE_TEXT,"rows_affected");
-	result->add_column_definition(SQLITE_TEXT,"rows_sent");
-	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		int n=DIGEST_STATS_FAST_THREADS;
-		get_query_digests_parallel_args args[n];
-		for (int i=0; i<n; i++) {
-			args[i].m=i;
-			//args[i].ret=0;
-			args[i].gu = &digest_umap_aux;
-			args[i].gtu = &digest_text_umap_aux;
-			args[i].result = result;
-			args[i].free_me = false;
+	if (use_resultset) {
+		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+			result = new SQLite3_result(14, true);
+			curtime1 = monotonic_time();
+		} else {
+			result = new SQLite3_result(14);
 		}
-		for (int i=0; i<n; i++) {
-			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
-				// LCOV_EXCL_START
-				assert(0);
-				// LCOV_EXCL_STOP
+		result->add_column_definition(SQLITE_TEXT,"hid");
+		result->add_column_definition(SQLITE_TEXT,"schemaname");
+		result->add_column_definition(SQLITE_TEXT,"username");
+		result->add_column_definition(SQLITE_TEXT,"client_address");
+		result->add_column_definition(SQLITE_TEXT,"digest");
+		result->add_column_definition(SQLITE_TEXT,"digest_text");
+		result->add_column_definition(SQLITE_TEXT,"count_star");
+		result->add_column_definition(SQLITE_TEXT,"first_seen");
+		result->add_column_definition(SQLITE_TEXT,"last_seen");
+		result->add_column_definition(SQLITE_TEXT,"sum_time");
+		result->add_column_definition(SQLITE_TEXT,"min_time");
+		result->add_column_definition(SQLITE_TEXT,"max_time");
+		result->add_column_definition(SQLITE_TEXT,"rows_affected");
+		result->add_column_definition(SQLITE_TEXT,"rows_sent");
+		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+			int n=DIGEST_STATS_FAST_THREADS;
+			get_query_digests_parallel_args args[n];
+			for (int i=0; i<n; i++) {
+				args[i].m=i;
+				args[i].gu = &digest_umap_aux;
+				args[i].gtu = &digest_text_umap_aux;
+				args[i].result = result;
+				args[i].free_me = false;
+			}
+			for (int i=0; i<n; i++) {
+				if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+					// LCOV_EXCL_START
+					assert(0);
+					// LCOV_EXCL_STOP
+				}
+			}
+			for (int i=0; i<n; i++) {
+				pthread_join(args[i].thr, NULL);
+			}
+		} else {
+			for (
+				std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
+				it != digest_umap_aux.end();
+				++it
+			) {
+				QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+				query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
+				char **pta=qds->get_row(&digest_text_umap_aux, a);
+				result->add_row(pta);
+				free(a);
 			}
 		}
-		for (int i=0; i<n; i++) {
-			pthread_join(args[i].thr, NULL);
-		}
-	} else {
-		for (
-			std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
-			it != digest_umap_aux.end();
-			++it
-		) {
-			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
-			query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
-			char **pta=qds->get_row(&digest_text_umap_aux, a);
-			result->add_row(pta);
-			free(a);
-		}
 	}
+	GloAdmin->stats___save_mysql_query_digest_to_sqlite(
+		false, false, result, &digest_umap_aux, &digest_text_umap_aux
+	);
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
@@ -1359,7 +1364,7 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	return result;
 }
 
-SQLite3_result * Query_Processor::get_query_digests_reset_v2() {
+SQLite3_result * Query_Processor::get_query_digests_reset_v2(const bool use_resultset) {
 	SQLite3_result *result = NULL;
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
@@ -1369,68 +1374,73 @@ SQLite3_result * Query_Processor::get_query_digests_reset_v2() {
 	pthread_rwlock_unlock(&digest_rwlock);
 	unsigned long long curtime1;
 	unsigned long long curtime2;
-	bool free_me = true;
-	bool defer_free = true;
+	size_t map_size = digest_umap.size();
+	bool free_me = false;
+	bool defer_free = false;
 	int n=DIGEST_STATS_FAST_THREADS;
 	get_query_digests_parallel_args args[n];
-	size_t map_size = digest_umap_aux.size();
-	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		curtime1=monotonic_time();
-		result = new SQLite3_result(14, true);
-	} else {
-		result = new SQLite3_result(14);
-	}
-	result->add_column_definition(SQLITE_TEXT,"hid");
-	result->add_column_definition(SQLITE_TEXT,"schemaname");
-	result->add_column_definition(SQLITE_TEXT,"username");
-	result->add_column_definition(SQLITE_TEXT,"client_address");
-	result->add_column_definition(SQLITE_TEXT,"digest");
-	result->add_column_definition(SQLITE_TEXT,"digest_text");
-	result->add_column_definition(SQLITE_TEXT,"count_star");
-	result->add_column_definition(SQLITE_TEXT,"first_seen");
-	result->add_column_definition(SQLITE_TEXT,"last_seen");
-	result->add_column_definition(SQLITE_TEXT,"sum_time");
-	result->add_column_definition(SQLITE_TEXT,"min_time");
-	result->add_column_definition(SQLITE_TEXT,"max_time");
-	result->add_column_definition(SQLITE_TEXT,"rows_affected");
-	result->add_column_definition(SQLITE_TEXT,"rows_sent");
-	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		for (int i=0; i<n; i++) {
-			args[i].m=i;
-			//args[i].ret=0;
-			args[i].gu = &digest_umap_aux;
-			args[i].gtu = &digest_text_umap_aux;
-			args[i].result = result;
-			args[i].free_me = free_me;
-			args[i].defer_free = defer_free;
+	if (use_resultset) {
+		free_me = true;
+		defer_free = true;
+		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+			curtime1=monotonic_time();
+			result = new SQLite3_result(14, true);
+		} else {
+			result = new SQLite3_result(14);
 		}
-		for (int i=0; i<n; i++) {
-			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
-				// LCOV_EXCL_START
-				assert(0);
-				// LCOV_EXCL_STOP
+		result->add_column_definition(SQLITE_TEXT,"hid");
+		result->add_column_definition(SQLITE_TEXT,"schemaname");
+		result->add_column_definition(SQLITE_TEXT,"username");
+		result->add_column_definition(SQLITE_TEXT,"client_address");
+		result->add_column_definition(SQLITE_TEXT,"digest");
+		result->add_column_definition(SQLITE_TEXT,"digest_text");
+		result->add_column_definition(SQLITE_TEXT,"count_star");
+		result->add_column_definition(SQLITE_TEXT,"first_seen");
+		result->add_column_definition(SQLITE_TEXT,"last_seen");
+		result->add_column_definition(SQLITE_TEXT,"sum_time");
+		result->add_column_definition(SQLITE_TEXT,"min_time");
+		result->add_column_definition(SQLITE_TEXT,"max_time");
+		result->add_column_definition(SQLITE_TEXT,"rows_affected");
+		result->add_column_definition(SQLITE_TEXT,"rows_sent");
+		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+			for (int i=0; i<n; i++) {
+				args[i].m=i;
+				args[i].gu = &digest_umap_aux;
+				args[i].gtu = &digest_text_umap_aux;
+				args[i].result = result;
+				args[i].free_me = free_me;
+				args[i].defer_free = defer_free;
 			}
-		}
-		for (int i=0; i<n; i++) {
-			pthread_join(args[i].thr, NULL);
-		}
-		if (free_me == false) {
+			for (int i=0; i<n; i++) {
+				if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+					// LCOV_EXCL_START
+					assert(0);
+					// LCOV_EXCL_STOP
+				}
+			}
+			for (int i=0; i<n; i++) {
+				pthread_join(args[i].thr, NULL);
+			}
+			if (free_me == false) {
+				for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap_aux.begin(); it!=digest_umap_aux.end(); ++it) {
+					QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+					delete qds;
+				}
+			}
+		} else {
 			for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap_aux.begin(); it!=digest_umap_aux.end(); ++it) {
 				QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+				query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
+				char **pta=qds->get_row(&digest_text_umap_aux, a);
+				result->add_row(pta);
+				free(a);
 				delete qds;
 			}
 		}
-	} else {
-		for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap_aux.begin(); it!=digest_umap_aux.end(); ++it) {
-			QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
-			query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
-			char **pta=qds->get_row(&digest_text_umap_aux, a);
-			result->add_row(pta);
-			//qds->free_row(pta);
-			free(a);
-			delete qds;
-		}
 	}
+	GloAdmin->stats___save_mysql_query_digest_to_sqlite(
+		false, false, result, &digest_umap_aux, &digest_text_umap_aux
+	);
 	digest_umap_aux.clear();
 	// this part is always single-threaded
 	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap_aux.begin(); it!=digest_text_umap_aux.end(); ++it) {
