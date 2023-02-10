@@ -1369,6 +1369,10 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			l_free(pkt->size,pkt->ptr);
 			pkt->size=pkt_2.size;
 			pkt->ptr=pkt_2.ptr;
+			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
+			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
+			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
+			CurrentQuery.QueryLength = pkt_2.size;
 		}
 	}
 	if ((pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
@@ -1389,6 +1393,10 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			l_free(pkt->size,pkt->ptr);
 			pkt->size=pkt_2.size;
 			pkt->ptr=pkt_2.ptr;
+			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
+			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
+			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
+			CurrentQuery.QueryLength = pkt_2.size;
 		}
 	}
 	if (
