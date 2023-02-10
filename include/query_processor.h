@@ -66,6 +66,7 @@ class QP_query_digest_stats {
 		unsigned long long cnt = 1
 	);
 	~QP_query_digest_stats();
+	char *get_digest_text(const umap_query_digest_text *digest_text_umap);
 	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
 };
 
