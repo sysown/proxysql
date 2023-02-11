@@ -3902,8 +3902,18 @@ void MySQL_Thread::process_all_sessions() {
 		if (sess->healthy==0) {
 			char _buf[1024];
 			if (sess->client_myds) {
-				if (mysql_thread___log_unhealthy_connections && sess->session_fast_forward == false) {
-					proxy_warning("Closing unhealthy client connection %s:%d\n",sess->client_myds->addr.addr,sess->client_myds->addr.port);
+				if (mysql_thread___log_unhealthy_connections) {
+					if (sess->session_fast_forward == false) {
+						proxy_warning(
+							"Closing unhealthy client connection %s:%d\n", sess->client_myds->addr.addr,
+							sess->client_myds->addr.port
+						);
+					} else {
+						proxy_warning(
+							"Closing 'fast_forward' client connection %s:%d\n", sess->client_myds->addr.addr,
+							sess->client_myds->addr.port
+						);
+					}
 				}
 			}
 			sprintf(_buf,"%s:%d:%s()", __FILE__, __LINE__, __func__);
