@@ -9449,7 +9449,7 @@ void ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 	// If the function do not receives a resultset, it gets the values directly from the digest_umap
 	while (resultset ? i != resultset->rows_count : it != digest_umap->end()) {
 		QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
-		SQLite3_row *row  = resultset ? resultset->rows[i] : NULL; i++;
+		SQLite3_row *row  = resultset ? resultset->rows[i] : NULL;
 		string digest_hex_str;
 		if (!resultset) {
 			std::ostringstream digest_stream;
@@ -9496,6 +9496,10 @@ void ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
 		}
+#ifdef DEBUG
+		if (resultset)
+			assert(row_idx == i);
+#endif
 		row_idx++;
 		if (resultset)
 			i++;
