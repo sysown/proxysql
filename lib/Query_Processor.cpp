@@ -1374,7 +1374,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset_v2(const bool use_resu
 	pthread_rwlock_unlock(&digest_rwlock);
 	unsigned long long curtime1;
 	unsigned long long curtime2;
-	size_t map_size = digest_umap.size();
+	size_t map_size = digest_umap_aux.size(); // we need to use the new map
 	bool free_me = false;
 	bool defer_free = false;
 	int n=DIGEST_STATS_FAST_THREADS;
