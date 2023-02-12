@@ -3997,16 +3997,36 @@ __get_pkts_from_client:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
 								break;
 							case _MYSQL_COM_BINLOG_DUMP:
-							case _MYSQL_COM_REGISTER_SLAVE:
 							case _MYSQL_COM_BINLOG_DUMP_GTID:
+							case _MYSQL_COM_REGISTER_SLAVE:
 								// In this switch we handle commands that download binlog events from MySQL
-								// servers. For this commands a lot of the features provided by ProxySQL
+								// servers. For these commands a lot of the features provided by ProxySQL
 								// aren't useful, like multiplexing, query parsing, etc. For this reason,
-								// ProxySQL enable fast_forward when it receives these commands. 
-								proxy_info(
-									"COM_REGISTER_SLAVE, COM_BINLOG_DUMP or COM_BINLOG_DUMP_GTID received. "
-									"Changing session fast foward to true\n"
-								);
+								// ProxySQL enables fast_forward when it receives these commands. 
+								{
+									// we use a switch to write the command in the info message
+									std::string q = "Received command ";
+									switch ((enum_mysql_command)c) {
+										case _MYSQL_COM_BINLOG_DUMP:
+											q += "MYSQL_COM_BINLOG_DUMP";
+											break;
+										case _MYSQL_COM_BINLOG_DUMP_GTID:
+											q += "MYSQL_COM_BINLOG_DUMP_GTID";
+											break;
+										case _MYSQL_COM_REGISTER_SLAVE:
+											q += "MYSQL_COM_REGISTER_SLAVE";
+											break;
+										default:
+											assert(0);
+											break;
+									};
+									// we add the client details in the info message
+									if (client_myds && client_myds->addr.addr) {
+										q += " from client " + std::string(client_myds->addr.addr) + ":" + std::to_string(client_myds->addr.port);
+									}
+									q += " . Changing session fast_forward to true";
+									proxy_info("%s\n", q.c_str());
+								}
 								session_fast_forward = true;
 
 								if (client_myds->PSarrayIN->len) {
@@ -4047,6 +4067,33 @@ __get_pkts_from_client:
 									// by 'mariadb' library. Otherwise 'MySQL_Thread' will threat this
 									// 'MySQL_Data_Stream' as library handled.
 									mybe->server_myds->DSS = STATE_READY;
+									// myds needs to have encrypted value set correctly
+									{
+										MySQL_Data_Stream * myds = mybe->server_myds;
+										MySQL_Connection * myconn = myds->myconn;
+										assert(myconn != NULL);
+										// PMC-10005
+										// if backend connection uses SSL we will set
+										// encrypted = true and we will start using the SSL structure
+										// directly from P_MARIADB_TLS structure.
+										MYSQL *mysql = myconn->mysql;
+										if (mysql && myconn->ret_mysql) {
+											if (mysql->options.use_ssl == 1) {
+												P_MARIADB_TLS * matls = (P_MARIADB_TLS *)mysql->net.pvio->ctls;
+												if (matls != NULL) {
+													myds->encrypted = true;
+													myds->ssl = (SSL *)matls->ssl;
+													myds->rbio_ssl = BIO_new(BIO_s_mem());
+													myds->wbio_ssl = BIO_new(BIO_s_mem());
+													SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+												} else {
+													// if mysql->options.use_ssl == 1 but matls == NULL
+													// it means that ProxySQL tried to use SSL to connect to the backend
+													// but the backend didn't support SSL
+												}
+											}
+										}
+									}
 									set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 								}
 
