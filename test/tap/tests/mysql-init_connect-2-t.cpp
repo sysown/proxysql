@@ -175,6 +175,8 @@ int main(int argc, char** argv) {
 		mysql_free_result(res);
 	}
 
+	MYSQL_QUERY(mysqladmin, "DELETE FROM mysql_hostgroup_attributes");
+	MYSQL_QUERY(mysqladmin, "LOAD MYSQL SERVERS TO RUNTIME");
 	mysql_close(mysqladmin);
 
 	return exit_status();
