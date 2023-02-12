@@ -6576,10 +6576,12 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	rc = mydb->prepare_v2(query, &statement);
 	ASSERT_SQLITE_OK(rc, mydb);
 	proxy_info("New mysql_hostgroup_attributes table\n");
+	bool current_configured[MyHostGroups->len];
 	// set configured = false to all
 	// in this way later we can known which HG were updated
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		current_configured[i] = myhgc->attributes.configured;
 		myhgc->attributes.configured = false;
 	}
 
@@ -6659,9 +6661,11 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		if (myhgc->attributes.configured == false) {
-			// if configured == false reset to defaults
-			proxy_info("Resetting hostgroup attributes for hostgroup %u\n", myhgc->hid);
-			myhgc->reset_attributes();
+			if (current_configured[i] == true) {
+				// if configured == false and previously it was configured == true , reset to defaults
+				proxy_info("Resetting hostgroup attributes for hostgroup %u\n", myhgc->hid);
+				myhgc->reset_attributes();
+			}
 		}
 	}
 
