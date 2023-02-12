@@ -4018,6 +4018,7 @@ __get_pkts_from_client:
 								// The following code prepares the session as if it was configured with fast
 								// forward before receiving the command. This way the state machine will
 								// handle the command automatically.
+								current_hostgroup = previous_hostgroup;
 								mybe = find_or_create_backend(current_hostgroup); // set a backend
 								mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
 								// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
@@ -7448,6 +7449,7 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 		CurrentQuery.end();
 	}
 	started_sending_data_to_client=false;
+	previous_hostgroup = current_hostgroup;
 }
 
 
