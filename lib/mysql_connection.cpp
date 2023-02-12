@@ -1115,6 +1115,7 @@ handler_again:
     	break;
 		case ASYNC_CONNECT_SUCCESSFUL:
 			if (mysql && ret_mysql) {
+				// PMC-10005
 				// we handle encryption for backend
 				//
 				// we have a similar code in MySQL_Data_Stream::attach_connection()
