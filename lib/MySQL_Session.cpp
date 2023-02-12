@@ -1827,9 +1827,15 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent=true;
-		if (mysql_thread___init_connect) {
+		char * tmp_init_connect = mysql_thread___init_connect;
+		char * init_connect_hg = mybe->server_myds->myconn->parent->myhgc->attributes.init_connect;
+		if (init_connect_hg != NULL && strlen(init_connect_hg) != 0) {
+			// mysql_hostgroup_attributes takes priority
+			tmp_init_connect = init_connect_hg;
+		}
+		if (tmp_init_connect) {
 			// we send init connect queries only if set
-			mybe->server_myds->myconn->options.init_connect=strdup(mysql_thread___init_connect);
+			mybe->server_myds->myconn->options.init_connect=strdup(tmp_init_connect);
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
