@@ -83,6 +83,7 @@ jobs:
     - if: matrix.language == 'cpp' 
       name: Build C++
       run: |
+        export GIT_VERSION 2.5.0
         make
 
     - name: Perform CodeQL Analysis
