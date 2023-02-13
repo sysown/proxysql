@@ -114,7 +114,7 @@ libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
 libev/libev/.libs/libev.a:
 	cd libev && rm -rf libev-*/ || true
 	cd libev && tar -zxf libev-*.tar.gz
-#	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
+	cd libev/libev && patch ev.c < ../ev.c-multiplication-overflow.patch
 	cd libev/libev && ./configure
 	cd libev/libev && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -251,7 +251,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_rpl.c < ../mariadb_rpl.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mariadb_rpl.h < ../mariadb_rpl.h.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
-# cd mariadb-client-library/mariadb_client/include && make my_config.h
+#	cd mariadb-client-library/mariadb_client/include && make my_config.h
 
 mariadb_client: mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a
 
@@ -260,7 +260,7 @@ sqlite3/sqlite3/sqlite3.o:
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
 	cd sqlite3 && tar -zxf sqlite-amalgamation-*.tar.gz
 	cd sqlite3/sqlite3 && patch -p1 < ../from_unixtime.patch
-#	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
+	cd sqlite3/sqlite3 && patch sqlite3.c < ../sqlite3.c-multiplication-overflow.patch
 	cd sqlite3/sqlite3 && ${CC} ${MYCFLAGS} -fPIC -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1 -DSQLITE_DLL=1
 	cd sqlite3/sqlite3 && ${CC} -shared -o libsqlite3.so sqlite3.o
 
@@ -294,7 +294,7 @@ re2/re2/obj/libre2.a:
 	cd re2 && tar -zxf re2-*.tar.gz
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
-#	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
+	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
 ifeq ($(UNAME_S),Darwin)
 	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -std=c++11 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 #	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
@@ -310,7 +310,7 @@ re2: re2/re2/obj/libre2.a
 pcre/pcre/.libs/libpcre.a:
 	cd pcre && rm -rf pcre-*/ || true
 	cd pcre && tar -zxf pcre-*.tar.gz
-#	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
+	cd pcre/pcre && patch pcretest.c < ../pcretest.c-multiplication-overflow.patch
 	cd pcre/pcre && ./configure
 	cd pcre/pcre && CC=${CC} CXX=${CXX} ${MAKE}
 
