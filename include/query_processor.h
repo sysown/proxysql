@@ -323,8 +323,8 @@ class Query_Processor {
 	SQLite3_result * get_stats_commands_counters();
 	SQLite3_result * get_query_digests();
 	SQLite3_result * get_query_digests_reset();
-	SQLite3_result * get_query_digests_v2(const bool use_resultset = true);
-	SQLite3_result * get_query_digests_reset_v2(const bool use_resultset = true);
+	std::pair<SQLite3_result *, int> get_query_digests_v2(const bool use_resultset = true);
+	std::pair<SQLite3_result *, int> get_query_digests_reset_v2(const bool use_resultset = true);
 	void get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt);
 	unsigned long long purge_query_digests(bool async_purge, bool parallel, char **msg);
 	unsigned long long purge_query_digests_async(char **msg);

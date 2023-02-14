@@ -1076,15 +1076,15 @@ incoming_servers_t::incoming_servers_t(
 int ProxySQL_Test___GetDigestTable_v2(bool reset, bool use_resultset) {
 	int r = 0;
 	if (!GloQPro) return 0;
-	SQLite3_result * resultset=NULL;
+	std::pair<SQLite3_result *, int> res;
 	if (reset==true) {
-		resultset=GloQPro->get_query_digests_reset_v2(use_resultset);
+		res = GloQPro->get_query_digests_reset_v2(use_resultset);
 	} else {
-		resultset=GloQPro->get_query_digests_v2(use_resultset);
+		res = GloQPro->get_query_digests_v2(use_resultset);
 	}
-	if (resultset==NULL) return 0;
-	r = resultset->rows_count;
-	delete resultset;
+	if (res.first == NULL) return res.second;
+	r = res.first->rows_count;
+	delete res.first;
 	return r;
 }
 
@@ -4062,8 +4062,8 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						// get all the entries from the digest map, but WRITING to DB
 						// it uses multiple threads
 						// It locks the maps while generating the resultset
-						SPA->stats___mysql_query_digests(false, true);
-						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0);
+						r1 = SPA->stats___mysql_query_digests(false, true);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 23:
@@ -9450,7 +9450,7 @@ void ProxySQL_Admin::stats___proxysql_message_metrics(bool reset) {
 	delete resultset;
 }
 
-void ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
+int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 	const bool reset, const bool copy, const SQLite3_result *resultset, const umap_query_digest *digest_umap,
 	const umap_query_digest_text *digest_text_umap
 ) {
@@ -9551,17 +9551,19 @@ void ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 		}
 	}
 	statsdb->execute("COMMIT");
+
+	return row_idx;
 }
 
-void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
-	if (!GloQPro) return;
+int ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
+	if (!GloQPro) return 0;
 	SQLite3_result * resultset=NULL;
 	if (reset==true) {
 		resultset=GloQPro->get_query_digests_reset();
 	} else {
 		resultset=GloQPro->get_query_digests();
 	}
-	if (resultset==NULL) return;
+	if (resultset==NULL) return 0;
 	statsdb->execute("BEGIN");
 	int rc;
 	sqlite3_stmt *statement1=NULL;
@@ -9656,6 +9658,8 @@ void ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 	}
 	statsdb->execute("COMMIT");
 	delete resultset;
+
+	return row_idx;
 }
 
 void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {

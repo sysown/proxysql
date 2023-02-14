@@ -418,11 +418,11 @@ class ProxySQL_Admin {
 
 	void p_update_metrics();
 	void stats___mysql_query_rules();
-	void stats___save_mysql_query_digest_to_sqlite(
+	int stats___save_mysql_query_digest_to_sqlite(
 		const bool reset, const bool copy, const SQLite3_result *resultset,
 		const umap_query_digest *digest_umap, const umap_query_digest_text *digest_text_umap
 	);
-	void stats___mysql_query_digests(bool reset, bool copy=false);
+	int stats___mysql_query_digests(bool reset, bool copy=false);
 	//void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();

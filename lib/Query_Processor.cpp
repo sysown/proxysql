@@ -1189,7 +1189,7 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 	return ret;
 }
 
-SQLite3_result * Query_Processor::get_query_digests_v2(const bool use_resultset) {
+std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const bool use_resultset) {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
 	SQLite3_result *result = NULL;
 	// Create two auxiliary maps and swap its content with the main maps. This
@@ -1259,7 +1259,7 @@ SQLite3_result * Query_Processor::get_query_digests_v2(const bool use_resultset)
 			}
 		}
 	}
-	GloAdmin->stats___save_mysql_query_digest_to_sqlite(
+	int num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
 		false, false, result, &digest_umap_aux, &digest_text_umap_aux
 	);
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
@@ -1294,7 +1294,8 @@ SQLite3_result * Query_Processor::get_query_digests_v2(const bool use_resultset)
 	digest_text_umap_aux.clear();
 	pthread_rwlock_unlock(&digest_rwlock);
 
-	return result;
+	std::pair<SQLite3_result *, int> res{result, num_rows};
+	return res;
 }
 
 SQLite3_result * Query_Processor::get_query_digests() {
@@ -1364,7 +1365,7 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	return result;
 }
 
-SQLite3_result * Query_Processor::get_query_digests_reset_v2(const bool use_resultset) {
+std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(const bool use_resultset) {
 	SQLite3_result *result = NULL;
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
@@ -1438,7 +1439,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset_v2(const bool use_resu
 			}
 		}
 	}
-	GloAdmin->stats___save_mysql_query_digest_to_sqlite(
+	int num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
 		false, false, result, &digest_umap_aux, &digest_text_umap_aux
 	);
 	digest_umap_aux.clear();
@@ -1464,7 +1465,9 @@ SQLite3_result * Query_Processor::get_query_digests_reset_v2(const bool use_resu
 			}
 		}
 	}
-	return result;
+
+	std::pair<SQLite3_result *, int> res{result, num_rows};
+	return res;
 }
 
 void Query_Processor::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
