@@ -1073,6 +1073,21 @@ incoming_servers_t::incoming_servers_t(
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes)
 {}
 
+int ProxySQL_Test___GetDigestTable_v2(bool reset, bool use_resultset) {
+	int r = 0;
+	if (!GloQPro) return 0;
+	SQLite3_result * resultset=NULL;
+	if (reset==true) {
+		resultset=GloQPro->get_query_digests_reset_v2(use_resultset);
+	} else {
+		resultset=GloQPro->get_query_digests_v2(use_resultset);
+	}
+	if (resultset==NULL) return 0;
+	r = resultset->rows_count;
+	delete resultset;
+	return r;
+}
+
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	int r = 0;
 	if (!GloQPro) return 0;
@@ -4042,6 +4057,28 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 						run_query=false;
 						free(msg);
+						break;
+					case 22:
+						// get all the entries from the digest map, but WRITING to DB
+						// it uses multiple threads
+						// It locks the maps while generating the resultset
+						SPA->stats___mysql_query_digests(false, true);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0);
+						run_query=false;
+						break;
+					case 23:
+						// get all the entries from the digest map, but WRITING to DB
+						// it uses multiple threads for creating the resultset
+						r1 = ProxySQL_Test___GetDigestTable_v2(false, true);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					case 24:
+						// get all the entries from the digest map, but WRITING to DB
+						// Do not create a resultset, uses the digest_umap
+						r1 = ProxySQL_Test___GetDigestTable_v2(false, false);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
 						break;
 					case 31:
 						{
