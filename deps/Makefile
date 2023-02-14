@@ -93,12 +93,22 @@ libssl/openssl/libssl.a:
 
 libssl: libssl/openssl/libssl.a
 
+MIN_VERSION := 4.9.0
+GCC_VERSION := $(shell gcc -dumpversion)
+SORTED_VERSIONS := $(shell echo -e "$(GCC_VERSION)\n$(MIN_VERSION)" | sort -V)
+
+REQUIRE_PATCH = false
+ifeq ($(MIN_VERSION),$(lastword $(SORTED_VERSIONS)))
+	REQUIRE_PATCH = true
+endif
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
+#ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../re2_regex.patch
+#endif
 	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
 ifeq ($(UNAME_S),FreeBSD)
