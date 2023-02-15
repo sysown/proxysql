@@ -1716,7 +1716,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		}
 
 		if (timeout_reached == false && mmsd->interr == 0) {
-			MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // default behavior
+			MyHGM->read_only_action_v2({ { mmsd->hostname, mmsd->port, read_only } }); // default behavior
 		} else {
 			char *error=NULL;
 			int cols=0;
@@ -1735,7 +1735,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 						// disable host
 						proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, max_failures);
 						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECKS_MISSED);
-						MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // N timeouts reached
+						MyHGM->read_only_action_v2({ { mmsd->hostname, mmsd->port, read_only } }); // N timeouts reached
 					}
 					delete resultset;
 					resultset=NULL;
@@ -7089,6 +7089,8 @@ __again:
 
 bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 
+	std::list<std::tuple<std::string, int, int>> mysql_servers;
+
 	for (auto& mmsd : mmsds) {
 
 		const auto task_result = mmsd->get_task_result();
@@ -7181,7 +7183,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		(*proxy_sqlite3_finalize)(statement);
 
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
-			MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // default behavior
+			//MyHGM->read_only_action_v2(mmsd->hostname, mmsd->port, read_only); // default behavior
+			mysql_servers.push_back({ mmsd->hostname, mmsd->port, read_only });
 		} else {
 			char* error = NULL;
 			int cols = 0;
@@ -7200,7 +7203,8 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 						// disable host
 						proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, max_failures);
 						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECKS_MISSED);
-						MyHGM->read_only_action(mmsd->hostname, mmsd->port, read_only); // N timeouts reached
+						//MyHGM->read_only_action_v2(mmsd->hostname, mmsd->port, read_only); // N timeouts reached
+						mysql_servers.push_back({ mmsd->hostname, mmsd->port, read_only });
 					}
 					delete resultset;
 					resultset = NULL;
@@ -7211,6 +7215,9 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			free(buff);
 		}
 	}
+
+	//executing readonly actions
+	MyHGM->read_only_action_v2(mysql_servers);
 
 	return true;
 }
