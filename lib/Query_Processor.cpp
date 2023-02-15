@@ -1287,6 +1287,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 			qds_equal->add_time(
 				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
 			);
+			delete qds_equal;
 		} else {
 			digest_umap.insert(element);
 		}
