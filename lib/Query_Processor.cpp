@@ -1293,9 +1293,9 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 		}
 	}
 	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
+	pthread_rwlock_unlock(&digest_rwlock);
 	digest_umap_aux.clear();
 	digest_text_umap_aux.clear();
-	pthread_rwlock_unlock(&digest_rwlock);
 
 	std::pair<SQLite3_result *, int> res{result, num_rows};
 	return res;
