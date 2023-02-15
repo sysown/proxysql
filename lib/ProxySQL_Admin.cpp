@@ -4080,6 +4080,28 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
+					case 25:
+						// get all the entries from the digest map AND RESET, but WRITING to DB
+						// it uses multiple threads
+						// It locks the maps while generating the resultset
+						r1 = SPA->stats___mysql_query_digests(true, true);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					case 26:
+						// get all the entries from the digest map AND RESET, but WRITING to DB
+						// it uses multiple threads for creating the resultset
+						r1 = ProxySQL_Test___GetDigestTable_v2(true, true);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
+					case 27:
+						// get all the entries from the digest map AND RESET, but WRITING to DB
+						// Do not create a resultset, uses the digest_umap
+						r1 = ProxySQL_Test___GetDigestTable_v2(true, false);
+						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
+						run_query=false;
+						break;
 					case 31:
 						{
 							if (test_arg1==0) {
