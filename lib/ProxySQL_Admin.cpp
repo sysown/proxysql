@@ -1073,7 +1073,7 @@ incoming_servers_t::incoming_servers_t(
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes)
 {}
 
-int ProxySQL_Test___GetDigestTable_v2(bool reset, bool use_resultset) {
+int ProxySQL_Test___GetDigestTable_v2(bool reset, bool copy, bool use_resultset) {
 	int r = 0;
 	if (!GloQPro) return 0;
 	std::pair<SQLite3_result *, int> res;
@@ -4069,14 +4069,14 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 					case 23:
 						// get all the entries from the digest map, but WRITING to DB
 						// it uses multiple threads for creating the resultset
-						r1 = ProxySQL_Test___GetDigestTable_v2(false, true);
+						r1 = ProxySQL_Test___GetDigestTable_v2(false, false, true);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 24:
 						// get all the entries from the digest map, but WRITING to DB
 						// Do not create a resultset, uses the digest_umap
-						r1 = ProxySQL_Test___GetDigestTable_v2(false, false);
+						r1 = ProxySQL_Test___GetDigestTable_v2(false, false, false);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
@@ -4091,14 +4091,14 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 					case 26:
 						// get all the entries from the digest map AND RESET, but WRITING to DB
 						// it uses multiple threads for creating the resultset
-						r1 = ProxySQL_Test___GetDigestTable_v2(true, true);
+						r1 = ProxySQL_Test___GetDigestTable_v2(true, true, true);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 27:
 						// get all the entries from the digest map AND RESET, but WRITING to DB
 						// Do not create a resultset, uses the digest_umap
-						r1 = ProxySQL_Test___GetDigestTable_v2(true, false);
+						r1 = ProxySQL_Test___GetDigestTable_v2(true, true, false);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
