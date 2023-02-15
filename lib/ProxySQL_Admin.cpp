@@ -1077,15 +1077,19 @@ int ProxySQL_Test___GetDigestTable_v2(bool reset, bool copy, bool use_resultset)
 	int r = 0;
 	if (!GloQPro) return 0;
 	std::pair<SQLite3_result *, int> res;
-	if (reset==true) {
+	if (reset == true) {
 		res = GloQPro->get_query_digests_reset_v2(use_resultset);
 	} else {
 		res = GloQPro->get_query_digests_v2(use_resultset);
 	}
-	if (res.first == NULL) return res.second;
-	r = res.first->rows_count;
+
+	if (res.first == NULL)
+		return res.second;
+
+	int num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(reset, copy, res.first, NULL, NULL);
 	delete res.first;
-	return r;
+
+	return num_rows;
 }
 
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
@@ -9503,11 +9507,11 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 	int num_rows = resultset ? resultset->rows_count : digest_umap->size();
 	int max_bulk_row_idx = num_rows/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
-	auto it = digest_umap->cbegin();
+	auto it = resultset ? (std::unordered_map<uint64_t, void *>::iterator)NULL : digest_umap->cbegin();
 	int i = 0;
 	// If the function do not receives a resultset, it gets the values directly from the digest_umap
 	while (resultset ? i != resultset->rows_count : it != digest_umap->end()) {
-		QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
+		QP_query_digest_stats *qds = (QP_query_digest_stats *)(resultset ? NULL : it->second);
 		SQLite3_row *row  = resultset ? resultset->rows[i] : NULL;
 		string digest_hex_str;
 		if (!resultset) {
