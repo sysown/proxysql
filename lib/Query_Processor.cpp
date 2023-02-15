@@ -1201,6 +1201,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
+	int num_rows = 0;
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	size_t map_size = digest_umap_aux.size();
@@ -1258,10 +1259,11 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 				free(a);
 			}
 		}
+	} else {
+		num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
+			false, false, NULL, &digest_umap_aux, &digest_text_umap_aux
+		);
 	}
-	int num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
-		false, false, result, &digest_umap_aux, &digest_text_umap_aux
-	);
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
@@ -1373,6 +1375,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(con
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
+	int num_rows = 0;
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	size_t map_size = digest_umap_aux.size(); // we need to use the new map
@@ -1438,10 +1441,11 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(con
 				delete qds;
 			}
 		}
+	} else {
+		num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
+			false, false, result, &digest_umap_aux, &digest_text_umap_aux
+		);
 	}
-	int num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
-		false, false, result, &digest_umap_aux, &digest_text_umap_aux
-	);
 	digest_umap_aux.clear();
 	// this part is always single-threaded
 	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap_aux.begin(); it!=digest_text_umap_aux.end(); ++it) {
