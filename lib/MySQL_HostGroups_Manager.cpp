@@ -7138,18 +7138,18 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			sprintf(query,q, _server_id, domain_name);
 			mydb->execute(query);
 
-            unsigned int max_max_connections = 1000;
-            unsigned int max_use_ssl = 0;
-            MyHGC *myhgc = MyHGC_lookup(_whid);
-            for (int j = 0; j < (int) myhgc->mysrvs->cnt(); j++) {
-                MySrvC *mysrvc = (MySrvC *) myhgc->mysrvs->servers->index(j);
-                if (mysrvc->max_connections > max_max_connections) {
-                    max_max_connections = mysrvc->max_connections;
-                }
-                if (mysrvc->use_ssl > max_use_ssl) {
-                    max_use_ssl = mysrvc->use_ssl;
-                }
-            }
+			unsigned int max_max_connections = 1000;
+			unsigned int max_use_ssl = 0;
+			MyHGC *myhgc = MyHGC_lookup(_whid);
+			for (int j = 0; j < (int) myhgc->mysrvs->cnt(); j++) {
+				MySrvC *mysrvc = (MySrvC *) myhgc->mysrvs->servers->index(j);
+				if (mysrvc->max_connections > max_max_connections) {
+					max_max_connections = mysrvc->max_connections;
+				}
+				if (mysrvc->use_ssl > max_use_ssl) {
+					max_use_ssl = mysrvc->use_ssl;
+				}
+			}
 
 			q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight, max_connections, use_ssl) VALUES (%d, '%s%s', %d, %d, %d, %d)";
 			sprintf(query,q, _writer_hostgroup, _server_id, domain_name, aurora_port, new_reader_weight, max_max_connections, max_use_ssl);
