@@ -34,5 +34,6 @@ jobs:
         export GIT_VERSION=${VERS}-${CMTS}-g${HASH}
     
     - name: Build C++
+      run: |
         make clickhouse_debug
         
