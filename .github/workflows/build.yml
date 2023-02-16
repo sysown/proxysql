@@ -1,10 +1,10 @@
 name: C/C++ CI
 
 on:
-#  push:
-#    branches: [ "v2.x" ]
-#  pull_request:
-#    branches: [ "v2.x" ]
+  push:
+    branches: [ "v2.x" ]
+  pull_request:
+    branches: [ "v2.x" ]
 #  schedule:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
