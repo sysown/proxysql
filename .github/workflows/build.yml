@@ -24,10 +24,13 @@ jobs:
       uses: actions/checkout@v3
       
     - name: Build C++
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         export VERS=$(git ls-remote https://github.com/sysown/proxysql.git "refs/tags/*" | grep -v 'refs/tags/v' | sed -e 's|.*/||g' | tail -2 | head -1)
         export HASH=$(gh api repos/sysown/proxysql/git/refs/heads/v2.x | jq '.object.sha' | cut -c2-8)
         export CMTS=$(gh api repos/sysown/proxysql/compare/${VERS}...v2.x | jq '.ahead_by')
+        echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
         export GIT_VERSION=2.5.0-0-g0000000
         make clickhouse
         
