@@ -8,6 +8,7 @@
 
 #include "MySQL_Logger.hpp"
 #include "MySQL_Data_Stream.h"
+#include "proxysql_utils.h"
 #include "query_processor.h"
 #include "SQLite3_Server.h"
 
@@ -23,7 +24,11 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <pthread.h>
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include <fcntl.h>
 #include <sys/utsname.h>
@@ -64,6 +69,7 @@
         } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
 } while (0)
 
+/*
 struct cpu_timer
 {
 	cpu_timer() {
@@ -79,6 +85,7 @@ struct cpu_timer
 	};
 	unsigned long long begin;
 };
+*/
 
 static char *s_strdup(char *s) {
 	char *ret=NULL;
@@ -233,7 +240,82 @@ class sqlite3server_main_loop_listeners {
 
 static sqlite3server_main_loop_listeners S_amll;
 
+#ifdef TEST_GROUPREP
+/**
+ * @brief Helper function that checks if the supplied string
+ *   is a number.
+ * @param s The string to check.
+ * @return True if the supplied string is just composed of
+ *   digits, false otherwise.
+ */
+bool is_number(const std::string& s) {
+	if (s.empty()) { return false; }
 
+	for (const auto& d : s) {
+		if (std::isdigit(d) == false) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/**
+ * @brief Checks if the query matches an specified 'monitor_query' of the
+ *   following format:
+ *
+ *   "$MONITOR_QUERY" + " hostname:port"
+ *
+ *   If the query matches, 'true' is returned, false otherwise.
+ *
+ * @param monitor_query Query that should be matched against the current
+ *   supplied 'query'.
+ * @param query Current query, to be matched against the supplied
+ *   'monitor_query'.
+ * @return 'true' if the query matches, false otherwise.
+ */
+bool match_monitor_query(const std::string& monitor_query, const std::string& query) {
+	if (query.rfind(monitor_query, 0) != 0) {
+		return false;
+	}
+
+	std::string srv_address {
+		query.substr(monitor_query.size())
+	};
+
+	// Check that what is beyond this point, is just the servers address,
+	// written as an identifier 'n.n.n.n:n'.
+	std::size_t cur_mark_pos = 0;
+	for (int i = 0; i < 3; i++) {
+		std::size_t next_mark_pos = srv_address.find('.', cur_mark_pos);
+		if (next_mark_pos == std::string::npos) {
+			return false;
+		} else {
+			std::string number {
+				srv_address.substr(cur_mark_pos, next_mark_pos - cur_mark_pos)
+			};
+
+			if (is_number(number)) {
+				cur_mark_pos = next_mark_pos + 1;
+			} else {
+				return false;
+			}
+		}
+	}
+
+	// Check last part is also a valid number
+	cur_mark_pos = srv_address.find(':', cur_mark_pos);
+	if (cur_mark_pos == std::string::npos) {
+		return false;
+	} else {
+		std::string number {
+			srv_address.substr(cur_mark_pos + 1)
+		};
+
+		return is_number(number);
+	}
+}
+#endif // TEST_GROUPREP
 
 void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
@@ -244,7 +326,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	SQLite3_result *resultset=NULL;
 	char *strA=NULL;
 	char *strB=NULL;
-	int strAl, strBl;
+	size_t strAl, strBl;
 	char *query=NULL;
 	unsigned int query_length=pkt->size-sizeof(mysql_hdr);
 	query=(char *)l_alloc(query_length);
@@ -294,6 +376,101 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		query_no_space[query_no_space_length]=0;
 	}
 
+	proxy_debug(PROXY_DEBUG_SQLITE, 4, "Received query on Session %p , thread_session_id %u : %s\n", sess, sess->thread_session_id, query_no_space);
+
+	{
+		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		char c=((char *)pkt->ptr)[5];
+		bool ret=false;
+		if (c=='c' || c=='C') {
+			if (strncasecmp((char *)"commit",(char *)pkt->ptr+5,6)==0) {
+				if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+					ret=true;
+				}
+			}
+		} else {
+			if (c=='r' || c=='R') {
+				if ( strncasecmp((char *)"rollback",(char *)pkt->ptr+5,8)==0 ) {
+					if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+						ret=true;
+					}
+				}
+			}
+		}
+		// if there is no transactions we filter both commit and rollback
+		if (ret == true) {
+			uint16_t status=0;
+			if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
+			if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+				status |= SERVER_STATUS_IN_TRANS;
+			}
+			GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
+			run_query=false;
+			goto __run_query;
+		}
+	}
+
+
+
+	{
+		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		sqlite3 *db = sqlite_sess->sessdb->get_db();
+		bool prev_autocommit = sess->autocommit;
+		bool autocommit_to_skip = sess->handler_SetAutocommit(pkt);
+		if (prev_autocommit == sess->autocommit) {
+			if (autocommit_to_skip==true) {
+				uint16_t status=0;
+				if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
+				if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+					status |= SERVER_STATUS_IN_TRANS;
+				}
+				GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
+				run_query=false;
+				goto __run_query;
+			}
+		} else {
+			// autocommit changed
+			if (sess->autocommit == false) {
+				// we simply reply ok. We will create a transaction at the next query
+				// we defer the creation of the transaction to simulate how MySQL works
+				uint16_t status=0;
+				if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
+				if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+					status |= SERVER_STATUS_IN_TRANS;
+				}
+				GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
+				run_query=false;
+				goto __run_query;
+/*
+				l_free(query_length,query);
+				query = l_strdup((char *)"BEGIN IMMEDIATE");
+				query_length=strlen(query)+1;
+				goto __run_query;
+*/
+			} else {
+				// setting autocommit=1
+				if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+					// there is no transaction
+					uint16_t status=0;
+					if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
+					if ((*proxy_sqlite3_get_autocommit)(db)==0) {
+						status |= SERVER_STATUS_IN_TRANS;
+					}
+					GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
+					run_query=false;
+					goto __run_query;
+				} else {
+					// there is a transaction, we run COMMIT
+					l_free(query_length,query);
+					query = l_strdup((char *)"COMMIT");
+					query_length=strlen(query)+1;
+					goto __run_query;
+				}
+			}
+		}
+	}
+
 	// fix bug #1047
 	if (
 /*
@@ -312,8 +489,8 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		||
 		(!strncasecmp("SET NAMES", query_no_space, strlen("SET NAMES")))
 		||
-		(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
-		||
+		//(!strncasecmp("SET AUTOCOMMIT", query_no_space, strlen("SET AUTOCOMMIT")))
+		//||
 		(!strncasecmp("/*!40100 SET @@SQL_MODE='' */", query_no_space, strlen("/*!40100 SET @@SQL_MODE='' */")))
 		||
 		(!strncasecmp("/*!40103 SET TIME_ZONE=", query_no_space, strlen("/*!40103 SET TIME_ZONE=")))
@@ -326,9 +503,10 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	) {
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
 		sqlite3 *db = sqlite_sess->sessdb->get_db();
-		uint16_t status=2; // autocommit
+		uint16_t status=0;
+		if (sess->autocommit) status |= SERVER_STATUS_AUTOCOMMIT;
 		if ((*proxy_sqlite3_get_autocommit)(db)==0) {
-			status = 3; // autocommit + transaction
+			status |= SERVER_STATUS_IN_TRANS;
 		}
 		GloSQLite3Server->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0, status);
 		run_query=false;
@@ -394,7 +572,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS '@@version'";
-		query_length=strlen(q)+20;
+		query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
 		query=(char *)l_alloc(query_length);
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
@@ -403,7 +581,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
 		l_free(query_length,query);
 		char *q=(char *)"SELECT '%s' AS 'version()'";
-		query_length=strlen(q)+20;
+		query_length=strlen(q)+strlen(PROXYSQL_VERSION)+20;
 		query=(char *)l_alloc(query_length);
 		sprintf(query,q,PROXYSQL_VERSION);
 		goto __run_query;
@@ -441,9 +619,9 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 		strB=(char *)"SELECT name AS tables FROM sqlite_master WHERE type='table' AND name LIKE '%s'";
 		strBl=strlen(strB);
 		char *tn=NULL; // tablename
-		tn=(char *)malloc(strlen(strA));
+		tn=(char *)malloc(strAl+1);
 		unsigned int i=0, j=0;
-		while (i<strlen(strA)) {
+		while (i<strAl) {
 			if (strA[i]!='\\' && strA[i]!='`' && strA[i]!='\'') {
 				tn[j]=strA[i];
 				j++;
@@ -523,6 +701,20 @@ __end_show_commands:
 		goto __run_query;
 	}
 
+	if (query_length>20 && strncasecmp(query,"SELECT",6)==0) {
+		if (strncasecmp(query+query_length-12," FOR UPDATE",11)==0) {
+			char * query_new = strndup(query,query_length-12);
+			l_free(query_length,query);
+			query_length-=11;
+			query = query_new;
+		} else if (strncasecmp(query+query_length-20," LOCK IN SHARE MODE",19)==0) {
+			char * query_new = strndup(query,query_length-20);
+			l_free(query_length,query);
+			query_length-=11;
+			query = query_new;
+		}
+	}
+
 	if (sess->session_type == PROXYSQL_SESSION_SQLITE) { // no admin
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
@@ -555,8 +747,41 @@ __run_query:
 #ifdef TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS")) {
 				pthread_mutex_lock(&GloSQLite3Server->grouprep_mutex);
-				GloSQLite3Server->populate_grouprep_table(sess, testLag);
-				if (testLag > 0) testLag--;
+				GloSQLite3Server->populate_grouprep_table(sess, 0);
+				// NOTE: This query should be in one place that can be reused by
+				// 'ProxySQL_Monitor' module.
+				const std::string grouprep_monitor_test_query_start {
+					"SELECT viable_candidate,read_only,transactions_behind "
+						"FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS "
+				};
+
+				// If the query matches 'grouprep_monitor_test_query_start', it
+				// means that the query has been issued by `ProxySQL_Monitor` and
+				// we need to fetch for the proper values and replace the query
+				// with one holding the values from `grouprep_map`.
+				if (match_monitor_query(grouprep_monitor_test_query_start, query_no_space)) {
+					std::string srv_addr {
+						query_no_space + grouprep_monitor_test_query_start.size()
+					};
+
+					const group_rep_status& gr_srv_status =
+						GloSQLite3Server->grouprep_test_value(srv_addr);
+					free(query);
+
+					std::string t_select_as_query {
+						"SELECT '%s' AS viable_candidate, '%s' AS read_only, %d AS transactions_behind"
+					};
+					std::string select_as_query {};
+					string_format(
+						t_select_as_query, select_as_query,
+						std::get<0>(gr_srv_status) ? "YES" : "NO",
+						std::get<1>(gr_srv_status) ? "YES" : "NO",
+						std::get<2>(gr_srv_status)
+					);
+
+					query = static_cast<char*>(malloc(select_as_query.length() + 1));
+					strcpy(query, select_as_query.c_str());
+				}
 			}
 #endif // TEST_GROUPREP
 #ifdef TEST_READONLY
@@ -586,6 +811,13 @@ __run_query:
 		}
 #endif // TEST_AURORA || TEST_GALERA || TEST_GROUPREP || TEST_READONLY
 		SQLite3_Session *sqlite_sess = (SQLite3_Session *)sess->thread->gen_args;
+		if (sess->autocommit==false) {
+			sqlite3 *db = sqlite_sess->sessdb->get_db();
+			if ((*proxy_sqlite3_get_autocommit)(db)==1) {
+				// we defer the creation of the transaction to simulate how MySQL works
+				sqlite_sess->sessdb->execute("BEGIN IMMEDIATE");
+			}
+		}
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 #if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
 		if (strncasecmp("SELECT",query_no_space,6)==0) {
@@ -613,20 +845,12 @@ __run_query:
 #ifdef TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS")) {
 				pthread_mutex_unlock(&GloSQLite3Server->grouprep_mutex);
-				if (resultset->rows_count == 0) {
-					PROXY_TRACE();
-				}
 
-				if (strncmp("127.2.1.2", sess->client_myds->proxy_addr.addr,9) == 0) {
-					if (testTimeoutSequence[testIndex--])
-						sleep(2);
-					if (testIndex < 0)
-						testIndex = 7;
-				}
-				else {
-					if (rand() % 20 == 0)
-						sleep(2);
-				}
+				// NOTE: Enable this just in case of manual testing
+				// if (rand() % 100 == 0) {
+				// 	// randomly add some latency on 1% of the traffic
+				// 	sleep(2);
+				// }
 			}
 #endif // TEST_GROUPREP
 			if (strstr(query_no_space,(char *)"Seconds_Behind_Master")) {
@@ -659,6 +883,18 @@ __run_query:
 	l_free(query_length,query);
 }
 
+#ifdef TEST_GROUPREP
+group_rep_status SQLite3_Server::grouprep_test_value(const std::string& srv_addr) {
+	group_rep_status cur_srv_st { "YES", "YES", 0 };
+
+	auto it = grouprep_map.find(srv_addr);
+	if (it != grouprep_map.end()) {
+		cur_srv_st = it->second;
+	}
+
+	return cur_srv_st;
+}
+#endif
 
 SQLite3_Session::SQLite3_Session() {
 	sessdb=new SQLite3DB();
@@ -729,16 +965,50 @@ static void *child_mysql(void *arg) {
 			}
 		}
 		myds->revents=fds[0].revents;
-		myds->read_from_net();
+		// FIXME: CI test test_sqlite3_server-t or test_sqlite3_server_and_fast_routing-t
+		// seems to result in fds->fd = -1
+		// it needs investigation
+		int rb = 0;
+		rb = myds->read_from_net();
 		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
+		if (myds->encrypted == true) {
+			// PMC-10004
+			// we probably should use SSL_pending() and/or SSL_has_pending() to determine
+			// if there is more data to be read, but it doesn't seem to be working.
+			// Therefore we try to call read_from_net() again as long as there is data.
+			// Previously we hardcoded 16KB but it seems that it can return in smaller
+			// chunks of 4KB.
+			// We finally removed the chunk size as it seems that any size is possible.
+			while (rb > 0) {
+				rb = myds->read_from_net();
+				if (myds->net_failure) goto __exit_child_mysql;
+				myds->read_pkts();
+			}
+		}
 		sess->to_process=1;
+		// Get and set the client address before the sesion is processed.
+		union {
+			struct sockaddr_in in;
+			struct sockaddr_in6 in6;
+		} custom_sockaddr;
+		struct sockaddr *addr=(struct sockaddr *)malloc(sizeof(custom_sockaddr));
+		socklen_t addrlen=sizeof(custom_sockaddr);
+		memset(addr, 0, sizeof(custom_sockaddr));
+		sess->client_myds->client_addrlen=addrlen;
+		sess->client_myds->client_addr=addr;
+		int g_rc = getpeername(sess->client_myds->fd, addr, &addrlen);
+		if (g_rc == -1) {
+			proxy_error("'getpeername' failed with error: %d\n", g_rc);
+		}
+
 		int rc=sess->handler();
 		if (rc==-1) goto __exit_child_mysql;
 	}
 
 __exit_child_mysql:
 	delete sqlite_sess;
+	mysql_thr->gen_args = NULL;
 	delete mysql_thr;
 	return NULL;
 }
@@ -793,15 +1063,25 @@ static void * sqlite3server_main_loop(void *arg)
 			}
 			fds[i].revents=0;
 		}
+		// NOTE: In case the address imposed by 'sqliteserver-mysql_ifaces' isn't avaible,
+		// a infinite loop could take place if 'POLLNVAL' is not checked here.
+		// This means that trying to set a 'mysql_ifaces' to an address that is
+		// already taken will result into an 'assert' in ProxySQL side.
+		if (nfds == 1 && fds[0].revents == POLLNVAL) {
+			proxy_error("revents==POLLNVAL for FD=%d, events=%d\n", fds[i].fd, fds[i].events);
+			assert(fds[0].revents != POLLNVAL);
+		}
 __end_while_pool:
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
 			version=S_amll.get_version();
-			for (i=0; i<nfds; i++) {
+			for (i=1; i<nfds; i++) {
 				char *add=NULL; char *port=NULL;
 				close(fds[i].fd);
-				c_split_2(socket_names[i], ":" , &add, &port);
-				if (atoi(port)==0) { unlink(socket_names[i]); }
+				if (socket_names[i] != NULL) { // this should skip socket_names[0] , because it is a pipe
+					c_split_2(socket_names[i], ":" , &add, &port);
+					if (atoi(port)==0) { unlink(socket_names[i]); }
+				}
 			}
 			nfds=0;
 			fds[nfds].fd=GloAdmin->pipefd[0];
@@ -931,7 +1211,16 @@ void SQLite3_Server::init_grouprep_ifaces_string(std::string& s) {
 	pthread_mutex_init(&grouprep_mutex,NULL);
 	if (!s.empty())
 		s += ";";
-	s += "127.2.1.1:3306;127.2.1.2:3306;127.2.1.3:3306";
+
+	// Maximum number of servers to simulate.
+	max_num_grouprep_servers = 50;
+	for (unsigned int i=0; i < max_num_grouprep_servers; i++) {
+		s += "127.2.1." + std::to_string(i) + ":3306";
+
+		if (i != max_num_grouprep_servers) {
+			s += ";";
+		}
+	}
 }
 #endif // TEST_GROUPREP
 
@@ -1119,19 +1408,77 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 #endif // TEST_AURORA
 
 #ifdef TEST_GROUPREP
+/**
+ * @brief Populates the 'grouprep' table if it's found empty with the default
+ *   values for the three testing servers.
+ *
+ *   NOTE: This function needs to be called with lock on grouprep_mutex already acquired
+ *
+ * @param sess The current session performing a query.
+ * @param txs_behind Unused parameter.
+ */
 void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind) {
-	// this function needs to be called with lock on mutex galera_mutex already acquired
-	//
-	sessdb->execute("DELETE FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS");
-	string myip = string(sess->client_myds->proxy_addr.addr);
-	string server_id = myip.substr(8,1);
-	if (server_id == "1")
-		sessdb->execute("INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'NO', 0)");
-	else {
-		std::stringstream ss;
-		ss << "INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate, read_only, transactions_behind) values ('YES', 'YES', " << txs_behind << ")";
-		sessdb->execute(ss.str().c_str());
+	GloAdmin->mysql_servers_wrlock();
+	// We are going to repopulate the map
+	this->grouprep_map.clear();
+
+	char *error=NULL;
+	int cols=0;
+	int affected_rows=0;
+	SQLite3_result *resultset=NULL;
+
+	string query { "SELECT * FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS" };
+	sessdb->execute_statement(query.c_str(), &error, &cols, &affected_rows, &resultset);
+	if (resultset) {
+		for (const SQLite3_row* r : resultset->rows) {
+			std::string srv_addr { std::string(r->fields[0]) + ":" + std::string(r->fields[1]) };
+			const group_rep_status srv_status {
+				std::string { r->fields[2] } == "YES" ? true : false,
+				std::string { r->fields[3] } == "YES" ? true : false,
+				atoi(r->fields[4])
+			};
+
+			this->grouprep_map[srv_addr] = srv_status;
+		}
 	}
+	delete resultset;
+
+	// Insert some default servers for manual testing.
+	//
+	// NOTE: This logic can be improved in the future, for now it only populates
+	// the 'monitoring' data for the default severs. If more servers are placed
+	// as the default ones, more servers will be placed in their appropiated
+	// hostgroups with the same pattern as first ones.
+	if (this->grouprep_map.size() == 0) {
+		GloAdmin->admindb->execute_statement(
+			(char*)"SELECT DISTINCT hostname, port, hostgroup_id FROM mysql_servers"
+			" WHERE hostgroup_id BETWEEN 2700 AND 4200",
+			&error, &cols , &affected_rows , &resultset
+		);
+
+		for (const SQLite3_row* r : resultset->rows) {
+			std::string hostname { r->fields[0] };
+			int port = atoi(r->fields[1]);
+			int hostgroup_id = atoi(r->fields[2]);
+			const std::string t_insert_query {
+				"INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS"
+					" (hostname, port, viable_candidate, read_only, transactions_behind) VALUES"
+					" ('%s', %d, '%s', '%s', 0)"
+			};
+			std::string insert_query {};
+
+			if (hostgroup_id % 4 == 0) {
+				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "NO");
+				sessdb->execute(insert_query.c_str());
+			} else {
+				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "YES");
+				sessdb->execute(insert_query.c_str());
+			}
+		}
+		delete resultset;
+	}
+
+	GloAdmin->mysql_servers_wrunlock();
 }
 #endif // TEST_GALERA
 
@@ -1182,7 +1529,7 @@ void SQLite3_Server::print_version() {
 };
 
 bool SQLite3_Server::init() {
-	cpu_timer cpt;
+	//cpu_timer cpt;
 
 #ifdef TEST_AURORA
 	tables_defs_aurora = new std::vector<table_def_t *>;
@@ -1204,7 +1551,11 @@ bool SQLite3_Server::init() {
 	tables_defs_grouprep = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_grouprep,
 		(const char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS",
-		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS (viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null)");
+		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS ("
+			"hostname VARCHAR NOT NULL, port INT NOT NULL, viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null, PRIMARY KEY (hostname, port)"
+		")"
+	);
+
 	check_and_build_standard_tables(sessdb, tables_defs_grouprep);
 	GloAdmin->enable_grouprep_testing();
 #endif // TEST_GALERA

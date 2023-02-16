@@ -1,9 +1,13 @@
 #include "proxysql.h"
 #include "cpp.h"
 
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include "MySQL_PreparedStatement.h"
+#include "MySQL_Protocol.h"
 
 //extern MySQL_STMT_Manager *GloMyStmt;
 //static uint32_t add_prepared_statement_calls = 0;
@@ -691,12 +695,7 @@ MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
 			it != global_stmt_to_backend_stmt.end(); ++it) {
 			uint64_t global_stmt_id = it->first;
 			MYSQL_STMT *stmt = it->second;
-			if (stmt->mysql) {
-				stmt->mysql->stmts =
-				    list_delete(stmt->mysql->stmts, &stmt->list);
-			}
-			stmt->mysql = NULL;
-			mysql_stmt_close(stmt);
+			proxy_mysql_stmt_close(stmt);
 			GloMyStmt->ref_count_server(global_stmt_id, -1);
 		}
 	}
@@ -725,12 +724,14 @@ MySQL_STMTs_local_v14::~MySQL_STMTs_local_v14() {
 
 
 MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::find_prepared_statement_by_hash(
-    uint64_t hash, bool lock) {
+    uint64_t hash) {
+    //uint64_t hash, bool lock) { // removed in 2.3
 	MySQL_STMT_Global_info *ret = NULL;  // assume we do not find it
+/* removed in 2.3
 	if (lock) {
 		pthread_rwlock_wrlock(&rwlock_);
 	}
-
+*/
 	auto s = map_stmt_hash_to_info.find(hash);
 	if (s != map_stmt_hash_to_info.end()) {
 		ret = s->second;
@@ -740,9 +741,11 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::find_prepared_statement_by_hash(
 //		__sync_fetch_and_add(&ret->ref_count_client, 1);
 	}
 
+/* removed in 2.3
 	if (lock) {
 		pthread_rwlock_unlock(&rwlock_);
 	}
+*/
 	return ret;
 }
 

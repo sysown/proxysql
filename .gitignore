@@ -31,6 +31,7 @@ oldcode/tests/connect_speed
 
 *.swp
 
+*.sha1
 
 # SQLITE files
 *.db
@@ -49,6 +50,7 @@ src/*pem
 binaries/*deb
 binaries/*rpm
 tools/eventslog_reader_sample
+src/proxysql-save.cfg
 
 proxysql-2.0.0/
 docker/images/proxysql/rhel-compliant/rpmmacros
@@ -71,100 +73,25 @@ architecture.txt
 proxysql-2.*
 
 ### DEPS
-
-#jemalloc source
-deps/jemalloc/jemalloc-3.6.0/
-deps/jemalloc/jemalloc-4.1.0/
-deps/jemalloc/jemalloc-4.2.1/
-deps/jemalloc/jemalloc-4.3.1/
-deps/jemalloc/jemalloc-5.2.0/
-
-#libdaemon
-deps/libdaemon/libdaemon-0.14/
-
-#mariadb client library
-deps/mariadb-client-library/mariadb_client-2.0.0-Linux-x86/
-deps/mariadb-client-library/mariadb_client-2.0.0-Linux-x86_64/
-deps/mariadb-client-library/mariadb_client-2.0.0-src/
-deps/mariadb-client-library/mariadb-connector-c-2.1.0-src/
-deps/mariadb-client-library/mariadb-connector-c-2.3.1/
-deps/mariadb-client-library/mariadb-connector-c-3.0.2-src/
-deps/mariadb-client-library/mariadb-connector-c-3.0.9-src/
-deps/mariadb-client-library/mariadb-connector-c-3.1.4-src/
-deps/mariadb-client-library/mariadb-connector-c-3.1.9-src/
-
-#libinjection
-deps/libinjection/libinjection-3.10.0/
-
-#glib
-deps/glib/glib-2.40.0/
-
-#libevent
-deps/libevent/libevent-2.0.22-stable/
-
-#memcached
-deps/memcached/memcached-1.4.20/
-
-#libconfig
-deps/libconfig/libconfig-1.4.9/
-deps/libconfig/libconfig-1.7.2/
-
-#libmicrohttpd
-deps/libmicrohttpd/libmicrohttpd-0.9.55/
-deps/libmicrohttpd/libmicrohttpd-0.9.68/
+deps/cityhash/cityhash-*/
+deps/clickhouse-cpp/clickhouse-cpp-*/
+deps/curl/curl-*/
+deps/jemalloc/jemalloc-*/
+deps/libconfig/libconfig-*/
+deps/libdaemon/libdaemon-*/
+deps/libev/libev-*/
+deps/libhttpserver/libhttpserver-*/
+deps/libinjection/libinjection-*/
+deps/libmicrohttpd/libmicrohttpd-*/
 deps/libmicrohttpd/libmicrohttpd
+deps/libssl/openssl-openssl-*/
+deps/lz4/lz4-*/
+deps/mariadb-client-library/mariadb-connector-c-*/
+deps/pcre/pcre-*/
+deps/prometheus-cpp/prometheus-cpp-*/
+deps/re2/re2-*/
+deps/sqlite3/sqlite-amalgamation-*/
 
-#libhttpserver
-deps/libhttpserver/libhttpserver-master_20191121/
-deps/libhttpserver/libhttpserver-0.18.1/
-
-#clickhouse
-deps/clickhouse-cpp/clickhouse-cpp/
-deps/cityhash/cityhash/
-deps/lz4/lz4-1.7.5/
-deps/lz4/lz4/
-
-#re2
-deps/re2/re2/
-deps/re2/re2-2018-07-01/
-deps/re2/re2-2020-07-06/
-deps/pcre/pcre-8.39/
-deps/pcre/pcre-8.44/
-deps/pcre/pcre/
-
-# curl
-deps/curl/curl/
-deps/curl/curl-7.57.0/
-
-deps/libev/libev-4.24/
-
-#protobuf
-deps/protobuf/protobuf-2.6.1/
-
-deps/sqlite3/sqlite-amalgamation-3150000/
-deps/sqlite3/sqlite-amalgamation-3190200/
-deps/sqlite3/sqlite-amalgamation-3270200/
-
-deps/clickhouse-cpp
-deps/cityhash/cityhash/
-deps/lz4/lz4-1.7.5/
-
-#libev
-deps/libev/libev-4.24/
-
-#libssl
-deps/libssl/openssl-1.1.0h/
-deps/libssl/openssl-1.1.1b/
-deps/libssl/openssl-1.1.1d/
-deps/libssl/openssl-1.1.1g/
-deps/libssl/openssl-1.1.1j/
-
-#google coredumper
-deps/google-coredumper/google-coredumper/
-
-#prometheus-cpp
-deps/prometheus-cpp/*
-!deps/prometheus-cpp/patches
 
 test/.vagrant
 .DS_Store
@@ -186,3 +113,18 @@ heaptrack.*
 *-t
 test/tap/tests/galera_1_timeout_count
 test/tap/tests/galera_2_timeout_no_count
+test/tap/tests/setparser_test
+test/tap/tests/reg_test_3504-change_user_libmariadb_helper
+test/tap/tests/reg_test_3504-change_user_libmysql_helper
+test/tap/tests/generate_set_session_csv
+test/tap/tests/set_testing-240.csv
+local_testing_datadir/
+
+test/cluster/node??/*
+
+
+#files generated during CI run
+proxysql-save.cfg
+test/tap/tests/test_cluster_sync_config/cluster_sync_node_stderr.txt
+test/tap/tests/test_cluster_sync_config/proxysql*.pem
+test/tap/tests/test_cluster_sync_config/test_cluster_sync.cnf

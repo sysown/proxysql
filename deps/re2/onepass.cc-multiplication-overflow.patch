@@ -1,0 +1,12 @@
+@@ -611,9 +611,9 @@
+     LOG(ERROR) << "nodes:\n" << dump;
+   }
+ 
+-  dfa_mem_ -= nalloc*statesize;
++  dfa_mem_ -= static_cast<long>(nalloc)*statesize;
+   onepass_nodes_ = PODArray<uint8_t>(nalloc*statesize);
+-  memmove(onepass_nodes_.data(), nodes.data(), nalloc*statesize);
++  memmove(onepass_nodes_.data(), nodes.data(), static_cast<long>(nalloc)*statesize);
+   return true;
+ 
+ fail:

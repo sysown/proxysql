@@ -6,6 +6,11 @@
  *   This file is an extension of ../../set_parser_test/setparsertest.cpp
  */
 
+// NOTE: Avoids the definition of 'global_variables glovars' in 'proxysql_structs.h'
+#define PROXYSQL_EXTERN
+// NOTE: Avoids definition of 'proxy_sqlite3_*' functions as 'extern'
+#define MAIN_PROXY_SQLITE3
+
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "util/test.h"
@@ -30,6 +35,7 @@
  */
 #include "openssl/ssl.h"
 #include "proxysql_structs.h"
+#include "sqlite3db.h"
 #include "MySQL_LDAP_Authentication.hpp"
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
@@ -73,6 +79,7 @@ static Test sql_mode[] = {
   { "SET @@sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SESSION sql_mode = 'TRADITIONAL'", { Expected("sql_mode", {"TRADITIONAL"}) } },
   { "SET @@session.sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
+  { "SET @@local.sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET sql_mode = 'TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SQL_MODE   ='TRADITIONAL'", { Expected("sql_mode",  {"TRADITIONAL"}) } },
   { "SET SQL_MODE  = \"TRADITIONAL\"", { Expected("sql_mode",  {"TRADITIONAL"}) } },
@@ -80,6 +87,7 @@ static Test sql_mode[] = {
   { "set sql_mode = IFNULL(NULL,\"STRICT_TRANS_TABLES\")", { Expected("sql_mode",  {"IFNULL(NULL,\"STRICT_TRANS_TABLES\")"}) } },
   { "set sql_mode = IFNULL(NULL,'STRICT_TRANS_TABLES')", { Expected("sql_mode",  {"IFNULL(NULL,'STRICT_TRANS_TABLES')"}) } },
   { "SET @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')", { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')"}) } },
+  { "SET @@LOCAL.sql_mode = CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')", { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ', STRICT_ALL_TABLES'), ', NO_AUTO_VALUE_ON_ZERO')"}) } },
   { "set session sql_mode = 'ONLY_FULL_GROUP_BY'" , { Expected("sql_mode",  {"ONLY_FULL_GROUP_BY"}) } },
   { "SET sql_mode = 'NO_ZERO_DATE,STRICT_ALL_TABLES,ONLY_FULL_GROUP_BY'" , { Expected("sql_mode",  {"NO_ZERO_DATE,STRICT_ALL_TABLES,ONLY_FULL_GROUP_BY"}) } },
   { "SET @@sql_mode = CONCAT(@@sql_mode, ',', 'ONLY_FULL_GROUP_BY')" , { Expected("sql_mode",  {"CONCAT(@@sql_mode, ',', 'ONLY_FULL_GROUP_BY')"}) } },
@@ -147,9 +155,11 @@ static Test session_track_gtids[] = {
   { "SET @@session_track_gtids = OFF", { Expected("session_track_gtids",  {"OFF"}) } },
   { "SET @@session_track_gtids = OWN_GTID", { Expected("session_track_gtids",  {"OWN_GTID"}) } },
   { "SET @@SESSION.session_track_gtids = OWN_GTID", { Expected("session_track_gtids",  {"OWN_GTID"}) } },
+  { "SET @@LOCAL.session_track_gtids = OWN_GTID", { Expected("session_track_gtids",  {"OWN_GTID"}) } },
   { "SET SESSION session_track_gtids = OWN_GTID", { Expected("session_track_gtids",  {"OWN_GTID"}) } },
   { "SET @@session_track_gtids = ALL_GTIDS", { Expected("session_track_gtids",  {"ALL_GTIDS"}) } },
   { "SET @@SESSION.session_track_gtids = ALL_GTIDS", { Expected("session_track_gtids",  {"ALL_GTIDS"}) } },
+  { "SET @@LOCAL.session_track_gtids = ALL_GTIDS", { Expected("session_track_gtids",  {"ALL_GTIDS"}) } },
   { "SET SESSION session_track_gtids = ALL_GTIDS", { Expected("session_track_gtids",  {"ALL_GTIDS"}) } },
 };
 
@@ -162,6 +172,7 @@ static Test character_set_results[] = {
   { "SET @@character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
   { "SET character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
   { "SET @@session.character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
+  { "SET @@local.character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
   { "SET session character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
 };
 
@@ -181,19 +192,25 @@ TEST(TestParse, SET_NAMES) {
 }
 static Test various[] = {
   { "SET @@SESSION.SQL_SELECT_LIMIT= DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
+  { "SET @@LOCAL.SQL_SELECT_LIMIT= DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
   { "SET @@SQL_SELECT_LIMIT= DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
   { "SET SESSION SQL_SELECT_LIMIT   = DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
   { "SET @@SESSION.SQL_SELECT_LIMIT= 1234", { Expected("sql_select_limit",  {"1234"}) } },
+  { "SET @@LOCAL.SQL_SELECT_LIMIT= 1234", { Expected("sql_select_limit",  {"1234"}) } },
   { "SET @@SQL_SELECT_LIMIT= 1234", { Expected("sql_select_limit",  {"1234"}) } },
   { "SET SESSION SQL_SELECT_LIMIT   = 1234", { Expected("sql_select_limit",  {"1234"}) } },
   { "SET @@SESSION.SQL_SELECT_LIMIT= 1234", { Expected("sql_select_limit",  {"1234"}) } },
+  { "SET @@LOCAL.SQL_SELECT_LIMIT= 1234", { Expected("sql_select_limit",  {"1234"}) } },
   { "SET @@SESSION.SQL_SELECT_LIMIT= @old_sql_select_limit", { Expected("sql_select_limit",  {"@old_sql_select_limit"}) } },
+  { "SET @@LOCAL.SQL_SELECT_LIMIT= @old_sql_select_limit", { Expected("sql_select_limit",  {"@old_sql_select_limit"}) } },
   { "SET SQL_SELECT_LIMIT= @old_sql_select_limit", { Expected("sql_select_limit",  {"@old_sql_select_limit"}) } },
   { "SET @@SESSION.sql_auto_is_null = 0", { Expected("sql_auto_is_null",  {"0"}) } },
+  { "SET @@LOCAL.sql_auto_is_null = 0", { Expected("sql_auto_is_null",  {"0"}) } },
   { "SET SESSION sql_auto_is_null = 1", { Expected("sql_auto_is_null",  {"1"}) } },
   { "SET sql_auto_is_null = OFF", { Expected("sql_auto_is_null",  {"OFF"}) } },
   { "SET @@sql_auto_is_null = ON", { Expected("sql_auto_is_null",  {"ON"}) } },
   { "SET @@SESSION.sql_safe_updates = 0", { Expected("sql_safe_updates",  {"0"}) } },
+  { "SET @@LOCAL.sql_safe_updates = 0", { Expected("sql_safe_updates",  {"0"}) } },
   { "SET SESSION sql_safe_updates = 1", { Expected("sql_safe_updates",  {"1"}) } },
   { "SET SQL_SAFE_UPDATES = OFF", { Expected("sql_safe_updates",  {"OFF"}) } },
   { "SET @@sql_safe_updates = ON", { Expected("sql_safe_updates",  {"ON"}) } },
@@ -210,11 +227,19 @@ static Test multiple[] = {
   { "SET  @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO'),  @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 2147483",
   { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO')"}), Expected("sql_auto_is_null", {"0"}),
   Expected("wait_timeout", {"2147483"}) } },
+  { "SET  @@LOCAL.sql_mode = CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO'),  @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 2147483",
+  { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO')"}), Expected("sql_auto_is_null", {"0"}),
+  Expected("wait_timeout", {"2147483"}) } },
   { "set autocommit=1, sql_mode = concat(@@sql_mode,',STRICT_TRANS_TABLES')", { Expected("autocommit", {"1"}), Expected("sql_mode",  {"concat(@@sql_mode,',STRICT_TRANS_TABLES')"}) } },
   { "SET NAMES utf8, @@SESSION.sql_mode = CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO'), @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 3600",
   { Expected("names", {"utf8"}), Expected("sql_mode",  {"CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO')"}), Expected("sql_auto_is_null", {"0"}),
   Expected("wait_timeout", {"3600"}) } },
+  { "SET NAMES utf8, @@LOCAL.sql_mode = CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO'), @@LOCAL.sql_auto_is_null = 0, @@LOCAL.wait_timeout = 3600",
+  { Expected("names", {"utf8"}), Expected("sql_mode",  {"CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO')"}), Expected("sql_auto_is_null", {"0"}),
+  Expected("wait_timeout", {"3600"}) } },
   { "set autocommit=1, session_track_schema=1, sql_mode = concat(@@sql_mode,',STRICT_TRANS_TABLES'), @@SESSION.net_write_timeout=7200", { Expected("autocommit", {"1"}), Expected("session_track_schema", {"1"}), Expected("sql_mode", {"concat(@@sql_mode,',STRICT_TRANS_TABLES')"}),
+  Expected("net_write_timeout", {"7200"}) } },
+  { "set autocommit=1, session_track_schema=1, sql_mode = concat(@@sql_mode,',STRICT_TRANS_TABLES'), @@LOCAL.net_write_timeout=7200", { Expected("autocommit", {"1"}), Expected("session_track_schema", {"1"}), Expected("sql_mode", {"concat(@@sql_mode,',STRICT_TRANS_TABLES')"}),
   Expected("net_write_timeout", {"7200"}) } },
   // Mutiple set queries involving 'NULL' values should be properly parsed with and without spaces
   { "set character_set_results=null, names latin7, character_set_client='utf8mb4'",

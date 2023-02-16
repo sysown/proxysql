@@ -10,7 +10,10 @@
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include "pcrecpp.h"
 
@@ -236,6 +239,8 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	assert(client_address);
 	pta[2]=client_address;
 
+	assert(qdsp != NULL);
+	assert(qdsp->digest);
 	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
 	pta[3]=qdsp->digest;
 
@@ -247,7 +252,9 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 		if (it != digest_text_umap->end()) {
 			pta[4] = it->second;
 		} else {
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 	}
 
@@ -382,6 +389,10 @@ static void __delete_query_rule(QP_rule_t *qr) {
 		free(qr->error_msg);
 	if (qr->OK_msg)
 		free(qr->OK_msg);
+	if (qr->attributes)
+		free(qr->attributes);
+	if (qr->comment)
+		free(qr->comment);
 	if (qr->regex_engine1) {
 		re2_t *r=(re2_t *)qr->regex_engine1;
 		if (r->opt1) { delete r->opt1; r->opt1=NULL; }
@@ -517,6 +528,7 @@ Query_Processor::Query_Processor() {
 		rand_del[13] = '-';
 		rand_del[14] = 0;
 	}
+	query_rules_resultset = NULL;
 	fast_routing_resultset = NULL;
 	rules_fast_routing = kh_init(khStrInt); // create a hashtable
 	rules_fast_routing___keys_values = NULL;
@@ -542,6 +554,10 @@ Query_Processor::~Query_Processor() {
 	}
 	digest_umap.erase(digest_umap.begin(),digest_umap.end());
 	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
+	if (query_rules_resultset) {
+		delete query_rules_resultset;
+		query_rules_resultset = NULL;
+	}
 	if (fast_routing_resultset) {
 		delete fast_routing_resultset;
 		fast_routing_resultset = NULL;
@@ -735,10 +751,8 @@ void Query_Processor::sort(bool lock) {
 // when commit is called, the version number is increased and the this will trigger the mysql threads to get a new Query Processor Table
 // The operation is asynchronous
 void Query_Processor::commit() {
-		pthread_rwlock_wrlock(&rwlock);
 	__sync_add_and_fetch(&version,1);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Increasing version number to %d - all threads will notice this and refresh their rules\n", version);
-		pthread_rwlock_unlock(&rwlock);
 };
 
 SQLite3_result * Query_Processor::get_stats_commands_counters() {
@@ -836,6 +850,25 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 	}
 	pthread_rwlock_unlock(&rwlock);
 	return result;
+}
+
+int Query_Processor::get_current_query_rules_fast_routing_count() {
+	int result = 0;
+	pthread_rwlock_rdlock(&rwlock);
+	result = fast_routing_resultset->rows_count;
+	pthread_rwlock_unlock(&rwlock);
+	return result;
+}
+
+// we return the resultset fast_routing_resultset
+// the caller of this function must lock Query Processor
+SQLite3_result * Query_Processor::get_current_query_rules_fast_routing_inner() {
+	return fast_routing_resultset;
+}
+// we return the resultset query_rules_resultset
+// the caller of this function must lock Query Processor
+SQLite3_result * Query_Processor::get_current_query_rules_inner() {
+	return query_rules_resultset;
 }
 
 SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
@@ -999,7 +1032,7 @@ unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool p
 
 unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	unsigned long long ret = 0;
-	pthread_rwlock_rdlock(&digest_rwlock);
+	pthread_rwlock_wrlock(&digest_rwlock);
 	unsigned long long curtime1=monotonic_time();
 	size_t map1_size = digest_umap.size();
 	size_t map2_size = digest_text_umap.size();
@@ -1027,7 +1060,7 @@ unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	curtime1 = curtime1/1000;
 	curtime2 = curtime2/1000;
 	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
-		proxy_info("Purging stats_mysql_query_digest: locked for %llums to remove %llu entries\n", curtime2-curtime1, map1_size);
+		proxy_info("Purging stats_mysql_query_digest: locked for %llums to remove %lu entries\n", curtime2-curtime1, map1_size);
 	}
 	char buf[128];
 	sprintf(buf, "Query digest map locked for %llums", curtime2-curtime1);
@@ -1047,7 +1080,7 @@ unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 
 unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 	unsigned long long ret = 0;
-	pthread_rwlock_rdlock(&digest_rwlock);
+	pthread_rwlock_wrlock(&digest_rwlock);
 	size_t map_size = digest_umap.size();
 	if (parallel && map_size >= DIGEST_STATS_FAST_MINSIZE) { // parallel purge
 		int n=DIGEST_STATS_FAST_THREADS;
@@ -1060,7 +1093,9 @@ unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &purge_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1105,7 +1140,9 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_total_size_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1176,7 +1213,9 @@ SQLite3_result * Query_Processor::get_query_digests() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1196,7 +1235,7 @@ SQLite3_result * Query_Processor::get_query_digests() {
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
 		curtime2 = curtime2/1000;
-		proxy_info("Running query on stats_mysql_query_digest: locked for %llums to retrieve %llu entries\n", curtime2-curtime1, map_size);
+		proxy_info("Running query on stats_mysql_query_digest: locked for %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
 	}
 	return result;
 }
@@ -1251,7 +1290,9 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 		}
 		for (int i=0; i<n; i++) {
 			if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 		}
 		for (int i=0; i<n; i++) {
@@ -1285,7 +1326,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
 		curtime2 = curtime2/1000;
-		proxy_info("Running query on stats_mysql_query_digest_reset: locked for %llums to retrieve %llu entries\n", curtime2-curtime1, map_size);
+		proxy_info("Running query on stats_mysql_query_digest_reset: locked for %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
 		if (free_me) {
 			if (defer_free) {
 				for (int i=0; i<n; i++) {
@@ -1380,11 +1421,11 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					qr1->comment);
 				qr2->parent=qr1;	// pointer to parent to speed up parent update (hits)
 				if (qr2->match_digest) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: \n", qr2->rule_id, qr2->match_digest);
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_digest: %s\n", qr2->rule_id, qr2->match_digest);
 					qr2->regex_engine1=(void *)compile_query_rule(qr2,1);
 				}
 				if (qr2->match_pattern) {
-					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: \n", qr2->rule_id, qr2->match_pattern);
+					proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Compiling regex for rule_id: %d, match_pattern: %s\n", qr2->rule_id, qr2->match_pattern);
 					qr2->regex_engine2=(void *)compile_query_rule(qr2,2);
 				}
 				_thr_SQP_rules->push_back(qr2);
@@ -1568,7 +1609,7 @@ __internal_loop:
 		}
 	    if (qr->retries >= 0) {
 			// Note: negative retries means this rule doesn't change
-			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will%s be re-executed %d times in case of failure\n", qr->rule_id, qr->retries);
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "query rule %d has set retries: %d. Query will be re-executed %d times in case of failure\n", qr->rule_id, qr->retries, qr->retries);
 			ret->retries=qr->retries;
 		}
 		if (qr->delay >= 0) {
@@ -1779,8 +1820,10 @@ __exit_process_mysql_query:
 			}
 		}
 		if (check_run == false) {
+			// LCOV_EXCL_START
 			proxy_error("Firewall problem: unknown user\n");
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 	} else {
 		ret->firewall_whitelist_mode = WUS_NOT_FOUND;
@@ -1876,7 +1919,7 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 	qp->first_comment=NULL;
 	qp->query_prefix=NULL;
 	if (mysql_thread___query_digests) {
-		qp->digest_text=mysql_query_digest_and_first_comment(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
+		qp->digest_text=mysql_query_digest_and_first_comment_2(query, query_length, &qp->first_comment, ((query_length < QUERY_DIGEST_BUF) ? qp->buf : NULL));
 		// the hash is computed only up to query_digests_max_digest_length bytes
 		int digest_text_length=strnlen(qp->digest_text, mysql_thread___query_digests_max_digest_length);
 		qp->digest=SpookyHash::Hash64(qp->digest_text, digest_text_length, 0);
@@ -2707,6 +2750,11 @@ void Query_Processor::load_mysql_firewall_rules(SQLite3_result *resultset) {
 	nsize *= oh;
 	tot_size += nsize;
 	global_mysql_firewall_whitelist_rules_map___size = tot_size;
+}
+
+void Query_Processor::save_query_rules(SQLite3_result *resultset) {
+	delete query_rules_resultset;
+	query_rules_resultset = resultset; // save it
 }
 
 void Query_Processor::load_fast_routing(SQLite3_result *resultset) {

@@ -23,7 +23,10 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include <fcntl.h>
 #include <sys/utsname.h>
@@ -70,7 +73,6 @@ using namespace clickhouse;
 
 __thread MySQL_Session * clickhouse_thread___mysql_sess;
 
-//static void ClickHouse_to_MySQL(SQLite3_result *result, char *error, int affected_rows, MySQL_Protocol *myprot) {
 inline void ClickHouse_to_MySQL(const Block& block) {
 	MySQL_Session *sess = clickhouse_thread___mysql_sess;
 	MySQL_Protocol *myprot=NULL;
@@ -88,8 +90,107 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 		columns=block.GetColumnCount();
 		//int rows=block.GetRowCount();
 		myprot->generate_pkt_column_count(true,NULL,NULL,sid,block.GetColumnCount()); sid++;
+		// Return proper types for:
+		// - Int8/Int16/Int32/Int64/Float/Double/NULL/DATE/Datetime
 		for (Block::Iterator bi(block); bi.IsValid(); bi.Next()) {
-			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)bi.Name().c_str(),(char *)"",33,15,MYSQL_TYPE_VAR_STRING,1,0x1f,false,0,NULL);
+			clickhouse::Type::Code cc = bi.Type()->GetCode();
+
+			uint8_t is_null = 1;
+
+			if (cc != clickhouse::Type::Code::Nullable) {
+				is_null = 0;
+			} else {
+				auto s_t = bi.Column()->As<ColumnNullable>();
+#ifdef CXX17
+				cc = s_t->Nested()->GetType().GetCode();
+#else
+				cc = s_t->Type()->GetNestedType()->GetCode();
+#endif // CXX17
+			}
+
+			if (cc >= clickhouse::Type::Code::Int8 && cc <= clickhouse::Type::Code::Float64) {
+				bool _unsigned = false;
+				uint16_t flags = is_null | 128;
+
+				// NOTE: Both 'size' and 'decimals' are just used for representation purposes.
+				// For this reason, the values we specify here are always the 'MAX' length of these
+				// fields without any computation specific to the current value. See note:
+				//   - https://dev.mysql.com/doc/internals/en/com-query-response.html#column-definition
+				uint32_t size = 0;
+				uint8_t decimals = 0;
+
+				enum_field_types type = MYSQL_TYPE_LONG;
+
+				switch(cc) {
+					case clickhouse::Type::Code::UInt8:
+						_unsigned = true;
+					case clickhouse::Type::Code::Int8:
+						type = MYSQL_TYPE_TINY;
+						flags |= (_unsigned ? 32 : 0);
+						size = 4;
+						break;
+					case clickhouse::Type::Code::UInt16:
+						_unsigned = true;
+					case clickhouse::Type::Code::Int16:
+						type = MYSQL_TYPE_SHORT;
+						flags |= (_unsigned ? 32 : 0);
+						size = 6;
+						break;
+					case clickhouse::Type::Code::UInt32:
+						_unsigned = true;
+					case clickhouse::Type::Code::Int32:
+						type = MYSQL_TYPE_LONG;
+						flags |= (_unsigned ? 32 : 0);
+						size = 11;
+						break;
+					case clickhouse::Type::Code::UInt64:
+						_unsigned = true;
+					case clickhouse::Type::Code::Int64:
+						type = MYSQL_TYPE_LONGLONG;
+						flags |= (_unsigned ? 32 : 0);
+						size = 20;
+						break;
+					case clickhouse::Type::Code::Float32:
+						type = MYSQL_TYPE_FLOAT;
+						size = 12;
+						decimals = 31;
+						break;
+					case clickhouse::Type::Code::Float64:
+						type = MYSQL_TYPE_DOUBLE;
+						size = 22;
+						decimals = 31;
+						break;
+					default:
+						_unsigned = false;
+						flags = 128;
+						size = 22;
+				}
+
+				myprot->generate_pkt_field(
+					true, NULL, NULL, sid, (char*)"", (char*)"", (char*)"", (char*)bi.Name().c_str(),
+					(char*)"", 63, size, type, flags, decimals, false, 0, NULL
+				);
+			} else if (cc == clickhouse::Type::Code::Date || cc == clickhouse::Type::Code::DateTime) {
+				if (cc == clickhouse::Type::Code::Date) {
+					const uint32_t size = strlen("YYYY-MM-DD") + 1;
+					myprot->generate_pkt_field(
+						true, NULL, NULL, sid, (char*)"", (char*)"", (char*)"", (char*)bi.Name().c_str(),
+						(char*)"", 33, size, MYSQL_TYPE_DATE, 0, 0x0, false, 0, NULL
+					);
+				} else {
+					const uint32_t size = strlen("YYYY-MM-DD hh:mm:ss") + 1;
+					myprot->generate_pkt_field(
+						true, NULL, NULL, sid, (char*)"", (char*)"", (char*)"", (char*)bi.Name().c_str(),
+						(char*)"", 33, size, MYSQL_TYPE_DATETIME, 0, 0x0, false, 0, NULL
+					);
+				}
+			} else {
+				myprot->generate_pkt_field(
+					true, NULL, NULL, sid, (char *)"", (char *)"", (char *)"", (char *)bi.Name().c_str(),
+					(char *)"", 33, 15, MYSQL_TYPE_VAR_STRING, 0, 0x1f, false, 0, NULL
+				);
+			}
+
 			sid++;
 		}
 /*
@@ -101,7 +202,10 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 		unsigned int nTrx=0;
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		//if (autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
-		myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus ); sid++;
+		bool deprecate_eof_active = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		if (!deprecate_eof_active) {
+			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+		}
 	}
 	char **p=(char **)malloc(sizeof(char*)*columns);
 	unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*columns);
@@ -109,6 +213,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 	for (int r=0; r<rows; r++) {
 		for (int i=0; i<columns; i++) {
 			clickhouse::Type::Code cc = block[i]->Type()->GetCode();
+			bool is_null = false;
 			string s;
 			switch (cc) {
 				case clickhouse::Type::Code::Int8:
@@ -177,9 +282,9 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 					{
 						auto s_t = block[i]->As<ColumnNullable>();
 						if (s_t->IsNull(r)) {
-							s = "\\N";
+							is_null = true;
 						} else {
-							clickhouse::Type::Code cnc = block[i]->Type()->GetNestedType()->GetCode();
+							clickhouse::Type::Code cnc = s_t->Nested()->Type()->GetCode();
 							switch (cnc) {
 								case clickhouse::Type::Code::Int8:
 									s=std::to_string(s_t->Nested()->As<ColumnInt8>()->At(r));
@@ -246,8 +351,12 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 				default:
 					break;
 			}
-      l[i]=s.length();
-      p[i]=strdup((char *)s.c_str());
+			if (is_null == false) {
+				l[i]=s.length();
+				p[i]=strdup((char *)s.c_str());
+			} else {
+				p[i]=NULL;
+			}
     }
     myprot->generate_pkt_row(true,NULL,NULL,sid,columns,l,p); sid++;
 		for (int i=0; i<columns; i++) {
@@ -262,34 +371,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
     free(p);
 }
 
-
-
-
-
-
-
-static void StringToHex(unsigned char *string, unsigned char *hexstring, size_t l) {
-	unsigned char ch;
-	size_t i, j;
-
-	for (i=0, j=0; i<l; i++, j+=2) {
-		ch=string[i];
-		ch = ch >> 4;
-		if (ch <= 9) {
-			hexstring[j]= '0' + ch;
-		} else {
-			hexstring[j]= 'A' + ch - 10;
-		}
-		ch = string[i];
-		ch = ch & 0x0F;
-		if (ch <= 9) {
-			hexstring[j+1]= '0' + ch;
-		} else {
-			hexstring[j+1]= 'A' + ch - 10;
-		}
-	}
-}
-
+/*
 struct cpu_timer
 {
 	cpu_timer() {
@@ -305,7 +387,7 @@ struct cpu_timer
 	};
 	unsigned long long begin;
 };
-
+*/
 static char *s_strdup(char *s) {
 	char *ret=NULL;
 	if (s) {
@@ -314,17 +396,6 @@ static char *s_strdup(char *s) {
 	return ret;
 }
 
-
-static char *sha1_pass_hex(char *sha1_pass) { // copied from MySQL_Protocol.cpp
-	if (sha1_pass==NULL) return NULL;
-	char *buff1=(char *)malloc(SHA_DIGEST_LENGTH*2+2);
-	buff1[0]='*';
-	buff1[SHA_DIGEST_LENGTH*2+1]='\0';
-	StringToHex((unsigned char *)sha1_pass,(unsigned char *)buff1+1,SHA_DIGEST_LENGTH);
-//	assert(strcmp(buff,buff1)==0);
-//	free(buff);
-	return buff1;
-}
 
 static int __ClickHouse_Server_refresh_interval=1000;
 extern Query_Cache *GloQC;
@@ -473,8 +544,6 @@ class sqlite3server_main_loop_listeners {
 static sqlite3server_main_loop_listeners S_amll;
 
 void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
-
-	ClickHouse_Server *s3s=(ClickHouse_Server *)_pa;
 	char *error=NULL;
 	int cols;
 	int affected_rows;
@@ -501,12 +570,15 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 		query_no_space[query_no_space_length]=0;
 	}
 
+	proxy_debug(PROXY_DEBUG_SQLITE, 4, "Received query on Session %p , thread_session_id %u : %s\n", sess, sess->thread_session_id, query_no_space);
+
 
 	if (sess->session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 		if (!strncasecmp("SET ", query_no_space, 4)) {
 			if (
 				!strncasecmp("SET AUTOCOMMIT", query_no_space, 14) ||
 				!strncasecmp("SET NAMES ", query_no_space, 10) ||
+				!strncasecmp("SET FOREIGN_KEY_CHECKS",query_no_space,22) ||
 				!strncasecmp("SET CHARACTER", query_no_space, 13) ||
 				!strncasecmp("SET COLLATION", query_no_space, 13) ||
 				!strncasecmp("SET SQL_AUTO_", query_no_space, 13) ||
@@ -672,16 +744,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 				goto __run_query_sqlite;
 		}
 		if (
-			(pkt->size==(strlen("SELECT @@storage_engine;")+5) && strncasecmp((char *)"SELECT @@storage_engine;",(char *)pkt->ptr+5,pkt->size-5)==0)
-		) {
-				l_free(query_length,query);
-				query=l_strdup("SELECT 'MergeTree' AS '@@storage_engine'");
-				query_length=strlen(query)+1;
-				run_query_sqlite = true;
-				goto __run_query_sqlite;
-		}
-		if (
-			(pkt->size==(strlen("SELECT @@storage_engine;")+5) && strncasecmp((char *)"SELECT @@storage_engine;",(char *)pkt->ptr+5,pkt->size-5)==0)
+			(pkt->size==(strlen("SELECT @@storage_engine")+5) && strncasecmp((char *)"SELECT @@storage_engine",(char *)pkt->ptr+5,pkt->size-5)==0)
 		) {
 				l_free(query_length,query);
 				query=l_strdup("SELECT 'MergeTree' AS '@@storage_engine'");
@@ -832,18 +895,28 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 			myprot->generate_pkt_column_count(true,NULL,NULL,sid,1); sid++;
 			myprot->generate_pkt_field(true,NULL,NULL,sid,(char *)"",(char *)"",(char *)"",(char *)"CONNECTION_ID()",(char *)"",63,31,MYSQL_TYPE_LONGLONG,161,0,false,0,NULL); sid++;
 			myds->DSS=STATE_COLUMN_DEFINITION;
-			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			bool deprecate_eof_active = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+			if (!deprecate_eof_active) {
+				myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			}
 			char **p=(char **)malloc(sizeof(char*)*1);
 			unsigned long *l=(unsigned long *)malloc(sizeof(unsigned long *)*1);
 			l[0]=strlen(buf);;
 			p[0]=buf;
 			myprot->generate_pkt_row(true,NULL,NULL,sid,1,l,p); sid++;
 			myds->DSS=STATE_ROW;
-			myprot->generate_pkt_EOF(true,NULL,NULL,sid,0, setStatus); sid++;
+			if (!deprecate_eof_active) {
+				myprot->generate_pkt_EOF(true, NULL, NULL, sid, 0, setStatus);
+				sid++;
+			} else {
+				myprot->generate_pkt_OK(true, NULL, NULL, sid, 0, 0, setStatus, 0, NULL, true);
+				sid++;
+			}
 			myds->DSS=STATE_SLEEP;
 			run_query=false;
 			goto __run_query;
 		}
+/*
 		if (
 			(pkt->size==(strlen("SELECT current_user()")+5) && strncasecmp((char *)"SELECT current_user()",(char *)pkt->ptr+5,pkt->size-5)==0)
 		) {
@@ -873,6 +946,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 			run_query=false;
 			goto __run_query;
 		}
+*/
 	}
 
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
@@ -887,7 +961,7 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 	if (query_no_space_length==SELECT_DB_USER_LEN) {
 		if (!strncasecmp(SELECT_DB_USER, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			char *query1=(char *)"SELECT \"admin\" AS 'DATABASE()', \"%s\" AS 'USER()'";
+			char *query1=(char *)"SELECT 'admin' AS \"DATABASE()\", '%s' AS \"USER()\"";
 			char *query2=(char *)malloc(strlen(query1)+strlen(sess->client_myds->myconn->userinfo->username)+10);
 			sprintf(query2,query1,sess->client_myds->myconn->userinfo->username);
 			query=l_strdup(query2);
@@ -900,25 +974,16 @@ void ClickHouse_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t
 	if (query_no_space_length==SELECT_CHARSET_VARIOUS_LEN) {
 		if (!strncasecmp(SELECT_CHARSET_VARIOUS, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
-			char *query1=(char *)"select 'utf8' as '@@character_set_client', 'utf8' as '@@character_set_connection', 'utf8' as '@@character_set_server', 'utf8' as '@@character_set_database' limit 1";
+			char *query1=(char *)"select 'utf8' as \"@@character_set_client\", 'utf8' as \"@@character_set_connection\", 'utf8' as \"@@character_set_server\", 'utf8' as \"@@character_set_database\" limit 1";
 			query=l_strdup(query1);
 			query_length=strlen(query1)+1;
 			goto __run_query;
 		}
 	}
 
-	if (!strncasecmp("SELECT @@version", query_no_space, strlen("SELECT @@version"))) {
-		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS '@@version'";
-		query_length=strlen(q)+20;
-		query=(char *)l_alloc(query_length);
-		sprintf(query,q,PROXYSQL_VERSION);
-		goto __run_query;
-	}
-
 	if (!strncasecmp("SELECT version()", query_no_space, strlen("SELECT version()"))) {
 		l_free(query_length,query);
-		char *q=(char *)"SELECT '%s' AS 'version()'";
+		char *q=(char *)"SELECT '%s' AS \"version()\"";
 		query_length=strlen(q)+20;
 		query=(char *)l_alloc(query_length);
 		sprintf(query,q,PROXYSQL_VERSION);
@@ -984,11 +1049,12 @@ __end_show_commands:
 	// see issue #1022
 	if (query_no_space_length==strlen("SELECT DATABASE() AS name") && !strncasecmp("SELECT DATABASE() AS name",query_no_space, query_no_space_length)) {
 		l_free(query_length,query);
-		query=l_strdup("SELECT \"main\" AS 'DATABASE()'");
+		query=l_strdup("SELECT 'main' AS \"DATABASE()\"");
 		query_length=strlen(query)+1;
 		goto __run_query;
 	}
 
+/*
 	if (sess->session_type == PROXYSQL_SESSION_SQLITE) { // no admin
 		if (
 			(strncasecmp("PRAGMA",query_no_space,6)==0)
@@ -1001,8 +1067,9 @@ __end_show_commands:
 			goto __run_query;
 		}
 	}
-
+*/
 	if (sess->session_type == PROXYSQL_SESSION_CLICKHOUSE) { // no admin
+/*
 		if (
 			(strncasecmp("SHOW SESSION VARIABLES",query_no_space,22)==0)
 			||
@@ -1018,6 +1085,7 @@ __end_show_commands:
             run_query_sqlite = true;
             goto __run_query_sqlite;
 		}
+*/
 		if (
 			(strncasecmp("SET NAMES",query_no_space,9)==0)
 			||
@@ -1139,7 +1207,15 @@ __run_query:
   						MySQL_Data_Stream *myds=myprot->get_myds();
 
 						if (clickhouse_sess->transfer_started) {
-	    					myprot->generate_pkt_EOF(true,NULL,NULL,clickhouse_sess->sid,0, 2); clickhouse_sess->sid++;
+							myds->DSS=STATE_ROW;
+							bool deprecate_eof_active = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+							if (deprecate_eof_active) {
+								myprot->generate_pkt_OK(true, NULL, NULL, clickhouse_sess->sid, 0, 0, 2, 0, NULL, true);
+								clickhouse_sess->sid++;
+							} else {
+								myprot->generate_pkt_EOF(true, NULL, NULL, clickhouse_sess->sid, 0, 2);
+								clickhouse_sess->sid++;
+							}
 						} else {
 							myprot->generate_pkt_OK(true,NULL,NULL,1,0,0,2,0,(char *)"");
 						}
@@ -1188,7 +1264,8 @@ __run_query_sqlite: // we are introducing this new section to send some query to
 	if (run_query_sqlite) {
 		ClickHouse_Session *sqlite_sess = (ClickHouse_Session *)sess->thread->gen_args;
 		sqlite_sess->sessdb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
+		bool deprecate_eof_active = sess->client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
 		l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
 		l_free(query_length,query);
@@ -1213,6 +1290,7 @@ bool ClickHouse_Session::init() {
 		co.SetHost(hostname);
 		co.SetPort(atoi(port));
 		co.SetCompressionMethod(CompressionMethod::None);
+		client = NULL;
 		client = new clickhouse::Client(co);
 		ret=true;
 	} catch (const std::exception& e) {
@@ -1274,7 +1352,7 @@ static void *child_mysql(void *arg) {
 	fds[0].revents=0;
 	fds[0].events=POLLIN|POLLOUT;
 	free(arg);
-	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, false);
+	sess->client_myds->myprot.generate_pkt_initial_handshake(true,NULL,NULL, &sess->thread_session_id, true);
 
 	while (__sync_fetch_and_add(&glovars.shutdown,0)==0) {
 		if (myds->available_data_out()) {
@@ -1292,9 +1370,24 @@ static void *child_mysql(void *arg) {
 			}
 		}
 		myds->revents=fds[0].revents;
-		myds->read_from_net();
+		int rb = 0;
+		rb - myds->read_from_net();
 		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
+		if (myds->encrypted == true) {
+			// PMC-10004
+			// we probably should use SSL_pending() and/or SSL_has_pending() to determine
+			// if there is more data to be read, but it doesn't seem to be working.
+			// Therefore we try to call read_from_net() again as long as there is data.
+			// Previously we hardcoded 16KB but it seems that it can return in smaller
+			// chunks of 4KB.
+			// We finally removed the chunk size as it seems that any size is possible.
+			while (rb > 0) {
+				rb = myds->read_from_net();
+				if (myds->net_failure) goto __exit_child_mysql;
+				myds->read_pkts();
+			}
+		}
 		sess->to_process=1;
 		int rc=sess->handler();
 		if (rc==-1) goto __exit_child_mysql;
@@ -1360,7 +1453,7 @@ __end_while_pool:
 		if (S_amll.get_version()!=version) {
 			S_amll.wrlock();
 			version=S_amll.get_version();
-			for (i=0; i<nfds; i++) {
+			for (i=1; i<nfds; i++) {
 				char *add=NULL; char *port=NULL;
 				close(fds[i].fd);
 				c_split_2(socket_names[i], ":" , &add, &port);
@@ -1464,6 +1557,7 @@ ClickHouse_Server::ClickHouse_Server() {
 	variables.mysql_ifaces=strdup("0.0.0.0:6090");
 	variables.hostname = strdup("127.0.0.1");
 	variables.port = 9000;
+	variables.read_only=false;
 };
 
 void ClickHouse_Server::wrlock() {
@@ -1480,7 +1574,7 @@ void ClickHouse_Server::print_version() {
 };
 
 bool ClickHouse_Server::init() {
-	cpu_timer cpt;
+//	cpu_timer cpt;
 
 	child_func[0]=child_mysql;
 	main_shutdown=0;
@@ -1506,9 +1600,11 @@ bool ClickHouse_Server::init() {
 		perror("Thread creation");
 		exit(EXIT_FAILURE);
 	}
+/*
 #ifdef DEBUG
 	std::cerr << "SQLite3 Server initialized in ";
 #endif
+*/
 	return true;
 };
 
@@ -1575,10 +1671,10 @@ bool ClickHouse_Server::set_variable(char *name, char *value) {  // this is the 
 			if ((variables.mysql_ifaces==NULL) || strcasecmp(variables.mysql_ifaces,value) ) update_creds=true;
 			if (variables.mysql_ifaces)
 				free(variables.mysql_ifaces);
-				variables.mysql_ifaces=strdup(value);
-				if (update_creds && variables.mysql_ifaces) {
-					S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
-				}
+			variables.mysql_ifaces=strdup(value);
+			if (update_creds && variables.mysql_ifaces) {
+				S_amll.update_ifaces(variables.mysql_ifaces, &S_amll.ifaces_mysql);
+			}
 			return true;
 		} else {
 			return false;

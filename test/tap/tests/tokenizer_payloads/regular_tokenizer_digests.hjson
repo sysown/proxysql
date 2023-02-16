@@ -1,0 +1,935 @@
+[
+	// NOTE: KnownIssue - 10
+	{
+		"q": [
+			// Comments: /* */
+			"select /* COMMENT */ 1",
+			"select/* COMMENT */ 1",
+			"select/* COMMENT */1",
+			"/* COMMENT */select 1",
+			"/* COMMENT */ select 1 ",
+			"select 1/* COMMENT */  ",
+			"select 1 /* COMMENT */ ",
+			// Comments: initial '#'
+			"# random_comment \n   select 1.1",
+			"#random_comment \nselect 1.1",
+			"#random_comment\nselect 1.1",
+			// Comments: initial '--'
+			"-- random_comment \n select 1.1",
+			"   --   random_comment\nselect 1.1",
+			// Comments: final/initial '#|--'
+			"# random_comment\n select 1.1 #final_comment\n   ",
+			// NOTE: KnownIssue - 1
+			"# random_comment\n select 1.1# final_comment   \n",
+			"# random_comment\n select 1.1   #final_comment  \n  ",
+			"-- random_comment\n select 1.1 -- final_comment\n   ",
+			"-- random_comment\n select 1.1-- final_comment   \n",
+			"-- random_comment\n select 1.1   -- final_comment  \n  "
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	// Final spaces and ending query delimiters (';')
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE           ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE;       ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE  ;  /* comment */",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE; -- final_comment\n   "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE"
+	},
+	// Final spaces and ending and middle query delimiters (';'). Just one space preserved before and after (';').
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE  ; SELECT 1         ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE ;  SELECT 1;     ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE  ;  /* comment */ SELECT 1     ;",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE ; -- final_comment\n SELECT 1;  -- final_comment\n  "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE ; SELECT ?"
+	},
+	// Final spaces and ending and middle query delimiters (';'). No extra spaces before (';')
+	{
+		"q": [
+			"  /* comment */SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT 1         ;",
+			"/* comment */ SELECT * FROM test.select_for_update_foo FOR UPDATE;  SELECT 1;     ",
+			"SELECT * FROM test.select_for_update_foo FOR UPDATE;  /* comment */ SELECT 1     ;",
+			"-- random_comment\n SELECT * FROM test.select_for_update_foo FOR UPDATE; -- final_comment\n SELECT 1;  -- final_comment\n  "
+		],
+		"s1": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s2": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s3": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?",
+		"s4": "SELECT * FROM test.select_for_update_foo FOR UPDATE; SELECT ?"
+	},
+	// Floats
+	{
+		"q": [
+			"select 1.1",
+			// Exponentials
+			"select 99.1929",
+			"select 1.1e9",
+			"select 1.1e+9",
+			"select 1.1e-9",
+			// NOTE: KnownIssue - 2: Exponentials are case sensitive
+			"select 1.1E9",
+			"select 1.1E+9",
+			"select 1.1E-9",
+			// hexadecimal
+			"select 0x100"
+		],
+		"s1": "select ?"
+	},
+	// Operators
+	{
+		"q":  "select 1 +1",
+		"s1": "select ? +?",
+		"s2": "select ?+?",
+		"s3": "select ?+?",
+		"s4": "select ?+?"
+	},
+	{
+		"q":  "select 1+ 1",
+		"s1": "select ?+ ?",
+		"s2": "select ?+?",
+		"s3": "select ?+?",
+		"s4": "select ?+?"
+	},
+	{
+		"q": "select 1- 1",
+		"s1": "select ?- ?",
+		"s2": "select ?-?",
+		"s3": "select ?-?",
+		"s4": "select ?-?"
+	},
+	{
+		"q":  "select 1 -1",
+		"s1": "select ? -?",
+		"s2": "select ?-?",
+		"s3": "select ?-?",
+		"s4": "select ?-?"
+	},
+	{
+		"q":  "select 1* 1",
+		"s1": "select ?* ?",
+		"s2": "select ?*?",
+		"s3": "select ?*?",
+		"s4": "select ?*?"
+	},
+	{
+		"q":  "select 1 *1",
+		"s1": "select ? *?",
+		"s2": "select ?*?",
+		"s3": "select ?*?",
+		"s4": "select ?*?"
+	},
+	{
+		"q":  "select 1/ 1",
+		"s1": "select ?/ ?",
+		"s2": "select ?/?",
+		"s3": "select ?/?",
+		"s4": "select ?/?"
+	},
+	{
+		"q":  "select 1 /1",
+		"s1": "select ? /?",
+		"s2": "select ?/?",
+		"s3": "select ?/?",
+		"s4": "select ?/?"
+	},
+	{
+		"q":  "select 1% 1",
+		"s1": "select ?% ?",
+		"s2": "select ?%?",
+		"s3": "select ?%?",
+		"s4": "select ?%?"
+	},
+	{
+		"q":  "select 1 %1",
+		"s1": "select ? %?",
+		"s2": "select ?%?",
+		"s3": "select ?%?",
+		"s4": "select ?%?"
+	},
+	{
+		"q":  "select NOW()-1",
+		"s1": "select NOW()-?",
+		"s2": "select NOW()-?",
+		"s3": "select NOW()-?",
+		"s4": "select NOW()-?"
+	},
+	{
+		"q":  "select NOW() - 1",
+		"s1": "select NOW() - ?",
+		"s2": "select NOW() -?",
+		"s3": "select NOW() -?",
+		"s4": "select NOW() -?"
+	},
+	// operators and commas
+	{
+		"q":  "select 1+ 1, 1 -1, 1 * 1 , 1/1 , 100 % 3",
+		"s1": "select ?+ ?, ? -?, ? * ? , ?/? , ? % ?",
+		"s2": "select ?+?,?-?,?*?,?/?,?%?",
+		"s3": "select ?+?,?-?,?*?,?/?,?%?",
+		"s4": "select ?+?,?-?,?*?,?/?,?%?"
+	},
+	{
+		"q":  "select 1+ 1, 1 -1,NOW()+1,1 * 1 , 1/1 , 100 % 3, NOW() - 1",
+		"s1": "select ?+ ?, ? -?,NOW()+?,? * ? , ?/? , ? % ?, NOW() - ?",
+		"s2": "select ?+?,?-?,NOW()+?,?*?,?/?,?%?,NOW() -?",
+		"s3": "select ?+?,?-?,NOW()+?,?*?,?/?,?%?,NOW() -?",
+		"s4": "select ?+?,?-?,NOW()+?,?*?,?/?,?%?,NOW() -?"
+	},
+	{
+		"q":  "SELECT * FROM t t1, t t2 ,t t3,t t4 LIMIT 0",
+		"s1": "SELECT * FROM t t1, t t2 ,t t3,t t4 LIMIT ?",
+		"s2": "SELECT * FROM t t1,t t2,t t3,t t4 LIMIT ?",
+		"s3": "SELECT * FROM t t1,t t2,t t3,t t4 LIMIT ?",
+		"s4": "SELECT * FROM t t1,t t2,t t3,t t4 LIMIT ?"
+	},
+	// mixing operators, commas and literals
+	{
+		"q":  "select 1+ 1,'1 -1', 1 * 1 , '1/1 ',100 % 3",
+		"s1": "select ?+ ?,?, ? * ? , ?,? % ?",
+		"s2": "select ?+?,?,?*?,?,?%?",
+		"s3": "select ?+?,?,?*?,?,?%?",
+		"s4": "select ?+?,?,?*?,?,?%?"
+	},
+	{
+		"q":  "select 1+ 1    ,'1 -1' ,1 * 1 , '1 '  , 100 % 3",
+		"s1": "select ?+ ? ,? ,? * ? , ? , ? % ?",
+		"s2": "select ?+?,?,?*?,?,?%?",
+		"s3": "select ?+?,?,?*?,?,?%?",
+		"s4": "select ?+?,?,?*?,?,?%?"
+	},
+	{
+		"q":  "select   1 + 1    , '1 - 1' , 1 * 1 , '1 '  , 100 % 3      ",
+		"s1": "select ? + ? , ? , ? * ? , ? , ? % ?",
+		"s2": "select ?+?,?,?*?,?,?%?",
+		"s3": "select ?+?,?,?*?,?,?%?",
+		"s4": "select ?+?,?,?*?,?,?%?"
+	},
+	// NOTE: KnownIssue - 8: Operators not removed when extra space precedes the value
+	{
+		"q":  "select  + 1",
+		"s1": "select + ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"q":  "select  + 1, - 2",
+		"s1": "select + ?, - ?",
+		"s2": "select ?,?",
+		"s3": "select ?,?",
+		"s4": "select ?,?"
+	},
+	// strings - simple
+	{
+		"q":  "select * from t where t = \"foo\"",
+		"s1": "select * from t where t = ?",
+		"s2": "select * from t where t = ?",
+		"s3": "select * from t where t = ?",
+		"s4": "select * from t where t = ?"
+	},
+	{
+		"q":  "select \"1+ 1, 1 -1, 1 * 1 , 1/1 , 100 % 3\"",
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"q":  "SELECT N'string', _utf8'str\\'i\nng'",
+		"s1":  "SELECT N?, _utf8?",
+		"s2":  "SELECT N?,_utf8?",
+		"s3":  "SELECT N?,_utf8?",
+		"s4":  "SELECT N?,_utf8?"
+	},
+	{
+		"q": "create table test.1_null_digests (null_c1 TEXT, c2 TEXT, c3 TEXT)",
+		"s1": "create table test.1_null_digests (null_c1 TEXT, c2 TEXT, c3 TEXT)",
+		"s2": "create table test.1_null_digests (null_c1 TEXT,c2 TEXT,c3 TEXT)",
+		"s3": "create table test.1_null_digests (null_c1 TEXT,c2 TEXT,c3 TEXT)",
+		"s4": "create table test.1_null_digests (null_c1 TEXT,c2 TEXT,c3 TEXT)",
+		"dr": "create table test.?_null_digests (null_c? TEXT,c? TEXT,c? TEXT)"
+	},
+	{
+		"q": "select * from 1_value",
+		"s1": "select * from 1_value",
+		"s2": "select * from 1_value",
+		"s3": "select * from 1_value",
+		"s4": "select * from 1_value",
+		"dr": "select * from ?_value"
+	},
+	// string - preceded by signs - outside parenthesis, not preceded by commas
+	{
+		"q":  "select -\"1\"",
+		"s1": "select -?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"q":  "select +\"1\",'foo'",
+		"s1": "select +?,?",
+		"s2": "select ?,?",
+		"s3": "select ?,?",
+		"s4": "select ?,?"
+	},
+	// string - preceded by signs - inside parenthesis, or preceded by commas
+	{
+		"q":  "select (-'89')",
+		"s1": "select (-?)",
+		"s2": "select (?)",
+		"s3": "select (?)",
+		"s4": "select (?)"
+	},
+	{
+		"q":  "select 10,-'89'",
+		"s1": "select ?,-?",
+		"s2": "select ?,?",
+		"s3": "select ?,?",
+		"s4": "select ?,?"
+	},
+	{
+		"q":  "select  10, -'89' ",
+		"s1": "select ?, -?",
+		"s2": "select ?,?",
+		"s3": "select ?,?",
+		"s4": "select ?,?"
+	},
+	{
+		"q":  "select  '10', -'89' ",
+		"s1": "select ?, -?",
+		"s2": "select ?,?",
+		"s3": "select ?,?",
+		"s4": "select ?,?"
+	},
+	{
+		"q":  "select  10, -'89 ',+'5'",
+		"s1": "select ?, -?,+?",
+		"s2": "select ?,?,?",
+		"s3": "select ?,?,?",
+		"s4": "select ?,?,?"
+	},
+	// string - symbols '''', '\'', '\\\\' are properly compressed
+	{
+		"q": [
+			"select ''''''''",
+			"select '\\''",
+			"select '\\\\'",
+			"select '''\\\\''\\''''",
+
+			"select \"\"\"\"\"\"\"\"",
+			"select \"\\\"\"",
+			"select \"\\\\\"",
+			"select \"\"\"\\\\\"\"\\\"\"\"\""
+		],
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s3": "select ?"
+	},
+	{
+		"q": [
+			"select '', '\\'', 'foo''bar\\'', '\\\\str_\\'foo'''",
+			"select \"\", \"\\\"\", \"foo\"\"bar\\\"\", \"\\\\str_\\\"foo\"\"\""
+		],
+		"s1": "select ?, ?, ?, ?",
+		"s2": "select ?,?,?,?",
+		"s3": "select ?,?,?,?",
+		"s3": "select ?,?,?,?"
+	},
+	// NOTE: KnownIssue - 7: Spaces not removed after parenthesis when literal strings are preceded by '+|-'
+	{
+		"q":  "select CONCAT( -'89'+'10')",
+		"s1": "select CONCAT( -?+?)",
+		//             ^ preserved space
+		"s2": "select CONCAT(?+?)",
+		"s3": "select CONCAT(?+?)",
+		"s4": "select CONCAT(?+?)"
+	},
+	{
+		"q":  "select CONCAT( -'89'+'10')",
+		"s1": "select CONCAT( -?+?)",
+		"s2": "select CONCAT(?+?)",
+		"s3": "select CONCAT(?+?)",
+		"s4": "select CONCAT(?+?)"
+	},
+	{
+		"q":  "select CONCAT(  -'89'   +  '10' )",
+		"s1": "select CONCAT( -? + ? )",
+		"s2": "select CONCAT(?+?)",
+		"s3": "select CONCAT(?+?)",
+		"s4": "select CONCAT(?+?)"
+	},
+	// NOTE: KnownIssue - 8: Operators not removed when extra space precedes the literal (value)
+	{
+		"q" :"select CONCAT(- '89')",
+		//              ^ preserved operator
+		"s1": "select CONCAT(- ?)",
+		"s2": "select CONCAT(?)",
+		"s3": "select CONCAT(?)",
+		"s4": "select CONCAT(?)"
+	},
+	// not modified
+	{
+		"q": "select * fromt t",
+		"s1": "select * fromt t",
+		"s2": "select * fromt t",
+		"s3": "select * fromt t",
+		"s4": "select * fromt t"
+	},
+	// NULL values replacement
+	{
+		"q":  "select NULL",
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"q":  "select nUlL",
+		"s1": "select ?",
+		"s2": "select ?",
+		"s3": "select ?",
+		"s4": "select ?"
+	},
+	{
+		"q":  "SELECT * FROM nulltablenull WHERE null_id IN (NULL  ,2,3, 'NULL' ,5,NulL,null,NULL8,9,10)",
+		"s1": "SELECT * FROM nulltablenull WHERE null_id IN (? ,?,?, ? ,?,?,?,NULL8,?,?)",
+		"s2": "SELECT * FROM nulltablenull WHERE null_id IN (?,?,?,?,?,?,?,NULL8,?,?)",
+		"s3": "SELECT * FROM nulltablenull WHERE null_id IN (?,?,?,...,NULL8,?,?)",
+		"s4": "SELECT * FROM nulltablenull WHERE null_id IN (?,?,?,...,NULL8,?,?)"
+	},
+	{
+		"q":  "SELECT * FROM table_NULL WHERE null_id IN (NULL  ,2,3, NULL ,5,6,7,NULL8,9,10)",
+		"s1": "SELECT * FROM table_NULL WHERE null_id IN (? ,?,?, ? ,?,?,?,NULL8,?,?)",
+		"s2": "SELECT * FROM table_NULL WHERE null_id IN (?,?,?,?,?,?,?,NULL8,?,?)",
+		"s3": "SELECT * FROM table_NULL WHERE null_id IN (?,?,?,...,NULL8,?,?)",
+		"s4": "SELECT * FROM table_NULL WHERE null_id IN (?,?,?,...,NULL8,?,?)"
+	},
+	{
+		"q":  "create table test.null_digests_2 (null_c1 TEXT, c2 TEXT, c3 TEXT)",
+		"s1": "create table test.null_digests_2 (null_c1 TEXT, c2 TEXT, c3 TEXT)",
+		"s2": "create table test.null_digests_2 (null_c1 TEXT,c2 TEXT,c3 TEXT)",
+		"s3": "create table test.null_digests_2 (null_c1 TEXT,c2 TEXT,c3 TEXT)",
+		"s4": "create table test.null_digests_2 (null_c1 TEXT,c2 TEXT,c3 TEXT)"
+	},
+	// SimpleGroping: Query digest reduction
+	{
+		"q":  "SELECT * FROM tablename WHERE id IN (1,2,3,4)",
+		"s1": "SELECT * FROM tablename WHERE id IN (?,?,?,?)",
+		"s2": "SELECT * FROM tablename WHERE id IN (?,?,?,?)",
+		"s3": "SELECT * FROM tablename WHERE id IN (?,?,?,?)",
+		"s4": "SELECT * FROM tablename WHERE id IN (?,?,?,?)"
+	},
+	{
+		"q":  "SELECT * FROM tablename WHERE id IN (1,2,3,4,5,6,7,8,9,10)",
+		"s1": "SELECT * FROM tablename WHERE id IN (?,?,?,?,?,?,?,?,?,?)",
+		"s3": "SELECT * FROM tablename WHERE id IN (?,?,?,...)",
+		"s4": "SELECT * FROM tablename WHERE id IN (?,?,?,...)"
+	},
+	// SimpleGroping: Invalid query grouping
+	{
+		"q":  "SELECT * tablename where id IN (1,2,3,4,5,6,7,8,  AND j in (1,2,3,4,5,6  and k=1",
+		"s1": "SELECT * tablename where id IN (?,?,?,?,?,?,?,?, AND j in (?,?,?,?,?,? and k=?",
+		"s2": "SELECT * tablename where id IN (?,?,?,?,?,?,?,?,AND j in (?,?,?,?,?,? and k=?",
+		"s3": "SELECT * tablename where id IN (?,?,?,...,AND j in (?,?,?,...,? and k=?",
+		"s4": "SELECT * tablename where id IN (?,?,?,...,AND j in (?,?,?,...,? and k=?"
+        //                                                                   ^ due to pattern breaking, symbol isn't collapsed
+	},
+	// SimpleGroping: Insert queries with mixed spacing
+	{
+		"q":  "INSERT INTO db.table(col1) VALUES ('val')",
+		"s1": "INSERT INTO db.table(col1) VALUES (?)",
+		"s2": "INSERT INTO db.table(col1) VALUES (?)",
+		"s3": "INSERT INTO db.table(col1) VALUES (?)",
+		"s4": "INSERT INTO db.table(col1) VALUES (?)"
+	},
+	{
+		"q":  "INSERT INTO db.table (col1) VALUES ('val')",
+		"s1": "INSERT INTO db.table (col1) VALUES (?)",
+		"s2": "INSERT INTO db.table (col1) VALUES (?)",
+		"s3": "INSERT INTO db.table (col1) VALUES (?)",
+		"s4": "INSERT INTO db.table (col1) VALUES (?)"
+	},
+	{
+		"q":  "INSERT INTO db.table( col1) VALUES ( 'val' )",
+		"s1": "INSERT INTO db.table( col1) VALUES ( ? )",
+		"s2": "INSERT INTO db.table(col1) VALUES (?)",
+		"s3": "INSERT INTO db.table(col1) VALUES (?)",
+		"s4": "INSERT INTO db.table(col1) VALUES (?)"
+	},
+	{
+		"q":  "INSERT INTO db.table( col1) VALUES ( 'val' )",
+		"s1": "INSERT INTO db.table( col1) VALUES ( ? )",
+		"s2": "INSERT INTO db.table(col1) VALUES (?)",
+		"s3": "INSERT INTO db.table(col1) VALUES (?)",
+		"s4": "INSERT INTO db.table(col1) VALUES (?)"
+	},
+	{
+		"q":  "INSERT INTO db.table  ( col1 )  VALUES ( 'val' )",
+		"s1": "INSERT INTO db.table ( col1 ) VALUES ( ? )",
+		"s2": "INSERT INTO db.table (col1) VALUES (?)",
+		"s3": "INSERT INTO db.table (col1) VALUES (?)",
+		"s4": "INSERT INTO db.table (col1) VALUES (?)"
+	},
+	{
+		"q":  "INSERT INTO db.table (col1, col2,col3,col4) VALUES ('val',2,3,'foo')",
+		"s1": "INSERT INTO db.table (col1, col2,col3,col4) VALUES (?,?,?,?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)",
+		"s4": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)"
+	},
+	{
+		"q":  "INSERT INTO db.table ( col1, col2,col3,col4 ) VALUES ('val',2,3,'foo')",
+		"s1": "INSERT INTO db.table ( col1, col2,col3,col4 ) VALUES (?,?,?,?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)",
+		"s4": "INSERT INTO db.table (col1,col2,col3,col4) VALUES (?,?,?,?)"
+	},
+	{
+		"q":  "INSERT INTO db.table_25 (col1, col2,col3,col4) VALUES ('val',2,3,'foo')",
+		"s1": "INSERT INTO db.table_25 (col1, col2,col3,col4) VALUES (?,?,?,?)",
+		"s2": "INSERT INTO db.table_25 (col1,col2,col3,col4) VALUES (?,?,?,?)",
+		"dr": "INSERT INTO db.table_? (col?,col?,col?,col?) VALUES (?,?,?,?)",
+		"s3": "INSERT INTO db.table_25 (col1,col2,col3,col4) VALUES (?,?,?,?)",
+		"s4": "INSERT INTO db.table_25 (col1,col2,col3,col4) VALUES (?,?,?,?)"
+	},
+	{
+		"q":  "INSERT INTO db.table1_25 ( col_121,col2121  ,col12_3, col41203_   ) VALUES ( 'val', -2, 3, 'foo' )",
+		"s1": "INSERT INTO db.table1_25 ( col_121,col2121 ,col12_3, col41203_ ) VALUES ( ?, -?, ?, ? )",
+		"s2": "INSERT INTO db.table1_25 (col_121,col2121,col12_3,col41203_) VALUES (?,?,?,?)",
+		"dr": "INSERT INTO db.table?_? (col_?,col?,col?_?,col?_) VALUES (?,?,?,?)",
+		"s3": "INSERT INTO db.table1_25 (col_121,col2121,col12_3,col41203_) VALUES (?,?,?,?)",
+		"s4": "INSERT INTO db.table1_25 (col_121,col2121,col12_3,col41203_) VALUES (?,?,?,?)"
+	},
+	// SimpleGrouping: Insert queries with operators breaking grouping sequence
+	{
+		"q":  "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',2,3,'foo', 5 + 10, 6 - 9)",
+		"s1": "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES (?,?,?,?, ? + ?, ? - ?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?+?,?-?)",
+		"dr": "INSERT INTO db.table (col?,col?,col?,col?,col?) VALUES (?,?,?,?,?+?,?-?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?+?,?-?)",
+		"s4": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?+?,?-?)"
+		//                                                                      ^ not collapsed due to pattern breaking
+	},
+	{
+		"q":  "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',1, 2,3,'foo', 5 + 10, 6 - 9)",
+		"s1": "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES (?,?, ?,?,?, ? + ?, ? - ?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?,?+?,?-?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...,?+?,?-?)",
+		"s4": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...,?+?,?-?)"
+		//                                                                        ^ not collapsed due to pattern breaking
+	},
+	{
+		"q":  "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',1, 2,3,'foo', 5 + 10, 6 - 9, 12, 3, 4, 5, 4,5,6)",
+		"s1": "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES (?,?, ?,?,?, ? + ?, ? - ?, ?, ?, ?, ?, ?,?,?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?,?+?,?-?,?,?,?,?,?,?,?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...,?+?,?-?,?,?,?,...)",
+		"dr": "INSERT INTO db.table (col?,col?,col?,col?,col?) VALUES (?,?,?,...,?+?,?-?,?,?,?,...)"
+		//                                                                        ^ not collapsed due to pattern breaking
+	},
+	{
+		"q":  "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',1, 2,3,'foo'), ('val2', 2,3,4,'foo2')",
+		"s1": "INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES (?,?, ?,?,?), (?, ?,?,?,?)",
+		"s2": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,?,?),(?,?,?,?,?)",
+		"s3": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...),(?,?,?,...)",
+		"s4": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,?,?,...),..."
+	},
+	{
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES (NULL, NULL, NULL, NULL)",
+			"INSERT INTO db.table (col1,col2,col3) VALUES ('foooo', 'bar', 'fooo')",
+			"INSERT INTO db.table (col1,col2,col3) VALUES (1.23234, 9.923, 8)"
+		],
+		"mz": {
+			"digest_max_size": 55,
+			"grouping_limit": 1,
+			"groups_grouping_limit": 1,
+			"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...)"
+		}
+	},
+	{
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES (NULL, NULL, NULL, NULL)"
+		],
+		"mz": {
+			"digest_max_size": 55,
+			"grouping_limit": 1,
+			"groups_grouping_limit": 1,
+			"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...)"
+		}
+	},
+	{
+		// Testing the compression limits of number parsing when buffer is exceeded.
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES (1.23234, 9.92381, 8.00)"
+		],
+		"mz": [
+			{
+				"digest_max_size": 57,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...)"
+			},
+			{
+				"digest_max_size": 57,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...)"
+			},
+			{
+				"digest_max_size": 56,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...)"
+			},
+			{
+				"digest_max_size": 55,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?"
+			},
+			{
+				"digest_max_size": 54,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?"
+			},
+			{
+				"digest_max_size": 54,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"replace_digits": 1,
+				"digest": "INSERT INTO db.table (col?,col?,col?) VALUES (?,?"
+			},
+			{
+				"digest_max_size": 53,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"replace_digits": 1,
+				"digest": "INSERT INTO db.table (col?,col?,col?) VALUES (?"
+			},
+			{
+				"digest_max_size": 47,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"replace_digits": 1,
+				"digest": "INSERT INTO db.table (col?,col?,col?) VALUES (?"
+			},
+			{
+				"digest_max_size": 46,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"replace_digits": 1,
+				"digest": "INSERT INTO db.table (col?,col?,col?) VALUES ("
+			}
+		]
+	},
+	{
+		// Testing the compression limits of number parsing when buffer is exceeded.
+		// NOTE: This is an example of a query that requires the '...' comprobation in the
+		// fourth stage parsing, since it's possible to find results like:
+		//    - (?,...),...(?,...)
+		//                 ^ remove any founds patterns like this
+		// Resulting from stage 3.
+		"q": [
+			"INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',1, 2,3,'foo'), ('val2',3,NULL,4,'foo2'), ('val2', 5,0x0239192,4,'foo2'), ('val2', 7,NULL,4,'foo2')"
+		],
+		"mz": [
+			{
+				"digest_max_size": 105,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,...),..."
+			}
+		]
+	},
+	{
+		"q": "INSERT INTO db.table (col1,col2,col3) VALUES (1,2,3),(3,5,6),(7,8,9) ON DUPLICATE KEY UPDATE col1 = VALUES(col2)",
+		"mz": [
+			{
+				"digest_max_size": 105,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			},
+			{
+				"digest_max_size": 99,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2"
+			}
+		]
+	},
+	{
+		"q": "INSERT INTO db.table (col1,col2,col3) VALUES (1,2,3),(3,5,6),(7,8,9) ON DUPLICATE KEY UPDATE col1 = VALUES(col2)",
+		"mz": [
+			{
+				"digest_max_size": 105,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			},
+			{
+				"digest_max_size": 99,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2"
+			}
+		]
+	},
+	{
+		"q": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),(1.23912939495912302020321, 2.23891282384852012203102301203120320031102, 20340122) ON DUPLICATE KEY UPDATE col1 = VALUES(col2)",
+		"mz": [
+			{
+				"digest_max_size": 100,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			},
+			{
+				"digest_max_size": 98,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),(?,?"
+				//                                                                 ^ expected, no room for parsing the whole digit
+			}
+		]
+	},
+	{
+		// Due to the difference in behavior of how numbers vs strings are parsed, it's expected that query is early trimmed
+		// when there is no more room for parsing, this is not the case of string parsing.
+		"q": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),('1.23912939495912302020321', '2.23891282384852012203102301203120320031102', '20340122') ON DUPLICATE KEY UPDATE col1 = VALUES(col2)",
+		"mz": [
+			{
+				"digest_max_size": 100,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			},
+			{
+				"digest_max_size": 98,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col"
+				//                                       expected proper parsing ^                  expected: query trimmed  ^
+			}
+		]
+	},
+	{
+		"q": "INSERT INTO db.table (col1,col2,col3) VALUES (-19, +29,- 29,+ 10,- 20,+ 40,- 34,- 30,+ 40, + 11, - 23,- 40, + 60)",
+		"mz": [
+			{
+				"digest_max_size": 85,
+				"grouping_limit": 11,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,?,?,?,?,?,?,?,?,...)"
+			}
+		]
+	},
+	{
+		"q": "INSERT INTO db.table (col1,col2,col3) VALUES (122,222,332,442,551,662,777,888,999,100,111,122,234)",
+		"mz": [
+			{
+				"digest_max_size": 68,
+				"grouping_limit": 8,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,?,?,?,?,?,...,?"
+				// this sign isn't compressed because there is no more room for parsing      ^
+				// the latest '234' number, so the number compression never completed, but in 'final_stage'
+				// the digits of the number is never completed, but in 'final_stage' whatever was copied of
+				// the number is trimmed in a final effort to homogenize the query.
+			}
+		]
+	},
+	{
+		"q": "INSERT INTO db.table (col1,col2,col3) VALUES (122,222,332,442,551,662,777,888,999,100,111,122,234)",
+		"mz": [
+			{
+				"digest_max_size": 70,
+				"grouping_limit": 8,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,?,?,?,?,?,...)"
+			}
+		]
+	},
+	{
+		"q": "INSERT INTO db.table (col1,col2,col3) VALUES (122,222,332,442,551,662,777,888,999,100,111,122,234)",
+		"mz": [
+			{
+				"digest_max_size": 71,
+				"grouping_limit": 8,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,?,?,?,?,?,...)"
+			}
+		]
+	},
+	{
+		"q": [
+			"SELECT /* keep_comment */ 1",
+			"SELECT /* keep_comment */ +1",
+			"SELECT /* keep_comment */ 1.123",
+			"SELECT /* keep_comment */ 0x100",
+			"SELECT /* keep_comment */ 1.1E-9",
+			"SELECT /* keep_comment */ 1.1E+9",
+			"SELECT /* keep_comment */ 0x100"
+		],
+		"mz": [
+			{
+				"digest_max_size": 100,
+				"keep_comment": true,
+				"digest": "SELECT /* keep_comment */ ?"
+			}
+		]
+	},
+	{
+		"q": [
+			"SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */ 1"
+		],
+		"mz": [
+			{
+				"digest_max_size": 110,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+				// Two chars are lost in this case, but it's nothing critical
+			}
+		]
+	},
+	{
+		"q": [
+			"SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */ 1"
+		],
+		"mz": [
+			{
+				// The final digest size is 135, but 137 chars are placing the final '*/' without issues. This is expected as the final position is never used
+				// for comment copying purposes in the state machine. Thus the '*/' is not copy, but there is room for the number replacement '?'.
+				"digest_max_size": 135,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 *"
+			},
+			{
+				// The final digest size is 135, but 137 chars are placing the final '*/' without issues. This is expected as the final position is never used
+				// for comment copying purposes in the state machine. Because of this, just the '*' is copied in this case.
+				"digest_max_size": 136,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */"
+			},
+			{
+				// The final digest size is 136, but 137 chars are placing the final '*/' without issues. This is expected as the final position is never used
+				// for comment copying purposes in the state machine. Thanks to the extra char in the buffer the digest contains the terminator.
+				"digest_max_size": 137,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */"
+			},
+			{
+				"digest_max_size": 138,
+				"keep_comment": true,
+				"digest": "SELECT /* long_comment 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 */ ?"
+			}
+		]
+	},
+	{
+		"q": "create /* foo_comment*/table table_10_utf8_4 (\n`pk` int primary key,\n`col_bigint_undef_signed` bigint ,\n`col_bigint_undef_unsigned` bigint unsigned ,\n`col_bigint_key_signed` bigint ,\n`col_bigint_key_unsigned` bigint unsigned ,\n`col_float_undef_signed` float ,\n`col_float_undef_unsigned` float unsigned ,\n`col_float_key_signed` float ,\n`col_float_key_unsigned` float unsigned ,\n`col_double_undef_signed` double ,\n`col_double_undef_unsigned` double unsigned ,\n`col_double_key_signed` double ,\n`col_double_key_unsigned` double unsigned ,\n`col_decimal(40, 20)_undef_signed` decimal(40, 20) ,\n`col_decimal(40, 20)_undef_unsigned` decimal(40, 20) unsigned ,\n`col_decimal(40, 20)_key_signed` decimal(40, 20)  ,\n`col_decimal(40, 20)_key_unsigned` decimal(40, 20) unsigned ,\n`col_char(20)_undef_signed` char(20)  ,\n`col_char(20)_key_signed` char(20) ,\n`col_varchar(20)_undef_signed` varchar(20)  ,\n`col_varchar(20)_key_signed` varchar(20) ,\n`col_enum_undef_signed` enum('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z') ,\n`col_enum_key_signed` enum('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z') ,\nkey (`col_bigint_key_signed`),\nkey (`col_bigint_key_unsigned`),\nkey (`col_float_key_signed`),\nkey (`col_float_key_unsigned`),\nkey (`col_double_key_signed`),\nkey (`col_double_key_unsigned`),\nkey (`col_decimal(40, 20)_key_signed`),\nkey (`col_decimal(40, 20)_key_unsigned`),\nkey (`col_char(20)_key_signed`),\nkey (`col_varchar(20)_key_signed`),\nkey (`col_enum_key_signed`)\n) character set utf8 \npartition by hash(pk)\npartitions 4",
+		"mz": [
+			{
+				"digest_max_size": 2048,
+				"grouping_limit": 0,
+				"groups_grouping_limit": 0,
+				"digest": "create table table_10_utf8_4 (`pk` int primary key,`col_bigint_undef_signed` bigint,`col_bigint_undef_unsigned` bigint unsigned,`col_bigint_key_signed` bigint,`col_bigint_key_unsigned` bigint unsigned,`col_float_undef_signed` float,`col_float_undef_unsigned` float unsigned,`col_float_key_signed` float,`col_float_key_unsigned` float unsigned,`col_double_undef_signed` double,`col_double_undef_unsigned` double unsigned,`col_double_key_signed` double,`col_double_key_unsigned` double unsigned,`col_decimal(?,?)_undef_signed` decimal(?,?),`col_decimal(?,?)_undef_unsigned` decimal(?,?) unsigned,`col_decimal(?,?)_key_signed` decimal(?,?),`col_decimal(?,?)_key_unsigned` decimal(?,?) unsigned,`col_char(?)_undef_signed` char(?),`col_char(?)_key_signed` char(?),`col_varchar(?)_undef_signed` varchar(?),`col_varchar(?)_key_signed` varchar(?),`col_enum_undef_signed` enum(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?),`col_enum_key_signed` enum(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?),key (`col_bigint_key_signed`),key (`col_bigint_key_unsigned`),key (`col_float_key_signed`),key (`col_float_key_unsigned`),key (`col_double_key_signed`),key (`col_double_key_unsigned`),key (`col_decimal(?,?)_key_signed`),key (`col_decimal(?,?)_key_unsigned`),key (`col_char(?)_key_signed`),key (`col_varchar(?)_key_signed`),key (`col_enum_key_signed`)) character set utf8 partition by hash(pk) partitions ?"
+			},
+			{
+				"digest_max_size": 2048,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "create table table_10_utf8_4 (`pk` int primary key,`col_bigint_undef_signed` bigint,`col_bigint_undef_unsigned` bigint unsigned,`col_bigint_key_signed` bigint,`col_bigint_key_unsigned` bigint unsigned,`col_float_undef_signed` float,`col_float_undef_unsigned` float unsigned,`col_float_key_signed` float,`col_float_key_unsigned` float unsigned,`col_double_undef_signed` double,`col_double_undef_unsigned` double unsigned,`col_double_key_signed` double,`col_double_key_unsigned` double unsigned,`col_decimal(?,?)_undef_signed` decimal(?,?),`col_decimal(?,?)_undef_unsigned` decimal(?,?) unsigned,`col_decimal(?,?)_key_signed` decimal(?,?),`col_decimal(?,?)_key_unsigned` decimal(?,?) unsigned,`col_char(?)_undef_signed` char(?),`col_char(?)_key_signed` char(?),`col_varchar(?)_undef_signed` varchar(?),`col_varchar(?)_key_signed` varchar(?),`col_enum_undef_signed` enum(?,...),`col_enum_key_signed` enum(?,...),key (`col_bigint_key_signed`),key (`col_bigint_key_unsigned`),key (`col_float_key_signed`),key (`col_float_key_unsigned`),key (`col_double_key_signed`),key (`col_double_key_unsigned`),key (`col_decimal(?,?)_key_signed`),key (`col_decimal(?,?)_key_unsigned`),key (`col_char(?)_key_signed`),key (`col_varchar(?)_key_signed`),key (`col_enum_key_signed`)) character set utf8 partition by hash(pk) partitions ?"
+			},
+			{
+				"digest_max_size": 2048,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"replace_digits": 1,
+				"digest": "create table table_?_utf?_? (`pk` int primary key,`col_bigint_undef_signed` bigint,`col_bigint_undef_unsigned` bigint unsigned,`col_bigint_key_signed` bigint,`col_bigint_key_unsigned` bigint unsigned,`col_float_undef_signed` float,`col_float_undef_unsigned` float unsigned,`col_float_key_signed` float,`col_float_key_unsigned` float unsigned,`col_double_undef_signed` double,`col_double_undef_unsigned` double unsigned,`col_double_key_signed` double,`col_double_key_unsigned` double unsigned,`col_decimal(?,?)_undef_signed` decimal(?,?),`col_decimal(?,?)_undef_unsigned` decimal(?,?) unsigned,`col_decimal(?,?)_key_signed` decimal(?,?),`col_decimal(?,?)_key_unsigned` decimal(?,?) unsigned,`col_char(?)_undef_signed` char(?),`col_char(?)_key_signed` char(?),`col_varchar(?)_undef_signed` varchar(?),`col_varchar(?)_key_signed` varchar(?),`col_enum_undef_signed` enum(?,...),`col_enum_key_signed` enum(?,...),key (`col_bigint_key_signed`),key (`col_bigint_key_unsigned`),key (`col_float_key_signed`),key (`col_float_key_unsigned`),key (`col_double_key_signed`),key (`col_double_key_unsigned`),key (`col_decimal(?,?)_key_signed`),key (`col_decimal(?,?)_key_unsigned`),key (`col_char(?)_key_signed`),key (`col_varchar(?)_key_signed`),key (`col_enum_key_signed`)) character set utf? partition by hash(pk) partitions ?"
+			}
+		]
+	},
+	{
+		"q": "create /* foo_comment*/table table_10_utf8_4 (`pk` int primary key,`col_bigint_undef_signed` bigint ,`col_bigint_undef_unsigned` bigint unsigned ,`col_bigint_key_signed` bigint ,`col_bigint_key_unsigned` bigint unsigned ,`col_float_undef_signed` float ,`col_float_undef_unsigned` float unsigned ,`col_float_key_signed` float ,`col_float_key_unsigned` float unsigned ,`col_double_undef_signed` double ,`col_double_undef_unsigned` double unsigned ,`col_double_key_signed` double ,`col_double_key_unsigned` double unsigned ,`col_decimal(40, 20)_undef_signed` decimal(40, 20) ,`col_decimal(40, 20)_undef_unsigned` decimal(40, 20) unsigned ,`col_decimal(40, 20)_key_signed` decimal(40, 20)  ,`col_decimal(40, 20)_key_unsigned` decimal(40, 20) unsigned ,`col_char(20)_undef_signed` char(20)  ,`col_char(20)_key_signed` char(20) ,`col_varchar(20)_undef_signed` varchar(20)  ,`col_varchar(20)_key_signed` varchar(20) ,`col_enum_undef_signed` enum('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z') ,`col_enum_key_signed` enum('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z') ,key (`col_bigint_key_signed`),key (`col_bigint_key_unsigned`),key (`col_float_key_signed`),key (`col_float_key_unsigned`),key (`col_double_key_signed`),key (`col_double_key_unsigned`),key (`col_decimal(40, 20)_key_signed`),key (`col_decimal(40, 20)_key_unsigned`),key (`col_char(20)_key_signed`),key (`col_varchar(20)_key_signed`),key (`col_enum_key_signed`)) character set utf8 partition by hash(pk) partitions 4",
+		"mz": [
+			{
+				"digest_max_size": 2048,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"replace_digits": 1,
+				"digest": "create table table_?_utf?_? (`pk` int primary key,`col_bigint_undef_signed` bigint,`col_bigint_undef_unsigned` bigint unsigned,`col_bigint_key_signed` bigint,`col_bigint_key_unsigned` bigint unsigned,`col_float_undef_signed` float,`col_float_undef_unsigned` float unsigned,`col_float_key_signed` float,`col_float_key_unsigned` float unsigned,`col_double_undef_signed` double,`col_double_undef_unsigned` double unsigned,`col_double_key_signed` double,`col_double_key_unsigned` double unsigned,`col_decimal(?,?)_undef_signed` decimal(?,?),`col_decimal(?,?)_undef_unsigned` decimal(?,?) unsigned,`col_decimal(?,?)_key_signed` decimal(?,?),`col_decimal(?,?)_key_unsigned` decimal(?,?) unsigned,`col_char(?)_undef_signed` char(?),`col_char(?)_key_signed` char(?),`col_varchar(?)_undef_signed` varchar(?),`col_varchar(?)_key_signed` varchar(?),`col_enum_undef_signed` enum(?,...),`col_enum_key_signed` enum(?,...),key (`col_bigint_key_signed`),key (`col_bigint_key_unsigned`),key (`col_float_key_signed`),key (`col_float_key_unsigned`),key (`col_double_key_signed`),key (`col_double_key_unsigned`),key (`col_decimal(?,?)_key_signed`),key (`col_decimal(?,?)_key_unsigned`),key (`col_char(?)_key_signed`),key (`col_varchar(?)_key_signed`),key (`col_enum_key_signed`)) character set utf? partition by hash(pk) partitions ?"
+			}
+		]
+	},
+	{
+		// digest_corner_cases_1.hjson - Testing the compression limits of number parsing when buffer is exceeded
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES    (  0x1bb81  ,  214957.551736 , NuLL   ,  13931.135294  , 23747.192325   ,123446.135101   ,  NULL  ,   \"qishXAQYMGjKECmKDOMPhdcAnCKsIZ\"   ,  0xdf06 )   ,  (   0xeeb2, 61634.403212  ,\"WLrEhMSFQunfdVMBlNTHuTOoJnZWXp\"  , 134001  ,0x11691   ,-117247   ,   null   , 185039.893374,0xfffffffffffdec0c   )   , (   63386.842817 ,NUll , NuLL ,'rjEesshgtPbGPhQQPPJdzShBDxgqtX', -70027.364007   ,   -33812,16088,  -55381.721224 ,    30937.841446  )  , (   -86381.060501   ,42818   , \"dWQiQvHpsqARowGWJYDfCWFfftJCQF\"  ,  \"usJPVckeqNRKoRbJhZcnjlKWxdRFqx\",   'vmHWbmdhfopTPzKzBktGDHfgAWvTjK' , -144765.876660  ,'zpUGEePzmDcktBrkWvpAjFvIYJLjJk'   ,   nuLL   ,   nulL) , (  Null  , -60588.485877,0xfffffffffffef1d8  ,   0x186f3   ,   'YRTtjWCbHXxqDAjfhqAeyOkflwUkUy'   ,   Null   ,   30300 ,   -79082   ,   -53386.660287 )   , (nuLL,  101067.756480,  'QJqcLLvbdUKvElZnitrCPiBmxttzPR'   , 82544.127490, \"pLwcmgkGEruDvPuJbjVWqigQKLtApm\" , NuLl ,\"pHCWIfigWjGHRWGbmrEYboNjNRrVle\"   ,   273.951202 , 0x1611e) ,  (  'xEqRpKSqBETVFlBrmUWDBNvXiWhLAv' ,0x2d71b   , -7610.975745 ,   49496.141605   ,  0x5a3b, 41343,   187409,  \"ogsXdRWyoxDtZIIsgbUQIBnHRPVBCr\" ,    \"OKDhJKxprZcDdKrveMoCipXkyBOWzB\")  ,(179771.894977 ,  'exEZujUOHgZlQNHbNBmzuqGvfIjSmh'   , 110148.494099  ,  0x22668,0xbb55   ,'WUAcoNyluxqJGkRXIynFEAzaHGoNUm', 99168  ,98435.675651   ,    83750.793947 ),    ( -55183.197960  ,  -209785 ,NULl  ,-131058  ,-40439.196182  , 0xfffffffffffeef1e  ,   'bOWeCuKfVyMAHgcRjonjLlHffKkVUj',-152886   ,  74587.327657 )  ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+		],
+		"mz": [
+			{
+				"digest_max_size": 300,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 7,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			}
+		]
+	},
+	{
+		// digest_corner_cases_2.hjson - Testing the compression limits of number parsing when buffer is exceeded
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES  (   -106884.372400,   Null,   96967.675019, \"uOkKFcQuotJLSsXHnlrRkMjkOHbnLL\",  nUll  ,   0xfffffffffffe2fa4,-98747,'FHnJDcaJuHYKrcLQjmPRgBPeEMVqHG',   0xfffffffffffe5f92   )   ,  (-65981.543813 , 0x18a51  ,  -63726 ,   -40277   ,   'RZLWNxLKntCNvKyywPcuWWDkunJDzi'  ,  95651.912060 , -120483.104736  ,  'zoMQmSNOsvEMwhAupPPxSdjGlpIwUF',   -92653 )  ,( 79071.944789  ,   29637 ,Null   , 0xa3e3  ,   69742.506092   ,   nuLl ,   nUlL ,   32587 ,    nuLL ),( NUll  ,   193562   , NuLl,nUll   ,51124 ,63407.690405,12880.173141  ,  -42003.235292  ,  nULl   )   , (  14465,   0xd769, 35866, -71474 , 238970.003674  ,   49471.298925,nULl   , 196468.485221,     'OQWWhgSLBQWiPGkidCLtmcJVjccXhT' )  ,   (15979.107082 ,   0xffffffffffffdecb, 'yAsavJoqsYcdRnqzuionGLUcgKzptM' , 52201.974227   ,  nUll  ,0xfffffffffffec75a , 152701.076362,  'vmWBqXdCYmBiZgIkQxPlMKkJzwoIjl'   ,   \"TzKdJzIgwVycdGJjnYiKVhYOVLhuHO\"  ) ,   ( 0x12a   ,   'wlbxzkxigeNkGceygISXGXHwHpNJfL', \"MjoQpMZYZlelqYyYFQQoXXvgMLxxIB\"   ,-14336.956478 ,79770.092506  , 0x8a19,   -209691 ,  -142530,    NuLl  )  , (  7107 ,   48803.646634   ,   nuLl ,\"RxqHnGFqRGECSvsXmdfPutRczeoBWM\"   ,   4707.102185  ,   -123755.871365   ,   0x3803a ,0x892e ,     0x7334   )   ,   (  Null ,  \"BwQbhYkWShweQqlAgdiJjZVNkghTFt\",   27725.575520   , 0x7363  , 0x21ca2   ,   null   ,  \"rSBYTyRDrmKCgMEKvLeDeMmGJrEWto\"   ,\"mpuVGXNeZsbPgbpKVUREyQBVpbsmLq\"   ,0xffffffffffff5b11 )    ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+		],
+		"mz": [
+			{
+				"digest_max_size": 300,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 3,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,...),(?,?,?,...),(?,?,?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			}
+		]
+	},
+	{
+		// digest_corner_cases_3.hjson - Testing the compression limits of number parsing when buffer is exceeded
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES    (   0xfffffffffffdfa31  ,  'ytWVaafHnboBDSJHpKDfIlWSWvUNjq'  ,   16908.503755   ,  -11736.372712,  0x1e798  , 'UlMwBSOlzzGgmKbjZavKKIgvDTzolx'  ,  9905.137073   ,  \"tGVoLiPoDsHOXXtXBqDrzwJHmWdOph\"   ),   ('XYvotpHOhBUaIKLLCPdeZamzyIQEIX'   , 39167.355124  ,  52963,   'HcfcZWuJpfTKhleWQNiEkydsyTPzwV' ,17553.074771   ,  0xfffffffffffea0e9   ,   -27669  ,    0xfffffffffffed5a4) ,   (   Null ,  -28382.553547, 0xffffffffffff6813   ,   33781  ,   -31269.369619,  0xfffffffffffdd05b   ,  \"ziXUovhpqIxEQTRDRoFVlmcXeXeXwE\",    0xffffffffffff22db   ) ,(0xfffffffffffec225   ,-54614  ,-130076.423664,  87245,   'lIDxwrQRGyVEhNJyflzVVVqgWKhcGQ'  ,0xffffffffffffc016  ,0xfffffffffffe2ebb  ,  7161.573031 ) ,( 86691 ,  nulL   ,   'wArHVQUJjIkruXUMYQZmdGwACUHfCl' ,   nUlL ,  nuLL,   \"IjkZVgqmoRbNhHXEXCuapacSrarUmf\" ,\"zbXFcuBLBViyEjNoOMRfGzqVGzGYnV\"  ,  65818.863137  )  ,  (   17501.998482, -19763.038658  , NuLl  , nULL   ,   0xffffffffffff8053,   \"FaiYqJUJdeMBqhSXLvNRjkRdoBKHCi\",NuLl  ,   -125847 ) ,   (   'FzlNatGeghhHXEaEvGZCzQAinUIark'  ,   -10893.427711 , 0xf36e   , nULl, 0xfffffffffffe71a8 ,  195649.986775, 61898   ,    \"SvtCaHMKbyDCcWqvZnsMKHRNRGPRFC\"   ),  (   69426   ,   'mZiasHoxeIhKBTaiSGTQJtwxtvoobg' ,'ZHWcgyackLzxYXDOwAgVbWRANJZWoW'  ,  'wGkUsXdrbWcmOrGRxGyilsQAEijGvW'  ,   \"OqKCBdtgWHePQzvBEzRUkypYgXdIbs\"   ,   nUll ,'SOPYdoFzxfIlwcCUsnLsIlcLNugdIJ'   ,   0x1be89   ),      (NuLL   , null  , nuLl  , 94923.703353  ,   24742.987834 , -47458,  -78436,    0xfffffffffffcda0f   )  ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+		],
+		"mz": [
+			{
+				"digest_max_size": 300,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 7,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			}
+		]
+	},
+	{
+		// digest_corner_cases_4.hjson - Testing the compression limits of number parsing when buffer is exceeded
+		"q": [
+			"INSERT INTO db.table (col1,col2,col3) VALUES    (  0x1bb81  ,  214957.551736 , NuLL   ,  13931.135294  , 23747.192325   ,123446.135101   ,  NULL  ,   \"qishXAQYMGjKECmKDOMPhdcAnCKsIZ\"   ,  0xdf06 )   ,  (   0xeeb2, 61634.403212  ,\"WLrEhMSFQunfdVMBlNTHuTOoJnZWXp\"  , 134001  ,0x11691   ,-117247   ,   null   , 185039.893374,0xfffffffffffdec0c   )   , (   63386.842817 ,NUll , NuLL ,'rjEesshgtPbGPhQQPPJdzShBDxgqtX', -70027.364007   ,   -33812,16088,  -55381.721224 ,    30937.841446  )  , (   -86381.060501   ,42818   , \"dWQiQvHpsqARowGWJYDfCWFfftJCQF\"  ,  \"usJPVckeqNRKoRbJhZcnjlKWxdRFqx\",   'vmHWbmdhfopTPzKzBktGDHfgAWvTjK' , -144765.876660  ,'zpUGEePzmDcktBrkWvpAjFvIYJLjJk'   ,   nuLL   ,   nulL) , (  Null  , -60588.485877,0xfffffffffffef1d8  ,   0x186f3   ,   'YRTtjWCbHXxqDAjfhqAeyOkflwUkUy'   ,   Null   ,   30300 ,   -79082   ,   -53386.660287 )   , (nuLL,  101067.756480,  'QJqcLLvbdUKvElZnitrCPiBmxttzPR'   , 82544.127490, \"pLwcmgkGEruDvPuJbjVWqigQKLtApm\" , NuLl ,\"pHCWIfigWjGHRWGbmrEYboNjNRrVle\"   ,   273.951202 , 0x1611e) ,  (  'xEqRpKSqBETVFlBrmUWDBNvXiWhLAv' ,0x2d71b   , -7610.975745 ,   49496.141605   ,  0x5a3b, 41343,   187409,  \"ogsXdRWyoxDtZIIsgbUQIBnHRPVBCr\" ,    \"OKDhJKxprZcDdKrveMoCipXkyBOWzB\")  ,(179771.894977 ,  'exEZujUOHgZlQNHbNBmzuqGvfIjSmh'   , 110148.494099  ,  0x22668,0xbb55   ,'WUAcoNyluxqJGkRXIynFEAzaHGoNUm', 99168  ,98435.675651   ,    83750.793947 ),    ( -55183.197960  ,  -209785 ,NULl  ,-131058  ,-40439.196182  , 0xfffffffffffeef1e  ,   'bOWeCuKfVyMAHgcRjonjLlHffKkVUj',-152886   ,  74587.327657 )  ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+		],
+		"mz": [
+			{
+				"digest_max_size": 300,
+				"grouping_limit": 3,
+				"groups_grouping_limit": 7,
+				"digest": "INSERT INTO db.table (col1,col2,col3) VALUES (?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),(?,?,?,...),... ON DUPLICATE KEY UPDATE col1 = VALUES(col2)"
+			}
+		]
+	}
+]

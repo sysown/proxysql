@@ -1,6 +1,7 @@
 #ifndef COMMAND_LINE_H
 #define COMMAND_LINE_H
 
+#include <string.h>
 #include <string>
 
 class CommandLine {
@@ -9,19 +10,21 @@ class CommandLine {
 	~CommandLine();
 
 	int parse(int argc, char** argv);
-	bool checksum;
-	bool no_write;
-	int silent;
-	char* host;
-	char* username;
-	char* password;
-	char* admin_username;
-	char* admin_password;
-	int	 port;
-	int admin_port;
-	char* workdir;
+	bool checksum = true;
+	bool no_write = false;
+	int silent = false;
 
-	int read(const std::string& file);
+	char* host = strdup("127.0.0.1");
+	char* username = strdup("root");
+	char* password = strdup("");
+	char* admin_username = strdup("admin");
+	char* admin_password = strdup("admin");
+
+	int	port = 6033;
+	int admin_port = 6032;
+	char* workdir = strdup("./tests/");
+
+	uint64_t client_flags = 0;
 	int getEnv();
 };
 

@@ -4,7 +4,7 @@
 #include "cpp.h"
 #include "query_cache.hpp"
 #include "proxysql_atomic.h"
-#include "SpookyV2.h"
+//#include "SpookyV2.h"
 #include "prometheus_helpers.h"
 #include "MySQL_Protocol.h"
 
@@ -97,7 +97,7 @@ KV_BtreeArray::KV_BtreeArray() {
 };
 
 KV_BtreeArray::~KV_BtreeArray() {
-	proxy_debug(PROXY_DEBUG_QUERY_CACHE, 3, "Size of  KVBtreeArray:%d , ptrArray:%llu\n", cnt() , ptrArray->len);
+	proxy_debug(PROXY_DEBUG_QUERY_CACHE, 3, "Size of  KVBtreeArray:%d , ptrArray:%u\n", cnt() , ptrArray->len);
 	empty();
 	QC_entry_t *qce=NULL;
 	while (ptrArray->len) {
@@ -515,9 +515,33 @@ unsigned char* eof_to_ok_packet(QC_entry_t* entry) {
 	// Initialize affected_rows and last_insert_id to zero
 	memset(vp, 0, 2);
 	vp += 2;
-	// Copy the warning an status flags
-	memcpy(vp, it, 4);
+	// Extract warning flags and status from 'EOF_packet'
+	char* eof_packet = entry->value + entry->row_eof_pkt_offset;
+	eof_packet += sizeof(mysql_hdr);
+	// Skip the '0xFE EOF packet header'
+	eof_packet += 1;
+	uint16_t warnings;
+	memcpy(&warnings, eof_packet, sizeof(uint16_t));
+	eof_packet += 2;
+	uint16_t status_flags;
+	memcpy(&status_flags, eof_packet, sizeof(uint16_t));
+	// Copy warnings an status flags
+	memcpy(vp, &status_flags, sizeof(uint16_t));
+	vp += 2;
+	memcpy(vp, &warnings, sizeof(uint16_t));
 	// =======================================
+
+	// Decrement ids after the first EOF
+	unsigned char* dp = result + entry->column_eof_pkt_offset;
+	mysql_hdr decrement_hdr;
+	for (;;) {
+		memcpy(&decrement_hdr, dp, sizeof(mysql_hdr));
+		decrement_hdr.pkt_id--;
+		memcpy(dp, &decrement_hdr, sizeof(mysql_hdr));
+		dp += sizeof(mysql_hdr) + decrement_hdr.pkt_length;
+		if (dp >= vp)
+			break;
+	}
 
 	return result;
 }
@@ -541,11 +565,13 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 	mysql_hdr ok_hdr;
 	memcpy(&ok_hdr, ok_packet, sizeof(mysql_hdr));
 	ok_packet += sizeof(mysql_hdr);
-	// Skipt the 'affected_rows' and 'last_insert_id'
+	// Skip the 'OK packet header', 'affected_rows' and 'last_insert_id'
+	ok_packet += 3;
+	uint16_t status_flags;
+	memcpy(&status_flags, ok_packet, sizeof(uint16_t));
 	ok_packet += 2;
-	uint16_t status_flags = *reinterpret_cast<uint16_t*>(ok_packet);
-	ok_packet += 2;
-	uint16_t warnings = *reinterpret_cast<uint16_t*>(ok_packet);
+	uint16_t warnings;
+	memcpy(&warnings, ok_packet, sizeof(uint16_t));
 
 	// Find the spot in which the first EOF needs to be placed
 	it += sizeof(mysql_hdr);
@@ -575,9 +601,9 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 	// Write 'column_eof_packet' contents
 	*vp = 0xfe;
 	vp++;
-	*reinterpret_cast<uint16_t*>(vp) = warnings;
+	memcpy(vp, &warnings, sizeof(uint16_t));
 	vp += 2;
-	*reinterpret_cast<uint16_t*>(vp) = status_flags;
+	memcpy(vp, &status_flags, sizeof(uint16_t));
 	vp += 2;
 
 	// Find the OK packet
@@ -597,9 +623,9 @@ unsigned char* ok_to_eof_packet(QC_entry_t* entry) {
 
 			*vp = 0xfe;
 			vp++;
-			*reinterpret_cast<uint16_t*>(vp) = warnings;
+			memcpy(vp, &warnings, sizeof(uint16_t));
 			vp += 2;
-			*reinterpret_cast<uint16_t*>(vp) = status_flags;
+			memcpy(vp, &status_flags, sizeof(uint16_t));
 			break;
 		} else {
 			// Increment the package id by one due to 'column_eof_packet'
@@ -627,22 +653,35 @@ unsigned char * Query_Cache::get(uint64_t user_hash, const unsigned char *kp, co
 	if (entry!=NULL) {
 		unsigned long long t=curtime_ms;
 		if (entry->expire_ms > t && entry->create_ms + cache_ttl > t) {
-			THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);
-			THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,1);
-
-			if (deprecate_eof_active && entry->column_eof_pkt_offset) {
-				result = eof_to_ok_packet(entry);
-				*lv = entry->length + eof_to_ok_dif;
-			} else if (!deprecate_eof_active && entry->ok_pkt_offset){
-				result = ok_to_eof_packet(entry);
-				*lv = entry->length + ok_to_eof_dif;
+			if (
+				mysql_thread___query_cache_soft_ttl_pct && !entry->refreshing &&
+				entry->create_ms + cache_ttl * mysql_thread___query_cache_soft_ttl_pct / 100 <= t
+			) {
+				// If the Query Cache entry reach the soft_ttl but do not reach
+				// the cache_ttl, the next query hit the backend and refresh
+				// the entry, including ResultSet and TTLs. While the
+				// refreshing is in process, other queries keep using the "old"
+				// Query Cache entry.
+				// soft_ttl_pct with value 0 and 100 disables the functionality.
+				entry->refreshing = true;
 			} else {
-				result = (unsigned char *)malloc(entry->length);
-				memcpy(result, entry->value, entry->length);
-				*lv = entry->length;
-			}
+				THR_UPDATE_CNT(__thr_cntGetOK,Glo_cntGetOK,1,1);
+				THR_UPDATE_CNT(__thr_dataOUT,Glo_dataOUT,entry->length,1);
 
-			if (t > entry->access_ms) entry->access_ms=t;
+				if (deprecate_eof_active && entry->column_eof_pkt_offset) {
+					result = eof_to_ok_packet(entry);
+					*lv = entry->length + eof_to_ok_dif;
+				} else if (!deprecate_eof_active && entry->ok_pkt_offset){
+					result = ok_to_eof_packet(entry);
+					*lv = entry->length + ok_to_eof_dif;
+				} else {
+					result = (unsigned char *)malloc(entry->length);
+					memcpy(result, entry->value, entry->length);
+					*lv = entry->length;
+				}
+
+				if (t > entry->access_ms) entry->access_ms=t;
+			}
 		}
 		__sync_fetch_and_sub(&entry->ref_count,1);
 	}
@@ -657,6 +696,7 @@ bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, 
 	entry->column_eof_pkt_offset=0;
 	entry->row_eof_pkt_offset=0;
 	entry->ok_pkt_offset=0;
+	entry->refreshing=false;
 
 	// Find the first EOF location
 	unsigned char* it = vp;

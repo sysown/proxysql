@@ -6,6 +6,21 @@
 
 #include "MySQL_Protocol.h"
 
+#ifndef uchar
+typedef unsigned char uchar;
+#endif
+
+#include "ma_pvio.h"
+// here we define P_MARIADB_TLS as a copy of MARIADB_TLS
+// copied from ma_tls.h
+// note that ma_pvio.h defines it as void
+typedef struct P_st_ma_pvio_tls {
+  void *data;
+  MARIADB_PVIO *pvio;
+  void *ssl;
+} P_MARIADB_TLS;
+
+
 #define QUEUE_T_DEFAULT_SIZE	32768
 #define MY_SSL_BUFFER	8192
 
@@ -35,8 +50,12 @@ class MyDS_real_query {
 */
 		pkt.ptr=_pkt->ptr;
 		pkt.size=_pkt->size;
-		QueryPtr=(char *)pkt.ptr+5;
 		QuerySize=pkt.size-5;
+		if (QuerySize == 0) {
+			QueryPtr=const_cast<char*>("");
+		} else {
+			QueryPtr=(char *)pkt.ptr+5;
+		}
 	}
 	void end() {
 		l_free(pkt.size,pkt.ptr);
@@ -168,7 +187,6 @@ class MySQL_Data_Stream
 	void set_pollout();	
 	void mysql_free();
 
-	void clean_net_failure();
 	void set_net_failure();
 	void setDSS_STATE_QUERY_SENT_NET();
 
@@ -180,8 +198,6 @@ class MySQL_Data_Stream
 	int write_pkts();
 
 	void unplug_backend();
-
-	int myds_connect(char *, int, int *); // the data stream MUST be initialized
 
 	void check_data_flow();
 	int assign_fd_from_mysql_conn();
@@ -195,6 +211,34 @@ class MySQL_Data_Stream
 		myconn=mc;
 		myconn->statuses.myconnpoll_get++;
 		mc->myds=this;
+		encrypted = false; // this is the default
+		// PMC-10005
+		// we handle encryption for backend
+		//
+		// we have a similar code in MySQL_Connection
+		// in case of ASYNC_CONNECT_SUCCESSFUL
+		if (sess != NULL && sess->session_fast_forward == true) {
+			// if frontend and backend connection use SSL we will set
+			// encrypted = true and we will start using the SSL structure
+			// directly from P_MARIADB_TLS structure.
+			//
+			// For futher details:
+			// - without ssl: we use the file descriptor from mysql connection
+			// - with ssl: we use the SSL structure from mysql connection
+			if (myconn->mysql && myconn->ret_mysql) {
+				if (myconn->mysql->options.use_ssl == 1) {
+					encrypted = true;
+					if (ssl == NULL) {
+						// check the definition of P_MARIADB_TLS
+						P_MARIADB_TLS * matls = (P_MARIADB_TLS *)myconn->mysql->net.pvio->ctls;
+						ssl = (SSL *)matls->ssl;
+						rbio_ssl = BIO_new(BIO_s_mem());
+						wbio_ssl = BIO_new(BIO_s_mem());
+						SSL_set_bio(ssl, rbio_ssl, wbio_ssl);
+					}
+				}
+			}
+		}
 	}
 
 	// safe way to detach a MySQL Connection
@@ -204,6 +248,15 @@ class MySQL_Data_Stream
 		statuses.myconnpoll_put++;
 		myconn->myds=NULL;
 		myconn=NULL;
+		if (encrypted == true) {
+			if (sess != NULL && sess->session_fast_forward == true) {
+				// it seems we are a connection with SSL on a fast_forward session.
+				// See attach_connection() for more details .
+				// We now disable SSL metadata from the Data Stream
+				encrypted = false;
+				ssl = NULL;
+			}
+		}
 	}
 
 	void return_MySQL_Connection_To_Pool();

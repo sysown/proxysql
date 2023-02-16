@@ -1,6 +1,8 @@
 #include <openssl/rand.h>
 #include "proxysql.h"
 #include "cpp.h"
+#include "re2/re2.h"
+#include "re2/regexp.h"
 
 #include "MySQL_PreparedStatement.h"
 #include "MySQL_Data_Stream.h"
@@ -67,7 +69,7 @@ char *sha1_pass_hex(char *sha1_pass) {
 	buff[0]='*';
 	buff[SHA_DIGEST_LENGTH*2+1]='\0';
 	int i;
-	uint8_t a;
+	uint8_t a = 0;
 	for (i=0;i<SHA_DIGEST_LENGTH;i++) {
 		memcpy(&a,sha1_pass+i,1);
 		sprintf(buff+1+2*i, "%02x", a);
@@ -87,6 +89,15 @@ void proxy_create_random_string(char *_to, uint length, struct rand_struct *rand
 	int rc = 0;
 	uint i;
 	rc = RAND_bytes((unsigned char *)to,length);
+#ifdef DEBUG
+	if (rc==1) {
+		// For code coverage (to test the following code and other function)
+		// in DEBUG mode we pretend that RAND_bytes() fails 1% of the time
+		if(rand()%100==0) {
+			rc=0;
+		}
+	}
+#endif // DEBUG
 	if (rc!=1) {
 		for (i=0; i<length ; i++) {
 			*to= (proxy_my_rnd(rand_st) * 94 + 33);
@@ -251,104 +262,9 @@ static uint8_t mysql_encode_length(uint64_t len, char *hd) {
 	return 9;	
 }
 
-
-enum MySQL_response_type mysql_response(unsigned char *pkt, unsigned int length) {
-	unsigned char c=*pkt;
-	switch (c) {
-		case 0:
-     // proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet OK_Packet\n");
-			return OK_Packet;
-		case 0xff:
-     // proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet ERR_Packet\n");
-			return ERR_Packet;
-		case 0xfe:
-			if (length < 9) {
-        //proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet EOF_Packet\n");
-				return EOF_Packet;
-			}
-		default:
-			//proxy_debug(PROXY_DEBUG_MYSQL_COM, 6, "Packet UNKNOWN_Packet\n");
-			return UNKNOWN_Packet;
-	}
-}
-
-int pkt_com_query(unsigned char *pkt, unsigned int length) {
-	unsigned char buf[length];
-	memcpy(buf,pkt+1, length-1);
-	buf[length-1]='\0';
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Query: %s\n", buf);
-	return PKT_PARSED;
-}
-
-int pkt_ok(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp) {
-	if (length < 7) return PKT_ERROR;
-
-	uint64_t affected_rows;
-	uint64_t  insert_id;
-#ifdef DEBUG
-	uint16_t  warns;
-#endif /* DEBUG */
-	unsigned char msg[length];
-
-	unsigned int p=0;
-	int rc;
-
-	pkt++; p++;
-	rc=mysql_decode_length(pkt,&affected_rows);
-	pkt	+= rc; p+=rc;
-	rc=mysql_decode_length(pkt,&insert_id);
-	pkt	+= rc; p+=rc;
-	mp->prot_status=CPY2(pkt);
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-#ifdef DEBUG
-	warns=CPY2(pkt);
-#endif /* DEBUG */
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-	pkt++;
-	p++;
-	if (length>p) {
-		memcpy(msg,pkt,length-p);
-		msg[length-p]=0;
-	} else {
-		msg[0]=0;
-	}
-
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)mp->prot_status, (uint16_t)warns, msg);
-	
-	return PKT_PARSED;
-}
-
-
-
-int pkt_end(unsigned char *pkt, unsigned int length, MySQL_Protocol *mp)
-{
-	if(*pkt != 0xFE || length > 5) return PKT_ERROR;
-#ifdef DEBUG
-	uint16_t warns = 0;
-#endif /* DEBUG */
-
-	if(length > 1) { // 4.1+
-		pkt++;
-#ifdef DEBUG
-		warns    = CPY2(pkt);
-#endif /* DEBUG */
-		pkt    += 2;
-		mp->prot_status  = CPY2(pkt);
-	}
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n", mp->prot_status, warns);
-
-//	if(status & SERVER_MORE_RESULTS_EXISTS) {
-//		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"End Packet <status:%u warns:%u>\n");
-//	}
-
-	return PKT_PARSED;
-}
-
 #ifdef DEBUG
 void debug_spiffe_id(const unsigned char *user, const char *attributes, int __line, const char *__func) {
-	if (strlen(attributes)) {
+	if (attributes!=NULL && strlen(attributes)) {
 		json j = nlohmann::json::parse(attributes);
 		auto spiffe_id = j.find("spiffe_id");
 		if (spiffe_id != j.end()) {
@@ -386,92 +302,6 @@ void MySQL_Protocol::init(MySQL_Data_Stream **__myds, MySQL_Connection_userinfo 
 	current_PreStmt=NULL;
 }
 
-int MySQL_Protocol::parse_mysql_pkt(PtrSize_t *PS_entry, MySQL_Data_Stream *__myds) {
-	unsigned char *pkt=(unsigned char *)PS_entry->ptr;	
-	enum mysql_data_stream_status *DSS=&(*myds)->DSS;
-
-	mysql_hdr hdr;
-	unsigned char cmd;
-	unsigned char *payload;
-	int from=(*myds)->myds_type;	// if the packet is from client or server
-	enum MySQL_response_type c;
-
-	payload=pkt+sizeof(mysql_hdr);
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"MySQL Packet length=%d, senquence_id=%d, addr=%p\n", hdr.pkt_length, hdr.pkt_id, payload);
-
-	switch (*DSS) {
-
-		// client is not connected yet
-		case STATE_NOT_CONNECTED:
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			break;
-
-		// client has sent the handshake
-		case STATE_CLIENT_HANDSHAKE:
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length, this)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			break;
-
-		// connection is idle. Client should be send a command
-		case STATE_SLEEP:
-//			if (!from_client) {
-//				return PKT_ERROR;
-//			}
-			cmd=*payload;
-			switch (cmd) {
-				case COM_QUERY:
-					if (pkt_com_query(payload, hdr.pkt_length)==PKT_PARSED) {
-						//*states=STATE_CLIENT_COM_QUERY;
-						return PKT_PARSED;
-					}
-					break;
-			}
-			//break;
-
-		default:
-		// TO BE REMOVED: begin
-			if (from==MYDS_FRONTEND) { // at this stage we expect a packet from the server, not from client
-				return PKT_ERROR;
-			}
-			c=mysql_response(payload, hdr.pkt_length);
-			switch (c) {
-				case OK_Packet:
-					if (pkt_ok(payload, hdr.pkt_length, this)==PKT_PARSED) {
-						*DSS=STATE_SLEEP;
-						return PKT_PARSED;
-					}
-					break;
-				case EOF_Packet:
-					pkt_end(payload, hdr.pkt_length, this);
-					break;
-				default:
-					return PKT_ERROR; // from the server we expect either an OK or an ERR. Everything else is wrong
-			}
-			
-		// TO BE REMOVED: end
-			break;
-	}
-	
-	return PKT_ERROR;
-}
-
-
-
 static unsigned char protocol_version=10;
 static uint16_t server_status=SERVER_STATUS_AUTOCOMMIT;
 
@@ -480,7 +310,7 @@ bool MySQL_Protocol::generate_statistics_response(bool send, void **ptr, unsigne
 
 	char buf1[1000];
 	unsigned long long t1=monotonic_time();
-	sprintf(buf1,"Uptime: %llu Threads: %d  Questions: %llu  Slow queries: %llu", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections , GloMTH->get_status_variable(st_var_queries,p_th_counter::questions) , GloMTH->get_status_variable(st_var_queries,p_th_counter::slow_queries) );
+	sprintf(buf1,"Uptime: %llu Threads: %d  Questions: %llu  Slow queries: %llu", (t1-GloVars.global.start_time)/1000/1000, MyHGM->status.client_connections , GloMTH->get_status_variable(st_var_queries,p_th_counter::questions) , GloMTH->get_status_variable(st_var_queries_slow,p_th_counter::slow_queries) );
 	unsigned char statslen=strlen(buf1);
 	mysql_hdr myhdr;
 	myhdr.pkt_id=1;
@@ -599,7 +429,9 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 					break;
 				}
 			default:
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 		}
 	}
 	if (len) { *len=size; }
@@ -701,6 +533,10 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 			internal_status |= SERVER_STATUS_NO_BACKSLASH_ESCAPES;
 		}
 	}
+	if (gtid_len == 0) {
+		// Remove 'SERVER_SESSION_STATE_CHANGED', since we don't track this info unless GTID related
+		internal_status &= ~SERVER_SESSION_STATE_CHANGED;
+	}
 	memcpy(_ptr+l, &internal_status, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	memcpy(_ptr+l, &warnings, sizeof(uint16_t)); l+=sizeof(uint16_t);
 	if (msg && strlen(msg)) {
@@ -738,10 +574,14 @@ bool MySQL_Protocol::generate_pkt_OK(bool send, void **ptr, unsigned int *len, u
 				if (eof_identifier)
 					(*myds)->DSS=STATE_EOF2;
 				else
+					// LCOV_EXCL_START
 					assert(0);
+					// LCOV_EXCL_STOP
 				break;
 			default:
+				// LCOV_EXCL_START
 				assert(0);
+				// LCOV_EXCL_STOP
 		}
 	}
 	if (len) { *len=size; }
@@ -1259,6 +1099,11 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 		myhdr.pkt_id++;
 	}
 
+	// Check if a 'COM_CHANGE_USER' Auth Switch is being performed in session
+	if ((*myds)->sess->change_user_auth_switch) {
+		myhdr.pkt_id=1;
+	}
+
 	switch((*myds)->switching_auth_type) {
 		case 1:
 			myhdr.pkt_length=1 // fe
@@ -1272,7 +1117,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 				+ 1; // 00
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 			break;
 	}
 
@@ -1297,7 +1144,9 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 			_ptr[l]=0x00; l++;
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
+			// LCOV_EXCL_STOP
 			break;
 	}
   _ptr[l]=0x00; //l+=1; //0x00
@@ -1385,29 +1234,43 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	}
 	mysql_thread___server_capabilities |= CLIENT_LONG_FLAG;
 	mysql_thread___server_capabilities |= CLIENT_MYSQL | CLIENT_PLUGIN_AUTH | CLIENT_RESERVED;
+	if (mysql_thread___enable_client_deprecate_eof) {
+		mysql_thread___server_capabilities |= CLIENT_DEPRECATE_EOF;
+	} else {
+		mysql_thread___server_capabilities &= ~CLIENT_DEPRECATE_EOF;
+	}
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
   const MARIADB_CHARSET_INFO *ci = NULL;
   ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
   if (!ci) {
+		// LCOV_EXCL_START
 	  proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable.\n",
 			  mysql_thread___default_variables[SQL_CHARACTER_SET], mysql_tracked_variables[SQL_CHARACTER_SET].internal_variable_name);
 	  assert(0);
+		// LCOV_EXCL_STOP
   }
   uint8_t uint8_charset = ci->nr & 255;
   memcpy(_ptr+l,&uint8_charset, sizeof(uint8_charset)); l+=sizeof(uint8_charset);
   memcpy(_ptr+l,&server_status, sizeof(server_status)); l+=sizeof(server_status);
+	uint32_t extended_capabilities = CLIENT_MULTI_RESULTS | CLIENT_MULTI_STATEMENTS | CLIENT_PS_MULTI_RESULTS |
+		CLIENT_PLUGIN_AUTH | CLIENT_SESSION_TRACKING | CLIENT_REMEMBER_OPTIONS;
 	// we conditionally reply the client specifying in 'server_capabilities' that
 	// 'CLIENT_DEPRECATE_EOF' is available if explicitly enabled by 'mysql-enable_client_deprecate_eof'
 	// variable. This is the first step of ensuring that client connections doesn't
 	// enable 'CLIENT_DEPRECATE_EOF' unless explicitly stated by 'mysql-enable_client_deprecate_eof'.
 	// Second step occurs during client handshake response (process_pkt_handshake_response).
 	if (deprecate_eof_active && mysql_thread___enable_client_deprecate_eof) {
-		memcpy(_ptr+l,"\x8f\x81\x15",3); l+=3;
+		extended_capabilities |= CLIENT_DEPRECATE_EOF;
 	}
-	else {
-		memcpy(_ptr+l,"\x8f\x80\x15",3); l+=3;
-	}
+	// Copy the 'capability_flags_2'
+	uint16_t upper_word = static_cast<uint16_t>(extended_capabilities >> 16);
+	memcpy(_ptr+l, static_cast<void*>(&upper_word), sizeof(upper_word)); l += sizeof(upper_word);
+	// Copy the 'auth_plugin_data_len'. Hardcoded due to 'CLIENT_PLUGIN_AUTH' always enabled and reported
+	// as 'mysql_native_password'.
+	uint8_t auth_plugin_data_len = 21;
+	memcpy(_ptr+l, &auth_plugin_data_len, sizeof(auth_plugin_data_len)); l += sizeof(auth_plugin_data_len);
+
   for (i=0;i<10; i++) { _ptr[l]=0x00; l++; } //filler
   //create_random_string(mypkt->data+l,12,(struct my_rnd_struct *)&rand_st); l+=12;
 //#ifdef MARIADB_BASE_VERSION
@@ -1439,81 +1302,6 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 #endif
 	return true;
 }
-
-bool MySQL_Protocol::process_pkt_OK(unsigned char *pkt, unsigned int len) {
-
-  if (len < 11) return false;
-
-  mysql_hdr hdr;
-  memcpy(&hdr,pkt,sizeof(mysql_hdr));
-  pkt     += sizeof(mysql_hdr);
-
-	if (*pkt) return false;
-	if (len!=hdr.pkt_length+sizeof(mysql_hdr)) return false;
-
-	uint64_t affected_rows;
-	uint64_t  insert_id;
-#ifdef DEBUG
-	uint16_t  warns;
-#endif /* DEBUG */
-	unsigned char msg[len];
-
-	unsigned int p=0;
-	int rc;
-
-	pkt++; p++;
-	rc=mysql_decode_length(pkt,&affected_rows);
-	pkt += rc; p+=rc;
-	rc=mysql_decode_length(pkt,&insert_id);
-	pkt += rc; p+=rc;
-	prot_status=CPY2(pkt);
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-#ifdef DEBUG
-	warns=CPY2(pkt);
-#endif /* DEBUG */
-	pkt+=sizeof(uint16_t);
-	p+=sizeof(uint16_t);
-	pkt++;
-	p++;
-	if (len>p) {
-		memcpy(msg,pkt,len-p);
-		msg[len-p]=0;
-	} else {
-		msg[0]=0;
-	}
-
-	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"OK Packet <affected_rows:%u insert_id:%u status:%u warns:%u msg:%s>\n", (uint32_t)affected_rows, (uint32_t)insert_id, (uint16_t)prot_status, (uint16_t)warns, msg);
-	
-	return true;
-}
-
-bool MySQL_Protocol::process_pkt_EOF(unsigned char *pkt, unsigned int len) {
-	int ret;
-	mysql_hdr hdr;
-	unsigned char *payload;
-	memcpy(&hdr,pkt,sizeof(mysql_hdr));
-	payload=pkt+sizeof(mysql_hdr);
-	ret=pkt_end(payload, hdr.pkt_length, this);
-	return ( ret==PKT_PARSED ? true : false );
-}
-
-bool MySQL_Protocol::process_pkt_COM_QUERY(unsigned char *pkt, unsigned int len) {
-	bool ret=false;
-
-	unsigned int _len=len-sizeof(mysql_hdr)-1;
-	unsigned char *query=(unsigned char *)l_alloc(_len+1);
-	memcpy(query,pkt+1+sizeof(mysql_hdr),_len);
-	query[_len]=0x00;
-
-	//printf("%s\n",query);
-
-	l_free(_len+1,query);
-
-	ret=true;
-	return ret;
-}
-
 
 bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
@@ -1575,6 +1363,84 @@ bool MySQL_Protocol::process_pkt_auth_swich_response(unsigned char *pkt, unsigne
 	return ret;
 }
 
+bool MySQL_Protocol::verify_user_pass(
+	enum proxysql_session_type session_type,
+	const char* password,
+	const char* user,
+	const char* pass,
+	int pass_len,
+	const char* sha1_pass,
+	const char* auth_plugin
+) {
+	bool ret = false;
+
+	char reply[SHA_DIGEST_LENGTH+1];
+	reply[SHA_DIGEST_LENGTH]='\0';
+	int auth_plugin_id = 0;
+
+	if (strncmp((char *)auth_plugin,(char *)"mysql_native_password",strlen((char *)"mysql_native_password"))==0) {
+		auth_plugin_id = 1;
+	}
+	if (strncmp((char *)auth_plugin,(char *)"mysql_clear_password",strlen((char *)"mysql_clear_password"))==0) {
+		auth_plugin_id = 2;
+	}
+
+	if (password[0]!='*') { // clear text password
+		if (auth_plugin_id == 1) { // mysql_native_password
+			proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
+			if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+				ret=true;
+			}
+		} else { // mysql_clear_password
+			if (strncmp(password,(char *)pass,strlen(password))==0) {
+				ret=true;
+			}
+		}
+	} else {
+		if (auth_plugin_id == 1) {
+			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
+				ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
+				if (ret) {
+					if (sha1_pass==NULL) {
+						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
+					}
+					if (userinfo->sha1_pass) free(userinfo->sha1_pass);
+					userinfo->sha1_pass=sha1_pass_hex(reply);
+				}
+			}
+		} else {
+			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
+				uint8_t hash_stage1[SHA_DIGEST_LENGTH];
+				uint8_t hash_stage2[SHA_DIGEST_LENGTH];
+				SHA_CTX sha1_context;
+				SHA1_Init(&sha1_context);
+				SHA1_Update(&sha1_context, pass, pass_len);
+				SHA1_Final(hash_stage1, &sha1_context);
+				SHA1_Init(&sha1_context);
+				SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
+				SHA1_Final(hash_stage2, &sha1_context);
+				// note that sha1_pass_hex() returns a new buffer
+				char *double_hashed_password = sha1_pass_hex((char *)hash_stage2);
+
+				if (strcasecmp(double_hashed_password,password)==0) {
+					ret = true;
+					if (sha1_pass==NULL) {
+						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,hash_stage1);
+					}
+					if (userinfo->sha1_pass)
+						free(userinfo->sha1_pass);
+					userinfo->sha1_pass=sha1_pass_hex((char *)hash_stage1);
+				} else {
+					ret = false;
+				}
+				free(double_hashed_password);
+			}
+		}
+	}
+
+	return ret;
+}
 
 bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len) {
 	bool ret=false;
@@ -1582,6 +1448,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	unsigned char *user=NULL;
 	char *password=NULL;
 	char *db=NULL;
+	char* user_attributes=NULL;
 	mysql_hdr hdr;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	int default_hostgroup=-1;
@@ -1597,10 +1464,30 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	memset(pass,0,128);
 	//pkt+=sizeof(mysql_hdr);
 	memcpy(pass, pkt+cur, pass_len);
-	char reply[SHA_DIGEST_LENGTH+1];
-	reply[SHA_DIGEST_LENGTH]='\0';
 	cur+=pass_len;
 	db=(char *)pkt+cur;
+	// Move to field after 'database'
+	cur += strlen(db) + 1;
+	// Skipt field 'character-set' (size 2)
+	cur += 2;
+	// Check and get 'Client Auth Plugin' if capability is supported
+	char* client_auth_plugin = nullptr;
+	if (pkt + len > pkt + cur) {
+		int capabilities = (*myds)->sess->client_myds->myconn->options.client_flag;
+		if (capabilities & CLIENT_PLUGIN_AUTH) {
+			client_auth_plugin = reinterpret_cast<char*>(pkt + cur);
+		}
+	}
+	// Default to 'mysql_native_password' in case 'auth_plugin' is not found.
+	if (client_auth_plugin == nullptr) {
+		client_auth_plugin = const_cast<char*>("mysql_native_password");
+	}
+	if (pass_len) {
+		if (pass[pass_len-1] == 0) {
+			pass_len--; // remove the extra 0 if present
+		}
+	}
+
 	void *sha1_pass=NULL;
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
@@ -1608,34 +1495,36 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 		password=GloClickHouseAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
-		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, NULL);
+		password=GloMyAuth->lookup((char *)user, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, NULL, NULL, &transaction_persistent, NULL, NULL, &sha1_pass, &user_attributes);
 	}
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
+	(*myds)->sess->user_attributes=user_attributes;
 	if (password==NULL) {
 		ret=false;
 	} else {
 		if (pass_len==0 && strlen(password)==0) {
 			ret=true;
 		} else {
-			if (password[0]!='*') { // clear text password
-				proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-				if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
-					ret=true;
-				}
+			// If pass not sent within 'COM_CHANGE_USER' packet, an 'Auth Switch Request'
+			// is required. We default to 'mysql_native_password'. See #3504 for more context.
+			if (pass_len == 0) {
+				// mysql_native_password
+				(*myds)->switching_auth_type = 1;
+				// started 'Auth Switch Request' for 'CHANGE_USER' in MySQL_Session.
+				(*myds)->sess->change_user_auth_switch = true;
+
+				generate_pkt_auth_switch_request(true, NULL, NULL);
+				(*myds)->myconn->userinfo->set((char *)user, NULL, db, NULL);
+				ret = false;
 			} else {
-				if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
-					ret=proxy_scramble_sha1((char *)pass,(*myds)->myconn->scramble_buff,password+1, reply);
-					if (ret) {
-						if (sha1_pass==NULL) {
-							// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-							GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,reply);
-						}
-						if (userinfo->sha1_pass) free(userinfo->sha1_pass);
-						userinfo->sha1_pass=sha1_pass_hex(reply);
-					}
-				}
+				// If pass is sent with 'COM_CHANGE_USER', we proceed trying to use
+				// it to authenticate the user. See #3504 for more context.
+				ret = verify_user_pass(
+					session_type, password, reinterpret_cast<char*>(user), reinterpret_cast<char*>(pass),
+					pass_len, static_cast<char*>(sha1_pass), client_auth_plugin
+				);
 			}
 		}
 		//if (_ret_use_ssl==true) {
@@ -1683,8 +1572,10 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			const MARIADB_CHARSET_INFO *ci = NULL;
 			ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 			if (!ci) {
+				// LCOV_EXCL_START
 				proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 				assert(0);
+				// LCOV_EXCL_STOP
 			}
 			charset=ci->nr;
 		}
@@ -1696,6 +1587,8 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			ret = false;
 			return ret;
 		}
+		// set the default charset for this session
+		(*myds)->sess->default_charset = charset;
 		if ((*myds)->sess->user_attributes) {
 			if (user_attributes_has_spiffe(__LINE__, __func__, user)) {
 				// if SPIFFE was used, CHANGE_USER is not allowed.
@@ -1707,6 +1600,18 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 				proxy_error("Client %s:%d is trying to run CHANGE_USER , but this is disabled because it previously used SPIFFE ID. Disconnecting\n", (*myds)->addr.addr, (*myds)->addr.port);
 				ret = false;
 				return ret;
+			}
+
+			char* user_attributes = (*myds)->sess->user_attributes;
+			if (strlen(user_attributes)) {
+				nlohmann::json j_user_attributes = nlohmann::json::parse(user_attributes);
+				auto default_transaction_isolation = j_user_attributes.find("default-transaction_isolation");
+
+				if (default_transaction_isolation != j_user_attributes.end()) {
+					std::string def_trx_isolation_val =
+						j_user_attributes["default-transaction_isolation"].get<std::string>();
+					mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, def_trx_isolation_val.c_str());
+				}
 			}
 		}
 		assert(sess);
@@ -1734,26 +1639,25 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,pkt,len); }
 #endif
-	bool ret=false;
+	bool ret = false;
 	unsigned int charset;
 	uint32_t  capabilities = 0;
 	uint32_t  max_pkt;
 	uint32_t  pass_len;
-	unsigned char *user=NULL;
-	char *db=NULL;
+	unsigned char *user = NULL;
+	char *db = NULL;
 	char *db_tmp = NULL;
 	unsigned char *pass = NULL;
 	MySQL_Connection *myconn = NULL;
-	char *password=NULL;
-	bool use_ssl=false;
-	bool _ret_use_ssl=false;
+	char *password = NULL;
+	bool use_ssl = false;
+	bool _ret_use_ssl = false;
 	unsigned char *auth_plugin = NULL;
 	int auth_plugin_id = 0;
 
-	char reply[SHA_DIGEST_LENGTH+1];
-	reply[SHA_DIGEST_LENGTH]='\0';
+	char reply[SHA_DIGEST_LENGTH+1] = { 0 };
 	int default_hostgroup=-1;
-	char *default_schema=NULL;
+	char *default_schema = NULL;
 	char *attributes = NULL;
 	bool schema_locked;
 	bool transaction_persistent = true;
@@ -1769,6 +1673,15 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	//Copy4B(&hdr,pkt);
 	pkt     += sizeof(mysql_hdr);
+
+	// NOTE: 'mysqlsh' sends a 'COM_INIT_DB' as soon as the connection is openned
+	// before ProxySQL has sent 'Server Greeting' messsage. Because this packet is
+	// unexpected, we simple return 'false' and exit.
+	if (hdr.pkt_id == 0 && *pkt == 2) {
+		ret = false;
+		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client is disconnecting\n", (*myds), (*myds)->sess, user);
+		goto __exit_process_pkt_handshake_response;
+	}
 
 	if ((*myds)->myconn->userinfo->username) {
 		(*myds)->switching_auth_stage=2;
@@ -1838,8 +1751,10 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		const MARIADB_CHARSET_INFO *ci = NULL;
 		ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
 		if (!ci) {
+			// LCOV_EXCL_START
 			proxy_error("Cannot find charset [%s]\n", mysql_thread___default_variables[SQL_CHARACTER_SET]);
 			assert(0);
+			// LCOV_EXCL_STOP
 		}
 		charset=ci->nr;
 	}
@@ -1924,7 +1839,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			if (GloMyLdapAuth) { // we check if user exists only if GloMyLdapAuth is enabled
 #ifdef PROXYSQLCLICKHOUSE
 				if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
-					user_exists = GloClickHouseAuth->exists((char *)user);
+					//user_exists = GloClickHouseAuth->exists((char *)user);
 					// for clickhouse, we currently do not support clear text or LDAP
 					user_exists = true;
 				} else {
@@ -1954,7 +1869,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 					bool user_exists = true;
 #ifdef PROXYSQLCLICKHOUSE
 					if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
-						user_exists = GloClickHouseAuth->exists((char *)user);
+						//user_exists = GloClickHouseAuth->exists((char *)user);
 						// for clickhouse, we currently do not support clear text or LDAP
 						user_exists = true;
 					} else {
@@ -2003,6 +1918,8 @@ __do_auth:
 			ret = false;
 			goto __exit_do_auth;
 		}
+		// set the default session charset
+		(*myds)->sess->default_charset = charset;
 	}
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 #ifdef PROXYSQLCLICKHOUSE
@@ -2030,10 +1947,13 @@ __do_auth:
 #endif
 		(*myds)->sess->schema_locked=schema_locked;
 		(*myds)->sess->transaction_persistent=transaction_persistent;
-		(*myds)->sess->session_fast_forward=fast_forward;
+		(*myds)->sess->session_fast_forward=false; // default
+		if ((*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL) {
+			(*myds)->sess->session_fast_forward=fast_forward;
+		}
 		(*myds)->sess->user_max_connections=max_connections;
 	}
-	if (password==NULL) {
+	if (password == NULL) {
 		// this is a workaround for bug #603
 		if (
 			((*myds)->sess->session_type == PROXYSQL_SESSION_ADMIN)
@@ -2076,8 +1996,10 @@ __do_auth:
 					}
 #endif // debug
 					char *backend_username = NULL;
-					(*myds)->sess->ldap_ctx = GloMyLdapAuth->ldap_ctx_init();
-					password = GloMyLdapAuth->lookup((*myds)->sess->ldap_ctx, (char *)user, (char *)pass, USERNAME_FRONTEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &backend_username);
+					(*myds)->sess->use_ldap_auth = true;
+					password = GloMyLdapAuth->lookup((char *) user, (char *) pass, USERNAME_FRONTEND, 
+						&_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, 
+						&transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes, &backend_username);
 					if (password) {
 #ifdef DEBUG
 						char *tmp_pass=strdup(password);
@@ -2090,7 +2012,7 @@ __do_auth:
 #endif // debug
 						(*myds)->sess->default_hostgroup=default_hostgroup;
 						(*myds)->sess->default_schema=default_schema; // just the pointer is passed
-						(*myds)->sess->user_attributes = attributes; // just the pointer is passed , but for now not available in LDAP
+						(*myds)->sess->user_attributes = attributes; // just the pointer is passed, LDAP returns empty string
 #ifdef DEBUG
 						debug_spiffe_id(user,attributes, __LINE__, __func__);
 #endif
@@ -2098,14 +2020,22 @@ __do_auth:
 						(*myds)->sess->transaction_persistent=transaction_persistent;
 						(*myds)->sess->session_fast_forward=fast_forward;
 						(*myds)->sess->user_max_connections=max_connections;
-						if (strncmp(password,(char *)pass,strlen(password))==0) {
+						if (strcmp(password, (char *) pass) == 0) {
 							if (backend_username) {
 								free(password);
 								password=NULL;
 								password=GloMyAuth->lookup(backend_username, USERNAME_BACKEND, &_ret_use_ssl, &default_hostgroup, &default_schema, &schema_locked, &transaction_persistent, &fast_forward, &max_connections, &sha1_pass, &attributes);
 								if (password) {
 									(*myds)->sess->default_hostgroup=default_hostgroup;
+									// Free the previously set 'default_schema' by 'GloMyLdapAuth'
+									if ((*myds)->sess->default_schema) {
+										free((*myds)->sess->default_schema);
+									}
 									(*myds)->sess->default_schema=default_schema; // just the pointer is passed
+									// Free the previously set 'user_attributes' by 'GloMyLdapAuth'
+									if ((*myds)->sess->user_attributes) {
+										free((*myds)->sess->user_attributes);
+									}
 									(*myds)->sess->user_attributes = attributes; // just the pointer is passed
 #ifdef DEBUG
 									proxy_info("Attributes for user %s: %s\n" , user, attributes);
@@ -2116,6 +2046,8 @@ __do_auth:
 									(*myds)->sess->user_max_connections=max_connections;
 									char *tmp_user=strdup((const char *)user);
 									userinfo->set(backend_username, NULL, NULL, NULL);
+									// 'MySQL_Connection_userinfo::set' duplicates the supplied information, 'free' is required.
+									free(backend_username);
 									if (sha1_pass==NULL) {
 										// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
 										GloMyAuth->set_SHA1((char *)userinfo->username, USERNAME_FRONTEND,reply);
@@ -2129,7 +2061,8 @@ __do_auth:
 									proxy_error("Unable to load credentials for backend user %s , associated to LDAP user %s\n", backend_username, user);
 								}
 							} else {
-								ret=true;
+								proxy_error("Unable to find backend user associated to LDAP user '%s'\n", user);
+								ret=false;
 							}
 						}
 					}
@@ -2153,12 +2086,12 @@ __do_auth:
 			if (password[0]!='*') { // clear text password
 				if (auth_plugin_id == 1) { // mysql_native_password
 					proxy_scramble(reply, (*myds)->myconn->scramble_buff, password);
-					if (memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
+					if (pass_len != 0 && memcmp(reply, pass, SHA_DIGEST_LENGTH)==0) {
 						ret=true;
 					}
 				} else { // mysql_clear_password
-					if (strncmp(password,(char *)pass,strlen(password))==0) {
-						ret=true;
+					if (strcmp(password, (char *) pass) == 0) {
+						ret = true;
 					}
 				}
 			} else {
@@ -2326,7 +2259,13 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 				ret = false;
 				std::string spiffe_val = j["spiffe_id"].get<std::string>();
 				if ((*myds)->x509_subject_alt_name) {
-					if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
+					if (spiffe_val.rfind("!", 0) == 0 && spiffe_val.size() > 1) {
+						string str_spiffe_regex { spiffe_val.substr(1) };
+						re2::RE2::Options opts = re2::RE2::Options(RE2::Quiet);
+						re2::RE2 subject_alt_regex(str_spiffe_regex, opts);
+
+						ret = re2::RE2::FullMatch((*myds)->x509_subject_alt_name, subject_alt_regex);
+					} else if (strncmp(spiffe_val.c_str(), "spiffe://", strlen("spiffe://"))==0) {
 						if (strcmp(spiffe_val.c_str(), (*myds)->x509_subject_alt_name)==0) {
 							ret = true;
 						}
@@ -2335,6 +2274,11 @@ bool MySQL_Protocol::verify_user_attributes(int calling_line, const char *callin
 				if (ret == false) {
 					proxy_error("%d:%s(): SPIFFE Authentication error for user %s . spiffed_id expected : %s , received: %s\n", calling_line, calling_func, user, spiffe_val.c_str(), ((*myds)->x509_subject_alt_name ? (*myds)->x509_subject_alt_name : "none"));
 				}
+			}
+			auto default_transaction_isolation = j.find("default-transaction_isolation");
+			if (default_transaction_isolation != j.end()) {
+				std::string default_transaction_isolation_value = j["default-transaction_isolation"].get<std::string>();
+				mysql_variables.client_set_value((*myds)->sess, SQL_ISOLATION_LEVEL, default_transaction_isolation_value.c_str());
 			}
 		}
 	}
@@ -2445,9 +2389,29 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 		for (i=0;i<num_params;i++) {
 			uint8_t null_byte=null_bitmap[i/8];
 			uint8_t idx=i%8;
-			my_bool is_null = (null_byte & ( 1 << idx )) >> idx;
+			uint8_t tmp_is_null = (null_byte & ( 1 << idx )) >> idx;
+			my_bool is_null = tmp_is_null;
+			if (new_params_bound_flag == 0) {
+				// NOTE: Just impose 'is_null' to be '1' using the values from
+				// previous bindings when we know values for these **haven't
+				// changed**, this is, when 'new_params_bound_flag' is '0'.
+				// Otherwise we will assume a value to be 'NULL' when the
+				// binding type could have actually been changed from the
+				// previous 'MYSQL_TYPE_NULL'. For more context see #3603.
+				if (binds[i].buffer_type == MYSQL_TYPE_NULL)
+					is_null = 1;
+			}
 			is_nulls[i]=is_null;
 			binds[i].is_null=&is_nulls[i];
+			// set length, defaults to 0
+			// for parameters with not fixed length, that will be assigned later
+			// we moved this initialization here due to #3585
+			binds[i].is_unsigned=0;
+			lengths[i]=0;
+			binds[i].length=&lengths[i];
+			// NOTE: We nullify buffers here to reflect that memory wasn't
+			// initalized. See #3546.
+			binds[i].buffer = NULL;
 		}
 		free(null_bitmap); // we are done with it
 
@@ -2464,12 +2428,14 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					binds[i].is_unsigned=1;
 				}
 				binds[i].buffer_type=(enum enum_field_types)buffer_type;
+				// NOTE: This is required because further check for nullity rely on
+				// 'is_nulls' instead of 'buffer_type'. See #3603.
+				if (binds[i].buffer_type == MYSQL_TYPE_NULL) {
+					is_nulls[i]= 1;
+				}
+
 				p+=2;
 
-				// set length, defaults to 0
-				// for parameters with not fixed length, that will be assigned later
-				lengths[i]=0;
-				binds[i].length=&lengths[i];
 			}
 		}
 
@@ -2518,11 +2484,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 						p++;
 						MYSQL_TIME ts;
 						memset(&ts,0,sizeof(MYSQL_TIME));
-						memcpy(&ts.neg,p,1);
-						memcpy(&ts.day,p+1,4);
-						memcpy(&ts.hour,p+5,1);
-						memcpy(&ts.minute,p+6,1);
-						memcpy(&ts.second,p+7,1);
+						if (l) {
+							memcpy(&ts.neg,p,1);
+							memcpy(&ts.day,p+1,4);
+							memcpy(&ts.hour,p+5,1);
+							memcpy(&ts.minute,p+6,1);
+							memcpy(&ts.second,p+7,1);
+						}
 						if (l>8) {
 							memcpy(&ts.second_part,p+8,4);
 						}
@@ -2540,9 +2508,11 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 						p++;
 						MYSQL_TIME ts;
 						memset(&ts,0,sizeof(MYSQL_TIME));
-						memcpy(&ts.year,p,2);
-						memcpy(&ts.month,p+2,1);
-						memcpy(&ts.day,p+3,1);
+						if (l) {
+							memcpy(&ts.year,p,2);
+							memcpy(&ts.month,p+2,1);
+							memcpy(&ts.day,p+3,1);
+						}
 						if (l>4) {
 							memcpy(&ts.hour,p+4,1);
 							memcpy(&ts.minute,p+5,1);
@@ -2583,11 +2553,13 @@ stmt_execute_metadata_t * MySQL_Protocol::get_binds_from_pkt(void *ptr, unsigned
 					}
 					break;
 				default:
+					// LCOV_EXCL_START
 					proxy_error("Unsupported field type %d in zero-based parameters[%d] "
 							"of query %s from user %s with default schema %s\n",
 							buffer_type, i, stmt_info->query, stmt_info->username, stmt_info->schemaname);
 					assert(0);
 					break;
+					// LCOV_EXCL_STOP
 			}
 		}
 	}
@@ -2657,7 +2629,18 @@ MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
 	//reset_pid = true;
 }
+
+void MySQL_ResultSet::buffer_init(MySQL_Protocol* myproto) {
+	if (buffer==NULL) {
+		buffer=(unsigned char *)malloc(RESULTSET_BUFLEN);
+	}
+
+	buffer_used=0;
+	myprot = myproto;
+}
+
 void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
+	PROXY_TRACE2();
 	transfer_started=false;
 	resultset_completed=false;
 	myprot=_myprot;
@@ -2735,18 +2718,35 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 			buffer_to_PSarrayOut();
 		}
 	if (!deprecate_eof_active && myds->com_field_list==false) {
-		myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
-		sid++;
-		resultset_size += 9;
+		// up to 2.2.0 we used to add an EOF here.
+		// due to bug #3547 we move the logic into add_eof() that can now handle also prepared statements
+		PROXY_TRACE2();
+		add_eof();
 	}
-	//}
-	//if (_stmt) { // binary protocol , we also assume we have ALL the resultset
-	///	init_with_stmt(_stmt);
-	//}
 }
 
 
-void MySQL_ResultSet::init_with_stmt() {
+// due to bug #3547 , in case of an error we remove the EOF
+// and replace it with an ERR
+// note that EOF is added on a packet on its own, instead of using a buffer,
+// so that can be removed using remove_last_eof()
+void MySQL_ResultSet::remove_last_eof() {
+	PROXY_TRACE2();
+	PtrSize_t pkt;
+	if (PSarrayOUT.len) {
+		unsigned int l = PSarrayOUT.len-1;
+		PtrSize_t * pktp = PSarrayOUT.index(l);
+		if (pktp->size == 9) {
+			PROXY_TRACE2();
+			PSarrayOUT.remove_index(l,&pkt);
+			l_free(pkt.size, pkt.ptr);
+			sid--;
+		}
+	}
+}
+
+void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
+	PROXY_TRACE2();
 	assert(stmt);
 	MYSQL_STMT *_stmt = stmt;
 	MySQL_Data_Stream * c_myds = *(myprot->myds);
@@ -2857,7 +2857,34 @@ void MySQL_ResultSet::init_with_stmt() {
 				}
 			}
 		}
-		add_eof();
+		// up to 2.2.0 we were always adding an EOF
+		// due to bug #3547 , in case of an error we remove the EOF
+		// and replace it with an ERR
+		// note that EOF is added on a packet on its own, instead of using a buffer,
+		// so that can be removed
+		//
+		// NOTE: After 2.4.5 previous behavior is modified in favor of the following:
+		//
+		// When CLIENT_DEPRECATE_EOF two EOF packets are two be expected in the response:
+		//   1. After the columns definitions (This is added directly by 'MySQL_ResultSet::init').
+		//   2. After the rows values, this can either be and EOF packet or a ERR packet in case of error.
+		//
+		// First EOF packet isn't optional, and it's just the second the one that is optionaly either an EOF
+		// or an ERR packet. The following code adds either the final EOF or ERR packet. This is equally valid
+		// for when CLIENT_DEPRECATE_EOF is enabled or not. If CLIENT_DEPRECATE_EOF is:
+		//   * DISABLED: The behavior is as described before.
+		//   * ENABLED: Code is identical for this case. The initial EOF packet is conditionally added by
+		//     'MySQL_ResultSet::init', thus, this packet should not be present if not needed at this point.
+		//     In case of error an ERR packet needs to be added, otherwise `add_eof` handles the generation of
+		//     the equivalent OK packet replacing the final EOF packet.
+		int myerr = mysql_stmt_errno(_stmt);
+		if (myerr) {
+			PROXY_TRACE2();
+			add_err(myconn->myds);
+		} else {
+			PROXY_TRACE2();
+			add_eof();
+		}
 }
 
 MySQL_ResultSet::~MySQL_ResultSet() {
@@ -2978,12 +3005,14 @@ void MySQL_ResultSet::add_eof() {
 			resultset_size += pkt.size;
 		}
 		else {
-			if (RESULTSET_BUFLEN <= (buffer_used + 9)) {
-				buffer_to_PSarrayOut();
-			}
+			// due to bug #3547 , in case of an error we remove the EOF
+			// and replace it with an ERR
+			// note that EOF is added on a packet on its own, instead of using a buffer,
+			// so that can be removed using remove_last_eof()
+			buffer_to_PSarrayOut();
 			myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
 			resultset_size += 9;
-			buffer_to_PSarrayOut(true);
+			buffer_to_PSarrayOut();
 		}
 		sid++;
 	}
@@ -3006,9 +3035,19 @@ void MySQL_ResultSet::add_err(MySQL_Data_Stream *_myds) {
 				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, 1317);
 			}
 		} else {
-			myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,mysql_errno(_mysql),sqlstate,mysql_error(_mysql));
+			int myerr = 0;
+			// the error code is returned from:
+			// - mysql_stmt_errno() if using a prepared statement
+			// - mysql_errno() if not using a prepared statement
+			if (stmt) {
+				myerr = mysql_stmt_errno(stmt);
+				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,myerr,sqlstate,mysql_stmt_error(stmt));
+			} else {
+				myerr = mysql_errno(_mysql);
+				myprot->generate_pkt_ERR(false,&pkt.ptr,&pkt.size,sid,myerr,sqlstate,mysql_error(_mysql));
+			}
 			// TODO: Check this is a mysql error
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, mysql_errno(_mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, _myds->myconn->parent->myhgc->hid, _myds->myconn->parent->address, _myds->myconn->parent->port, myerr);
 		}
 		PSarrayOUT.add(pkt.ptr,pkt.size);
 		sid++;
@@ -3071,4 +3110,16 @@ unsigned long long MySQL_ResultSet::current_size() {
 		}
 	}
 	return intsize;
+}
+
+my_bool proxy_mysql_stmt_close(MYSQL_STMT* stmt) {
+	// Clean internal structures for 'stmt->mysql->stmts'.
+	if (stmt->mysql) {
+		stmt->mysql->stmts =
+			list_delete(stmt->mysql->stmts, &stmt->list);
+	}
+	// Nullify 'mysql' field to avoid sending a blocking command to the server.
+	stmt->mysql = NULL;
+	// Perform the regular close operation.
+	return mysql_stmt_close(stmt);
 }

@@ -19,21 +19,6 @@
 #define N_ITERATION_3  3
 
 /**
- * NOTE: This is a duplicate of 'proxysql_find_charset_collate' in 'MySQL_Variables.h'. Including
- * 'MySQL_Variables' is not a easy task due to its interdependeces with other ProxySQL modules.
- */
-MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
-	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
-	do {
-		if (!strcasecmp(c->name, collatename)) {
-			return c;
-		}
-		++c;
-	} while (c[0].nr != 0);
-	return NULL;
-}
-
-/**
  * @brief Creates a different MYSQL connection for each supplied collation. Logs in case of a
  *  failure creating a connection.
  *
@@ -102,7 +87,7 @@ int query_and_check_session_variables(MYSQL *mysql, std::string collation, int i
 	MYSQL_RES* proxy_res = nullptr;
 	std::string query = "";
 	if (new_connection)
-		query += "/*+ ;create_new_connection=1 */ ";
+		query += "/* ;create_new_connection=1 */ ";
 	query += "SELECT lower(variable_name), variable_value FROM performance_schema.session_variables WHERE";
 	query +=" Variable_name IN ('character_set_client', 'character_set_connection', 'character_set_results', 'collation_connection') ORDER BY Variable_name";
 

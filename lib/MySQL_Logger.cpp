@@ -58,6 +58,11 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	affected_rows=0;
 	have_rows_sent=false;
 	rows_sent=0;
+	client_stmt_id=0;
+}
+
+void MySQL_Event::set_client_stmt_id(uint32_t client_stmt_id) {
+	this->client_stmt_id = client_stmt_id;
 }
 
 void MySQL_Event::set_affected_rows(uint64_t ar) {
@@ -119,7 +124,7 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 }
 
 void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
-	json j;
+	json j = {};
 	j["timestamp"] = start_time/1000;
 	{
 		time_t timer=start_time/1000/1000;
@@ -257,6 +262,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 
 	total_bytes+=mysql_encode_length(start_time,NULL);
 	total_bytes+=mysql_encode_length(end_time,NULL);
+	total_bytes+=mysql_encode_length(client_stmt_id,NULL);
 	total_bytes+=mysql_encode_length(affected_rows,NULL);
 	total_bytes+=mysql_encode_length(rows_sent,NULL);
 
@@ -314,6 +320,12 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	write_encoded_length(buf,end_time,len,buf[0]);
 	f->write((char *)buf,len);
 
+	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
+		len=mysql_encode_length(client_stmt_id,buf);
+		write_encoded_length(buf,client_stmt_id,len,buf[0]);
+		f->write((char *)buf,len);
+	}
+
 	len=mysql_encode_length(affected_rows,buf);
 	write_encoded_length(buf,affected_rows,len,buf[0]);
 	f->write((char *)buf,len);
@@ -337,7 +349,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 }
 
 uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
-	json j;
+	json j = {};
 	uint64_t total_bytes=0;
 	if (hid!=UINT64_MAX) {
 		j["hostgroup_id"] = hid;
@@ -405,6 +417,10 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	char digest_hex[20];
 	sprintf(digest_hex,"0x%016llX", (long long unsigned int)query_digest);
 	j["digest"] = digest_hex;
+
+	if (et == PROXYSQL_COM_STMT_PREPARE || et == PROXYSQL_COM_STMT_EXECUTE) {
+		j["client_stmt_id"] = client_stmt_id;
+	}
 
 	// for performance reason, we are moving the write lock
 	// right before the write to disk
@@ -514,10 +530,10 @@ void MySQL_Logger::events_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (events.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(events.base_filename)+10);
+		filen=(char *)malloc(strlen(events.base_filename)+11);
 		sprintf(filen,"%s.%08d",events.base_filename,events.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(events.datadir)+strlen(events.base_filename)+10);
+		filen=(char *)malloc(strlen(events.datadir)+strlen(events.base_filename)+11);
 		sprintf(filen,"%s/%s.%08d",events.datadir,events.base_filename,events.log_file_id);
 	}
 	events.logfile=new std::fstream();
@@ -526,7 +542,7 @@ void MySQL_Logger::events_open_log_unlocked() {
 		events.logfile->open(filen , std::ios::out | std::ios::binary);
 		proxy_info("Starting new mysql event log file %s\n", filen);
 	}
-	catch (std::ofstream::failure e) {
+	catch (const std::ofstream::failure&) {
 		proxy_error("Error creating new mysql event log file %s\n", filen);
 		delete events.logfile;
 		events.logfile=NULL;
@@ -543,10 +559,10 @@ void MySQL_Logger::audit_open_log_unlocked() {
 	}
 	char *filen=NULL;
 	if (audit.base_filename[0]=='/') { // absolute path
-		filen=(char *)malloc(strlen(audit.base_filename)+10);
+		filen=(char *)malloc(strlen(audit.base_filename)+11);
 		sprintf(filen,"%s.%08d",audit.base_filename,audit.log_file_id);
 	} else { // relative path
-		filen=(char *)malloc(strlen(audit.datadir)+strlen(audit.base_filename)+10);
+		filen=(char *)malloc(strlen(audit.datadir)+strlen(audit.base_filename)+11);
 		sprintf(filen,"%s/%s.%08d",audit.datadir,audit.base_filename,audit.log_file_id);
 	}
 	audit.logfile=new std::fstream();
@@ -555,7 +571,7 @@ void MySQL_Logger::audit_open_log_unlocked() {
 		audit.logfile->open(filen , std::ios::out | std::ios::binary);
 		proxy_info("Starting new audit log file %s\n", filen);
 	}
-	catch (std::ofstream::failure e) {
+	catch (const std::ofstream::failure&) {
 		proxy_error("Error creating new audit log file %s\n", filen);
 		delete audit.logfile;
 		audit.logfile=NULL;
@@ -626,6 +642,9 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	if (events.enabled==false) return;
 	if (events.logfile==NULL) return;
+	// 'MySQL_Session::client_myds' could be NULL in case of 'RequestEnd' being called over a freshly created session
+	// due to a failed 'CONNECTION_RESET'. Because this scenario isn't a client request, we just return.
+	if (sess->client_myds==NULL || sess->client_myds->myconn== NULL) return;
 
 	MySQL_Connection_userinfo *ui=sess->client_myds->myconn->userinfo;
 
@@ -638,7 +657,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+8);
+		ca=(char *)malloc(cl+9);
 		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
@@ -667,11 +686,20 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		default:
 			break;
 	}
+
+	uint64_t query_digest = 0;
+
+	if (sess->status != PROCESSING_STMT_EXECUTE) {
+		query_digest = GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs);
+	} else {
+		query_digest = sess->CurrentQuery.stmt_info->digest;
+	}
+
 	MySQL_Event me(let,
 		sess->thread_session_id,ui->username,ui->schemaname,
 		sess->CurrentQuery.start_time + curtime_real - curtime_mono,
 		sess->CurrentQuery.end_time + curtime_real - curtime_mono,
-		GloQPro->get_digest(&sess->CurrentQuery.QueryParserArgs),
+		query_digest,
 		ca, cl
 	);
 	char *c = NULL;
@@ -680,11 +708,18 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 		case PROCESSING_STMT_EXECUTE:
 			c = (char *)sess->CurrentQuery.stmt_info->query;
 			ql = sess->CurrentQuery.stmt_info->query_length;
+			me.set_client_stmt_id(sess->CurrentQuery.stmt_client_id);
 			break;
 		case PROCESSING_STMT_PREPARE:
 		default:
 			c = (char *)sess->CurrentQuery.QueryPointer;
 			ql = sess->CurrentQuery.QueryLength;
+			// NOTE: This needs to be located in the 'default' case because otherwise will miss state
+			// 'WAITING_CLIENT_DATA'. This state is possible when the prepared statement is found in the
+			// global cache and due to that we immediately reply to the client and session doesn't reach
+			// 'PROCESSING_STMT_PREPARE' state. 'stmt_client_id' is expected to be '0' for anything that isn't
+			// a prepared statement, still, logging should rely 'log_event_type' instead of this value.
+			me.set_client_stmt_id(sess->CurrentQuery.stmt_client_id);
 			break;
 	}
 	if (c) {
@@ -707,7 +742,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	}
 	sl+=strlen(sa);
 	if (sl && myds->myconn->parent->port) {
-		sa=(char *)malloc(sl+8);
+		sa=(char *)malloc(sl+9);
 		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);
@@ -820,7 +855,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 	cl+=strlen(ca);
 	if (cl && sess->client_myds->addr.port) {
-		ca=(char *)malloc(cl+8);
+		ca=(char *)malloc(cl+9);
 		sprintf(ca,"%s:%d",sess->client_myds->addr.addr,sess->client_myds->addr.port);
 	}
 	cl=strlen(ca);
@@ -857,7 +892,7 @@ void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQ
 	}
 	sl+=strlen(sa);
 	if (sl && myds->myconn->parent->port) {
-		sa=(char *)malloc(sl+8);
+		sa=(char *)malloc(sl+9);
 		sprintf(sa,"%s:%d", myds->myconn->parent->address, myds->myconn->parent->port);
 	}
 	sl=strlen(sa);

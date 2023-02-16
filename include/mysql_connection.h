@@ -17,7 +17,7 @@ using json = nlohmann::json;
 #define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX         0x00000080
 #define STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0         0x00000100
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
-#define STATUS_MYSQL_CONNECTION_NO_BACKSLASH_ESCAPES 0x00000400
+#define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG      0x00000400
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
 
 class Variable {
@@ -25,8 +25,6 @@ public:
 	char *value = (char*)"";
 	void fill_server_internal_session(json &j, int conn_num, int idx);
 	void fill_client_internal_session(json &j, int idx);
-	static const char set_name[SQL_NAME_LAST][64];
-	static const char proxysql_internal_session_name[SQL_NAME_LAST][64];
 };
 
 enum charset_action {
@@ -78,9 +76,14 @@ class MySQL_Connection {
 		bool no_backslash_escapes;
 	} options;
 
-	Variable variables[SQL_NAME_LAST];
-	uint32_t var_hash[SQL_NAME_LAST];
-	bool var_absent[SQL_NAME_LAST] = {false};
+	Variable variables[SQL_NAME_LAST_HIGH_WM];
+	uint32_t var_hash[SQL_NAME_LAST_HIGH_WM];
+	// for now we store possibly missing variables in the lower range
+	// we may need to fix that, but this will cost performance
+	bool var_absent[SQL_NAME_LAST_HIGH_WM] = {false};
+
+	std::vector<uint32_t> dynamic_variables_idx;
+	unsigned int reorder_dynamic_variables_idx();
 
 	struct {
 		unsigned long length;
@@ -105,6 +108,11 @@ class MySQL_Connection {
 	MySrvC *parent;
 	MySQL_Connection_userinfo *userinfo;
 	MySQL_Data_Stream *myds;
+
+	struct {
+		char* hostname;
+		char* ip;
+	} connected_host_details;
 	/**
 	 * @brief Keeps tracks of the 'server_status'. Do not confuse with the 'server_status' from the
 	 *  'MYSQL' connection itself. This flag keeps track of the configured server status from the
@@ -161,8 +169,10 @@ class MySQL_Connection {
 	void set_names_cont(short event);
 	void real_query_start();
 	void real_query_cont(short event);
+#ifndef PROXYSQL_USE_RESULT
 	void store_result_start();
 	void store_result_cont(short event);
+#endif // PROXYSQL_USE_RESULT
 	void initdb_start();
 	void initdb_cont(short event);
 	void set_option_start();
@@ -211,7 +221,8 @@ class MySQL_Connection {
 	} */
 	bool IsServerOffline();
 	bool IsAutoCommit();
-	bool MultiplexDisabled();
+	bool AutocommitFalse_AndSavepoint();
+	bool MultiplexDisabled(bool check_delay_token = true);
 	bool IsKeepMultiplexEnabledVariables(char *query_digest_text);
 	void ProcessQueryAndSetStatusFlags(char *query_digest_text);
 	void optimize();

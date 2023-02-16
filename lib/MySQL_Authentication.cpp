@@ -5,7 +5,10 @@
 
 #include "MySQL_Authentication.hpp"
 
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 MySQL_Authentication::MySQL_Authentication() {
 #ifdef DEBUG
@@ -122,7 +125,45 @@ bool MySQL_Authentication::add(char * username, char * password, enum cred_usern
 				// NOTE: add() is only place where we do input validation
 				try {
 					nlohmann::json valid=nlohmann::json::parse(attributes);
-					ad->attributes=strdup(attributes);
+					// we do further input validation here, and possibly transforming the JSON itself
+					bool json_rewritten = false;
+					auto default_transaction_isolation = valid.find("default-transaction_isolation");
+					if (default_transaction_isolation != valid.end()) {
+						std::string dti = valid["default-transaction_isolation"].get<std::string>();
+						for (unsigned int i = 0; i < dti.length(); ++i) {
+							if (dti[i] == '-') {
+								dti[i] = ' ';
+								json_rewritten = true; // the json needs to be rewritten
+							}
+						}
+						// input validation
+						if (
+							   (strcasecmp(dti.c_str(), "READ UNCOMMITTED")==0 )
+							|| (strcasecmp(dti.c_str(), "READ COMMITTED")==0 )
+							|| (strcasecmp(dti.c_str(), "REPEATABLE READ")==0 )
+							|| (strcasecmp(dti.c_str(), "SERIALIZABLE")==0 )
+						) {
+							if (json_rewritten) {
+								valid["default-transaction_isolation"]=dti;
+							}
+						} else {
+							std::string dti_orig = valid["default-transaction_isolation"].get<std::string>();
+							proxy_error("Invalid default-transaction_isolation for user %s : %s . Removing it from runtime\n", username, dti_orig.c_str());
+							valid.erase("default-transaction_isolation");
+							json_rewritten = true; // the json was rewritten
+						}
+					}
+					if (json_rewritten) {
+						std::string d = valid.dump();
+						if (d.length()==2) { // empty json
+							ad->attributes=strdup(""); // empty string
+						} else {
+							ad->attributes=strdup(d.c_str());
+						}
+					} else {
+						// the JSON wasn't rewritten for the purpose of input validation, therefore we copy the original value
+						ad->attributes=strdup(attributes);
+					}
 				}
 				catch(nlohmann::json::exception& e) {
 					ad->attributes=strdup("");
@@ -255,7 +296,6 @@ int MySQL_Authentication::dump_all_users(account_details_t ***ads, bool _complet
 		} else {
 			ad->num_connections_used=ado->num_connections_used;
 			ad->password=strdup(ado->password);
-			ad->default_schema=strdup(ado->default_schema);
 			ad->sha1_pass=NULL;
 			ad->use_ssl=ado->use_ssl;
 			ad->default_schema=strdup(ado->default_schema);
@@ -548,48 +588,159 @@ bool MySQL_Authentication::reset() {
 	return true;
 }
 
+using std::map;
 
-uint64_t MySQL_Authentication::_get_runtime_checksum(enum cred_username_type usertype) {
-	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
-	std::map<uint64_t, account_details_t *>::iterator it;
-	if (cg.bt_map.size() == 0) {
+uint64_t compute_accounts_hash(const umap_auth& accs_map) {
+	if (accs_map.size() == 0) {
 		return 0;
 	}
 	bool foundany = false;
-	SpookyHash myhash;
-	myhash.Init(13,4);
-	for (it = cg.bt_map.begin(); it != cg.bt_map.end(); ) {
-		account_details_t *ad=it->second;
+	SpookyHash acc_map_hash;
+	acc_map_hash.Init(13,4);
+
+	for (const pair<const uint64_t, account_details_t*>& map_entry : accs_map) {
+		const account_details_t* ad = map_entry.second;
+
 		if (ad->default_hostgroup >= 0) {
 			foundany = true;
-			myhash.Update(&ad->use_ssl,sizeof(ad->use_ssl));
-			myhash.Update(&ad->default_hostgroup,sizeof(ad->default_hostgroup));
-			myhash.Update(&ad->schema_locked,sizeof(ad->schema_locked));
-			myhash.Update(&ad->transaction_persistent,sizeof(ad->transaction_persistent));
-			myhash.Update(&ad->fast_forward,sizeof(ad->fast_forward));
-			myhash.Update(&ad->max_connections,sizeof(ad->max_connections));
-			myhash.Update(ad->username,strlen(ad->username));
-			myhash.Update(ad->password,strlen(ad->password));
+			acc_map_hash.Update(&ad->use_ssl,sizeof(ad->use_ssl));
+			acc_map_hash.Update(&ad->default_hostgroup,sizeof(ad->default_hostgroup));
+			acc_map_hash.Update(&ad->schema_locked,sizeof(ad->schema_locked));
+			acc_map_hash.Update(&ad->transaction_persistent,sizeof(ad->transaction_persistent));
+			acc_map_hash.Update(&ad->fast_forward,sizeof(ad->fast_forward));
+			acc_map_hash.Update(&ad->max_connections,sizeof(ad->max_connections));
+			acc_map_hash.Update(ad->username,strlen(ad->username));
+			acc_map_hash.Update(ad->password,strlen(ad->password));
 			if (ad->default_schema)
-				myhash.Update(ad->default_schema,strlen(ad->default_schema));
+				acc_map_hash.Update(ad->default_schema,strlen(ad->default_schema));
 			if (ad->comment)
-				myhash.Update(ad->comment,strlen(ad->comment));
+				acc_map_hash.Update(ad->comment,strlen(ad->comment));
 			if (ad->attributes) {
-				myhash.Update(ad->attributes,strlen(ad->attributes));
+				acc_map_hash.Update(ad->attributes,strlen(ad->attributes));
 			}
 		}
-		it++;
 	}
+
 	if (foundany == false) {
 		return 0;
+	} else {
+		uint64_t hash1 = 0, hash2 = 0;
+		acc_map_hash.Final(&hash1, &hash2);
+
+		return hash1;
 	}
-	uint64_t hash1, hash2;
-	myhash.Final(&hash1, &hash2);
-	return hash1;
+}
+
+uint64_t MySQL_Authentication::_get_runtime_checksum(enum cred_username_type usertype) {
+	creds_group_t &cg=(usertype==USERNAME_BACKEND ? creds_backends : creds_frontends);
+	uint64_t accs_hash = compute_accounts_hash(cg.bt_map);
+
+	return accs_hash;
 }
 
 uint64_t MySQL_Authentication::get_runtime_checksum() {
 	uint64_t hashB = _get_runtime_checksum(USERNAME_BACKEND);
 	uint64_t hashF = _get_runtime_checksum(USERNAME_FRONTEND);
 	return hashB+hashF;
+}
+
+pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
+	if (resultset == nullptr) { return { umap_auth {}, umap_auth {} }; }
+
+	// The following order is assumed for the resulset received fields:
+	//  - username, password, active, use_ssl, default_hostgroup, default_schema, schema_locked, 
+	// 	  transaction_persistent, fast_forward, backend, frontend, max_connections, attributes, comment.
+	umap_auth f_accs_map {};
+	umap_auth b_accs_map {};
+
+	// Create the SQLite3 resultsets for 'frontend' and 'backend' users
+	uint32_t num_fields = mysql_num_fields(resultset);
+	MYSQL_FIELD* fields = mysql_fetch_fields(resultset);
+
+	SQLite3_result* _all_users { new SQLite3_result(num_fields) };
+
+	for (uint32_t i = 0; i < num_fields; i++) {
+		_all_users->add_column_definition(SQLITE_TEXT, fields[i].name);
+	}
+
+	const auto create_account_details = [] (MYSQL_ROW row) -> account_details_t* {
+		account_details_t* acc_details { new account_details_t {} };
+
+		acc_details->username = row[0];
+		acc_details->password = row[1] ? row[1] : const_cast<char*>("");
+		acc_details->__active = true;
+		acc_details->use_ssl = strcmp(row[2], "1") == 0 ? true : false;
+		acc_details->default_hostgroup = atoi(row[3]);
+		acc_details->default_schema = row[4] ? row[4] : const_cast<char*>("");
+		acc_details->schema_locked = strcmp(row[5], "1") == 0 ? true : false;
+		acc_details->transaction_persistent = strcmp(row[6], "1") == 0 ? true : false;
+		acc_details->fast_forward = strcmp(row[7], "1") == 0 ? true : false;
+		acc_details->__backend = strcmp(row[8], "1") == 0 ? true : false;
+		acc_details->__frontend = strcmp(row[9], "1") == 0 ? true : false;
+		acc_details->max_connections = atoi(row[10]);
+		acc_details->attributes = row[11] ? row[11] : const_cast<char*>("");
+		acc_details->comment = row[12] ? row[12] : const_cast<char*>("");
+
+		return acc_details;
+	};
+
+	vector<char*> pta(static_cast<size_t>(num_fields));
+	while (MYSQL_ROW row = mysql_fetch_row(resultset)) {
+		// compute the 'username' hash for the map
+		uint64_t u_hash = 0, _u_hash2 = 0;
+		SpookyHash myhash {};
+		myhash.Init(1,2);
+		myhash.Update(row[0], strlen(row[0]));
+		myhash.Final(&u_hash, &_u_hash2);
+
+		// is backend
+		if (strcmp(row[8], "1") == 0) {
+			account_details_t* acc_details = create_account_details(row);
+			b_accs_map.insert({u_hash, acc_details});
+		}
+		// is frontend
+		if (strcmp(row[9], "1") == 0) {
+			account_details_t* acc_details = create_account_details(row);
+			f_accs_map.insert({u_hash, acc_details});
+		}
+
+		// Update the contents of the row for the SQLite3 resultset
+		for (uint32_t i = 0; i < num_fields; i++) {
+			pta[i] = row[i];
+		}
+		_all_users->add_row(&pta[0]);
+	}
+
+	mysql_data_seek(resultset, 0);
+
+	// Update the supplied 'unique_ptr' with the target resultsets
+	all_users.reset(_all_users);
+
+	return { b_accs_map, f_accs_map };
+}
+
+uint64_t MySQL_Authentication::get_runtime_checksum(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
+	if (resultset == NULL) { return 0; }
+
+	pair<umap_auth, umap_auth> acc_maps { extract_accounts_details(resultset, all_users) };
+
+	uint64_t b_acc_hash = compute_accounts_hash(acc_maps.first);
+	uint64_t f_acc_hash = compute_accounts_hash(acc_maps.second);
+
+	for (pair<const uint64_t, account_details_t*>& map_entry : acc_maps.first) {
+		delete map_entry.second;
+	}
+	for (pair<const uint64_t, account_details_t*>& map_entry : acc_maps.second) {
+		delete map_entry.second;
+	}
+
+	return b_acc_hash + f_acc_hash;
+}
+
+void MySQL_Authentication::save_mysql_users(unique_ptr<SQLite3_result>&& users) {
+	this->mysql_users_resultset = std::move(users);
+}
+
+SQLite3_result* MySQL_Authentication::get_current_mysql_users() {
+	return this->mysql_users_resultset.get();
 }

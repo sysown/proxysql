@@ -13,6 +13,10 @@ class SQLite3_Session {
 	~SQLite3_Session();
 };
 
+#ifdef TEST_GROUPREP
+using group_rep_status = std::tuple<bool, bool, uint32_t>;
+#endif
+
 class SQLite3_Server {
 	private:
 	volatile int main_shutdown;
@@ -43,6 +47,7 @@ class SQLite3_Server {
 	std::vector<table_def_t *> *tables_defs_galera;
 #endif // TEST_GALERA
 #ifdef TEST_GROUPREP
+	std::unordered_map<std::string, group_rep_status> grouprep_map;
 	std::vector<table_def_t *> *tables_defs_grouprep;
 #endif // TEST_GROUPREP
 #ifdef TEST_READONLY
@@ -73,9 +78,11 @@ class SQLite3_Server {
 	void init_galera_ifaces_string(std::string& s);
 #endif // TEST_GALERA
 #ifdef TEST_GROUPREP
+	unsigned int max_num_grouprep_servers;
 	pthread_mutex_t grouprep_mutex;
 	void populate_grouprep_table(MySQL_Session *sess, int txs_behind = 0);
 	void init_grouprep_ifaces_string(std::string& s);
+	group_rep_status grouprep_test_value(const std::string& srv_addr);
 #endif // TEST_GROUPREP
 #ifdef TEST_READONLY
 	pthread_mutex_t test_readonly_mutex;

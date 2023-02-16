@@ -1,5 +1,3 @@
-#include <map>
-#include <mutex>
 //#include <thread>
 #include "proxysql.h"
 #include "cpp.h"
@@ -82,6 +80,7 @@ void ProxySQL_Statistics::init() {
 	insert_into_tables_defs(tables_defs_statsdb_mem,"mysql_connections", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"mysql_connections", STATSDB_SQLITE_TABLE_MYSQL_CONNECTIONS);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_status_variables", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES);
+	insert_into_tables_defs(tables_defs_statsdb_disk,"history_mysql_status_variables_lookup", STATSDB_SQLITE_TABLE_HISTORY_MYSQL_STATUS_VARIABLES_LOOKUP);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"history_stats_mysql_connection_pool", STATSDB_SQLITE_TABLE_HISTORY_STATS_MYSQL_CONNECTION_POOL);
 	insert_into_tables_defs(tables_defs_statsdb_disk,"system_cpu", STATSDB_SQLITE_TABLE_SYSTEM_CPU);
 #ifndef NOJEM
@@ -120,6 +119,7 @@ void ProxySQL_Statistics::init() {
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_first_seen ON history_mysql_query_digest (first_seen)");
 //	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_last_seen ON history_mysql_query_digest (last_seen)");
 	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_query_digest_dump_time ON history_mysql_query_digest (dump_time)");
+	statsdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_history_mysql_status_variable_id_timestamp ON history_mysql_status_variables(variable_id,timestamp)");
 }
 
 void ProxySQL_Statistics::disk_upgrade_mysql_connections() {
@@ -218,7 +218,7 @@ bool ProxySQL_Statistics::MySQL_Query_Cache_timetoget(unsigned long long curtime
 }
 
 bool ProxySQL_Statistics::mysql_query_digest_to_disk_timetoget(unsigned long long curtime) {
-	unsigned int i = (unsigned int)variables.stats_mysql_query_digest_to_disk;
+	unsigned long i = (unsigned long)variables.stats_mysql_query_digest_to_disk;
 	if (i) {
 		if (
 			( curtime > next_timer_mysql_query_digest_to_disk )
@@ -293,8 +293,10 @@ SQLite3_result * ProxySQL_Statistics::get_mysql_metrics(int interval) {
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -346,8 +348,10 @@ SQLite3_result * ProxySQL_Statistics::get_myhgm_metrics(int interval) {
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 	free(query);
@@ -387,8 +391,10 @@ SQLite3_result * ProxySQL_Statistics::get_MySQL_Query_Cache_metrics(int interval
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -430,8 +436,10 @@ SQLite3_result * ProxySQL_Statistics::get_system_memory_metrics(int interval) {
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -473,8 +481,10 @@ SQLite3_result * ProxySQL_Statistics::get_system_cpu_metrics(int interval) {
 			sprintf(query, query2, ts-interval, ts);
 			break;
 		default:
+			// LCOV_EXCL_START
 			assert(0);
 			break;
+			// LCOV_EXCL_STOP
 	}
 	//fprintf(stderr,"%s\n", query);
 	statsdb_disk->execute_statement(query, &error , &cols , &affected_rows , &resultset);
@@ -634,7 +644,13 @@ void ProxySQL_Statistics::system_memory_sets() {
 
 void ProxySQL_Statistics::MyHGM_Handler_sets(SQLite3_result *resultset1, SQLite3_result *resultset2) {
 	MyHGM_Handler_sets_v1(resultset1);
+
+// In debug, enable metrics features for debugging and testing even if the web interface plugin is not loaded. 
+#ifdef DEBUG
+	if (resultset2) {
+#else
 	if (GloVars.web_interface_plugin && resultset2) {
+#endif
 		MySQL_Threads_Handler_sets_v2(resultset1);
 		MyHGM_Handler_sets_connection_pool(resultset2);
 	}
@@ -779,7 +795,12 @@ void ProxySQL_Statistics::MyHGM_Handler_sets_v1(SQLite3_result *resultset) {
 
 void ProxySQL_Statistics::MySQL_Threads_Handler_sets(SQLite3_result *resultset) {
 	MySQL_Threads_Handler_sets_v1(resultset);
+// In debug, enable metrics features for debugging and testing even if the web interface plugin is not loaded. 
+#ifdef DEBUG
+	if (true) {
+#else
 	if (GloVars.web_interface_plugin) {
+#endif
 		MySQL_Threads_Handler_sets_v2(resultset);
 	}
 }
@@ -795,6 +816,9 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultse
 		return;
 	}
 	time_t ts = time(NULL);
+
+	load_variable_name_id_map_if_empty();
+
 	query = "INSERT INTO history_mysql_status_variables VALUES ";
 	int idx = 0;
 	for (int i=0; i < resultset->rows_count; i++) {
@@ -811,7 +835,7 @@ void ProxySQL_Statistics::MySQL_Threads_Handler_sets_v2(SQLite3_result *resultse
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 		SQLite3_row *r=*it;
 		rc=(*proxy_sqlite3_bind_int64)(statement, idx+1, ts); ASSERT_SQLITE_OK(rc, statsdb_disk);
-		rc=(*proxy_sqlite3_bind_text)(statement, idx+2, r->fields[0] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // name
+		rc=(*proxy_sqlite3_bind_int64)(statement, idx+2, get_variable_id_for_name(r->fields[0])); ASSERT_SQLITE_OK(rc, statsdb_disk); // variable_id
 		rc=(*proxy_sqlite3_bind_text)(statement, idx+3, r->fields[1] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb_disk); // value
 		idx+=3;
 	}
@@ -1056,5 +1080,108 @@ void ProxySQL_Statistics::MySQL_Query_Cache_sets(SQLite3_result *resultset) {
 		statsdb_disk->execute(buf);
 		sprintf(buf,"DELETE FROM mysql_query_cache_hour WHERE timestamp < %ld", ts - 3600*24*365);
 		statsdb_disk->execute(buf);
+	}
+}
+
+bool ProxySQL_Statistics::knows_variable_name(const std::string & variable_name) const
+{
+	return (variable_name_id_map.find(variable_name) != variable_name_id_map.end());
+}
+
+int64_t ProxySQL_Statistics::get_variable_id_for_name(const std::string & variable_name) {
+	lock_guard<mutex> lock(mu);
+
+	int64_t variable_id = -1; // Negative value indicates not yet found.
+	auto it = variable_name_id_map.find(variable_name);
+
+	if (it != variable_name_id_map.end()) {
+		variable_id = it->second;
+	} else {
+		// No matching variable_id found in map. Try loading from the SQLite lookup table on disk 
+		SQLite3_result *result = NULL;
+		int cols;
+		int affected_rows;
+		char *error = NULL;
+		
+		auto select_var_id = [&]() -> int64_t {
+			const string var_id_query = "SELECT variable_id FROM history_mysql_status_variables_lookup WHERE variable_name=\"" + variable_name + "\"";
+			statsdb_disk->execute_statement(var_id_query.c_str(), &error , &cols , &affected_rows , &result);
+
+			if (error) {
+				proxy_error("SQLITE CRITICAL ERROR %s. Shutting down\n", error);
+				free(error);
+				error = NULL;
+				exit(EXIT_SUCCESS); 
+			} 
+			
+			if (result) {
+				if (result->rows_count > 0) {
+					// matching variable_id for variable_name in lookup table
+					SQLite3_row *r = result->rows[0];
+					int64_t found_variable_id = strtoll(r->fields[0], NULL, 10);
+					delete result;
+					return found_variable_id;
+				}
+				delete result;
+				result = NULL;
+			}	
+			return -1;
+		};
+
+		variable_id = select_var_id(); // Check for variable name present in the lookup
+
+		if (variable_id < 0) {
+			// No match found, create a new record in the lookup table and then select the newly generated id
+			string insert_var_query = "INSERT INTO history_mysql_status_variables_lookup(variable_name) VALUES(\"" + variable_name + "\")";
+			if (statsdb_disk->execute(insert_var_query.c_str())) {
+				variable_id = select_var_id();
+			}
+		} 
+
+		// Update the map if a lookup record id was found, or if a new record was generated.
+		if (variable_id > 0) {
+			variable_name_id_map[variable_name] = variable_id;
+		} else {
+			proxy_error("CRITICAL ERROR: Statistics could not find or generate variable_id for variable_name: %s. Shutting down\n", variable_name.c_str());
+			exit(EXIT_SUCCESS);
+		}
+	}
+
+	return variable_id;
+}
+
+void ProxySQL_Statistics::load_variable_name_id_map_if_empty() {
+	lock_guard<mutex> lock(mu);
+
+	if (!variable_name_id_map.empty())
+		return;
+
+	// Load id and name records from the lookup table and store in the map
+	SQLite3_result *result = NULL;
+	int cols;
+	int affected_rows;
+	char *error = NULL;
+	
+	string query = "SELECT variable_id, variable_name FROM history_mysql_status_variables_lookup";
+	statsdb_disk->execute_statement(query.c_str(), &error , &cols , &affected_rows , &result);
+
+	if (error) {
+		proxy_error("SQLITE CRITICAL ERROR: %s. Shutting down\n", error);
+		if (result)
+			delete result;
+
+		free(error);
+		error = NULL;
+		exit(EXIT_SUCCESS);
+	}
+
+	if (result) {
+		for (int i = 0; i < result->rows_count; i++) {
+			SQLite3_row *r = result->rows[i];
+			int64_t variable_id = strtoll(r->fields[0], NULL, 10);
+			string variable_name = r->fields[1];
+			variable_name_id_map[variable_name] = variable_id;
+		}
+		delete result;
 	}
 }

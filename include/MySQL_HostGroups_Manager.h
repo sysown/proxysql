@@ -18,6 +18,14 @@
 
 #include "ev.h"
 
+#ifndef SPOOKYV2
+#include "SpookyV2.h"
+#define SPOOKYV2
+#endif
+
+#include "../deps/json/json.hpp"
+using json = nlohmann::json;
+
 #ifdef DEBUG
 /* */
 //	Enabling STRESSTEST_POOL ProxySQL will do a lot of loops in the connection pool
@@ -53,6 +61,10 @@
 										  "min_lag_ms INT NOT NULL CHECK (min_lag_ms >= 0 AND min_lag_ms <= 600000) DEFAULT 30 , " \
 										  "lag_num_checks INT NOT NULL CHECK (lag_num_checks >= 1 AND lag_num_checks <= 16) DEFAULT 1 , comment VARCHAR ," \
 										  "UNIQUE (reader_hostgroup))"
+
+#define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
+
+#define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
@@ -95,7 +107,6 @@ class GTID_Server_Data {
 
 class MySrvConnList {
 	private:
-	PtrArray *conns;
 	MySrvC *mysrvc;
 	int find_idx(MySQL_Connection *c) {
 		//for (unsigned int i=0; i<conns_length(); i++) {
@@ -109,6 +120,7 @@ class MySrvConnList {
 		return -1;
 	}
 	public:
+	PtrArray *conns;
 	MySrvConnList(MySrvC *);
 	~MySrvConnList();
 	void add(MySQL_Connection *);
@@ -160,7 +172,7 @@ class MySrvC {	// MySQL Server Container
 	MySrvConnList *ConnectionsFree;
 	MySrvC(char *, uint16_t, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment);
 	~MySrvC();
-	void connect_error(int);
+	void connect_error(int, bool get_mutex=true);
 	void shun_and_killall();
 	/**
 	 * Update the maximum number of used connections
@@ -196,6 +208,21 @@ class MyHGC {	// MySQL Host Group Container
 	unsigned long long current_time_now;
 	uint32_t new_connections_now;
 	MySrvList *mysrvs;
+	struct { // this is a series of attributes specific for each hostgroup
+		char * init_connect;
+		char * comment;
+		char * ignore_session_variables_text; // this is the original version (text format) of ignore_session_variables
+		uint32_t max_num_online_servers;
+		uint32_t throttle_connections_per_sec;
+		int8_t autocommit;
+		int8_t free_connections_pct;
+		bool multiplex;
+		bool connection_warming;
+		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
+		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
+		json ignore_session_variables_json; // the JSON format of ignore_session_variables
+	} attributes;
+	void reset_attributes();
 	MyHGC(int);
 	~MyHGC();
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);
@@ -375,6 +402,37 @@ class MySQL_HostGroups_Manager {
 	void generate_mysql_replication_hostgroups_table();
 	Galera_Info *get_galera_node_info(int hostgroup);
 
+	/**
+	 * @brief This resultset holds the current values for 'runtime_mysql_servers' computed by either latest
+	 *  'commit' or fetched from another Cluster node. It's also used by ProxySQL_Admin to respond to the
+	 *  intercepted query 'CLUSTER_QUERY_MYSQL_SERVERS'.
+	 * @details This resultset can't right now just contain the value for 'incoming_mysql_servers' as with the
+	 *  rest of the intercepted resultset. This is due to 'runtime_mysql_servers' reconfigurations that can be
+	 *  triggered by monitoring actions like 'Galera' currently performs. These actions not only trigger status
+	 *  changes in the servers, but also re-generate the servers table via 'commit', thus generating a new
+	 *  checksum in the process. Because of this potential mismatch, the fetching server wouldn't be able to
+	 *  compute the proper checksum for the fetched 'runtime_mysql_servers' config.
+	 *
+	 *  As previously stated, these reconfigurations are monitoring actions, they can't be packed or performed
+	 *  in a single action, since monitoring data is required, which may not be already present. This makes
+	 *  this a convergent, but iterative process, that can't be compressed into a single action. Using other
+	 *  nodes 'runtime_mysql_servers' while fetching represents a best effort for avoiding these
+	 *  reconfigurations in nodes that already holds the same monitoring conditions. If monitoring
+	 *  conditions are not the same, circular fetching is still possible due to the previously described
+	 *  scenario.
+	 */
+	SQLite3_result* runtime_mysql_servers;
+	/**
+	 * @brief These resultset holds the latest values for 'incoming_*' tables used to promoted servers to runtime.
+	 * @details All these resultsets are used by 'Cluster' to fetch and promote the same configuration used in the
+	 *  node across the whole cluster. For these, the queries:
+	 *   - 'CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS'
+	 *   - 'CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS'
+	 *   - 'CLUSTER_QUERY_MYSQL_GALERA'
+	 *   - 'CLUSTER_QUERY_MYSQL_AWS_AURORA'
+	 *   - 'CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES'
+	 *  Issued by 'Cluster' are intercepted by 'ProxySQL_Admin' and return the content of these resultsets.
+	 */
 	SQLite3_result *incoming_replication_hostgroups;
 
 	void generate_mysql_group_replication_hostgroups_table();
@@ -395,6 +453,9 @@ class MySQL_HostGroups_Manager {
 	pthread_mutex_t AWS_Aurora_Info_mutex;
 	std::map<int , AWS_Aurora_Info *> AWS_Aurora_Info_Map;
 
+	void generate_mysql_hostgroup_attributes_table();
+	SQLite3_result *incoming_hostgroup_attributes;
+
 	std::thread *HGCU_thread;
 
 	std::thread *GTID_syncer_thread;
@@ -414,11 +475,30 @@ class MySQL_HostGroups_Manager {
 	 */
 	void p_update_mysql_gtid_executed();
 
-	void p_update_connection_pool_update_counter(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx);
-	void p_update_connection_pool_update_gauge(std::string& endpoint_id, std::map<std::string, std::string> labels, std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx);
+	void p_update_connection_pool_update_counter(
+		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
+		std::map<std::string, prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx
+	);
+	void p_update_connection_pool_update_gauge(
+		const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
+		std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx
+	);
+
+	void group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable);
 
 	public:
 	std::mutex galera_set_writer_mutex;
+	/**
+	 * @brief Mutex used to guard 'mysql_servers_to_monitor' resulset.
+	 */
+	std::mutex mysql_servers_to_monitor_mutex;
+	/**
+	 * @brief Resulset containing the latest 'mysql_servers' present in 'mydb'.
+	 * @details This resulset should be updated via 'update_table_mysql_servers_for_monitor' each time actions
+	 *   that modify the 'mysql_servers' table are performed.
+	 */
+	SQLite3_result* mysql_servers_to_monitor;
+
 	pthread_rwlock_t gtid_rwlock;
 	std::unordered_map <string, GTID_Server_Data *> gtid_map;
 	struct ev_async * gtid_ev_async;
@@ -518,20 +598,43 @@ class MySQL_HostGroups_Manager {
 	void init();
 	void wrlock();
 	void wrunlock();
-	bool server_add(unsigned int hid, char *add, uint16_t p=3306, uint16_t gp=0, unsigned int _weight=1, enum MySerStatus status=MYSQL_SERVER_STATUS_ONLINE, unsigned int _comp=0, unsigned int _max_connections=100, unsigned int _max_replication_lag=0, unsigned int _use_ssl=0, unsigned int _max_latency_ms=0, char *comment=NULL);
-	int servers_add(SQLite3_result *resultset); // faster version of server_add
-	bool commit();
+	int servers_add(SQLite3_result *resultset);
+	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void commit_update_checksums_from_tables(SpookyHash& myhash, bool& init);
+	void CUCFT1(SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName); // used by commit_update_checksums_from_tables()
 
-	void set_incoming_replication_hostgroups(SQLite3_result *);
-	void set_incoming_group_replication_hostgroups(SQLite3_result *);
-	void set_incoming_galera_hostgroups(SQLite3_result *);
-	void set_incoming_aws_aurora_hostgroups(SQLite3_result *);
+	/**
+	 * @brief Store the resultset for the 'runtime_mysql_servers' table set that have been loaded to runtime.
+	 *  The store configuration is later used by Cluster to propagate current config.
+	 * @param The resulset to be stored replacing the current one.
+	 */
+	void save_runtime_mysql_servers(SQLite3_result *);
+	/**
+	 * @brief These setters/getter functions store and retrieve the currently hold resultset for the
+	 *  'incoming_*' table set that have been loaded to runtime. The store configuration is later used by
+	 *  Cluster to propagate current config.
+	 * @param The resulset to be stored replacing the current one.
+	 */
+
+	void save_incoming_mysql_table(SQLite3_result *, const string&);
+	SQLite3_result* get_current_mysql_table(const string& name);
+
 	SQLite3_result * execute_query(char *query, char **error);
-	SQLite3_result *dump_table_mysql_servers();
-	SQLite3_result *dump_table_mysql_replication_hostgroups();
-	SQLite3_result *dump_table_mysql_group_replication_hostgroups();
-	SQLite3_result *dump_table_mysql_galera_hostgroups();
-	SQLite3_result *dump_table_mysql_aws_aurora_hostgroups();
+	SQLite3_result *dump_table_mysql(const string&);
+
+	/**
+	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
+	 *   'mysql_servers' present in 'MySQL_HostGroups_Manager' db, which are not 'OFFLINE_HARD'. The resulset
+	 *   fields match the definition of 'monitor_internal.mysql_servers' table.
+	 * @details Several details:
+	 *   - Function assumes that 'mysql_servers' table from 'MySQL_HostGroups_Manager' db is ready
+	 *     to be consumed, because of this it doesn't perform any of the following operations:
+	 *       - Purging 'mysql_servers' table.
+	 *       - Regenerating 'mysql_servers' table.
+	 *   - Function locks on 'mysql_servers_to_monitor_mutex'.
+	 * @param lock When supplied the function calls 'wrlock()' and 'wrunlock()' functions for accessing the db.
+	 */
+	void update_table_mysql_servers_for_monitor(bool lock=false);
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
@@ -540,13 +643,14 @@ class MySQL_HostGroups_Manager {
 
 	void drop_all_idle_connections();
 	int get_multiple_idle_connections(int, unsigned long long, MySQL_Connection **, int);
-	SQLite3_result * SQL3_Connection_Pool(bool _reset);
+	SQLite3_result * SQL3_Connection_Pool(bool _reset, int *hid = NULL);
 	SQLite3_result * SQL3_Free_Connections();
 
 	void push_MyConn_to_pool(MySQL_Connection *, bool _lock=true);
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
+	void replication_lag_action_inner(MyHGC *, char*, unsigned int, int);
 	void replication_lag_action(int, char*, unsigned int, int);
 	void read_only_action(char *hostname, int port, int read_only);
 	unsigned int get_servers_table_version();
@@ -559,7 +663,30 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
 	void converge_group_replication_config(int _writer_hostgroup);
-
+	/**
+	 * @brief Set the supplied server as SHUNNED, this function shall be called
+	 *   to 'SHUNNED' those servers which replication lag is bigger than:
+	 *     - `mysql_thread___monitor_groupreplication_max_transactions_behind_count`
+	 *
+	 * @details The function automatically handles the appropriate operation to
+	 *   perform on the supplied server, based on the supplied 'enable' flag and
+	 *   in 'monitor_groupreplication_max_transaction_behind_for_read_only'
+	 *   variable. In case the value of the variable is:
+	 *
+	 *     * '0' or '2': It's required to search the writer hostgroup for
+	 *       finding the supplied server.
+	 *     * '1' or '2': It's required to search the reader hostgroup for
+	 *       finding the supplied server.
+	 *
+	 * @param _hid The writer hostgroup.
+	 * @param address The server address.
+	 * @param port The server port.
+	 * @param lag_counts The computed lag for the sever.
+	 * @param read_only Boolean specifying the read_only flag value of the server.
+	 * @param enable Boolean specifying if the server needs to be disabled / enabled,
+	 *   'true' for enabling the server if it's 'SHUNNED', 'false' for disabling it.
+	 */
+	void group_replication_lag_action(int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable);
 	void update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error, bool soft=false);
 	void update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup);
@@ -585,6 +712,8 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *get_mysql_errors(bool);
 
 	void shutdown();
+	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);
+	MySrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

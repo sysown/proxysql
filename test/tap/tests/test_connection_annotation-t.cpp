@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
 	srand(time(NULL));
 	int rand_conn = rand() % 100;
 	for (int i = 0; i < rand_conn; i++) {
-		MYSQL_QUERY(proxysql_mysql, "SELECT /*+ ;create_new_connection=1 */ 1");
+		MYSQL_QUERY(proxysql_mysql, "SELECT /* ;create_new_connection=1 */ 1");
 		proxy_res = mysql_store_result(proxysql_mysql);
 		mysql_free_result(proxy_res);
 	}

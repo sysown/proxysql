@@ -1,36 +1,41 @@
 diff --git a/pull/include/prometheus/exposer.h b/pull/include/prometheus/exposer.h
-index c730360..3d070c5 100644
+index 93e0b2b..0e83a7a 100644
 --- a/pull/include/prometheus/exposer.h
 +++ b/pull/include/prometheus/exposer.h
-@@ -5,6 +5,7 @@
- #include <memory>
+@@ -6,9 +6,12 @@
+ #include <mutex>
  #include <string>
  #include <vector>
 +#include <functional>
-
++#include <map>
+ 
  #include "prometheus/collectable.h"
  #include "prometheus/detail/pull_export.h"
-@@ -16,6 +17,7 @@ namespace prometheus {
-
++#include "prometheus/registry.h"
+ 
+ class CivetServer;
+ struct CivetCallbacks;
+@@ -17,6 +20,7 @@ namespace prometheus {
+ 
  namespace detail {
- class MetricsHandler;
+ class Endpoint;
 +class SerialMetricsHandler;
  }  // namespace detail
-
+ 
  class PROMETHEUS_CPP_PULL_EXPORT Exposer {
-@@ -34,4 +36,18 @@ class PROMETHEUS_CPP_PULL_EXPORT Exposer {
-   std::string uri_;
+@@ -53,4 +57,18 @@ class PROMETHEUS_CPP_PULL_EXPORT Exposer {
+   std::mutex mutex_;
  };
-
+ 
 +class SerialExposer {
-+public:
++ public:
 +	explicit SerialExposer(const std::function<void()> update_callback = std::function<void()> {});
 +	std::pair<std::map<std::string, std::string>, std::string>
 +	operator()(const std::map<std::string, std::string>& req_headers);
 +	void RegisterCollectable(const std::weak_ptr<Collectable>& collectable);
 +	~SerialExposer();
 +
-+private:
++ private:
 +	std::vector<std::weak_ptr<Collectable>> collectables_;
 +	std::shared_ptr<Registry> exposer_registry_;
 +	std::unique_ptr<detail::SerialMetricsHandler> metrics_handler_;
@@ -38,14 +43,19 @@ index c730360..3d070c5 100644
 +
  }  // namespace prometheus
 diff --git a/pull/src/exposer.cc b/pull/src/exposer.cc
-index 966d04a..17f7ef3 100644
+index 38a28e0..0d62bf3 100644
 --- a/pull/src/exposer.cc
 +++ b/pull/src/exposer.cc
-@@ -30,4 +30,29 @@ void Exposer::RegisterCollectable(
-     const std::weak_ptr<Collectable>& collectable) {
-   collectables_.push_back(collectable);
+@@ -1,4 +1,5 @@
+ #include "prometheus/exposer.h"
++#include "handler.h"
+ 
+ #include <algorithm>
+ #include <iterator>
+@@ -63,4 +64,28 @@ detail::Endpoint& Exposer::GetEndpointForUri(const std::string& uri) {
+   return *endpoints_.back().get();
  }
-+
+ 
 +SerialExposer::SerialExposer(
 +	const std::function<void()> update_callback
 +) :
@@ -72,12 +82,12 @@ index 966d04a..17f7ef3 100644
 +
  }  // namespace prometheus
 diff --git a/pull/src/handler.cc b/pull/src/handler.cc
-index ea94365..d04758f 100644
+index 5a55001..b6ffa85 100644
 --- a/pull/src/handler.cc
 +++ b/pull/src/handler.cc
-@@ -150,5 +150,124 @@ std::vector<MetricFamily> MetricsHandler::CollectMetrics() const {
-
-   return collected_metrics;
+@@ -172,5 +172,124 @@ void MetricsHandler::CleanupStalePointers(
+                      }),
+       std::end(collectables));
  }
 +
 +//////////////////////////////////////////////////////
@@ -201,26 +211,23 @@ index ea94365..d04758f 100644
  }  // namespace detail
  }  // namespace prometheus
 diff --git a/pull/src/handler.h b/pull/src/handler.h
-index 112267a..d603369 100644
+index 10c90f9..8b62aab 100644
 --- a/pull/src/handler.h
 +++ b/pull/src/handler.h
-@@ -2,8 +2,9 @@
-
+@@ -3,6 +3,7 @@
  #include <memory>
+ #include <mutex>
  #include <vector>
--
 +#include <functional>
+ 
  #include "CivetServer.h"
-+
- #include "prometheus/counter.h"
- #include "prometheus/registry.h"
- #include "prometheus/summary.h"
-@@ -27,6 +28,35 @@ class MetricsHandler : public CivetHandler {
+ #include "prometheus/collectable.h"
+@@ -34,6 +35,36 @@ class MetricsHandler : public CivetHandler {
    Counter& num_scrapes_;
    Family<Summary>& request_latencies_family_;
    Summary& request_latencies_;
 +  std::function<void()> update_callback_ {};
-+};
+ };
 +
 +//////////////////////////////////////////////////////
 +///          Serial Metrics Handler                ///
@@ -248,6 +255,7 @@ index 112267a..d603369 100644
 +  Family<Summary>& request_latencies_family_;
 +  Summary& request_latencies_;
 +  std::function<void()> update_callback_ {};
- };
++};
++
  }  // namespace detail
  }  // namespace prometheus

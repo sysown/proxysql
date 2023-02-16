@@ -1,0 +1,16 @@
+[
+	{
+		// Testing the compression limits of number parsing when buffer is exceeded.
+		"q": [
+			"INSERT INTO db.table ( col1, col2,col3,col4, col5 ) VALUES ('val',1, 2,3,'foo'), ('val2',3,NULL,4,'foo2'), ('val2', 5,0x0239192,4,'foo2'), ('val2', 7,NULL,4,'foo2')"
+		],
+		"mz": [
+			{
+				"digest_max_size": 105,
+				"grouping_limit": 1,
+				"groups_grouping_limit": 1,
+				"digest": "INSERT INTO db.table (col1,col2,col3,col4,col5) VALUES (?,...),..."
+			}
+		]
+	}
+]

@@ -3,7 +3,10 @@
 
 #include "MySQL_Session.h"
 #include "MySQL_Data_Stream.h"
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 #include <sstream>
 
@@ -15,8 +18,8 @@ static inline char is_digit(char c) {
 }
 
 
-verify_var MySQL_Variables::verifiers[SQL_NAME_LAST];
-update_var MySQL_Variables::updaters[SQL_NAME_LAST];
+verify_var MySQL_Variables::verifiers[SQL_NAME_LAST_HIGH_WM];
+update_var MySQL_Variables::updaters[SQL_NAME_LAST_HIGH_WM];
 
 
 MySQL_Variables::MySQL_Variables() {
@@ -24,15 +27,39 @@ MySQL_Variables::MySQL_Variables() {
 	ignore_vars.push_back("interactive_timeout");
 	ignore_vars.push_back("wait_timeout");
 	ignore_vars.push_back("net_read_timeout");
+	ignore_vars.push_back("net_write_timeout");
+	ignore_vars.push_back("net_buffer_length");
+	ignore_vars.push_back("read_buffer_size");
+	ignore_vars.push_back("read_rnd_buffer_size");
 	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
 	ignore_vars.push_back("session_track_schema");
 	variables_regexp = "";
-	for (auto i = 0; i < SQL_NAME_LAST; i++) {
+	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
+		// we initialized all the internal_variable_name if set to NULL
+		if (mysql_tracked_variables[i].internal_variable_name == NULL) {
+			mysql_tracked_variables[i].internal_variable_name = mysql_tracked_variables[i].set_variable_name;
+		}
+	}
+/*
+   NOTE:
+	make special ATTENTION that the order in mysql_variable_name
+	and mysql_tracked_variables[] is THE SAME
+   NOTE:
+	MySQL_Variables::MySQL_Variables() has a built-in check to make sure that the order is correct,
+	and that variables are in alphabetical order
+*/
+	for (int i = SQL_NAME_LAST_LOW_WM; i < SQL_NAME_LAST_HIGH_WM; i++) {
+		assert(i == mysql_tracked_variables[i].idx);
+		if (i > SQL_NAME_LAST_LOW_WM+1) {
+			assert(strcmp(mysql_tracked_variables[i].set_variable_name, mysql_tracked_variables[i-1].set_variable_name) > 0);
+		}
+	}
+	for (auto i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
 		if (i == SQL_CHARACTER_SET || i == SQL_CHARACTER_ACTION || i == SQL_SET_NAMES) {
 			MySQL_Variables::updaters[i] = NULL;
 			MySQL_Variables::verifiers[i] = NULL;
 		}
-		else if (i == SQL_LOG_BIN) {
+		else if (i == SQL_SQL_LOG_BIN) {
 			MySQL_Variables::verifiers[i] = verify_server_variable;
 			MySQL_Variables::updaters[i] = logbin_update_server_variable;
 		} else {
@@ -51,21 +78,6 @@ MySQL_Variables::MySQL_Variables() {
 }
 
 MySQL_Variables::~MySQL_Variables() {}
-
-bool MySQL_Variables::on_connect_to_backend(MySQL_Connection *myconn) {
-	assert(myconn);
-	auto be_version = myconn->mysql->server_version;
-
-	// verify this is not galera cluster
-	// assume galera cluster has two dashes in a version
-	char* first_dash = strstr(be_version, "-");
-	if (!first_dash || !strstr(first_dash+1, "-")) {
-		myconn->var_absent[SQL_WSREP_SYNC_WAIT] = true;
-	}
-
-	return true;
-}
-
 
 bool MySQL_Variables::client_set_hash_and_value(MySQL_Session* session, int idx, const std::string& value, uint32_t hash) {
 	if (!session || !session->client_myds || !session->client_myds->myconn) {
@@ -175,7 +187,8 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 		free(session->client_myds->myconn->variables[idx].value);
 	}
 	session->client_myds->myconn->variables[idx].value = strdup(value.c_str());
-
+	// we now regererate dynamic_variables_idx
+	session->client_myds->myconn->reorder_dynamic_variables_idx();
 	return true;
 }
 
@@ -205,6 +218,8 @@ void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const ch
 		free(session->mybe->server_myds->myconn->variables[idx].value);
 	}
 	session->mybe->server_myds->myconn->variables[idx].value = strdup(value);
+	// we now regererate dynamic_variables_idx
+	session->mybe->server_myds->myconn->reorder_dynamic_variables_idx();
 }
 
 const char* MySQL_Variables::server_get_value(MySQL_Session* session, int idx) const {
@@ -224,19 +239,19 @@ uint32_t MySQL_Variables::server_get_hash(MySQL_Session* session, int idx) const
 }
 
 bool MySQL_Variables::update_variable(MySQL_Session* session, session_status status, int &_rc) {
-	int idx = SQL_NAME_LAST;
+	int idx = SQL_NAME_LAST_HIGH_WM;
 	if (session->status == SETTING_VARIABLE) {
 		// if status is SETTING_VARIABLE , what variable needs to be changed is defined in changing_variable_idx
 		idx = session->changing_variable_idx;
 	} else {
-		for (int i=0; i<SQL_NAME_LAST; i++) {
+		for (int i=0; i<SQL_NAME_LAST_HIGH_WM; i++) {
 			if (mysql_tracked_variables[i].status == status) {
 				idx = i;
 				break;
 			}
 		}
 	}
-	assert(idx != SQL_NAME_LAST);
+	assert(idx != SQL_NAME_LAST_HIGH_WM);
 	return updaters[idx](session, idx, _rc);
 }
 
@@ -277,8 +292,10 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 				case HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE:
 					ci = proxysql_find_charset_nr(charset);
 					if (!ci) {
+						// LCOV_EXCL_START
 						proxy_error("Cannot find character set [%s]\n", mysql_variables.client_get_value(session, idx));
 						assert(0);
+						// LCOV_EXCL_STOP
 					}
 					not_supported_collation = ci->name;
 
@@ -293,8 +310,10 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 					}
 
 					if (!ci) {
+						// LCOV_EXCL_START
 						proxy_error("Cannot find character set [%s]\n", mysql_thread___default_variables[idx]);
 						assert(0);
+						// LCOV_EXCL_STOP
 					}
 					replace_collation = ci->name;
 					replace_collation_nr = ci->nr;
@@ -319,8 +338,10 @@ bool validate_charset(MySQL_Session* session, int idx, int &_rc) {
 					}
 
 					if (!ci) {
+						// LCOV_EXCL_START
 						proxy_error("Cannot filnd charset [%s]\n", mysql_thread___default_variables[idx]);
 						assert(0);
+						// LCOV_EXCL_STOP
 					}
 					replace_collation_nr = ci->nr;
 
@@ -443,9 +464,11 @@ bool verify_set_names(MySQL_Session* session) {
 				session->previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
+				// LCOV_EXCL_START
 				proxy_error("Wrong status %d\n", session->status);
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		session->set_status(SETTING_SET_NAMES);
 		uint32_t hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
@@ -473,7 +496,7 @@ inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t cli
 			}
 		}
 		// this variable is relevant only if status == SETTING_VARIABLE
-		session->changing_variable_idx = (enum variable_name)idx;
+		session->changing_variable_idx = (enum mysql_variable_name)idx;
 		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
 				session->previous_status.push(PROCESSING_QUERY);
@@ -485,9 +508,11 @@ inline bool verify_server_variable(MySQL_Session* session, int idx, uint32_t cli
 				session->previous_status.push(PROCESSING_STMT_EXECUTE);
 				break;
 			default:
+				// LCOV_EXCL_START
 				proxy_error("Wrong status %d\n", session->status);
 				assert(0);
 				break;
+				// LCOV_EXCL_STOP
 		}
 		session->set_status(mysql_tracked_variables[idx].status);
 		mysql_variables.server_set_value(session, idx, mysql_variables.client_get_value(session, idx));
@@ -533,7 +558,6 @@ bool MySQL_Variables::parse_variable_boolean(MySQL_Session *sess, int idx, strin
 			}
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		}
-		//exit_after_SetParse = true;
 	} else {
 		sess->unable_to_parse_set_statement(lock_hostgroup);
 		return false;
@@ -553,19 +577,36 @@ bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string
 		}
 	}
 	if (!only_digit_chars) {
-		if (strcasecmp(mysql_tracked_variables[idx].set_variable_name,(char *)"sql_select_limit")==0) { // only sql_select_limit allows value "default"
+		if (
+			(strcasecmp(mysql_tracked_variables[idx].set_variable_name,(char *)"sql_select_limit")==0) // sql_select_limit allows value "default"
+			||
+			(strcasecmp(mysql_tracked_variables[idx].set_variable_name,(char *)"max_join_size")==0) // max_join_size allows value "default"
+		) {
 			if (strcasecmp(v,"default")==0) {
 				only_digit_chars = true;
 			}
 		}
 	}
 	if (only_digit_chars) {
+		// see https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_max_join_size
 		proxy_debug(PROXY_DEBUG_MYSQL_COM, 7, "Processing SET %s value %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
 		uint32_t var_value_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 		if (mysql_variables.client_get_hash(sess, idx) != var_value_int) {
 			if (!mysql_variables.client_set_value(sess, idx, value1.c_str()))
 				return false;
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", mysql_tracked_variables[idx].set_variable_name, value1.c_str());
+			if (idx == SQL_MAX_JOIN_SIZE) {
+				// see https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_max_join_size
+				if (
+					(value1 == "18446744073709551615")
+					||
+					(strcasecmp(v,"default")==0)
+				) {
+					mysql_variables.client_set_value(sess, SQL_SQL_BIG_SELECTS, "ON");
+				} else {
+					mysql_variables.client_set_value(sess, SQL_SQL_BIG_SELECTS, "OFF");
+				}
+			}
 		}
 		//exit_after_SetParse = true;
 	} else {

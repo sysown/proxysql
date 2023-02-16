@@ -3,7 +3,10 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include "proxysql_atomic.h"
+#ifndef SPOOKYV2
 #include "SpookyV2.h"
+#define SPOOKYV2
+#endif
 
 ClickHouse_Authentication::ClickHouse_Authentication() {
 #ifdef DEBUG
@@ -318,6 +321,7 @@ bool ClickHouse_Authentication::del(char * username, enum cred_username_type use
 	return ret;
 };
 
+/* unused?
 bool ClickHouse_Authentication::set_SHA1(char * username, enum cred_username_type usertype, void *sha_pass) {
 	bool ret=false;
 	uint64_t hash1, hash2;
@@ -352,7 +356,12 @@ bool ClickHouse_Authentication::set_SHA1(char * username, enum cred_username_typ
 #endif
 	return ret;
 };
+*/
 
+/*
+// REMOVING THIS FUNCTION BECAUSE IT IS USED ONLY FOR LDAP
+// AND CLICKHOUSE MODULE DOESN'T SUPPORT LDAP.
+// See also MySQL_Protocol::process_pkt_handshake_response()
 bool ClickHouse_Authentication::exists(char * username) {
 	bool ret = false;
 	uint64_t hash1, hash2;
@@ -371,6 +380,7 @@ bool ClickHouse_Authentication::exists(char * username) {
 	pthread_rwlock_unlock(&cg.lock);
 	return ret;
 }
+*/
 
 char * ClickHouse_Authentication::lookup(char * username, enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, char **default_schema, bool *schema_locked, bool *transaction_persistent, bool *fast_forward, int *max_connections, void **sha1_pass) {
 	char *ret=NULL;

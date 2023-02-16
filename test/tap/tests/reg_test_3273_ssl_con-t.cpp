@@ -1,5 +1,5 @@
 /**
- * @file test_simple_ssl_con-t.cpp
+ * @file reg_test_3273_ssl_con-t.cpp
  * @brief This test tries to induce a particular timing condition to replicate issue #70138.
  *  For testing the issue against admin, supply to the binary "admin" as parameter, otherwise
  *  the connection will be created as a regular client connection.
@@ -64,49 +64,13 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 	}
 }
 
-
-/**
- * @brief Returns ProxySQL cpu usage in ms.
- * @param intv The interval in which the CPU usage of ProxySQL is going
- *  to be measured.
- * @param cpu_usage Output parameter with the cpu usage by ProxySQL in
- *  'ms' in the specified interval.
- * @return 0 if success, -1 in case of error.
- */
-int get_proxysql_cpu_usage(const CommandLine& cl, int intv, int* cpu_usage) {
-	// check if proxysql process is consuming higher cpu than it should
-	MYSQL* proxysql_admin = mysql_init(NULL);
-	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		return -1;
-	}
-
-	// recover admin variables
-	std::string set_stats_query { "SET admin-stats_system_cpu=" + std::to_string(intv) };
-	MYSQL_QUERY(proxysql_admin, set_stats_query.c_str());
-	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-
-	// sleep during the required interval + safe threshold
-	sleep(intv + 2);
-
-	MYSQL_QUERY(proxysql_admin, "SELECT * FROM system_cpu ORDER BY timestamp DESC LIMIT 1");
-	MYSQL_RES* admin_res = mysql_store_result(proxysql_admin);
-	MYSQL_ROW row = mysql_fetch_row(admin_res);
-
-	double s_clk = 1.0 / sysconf(_SC_CLK_TCK);
-	int utime_ms = atoi(row[1]) / s_clk;
-	int stime_ms = atoi(row[2]) / s_clk;
-	int t_ms = utime_ms + stime_ms;
-
-	// return the cpu usage
-	*cpu_usage = t_ms;
-
-	// recover admin variables
-	MYSQL_QUERY(proxysql_admin, "SET admin-stats_system_cpu=60");
-	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-
-	return 0;
-}
+const uint32_t REPORT_INTV_SEC = 5;
+#ifdef TEST_WITHASAN
+const double MAX_ALLOWED_CPU_USAGE = 5.00;
+#else
+//const double MAX_ALLOWED_CPU_USAGE = 0.15;
+const double MAX_ALLOWED_CPU_USAGE = 0.3; // doubled it because of extra load due to cluster
+#endif
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -125,8 +89,8 @@ int main(int argc, char** argv) {
 	}
 
 	// get ProxySQL idle cpu usage
-	int idle_cpu_ms = 0;
-	int idle_err = get_proxysql_cpu_usage(cl, 5, &idle_cpu_ms);
+	uint32_t idle_cpu_ms = 0;
+	int idle_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_cpu_ms);
 	if (idle_err) {
 	    fprintf(stdout, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
 		return idle_err;
@@ -155,8 +119,7 @@ int main(int argc, char** argv) {
 	my_socket sockt = mysql_get_socket(proxysql);
 
 	int state = 0;
-	while (status)
-	{
+	while (status) {
 		status = wait_for_mysql(proxysql, status);
 		if (state == 1) {
 			std::thread closer {[sockt]() -> void {
@@ -187,20 +150,20 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	int final_cpu_ms = 0;
-	int final_err = get_proxysql_cpu_usage(cl, 5, &final_cpu_ms);
+	uint32_t final_cpu_ms = 0;
+	int final_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, final_cpu_ms);
 	if (final_err) {
 	    fprintf(stdout, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
 		return idle_err;
 	}
 
-	// proxysql spent more than one time of CPU in the last 5 seconds when it should be
-	// idle; something is wrong
+	// compute the '%' of CPU used during the last interval
+	uint32_t cpu_usage_ms = final_cpu_ms - idle_cpu_ms;
+	double cpu_usage_pct = cpu_usage_ms / (REPORT_INTV_SEC * 1000.0);
+
 	ok(
-		final_cpu_ms < (idle_cpu_ms*3),
-		"ProxySQL shouldn't be taking so much CPU time, idle:'%d', final:'%d'",
-		idle_cpu_ms,
-		final_cpu_ms
+		cpu_usage_pct < MAX_ALLOWED_CPU_USAGE, "ProxySQL CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)", 
+		MAX_ALLOWED_CPU_USAGE, cpu_usage_pct
 	);
 
 	return exit_status();

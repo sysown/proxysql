@@ -1,0 +1,14 @@
+diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
+index ba1617b..1c8d2e6 100644
+--- libmariadb/mariadb_stmt.c
++++ libmariadb/mariadb_stmt.c
+@@ -1838,6 +1838,9 @@ int STDCALL mysql_stmt_store_result(MYSQL_STMT *stmt)
+     stmt->result.data= NULL;
+     stmt->result.rows= 0;
+     stmt->mysql->status= MYSQL_STATUS_READY;
++    /* In case of error, stmt internal state needs to be reset. Otherwise state machine could be left in an
++       inconsistent state and further calls to 'mysql_stmt_execute' will halt. */
++    stmt->state= MYSQL_STMT_FETCH_DONE;
+     return(1);
+   }
+ 

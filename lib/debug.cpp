@@ -1,7 +1,17 @@
-#include <set>
 #include "proxysql.h"
 #include "proxysql_atomic.h"
+
+#include "sqlite3db.h"
+#include "prometheus_helpers.h"
+
+#include <set>
 #include <cxxabi.h>
+#include <string>
+#include <unordered_map>
+#include <array>
+
+using std::string;
+using std::unordered_map;
 
 #ifdef DEBUG
 #ifdef DEBUG_EXTERN
@@ -155,12 +165,177 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 };
 #endif
 
-void proxy_error_func(const char *fmt, ...) {
+using metric_name = std::string;
+using metric_help = std::string;
+using metric_tags = std::map<std::string, std::string>;
+
+using debug_dyn_counter_tuple = std::tuple<p_debug_dyn_counter::metric, metric_name, metric_help, metric_tags>;
+using debug_dyn_counter_vector = std::vector<debug_dyn_counter_tuple>;
+
+const std::tuple<debug_dyn_counter_vector> debug_metrics_map = std::make_tuple(
+	debug_dyn_counter_vector {
+		std::make_tuple (
+			p_debug_dyn_counter::proxysql_message_count,
+			"proxysql_message_count_total",
+			"Number of times a particular message has been logged by ProxySQL.",
+			metric_tags {}
+		)
+	}
+);
+
+std::map<std::string, prometheus::Counter*> p_proxysql_messages_map {};
+std::array<prometheus::Family<prometheus::Counter>*, p_debug_dyn_counter::__size> p_debug_dyn_counter_array {};
+std::mutex msg_stats_mutex {};
+
+const int ProxySQL_MSG_STATS_FIELD_NUM = 7;
+
+class ProxySQL_messages_stats {
+public:
+	const int32_t message_id = 0;
+	const char* filename = nullptr;
+	const int32_t line = 0;
+	const char* func = nullptr;
+
+	uint64_t count_star = 0;
+	time_t first_seen = 0;
+	time_t last_seen = 0;
+
+	ProxySQL_messages_stats(
+		const int32_t message_id_, const char* filename_, const int32_t line_, const char* func_, time_t first_seen_,
+		time_t last_seen_, uint64_t count_star_
+	) : message_id(message_id_), filename(filename_), line(line_), func(func_),  count_star(count_star_),
+	    first_seen(first_seen_), last_seen(last_seen_)
+	{
+		assert(message_id_);
+		assert(filename_);
+		assert(line_);
+		assert(func_);
+	}
+
+	char** get_row() const {
+		char buf[128];
+
+		char** pta = static_cast<char**>(malloc(sizeof(char *)*ProxySQL_MSG_STATS_FIELD_NUM));
+		sprintf(buf,"%d",message_id);
+		pta[0]=strdup(buf);
+		pta[1]=strdup(filename);
+		sprintf(buf,"%d",line);
+		pta[2]=strdup(buf);
+		pta[3]=strdup(func);
+		sprintf(buf,"%lu",count_star);
+		pta[4]=strdup(buf);
+		sprintf(buf,"%ld", first_seen);
+		pta[5]=strdup(buf);
+		sprintf(buf,"%ld", last_seen);
+		pta[6]=strdup(buf);
+
+		return pta;
+	}
+
+	void add_time(uint64_t n) {
+		count_star++;
+		if (first_seen == 0) {
+			first_seen = n;
+		}
+		last_seen=n;
+	}
+
+	void free_row(char **pta) const {
+		for (int i=0; i < ProxySQL_MSG_STATS_FIELD_NUM; i++) {
+			assert(pta[i]);
+			free(pta[i]);
+		}
+		free(pta);
+	}
+};
+
+unordered_map<string, ProxySQL_messages_stats> umap_msg_stats {};
+
+/**
+ * @brief Handles ProxySQL message logging.
+ * @details The extra variadic arguments are expected to be received in the following order:
+ *    ```
+ *    proxy_error_func(msgid, fmt_message, time_buf, __FILE__, __LINE__, __func__ , ## __VA_ARGS__);
+ *    ```
+ *   Any other use of the function is UNSAFE. And will result in unespecified behavior.
+ * @param msgid The message id of the message to be logged, when non-zero, stats about the message are updated in
+ *   'umap_msg_stats'.
+ * @param fmt The formatted string to be pass to 'vfprintf'.
+ * @param ... The variadic list of arguments to be passed to 'vfprintf'.
+ */
+void proxy_error_func(int msgid, const char *fmt, ...) {
 	va_list ap;
 	va_start(ap, fmt);
+
+	if (msgid != 0) {
+		va_list stats_params;
+		va_copy(stats_params, ap);
+
+		// ignore 'time' buffer argument
+		va_arg(stats_params, const char*);
+
+		// collect arguments '__FILE__', '__LINE__' and '__func__'
+		const char* file = va_arg(stats_params, const char*);
+		const int32_t line = va_arg(stats_params, int32_t);
+		const char* func = va_arg(stats_params, const char*);
+
+		std::lock_guard<std::mutex> msg_stats_guard { msg_stats_mutex };
+
+		string msg_stats_id { string { file } + ":" + std::to_string(line) + ":" + string { func } };
+		auto msg_stats = umap_msg_stats.find(msg_stats_id);
+		time_t tn = time(NULL);
+
+		const std::map<string,string> m_labels {
+			{ "message_id", std::to_string(msgid) }, { "filename", file },
+			{ "line", std::to_string(line) }, { "func", func }
+		};
+
+		prometheus::Family<prometheus::Counter>* m_family =
+			p_debug_dyn_counter_array[p_debug_dyn_counter::proxysql_message_count];
+
+		p_inc_map_counter(p_proxysql_messages_map, m_family, msg_stats_id, m_labels);
+
+		if (msg_stats != umap_msg_stats.end()) {
+			msg_stats->second.add_time(tn);
+		} else {
+			umap_msg_stats.insert(
+				{ msg_stats_id, ProxySQL_messages_stats(msgid, file, line, func, tn, tn, 1) }
+			);
+		}
+	}
+
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);	
 };
+
+SQLite3_result* proxysql_get_message_stats(bool reset) {
+	std::lock_guard<std::mutex> msg_stats_guard { msg_stats_mutex };
+	SQLite3_result* result = new SQLite3_result(ProxySQL_MSG_STATS_FIELD_NUM);
+
+	result->add_column_definition(SQLITE_TEXT,"message_id");
+	result->add_column_definition(SQLITE_TEXT,"filename");
+	result->add_column_definition(SQLITE_TEXT,"line");
+	result->add_column_definition(SQLITE_TEXT,"func");
+	result->add_column_definition(SQLITE_TEXT,"count_star");
+	result->add_column_definition(SQLITE_TEXT,"first_seen");
+	result->add_column_definition(SQLITE_TEXT,"last_seen");
+
+	for (const auto& msg_stats : umap_msg_stats) {
+		char** pta = msg_stats.second.get_row();
+		result->add_row(pta);
+		msg_stats.second.free_row(pta);
+	}
+
+	if (reset) {
+		umap_msg_stats.clear();
+	}
+
+	return result;
+}
+
+void proxysql_init_debug_prometheus_metrics() {
+	init_prometheus_dyn_counter_array<debug_metrics_map_idx, p_debug_dyn_counter>(debug_metrics_map, p_debug_dyn_counter_array);
+}
 
 static void full_write(int fd, const char *buf, size_t len)
 {
@@ -226,6 +401,8 @@ void init_debug_struct() {
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_IPC].name=(char *)"debug_ipc";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_QUERY_CACHE].name=(char *)"debug_query_cache";
 	GloVars.global.gdbg_lvl[PROXY_DEBUG_QUERY_STATISTICS].name=(char *)"debug_query_statistics";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_RESTAPI].name=(char *)"debug_restapi";
+	GloVars.global.gdbg_lvl[PROXY_DEBUG_MONITOR].name=(char *)"debug_monitor";
 
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		// if this happen, the above table is not populated correctly
