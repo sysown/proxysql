@@ -1195,8 +1195,8 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 	// Create two auxiliary maps and swap its content with the main maps. This
 	// way, this function can read query digests stored until now while other
 	// threads write in the other map. We need to lock while swapping.
-	umap_query_digest digest_umap_aux;
-	umap_query_digest_text digest_text_umap_aux;
+	umap_query_digest digest_umap_aux, digest_umap_aux_2;
+	umap_query_digest_text digest_text_umap_aux, digest_text_umap_aux_2;
 	pthread_rwlock_wrlock(&digest_rwlock);
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
@@ -1271,7 +1271,41 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 		proxy_info("Running query on stats_mysql_query_digest: %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
 	}
 
-	// Once the reading finishes, we lock and swap again both maps. Then, we
+	// Once we finish creating the resultset or writing to SQLite, we use a
+	// second group of auxiliary maps to swap it with the first group of
+	// auxiliary maps.  This way, we can merge the main maps and the first
+	// auxiliary maps without locking the mutex during the process. This is
+	// useful because writing to SQLite can take a lot of time, so the first
+	// group of auxiliary maps could grow large.
+	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_umap.swap(digest_umap_aux_2);
+	digest_text_umap.swap(digest_text_umap_aux_2);
+	pthread_rwlock_unlock(&digest_rwlock);
+
+	// Once we do the swap, we merge the content of the first auxiliary maps
+	// in the main maps and clear the content of the auxiliary maps.
+	digest_text_umap_aux.swap(digest_text_umap);
+	for (const auto& element : digest_umap_aux) {
+		uint64_t digest = element.first;
+		QP_query_digest_stats *qds = (QP_query_digest_stats *)element.second;
+		std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux_2.find(digest);
+		if (it != digest_umap_aux_2.end()) {
+			// found
+			QP_query_digest_stats *qds_equal = (QP_query_digest_stats *)it->second;
+			qds_equal->add_time(
+				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
+			);
+			delete qds_equal;
+		} else {
+			digest_umap_aux_2.insert(element);
+		}
+	}
+	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
+	digest_umap_aux_2.clear();
+	digest_text_umap_aux_2.clear();
+
+	// Once we finish merging the main maps and the first auxiliary maps, we
+	// lock and swap the main maps with the second auxiliary maps. Then, we
 	// merge the content of the auxiliary maps in the main maps and clear the
 	// content of the auxiliary maps.
 	pthread_rwlock_wrlock(&digest_rwlock);
