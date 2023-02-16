@@ -15,7 +15,7 @@ jobs:
     
     steps:
     - name: Install build tools
-      run: sudo apt-get -y install make automake git wget gcc g++ libtool equivs python3
+      run: sudo apt-get -y install make automake git wget gcc g++ libtool equivs python3 valgrind
       
     - name: Install build dependencies
       run: sudo apt-get -y install libssl-dev gnutls-dev libgnutls28-dev libmysqlclient-dev libboost-all-dev libunwind8 libunwind-dev uuid-dev ca-certificates
