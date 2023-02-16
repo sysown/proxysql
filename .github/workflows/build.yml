@@ -20,6 +20,9 @@ jobs:
     - name: Install build dependencies
       run: sudo apt-get -y install libssl-dev gnutls-dev libgnutls28-dev libmysqlclient-dev libboost-all-dev libunwind8 libunwind-dev uuid-dev ca-certificates
       
+    - name: Install test tools
+      run: sudo apt-get -y install mysql-client
+            
     - name: Checkout repository
       uses: actions/checkout@v3
       
@@ -33,7 +36,14 @@ jobs:
         echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
         echo "GIT_VERSION=${VERS}-${CMTS}-g${HASH}" >> $GITHUB_ENV
     
-    - name: Build C++
+    - name: Build
       run: |
         make debug_clickhouse
+        
+    - name: Self-tests
+      run: |
+        cd src && ./proxysql --initial --clickhouse --idle-threads -D .
+        sleep 30
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SHUTDOWN SLOW;"
+        
         
