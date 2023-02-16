@@ -1480,6 +1480,14 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(con
 		num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
 			false, false, result, &digest_umap_aux, &digest_text_umap_aux
 		);
+		for (
+			std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
+			it != digest_umap_aux.end();
+			++it
+		) {
+			QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
+			delete qds;
+		}
 	}
 	digest_umap_aux.clear();
 	// this part is always single-threaded
