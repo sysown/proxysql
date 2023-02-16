@@ -35,5 +35,5 @@ jobs:
     
     - name: Build C++
       run: |
-        make clickhouse_debug
+        make debug_clickhouse
         
