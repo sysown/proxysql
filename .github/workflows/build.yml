@@ -23,7 +23,7 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
       
-    - name: Build C++
+    - name: Git describe
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -32,5 +32,7 @@ jobs:
         export CMTS=$(gh api repos/sysown/proxysql/compare/${VERS}...v2.x | jq '.ahead_by')
         echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
         export GIT_VERSION=${VERS}-${CMTS}-g${HASH}
-        make clickhouse
+    
+    - name: Build C++
+        make clickhouse_debug
         
