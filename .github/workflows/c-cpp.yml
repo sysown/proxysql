@@ -26,6 +26,6 @@ jobs:
 
     - name: Build C++
       run: |
-        export GIT_VERSION=2.5.0-0-g0000000
+        export GIT_VERSION=$(git describe --long --abbrev=7)
         make clickhouse
 
