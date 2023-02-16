@@ -31,11 +31,9 @@ jobs:
         export HASH=$(gh api repos/sysown/proxysql/git/refs/heads/v2.x | jq '.object.sha' | cut -c2-8)
         export CMTS=$(gh api repos/sysown/proxysql/compare/${VERS}...v2.x | jq '.ahead_by')
         echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
-        export GIT_VERSION=${VERS}-${CMTS}-g${HASH}
+        echo "GIT_VERSION=${VERS}-${CMTS}-g${HASH}" >> $GITHUB_ENV
     
     - name: Build C++
-      env:
-        GIT_VERSION: ${{ env.GIT_VERSION }}
       run: |
         make clickhouse_debug
         
