@@ -1,10 +1,10 @@
 name: C/C++ CI
 
 on:
-  push:
-    branches: [ "v2.x" ]
-  pull_request:
-    branches: [ "v2.x" ]
+#  push:
+#    branches: [ "v2.x" ]
+#  pull_request:
+#    branches: [ "v2.x" ]
 #  schedule:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
@@ -31,6 +31,6 @@ jobs:
         export HASH=$(gh api repos/sysown/proxysql/git/refs/heads/v2.x | jq '.object.sha' | cut -c2-8)
         export CMTS=$(gh api repos/sysown/proxysql/compare/${VERS}...v2.x | jq '.ahead_by')
         echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
-        export GIT_VERSION=2.5.0-0-g0000000
+        export GIT_VERSION=${VERS}-${CMTS}-g${HASH}
         make clickhouse
         
