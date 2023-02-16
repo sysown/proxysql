@@ -45,6 +45,6 @@ jobs:
         cd src && (./proxysql -f --initial --clickhouse --idle-threads -D . &>proxysql.log &)
         sleep 30
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "PROXYSQLTEST 1 1000;" 2>&1 | grep -v 'Using a password'
-        (mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "PROXYSQL SHUTDOWN SLOW;" 2>&1 | grep -v 'Using a password') || true
+
         
         
