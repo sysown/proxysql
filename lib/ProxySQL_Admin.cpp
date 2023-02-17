@@ -11574,7 +11574,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_text)(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				SAFE_SQLITE3_STEP(statement1);
+				SAFE_SQLITE3_STEP2(statement1);
 				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			}
@@ -13398,6 +13398,36 @@ void ProxySQL_Admin::enable_grouprep_testing() {
 	load_mysql_query_rules_to_runtime();
 }
 #endif // TEST_GROUPREP
+
+#ifdef TEST_READONLY
+void ProxySQL_Admin::enable_readonly_testing() {
+	proxy_info("Admin is enabling Read Only Testing using SQLite3 Server and HGs from 4201 to 4800\n");
+	mysql_servers_wrlock();
+	string q;
+	q = "DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 4201 AND 4800";
+	admindb->execute(q.c_str());
+
+/*
+ *  NOTE: This section can be uncomment for manual testing. It populates the `mysql_servers`
+ *  and `mysql_replication_hostgroups`.
+ */
+// **************************************************************************************
+//	for (int i=1; i < 4; i++) {
+//		for (int j=2; j<100; j+=2) {
+//			for (int k=1; k<5; k++) {
+//				q = "INSERT INTO mysql_servers (hostgroup_id, hostname, use_ssl, comment) VALUES (" + std::to_string(4000+i*200+j) + ", '127.5."+ std::to_string(i) +"." + std::to_string(j*2+k) + "', 0, '')";
+//				admindb->execute(q.c_str());
+//			}
+//			q = "INSERT INTO mysql_replication_hostgroups(writer_hostgroup, reader_hostgroup) VALUES (" + std::to_string(4000+i*200+j-1) + "," + std::to_string(4000+i*200+j) + ")";
+//			admindb->execute(q.c_str());
+//		}
+//	}
+// **************************************************************************************
+
+	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
+}
+#endif // TEST_READONLY
 
 void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters() {
 	mysql_servers_wrlock();

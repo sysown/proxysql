@@ -566,6 +566,7 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_ping_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::ping_handler;
 		break;
+#ifndef TEST_READONLY
 	case MON_READ_ONLY:
 		query_ = "SELECT @@global.read_only read_only";
 		async_state_machine_ = ASYNC_QUERY_START;
@@ -596,6 +597,19 @@ void MySQL_Monitor_State_Data::init_async() {
 		task_timeout_ = mysql_thread___monitor_read_only_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
 		break;
+#else // TEST_READONLY
+	case MON_READ_ONLY:
+	case MON_INNODB_READ_ONLY:
+	case MON_SUPER_READ_ONLY:
+	case MON_READ_ONLY__AND__INNODB_READ_ONLY:
+	case MON_READ_ONLY__OR__INNODB_READ_ONLY:
+		query_ = "SELECT @@global.read_only read_only ";
+		query_ += std::string(hostname) + ":" + std::to_string(port);
+		async_state_machine_ = ASYNC_QUERY_START;
+		task_timeout_ = mysql_thread___monitor_read_only_timeout;
+		task_handler_ = &MySQL_Monitor_State_Data::read_only_handler;
+		break;
+#endif // TEST_READONLY
 	case MON_GROUP_REPLICATION:
 		async_state_machine_ = ASYNC_QUERY_START;
 #ifdef TEST_GROUPREP
@@ -1573,6 +1587,7 @@ void * monitor_read_only_thread(void *arg) {
 
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
+#ifndef TEST_READONLY
 	if (mmsd->get_task_type() == MON_INNODB_READ_ONLY) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.innodb_read_only read_only");
 	} else if (mmsd->get_task_type() == MON_SUPER_READ_ONLY) {
@@ -1584,6 +1599,13 @@ void * monitor_read_only_thread(void *arg) {
 	} else { // default
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SELECT @@global.read_only read_only");
 	}
+#else // TEST_READONLY
+	{
+		std::string s = "SELECT @@global.read_only read_only";
+		s += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
+		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,s.c_str());
+	}
+#endif // TEST_READONLY
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 #ifdef DEBUG
