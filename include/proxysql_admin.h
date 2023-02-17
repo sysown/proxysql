@@ -423,6 +423,7 @@ class ProxySQL_Admin {
 		const umap_query_digest *digest_umap, const umap_query_digest_text *digest_text_umap
 	);
 	int stats___mysql_query_digests(bool reset, bool copy=false);
+	int stats___mysql_query_digests_v2(bool reset, bool copy, bool use_resultset);
 	//void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();

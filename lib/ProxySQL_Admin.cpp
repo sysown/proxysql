@@ -1073,25 +1073,6 @@ incoming_servers_t::incoming_servers_t(
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes)
 {}
 
-int ProxySQL_Test___GetDigestTable_v2(bool reset, bool copy, bool use_resultset) {
-	int r = 0;
-	if (!GloQPro) return 0;
-	std::pair<SQLite3_result *, int> res;
-	if (reset == true) {
-		res = GloQPro->get_query_digests_reset_v2(use_resultset);
-	} else {
-		res = GloQPro->get_query_digests_v2(use_resultset);
-	}
-
-	if (res.first == NULL)
-		return res.second;
-
-	int num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(reset, copy, res.first, NULL, NULL);
-	delete res.first;
-
-	return num_rows;
-}
-
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	int r = 0;
 	if (!GloQPro) return 0;
@@ -3280,10 +3261,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
 		if (stats_mysql_query_digest_reset) {
-			stats___mysql_query_digests(true, stats_mysql_query_digest);
+			stats___mysql_query_digests_v2(true, stats_mysql_query_digest, false);
 		} else {
 			if (stats_mysql_query_digest) {
-				stats___mysql_query_digests(false);
+				stats___mysql_query_digests_v2(false, false, false);
 			}
 		}
 		if (stats_mysql_errors)
@@ -4073,14 +4054,14 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 					case 23:
 						// get all the entries from the digest map, but WRITING to DB
 						// it uses multiple threads for creating the resultset
-						r1 = ProxySQL_Test___GetDigestTable_v2(false, false, true);
+						r1 = SPA->stats___mysql_query_digests_v2(false, false, true);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 24:
 						// get all the entries from the digest map, but WRITING to DB
 						// Do not create a resultset, uses the digest_umap
-						r1 = ProxySQL_Test___GetDigestTable_v2(false, false, false);
+						r1 = SPA->stats___mysql_query_digests_v2(false, false, false);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
@@ -4095,14 +4076,14 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 					case 26:
 						// get all the entries from the digest map AND RESET, but WRITING to DB
 						// it uses multiple threads for creating the resultset
-						r1 = ProxySQL_Test___GetDigestTable_v2(true, true, true);
+						r1 = SPA->stats___mysql_query_digests_v2(true, true, true);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
 					case 27:
 						// get all the entries from the digest map AND RESET, but WRITING to DB
 						// Do not create a resultset, uses the digest_umap
-						r1 = ProxySQL_Test___GetDigestTable_v2(true, true, false);
+						r1 = SPA->stats___mysql_query_digests_v2(true, true, false);
 						SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, r1);
 						run_query=false;
 						break;
@@ -9686,6 +9667,24 @@ int ProxySQL_Admin::stats___mysql_query_digests(bool reset, bool copy) {
 	delete resultset;
 
 	return row_idx;
+}
+
+int ProxySQL_Admin::stats___mysql_query_digests_v2(bool reset, bool copy, bool use_resultset) {
+	if (!GloQPro) return 0;
+	std::pair<SQLite3_result *, int> res;
+	if (reset == true) {
+		res = GloQPro->get_query_digests_reset_v2(use_resultset);
+	} else {
+		res = GloQPro->get_query_digests_v2(use_resultset);
+	}
+
+	if (res.first == NULL)
+		return res.second;
+
+	int num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(reset, copy, res.first, NULL, NULL);
+	delete res.first;
+
+	return num_rows;
 }
 
 void ProxySQL_Admin::stats___mysql_client_host_cache(bool reset) {
