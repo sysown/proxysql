@@ -517,8 +517,10 @@ int main(int, char**) {
 
 	test_params_t test_params { b_0, b, its, delay_s };
 
-	vector<svr_addr> s_server_test { { "127.0.0.1", 13306 } };
-	vector<svr_addr> m_server_test { { "127.0.0.1", 13306 }, { "127.0.0.1", 13307 }, { "127.0.0.1", 13308 } };
+//	vector<svr_addr> s_server_test { { "127.0.0.1", 13306 } };
+	vector<svr_addr> s_server_test { { "mysql1.infra-mysql57", 3306 } };
+//	vector<svr_addr> m_server_test { { "127.0.0.1", 13306 }, { "127.0.0.1", 13307 }, { "127.0.0.1", 13308 } };
+	vector<svr_addr> m_server_test { { "mysql1.infra-mysql57", 3306 }, { "mysql2.infra-mysql57", 3306 }, { "mysql3.infra-mysql57", 3306 } };
 
 	diag("Performing 'check_backend_conns()' for servers: '%s'", nlohmann::json(s_server_test).dump().c_str());
 	int s_server_rc = check_backend_conns(cl, test_params, 0, s_server_test);

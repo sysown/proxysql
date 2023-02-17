@@ -496,7 +496,8 @@ bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin, const CommandLi
 
 void check_server_data_recv(const map<string,double>& prev_metrics, const map<string,double>& after_metrics) {
 	// Endpoint we are going to target
-	const string endpoint_hg { "endpoint=\"127.0.0.1:13306\",hostgroup=\"0\"" };
+//	const string endpoint_hg { "endpoint=\"127.0.0.1:13306\",hostgroup=\"0\"" };
+	const string endpoint_hg { "endpoint=\"mysql1.infra-mysql57:3306\",hostgroup=\"0\"" };
 
 	// Metrics identifiers
 	const vector<string> metrics_ids {

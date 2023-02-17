@@ -968,7 +968,8 @@ int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector
 	MARIADB_CHARSET_INFO* latin2_charset = proxysql_find_charset_collate("latin2_general_ci");
 	mysql->charset = latin2_charset;
 
-	if (!mysql_real_connect(mysql, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+//	if (!mysql_real_connect(mysql, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+	if (!mysql_real_connect(mysql, "mysql1.infra-mysql57", "root", "root", NULL, 3306, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
@@ -1176,7 +1177,8 @@ int main(int argc, char** argv) {
 	};
 
 	MYSQL* mysql_server = mysql_init(NULL);
-	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+//	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+	if (!mysql_real_connect(mysql_server, "mysql1.infra-mysql57", "root", "root", NULL, 3306, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
 	}
