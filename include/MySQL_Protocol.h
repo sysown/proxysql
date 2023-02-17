@@ -91,6 +91,36 @@ uint8_t mysql_decode_length(unsigned char *ptr, uint64_t *len);
  */
 my_bool proxy_mysql_stmt_close(MYSQL_STMT* mysql_stmt);
 
+class MyProt_tmp_auth_vars {
+	public:
+	unsigned char *user = NULL;
+	char *db = NULL;
+	char *db_tmp = NULL;
+	unsigned char *pass = NULL;
+	char *password = NULL;
+	unsigned char *auth_plugin = NULL;
+	void *sha1_pass=NULL;
+	unsigned char *_ptr = NULL;;
+	unsigned int charset;
+	uint32_t  capabilities = 0;
+	uint32_t  max_pkt;
+	uint32_t  pass_len;
+	bool use_ssl = false;
+	enum proxysql_session_type session_type;
+};
+
+class MyProt_tmp_auth_attrs {
+	public:
+	char *default_schema = NULL;
+	char *attributes = NULL;
+	int default_hostgroup=-1;
+	int max_connections;
+	bool schema_locked;
+	bool transaction_persistent = true;
+	bool fast_forward = false;
+	bool _ret_use_ssl = false;
+};
+
 class MySQL_Protocol {
 	private:
 	MySQL_Connection_userinfo *userinfo;
@@ -101,10 +131,14 @@ class MySQL_Protocol {
 	bool dump_pkt;
 #endif
 	MySQL_Prepared_Stmt_info *current_PreStmt;
+	int auth_plugin_id;
 	uint16_t prot_status;
+	bool more_data_needed;
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	MySQL_Protocol() {
+		auth_plugin_id = 0;
 		prot_status=0;
+		more_data_needed = false;
 	}
 	void init(MySQL_Data_Stream **, MySQL_Connection_userinfo *, MySQL_Session *);
 
@@ -139,6 +173,27 @@ class MySQL_Protocol {
 	// - pointer to the packet
 	// - size of the packet 
 	bool process_pkt_handshake_response(unsigned char *pkt, unsigned int len);
+	// the following PPHR_N functions where inline inside process_pkt_handshake_response() , but it was split for readibility
+	int PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1); //uint32_t& pass_len, unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret);
+	bool PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1); //uint32_t& pass_len, unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret, unsigned char *& auth_plugin, uint32_t& max_pkt, bool& use_ssl, char *& db_tmp
+#ifdef DEBUG
+//	, unsigned char *& _ptr
+#endif // DEBUG
+//);
+	//void PPHR_3(unsigned char *& auth_plugin, unsigned char *& user);
+	void PPHR_3(MyProt_tmp_auth_vars& vars1);
+	bool PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
+//unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret, unsigned char *& auth_plugin, uint32_t& max_pkt, bool& use_ssl, char *& db_tmp);
+	bool PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1);
+//uint32_t& pass_len, unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret, unsigned char *& auth_plugin, uint32_t& max_pkt, bool& use_ssl, char *& db_tmp);
+	void PPHR_5passwordTrue(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1); // uint32_t& pass_len, unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret, unsigned char *& auth_plugin, uint32_t& max_pkt, bool& use_ssl, char *& db_tmp, char *& password, char * reply, MyProt_tmp_auth_attrs& attr1);
+//	int& default_hostgroup, char *& default_schema, char *& attributes, bool& schema_locked, bool& transaction_persistent, bool& fast_forward, int& max_connections);
+	void PPHR_5passwordFalse_0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1); //uint32_t& pass_len, unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret, unsigned char *& auth_plugin, uint32_t& max_pkt, bool& use_ssl, char *& db_tmp, char *& password, char * reply, MyProt_tmp_auth_attrs& attr1);
+//	int& default_hostgroup, char *& default_schema, char *& attributes, bool& schema_locked, bool& transaction_persistent, bool& fast_forward, int& max_connections);
+	void PPHR_5passwordFalse_auth2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass); //uint32_t& pass_len, unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret, unsigned char *& auth_plugin, uint32_t& max_pkt, bool& use_ssl, char *& db_tmp, char *& password, char * reply, void *& sha1_pass, MyProt_tmp_auth_attrs& attr1);
+//	int& default_hostgroup, char *& default_schema, char *& attributes, bool& schema_locked, bool& transaction_persistent, bool& fast_forward, int& max_connections);
+	void PPHR_7auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass); //uint32_t& pass_len, unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret, unsigned char *& auth_plugin, uint32_t& max_pkt, bool& use_ssl, char *& db_tmp, char *& password, char * reply, void *& sha1_pass);
+	void PPHR_7auth2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass); //uint32_t& pass_len, unsigned char *& user, unsigned char *& pass, char *& db, uint32_t& capabilities, unsigned int& charset, bool& ret, unsigned char *& auth_plugin, uint32_t& max_pkt, bool& use_ssl, char *& db_tmp, char *& password, char * reply, void *& sha1_pass);
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);
 	/**
