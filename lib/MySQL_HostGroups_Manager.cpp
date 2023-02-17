@@ -7641,26 +7641,26 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy(Type dest_type, Ty
 	std::vector<Node>& dest_nodes = mapping[dest_type];
 	std::list<Node> append;
 
-	for (const auto& node : src_nodes) {
+	for (const auto& src_node : src_nodes) {
 
-		for (auto& parent_node : dest_nodes) {
+		for (auto& dest_node : dest_nodes) {
 
-			if (node.reader_hostgroup_id == parent_node.reader_hostgroup_id &&
-				node.writer_hostgroup_id == parent_node.writer_hostgroup_id) {
+			if (src_node.reader_hostgroup_id == dest_node.reader_hostgroup_id &&
+				src_node.writer_hostgroup_id == dest_node.writer_hostgroup_id) {
 
 				if (update_if_exists) {
-					MySrvC* new_srv = insert_HGM(get_hostgroup_id(dest_type, parent_node), node.srv);
+					MySrvC* new_srv = insert_HGM(get_hostgroup_id(dest_type, dest_node), src_node.srv);
 
 					if (!new_srv) assert(0);
 					
-					parent_node.srv = new_srv;
-					parent_node.server_status = node.server_status;
+					dest_node.srv = new_srv;
+					dest_node.server_status = src_node.server_status;
 				}
 				goto __skip;
 			}
 		}
 
-		append.push_back(node);
+		append.push_back(src_node);
 
 	__skip:
 		continue;
