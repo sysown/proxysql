@@ -1401,7 +1401,9 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	return result;
 }
 
-std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(const bool use_resultset) {
+std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(
+	const bool copy, const bool use_resultset
+) {
 	SQLite3_result *result = NULL;
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
@@ -1477,7 +1479,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(con
 		}
 	} else {
 		num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
-			false, false, result, &digest_umap_aux, &digest_text_umap_aux
+			true, copy, result, &digest_umap_aux, &digest_text_umap_aux
 		);
 		for (
 			std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();

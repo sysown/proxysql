@@ -9673,7 +9673,7 @@ int ProxySQL_Admin::stats___mysql_query_digests_v2(bool reset, bool copy, bool u
 	if (!GloQPro) return 0;
 	std::pair<SQLite3_result *, int> res;
 	if (reset == true) {
-		res = GloQPro->get_query_digests_reset_v2(use_resultset);
+		res = GloQPro->get_query_digests_reset_v2(copy, use_resultset);
 	} else {
 		res = GloQPro->get_query_digests_v2(use_resultset);
 	}
