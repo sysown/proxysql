@@ -1284,20 +1284,19 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 
 	// Once we do the swap, we merge the content of the first auxiliary maps
 	// in the main maps and clear the content of the auxiliary maps.
-	digest_text_umap_aux.swap(digest_text_umap);
-	for (const auto& element : digest_umap_aux) {
+	for (const auto& element : digest_umap_aux_2) {
 		uint64_t digest = element.first;
 		QP_query_digest_stats *qds = (QP_query_digest_stats *)element.second;
-		std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux_2.find(digest);
-		if (it != digest_umap_aux_2.end()) {
+		std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.find(digest);
+		if (it != digest_umap_aux.end()) {
 			// found
 			QP_query_digest_stats *qds_equal = (QP_query_digest_stats *)it->second;
 			qds_equal->add_time(
 				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
 			);
-			delete qds_equal;
+			delete qds;
 		} else {
-			digest_umap_aux_2.insert(element);
+			digest_umap_aux.insert(element);
 		}
 	}
 	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
@@ -1321,7 +1320,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 			qds_equal->add_time(
 				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
 			);
-			delete qds_equal;
+			delete qds;
 		} else {
 			digest_umap.insert(element);
 		}
