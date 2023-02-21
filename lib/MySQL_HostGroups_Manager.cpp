@@ -4767,7 +4767,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 	unsigned long long curtime2 = monotonic_time();
 	curtime1 = curtime1 / 1000;
 	curtime2 = curtime2 / 1000;
-	proxy_info("MySQL_HostGroups_Manager::read_only_action_v2() locked for %llums (server count:%d)\n", curtime2 - curtime1, mysql_servers.size());
+	proxy_info("MySQL_HostGroups_Manager::read_only_action_v2() locked for %llums (server count:%ld)\n", curtime2 - curtime1, mysql_servers.size());
 }
 
 // shun_and_killall
