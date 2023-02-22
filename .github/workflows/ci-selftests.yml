@@ -1,0 +1,91 @@
+name: CI-selftests
+
+on:
+  push:
+    branches: [ "v2.x" ]
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  pull_request:
+    branches: [ "v2.x" ]
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+#  schedule:
+#    - cron: '15 13 * * 3'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Install build tools
+      run: sudo apt-get -y install make automake git wget gcc g++ libtool equivs python3 valgrind
+      
+    - name: Install build dependencies
+      run: sudo apt-get -y install libssl-dev gnutls-dev libgnutls28-dev libmysqlclient-dev libboost-all-dev libunwind8 libunwind-dev uuid-dev ca-certificates
+      
+    - name: Install test tools
+      run: sudo apt-get -y install mysql-client
+            
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Git describe
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        export VERS=$(git ls-remote https://github.com/sysown/proxysql.git "refs/tags/*" | grep -v 'refs/tags/v' | sed -e 's|.*/||g' | tail -2 | head -1)
+        export HASH=$(gh api repos/sysown/proxysql/git/refs/heads/v2.x | jq '.object.sha' | cut -c2-8)
+        export CMTS=$(gh api repos/sysown/proxysql/compare/${VERS}...v2.x | jq '.ahead_by')
+        echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
+        echo "GIT_VERSION=${VERS}-${CMTS}-g${HASH}" >> $GITHUB_ENV
+    
+    - name: Build
+      run: |
+        make debug_clickhouse
+        
+    - name: Self-tests
+      run: |
+        ulimit -c unlimited
+        set +e
+        set -o pipefail
+        set -x
+
+        cd src && (./proxysql -f --initial --clickhouse --idle-threads -D . &>proxysql.log &)
+        sleep 30
+
+        mysql -V -vvv
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SELECT version();" 2>&1 | grep -v 'Using a password'
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SET mysql-verbose_query_error=true;" 2>&1 | grep -v 'Using a password'
+        
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv 2>&1 << EOF | grep -v 'Using a password'
+        SELECT COUNT(*) FROM stats_mysql_query_digest;
+        SELECT COUNT(*) FROM stats_mysql_query_digest_reset;
+        SELECT schemaname, COUNT(*) FROM stats_mysql_query_digest GROUP BY schemaname;
+        SELECT schemaname, COUNT(*) FROM stats_mysql_query_digest_reset GROUP BY schemaname;
+        TRUNCATE TABLE stats.stats_mysql_query_digest_reset;
+        TRUNCATE TABLE stats.stats_mysql_query_digest;
+        PROXYSQLTEST 1 1000;
+        PROXYSQLTEST 2 1000;
+        PROXYSQLTEST 3 1000;
+        PROXYSQLTEST 4 1000;
+        PROXYSQLTEST 5 1000;
+        PROXYSQLTEST 6 1000;
+        EOF
+        RC=$?
+        
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL SHUTDOWN SLOW;" 2>&1 | grep -v 'Using a password'
+        sleep 30
+        echo 'DONE'
+        exit $RC
+
+    - name: Archive artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: artifacts-${{ github.run_number }}
+        path: |
+          ./src/
+          
