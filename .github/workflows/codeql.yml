@@ -12,11 +12,11 @@
 name: "CodeQL"
 
 on:
-#  push:
-#    branches: [ CodeQL ]
-#  pull_request:
-#    # The branches below must be a subset of the branches above
-#    branches: [ CodeQL ]
+  push:
+    branches: [ v2.x ]
+  pull_request:
+    # The branches below must be a subset of the branches above
+    branches: [ v2.x ]
 #  schedule:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
@@ -42,17 +42,17 @@ jobs:
       run: sudo apt-get update
 
     - name: Install build tools
-      run: sudo apt-get -y install make automake git wget gcc g++ libtool equivs python python3
+      run: sudo apt-get -y install make automake git wget gcc g++ libtool equivs python3
 
     - name: Install build dependencies
       run: sudo apt-get -y install libssl-dev gnutls-dev libgnutls28-dev libmysqlclient-dev libboost-all-dev libunwind8 libunwind-dev uuid-dev ca-certificates
 
     - name: Checkout repository
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v1
+      uses: github/codeql-action/init@v2
       with:
         languages: ${{ matrix.language }}
         # If you wish to specify custom queries, you can do so here or in a config file.
@@ -63,7 +63,7 @@ jobs:
     # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
     # If this step fails, then you should remove it and run the build manually (see below)
     #- name: Autobuild
-    #  uses: github/codeql-action/autobuild@v1
+    #  uses: github/codeql-action/autobuild@v2
 
     # ℹ️ Command-line programs to run using the OS shell.
     # 📚 https://git.io/JvXDl
@@ -78,12 +78,23 @@ jobs:
 
     - if: matrix.language == 'python' || matrix.language == 'java' 
       name: Autobuild
-      uses: github/codeql-action/autobuild@v1
-
+      uses: github/codeql-action/autobuild@v2
+      
+    - name: Git describe
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        export VERS=$(git ls-remote https://github.com/sysown/proxysql.git "refs/tags/*" | grep -v 'refs/tags/v' | sed -e 's|.*/||g' | tail -2 | head -1)
+        export HASH=$(gh api repos/sysown/proxysql/git/refs/heads/v2.x | jq '.object.sha' | cut -c2-8)
+        export CMTS=$(gh api repos/sysown/proxysql/compare/${VERS}...v2.x | jq '.ahead_by')
+        echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
+        echo "GIT_VERSION=${VERS}-${CMTS}-g${HASH}" >> $GITHUB_ENV
+    
     - if: matrix.language == 'cpp' 
       name: Build C++
       run: |
         make
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v1
+      uses: github/codeql-action/analyze@v2
+
