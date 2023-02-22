@@ -39,7 +39,12 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1() {
 //#define VAR_VALUE "((?:CONCAT\\((?:(REPLACE|CONCAT)\\()+@@sql_mode,(?:(?:'|\\w|,| |\"|\\))+(?:\\)))|(?:[@\\w/\\d:\\+\\-]|,)+|(?:)))"
 
 // added (?:[\\w]+=(?:on|off)|,)+ for optimizer_switch
-#define VAR_VALUE_P1 "((?:\\()*(?:SELECT)*(?: )*(?:CONCAT\\()*(?:(?:(?: )*REPLACE|IFNULL|CONCAT)\\()+(?: )*(?:NULL|@OLD_SQL_MODE|@@SQL_MODE),(?:(?:'|\\w|,| |\"|\\))+(?:\\))*)(?:\\))|(?:NULL)|(?:[\\w]+=(?:on|off)|,)+|(?:[@\\w/\\d:\\+\\-]|,)+|(?:(?:'{1}|\"{1})(?:)(?:'{1}|\"{1})))"
+#define VAR_VALUE_P1_1 "(?:\\()*(?:SELECT)*(?: )*(?:CONCAT\\()*(?:(?:(?: )*REPLACE|IFNULL|CONCAT)\\()+(?: )*(?:NULL|@OLD_SQL_MODE|@@SQL_MODE),(?:(?:'|\\w|,| |\"|\\))+(?:\\))*)(?:\\))"
+#define VAR_VALUE_P1_2 "|(?:NULL)"
+#define VAR_VALUE_P1_3 "|(?:[\\w]+=(?:on|off)|,)+"
+#define VAR_VALUE_P1_4 "|(?:[@\\w/\\d:\\+\\-]|,)+"
+#define VAR_VALUE_P1_5 "|(?:(?:'{1}|\"{1})(?:)(?:'{1}|\"{1}))"
+#define VAR_VALUE_P1 "(" VAR_VALUE_P1_1 VAR_VALUE_P1_2 VAR_VALUE_P1_3 VAR_VALUE_P1_4 VAR_VALUE_P1_5 ")"
 
 	const std::string pattern="(?:" NAMES SPACES QUOTES NAME_VALUE QUOTES "(?: +COLLATE +" QUOTES NAME_VALUE QUOTES "|)" "|" SESSION_P1 VAR_P1 SPACES "(?:|:)=" SPACES QUOTES VAR_VALUE_P1 QUOTES ") *,? *";
 VALGRIND_DISABLE_ERROR_REPORTING;
