@@ -2746,7 +2746,7 @@ __exit_monitor_replication_lag_thread:
 				SAFE_SQLITE3_STEP2(statement);
 				rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-				MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
+				MyHGM->replication_lag_action({ {mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag} });
 			(*proxy_sqlite3_finalize)(statement);
 			if (mmsd->mysql_error_msg == NULL) {
 				replication_lag_success = true;
@@ -7508,6 +7508,8 @@ void MySQL_Monitor::monitor_gr_async_actions_handler(
 
 
 bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
+	
+	std::list<std::tuple<int, std::string, unsigned int, int>> mysql_servers;
 
 	for (auto& mmsd : mmsds) {
 
@@ -7609,9 +7611,13 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 		SAFE_SQLITE3_STEP2(statement);
 		rc = (*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-		MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
+		//MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
 		(*proxy_sqlite3_finalize)(statement);
+		mysql_servers.push_back({ mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag });
 	}
+
+	//executing replication lag action
+	MyHGM->replication_lag_action(mysql_servers);
 
 	return true;
 }

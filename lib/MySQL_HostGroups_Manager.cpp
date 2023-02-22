@@ -3367,7 +3367,7 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	myhgc->mysrvs->add(mysrvc);
 }
 
-void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, char *address, unsigned int port, int current_replication_lag) {
+void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const char *address, unsigned int port, int current_replication_lag) {
 	int j;
 	for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
@@ -3419,23 +3419,45 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, char *
 	}
 }
 
-void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
-	GloAdmin->mysql_servers_wrlock();
+void MySQL_HostGroups_Manager::replication_lag_action(const std::list<std::tuple<int, std::string, unsigned int, int>>& mysql_servers) {
+
+	//this method does not use admin table, so this lock is not needed. 
+	//GloAdmin->mysql_servers_wrlock();
+
+	int hid = -1;
+	std::string address;
+	unsigned int port = 0;
+	int current_replication_lag = -1;
+
+	unsigned long long curtime1 = monotonic_time();
 	wrlock();
-	if (mysql_thread___monitor_replication_lag_group_by_host == false) {
-		// legacy check. 1 check per server per hostgroup
-		MyHGC *myhgc = MyHGC_find(_hid);
-		replication_lag_action_inner(myhgc,address,port,current_replication_lag);
-	} else {
-		// only 1 check per server, no matter the hostgroup
-		// all hostgroups must be searched
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-			replication_lag_action_inner(myhgc,address,port,current_replication_lag);
+
+	for (const auto& server : mysql_servers) {
+
+		std::tie(hid, address, port, current_replication_lag) = server;
+
+		if (mysql_thread___monitor_replication_lag_group_by_host == false) {
+			// legacy check. 1 check per server per hostgroup
+			MyHGC *myhgc = MyHGC_find(hid);
+			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
+		}
+		else {
+			// only 1 check per server, no matter the hostgroup
+			// all hostgroups must be searched
+			for (unsigned int i=0; i<MyHostGroups->len; i++) {
+				MyHGC*myhgc=(MyHGC*)MyHostGroups->index(i);
+				replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
+			}
 		}
 	}
+
 	wrunlock();
-	GloAdmin->mysql_servers_wrunlock();
+	//GloAdmin->mysql_servers_wrunlock();
+
+	unsigned long long curtime2 = monotonic_time();
+	curtime1 = curtime1 / 1000;
+	curtime2 = curtime2 / 1000;
+	proxy_info("MySQL_HostGroups_Manager::replication_lag_action() locked for %llums (server count:%ld)\n", curtime2 - curtime1, mysql_servers.size());
 }
 
 /**
