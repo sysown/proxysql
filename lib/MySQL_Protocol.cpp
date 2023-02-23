@@ -1824,6 +1824,7 @@ bool MySQL_Protocol::PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret
 		bool user_exists = true;
 		if (GloMyLdapAuth) { // we check if user exists only if GloMyLdapAuth is enabled
 #ifdef PROXYSQLCLICKHOUSE
+			enum proxysql_session_type session_type = (*myds)->sess->session_type;
 			if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 				//user_exists = GloClickHouseAuth->exists((char *)user);
 				// for clickhouse, we currently do not support clear text or LDAP
@@ -1856,6 +1857,7 @@ bool MySQL_Protocol::PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret
 		if ((*myds)->switching_auth_stage == 0) {
 			bool user_exists = true;
 #ifdef PROXYSQLCLICKHOUSE
+			enum proxysql_session_type session_type = (*myds)->sess->session_type;
 			if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 				//user_exists = GloClickHouseAuth->exists((char *)user);
 				// for clickhouse, we currently do not support clear text or LDAP
@@ -2202,7 +2204,7 @@ __do_auth:
 	}
 	if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 #ifdef PROXYSQLCLICKHOUSE
-		password=GloClickHouseAuth->lookup((char *)vars1.user, USERNAME_FRONTEND, &attr1._ret_use_ssl, &attr1.default_hostgroup, &attr1.default_schema, &attr1.schema_locked, &attr1.transaction_persistent, &attr1.fast_forward, &attr1.max_connections, &sha1_pass);
+		vars1.password=GloClickHouseAuth->lookup((char *)vars1.user, USERNAME_FRONTEND, &attr1._ret_use_ssl, &attr1.default_hostgroup, &attr1.default_schema, &attr1.schema_locked, &attr1.transaction_persistent, &attr1.fast_forward, &attr1.max_connections, &sha1_pass);
 #endif /* PROXYSQLCLICKHOUSE */
 	} else {
 		vars1.password=GloMyAuth->lookup((char *)vars1.user, USERNAME_FRONTEND, &attr1._ret_use_ssl, &attr1.default_hostgroup, &attr1.default_schema, &attr1.schema_locked, &attr1.transaction_persistent, &attr1.fast_forward, &attr1.max_connections, &sha1_pass, &attr1.attributes);
