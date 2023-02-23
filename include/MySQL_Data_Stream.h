@@ -157,6 +157,7 @@ class MySQL_Data_Stream
 
 	int switching_auth_stage;
 	int switching_auth_type;
+	int auth_in_progress; // if 0 , no authentication is in progress. Any value greater than 0 depends from the implementation
 	unsigned int tmp_charset;
 
 	short revents;

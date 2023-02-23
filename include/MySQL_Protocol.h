@@ -185,6 +185,7 @@ class MySQL_Protocol {
 	void PPHR_5passwordFalse_auth2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
 	void PPHR_7auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
 	void PPHR_7auth2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1, char * reply, MyProt_tmp_auth_attrs& attr1 , void *& sha1_pass);
+	void PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, MyProt_tmp_auth_attrs& attr1);
 
 	bool process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned int len);
 	void * Query_String_to_packet(uint8_t sid, std::string *s, unsigned int *l);

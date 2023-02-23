@@ -291,6 +291,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	encrypted=false;
 	switching_auth_stage = 0;
 	switching_auth_type = 0;
+	auth_in_progress = 0;
 	x509_subject_alt_name=NULL;
 	ssl=NULL;
 	rbio_ssl = NULL;
