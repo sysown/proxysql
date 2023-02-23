@@ -4691,12 +4691,6 @@ int MySQL_Session::handler() {
 	//unsigned int j;
 	//unsigned char c;
 
-	if (active_transactions == 0) {
-		active_transactions=NumActiveTransactions();
-		if (active_transactions > 0) {
-			transaction_started_at = thread->curtime;
-		}
-	}
 //	FIXME: Sessions without frontend are an ugly hack
 	if (session_fast_forward==false) {
 	if (client_myds==NULL) {
@@ -4968,6 +4962,15 @@ handler_again:
 				gtid_hid = -1;
 				if (rc==0) {
 
+					if (active_transactions != 0) {  // run this only if currently we think there is a transaction
+						// Redundant?
+						//if ((myconn->mysql->server_status & SERVER_STATUS_IN_TRANS) == 0) { // there is no transaction on the backend connection
+							active_transactions = NumActiveTransactions(); // we check all the hostgroups/backends
+							if (active_transactions == 0)
+								transaction_started_at = 0; // reset it
+						//}
+					}
+
 					handler_rc0_Process_GTID(myconn);
 
 					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
@@ -5075,6 +5078,12 @@ handler_again:
 							handler_minus1_HandleBackendConnection(myds, myconn);
 						}
 					} else {
+						if (active_transactions == 0) {
+							active_transactions=NumActiveTransactions();
+							if (active_transactions > 0) {
+								transaction_started_at = thread->curtime;
+							}
+						}
 						switch (rc) {
 							// rc==1 , query is still running
 							// start sending to frontend if mysql_thread___threshold_resultset_size is reached
@@ -7206,8 +7215,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		int myerrno=mysql_errno(mysql);
 		if (myerrno==0) {
 			unsigned int num_rows = mysql_affected_rows(mysql);
-			unsigned int nTrx=NumActiveTransactions();
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			uint16_t setStatus = (active_transactions ? SERVER_STATUS_IN_TRANS : 0);
 			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST)
 				setStatus |= SERVER_MORE_RESULTS_EXIST;

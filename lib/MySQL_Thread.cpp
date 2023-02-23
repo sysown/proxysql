@@ -3746,18 +3746,6 @@ void MySQL_Thread::ProcessAllSessions_CompletedMirrorSession(unsigned int& n, My
 // this function was inline in MySQL_Thread::process_all_sessions()
 void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsigned long long sess_time, unsigned int& total_active_transactions_) {
 	unsigned int numTrx=0;
-	sess->active_transactions=sess->NumActiveTransactions();
-	{
-		sess->active_transactions=sess->NumActiveTransactions();
-		// in case we detected a new transaction just now
-		if (sess->active_transactions == 0) {
-			sess->transaction_started_at = 0;
-		} else {
-			if (sess->transaction_started_at == 0) {
-				sess->transaction_started_at = curtime;
-			}
-		}
-	}
 	total_active_transactions_ += sess->active_transactions;
 	sess->to_process=1;
 	if ( (sess_time/1000 > (unsigned long long)mysql_thread___max_transaction_idle_time) || (sess_time/1000 > (unsigned long long)mysql_thread___wait_timeout) ) {
