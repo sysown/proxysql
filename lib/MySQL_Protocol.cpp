@@ -1398,7 +1398,8 @@ bool MySQL_Protocol::verify_user_pass(
 	} else if (strncmp((char *)auth_plugin,plugins[1],strlen(plugins[1]))==0) { // mysql_clear_password
 		auth_plugin_id = 2;
 	} else if (strncmp((char *)auth_plugin,plugins[2],strlen(plugins[2]))==0) { // caching_sha2_password
-        auth_plugin_id = 3;
+		//auth_plugin_id = 3; // FIXME: this is temporary, because yet not supported
+		auth_plugin_id = 0; // FIXME: this is temporary, because yet not supported . It must become 3
 	}
 
 	if (password[0]!='*') { // clear text password
@@ -1411,7 +1412,10 @@ bool MySQL_Protocol::verify_user_pass(
 			if (strncmp(password,(char *)pass,strlen(password))==0) {
 				ret=true;
 			}
-		} else if (auth_plugin_id == 2) { // caching_sha2_password
+		} else if (auth_plugin_id == 3) { // caching_sha2_password
+			// FIXME: not supported yet
+			// we assert() here because auth_plugin_id should never be 3 unless it is fully implemented
+			assert(0);
 		} else {
 			ret = false;
 		}
@@ -1655,24 +1659,15 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 }
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
-int MySQL_Protocol::PPHR_1(
-	unsigned char *pkt, unsigned int len,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-*/
-	bool& ret, MyProt_tmp_auth_vars& vars1
-	) { // process_pkt_handshake_response inner 1
+int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 1
 	(*myds)->switching_auth_stage=2;
+	(*myds)->auth_in_progress = 0;
 	if (len==5) {
 		ret = false;
 		vars1.user = (unsigned char *)(*myds)->myconn->userinfo->username;
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . Client is disconnecting\n", (*myds), (*myds)->sess, vars1.user);
 		proxy_error("User '%s'@'%s' is disconnecting during switch auth\n", vars1.user, (*myds)->addr.addr);
+		(*myds)->auth_in_progress = 0;
 		return 1;
 	}
 	auth_plugin_id = (*myds)->switching_auth_type;
@@ -1694,26 +1689,7 @@ int MySQL_Protocol::PPHR_1(
 }
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
-bool MySQL_Protocol::PPHR_2(
-	unsigned char *pkt, unsigned int len,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-	bool& ret,
-	unsigned char *& auth_plugin,
-	uint32_t& max_pkt,
-	bool& use_ssl,
-	char *& db_tmp
-#ifdef DEBUG
-	, unsigned char *& _ptr
-#endif // DEBUG
-*/
-	bool& ret, MyProt_tmp_auth_vars& vars1
-	) { // process_pkt_handshake_response inner 2
+bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 2
 	vars1.capabilities = CPY4(pkt);
 	// see bug #2916. If CLIENT_MULTI_STATEMENTS is set by the client
 	// we enforce setting CLIENT_MULTI_RESULTS, this is the proper and expected
@@ -1833,31 +1809,17 @@ void MySQL_Protocol::PPHR_3(MyProt_tmp_auth_vars& vars1) { // detect plugin id
 		} else if (strncmp((char *)vars1.auth_plugin,plugins[1],strlen(plugins[1]))==0) { // mysql_clear_password
 			auth_plugin_id = 2;
 		} else if (strncmp((char *)vars1.auth_plugin,plugins[2],strlen(plugins[2]))==0) { // caching_sha2_password
-			auth_plugin_id = 3;
+			//auth_plugin_id = 3; // FIXME: this is temporary, because yet not supported
+			auth_plugin_id = 0; // FIXME: this is temporary, because yet not supported . It must become 3
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, vars1.user, auth_plugin_id);
 }
 
-bool MySQL_Protocol::PPHR_4auth0(
-	unsigned char *pkt, unsigned int len,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-	bool& ret,
-	unsigned char *& auth_plugin,
-	uint32_t& max_pkt,
-	bool& use_ssl,
-	char *& db_tmp
-*/
-	bool& ret, MyProt_tmp_auth_vars& vars1
-	) {
+bool MySQL_Protocol::PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) {
 	if ((*myds)->switching_auth_stage == 0) {
 		(*myds)->switching_auth_stage = 1;
+		(*myds)->auth_in_progress = 1;
 		// check if user exists
 		bool user_exists = true;
 		if (GloMyLdapAuth) { // we check if user exists only if GloMyLdapAuth is enabled
@@ -1889,23 +1851,7 @@ bool MySQL_Protocol::PPHR_4auth0(
 }
 
 
-bool MySQL_Protocol::PPHR_4auth1(
-	unsigned char *pkt, unsigned int len,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-	bool& ret,
-	unsigned char *& auth_plugin,
-	uint32_t& max_pkt,
-	bool& use_ssl,
-	char *& db_tmp
-*/
-	bool& ret, MyProt_tmp_auth_vars& vars1
-	) {
+bool MySQL_Protocol::PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) {
 	if (GloMyLdapAuth) {
 		if ((*myds)->switching_auth_stage == 0) {
 			bool user_exists = true;
@@ -1924,6 +1870,7 @@ bool MySQL_Protocol::PPHR_4auth1(
 			if (user_exists == false) {
 				(*myds)->switching_auth_type = 2; // mysql_clear_password
 				(*myds)->switching_auth_stage = 1;
+				(*myds)->auth_in_progress = 1;
 				generate_pkt_auth_switch_request(true, NULL, NULL);
 				(*myds)->myconn->userinfo->set((char *)vars1.user, NULL, vars1.db, NULL);
 				ret = false;
@@ -1937,19 +1884,6 @@ bool MySQL_Protocol::PPHR_4auth1(
 void MySQL_Protocol::PPHR_5passwordTrue(
 	unsigned char *pkt, unsigned int len,
 	bool& ret,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-	unsigned char *& auth_plugin,
-	uint32_t& max_pkt,
-	bool& use_ssl,
-	char *& db_tmp,
-	char *& password,
-*/
 	MyProt_tmp_auth_vars& vars1,
 	char * reply,
 	MyProt_tmp_auth_attrs& attr1) {
@@ -1982,24 +1916,9 @@ void MySQL_Protocol::PPHR_5passwordTrue(
 void MySQL_Protocol::PPHR_5passwordFalse_0(
 	unsigned char *pkt, unsigned int len,
 	bool& ret,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-	bool& ret,
-	unsigned char *& auth_plugin,
-	uint32_t& max_pkt,
-	bool& use_ssl,
-	char *& db_tmp,
-	char *& password,
-*/
 	MyProt_tmp_auth_vars& vars1,
 	char * reply,
 	MyProt_tmp_auth_attrs& attr1) {
-//	int& default_hostgroup, char *& default_schema, char *& attributes, bool& schema_locked, bool& transaction_persistent, bool& fast_forward, int& max_connections) {
 	if (strcmp((const char *)vars1.user,mysql_thread___monitor_username)==0) {
 		proxy_scramble(reply, (*myds)->myconn->scramble_buff, mysql_thread___monitor_password);
 		if (memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH)==0) {
@@ -2019,27 +1938,11 @@ void MySQL_Protocol::PPHR_5passwordFalse_0(
 
 void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 	unsigned char *pkt, unsigned int len,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-	bool& ret,
-	unsigned char *& auth_plugin,
-	uint32_t& max_pkt,
-	bool& use_ssl,
-	char *& db_tmp,
-	char *& password,
-	char * reply,
-*/
 	bool& ret,
 	MyProt_tmp_auth_vars& vars1,
 	char * reply,
 	MyProt_tmp_auth_attrs& attr1,
 	void *& sha1_pass) {
-//	int& default_hostgroup, char *& default_schema, char *& attributes, bool& schema_locked, bool& transaction_persistent, bool& fast_forward, int& max_connections) {
 	if (GloMyLdapAuth) {
 #ifdef DEBUG
 		{
@@ -2128,22 +2031,6 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 
 void MySQL_Protocol::PPHR_7auth1(
 	unsigned char *pkt, unsigned int len,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-	bool& ret,
-	unsigned char *& auth_plugin,
-	uint32_t& max_pkt,
-	bool& use_ssl,
-	char *& db_tmp,
-	char *& password,
-	char * reply,
-	void *& sha1_pass) {
-*/
 	bool& ret,
 	MyProt_tmp_auth_vars& vars1,
 	char * reply,
@@ -2167,22 +2054,6 @@ void MySQL_Protocol::PPHR_7auth1(
 
 void MySQL_Protocol::PPHR_7auth2(
 	unsigned char *pkt, unsigned int len,
-/*
-	uint32_t& pass_len,
-	unsigned char *& user,
-	unsigned char *& pass,
-	char *& db,
-	uint32_t& capabilities,
-	unsigned int& charset,
-	bool& ret,
-	unsigned char *& auth_plugin,
-	uint32_t& max_pkt,
-	bool& use_ssl,
-	char *& db_tmp,
-	char *& password,
-	char * reply,
-	void *& sha1_pass) {
-*/
 	bool& ret,
 	MyProt_tmp_auth_vars& vars1,
 	char * reply,
@@ -2217,6 +2088,35 @@ void MySQL_Protocol::PPHR_7auth2(
 	}
 }
 
+void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, MyProt_tmp_auth_attrs& attr1) {
+	MySQL_Connection *myconn = NULL;
+	myconn=sess->client_myds->myconn;
+	assert(myconn);
+	myconn->set_charset(vars1.charset, CONNECT_START);
+
+	std::stringstream ss;
+	ss << vars1.charset;
+
+	/* We are processing handshake from client. Client sends us a character set it will use in communication.
+	 * we store this character set in the client's variables to use later in multiplexing with different backends
+	 */
+	mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
+	mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
+	mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
+	mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
+
+	// enable compression
+	if (vars1.capabilities & CLIENT_COMPRESS) {
+		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
+			myconn->options.compression_min_length=50;
+			//myconn->set_status_compression(true);  // don't enable this here. It needs to be enabled after the OK is sent
+		}
+	}
+	if (attr1._ret_use_ssl==true) {
+		(*myds)->sess->use_ssl = true;
+	}
+}
+
 /**
  * @brief Process handshake response from the client, and it needs to be called until
  *   the authentication is completed (successfully or failed)
@@ -2230,39 +2130,12 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	if (dump_pkt) { __dump_pkt(__func__,pkt,len); }
 #endif
 	bool ret = false;
-	MySQL_Connection *myconn = NULL;
-/*
-	unsigned int charset;
-	uint32_t  capabilities = 0;
-	uint32_t  max_pkt;
-	uint32_t  pass_len;
-	unsigned char *user = NULL;
-	char *db = NULL;
-	char *db_tmp = NULL;
-	unsigned char *pass = NULL;
-	char *password = NULL;
-	bool use_ssl = false;
-	bool _ret_use_ssl = false;
-	unsigned char *auth_plugin = NULL;
-*/
 	auth_plugin_id = 0;
 
 	char reply[SHA_DIGEST_LENGTH+1] = { 0 };
-/*
-	int default_hostgroup=-1;
-	char *default_schema = NULL;
-	char *attributes = NULL;
-	bool schema_locked;
-	bool transaction_persistent = true;
-	bool fast_forward = false;
-	int max_connections;
-*/
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 
 	void *sha1_pass=NULL;
-//#ifdef DEBUG
-//	unsigned char *_ptr=pkt;
-//#endif
 	MyProt_tmp_auth_vars vars1;
 	MyProt_tmp_auth_attrs attr1;
 	vars1._ptr = pkt;
@@ -2289,13 +2162,6 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		assert(0);
 	}
 
-/*
-	ret = PPHR_2(pkt, len, pass_len, user, pass, db, capabilities, charset, ret, auth_plugin, max_pkt, use_ssl, db_tmp
-#ifdef DEBUG
-	, _ptr
-#endif // DEBUG
-);
-*/
 	ret = PPHR_2(pkt, len, ret, vars1);
 	if (ret == false)
 		goto __exit_process_pkt_handshake_response;
@@ -2344,7 +2210,6 @@ __do_auth:
 	//assert(default_hostgroup>=0);
 	if (vars1.password) {
 		PPHR_5passwordTrue(pkt, len, ret, vars1, reply, attr1);
-			//default_hostgroup, default_schema, attributes, schema_locked, transaction_persistent, fast_forward, max_connections);
 	}
 	if (vars1.password == NULL) {
 		// this is a workaround for bug #603
@@ -2357,16 +2222,12 @@ __do_auth:
 			((*myds)->sess->session_type == PROXYSQL_SESSION_SQLITE)
 //#endif // TEST_AURORA  || TEST_GALERA
 		) {
-			//PPHR_5passwordFalse_0(pkt, len, pass_len, user, pass, db, capabilities, charset, ret, auth_plugin, max_pkt, use_ssl, db_tmp, password, reply, attr1);
 			PPHR_5passwordFalse_0(pkt, len, ret, vars1, reply, attr1);
-				//default_hostgroup, default_schema, attributes, schema_locked, transaction_persistent, fast_forward, max_connections); 
 		} else {
 			ret=false; // by default, assume this will fail
 			// try LDAP
 			if (auth_plugin_id==2) {
-				//PPHR_5passwordFalse_auth2(pkt, len, pass_len, user, pass, db, capabilities, charset, ret, auth_plugin, max_pkt, use_ssl, db_tmp, password, reply, sha1_pass, attr1);
 				PPHR_5passwordFalse_auth2(pkt, len, ret, vars1, reply, attr1, sha1_pass);
-//					default_hostgroup, default_schema, attributes, schema_locked, transaction_persistent, fast_forward, max_connections); 
 			}
 		}
 	} else {
@@ -2398,10 +2259,8 @@ __do_auth:
 				}
 			} else {
 				if (auth_plugin_id == 1) {
-					//PPHR_7auth1(pkt, len, pass_len, user, pass, db, capabilities, charset, ret, auth_plugin, max_pkt, use_ssl, db_tmp, password, reply, sha1_pass);
 					PPHR_7auth1(pkt, len, ret, vars1, reply, attr1, sha1_pass);
 				} else if (auth_plugin_id == 2) { // mysql_clear_password
-					//PPHR_7auth2(pkt, len, pass_len, user, pass, db, capabilities, charset, ret, auth_plugin, max_pkt, use_ssl, db_tmp, password, reply, sha1_pass);
 					PPHR_7auth2(pkt, len, ret, vars1, reply, attr1, sha1_pass);
 				} else {
 					assert(0);
@@ -2412,9 +2271,6 @@ __do_auth:
 
 __exit_do_auth:
 
-	if (attr1._ret_use_ssl==true) {
-		(*myds)->sess->use_ssl = true;
-	}
 
 #ifdef DEBUG
 	{
@@ -2433,28 +2289,10 @@ __exit_do_auth:
 #endif
 	assert(sess);
 	assert(sess->client_myds);
-	myconn=sess->client_myds->myconn;
-	assert(myconn);
-	myconn->set_charset(vars1.charset, CONNECT_START);
-	{
-		std::stringstream ss;
-		ss << vars1.charset;
 
-		/* We are processing handshake from client. Client sends us a character set it will use in communication.
-		 * we store this character set in the client's variables to use later in multiplexing with different backends
-		 */
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_RESULTS, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CLIENT, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str());
-		mysql_variables.client_set_value(sess, SQL_COLLATION_CONNECTION, ss.str().c_str());
-	}
-	// enable compression
-	if (vars1.capabilities & CLIENT_COMPRESS) {
-		if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
-			myconn->options.compression_min_length=50;
-			//myconn->set_status_compression(true);  // don't enable this here. It needs to be enabled after the OK is sent
-		}
-	}
+	// set connection attributes (charsets, compression, encryption)
+	PPHR_SetConnAttrs(vars1, attr1);
+
 #ifdef DEBUG
 	if (dump_pkt) { __dump_pkt(__func__,vars1._ptr,len); }
 #endif
