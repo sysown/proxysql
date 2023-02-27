@@ -117,8 +117,8 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// Disable current ^SELECT query rule
-	MYSQL_QUERY(proxy_admin, "UPDATE mysql_query_rules SET active=0 WHERE rule_id=2");
+	// Delete previous mysql_query_rules
+	MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_query_rules");
 
 	// Add a new query rule with caching TTL for targgeting the cache
 	std::string query_digest { "SELECT \\* FROM test\\.ok_packet_cache_test WHERE id=?" };
