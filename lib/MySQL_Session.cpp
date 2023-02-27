@@ -4968,6 +4968,9 @@ handler_again:
 							if (active_transactions == 0)
 								transaction_started_at = 0; // reset it
 						}
+					} else {
+						transaction_started_at = thread->curtime;
+						active_transactions = NumActiveTransactions();
 					}
 
 					handler_rc0_Process_GTID(myconn);
@@ -5077,12 +5080,6 @@ handler_again:
 							handler_minus1_HandleBackendConnection(myds, myconn);
 						}
 					} else {
-						if (active_transactions == 0) {
-							active_transactions=NumActiveTransactions();
-							if (active_transactions > 0) {
-								transaction_started_at = thread->curtime;
-							}
-						}
 						switch (rc) {
 							// rc==1 , query is still running
 							// start sending to frontend if mysql_thread___threshold_resultset_size is reached
