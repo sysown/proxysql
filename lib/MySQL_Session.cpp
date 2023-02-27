@@ -1095,6 +1095,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["autocommit_on_hostgroup"] = autocommit_on_hostgroup;
 	j["last_insert_id"] = last_insert_id;
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
+	j["active_transactions"] = active_transactions;
+	j["transaction_started_at"] = transaction_started_at;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
@@ -4968,9 +4970,6 @@ handler_again:
 							if (active_transactions == 0)
 								transaction_started_at = 0; // reset it
 						}
-					} else {
-						transaction_started_at = thread->curtime;
-						active_transactions = NumActiveTransactions();
 					}
 
 					handler_rc0_Process_GTID(myconn);
