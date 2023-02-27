@@ -4963,12 +4963,11 @@ handler_again:
 				if (rc==0) {
 
 					if (active_transactions != 0) {  // run this only if currently we think there is a transaction
-						// Redundant?
-						//if ((myconn->mysql->server_status & SERVER_STATUS_IN_TRANS) == 0) { // there is no transaction on the backend connection
+						if ((myconn->mysql->server_status & SERVER_STATUS_IN_TRANS) == 0) { // there is no transaction on the backend connection
 							active_transactions = NumActiveTransactions(); // we check all the hostgroups/backends
 							if (active_transactions == 0)
 								transaction_started_at = 0; // reset it
-						//}
+						}
 					}
 
 					handler_rc0_Process_GTID(myconn);
