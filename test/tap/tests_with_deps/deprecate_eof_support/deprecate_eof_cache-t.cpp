@@ -117,13 +117,6 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	// Delete previous mysql_query_rules matching target digest
-	MYSQL_QUERY(
-		proxy_admin,
-		"DELETE FROM mysql_query_rules WHERE "
-		"match_digest='SELECT \\* FROM test\\.ok_packet_cache_test WHERE id=?'"
-	);
-
 	// Disable current ^SELECT query rule
 	MYSQL_QUERY(proxy_admin, "UPDATE mysql_query_rules SET active=0 WHERE rule_id=2");
 
@@ -302,17 +295,6 @@ int main(int argc, char** argv) {
 			eof_res_warnings
 		);
 	}
-
-	// Delete new query cache rule
-	MYSQL_QUERY(
-		proxy_admin,
-		"DELETE FROM mysql_query_rules WHERE "
-		"match_digest='SELECT \\* FROM test\\.ok_packet_cache_test WHERE id=?'"
-	);
-
-	// Enable old ^SELECT query rule
-	MYSQL_QUERY(proxy_admin, "UPDATE mysql_query_rules SET active=1 WHERE rule_id=2");
-	MYSQL_QUERY(proxy_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	mysql_close(proxy_admin);
 	mysql_close(proxy_mysql);
