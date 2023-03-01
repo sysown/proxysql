@@ -3653,12 +3653,14 @@ void gr_handle_actions_over_unresp_srvs(const vector<gr_host_def_t>& hosts_defs,
  *  before placing the connection back into the 'ConnectionPool', on failure, we discard the connection.
  * @param mmsd The mmsd wrapper holding all information for returning the connection.
  */
-void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
+void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd, bool unregister_conn_on_failure) {
 	if (mmsd == nullptr) return;
 
 	if (mmsd->mysql) {
 		if (mmsd->interr || mmsd->mysql_error_msg) {
-			GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
+			if (unregister_conn_on_failure) {
+				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
+			}
 			mysql_close(mmsd->mysql);
 		} else {
 			if (mmsd->created_conn) {
@@ -3673,7 +3675,9 @@ void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
 					MyHGM->p_update_mysql_error_counter(
 						p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
 					);
-					GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
+					if (unregister_conn_on_failure) {
+						GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
+					}
 					mysql_close(mmsd->mysql);
 				}
 			} else {
@@ -3720,7 +3724,7 @@ void gr_report_fetching_errs(MySQL_Monitor_State_Data* mmsd) {
  * @param mmsd The server 'MySQL_Monitor_State_Data' after the fetching is completed. It should either
  *  hold a valid 'MYSQL_RES' or an error.
  */
-void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
+void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd, bool unregister_conn_on_failure) {
 	// We base 'start_time' on the conn init for 'MySQL_Monitor_State_Data'. If a conn creation was
 	// required, we take into account this time into account, otherwise we asume that 'start_time=t1'.
 	uint64_t start_time = 0;
@@ -3743,7 +3747,7 @@ void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
 	}
 
 	// Handle 'mmsd' MySQL conn return to 'ConnectionPool'
-	handle_mmsd_mysql_conn(mmsd);
+	handle_mmsd_mysql_conn(mmsd, unregister_conn_on_failure);
 }
 
 /**
@@ -3859,7 +3863,7 @@ void* monitor_GR_thread_HG(void *arg) {
 
 		// Handle 'mmsds' that failed to optain conns
 		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : fail_mmsds) {
-			async_gr_mon_actions_handler(mmsd.get());
+			async_gr_mon_actions_handler(mmsd.get(), true);
 		}
 
 		// Update 't1' for subsequent fetch operations and reset errors
@@ -7486,7 +7490,7 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks_2(
 	for (MySQL_Monitor_State_Data* mmsd : mmsds) {
 		const MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
-		async_gr_mon_actions_handler(mmsd);
+		async_gr_mon_actions_handler(mmsd, false);
 	}
 
 	return true;
