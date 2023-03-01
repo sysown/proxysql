@@ -53,7 +53,7 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	diag("Configure the target server (non-existing) server to test connection failures");
+	diag("Configure ProxySQL to test mysql-max_transaction_time");
 	MYSQL_QUERY_T(
 		admin,
 		"UPDATE global_variables SET variable_value = 10000 "
