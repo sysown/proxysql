@@ -13,6 +13,7 @@
 #include "tap.h"
 #include "utils.h"
 
+#include <unistd.h>
 #include <iostream>
 
 using std::string;
@@ -38,14 +39,12 @@ void parse_result_json_column(MYSQL_RES *result, json& j) {
 int main(int, char**) {
 	CommandLine cl;
 
-	plan(NUMQUERIES*2-1);
+	plan(NUMQUERIES*2+1);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
-
-	unsigned long long prev_transaction_started_at = 0;
 
 	MYSQL* admin = mysql_init(NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -88,16 +87,20 @@ int main(int, char**) {
 		parse_result_json_column(myres, j);
 		mysql_free_result(myres);
 		int active_transactions = atoi(j["active_transactions"].dump().c_str());
-		unsigned long long transaction_started_at = atoll(j["transaction_started_at"].dump().c_str());
-		unsigned long long lapse_time = transaction_started_at - prev_transaction_started_at;
-		lapse_time /= 1000;
-		prev_transaction_started_at = transaction_started_at;
+		unsigned long long transaction_time_ms = atoll(j["transaction_time_ms"].dump().c_str());
+		transaction_time_ms /= 1000;
 		ok(active_transactions==1, "active_transactions = %d", active_transactions);
-		if (i != 0) {
-			ok (lapse_time >= 900 && lapse_time <= 1200, "Transaction time: %llu ms" , lapse_time);
-		}
+		ok(transaction_time_ms >= 900 && transaction_time_ms <= 1200, "Transaction time: %llu ms" , transaction_time_ms);
 		MYSQL_QUERY_T(proxy, "COMMIT");
 	}
+
+
+	MYSQL_QUERY_T(proxy, "BEGIN");
+	diag("Sleeping for 10 seconds so that the transaction times out");
+	sleep(10);
+	diag("Issuing COMMIT : it should fail");
+	int query_err = mysql_query(proxy, "COMMIT");
+	ok(query_err != 0 && mysql_errno(proxy) == 2013 , "Failed with error code %d : %s" , mysql_errno(proxy), mysql_error(proxy));
 
 	mysql_close(proxy);
 
