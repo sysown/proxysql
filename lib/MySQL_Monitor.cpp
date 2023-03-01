@@ -6763,6 +6763,10 @@ public:
 			for (unsigned int i = 0; i < len_;) {
 
 				if (mmsds_[i]->task_handler(fds_[i].revents, fds_[i].events) != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING) {
+#ifdef DEBUG
+					if (mmsds_[i]->get_task_result() != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS)
+						GloMyMon->My_Conn_Pool->conn_unregister(mmsds_[i]);
+#endif // DEBUG
 					ready_tasks.push_back(mmsds_[i]);
 					remove_index_fast(i);
 
@@ -6924,9 +6928,9 @@ bool MySQL_Monitor::monitor_ping_process_ready_tasks(const std::vector<MySQL_Mon
 				proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif // DEBUG
 			}
-#ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd);
-#endif // DEBUG
+//#ifdef DEBUG
+//			My_Conn_Pool->conn_unregister(mmsd);
+//#endif // DEBUG
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
@@ -7112,9 +7116,9 @@ bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQ
 				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
-#ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd);
-#endif // DEBUG
+//#ifdef DEBUG
+//			My_Conn_Pool->conn_unregister(mmsd);
+//#endif // DEBUG
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
@@ -7290,9 +7294,9 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
-#ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd);
-#endif // DEBUG
+//#ifdef DEBUG
+//			My_Conn_Pool->conn_unregister(mmsd);
+//#endif // DEBUG
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
@@ -7532,9 +7536,9 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 				proxy_error("Error after %lldms on server %s:%d : %s\n", (mmsd->t2 - mmsd->t1) / 1000, mmsd->hostname, mmsd->port, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
-#ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd);
-#endif
+//#ifdef DEBUG
+//			My_Conn_Pool->conn_unregister(mmsd);
+//#endif
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
@@ -7691,9 +7695,9 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 				proxy_error("Got error: mmsd %p , MYSQL %p , FD %d : %s\n", mmsd, mmsd->mysql, mmsd->mysql->net.fd, (mmsd->mysql_error_msg ? mmsd->mysql_error_msg : ""));
 #endif
 			}
-#ifdef DEBUG
-			My_Conn_Pool->conn_unregister(mmsd);
-#endif // DEBUG
+//#ifdef DEBUG
+//			My_Conn_Pool->conn_unregister(mmsd);
+//#endif // DEBUG
 			mysql_close(mmsd->mysql);
 			mmsd->mysql = NULL;
 		}
