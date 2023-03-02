@@ -2851,3 +2851,27 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	}
 	return ret;
 }
+
+void MySQL_Connection::get_system_variables() {
+	if (mysql) {
+		if (mysql->net.last_errno==0) { // only if there is no error
+			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
+				const char *name, *value;
+				size_t name_length, value_length;
+				int idx;
+				if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length) == 0) {
+					mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length);
+					idx = mysql_variables.get_variable_idx_by_name(name);
+					if (strcasecmp(variables[idx].value, value) != 0)
+						assert(0);
+					while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length) == 0) {
+						mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length);
+						idx = mysql_variables.get_variable_idx_by_name(name);
+						if (strcasecmp(variables[idx].value, value) != 0)
+							assert(0);
+					}
+				}
+			}
+		}
+	}
+}
