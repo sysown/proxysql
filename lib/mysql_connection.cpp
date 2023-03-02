@@ -1982,6 +1982,14 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 			return 0;
 			break;
 		case ASYNC_IDLE:
+			if (myds && myds->sess) {
+				if (myds->sess->active_transactions == 0) {
+					// every time we start a query (no matter if COM_QUERY, STMT_PREPARE or otherwise)
+					// also a transaction starts, even if in autocommit mode
+					myds->sess->active_transactions = 1;
+					myds->sess->transaction_started_at = myds->sess->thread->curtime;
+				}
+			}
 			if (stmt_meta==NULL)
 				set_query(stmt,length);
 			async_state_machine=ASYNC_QUERY_START;
