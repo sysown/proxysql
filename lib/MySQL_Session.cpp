@@ -4673,13 +4673,14 @@ void MySQL_Session::housekeeping_before_pkts() {
 }
 
 // this function was inline
-void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
+void MySQL_Session::handler_rc0_Process_Session_Track(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
 		if (mysql_thread___client_session_track_gtid) {
 			gtid_hid = current_hostgroup;
 			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
 		}
 	}
+	myconn->get_system_variables();
 }
 
 int MySQL_Session::handler() {
@@ -4972,7 +4973,7 @@ handler_again:
 						}
 					}
 
-					handler_rc0_Process_GTID(myconn);
+					handler_rc0_Process_Session_Track(myconn);
 
 					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
 					// see bug #3549

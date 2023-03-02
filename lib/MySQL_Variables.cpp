@@ -616,3 +616,10 @@ bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string
 	return true;
 }
 
+int MySQL_Variables::get_variable_idx_by_name(const char *name) {
+	for (int i = 0; i < SQL_NAME_LAST_HIGH_WM; i++) {
+		if (strcasecmp(mysql_tracked_variables[i].set_variable_name, name) == 0)
+			return mysql_tracked_variables[i].idx;
+	}
+	return -1;
+}

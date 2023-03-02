@@ -51,6 +51,8 @@ public:
 	bool update_variable(MySQL_Session* session, session_status status, int &_rc);
 	bool parse_variable_boolean(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
 	bool parse_variable_number(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
+
+	int get_variable_idx_by_name(const char *name);
 };
 
 #endif // #ifndef MYSQL_VARIABLES_H
