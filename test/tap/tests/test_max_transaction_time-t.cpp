@@ -55,7 +55,7 @@ int main(int, char**) {
 	diag("Configure ProxySQL to test mysql-max_transaction_time");
 	MYSQL_QUERY_T(
 		admin,
-		"UPDATE global_variables SET variable_value = 10000 "
+		"UPDATE global_variables SET variable_value = 4000 "
 		"WHERE variable_name = 'mysql-max_transaction_time'"
 	);
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
@@ -98,10 +98,20 @@ int main(int, char**) {
 	MYSQL_QUERY_T(proxy, "BEGIN");
 	diag("Sleeping for 10 seconds so that the transaction times out");
 	sleep(10);
-	diag("Issuing COMMIT : it should fail");
-	int query_err = mysql_query(proxy, "COMMIT");
+	diag("Issuing PROXYSQL INTERNAL SESSION : it should fail");
+	int query_err = mysql_query(proxy, "PROXYSQL INTERNAL SESSION");
 	ok(query_err != 0 && mysql_errno(proxy) == 2013 , "Failed with error code %d : %s" , mysql_errno(proxy), mysql_error(proxy));
-
+	if (query_err == 0) {
+		json j = {};
+		myres = mysql_store_result(proxy);
+		parse_result_json_column(myres, j);
+		mysql_free_result(myres);
+		int active_transactions = atoi(j["active_transactions"].dump().c_str());
+		unsigned long long transaction_time_ms = atoll(j["transaction_time_ms"].dump().c_str());
+		transaction_time_ms /= 1000;
+		diag("active_transactions = %d", active_transactions);
+		diag("Transaction time: %llu ms" , transaction_time_ms);
+	}
 	mysql_close(proxy);
 
 	return exit_status();
