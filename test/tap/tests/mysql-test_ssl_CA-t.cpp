@@ -110,9 +110,12 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(mysqladmin, "UPDATE mysql_servers SET use_ssl=1 WHERE hostgroup_id IN (0,1,10,11,20,30,31,50,60,1710,1711)");
 	MYSQL_QUERY(mysqladmin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-	diag("Setting mysql-ssl_p2s_ca");
-	MYSQL_QUERY(mysqladmin, "SET mysql-ssl_p2s_ca='cert-bundle-rnd.pem'");
-	MYSQL_QUERY(mysqladmin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	{
+		diag("Setting mysql-ssl_p2s_ca");
+		std::string ca_full_path = "SET mysql-ssl_p2s_ca='" + std::string(p_infra_datadir) + "/cert-bundle-rnd.pem'";
+		MYSQL_QUERY(mysqladmin, ca_full_path.c_str());
+		MYSQL_QUERY(mysqladmin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	}
 
 	for (std::vector<std::string>::iterator it = pemfiles.begin(); it != pemfiles.end(); it++ ) {
 		std::string cmd = "cat " + std::string(cl.workdir) + "/aws_ssl_certs/" + *it + " >> " + p_infra_datadir + "/cert-bundle-rnd.pem";
