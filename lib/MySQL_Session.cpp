@@ -4929,7 +4929,7 @@ handler_again:
 								stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
 								CurrentQuery.QueryLength=stmt_info->query_length;
 								CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
-								// NOTE: Update 'first_comment' with the the from the retrieved
+								// NOTE: Update 'first_comment' with the 'first_comment' from the retrieved
 								// 'stmt_info' from the found prepared statement. 'CurrentQuery' requires its
 								// own copy of 'first_comment' because it will later be free by 'QueryInfo::end'.
 								if (stmt_info->first_comment) {

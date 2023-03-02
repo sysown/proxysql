@@ -1,6 +1,6 @@
 /**
  * @file eof_cache_mixed_flags-t.cpp
- * @brief This test verifies that the the new introduced flags 'mysql-enable_client_deprecate_eof' and
+ * @brief This test verifies that the new introduced flags 'mysql-enable_client_deprecate_eof' and
  *   'mysql-enable_server_deprecate_eof' actually impose the addition or deletion of 'client_deprecate_eof'
  *   flag to the "MySQL_Connection::options::client_flag" field.
  *
