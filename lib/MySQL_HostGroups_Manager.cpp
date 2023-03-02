@@ -7141,12 +7141,26 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostname<>'%s%s'";
 			sprintf(query,q, _server_id, domain_name);
 			mydb->execute(query);
-			q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight) VALUES (%d, '%s%s', %d, %d)";
-			sprintf(query,q, _writer_hostgroup, _server_id, domain_name, aurora_port, new_reader_weight);
+
+			unsigned int max_max_connections = 1000;
+			unsigned int max_use_ssl = 0;
+			MyHGC *myhgc = MyHGC_lookup(_whid);
+			for (int j = 0; j < (int) myhgc->mysrvs->cnt(); j++) {
+				MySrvC *mysrvc = (MySrvC *) myhgc->mysrvs->servers->index(j);
+				if (mysrvc->max_connections > max_max_connections) {
+					max_max_connections = mysrvc->max_connections;
+				}
+				if (mysrvc->use_ssl > max_use_ssl) {
+					max_use_ssl = mysrvc->use_ssl;
+				}
+			}
+
+			q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight, max_connections, use_ssl) VALUES (%d, '%s%s', %d, %d, %d, %d)";
+			sprintf(query,q, _writer_hostgroup, _server_id, domain_name, aurora_port, new_reader_weight, max_max_connections, max_use_ssl);
 			mydb->execute(query);
 			if (writer_is_also_reader && read_HG>=0) {
-				q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight) VALUES (%d, '%s%s', %d, %d)";
-				sprintf(query, q, read_HG, _server_id, domain_name, aurora_port, new_reader_weight);
+				q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight, max_connections, use_ssl) VALUES (%d, '%s%s', %d, %d, %d, %d)";
+				sprintf(query, q, read_HG, _server_id, domain_name, aurora_port, new_reader_weight, max_max_connections, max_use_ssl);
 				mydb->execute(query);
 			}
 			proxy_info("AWS Aurora: setting new auto-discovered host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
