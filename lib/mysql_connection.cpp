@@ -2862,7 +2862,7 @@ void MySQL_Connection::get_system_variables() {
 				const char *name, *value;
 				size_t name_length, value_length;
 				std::string name_str;
-				int idx;
+				int idx = -1;
 				if (
 					mysql_session_track_get_first(
 						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
@@ -2872,7 +2872,14 @@ void MySQL_Connection::get_system_variables() {
 						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
 					);
 					name_str = std::string(name, name_length);
-					idx = mysql_variables.mysql_tracked_variables_umap[name_str];
+					try {
+						idx = mysql_variables.mysql_tracked_variables_umap.at(name_str);
+					}
+					catch (std::out_of_range) {
+						proxy_warning(
+							"System variable '%s' changed. but it not tracked by ProxySQL", name_str.c_str()
+						);
+					}
 					if (idx != -1) {
 						if (strncasecmp(variables[idx].value, value, value_length) != 0)
 							assert(0);
@@ -2886,7 +2893,15 @@ void MySQL_Connection::get_system_variables() {
 							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
 						);
 						name_str = std::string(name, name_length);
-						idx = mysql_variables.mysql_tracked_variables_umap[name_str];
+						try {
+							idx = mysql_variables.mysql_tracked_variables_umap.at(name_str);
+						}
+						catch (std::out_of_range) {
+							proxy_warning(
+								"System variable '%s' changed, but it not tracked by ProxySQL",
+								name_str.c_str()
+							);
+						}
 						if (idx != -1) {
 							if (strncasecmp(variables[idx].value, value, value_length) != 0)
 								assert(0);
