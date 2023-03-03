@@ -319,7 +319,7 @@ struct conn_cnf_t {
 std::string to_string(const conn_cnf_t& cnf);
 
 /**
- * @brief Execute the the test 'deprecate_eof_cache-t' with the 'mysql-variables'
+ * @brief Execute the test 'deprecate_eof_cache-t' with the 'mysql-variables'
  *  'mysql-enable_client_deprecate_eof' and 'mysql-enable_server_deprecate_eof'
  *  with the values suppplied in the parameters.
  *
