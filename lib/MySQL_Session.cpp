@@ -2167,6 +2167,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 	}
 	int rc=myconn->async_send_simple_command(myds->revents,myconn->options.init_connect,strlen(myconn->options.init_connect));
 	if (rc==0) {
+		handler_rc0_Process_Session_Track(myconn);
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		//myds->free_mysql_real_query();
 		myds->DSS = STATE_MARIADB_GENERIC;
@@ -2271,6 +2272,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 		rc = myconn->async_send_simple_command(myds->revents,(char *)"", 0);
 	}
 	if (rc==0) {
+		handler_rc0_Process_Session_Track(myconn);
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		//myds->free_mysql_real_query();
 		myds->DSS = STATE_MARIADB_GENERIC;
@@ -2347,6 +2349,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 		query=NULL;
 	}
 	if (rc==0) {
+		handler_rc0_Process_Session_Track(myconn);
 		if (!strcmp("0", mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN)) || !strcasecmp("OFF",  mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN))) {
 			// Pay attention here. STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0 sets sql_log_bin to ZERO:
 			//   - sql_log_bin=0 => true
@@ -2558,6 +2561,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		query=NULL;
 	}
 	if (rc==0) {
+		handler_rc0_Process_Session_Track(myconn);
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();

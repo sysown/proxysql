@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <unordered_map>
 
 class MySQL_Session;
 
@@ -32,6 +33,9 @@ public:
 	std::string variables_regexp;
 	// ignore_vars is a list of all variables that proxysql will parse but ignore its value
 	std::vector<std::string> ignore_vars;
+	// unordered map that contains system variables names as keys and idx a
+	// values. Its used in MySQL_Connection::get_system_variables().
+	std::unordered_map<std::string, int> mysql_tracked_variables_umap;
 public:
 	MySQL_Variables();
 
@@ -51,8 +55,6 @@ public:
 	bool update_variable(MySQL_Session* session, session_status status, int &_rc);
 	bool parse_variable_boolean(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
 	bool parse_variable_number(MySQL_Session *sess, int idx, std::string &value1, bool* lock_hostgroup);
-
-	int get_variable_idx_by_name(const char *name);
 };
 
 #endif // #ifndef MYSQL_VARIABLES_H
