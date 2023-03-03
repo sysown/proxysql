@@ -2852,23 +2852,45 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	return ret;
 }
 
+// Use MySQL setting "session_track_system_variables" to track changes in
+// system variables in the backend.
+// See: https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_session_track_system_variables
 void MySQL_Connection::get_system_variables() {
 	if (mysql) {
 		if (mysql->net.last_errno==0) { // only if there is no error
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
 				const char *name, *value;
 				size_t name_length, value_length;
+				std::string name_str;
 				int idx;
-				if (mysql_session_track_get_first(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length) == 0) {
-					mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length);
-					idx = mysql_variables.get_variable_idx_by_name(name);
-					if (strcasecmp(variables[idx].value, value) != 0)
-						assert(0);
-					while (mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length) == 0) {
-						mysql_session_track_get_next(mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length);
-						idx = mysql_variables.get_variable_idx_by_name(name);
-						if (strcasecmp(variables[idx].value, value) != 0)
+				if (
+					mysql_session_track_get_first(
+						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
+					) == 0
+				) {
+					mysql_session_track_get_next(
+						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
+					);
+					name_str = std::string(name, name_length);
+					idx = mysql_variables.mysql_tracked_variables_umap[name_str];
+					if (idx != -1) {
+						if (strncasecmp(variables[idx].value, value, value_length) != 0)
 							assert(0);
+					}
+					while (
+						mysql_session_track_get_next(
+							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
+						) == 0
+					) {
+						mysql_session_track_get_next(
+							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
+						);
+						name_str = std::string(name, name_length);
+						idx = mysql_variables.mysql_tracked_variables_umap[name_str];
+						if (idx != -1) {
+							if (strncasecmp(variables[idx].value, value, value_length) != 0)
+								assert(0);
+						}
 					}
 				}
 			}
