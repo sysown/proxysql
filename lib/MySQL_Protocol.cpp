@@ -1714,7 +1714,7 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 			vars1.use_ssl = true;
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, vars1.user);
-			return ret; // false
+			return false;
 		}
 	}
 	// see bug #810
@@ -1746,14 +1746,14 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, vars1.user);
-			return ret; // false
+			return false;
 		}
 	} else {
 		vars1.pass_len = (vars1.capabilities & CLIENT_SECURE_CONNECTION ? *pkt++ : strlen((char *)pkt));
 		if (vars1.pass_len > (len - (pkt - vars1._ptr))) {
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response\n", (*myds), (*myds)->sess, vars1.user);
-			return ret; // false
+			return false;
 		}
 	}
 	vars1.pass = (unsigned char *)malloc(vars1.pass_len+1);
@@ -1838,8 +1838,9 @@ bool MySQL_Protocol::PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret
 		generate_pkt_auth_switch_request(true, NULL, NULL);
 		(*myds)->myconn->userinfo->set((char *)vars1.user, NULL, vars1.db, NULL);
 		ret = false;
+		return false;
 	}
-	return ret;
+	return true;
 }
 
 
@@ -1868,10 +1869,11 @@ bool MySQL_Protocol::PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret
 				(*myds)->myconn->userinfo->set((char *)vars1.user, NULL, vars1.db, NULL);
 				ret = false;
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response. User does not exist\n", (*myds), (*myds)->sess, vars1.user);
+				return false;
 			}
 		}
 	}
-	return ret;
+	return true;
 }
 
 void MySQL_Protocol::PPHR_5passwordTrue(
@@ -2133,6 +2135,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	MyProt_tmp_auth_attrs attr1;
 	vars1._ptr = pkt;
 	mysql_hdr hdr;
+	bool bool_rc = false;
 	memcpy(&hdr,pkt,sizeof(mysql_hdr));
 	//Copy4B(&hdr,pkt);
 	pkt     += sizeof(mysql_hdr);
@@ -2155,8 +2158,8 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 		assert(0);
 	}
 
-	ret = PPHR_2(pkt, len, ret, vars1);
-	if (ret == false)
+	bool_rc = PPHR_2(pkt, len, ret, vars1);
+	if (bool_rc == false)
 		goto __exit_process_pkt_handshake_response;
 
 
@@ -2164,12 +2167,12 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, vars1.user, auth_plugin_id);
 
 	if (auth_plugin_id == 0) {
-		ret = PPHR_4auth0(pkt, len, ret, vars1);
-		if (ret == false)
+		bool_rc = PPHR_4auth0(pkt, len, ret, vars1);
+		if (bool_rc == false)
 			goto __exit_process_pkt_handshake_response;
 	} else if (auth_plugin_id == 1) {
-		ret = PPHR_4auth1(pkt, len, ret, vars1);
-		if (ret == false)
+		bool_rc = PPHR_4auth1(pkt, len, ret, vars1);
+		if (bool_rc == false)
 			goto __exit_process_pkt_handshake_response;
 	} else if (auth_plugin_id == 2) { // caching_sha2_password
 	}
