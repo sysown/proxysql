@@ -13429,6 +13429,18 @@ void ProxySQL_Admin::enable_readonly_testing() {
 }
 #endif // TEST_READONLY
 
+#ifdef TEST_REPLICATIONLAG
+void ProxySQL_Admin::enable_replicationlag_testing() {
+	proxy_info("Admin is enabling Replication Lag Testing using SQLite3 Server and HGs from 5201 to 5800\n");
+	mysql_servers_wrlock();
+	
+	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 5201 AND 5800");
+
+	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
+}
+#endif // TEST_REPLICATIONLAG
+
 void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters() {
 	mysql_servers_wrlock();
 	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 10001 AND 20000");

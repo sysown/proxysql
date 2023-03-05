@@ -538,6 +538,10 @@ class ProxySQL_Admin {
 	void enable_readonly_testing();
 #endif // TEST_READONLY
 
+#ifdef TEST_REPLICATIONLAG
+	void enable_replicationlag_testing();
+#endif // TEST_REPLICATIONLAG
+
 	unsigned int ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int, bool);
 	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual);
 	void ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters();

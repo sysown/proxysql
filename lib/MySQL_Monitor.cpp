@@ -632,6 +632,10 @@ void MySQL_Monitor_State_Data::init_async() {
 		break;
 	case MON_REPLICATION_LAG:
 		async_state_machine_ = ASYNC_QUERY_START;
+#ifdef TEST_REPLICATIONLAG
+		query_ = "SELECT SLAVE STATUS "; // replaced SHOW with SELECT to avoid breaking simulator logic
+		query_ += std::string(hostname) + ":" + std::to_string(port);
+#else
 		if (mysql_thread___monitor_replication_lag_use_percona_heartbeat && 
 			mysql_thread___monitor_replication_lag_use_percona_heartbeat[0] != '\0') {
 			use_percona_heartbeat = true;
@@ -640,6 +644,7 @@ void MySQL_Monitor_State_Data::init_async() {
 		} else {
 			query_ = "SHOW SLAVE STATUS";
 		}
+#endif
 		task_timeout_ = mysql_thread___monitor_replication_lag_timeout;
 		task_handler_ = &MySQL_Monitor_State_Data::replication_lag_handler;
 		break;
@@ -2617,6 +2622,14 @@ void * monitor_replication_lag_thread(void *arg) {
 
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
+
+#ifdef TEST_REPLICATIONLAG
+	{
+		std::string s = "SELECT SLAVE STATUS "; // replaced SHOW with SELECT to avoid breaking simulator logic
+		s += std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
+		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, s.c_str());
+	}
+#else
 	if (percona_heartbeat_table) {
 		int l = strlen(percona_heartbeat_table);
 		if (l) {
@@ -2631,6 +2644,7 @@ void * monitor_replication_lag_thread(void *arg) {
 	if (use_percona_heartbeat == false) {
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,"SHOW SLAVE STATUS");
 	}
+#endif // TEST_REPLICATIONLAG
 	while (mmsd->async_exit_status) {
 		mmsd->async_exit_status=wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
 #ifdef DEBUG
@@ -2721,13 +2735,18 @@ __exit_monitor_replication_lag_thread:
 					int j=-1;
 					num_fields = mysql_num_fields(mmsd->result);
 					fields = mysql_fetch_fields(mmsd->result);
+#ifdef TEST_REPLICATIONLAG
+					if (fields && num_fields == 1 )
+#else
 					if (
 						fields && (
 						( num_fields == 1 && use_percona_heartbeat == true )
 						||
 						( num_fields > 30 && use_percona_heartbeat == false )
 						)
-					) {
+					) 
+#endif					
+					{
 						for(k = 0; k < num_fields; k++) {
 							if (fields[k].name) {
 								if (strcmp("Seconds_Behind_Master", fields[k].name)==0) {
@@ -7591,13 +7610,18 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 			int j = -1;
 			num_fields = mysql_num_fields(mmsd->result);
 			fields = mysql_fetch_fields(mmsd->result);
+#ifdef TEST_REPLICATIONLAG
+			if (fields && num_fields == 1)
+#else
 			if (
 				fields && (
 					(num_fields == 1 && mmsd->use_percona_heartbeat == true)
 					||
 					(num_fields > 30 && mmsd->use_percona_heartbeat == false)
 					)
-				) {
+				) 
+#endif
+			{
 				for (k = 0; k < num_fields; k++) {
 					if (fields[k].name) {
 						if (strcmp("Seconds_Behind_Master", fields[k].name) == 0) {
