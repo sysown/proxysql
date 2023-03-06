@@ -2852,6 +2852,74 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 	return ret;
 }
 
+#define MAX_JOIN_SIZE_DEFAULT_STR_VALUE "DEFAULT"
+#define MAX_JOIN_SIZE_DEFAULT_INT_VALUE 18446744073709551615ULL
+
+const std::unordered_map<std::string, int> query_cache_types_umap {{"OFF", 0}, {"ON", 1}, {"DEMAND", 2}};
+
+void MySQL_Connection::compare_system_variable(const char *name, const size_t name_length) {
+	uint64_t proxysql_max_join_size_value;
+	std::string name_str, value_str;
+	int idx = -1, value_int;
+	size_t value_length;
+	const char *value;
+
+	mysql_session_track_get_next(
+		mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
+	);
+	name_str = std::string(name, name_length);
+	try {
+		idx = mysql_variables.mysql_tracked_variables_umap.at(name_str);
+	}
+	catch (std::out_of_range const&) {
+		proxy_warning(
+			"System variable '%s' changed, but it not tracked by ProxySQL",
+			name_str.c_str()
+		);
+	}
+
+	// Some system variables need special handling because ProxySQL stores the
+	// value in a different way than the backend.
+	switch (idx) {
+	case SQL_MAX_JOIN_SIZE:
+		proxysql_max_join_size_value = atoi(variables[idx].value);
+		if (strcasecmp(variables[idx].value, MAX_JOIN_SIZE_DEFAULT_STR_VALUE) == 0)
+			proxysql_max_join_size_value = MAX_JOIN_SIZE_DEFAULT_INT_VALUE;
+		if (proxysql_max_join_size_value != strtoull(std::string(value, value_length).c_str(), NULL, 10))
+			assert(0);
+		break;
+	case SQL_QUERY_CACHE_TYPE:
+		value_str = std::string(value, value_length);
+		try {
+			value_int = query_cache_types_umap.at(value_str);
+			if (atoi(variables[idx].value) != value_int)
+				assert(0);
+		}
+		catch (std::out_of_range const&) {
+			assert(0);
+		}
+		break;
+	case SQL_LONG_QUERY_TIME:
+	case SQL_TIMESTAMP:
+		if (atof(variables[idx].value) != atof(std::string(value, value_length).c_str()))
+			assert(0);
+		break;
+	case SQL_SQL_MODE:
+	case SQL_OPTIMIZER_SWITCH:
+		if (strncasecmp(variables[idx].value, value, value_length) != 0) {
+			value_str = std::string(value, value_length);
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		}
+	case -1:
+		break;
+	default:
+		if (strncasecmp(variables[idx].value, value, value_length) != 0)
+			assert(0);
+		break;
+	}
+}
+
 // Use MySQL setting "session_track_system_variables" to track changes in
 // system variables in the backend.
 // See: https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_session_track_system_variables
@@ -2859,53 +2927,20 @@ void MySQL_Connection::get_system_variables() {
 	if (mysql) {
 		if (mysql->net.last_errno==0) { // only if there is no error
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
-				const char *name, *value;
-				size_t name_length, value_length;
-				std::string name_str;
-				int idx = -1;
+				const char *name;
+				size_t name_length;
 				if (
 					mysql_session_track_get_first(
 						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
 					) == 0
 				) {
-					mysql_session_track_get_next(
-						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
-					);
-					name_str = std::string(name, name_length);
-					try {
-						idx = mysql_variables.mysql_tracked_variables_umap.at(name_str);
-					}
-					catch (std::out_of_range) {
-						proxy_warning(
-							"System variable '%s' changed. but it not tracked by ProxySQL", name_str.c_str()
-						);
-					}
-					if (idx != -1) {
-						if (strncasecmp(variables[idx].value, value, value_length) != 0)
-							assert(0);
-					}
+					compare_system_variable(name, name_length);
 					while (
 						mysql_session_track_get_next(
 							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
 						) == 0
 					) {
-						mysql_session_track_get_next(
-							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
-						);
-						name_str = std::string(name, name_length);
-						try {
-							idx = mysql_variables.mysql_tracked_variables_umap.at(name_str);
-						}
-						catch (std::out_of_range) {
-							proxy_warning(
-								"System variable '%s' changed, but it not tracked by ProxySQL",
-								name_str.c_str()
-							);
-						}
-						if (idx != -1) {
-							if (strncasecmp(variables[idx].value, value, value_length) != 0)
-								assert(0);
-						}
+						compare_system_variable(name, name_length);
 					}
 				}
 			}
