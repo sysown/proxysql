@@ -55,6 +55,7 @@ class MySQL_Connection {
 	private:
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
+	void compare_system_variable(const char *name, const size_t name_length);
 	public:
 	struct {
 		char *server_version;
