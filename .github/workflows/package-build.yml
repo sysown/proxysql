@@ -21,6 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+#        dist: [ 'centos7' ]
         dist: [ 'almalinux8','almalinux9','centos6','centos7','centos8','debian8','debian9','debian10','debian11','fedora27','fedora28','fedora33','fedora34','fedora36','fedora37','opensuse15','ubuntu14','ubuntu16','ubuntu18','ubuntu20','ubuntu22' ]
         type: [ '','-dbg','-clang' ]
         exclude:
@@ -46,7 +47,7 @@ jobs:
             type: '-clang'
           - dist: 'ubuntu18'
             type: '-clang'
-
+            
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
@@ -59,20 +60,33 @@ jobs:
       run: |
         git fetch --tags --force
         echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
+        
     - name: Build package
-      run: make ${{ matrix.dist }}${{ matrix.type }}
-
-    - name: Deploy to Server
-      uses: easingthemes/ssh-deploy@main
+      run: |
+        make ${{ matrix.dist }}${{ matrix.type }}
+        
+#    - name: Deploy to Repo
+#      uses: easingthemes/ssh-deploy@main
+#      env:
+#          SSH_PRIVATE_KEY: ${{ secrets.REPO_PRIVATE_KEY }}
+#          ARGS: "-ai"
+#          SOURCE: "binaries/"
+#          REMOTE_HOST: ${{ secrets.REPO_HOST }}
+#          REMOTE_USER: ${{ secrets.REPO_USER }}
+#          TARGET: ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}
+#          EXCLUDE: "binaries/.gitignore"
+#          SCRIPT_BEFORE: |
+#            ls -ld ${{ secrets.REPO_TARGET }}/*
+#            (ls -1d ${{ secrets.REPO_TARGET }}/binaries-* || true) | sort -r | tail -n +10 | xargs -n1 rm -rf
+#            rm -rf ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}
+ 
+    - name: Publish release
       env:
-          SSH_PRIVATE_KEY: ${{ secrets.REPO_PRIVATE_KEY }}
-          ARGS: "-rlgoDzvc -i"
-          SOURCE: "binaries/"
-          REMOTE_HOST: ${{ secrets.REPO_HOST }}
-          REMOTE_USER: ${{ secrets.REPO_USER }}
-          TARGET: ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}
-          EXCLUDE: "binaries/.gitignore"
-
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        echo -e "### Development Snapshot\n\nGH-Action Package-Build on PR merge into v2.x\n\ngit describe : **${GIT_VERSION}**" | gh release edit v2.x-head --repo mirostauder/proxysql --notes-file -
+        gh release upload v2.x-head --repo mirostauder/proxysql --clobber binaries/proxysql*[mb]
+        
     - name: Archive artifacts
       if: always()
       uses: actions/upload-artifact@v3
@@ -81,3 +95,5 @@ jobs:
         path: |
           ./binaries/
           !./**/.gitignore
+ 
+ 
