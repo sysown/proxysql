@@ -288,8 +288,6 @@ struct p_th_counter {
 		queries_backends_bytes_recv,
 		queries_frontends_bytes_sent,
 		queries_frontends_bytes_recv,
-		client_connections_created,
-		client_connections_aborted,
 		query_processor_time_nsec,
 		backend_query_time_nsec,
 		com_backend_stmt_prepare,

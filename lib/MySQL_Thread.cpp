@@ -653,25 +653,6 @@ th_metrics_map = std::make_tuple(
 		),
 		// ====================================================================
 
-		// ====================================================================
-		std::make_tuple (
-			p_th_counter::client_connections_created,
-			"proxysql_client_connections_total",
-			"Total number of client connections created or failed (including improperly closed).",
-			metric_tags {
-				{ "status", "created" }
-			}
-		),
-		std::make_tuple (
-			p_th_counter::client_connections_aborted,
-			"proxysql_client_connections_total",
-			"Total number of client connections created or failed (including improperly closed).",
-			metric_tags {
-				{ "status", "aborted" }
-			}
-		),
-		// ====================================================================
-
 		std::make_tuple (
 			p_th_counter::query_processor_time_nsec,
 			"proxysql_query_processor_time_seconds_total",
