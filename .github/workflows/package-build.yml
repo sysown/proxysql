@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dist: [ 'almalinux8','almalinux9','centos6','centos7','centos8','debian8','debian9','debian10','debian11','fedora27','fedora28','fedora33','fedora34','fedora36','fedora37','opensuse15','ubuntu14','ubuntu16','ubuntu18','ubuntu20','ubuntu22']
+        dist: [ 'almalinux8','almalinux9','centos6','centos7','centos8','debian8','debian9','debian10','debian11','fedora27','fedora28','fedora33','fedora34','fedora36','fedora37','opensuse15','ubuntu14','ubuntu16','ubuntu18','ubuntu20','ubuntu22' ]
         type: [ '','-dbg','-clang' ]
         exclude:
           - dist: 'centos6'
@@ -61,6 +61,17 @@ jobs:
         echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
     - name: Build package
       run: make ${{ matrix.dist }}${{ matrix.type }}
+
+    - name: Deploy to Server
+      uses: easingthemes/ssh-deploy@main
+      env:
+          SSH_PRIVATE_KEY: ${{ secrets.REPO_PRIVATE_KEY }}
+          ARGS: "-rlgoDzvc -i"
+          SOURCE: "binaries/"
+          REMOTE_HOST: ${{ secrets.REPO_HOST }}
+          REMOTE_USER: ${{ secrets.REPO_USER }}
+          TARGET: ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}
+          EXCLUDE: "binaries/.gitignore"
 
     - name: Archive artifacts
       if: always()
