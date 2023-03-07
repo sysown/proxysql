@@ -84,8 +84,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        echo -e "### Development Snapshot\n\nGH-Action Package-Build on PR merge into v2.x\n\ngit describe : **${GIT_VERSION}**" | gh release edit v2.x-head --repo mirostauder/proxysql --notes-file -
-        gh release upload v2.x-head --repo mirostauder/proxysql --clobber binaries/proxysql*[mb]
+        echo -e "### Development Snapshot\n\nGH-Action Package-Build on PR merge into v2.x\n\ngit describe : **${GIT_VERSION}**" | gh release edit v2.x-head --repo sysown/proxysql --notes-file -
+        gh release upload v2.x-head --repo sysown/proxysql --clobber binaries/proxysql*[mb]
         
     - name: Archive artifacts
       if: always()
