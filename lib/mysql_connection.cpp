@@ -2873,7 +2873,7 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 	}
 	catch (std::out_of_range const&) {
 		proxy_warning(
-			"System variable '%s' changed, but it not tracked by ProxySQL",
+			"System variable '%s' changed, but it not tracked by ProxySQL\n",
 			name_str.c_str()
 		);
 	}
