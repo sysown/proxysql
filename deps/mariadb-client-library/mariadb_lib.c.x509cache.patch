@@ -1,0 +1,31 @@
+@@ -127,6 +127,11 @@
+ uint mysql_port=0;
+ my_string mysql_unix_port=0;
+ 
++#include <openssl/ssl.h>
++extern __thread SSL_CTX * thread_ctx;
++extern __thread char **local_x509_files;
++extern __thread char **local_x509_sha1s;
++
+ #define CONNECT_TIMEOUT 0
+ 
+ struct st_mariadb_methods MARIADB_DEFAULT_METHODS;
+@@ -4078,6 +4083,18 @@
+ 
+ void STDCALL mysql_thread_end(void)
+ {
++  if (local_x509_files != NULL) {
++    for (int i=0; local_x509_files[i] != NULL ; i++) {
++      free(local_x509_files[i]);
++      free(local_x509_sha1s[i]);
++    }
++	free(local_x509_files);
++	free(local_x509_sha1s);
++  }
++  if (thread_ctx != NULL) {
++    SSL_CTX_free(thread_ctx);
++    thread_ctx = NULL;
++  }
+ }
+ 
+ int STDCALL mysql_set_server_option(MYSQL *mysql,
