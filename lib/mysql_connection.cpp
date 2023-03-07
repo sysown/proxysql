@@ -2858,11 +2858,12 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 const std::unordered_map<std::string, int> query_cache_types_umap {{"OFF", 0}, {"ON", 1}, {"DEMAND", 2}};
 
 void MySQL_Connection::compare_system_variable(const char *name, const size_t name_length) {
+	const MARIADB_CHARSET_INFO *ci = NULL;
 	uint64_t proxysql_max_join_size_value;
 	std::string name_str, value_str;
+	const char *value, *ci_name;
 	int idx = -1, value_int;
 	size_t value_length;
-	const char *value;
 
 	mysql_session_track_get_next(
 		mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
@@ -2911,6 +2912,26 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 			mysql_variables.client_set_value(myds->sess, idx, value_str);
 			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
 		}
+		break;
+	case SQL_CHARACTER_SET_DATABASE:
+	case SQL_CHARACTER_SET_CLIENT:
+	case SQL_CHARACTER_SET_RESULTS:
+	case SQL_CHARACTER_SET_CONNECTION:
+	case SQL_COLLATION_CONNECTION:
+		if (value_length == 0) {
+			if (strcasecmp(variables[idx].value, "NULL") != 0)
+				assert(0);
+			break;
+		}
+		ci = proxysql_find_charset_nr(atoi(variables[idx].value));
+		if (!ci)
+			assert(0);
+		ci_name = ci->csname;
+		if (idx == SQL_COLLATION_CONNECTION)
+			ci_name = ci->name;
+		if (!ci_name || strncasecmp(ci_name, value, value_length) != 0)
+			assert(0);
+		break;
 	case -1:
 		break;
 	default:
