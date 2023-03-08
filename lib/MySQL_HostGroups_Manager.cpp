@@ -1930,6 +1930,7 @@ bool MySQL_HostGroups_Manager::commit(
 				delete resultset;
 			} else {
 				proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
+				table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = 0;
 			}
 		}
 
@@ -1970,9 +1971,9 @@ bool MySQL_HostGroups_Manager::commit(
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
 
-		const char* query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup \
+		const char* query = "SELECT DISTINCT hostname, port, '1' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=writer_hostgroup WHERE status<>3 \
 							 UNION \
-							 SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup \
+							 SELECT DISTINCT hostname, port, '0' is_writer, status, reader_hostgroup, writer_hostgroup, mem_pointer FROM mysql_replication_hostgroups JOIN mysql_servers ON hostgroup_id=reader_hostgroup WHERE status<>3 \
 							 ORDER BY hostname, port";
 		
 		mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
@@ -1989,8 +1990,18 @@ bool MySQL_HostGroups_Manager::commit(
 				const std::string& server_id = std::string(r->fields[0]) + ":::" + r->fields[1];
 
 				if (fetched_server_mapping == NULL || server_id != fetched_server_id) {
-					fetched_server_mapping = &hostgroup_server_mapping[server_id];
-					fetched_server_mapping->set_HGM(this);
+					
+					auto itr = hostgroup_server_mapping.find(server_id);
+
+					if (itr == hostgroup_server_mapping.end()) {
+						std::unique_ptr<HostGroup_Server_Mapping> server_mapping(new HostGroup_Server_Mapping(this));
+						fetched_server_mapping = server_mapping.get();
+						hostgroup_server_mapping.insert({ server_id, std::move(server_mapping) });
+					}
+					else {
+						fetched_server_mapping = itr->second.get();
+					}
+
 					fetched_server_id = server_id;
 				}
 				
@@ -4577,27 +4588,12 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 			continue;
 		}
 
-		HostGroup_Server_Mapping& host_server_mapping = itr->second;
+		HostGroup_Server_Mapping* host_server_mapping = itr->second.get();
 
-		const std::vector<HostGroup_Server_Mapping::Node>& writer_map = host_server_mapping.get(HostGroup_Server_Mapping::Type::WRITER);
-		const std::vector<HostGroup_Server_Mapping::Node>& reader_map = host_server_mapping.get(HostGroup_Server_Mapping::Type::READER);
+		if (!host_server_mapping)
+			assert(0);
 
-		bool removed_offline_server = false;
-
-		for (size_t i = 0; i < writer_map.size();) {
-
-			const HostGroup_Server_Mapping::Node& node = writer_map[i];
-
-			// remove offline hard server node from writer map
-			if (node.server_status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Removing server %s:%d in hostgroup=%d having status='OFFLINE_HARD'\n", hostname.c_str(), port, node.writer_hostgroup_id);
-				host_server_mapping.remove(HostGroup_Server_Mapping::Type::WRITER, i);
-				removed_offline_server = true;
-				continue;
-			}
-
-			i++;
-		}
+		const std::vector<HostGroup_Server_Mapping::Node>& writer_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::WRITER);
 
 		is_writer = !writer_map.empty();
 
@@ -4605,14 +4601,14 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 			if (is_writer == false) {
 				// the server has read_only=0 (writer), but we can't find any writer, 
 				// so we copy all reader nodes to writer
-				host_server_mapping.copy(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
+				host_server_mapping->copy(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
 				if (mysql_thread___monitor_writer_is_also_reader) {
 					// server is also a reader, we copy all nodes from writer to reader (previous reader nodes will be reused)
-					host_server_mapping.copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
+					host_server_mapping->copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
 				} else {
 					// server can only be a writer
-					host_server_mapping.clear(HostGroup_Server_Mapping::Type::READER);
+					host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
 				}
 
 				update_mysql_servers_table = true;
@@ -4620,12 +4616,12 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				bool act = false;
 
 				// if the server was RO=0 on the previous check then no action is needed
-				if (host_server_mapping.get_readonly_flag() != 0) {
+				if (host_server_mapping->get_readonly_flag() != 0) {
 					// it is the first time that we detect RO on this server
-					
-					act = removed_offline_server;
 
 					if (act == false) {
+						const std::vector<HostGroup_Server_Mapping::Node>& reader_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::READER);
+
 						for (const auto& reader_node : reader_map) {
 							for (const auto& writer_node : writer_map) {
 
@@ -4643,7 +4639,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 					if (act == false) {
 						// no action required, therefore we set readonly_flag to 0
 						proxy_info("read_only_action_v2() detected RO=0 on server %s:%d for the first time after commit(), but no need to reconfigure\n", hostname.c_str(), port);
-						host_server_mapping.set_readonly_flag(0);
+						host_server_mapping->set_readonly_flag(0);
 					}
 				} else {
 					// the server was already detected as RO=0
@@ -4653,14 +4649,14 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				if (act == true) {	// there are servers either missing, or with stats=OFFLINE_HARD
 
 					// copy all reader nodes to writer
-					host_server_mapping.copy(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
+					host_server_mapping->copy(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
 					if (mysql_thread___monitor_writer_is_also_reader) {
 						// server is also a reader, we copy all nodes from writer to reader (previous reader nodes will be reused)
-						host_server_mapping.copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
+						host_server_mapping->copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
 					} else {
 						// server can only be a writer
-						host_server_mapping.clear(HostGroup_Server_Mapping::Type::READER);
+						host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
 					}
 
 					update_mysql_servers_table = true;
@@ -4669,10 +4665,10 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 		} else if (read_only == 1) {
 			if (is_writer) {
 				// the server has read_only=1 (reader), but we find it as writer, so we copy all writer nodes to reader (previous reader nodes will be reused)
-				host_server_mapping.copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
+				host_server_mapping->copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
 
 				// clearing all writer nodes
-				host_server_mapping.clear(HostGroup_Server_Mapping::Type::WRITER);
+				host_server_mapping->clear(HostGroup_Server_Mapping::Type::WRITER);
 
 				update_mysql_servers_table = true;
 			}
@@ -4713,29 +4709,24 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				delete resultset;
 			} else {
 				proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
+				table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = 0;
+				hgsm_mysql_servers_checksum = 0;
 			}
 
 			uint64_t hash = 0, hash2 = 0;
 			SpookyHash myhash;
+			bool init = false;
 
-			myhash.Init(19, 3);
-			hash = table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
-			myhash.Update(&hash, sizeof(hash));
+			for (uint64_t hash_val : table_resultset_checksum) {
+				if (hash_val) {
+					if (init == false) {
+						init = true;
+						myhash.Init(19, 3);
+					}
 
-			hash = table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS];
-			myhash.Update(&hash, sizeof(hash));
-
-			hash = table_resultset_checksum[HGM_TABLES::MYSQL_GROUP_REPLICATION_HOSTGROUPS];
-			myhash.Update(&hash, sizeof(hash));
-
-			hash = table_resultset_checksum[HGM_TABLES::MYSQL_GALERA_HOSTGROUPS];
-			myhash.Update(&hash, sizeof(hash));
-
-			hash = table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS];
-			myhash.Update(&hash, sizeof(hash));
-
-			hash = table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES];
-			myhash.Update(&hash, sizeof(hash));
+					myhash.Update(&hash_val, sizeof(hash_val));
+				}
+			}
 
 			myhash.Final(&hash, &hash2);
 
@@ -4762,7 +4753,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 	unsigned long long curtime2 = monotonic_time();
 	curtime1 = curtime1 / 1000;
 	curtime2 = curtime2 / 1000;
-	proxy_info("MySQL_HostGroups_Manager::read_only_action_v2() locked for %llums (server count:%d)\n", curtime2 - curtime1, mysql_servers.size());
+	proxy_debug(PROXY_DEBUG_MONITOR, 7, "MySQL_HostGroups_Manager::read_only_action_v2() locked for %llums (server count:%ld)\n", curtime2 - curtime1, mysql_servers.size());
 }
 
 // shun_and_killall
@@ -7632,26 +7623,26 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy(Type dest_type, Ty
 	std::vector<Node>& dest_nodes = mapping[dest_type];
 	std::list<Node> append;
 
-	for (const auto& node : src_nodes) {
+	for (const auto& src_node : src_nodes) {
 
-		for (auto& parent_node : dest_nodes) {
+		for (auto& dest_node : dest_nodes) {
 
-			if (node.reader_hostgroup_id == parent_node.reader_hostgroup_id &&
-				node.writer_hostgroup_id == parent_node.writer_hostgroup_id) {
+			if (src_node.reader_hostgroup_id == dest_node.reader_hostgroup_id &&
+				src_node.writer_hostgroup_id == dest_node.writer_hostgroup_id) {
 
 				if (update_if_exists) {
-					MySrvC* new_srv = insert_HGM(get_hostgroup_id(dest_type, parent_node), node.srv);
+					MySrvC* new_srv = insert_HGM(get_hostgroup_id(dest_type, dest_node), src_node.srv);
 
 					if (!new_srv) assert(0);
 					
-					parent_node.srv = new_srv;
-					parent_node.server_status = node.server_status;
+					dest_node.srv = new_srv;
+					dest_node.server_status = src_node.server_status;
 				}
 				goto __skip;
 			}
 		}
 
-		append.push_back(node);
+		append.push_back(src_node);
 
 	__skip:
 		continue;
