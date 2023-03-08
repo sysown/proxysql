@@ -402,13 +402,15 @@ class MySQL_HostGroups_Manager {
 		__HGM_TABLES_SIZE
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum;
+	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { 0 };
 
 	class HostGroup_Server_Mapping {
 	public:
 		enum Type {
 			WRITER = 0,
-			READER = 1
+			READER = 1,
+
+			__TYPE_SIZE
 		};
 
 		struct Node {
@@ -418,7 +420,7 @@ class MySQL_HostGroups_Manager {
 			MySerStatus server_status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
 		};
 
-		HostGroup_Server_Mapping() : readonly_flag(1), myHGM(NULL) { }
+		HostGroup_Server_Mapping(MySQL_HostGroups_Manager* hgm) : readonly_flag(1), myHGM(hgm) { }
 		~HostGroup_Server_Mapping() = default;
 
 		// Note: copy, remove, clear method also makes changes to MyHostGroups
@@ -452,23 +454,18 @@ class MySQL_HostGroups_Manager {
 			return readonly_flag;
 		}
 
-		inline
-		void set_HGM(MySQL_HostGroups_Manager* hgm) {
-			myHGM = hgm;
-		}
-
 	private:
 		unsigned int get_hostgroup_id(Type type, size_t index) const;
 		unsigned int get_hostgroup_id(Type type, const Node& node) const;
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
 		void remove_HGM(MySrvC* srv);
 
-		std::array<std::vector<Node>, 2> mapping;
+		std::array<std::vector<Node>, __TYPE_SIZE> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		MySQL_HostGroups_Manager* myHGM;
 	};
 
-	std::unordered_map<std::string, HostGroup_Server_Mapping> hostgroup_server_mapping;
+	std::unordered_map<std::string, std::unique_ptr<HostGroup_Server_Mapping>> hostgroup_server_mapping;
 	uint64_t hgsm_mysql_servers_checksum = 0;
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
 
