@@ -4733,7 +4733,9 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				}
 			}
 
-			myhash.Final(&hash, &hash2);
+			if (init == true) {
+				myhash.Final(&hash, &hash2);
+			}
 
 			char buf[80];
 			uint32_t d32[2];
