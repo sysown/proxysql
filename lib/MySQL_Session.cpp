@@ -4977,8 +4977,6 @@ handler_again:
 						}
 					}
 
-					handler_rc0_Process_Session_Track(myconn);
-
 					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
 					// see bug #3549
 					if (locked_on_hostgroup >= 0) {
@@ -4986,6 +4984,8 @@ handler_again:
 						assert(myconn->mysql != NULL);
 						autocommit = myconn->mysql->server_status & SERVER_STATUS_AUTOCOMMIT;
 					}
+
+					handler_rc0_Process_Session_Track(myconn);
 
 					if (mirror == false) {
 						// Support for LAST_INSERT_ID()

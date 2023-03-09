@@ -2868,6 +2868,41 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 	mysql_session_track_get_next(
 		mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
 	);
+
+	if (strncasecmp("autocommit", name, name_length) == 0) {
+		proxy_info("autocommit\n");
+		value_str = std::string(value, value_length);
+		try {
+			value_int = query_cache_types_umap.at(value_str);
+			// Always with compare autocommit status from mysql object and from
+			// MySQL_Session.
+			if (
+				(bool)(mysql->server_status & SERVER_STATUS_AUTOCOMMIT) != value_int ||
+				myds->sess->autocommit != value_int
+			)
+				assert(0);
+			// We are not locked on hostgroup, so MySQL_Connection is aware of
+			// the "SET autocommit=" queries the frontend does.
+			if (myds->sess->locked_on_hostgroup == -1) {
+				// If the connection was reset, IsAutoCommit() should always
+				// return true.
+				if (options.last_set_autocommit == -1) {
+					if (IsAutoCommit() != true)
+						assert(0);
+				// In a normal situation, IsAutoCommit() should match the value
+				// sent by MySQL.
+				} else {
+					if (IsAutoCommit() != value_int)
+						assert(0);
+				}
+			}
+		}
+		catch (std::out_of_range const&) {
+			assert(0);
+		}
+		return;
+	}
+
 	name_str = std::string(name, name_length);
 	try {
 		idx = mysql_variables.mysql_tracked_variables_umap.at(name_str);
