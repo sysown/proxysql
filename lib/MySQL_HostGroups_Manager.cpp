@@ -4572,6 +4572,14 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
 	free(query);
 }
 
+/**
+ * @brief New implementation of the read_only_action method that does not depend on the admin table.
+ *   The method checks each server in the provided list and adjusts the servers according to their corresponding read_only value.
+ *   If any change has occured, checksum is calculated.
+ *
+ * @param mysql_servers List of servers having hostname, port and read only value.
+ * 
+ */
 void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<std::string,int,int>>& mysql_servers) {
 
 	std::string hostname;
@@ -4606,11 +4614,11 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 			if (is_writer == false) {
 				// the server has read_only=0 (writer), but we can't find any writer, 
 				// so we copy all reader nodes to writer
-				host_server_mapping->copy(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
+				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
 				if (mysql_thread___monitor_writer_is_also_reader) {
 					// server is also a reader, we copy all nodes from writer to reader (previous reader nodes will be reused)
-					host_server_mapping->copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
+					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
 				} else {
 					// server can only be a writer
 					host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
@@ -4623,22 +4631,19 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				// if the server was RO=0 on the previous check then no action is needed
 				if (host_server_mapping->get_readonly_flag() != 0) {
 					// it is the first time that we detect RO on this server
+					const std::vector<HostGroup_Server_Mapping::Node>& reader_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::READER);
 
-					if (act == false) {
-						const std::vector<HostGroup_Server_Mapping::Node>& reader_map = host_server_mapping->get(HostGroup_Server_Mapping::Type::READER);
+					for (const auto& reader_node : reader_map) {
+						for (const auto& writer_node : writer_map) {
 
-						for (const auto& reader_node : reader_map) {
-							for (const auto& writer_node : writer_map) {
-
-								if (reader_node.writer_hostgroup_id == writer_node.writer_hostgroup_id) {
-									goto __writer_found;
-								}
+							if (reader_node.writer_hostgroup_id == writer_node.writer_hostgroup_id) {
+								goto __writer_found;
 							}
-							act = true;
-							break;
-						__writer_found:
-							continue;
 						}
+						act = true;
+						break;
+					__writer_found:
+						continue;
 					}
 
 					if (act == false) {
@@ -4654,11 +4659,11 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				if (act == true) {	// there are servers either missing, or with stats=OFFLINE_HARD
 
 					// copy all reader nodes to writer
-					host_server_mapping->copy(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
+					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
 					if (mysql_thread___monitor_writer_is_also_reader) {
 						// server is also a reader, we copy all nodes from writer to reader (previous reader nodes will be reused)
-						host_server_mapping->copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
+						host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
 					} else {
 						// server can only be a writer
 						host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
@@ -4670,7 +4675,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 		} else if (read_only == 1) {
 			if (is_writer) {
 				// the server has read_only=1 (reader), but we find it as writer, so we copy all writer nodes to reader (previous reader nodes will be reused)
-				host_server_mapping->copy(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER, false);
+				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
 
 				// clearing all writer nodes
 				host_server_mapping->clear(HostGroup_Server_Mapping::Type::WRITER);
@@ -7625,7 +7630,7 @@ MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std
 	return f_server;
 }
 
-void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy(Type dest_type, Type src_type, bool update_if_exists /*= true*/) {
+void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type dest_type, Type src_type) {
 
 	const std::vector<Node>& src_nodes = mapping[src_type];
 
@@ -7640,15 +7645,6 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy(Type dest_type, Ty
 
 			if (src_node.reader_hostgroup_id == dest_node.reader_hostgroup_id &&
 				src_node.writer_hostgroup_id == dest_node.writer_hostgroup_id) {
-
-				if (update_if_exists) {
-					MySrvC* new_srv = insert_HGM(get_hostgroup_id(dest_type, dest_node), src_node.srv);
-
-					if (!new_srv) assert(0);
-					
-					dest_node.srv = new_srv;
-					dest_node.server_status = src_node.server_status;
-				}
 				goto __skip;
 			}
 		}
@@ -7701,16 +7697,6 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::clear(Type type) {
 	}
 
 	mapping[type].clear();
-}
-
-unsigned int MySQL_HostGroups_Manager::HostGroup_Server_Mapping::get_hostgroup_id(Type type, size_t index) const {
-
-	if (type == Type::WRITER)
-		return mapping[Type::WRITER][index].writer_hostgroup_id;
-	else if (type == Type::READER)
-		return mapping[Type::READER][index].reader_hostgroup_id;
-	else
-		assert(0);
 }
 
 unsigned int MySQL_HostGroups_Manager::HostGroup_Server_Mapping::get_hostgroup_id(Type type, const Node& node) const {
