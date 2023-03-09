@@ -1833,11 +1833,12 @@ bool MySQL_HostGroups_Manager::commit(
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
 	mydb->execute("DELETE FROM mysql_servers_incoming");
 
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_replication_hostgroups\n");
-	mydb->execute("DELETE FROM mysql_replication_hostgroups");
-
-	generate_mysql_replication_hostgroups_table();
-
+	// replication
+	if (incoming_replication_hostgroups) { // this IF is extremely important, otherwise replication hostgroups may disappear
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_replication_hostgroups\n");
+		mydb->execute("DELETE FROM mysql_replication_hostgroups");
+		generate_mysql_replication_hostgroups_table();
+	}
 
 	// group replication
 	if (incoming_group_replication_hostgroups) {
