@@ -2903,6 +2903,9 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 		return;
 	}
 
+	if (myds->sess->locked_on_hostgroup >= 0)
+		return;
+
 	name_str = std::string(name, name_length);
 	try {
 		idx = mysql_variables.mysql_tracked_variables_umap.at(name_str);
