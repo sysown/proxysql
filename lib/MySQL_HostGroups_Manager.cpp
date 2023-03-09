@@ -3514,7 +3514,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(const std::list<std::tuple
 	unsigned long long curtime2 = monotonic_time();
 	curtime1 = curtime1 / 1000;
 	curtime2 = curtime2 / 1000;
-	proxy_info("MySQL_HostGroups_Manager::replication_lag_action() locked for %llums (server count:%ld)\n", curtime2 - curtime1, mysql_servers.size());
+	proxy_debug(PROXY_DEBUG_MONITOR, 7, "MySQL_HostGroups_Manager::replication_lag_action() locked for %llums (server count:%ld)\n", curtime2 - curtime1, mysql_servers.size());
 }
 
 /**
