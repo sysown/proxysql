@@ -423,8 +423,8 @@ class MySQL_HostGroups_Manager {
 		HostGroup_Server_Mapping(MySQL_HostGroups_Manager* hgm) : readonly_flag(1), myHGM(hgm) { }
 		~HostGroup_Server_Mapping() = default;
 
-		// Note: copy, remove, clear method also makes changes to MyHostGroups
-		void copy(Type dest_type, Type src_type, bool update_if_exists = true);
+		// Note: copy_if_not_exists, remove, clear method also makes changes to MyHostGroups
+		void copy_if_not_exists(Type dest_type, Type src_type);
 		void remove(Type type, size_t index);
 		void clear(Type type);
 		//
@@ -440,11 +440,6 @@ class MySQL_HostGroups_Manager {
 		}
 
 		inline
-		void set(Type type, const std::vector<Node>& nodes) {
-			mapping[type] = nodes;
-		}
-
-		inline
 		void set_readonly_flag(int val) {
 			readonly_flag = val;
 		}
@@ -455,7 +450,6 @@ class MySQL_HostGroups_Manager {
 		}
 
 	private:
-		unsigned int get_hostgroup_id(Type type, size_t index) const;
 		unsigned int get_hostgroup_id(Type type, const Node& node) const;
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
 		void remove_HGM(MySrvC* srv);
