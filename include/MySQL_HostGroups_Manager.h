@@ -733,8 +733,8 @@ class MySQL_HostGroups_Manager {
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
-	void replication_lag_action_inner(MyHGC *, char*, unsigned int, int);
-	void replication_lag_action(int, char*, unsigned int, int);
+	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int);
+	void replication_lag_action(const std::list<std::tuple<int, std::string, unsigned int, int>>& mysql_servers);
 	void read_only_action(char *hostname, int port, int read_only);
 	void read_only_action_v2(const std::list<std::tuple<std::string,int,int>>& mysql_servers);
 	unsigned int get_servers_table_version();
