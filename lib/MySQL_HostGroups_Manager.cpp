@@ -1914,6 +1914,9 @@ bool MySQL_HostGroups_Manager::commit(
 				save_runtime_mysql_servers(runtime_mysql_servers);
 			}
 
+			// reset all checksum
+			table_resultset_checksum.fill(0);
+
 			if (resultset) {
 				if (resultset->rows_count) {
 					if (init == false) {
@@ -1930,7 +1933,6 @@ bool MySQL_HostGroups_Manager::commit(
 				delete resultset;
 			} else {
 				proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
-				table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = 0;
 			}
 		}
 
@@ -4702,6 +4704,10 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 			
 			resultset = NULL;
 
+			// reset mysql_server checksum
+			table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = 0;
+			hgsm_mysql_servers_checksum = 0;
+
 			char* query = (char*)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port";
 			mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 
@@ -4714,8 +4720,6 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				delete resultset;
 			} else {
 				proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
-				table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = 0;
-				hgsm_mysql_servers_checksum = 0;
 			}
 
 			uint64_t hash = 0, hash2 = 0;
