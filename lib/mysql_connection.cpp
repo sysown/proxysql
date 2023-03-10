@@ -2855,6 +2855,15 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 #define MAX_JOIN_SIZE_DEFAULT_STR_VALUE "DEFAULT"
 #define MAX_JOIN_SIZE_DEFAULT_INT_VALUE 18446744073709551615ULL
 
+#define MYSQL_VERSION_5_7 "5.7"
+#define SQL_MODE_TRADITIONAL "TRADITIONAL"
+#define SQL_MODE_TRADITIONAL_EQUIVALENT \
+	"STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE," \
+	"NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_ENGINE_SUBSTITUTION"
+#define SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7 \
+	"STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO," \
+	"TRADITIONAL,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION"
+
 const std::unordered_map<std::string, int> query_cache_types_umap {{"OFF", 0}, {"ON", 1}, {"DEMAND", 2}};
 
 void MySQL_Connection::compare_system_variable(const char *name, const size_t name_length) {
@@ -2944,11 +2953,14 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 			assert(0);
 		break;
 	case SQL_SQL_MODE:
-	case SQL_OPTIMIZER_SWITCH:
-		if (strncasecmp(variables[idx].value, value, value_length) != 0) {
-			value_str = std::string(value, value_length);
-			mysql_variables.client_set_value(myds->sess, idx, value_str);
-			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		value_str = variables[idx].value;
+		if (strcasecmp(variables[idx].value, SQL_MODE_TRADITIONAL) == 0) {
+			value_str = SQL_MODE_TRADITIONAL_EQUIVALENT;
+			if (strncmp(mysql->server_version, MYSQL_VERSION_5_7, sizeof(MYSQL_VERSION_5_7) - 1) == 0)
+				value_str = SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7;
+		}
+		if (strncasecmp(value_str.c_str(), value, value_length) != 0) {
+			assert(0);
 		}
 		break;
 	case SQL_CHARACTER_SET_DATABASE:
