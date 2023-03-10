@@ -74,6 +74,21 @@ int test_compress_split_packets(const CommandLine& cl, const vector<size_t> test
 
 	MYSQL_QUERY_P(proxy, "/* create_new_connection=1 */ BEGIN");
 
+	// 0. Confirm max_allowed_packet contains updated value
+	MYSQL_QUERY(proxy, "SHOW VARIABLES LIKE 'max_allowed_packet'");
+	MYSQL_RES* res = mysql_store_result(proxy);
+	MYSQL_ROW row = mysql_fetch_row(res);
+
+	const auto max_allowed_packet = strtoul(row[1], NULL, 10);
+	const bool is_max_allowed_packet_equal = max_allowed_packet == 41943040;
+
+	ok(
+		is_max_allowed_packet_equal, "'max_allowed_packet' variable should contain updated value '41943040'. Error: '%s'",
+		(is_max_allowed_packet_equal == false ? row[1] : "")
+	);
+
+	mysql_free_result(res);
+
 	// 1. Test table creation
 	const char* CREATE_TABLE_QUERY =
 		"CREATE TABLE IF NOT EXISTS test.compress_split_packet (id INT PRIMARY KEY AUTO_INCREMENT, binarydata LONGBLOB)";
@@ -185,7 +200,7 @@ int main(int argc, char** argv) {
 	CommandLine cl;
 
 	// '4' tests per payload, times '2' due to compression/non-compression on backend servers
-	plan(test_payload_sizes.size() * 4 * 2);
+	plan(test_payload_sizes.size() * 4 * 2 + 2);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
