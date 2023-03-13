@@ -5798,6 +5798,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
 	debug_output = 1;
+	proxysql_set_admin_debug_output(debug_output);
 #endif /* DEBUG */
 
 	last_p_memory_metrics_ts = 0;
@@ -6100,7 +6101,7 @@ bool ProxySQL_Admin::init() {
 		debugdb_disk->execute("PRAGMA synchronous=0");
 		string cmd = "ATTACH DATABASE '" + debugdb_disk_path + "' AS debugdb_disk";
 		admindb->execute(cmd.c_str());
-		proxysql_set_status_admin_debugdb_disk(true);
+		proxysql_set_admin_debugdb_disk(debugdb_disk);
 	}
 #endif /* DEBUG */
 
@@ -6242,7 +6243,7 @@ void ProxySQL_Admin::admin_shutdown() {
 	delete monitordb;
 	delete statsdb_disk;
 #ifdef DEBUG
-	proxysql_set_status_admin_debugdb_disk(false);
+	proxysql_set_admin_debugdb_disk(NULL);
 	delete debugdb_disk;
 #endif
 	(*proxy_sqlite3_shutdown)();
@@ -8467,6 +8468,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		const auto fval = atoi(value);
 		if (fval > 0 && fval <= 3) {
 			debug_output = fval;
+			proxysql_set_admin_debug_output(debug_output);
 			return true;
 		} else {
 			return false;

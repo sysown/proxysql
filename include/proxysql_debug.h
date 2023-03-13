@@ -215,6 +215,8 @@ void proxysql_init_debug_prometheus_metrics();
 /**
  * @brief Set or unset if Admin has debugdb_disk fully initialized
  */
-void proxysql_set_status_admin_debugdb_disk(bool status);
+void proxysql_set_admin_debugdb_disk(SQLite3DB *_db);
+
+void proxysql_set_admin_debug_output(unsigned int _do);
 
 #endif

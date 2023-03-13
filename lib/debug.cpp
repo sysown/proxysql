@@ -1,10 +1,9 @@
 #include "proxysql.h"
 #include "proxysql_atomic.h"
 
-#include "proxysql_admin.h"
-
 #include "sqlite3db.h"
 #include "prometheus_helpers.h"
+#include "gen_utils.h"
 
 #include <set>
 #include <cxxabi.h>
@@ -28,9 +27,9 @@ using std::unordered_map;
 #ifdef DEBUG
 __thread unsigned long long pretime=0;
 static pthread_mutex_t debug_mutex;
-static bool debugdb_disk_init = false;
+static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
-extern ProxySQL_Admin *GloAdmin;
+static unsigned int debug_output = 1;
 #endif /* DEBUG */
 
 /*
@@ -133,7 +132,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 	unsigned long long curtime=realtime_time();
 	pthread_mutex_lock(&debug_mutex);
 	bool write_to_disk = false;
-	if (debugdb_disk_init == true && (GloAdmin->debug_output == 2 || GloAdmin->debug_output == 3)) {
+	if (debugdb_disk != NULL && (debug_output == 2 || debug_output == 3)) {
 		write_to_disk = true;
 	}
 	if (
@@ -183,7 +182,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 //		fprintf(stderr, "%s", longdebugbuff);
 	}
 #endif
-	if (debugdb_disk_init == false) {
+	if (debugdb_disk == NULL) {
 		// default behavior
 		if (longdebugbuff[0] != 0) {
 			fprintf(stderr, "%s", longdebugbuff);
@@ -194,16 +193,14 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 			}
 		}
 	} else {
-		assert (GloAdmin != NULL);
-		SQLite3DB *db = GloAdmin->debugdb_disk;
-		assert(db != NULL);
+		SQLite3DB *db = debugdb_disk;
 		int rc = 0;
 		if (statement1==NULL) {
 			const char *a = "INSERT INTO debug_log (id, time, lapse, thread, file, line, funct, modnum, modname, verbosity, message, note, backtrace) VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)";
 			rc=db->prepare_v2(a, &statement1);
 			ASSERT_SQLITE_OK(rc, db);
 		}
-		if (GloAdmin->debug_output == 1 || GloAdmin->debug_output == 3) {
+		if (debug_output == 1 || debug_output == 3) {
 			// to stderr
 			if (longdebugbuff[0] != 0) {
 				fprintf(stderr, "%s", longdebugbuff);
@@ -490,7 +487,11 @@ void init_debug_struct_from_cmdline() {
 }
 
 
-void proxysql_set_status_admin_debugdb_disk(bool status) {
-	debugdb_disk_init = status;
+void proxysql_set_admin_debugdb_disk(SQLite3DB * _db) {
+	debugdb_disk = _db;
+}
+
+void proxysql_set_admin_debug_output(unsigned int _do) {
+	debug_output = _do;
 }
 #endif /* DEBUG */
