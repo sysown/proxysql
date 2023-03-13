@@ -148,11 +148,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d#%s LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, GloVars.global.gdbg_lvl[module].name, verbosity, origdebugbuff);
 	}
 #ifdef __GLIBC__
-	if (
-		(GloVars.global.gdbg_lvl[module].verbosity>=10)
-		||
-		write_to_disk == true
-	) {
+	if (GloVars.global.gdbg_lvl[module].verbosity>=10) {
 		void *arr[20];
 		char **strings;
 		int s;
@@ -224,7 +220,6 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
 			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
-			//(*proxy_sqlite3_finalize)(statement1);
 		}
 	}
 	pthread_mutex_unlock(&debug_mutex);
