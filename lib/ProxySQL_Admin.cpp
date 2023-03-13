@@ -235,14 +235,6 @@ int sqlite3_json_init(
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
-#define SAFE_SQLITE3_STEP2(_stmt) do {\
-        do {\
-                rc=(*proxy_sqlite3_step)(_stmt);\
-                if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
-                        usleep(100);\
-                }\
-        } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
-} while (0)
 
 typedef struct _arg_mysql_adm_t {
 	struct sockaddr * addr;
@@ -671,7 +663,8 @@ static char * admin_variables_names[]= {
 	(char *)"web_verbosity",
 	(char *)"prometheus_memory_metrics_interval",
 #ifdef DEBUG
-  (char *)"debug",
+	(char *)"debug",
+	(char *)"debug_output",
 #endif /* DEBUG */
   NULL
 };
@@ -5689,6 +5682,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	serial_exposer(std::function<void()> { update_modules_metrics })
 {
 #ifdef DEBUG
+		debugdb_disk = NULL;
 		if (glovars.has_debug==false) {
 #else
 		if (glovars.has_debug==true) {
@@ -5803,6 +5797,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.p_memory_metrics_interval = 61;
 #ifdef DEBUG
 	variables.debug=GloVars.global.gdbg;
+	debug_output = 1;
 #endif /* DEBUG */
 
 	last_p_memory_metrics_ts = 0;
@@ -6091,6 +6086,22 @@ bool ProxySQL_Admin::init() {
 #ifdef DEBUG
 	admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
 	admindb->execute("ATTACH DATABASE 'file:mem_monitor_internal_db?mode=memory&cache=shared' AS 'monitor_internal'");
+	{
+		string debugdb_disk_path = string(GloVars.datadir) + "/" + "proxysql_debug.db";
+		debugdb_disk = new SQLite3DB();
+		debugdb_disk->open((char *)debugdb_disk_path.c_str(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+		debugdb_disk->execute("CREATE TABLE IF NOT EXISTS debug_log (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , time INT NOT NULL , lapse INT NOT NULL , thread INT NOT NULL , file VARCHAR NOT NULL , line INT NOT NULL , funct VARCHAR NOT NULL , modnum INT NOT NULL , modname VARCHAR NOT NULL , verbosity INT NOT NULL , message VARCHAR , note VARCHAR , backtrace VARCHAR)");
+		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_time ON debug_log (time)");
+		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_thread ON debug_log (thread)");
+		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_file ON debug_log (file)");
+		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_file_line ON debug_log (file,line)");
+		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_funct ON debug_log (funct)");
+		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_modnum ON debug_log (modnum)");
+		debugdb_disk->execute("PRAGMA synchronous=0");
+		string cmd = "ATTACH DATABASE '" + debugdb_disk_path + "' AS debugdb_disk";
+		admindb->execute(cmd.c_str());
+		proxysql_set_status_admin_debugdb_disk(true);
+	}
 #endif /* DEBUG */
 
 #ifdef DEBUG
@@ -6230,6 +6241,10 @@ void ProxySQL_Admin::admin_shutdown() {
 	delete configdb;
 	delete monitordb;
 	delete statsdb_disk;
+#ifdef DEBUG
+	proxysql_set_status_admin_debugdb_disk(false);
+	delete debugdb_disk;
+#endif
 	(*proxy_sqlite3_shutdown)();
 	if (main_poll_fds) {
 		for (i=0;i<main_poll_nfds;i++) {
@@ -7825,6 +7840,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"debug")) {
 		return strdup((variables.debug ? "true" : "false"));
 	}
+	if (!strcasecmp(name,"debug_output")) {
+		sprintf(intbuf, "%d", debug_output);
+		return strdup(intbuf);
+	}
 #endif /* DEBUG */
 	return NULL;
 }
@@ -8441,6 +8460,16 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 			variables.debug=false;
 			GloVars.global.gdbg=false;
 			return true;
+		}
+		return false;
+	}
+	if (!strcasecmp(name,"debug_output")) {
+		const auto fval = atoi(value);
+		if (fval > 0 && fval <= 3) {
+			debug_output = fval;
+			return true;
+		} else {
+			return false;
 		}
 		return false;
 	}

@@ -1,6 +1,8 @@
 #include "proxysql.h"
 #include "proxysql_atomic.h"
 
+#include "proxysql_admin.h"
+
 #include "sqlite3db.h"
 #include "prometheus_helpers.h"
 
@@ -24,16 +26,20 @@ using std::unordered_map;
 #endif // CLOCK_MONOTONIC
 
 #ifdef DEBUG
-static unsigned long long pretime=0;
+__thread unsigned long long pretime=0;
 static pthread_mutex_t debug_mutex;
+static bool debugdb_disk_init = false;
+sqlite3_stmt *statement1=NULL;
+extern ProxySQL_Admin *GloAdmin;
 #endif /* DEBUG */
 
+/*
 static inline unsigned long long debug_monotonic_time() {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
-
+*/
 
 #define DEBUG_MSG_MAXSIZE	1024
 
@@ -111,26 +117,43 @@ void proxy_debug_load_filters(std::set<std::string>& f) {
 
 void proxy_debug_func(enum debug_module module, int verbosity, int thr, const char *__file, int __line, const char *__func, const char *fmt, ...) {
 	assert(module<PROXY_DEBUG_UNKNOWN);
+	if (pretime == 0) { // never initialized
+		pretime=realtime_time();
+	}
 	if (GloVars.global.gdbg_lvl[module].verbosity < verbosity)
 		return;
 	if (filter_debug_entry(__file, __line, __func)) // check if the entry must be filtered
 		return;
+	char origdebugbuff[DEBUG_MSG_MAXSIZE];
 	char debugbuff[DEBUG_MSG_MAXSIZE];
 	char longdebugbuff[DEBUG_MSG_MAXSIZE*8];
+	char longdebugbuff2[DEBUG_MSG_MAXSIZE*8];
 	longdebugbuff[0]=0;
-	if (GloVars.global.foreground) {
+	longdebugbuff2[0]=0;
+	unsigned long long curtime=realtime_time();
+	pthread_mutex_lock(&debug_mutex);
+	bool write_to_disk = false;
+	if (debugdb_disk_init == true && (GloAdmin->debug_output == 2 || GloAdmin->debug_output == 3)) {
+		write_to_disk = true;
+	}
+	if (
+		GloVars.global.foreground
+		||
+		write_to_disk == true
+	) {
 		va_list ap;
 		va_start(ap, fmt);
-		vsnprintf(debugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
+		vsnprintf(origdebugbuff, DEBUG_MSG_MAXSIZE,fmt,ap);
 		va_end(ap);
-		pthread_mutex_lock(&debug_mutex);
-		unsigned long long curtime=debug_monotonic_time();
 		//fprintf(stderr, "%d:%s:%d:%s(): MOD#%d LVL#%d : %s" , thr, __file, __line, __func, module, verbosity, debugbuff);
-		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d#%s LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, GloVars.global.gdbg_lvl[module].name, verbosity, debugbuff);
-		pretime=curtime;
+		sprintf(longdebugbuff, "%llu(%llu): %d:%s:%d:%s(): MOD#%d#%s LVL#%d : %s" , curtime, curtime-pretime, thr, __file, __line, __func, module, GloVars.global.gdbg_lvl[module].name, verbosity, origdebugbuff);
 	}
 #ifdef __GLIBC__
-	if (GloVars.global.gdbg_lvl[module].verbosity>=10) {
+	if (
+		(GloVars.global.gdbg_lvl[module].verbosity>=10)
+		||
+		write_to_disk == true
+	) {
 		void *arr[20];
 		char **strings;
 		int s;
@@ -150,18 +173,66 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 			realname=abi::__cxa_demangle(debugbuff, 0, 0, &status);
 			if (realname) {
 				sprintf(debugbuff," ---- %s : %s\n", strings[i], realname);
-				strcat(longdebugbuff,debugbuff);
+				strcat(longdebugbuff2,debugbuff);
 			}
 		}
 		//printf("\n");
-		strcat(longdebugbuff,"\n");
+		//strcat(longdebugbuff2,"\n");
 		free(strings);
 //	} else {
 //		fprintf(stderr, "%s", longdebugbuff);
 	}
 #endif
-	if (strlen(longdebugbuff)) fprintf(stderr, "%s", longdebugbuff);
+	if (debugdb_disk_init == false) {
+		// default behavior
+		if (longdebugbuff[0] != 0) {
+			fprintf(stderr, "%s", longdebugbuff);
+		}
+		if (longdebugbuff2[0] != 0) {
+			if (GloVars.global.gdbg_lvl[module].verbosity>=10) {
+				fprintf(stderr, "%s\n", longdebugbuff2);
+			}
+		}
+	} else {
+		assert (GloAdmin != NULL);
+		SQLite3DB *db = GloAdmin->debugdb_disk;
+		assert(db != NULL);
+		int rc = 0;
+		if (statement1==NULL) {
+			const char *a = "INSERT INTO debug_log (id, time, lapse, thread, file, line, funct, modnum, modname, verbosity, message, note, backtrace) VALUES (NULL, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11)";
+			rc=db->prepare_v2(a, &statement1);
+			ASSERT_SQLITE_OK(rc, db);
+		}
+		if (GloAdmin->debug_output == 1 || GloAdmin->debug_output == 3) {
+			// to stderr
+			if (longdebugbuff[0] != 0) {
+				fprintf(stderr, "%s", longdebugbuff);
+			}
+			if (longdebugbuff2[0] != 0) {
+				fprintf(stderr, "%s", longdebugbuff2);
+			}
+		}
+		if (write_to_disk == true) {
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 1, curtime); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 2, curtime-pretime); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 3, thr); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_text)(statement1,  4, __file, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 5, __line); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_text)(statement1,  6, __func, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, module); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_text)(statement1,  8, GloVars.global.gdbg_lvl[module].name, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_int64)(statement1, 9, verbosity); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 10, origdebugbuff, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_bind_text)(statement1, 11, longdebugbuff2, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+			SAFE_SQLITE3_STEP2(statement1);
+			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
+			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+			//(*proxy_sqlite3_finalize)(statement1);
+		}
+	}
 	pthread_mutex_unlock(&debug_mutex);
+	if (curtime != 0)
+		pretime=curtime;
 };
 #endif
 
@@ -376,7 +447,6 @@ void print_backtrace(void)
 void init_debug_struct() {	
 	int i;
 	pthread_mutex_init(&debug_mutex,NULL);
-	pretime=debug_monotonic_time();
 	GloVars.global.gdbg_lvl= (debug_level *) malloc(PROXY_DEBUG_UNKNOWN*sizeof(debug_level));
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		GloVars.global.gdbg_lvl[i].module=(enum debug_module)i;
@@ -417,5 +487,10 @@ void init_debug_struct_from_cmdline() {
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		GloVars.global.gdbg_lvl[i].verbosity=GloVars.__cmd_proxysql_gdbg;
 	}
+}
+
+
+void proxysql_set_status_admin_debugdb_disk(bool status) {
+	debugdb_disk_init = status;
 }
 #endif /* DEBUG */
