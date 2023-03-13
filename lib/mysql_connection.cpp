@@ -2871,6 +2871,7 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 	uint64_t proxysql_max_join_size_value;
 	std::string name_str, value_str;
 	const char *value, *ci_name;
+	bool unlock_flag = false;
 	int idx = -1, value_int;
 	size_t value_length;
 
@@ -2911,9 +2912,6 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 		}
 		return;
 	}
-
-	if (myds->sess->locked_on_hostgroup >= 0)
-		return;
 
 	name_str = std::string(name, name_length);
 	try {
@@ -2985,10 +2983,25 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 	case -1:
 		break;
 	default:
-		if (strncasecmp(variables[idx].value, value, value_length) != 0)
-			assert(0);
+		if (strncasecmp(variables[idx].value, value, value_length) != 0) {
+			value_str = std::string(value, value_length);
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+			unlock_flag = true;
+		}
 		break;
 	}
+
+	// Confirmation that we are locked due to invalid SET STATEMENT
+	if (
+		unlock_flag &&
+		mysql_thread___set_query_lock_on_hostgroup == 1 &&
+		myds->sess->locked_on_hostgroup == myds->sess->current_hostgroup
+	) {
+		// Back to unlocked
+		myds->sess->locked_on_hostgroup = -1;
+	}
+
 }
 
 // Use MySQL setting "session_track_system_variables" to track changes in
