@@ -3651,6 +3651,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		if (!strncasecmp("LOGENTRY ", query_no_space, strlen("LOGENTRY "))) {
+			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command LOGENTRY: %s\n", query_no_space + strlen("LOGENTRY "));
 			proxy_info("Received command LOGENTRY: %s\n", query_no_space + strlen("LOGENTRY "));
 			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, NULL);
 			run_query=false;
