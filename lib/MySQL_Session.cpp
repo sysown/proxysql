@@ -1536,6 +1536,34 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			}
 		}
 	}
+	// Handle SQL_MODE with space. Issue #3863.
+	if (
+		pkt->size == strlen((char *)"SET SESSION sql_mode=' '") + 5 &&
+		strncmp((char *)"SET SESSION sql_mode=' '", (char *)pkt->ptr+5, pkt->size-5) == 0
+	) {
+		// Replace pkt with a new one with the same query but without the
+		// space, and let handler() process it.
+		PtrSize_t pkt_2;
+		pkt_2.size = pkt->size - 1;
+		pkt_2.ptr = l_alloc(pkt_2.size);
+		mysql_hdr hrd;
+		memcpy(&hrd, pkt->ptr, sizeof(mysql_hdr));
+		hrd.pkt_length = pkt_2.size - 5;
+		memcpy((char *)pkt_2.ptr + 4, (char *)pkt->ptr + 4, 1);
+		memcpy(pkt_2.ptr, &hrd, sizeof(mysql_hdr));
+		memcpy(
+			(char *)pkt_2.ptr + 5,
+			(char *)"SET SESSION sql_mode=''",
+			strlen((char *)"SET SESSION sql_mode=''")
+		);
+		l_free(pkt->size, pkt->ptr);
+		pkt->size = pkt_2.size;
+		pkt->ptr = pkt_2.ptr;
+		// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
+		// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
+		CurrentQuery.QueryPointer = static_cast<unsigned char*>((unsigned char *)pkt_2.ptr + 5);
+		CurrentQuery.QueryLength = pkt_2.size - 5;
+	}
 
 	return false;
 }
