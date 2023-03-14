@@ -556,6 +556,13 @@ int main(int, char**) {
 	diag("Restoring previous 'MySQL' servers infra config...");
 
 	{
+		// do some cleanup
+		string query = "SET mysql-free_connections_pct=5";
+		diag("%s", query.c_str());
+		MYSQL_QUERY(proxy_admin, query.c_str());
+		MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+	}
+	{
 		for (const auto& server_old_config : servers_old_configs) {
 			const mysql_res_row& res_row = server_old_config.first;
 			const srv_cfg& old_srv_config = server_old_config.second;
@@ -568,6 +575,7 @@ int main(int, char**) {
 		}
 	}
 
+	sleep(2); // wait for the cleanup to happen
 	mysql_close(proxy_admin);
 
 	return exit_status();

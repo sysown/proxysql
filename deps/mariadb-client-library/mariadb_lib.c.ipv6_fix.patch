@@ -1,0 +1,24 @@
+@@ -1615,6 +1615,11 @@
+   if (ma_pvio_connect(pvio, &cinfo) != 0)
+   {
+     ma_pvio_close(pvio);
++    if (mysql->options.extension && mysql->options.extension->async_context &&
++        mysql->options.extension->async_context->pvio) {
++        /* async_context->pvio contains dangling pointer. Setting async_context->pvio to NULL*/
++	    mysql->options.extension->async_context->pvio = NULL;
++    }
+     goto error;
+   }
+ 
+@@ -1625,6 +1630,11 @@
+     if (ma_pvio_write(pvio, (unsigned char *)hdr, len) <= 0)
+     {
+       ma_pvio_close(pvio);
++      if (mysql->options.extension->async_context &&
++          mysql->options.extension->async_context->pvio) {
++          /* async_context->pvio contains dangling pointer. Setting async_context->pvio to NULL*/
++          mysql->options.extension->async_context->pvio = NULL;
++      }
+       goto error;
+     }
+   }

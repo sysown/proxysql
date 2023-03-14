@@ -1095,6 +1095,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["autocommit_on_hostgroup"] = autocommit_on_hostgroup;
 	j["last_insert_id"] = last_insert_id;
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
+	j["active_transactions"] = active_transactions;
+	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
@@ -1369,6 +1371,10 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			l_free(pkt->size,pkt->ptr);
 			pkt->size=pkt_2.size;
 			pkt->ptr=pkt_2.ptr;
+			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
+			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
+			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
+			CurrentQuery.QueryLength = pkt_2.size;
 		}
 	}
 	if ((pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
@@ -1389,6 +1395,10 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			l_free(pkt->size,pkt->ptr);
 			pkt->size=pkt_2.size;
 			pkt->ptr=pkt_2.ptr;
+			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
+			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
+			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
+			CurrentQuery.QueryLength = pkt_2.size;
 		}
 	}
 	if (
@@ -1819,9 +1829,15 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 	if (mybe->server_myds->myconn->options.init_connect_sent==false) {
 		// we needs to set it to true
 		mybe->server_myds->myconn->options.init_connect_sent=true;
-		if (mysql_thread___init_connect) {
+		char * tmp_init_connect = mysql_thread___init_connect;
+		char * init_connect_hg = mybe->server_myds->myconn->parent->myhgc->attributes.init_connect;
+		if (init_connect_hg != NULL && strlen(init_connect_hg) != 0) {
+			// mysql_hostgroup_attributes takes priority
+			tmp_init_connect = init_connect_hg;
+		}
+		if (tmp_init_connect) {
 			// we send init connect queries only if set
-			mybe->server_myds->myconn->options.init_connect=strdup(mysql_thread___init_connect);
+			mybe->server_myds->myconn->options.init_connect=strdup(tmp_init_connect);
 			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 				case PROCESSING_QUERY:
 					previous_status.push(PROCESSING_QUERY);
@@ -3989,16 +4005,36 @@ __get_pkts_from_client:
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STMT_SEND_LONG_DATA(pkt);
 								break;
 							case _MYSQL_COM_BINLOG_DUMP:
-							case _MYSQL_COM_REGISTER_SLAVE:
 							case _MYSQL_COM_BINLOG_DUMP_GTID:
+							case _MYSQL_COM_REGISTER_SLAVE:
 								// In this switch we handle commands that download binlog events from MySQL
-								// servers. For this commands a lot of the features provided by ProxySQL
+								// servers. For these commands a lot of the features provided by ProxySQL
 								// aren't useful, like multiplexing, query parsing, etc. For this reason,
-								// ProxySQL enable fast_forward when it receives these commands. 
-								proxy_info(
-									"COM_REGISTER_SLAVE, COM_BINLOG_DUMP or COM_BINLOG_DUMP_GTID received. "
-									"Changing session fast foward to true\n"
-								);
+								// ProxySQL enables fast_forward when it receives these commands. 
+								{
+									// we use a switch to write the command in the info message
+									std::string q = "Received command ";
+									switch ((enum_mysql_command)c) {
+										case _MYSQL_COM_BINLOG_DUMP:
+											q += "MYSQL_COM_BINLOG_DUMP";
+											break;
+										case _MYSQL_COM_BINLOG_DUMP_GTID:
+											q += "MYSQL_COM_BINLOG_DUMP_GTID";
+											break;
+										case _MYSQL_COM_REGISTER_SLAVE:
+											q += "MYSQL_COM_REGISTER_SLAVE";
+											break;
+										default:
+											assert(0);
+											break;
+									};
+									// we add the client details in the info message
+									if (client_myds && client_myds->addr.addr) {
+										q += " from client " + std::string(client_myds->addr.addr) + ":" + std::to_string(client_myds->addr.port);
+									}
+									q += " . Changing session fast_forward to true";
+									proxy_info("%s\n", q.c_str());
+								}
 								session_fast_forward = true;
 
 								if (client_myds->PSarrayIN->len) {
@@ -4010,6 +4046,7 @@ __get_pkts_from_client:
 								// The following code prepares the session as if it was configured with fast
 								// forward before receiving the command. This way the state machine will
 								// handle the command automatically.
+								current_hostgroup = previous_hostgroup;
 								mybe = find_or_create_backend(current_hostgroup); // set a backend
 								mybe->server_myds->reinit_queues(); // reinitialize the queues in the myds . By default, they are not active
 								// We reinitialize the 'wait_until' since this session shouldn't wait for processing as
@@ -4038,6 +4075,33 @@ __get_pkts_from_client:
 									// by 'mariadb' library. Otherwise 'MySQL_Thread' will threat this
 									// 'MySQL_Data_Stream' as library handled.
 									mybe->server_myds->DSS = STATE_READY;
+									// myds needs to have encrypted value set correctly
+									{
+										MySQL_Data_Stream * myds = mybe->server_myds;
+										MySQL_Connection * myconn = myds->myconn;
+										assert(myconn != NULL);
+										// PMC-10005
+										// if backend connection uses SSL we will set
+										// encrypted = true and we will start using the SSL structure
+										// directly from P_MARIADB_TLS structure.
+										MYSQL *mysql = myconn->mysql;
+										if (mysql && myconn->ret_mysql) {
+											if (mysql->options.use_ssl == 1) {
+												P_MARIADB_TLS * matls = (P_MARIADB_TLS *)mysql->net.pvio->ctls;
+												if (matls != NULL) {
+													myds->encrypted = true;
+													myds->ssl = (SSL *)matls->ssl;
+													myds->rbio_ssl = BIO_new(BIO_s_mem());
+													myds->wbio_ssl = BIO_new(BIO_s_mem());
+													SSL_set_bio(myds->ssl, myds->rbio_ssl, myds->wbio_ssl);
+												} else {
+													// if mysql->options.use_ssl == 1 but matls == NULL
+													// it means that ProxySQL tried to use SSL to connect to the backend
+													// but the backend didn't support SSL
+												}
+											}
+										}
+									}
 									set_status(FAST_FORWARD); // we can set status to FAST_FORWARD
 								}
 
@@ -4629,12 +4693,6 @@ int MySQL_Session::handler() {
 	//unsigned int j;
 	//unsigned char c;
 
-	if (active_transactions == 0) {
-		active_transactions=NumActiveTransactions();
-		if (active_transactions > 0) {
-			transaction_started_at = thread->curtime;
-		}
-	}
 //	FIXME: Sessions without frontend are an ugly hack
 	if (session_fast_forward==false) {
 	if (client_myds==NULL) {
@@ -4871,7 +4929,7 @@ handler_again:
 								stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
 								CurrentQuery.QueryLength=stmt_info->query_length;
 								CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
-								// NOTE: Update 'first_comment' with the the from the retrieved
+								// NOTE: Update 'first_comment' with the 'first_comment' from the retrieved
 								// 'stmt_info' from the found prepared statement. 'CurrentQuery' requires its
 								// own copy of 'first_comment' because it will later be free by 'QueryInfo::end'.
 								if (stmt_info->first_comment) {
@@ -4905,6 +4963,14 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
+
+					if (active_transactions != 0) {  // run this only if currently we think there is a transaction
+						if ((myconn->mysql->server_status & SERVER_STATUS_IN_TRANS) == 0) { // there is no transaction on the backend connection
+							active_transactions = NumActiveTransactions(); // we check all the hostgroups/backends
+							if (active_transactions == 0)
+								transaction_started_at = 0; // reset it
+						}
+					}
 
 					handler_rc0_Process_GTID(myconn);
 
@@ -7144,8 +7210,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		int myerrno=mysql_errno(mysql);
 		if (myerrno==0) {
 			unsigned int num_rows = mysql_affected_rows(mysql);
-			unsigned int nTrx=NumActiveTransactions();
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			uint16_t setStatus = (active_transactions ? SERVER_STATUS_IN_TRANS : 0);
 			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST)
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
@@ -7440,6 +7505,7 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 		CurrentQuery.end();
 	}
 	started_sending_data_to_client=false;
+	previous_hostgroup = current_hostgroup;
 }
 
 

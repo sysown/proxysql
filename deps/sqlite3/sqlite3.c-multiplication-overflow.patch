@@ -1,18 +1,13 @@
-@@ -103301,7 +103301,7 @@
-   int n = *pnEntry;
-   if( (n & (n-1))==0 ){
-     int sz = (n==0) ? 1 : 2*n;
--    void *pNew = sqlite3DbRealloc(db, pArray, sz*szEntry);
-+    void *pNew = sqlite3DbRealloc(db, pArray, (long) sz*szEntry);
-     if( pNew==0 ){
-       *pIdx = -1;
-       return pArray;
-@@ -141183,7 +141183,7 @@
-     pStart = 0;
-   }else if( pBuf==0 ){
-     sqlite3BeginBenignMalloc();
--    pStart = sqlite3Malloc( sz*cnt );  /* IMP: R-61949-35727 */
-+    pStart = sqlite3Malloc( (long) sz*cnt );  /* IMP: R-61949-35727 */
-     sqlite3EndBenignMalloc();
-     if( pStart ) cnt = sqlite3MallocSize(pStart)/sz;
-   }else{
+@@ -173310,10 +173310,10 @@
+ #ifndef SQLITE_OMIT_TWOSIZE_LOOKASIDE
+   if( sz>=LOOKASIDE_SMALL*3 ){
+     nBig = szAlloc/(3*LOOKASIDE_SMALL+sz);
+-    nSm = (szAlloc - sz*nBig)/LOOKASIDE_SMALL;
++    nSm = (szAlloc - (long) sz*nBig)/LOOKASIDE_SMALL;
+   }else if( sz>=LOOKASIDE_SMALL*2 ){
+     nBig = szAlloc/(LOOKASIDE_SMALL+sz);
+-    nSm = (szAlloc - sz*nBig)/LOOKASIDE_SMALL;
++    nSm = (szAlloc - (long) sz*nBig)/LOOKASIDE_SMALL;
+   }else
+ #endif /* SQLITE_OMIT_TWOSIZE_LOOKASIDE */
+   if( sz>0 ){

@@ -1,0 +1,9 @@
+@@ -94,6 +94,8 @@
+   VIEW_CHANGE_EVENT= 37,
+   XA_PREPARE_LOG_EVENT= 38,
+ 
++  HEARTBEAT_LOG_EVENT_V2 = 41,
++
+   /*
+     Add new events here - right above this comment!
+     Existing events (except ENUM_END_EVENT) should never change their numbers

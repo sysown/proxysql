@@ -3619,6 +3619,11 @@ void MySQL_HostGroups_Manager::group_replication_lag_action(
 		}
 	}
 
+	if (rhid_res != nullptr) {
+		delete rhid_res;
+		rhid_res = nullptr;
+	}
+
 __exit_replication_lag_action:
 
 	wrunlock();
@@ -6854,10 +6859,12 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	rc = mydb->prepare_v2(query, &statement);
 	ASSERT_SQLITE_OK(rc, mydb);
 	proxy_info("New mysql_hostgroup_attributes table\n");
+	bool current_configured[MyHostGroups->len];
 	// set configured = false to all
 	// in this way later we can known which HG were updated
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		current_configured[i] = myhgc->attributes.configured;
 		myhgc->attributes.configured = false;
 	}
 
@@ -6937,9 +6944,11 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		if (myhgc->attributes.configured == false) {
-			// if configured == false reset to defaults
-			proxy_info("Resetting hostgroup attributes for hostgroup %u\n", myhgc->hid);
-			myhgc->reset_attributes();
+			if (current_configured[i] == true) {
+				// if configured == false and previously it was configured == true , reset to defaults
+				proxy_info("Resetting hostgroup attributes for hostgroup %u\n", myhgc->hid);
+				myhgc->reset_attributes();
+			}
 		}
 	}
 
@@ -7410,12 +7419,26 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostname<>'%s%s'";
 			sprintf(query,q, _server_id, domain_name);
 			mydb->execute(query);
-			q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight) VALUES (%d, '%s%s', %d, %d)";
-			sprintf(query,q, _writer_hostgroup, _server_id, domain_name, aurora_port, new_reader_weight);
+
+			unsigned int max_max_connections = 1000;
+			unsigned int max_use_ssl = 0;
+			MyHGC *myhgc = MyHGC_lookup(_whid);
+			for (int j = 0; j < (int) myhgc->mysrvs->cnt(); j++) {
+				MySrvC *mysrvc = (MySrvC *) myhgc->mysrvs->servers->index(j);
+				if (mysrvc->max_connections > max_max_connections) {
+					max_max_connections = mysrvc->max_connections;
+				}
+				if (mysrvc->use_ssl > max_use_ssl) {
+					max_use_ssl = mysrvc->use_ssl;
+				}
+			}
+
+			q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight, max_connections, use_ssl) VALUES (%d, '%s%s', %d, %d, %d, %d)";
+			sprintf(query,q, _writer_hostgroup, _server_id, domain_name, aurora_port, new_reader_weight, max_max_connections, max_use_ssl);
 			mydb->execute(query);
 			if (writer_is_also_reader && read_HG>=0) {
-				q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight) VALUES (%d, '%s%s', %d, %d)";
-				sprintf(query, q, read_HG, _server_id, domain_name, aurora_port, new_reader_weight);
+				q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight, max_connections, use_ssl) VALUES (%d, '%s%s', %d, %d, %d, %d)";
+				sprintf(query, q, read_HG, _server_id, domain_name, aurora_port, new_reader_weight, max_max_connections, max_use_ssl);
 				mydb->execute(query);
 			}
 			proxy_info("AWS Aurora: setting new auto-discovered host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);

@@ -3656,6 +3656,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 	// add global mutex, see bug #1188
 	pthread_mutex_lock(&pa->sql_query_global_mutex);
 
+	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
+		if (!strncasecmp("LOGENTRY ", query_no_space, strlen("LOGENTRY "))) {
+			proxy_info("Received command LOGENTRY: %s\n", query_no_space + strlen("LOGENTRY "));
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, NULL);
+			run_query=false;
+			goto __run_query;
+		 }
+	 }
+
 	// handle special queries from Cluster
 	// for bug #1188 , ProxySQL Admin needs to know the exact query
 
