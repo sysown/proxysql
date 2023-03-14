@@ -3001,6 +3001,12 @@ void MySQL_Connection::get_system_variables() {
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
 				const char *name;
 				size_t name_length;
+				// When a session system variable is assigned, two values per
+				// variable are returned (in separate calls). For the first
+				// call, we receive the variable name as a string and its
+				// length. For the second call, we receive the variable value
+				// as a string and its length. Both string are NOT null
+				// terminated.
 				if (
 					mysql_session_track_get_first(
 						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
