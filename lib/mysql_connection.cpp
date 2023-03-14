@@ -2966,6 +2966,7 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 	case SQL_CHARACTER_SET_RESULTS:
 	case SQL_CHARACTER_SET_CONNECTION:
 	case SQL_COLLATION_CONNECTION:
+	case SQL_SET_NAMES:
 		if (value_length == 0) {
 			if (strcasecmp(variables[idx].value, "NULL") != 0)
 				assert(0);
