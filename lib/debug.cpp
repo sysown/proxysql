@@ -27,6 +27,7 @@ using std::unordered_map;
 #ifdef DEBUG
 __thread unsigned long long pretime=0;
 static pthread_mutex_t debug_mutex;
+static pthread_rwlock_t filters_rwlock;
 static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
 static unsigned int debug_output = 1;
@@ -53,7 +54,8 @@ static inline unsigned long long debug_monotonic_time() {
 std::set<std::string> debug_filters;
 
 static bool filter_debug_entry(const char *__file, int __line, const char *__func) {
-	pthread_mutex_lock(&debug_mutex);
+	//pthread_mutex_lock(&debug_mutex);
+	pthread_rwlock_rdlock(&filters_rwlock);
 	bool to_filter = false;
 	if (debug_filters.size()) { // if the set is empty we aren't performing any filter, so we won't search
 		std::string key(__file);
@@ -93,25 +95,30 @@ static bool filter_debug_entry(const char *__file, int __line, const char *__fun
 			}
 		}
 	}
-	pthread_mutex_unlock(&debug_mutex);
+	//pthread_mutex_unlock(&debug_mutex);
+	pthread_rwlock_unlock(&filters_rwlock);
 	return to_filter;
 }
 
 // we use this function to sent the filters to Admin
-// we hold here the mutex on debug_mutex
+// we hold here the lock on filters_rwlock
 void proxy_debug_get_filters(std::set<std::string>& f) {
-	pthread_mutex_lock(&debug_mutex);
+	//pthread_mutex_lock(&debug_mutex);
+	pthread_rwlock_rdlock(&filters_rwlock);
 	f = debug_filters;
-	pthread_mutex_unlock(&debug_mutex);
+	pthread_rwlock_unlock(&filters_rwlock);
+	//pthread_mutex_unlock(&debug_mutex);
 }
 
 // we use this function to get the filters from Admin
-// we hold here the mutex on debug_mutex
+// we hold here the lock on filters_rwlock
 void proxy_debug_load_filters(std::set<std::string>& f) {
-	pthread_mutex_lock(&debug_mutex);
+	//pthread_mutex_lock(&debug_mutex);
+	pthread_rwlock_wrlock(&filters_rwlock);
 	debug_filters.erase(debug_filters.begin(), debug_filters.end());
 	debug_filters = f;
-	pthread_mutex_unlock(&debug_mutex);
+	pthread_rwlock_unlock(&filters_rwlock);
+	//pthread_mutex_unlock(&debug_mutex);
 }
 
 void proxy_debug_func(enum debug_module module, int verbosity, int thr, const char *__file, int __line, const char *__func, const char *fmt, ...) {
@@ -130,7 +137,6 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 	longdebugbuff[0]=0;
 	longdebugbuff2[0]=0;
 	unsigned long long curtime=realtime_time();
-	pthread_mutex_lock(&debug_mutex);
 	bool write_to_disk = false;
 	if (debugdb_disk != NULL && (debug_output == 2 || debug_output == 3)) {
 		write_to_disk = true;
@@ -178,6 +184,7 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 //		fprintf(stderr, "%s", longdebugbuff);
 	}
 #endif
+	pthread_mutex_lock(&debug_mutex);
 	if (debugdb_disk == NULL) {
 		// default behavior
 		if (longdebugbuff[0] != 0) {
@@ -439,6 +446,7 @@ void print_backtrace(void)
 void init_debug_struct() {	
 	int i;
 	pthread_mutex_init(&debug_mutex,NULL);
+	pthread_rwlock_init(&filters_rwlock, NULL);
 	GloVars.global.gdbg_lvl= (debug_level *) malloc(PROXY_DEBUG_UNKNOWN*sizeof(debug_level));
 	for (i=0;i<PROXY_DEBUG_UNKNOWN;i++) {
 		GloVars.global.gdbg_lvl[i].module=(enum debug_module)i;
