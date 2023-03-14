@@ -4629,9 +4629,6 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 			} else {
 				bool act = false;
 
-				proxy_info("Server '%s:%d' found with 'read_only=0', also found as writer\n", hostname.c_str(), port);
-				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=0', also found as writer\n", hostname.c_str(), port);
-
 				// if the server was RO=0 on the previous check then no action is needed
 				if (host_server_mapping->get_readonly_flag() != 0) {
 					// it is the first time that we detect RO on this server
@@ -4661,6 +4658,9 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				}
 
 				if (act == true) {	// there are servers either missing, or with stats=OFFLINE_HARD
+
+					proxy_info("Server '%s:%d' with 'read_only=0' found missing at some 'writer_hostgroup'\n", hostname.c_str(), port);
+					proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' with 'read_only=0' found missing at some 'writer_hostgroup'\n", hostname.c_str(), port);
 
 					// copy all reader nodes to writer
 					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
