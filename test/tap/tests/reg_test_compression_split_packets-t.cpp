@@ -40,17 +40,17 @@ string gen_binary_payload(size_t size) {
 }
 
 void print_query(const string& query, MYSQL* mysql) {
-	diag("Query: Issuing query '%s' to ('%s':%d)", query.c_str(), mysql->host, mysql->port);
+	diag("Query: Issuing '%s' to ('%s':%d)", query.c_str(), mysql->host, mysql->port);
 }
 
 int mysql_query_p(MYSQL* mysql, const char* query) {
-	diag("Query: Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port);
+	diag("Query: Issuing '%s' to ('%s':%d)", query, mysql->host, mysql->port);
 	return mysql_query(mysql, query);
 }
 
 #define MYSQL_QUERY_P(mysql, query) \
 	do { \
-		diag("Query: Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port); \
+		diag("Query: Issuing '%s' to ('%s':%d)", query, mysql->host, mysql->port); \
 		if (mysql_query(mysql, query)) { \
 			fprintf(stderr, "File %s, line %d, Error: %s\n", \
 					__FILE__, __LINE__, mysql_error(mysql)); \
@@ -58,7 +58,9 @@ int mysql_query_p(MYSQL* mysql, const char* query) {
 		} \
 	} while(0)
 
-int test_compress_split_packets(const CommandLine& cl, const vector<size_t> test_payload_sizes) {
+int test_compress_split_packets(
+	const CommandLine& cl, const vector<size_t> test_payload_sizes, int last_insert_id = 0
+) {
 	diag("Create new conn to ProxySQL and ensure new backend conn is used for serving this queries");
 	MYSQL* proxy = mysql_init(NULL);
 
@@ -67,14 +69,15 @@ int test_compress_split_packets(const CommandLine& cl, const vector<size_t> test
 		diag("Failed to set 'MYSQL_OPT_COMPRESS' for connection, aborting test. Error: '%s'", mysql_error(proxy));
 	}
 
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_COMPRESS)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	}
 
+	diag("Starting explicit transaction in new connection, changes should be later ROLLBACK");
 	MYSQL_QUERY_P(proxy, "/* create_new_connection=1 */ BEGIN");
 
-	// 0. Confirm max_allowed_packet contains updated value
+	// Confirm max_allowed_packet contains updated value
 	MYSQL_QUERY(proxy, "SHOW VARIABLES LIKE 'max_allowed_packet'");
 	MYSQL_RES* res = mysql_store_result(proxy);
 	MYSQL_ROW row = mysql_fetch_row(res);
@@ -89,16 +92,8 @@ int test_compress_split_packets(const CommandLine& cl, const vector<size_t> test
 
 	mysql_free_result(res);
 
-	// 1. Test table creation
-	const char* CREATE_TABLE_QUERY =
-		"CREATE TABLE IF NOT EXISTS test.compress_split_packet (id INT PRIMARY KEY AUTO_INCREMENT, binarydata LONGBLOB)";
-
-	MYSQL_QUERY_P(proxy, "CREATE DATABASE IF NOT EXISTS test");
-	MYSQL_QUERY_P(proxy, "DROP TABLE IF EXISTS test.compress_split_packet");
-	MYSQL_QUERY_P(proxy, CREATE_TABLE_QUERY);
-
-	// 2. Data insertion/retrieval
-	int test_num = 1;
+	// Data insertion/retrieval
+	int test_num = last_insert_id + 1;
 
 	for (const size_t test_size : test_payload_sizes) {
 		const string bin_data { gen_binary_payload(test_size) };
@@ -173,9 +168,10 @@ int test_compress_split_packets(const CommandLine& cl, const vector<size_t> test
 		test_num += 1;
 	}
 
+	diag("Closing connection - Using implicit ROLLBACK as cleanup for next TEST");
 	mysql_close(proxy);
 
-	return (test_num - 1) != test_payload_sizes.size();
+	return test_num - 1;
 }
 
 /**
@@ -218,9 +214,16 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	}
+	const char CREATE_TABLE_QUERY[] {
+		"CREATE TABLE IF NOT EXISTS test.compress_split_packet (id INT PRIMARY KEY AUTO_INCREMENT, binarydata LONGBLOB)"
+	};
 
 	diag("Preparing server for queries to be performed");
 	MYSQL_QUERY_P(proxy, "/* hostgroup=0 */ SET GLOBAL max_allowed_packet=41943040");
+	MYSQL_QUERY_P(proxy, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY_P(proxy, "DROP TABLE IF EXISTS test.compress_split_packet");
+	MYSQL_QUERY_P(proxy, CREATE_TABLE_QUERY);
+
 	mysql_close(proxy);
 
 	diag("Prepare ProxySQL servers with 'compression=0' for first test");
@@ -228,8 +231,8 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_P(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	diag("TEST: Check compressed split packets through ProxySQL with backend conns with 'compression=0'");
-	int rc = test_compress_split_packets(cl, test_payload_sizes);
-	if (rc != EXIT_SUCCESS) {
+	int last_insert_id = test_compress_split_packets(cl, test_payload_sizes);
+	if (last_insert_id != test_payload_sizes.size()) {
 		diag("Failed tests for 'compression=0' aborting further testing");
 		goto cleanup;
 	}
@@ -239,7 +242,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_P(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	diag("TEST: Check compressed split packets through ProxySQL with backend conns with 'compression=1'");
-	test_compress_split_packets(cl, test_payload_sizes);
+	test_compress_split_packets(cl, test_payload_sizes, last_insert_id);
 
 cleanup:
 	mysql_close(admin);

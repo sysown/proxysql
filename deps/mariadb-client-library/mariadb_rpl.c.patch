@@ -1,0 +1,16 @@
+@@ -386,6 +386,15 @@
+         memcpy(rpl_event->event.rows.row_data, ev, rpl_event->event.rows.row_data_size);
+       }
+       break;
++	case PREVIOUS_GTIDS_LOG_EVENT:
++	case ANONYMOUS_GTID_LOG_EVENT:
++  	case WRITE_ROWS_EVENT:
++	case UPDATE_ROWS_EVENT:
++	case DELETE_ROWS_EVENT:
++	case GTID_LOG_EVENT:
++	case HEARTBEAT_LOG_EVENT_V2:
++	case ROWS_QUERY_LOG_EVENT:
++		break;
+     default:
+       free(rpl_event);
+       return NULL;

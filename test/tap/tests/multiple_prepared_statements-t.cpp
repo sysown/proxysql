@@ -269,7 +269,9 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	for (int i=0; i<NCONNS; i++) {
+	// Half of the connections were freed earlier. We only iterate the other
+	// half that has not been freed.
+	for (int i=1; i<NCONNS; i+=2) {
 		mysql_close(conns[i]);
 	}
 
