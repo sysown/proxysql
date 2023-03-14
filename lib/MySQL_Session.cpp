@@ -1095,6 +1095,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["autocommit_on_hostgroup"] = autocommit_on_hostgroup;
 	j["last_insert_id"] = last_insert_id;
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
+	j["active_transactions"] = active_transactions;
+	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
@@ -4691,12 +4693,6 @@ int MySQL_Session::handler() {
 	//unsigned int j;
 	//unsigned char c;
 
-	if (active_transactions == 0) {
-		active_transactions=NumActiveTransactions();
-		if (active_transactions > 0) {
-			transaction_started_at = thread->curtime;
-		}
-	}
 //	FIXME: Sessions without frontend are an ugly hack
 	if (session_fast_forward==false) {
 	if (client_myds==NULL) {
@@ -4933,7 +4929,7 @@ handler_again:
 								stmt_info=GloMyStmt->find_prepared_statement_by_stmt_id(CurrentQuery.stmt_global_id);
 								CurrentQuery.QueryLength=stmt_info->query_length;
 								CurrentQuery.QueryPointer=(unsigned char *)stmt_info->query;
-								// NOTE: Update 'first_comment' with the the from the retrieved
+								// NOTE: Update 'first_comment' with the 'first_comment' from the retrieved
 								// 'stmt_info' from the found prepared statement. 'CurrentQuery' requires its
 								// own copy of 'first_comment' because it will later be free by 'QueryInfo::end'.
 								if (stmt_info->first_comment) {
@@ -4967,6 +4963,14 @@ handler_again:
 				}
 				gtid_hid = -1;
 				if (rc==0) {
+
+					if (active_transactions != 0) {  // run this only if currently we think there is a transaction
+						if ((myconn->mysql->server_status & SERVER_STATUS_IN_TRANS) == 0) { // there is no transaction on the backend connection
+							active_transactions = NumActiveTransactions(); // we check all the hostgroups/backends
+							if (active_transactions == 0)
+								transaction_started_at = 0; // reset it
+						}
+					}
 
 					handler_rc0_Process_GTID(myconn);
 
@@ -7206,8 +7210,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		int myerrno=mysql_errno(mysql);
 		if (myerrno==0) {
 			unsigned int num_rows = mysql_affected_rows(mysql);
-			unsigned int nTrx=NumActiveTransactions();
-			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
+			uint16_t setStatus = (active_transactions ? SERVER_STATUS_IN_TRANS : 0);
 			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			if (mysql->server_status & SERVER_MORE_RESULTS_EXIST)
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
