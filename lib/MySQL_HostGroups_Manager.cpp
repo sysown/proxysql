@@ -1966,8 +1966,9 @@ bool MySQL_HostGroups_Manager::commit(
 	if (hgsm_mysql_servers_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] ||
 		hgsm_mysql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS])
 	{
-		proxy_info("Checksum for table 'mysql_servers': old:0x%lX new:0x%lX\n", hgsm_mysql_servers_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS]);
-		proxy_info("Checksum for table 'mysql_replication_hostgroups': old:0x%lX new:0x%lX\n", hgsm_mysql_replication_hostgroups_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
+		proxy_info("Rebuilding 'Hostgroup_Manager_Mapping' due to checksums change - mysql_servers { old: 0x%lX, new: 0x%lX }, mysql_replication_hostgroups { old:0x%lX, new:0x%lX }\n", 
+			hgsm_mysql_servers_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS], 
+			hgsm_mysql_replication_hostgroups_checksum, table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
 		
 		char* error = NULL;
 		int cols = 0;
@@ -4617,6 +4618,8 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 			if (is_writer == false) {
 				// the server has read_only=0 (writer), but we can't find any writer, 
 				// so we copy all reader nodes to writer
+				proxy_info("Server '%s:%d' found with 'read_only=0', but not found as writer\n", hostname.c_str(), port);
+				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=0', but not found as writer\n", hostname.c_str(), port);
 				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
 				if (mysql_thread___monitor_writer_is_also_reader) {
@@ -4628,8 +4631,12 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				}
 
 				update_mysql_servers_table = true;
+				proxy_info("Regenerating table 'mysql_servers' due to actions on server '%s:%d'\n", hostname.c_str(), port);
 			} else {
 				bool act = false;
+
+				proxy_info("Server '%s:%d' found with 'read_only=0', also found as writer\n", hostname.c_str(), port);
+				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=0', also found as writer\n", hostname.c_str(), port);
 
 				// if the server was RO=0 on the previous check then no action is needed
 				if (host_server_mapping->get_readonly_flag() != 0) {
@@ -4673,17 +4680,21 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 					}
 
 					update_mysql_servers_table = true;
+					proxy_info("Regenerating table 'mysql_servers' due to actions on server '%s:%d'\n", hostname.c_str(), port);
 				}
 			}
 		} else if (read_only == 1) {
 			if (is_writer) {
 				// the server has read_only=1 (reader), but we find it as writer, so we copy all writer nodes to reader (previous reader nodes will be reused)
+				proxy_info("Server '%s:%d' found with 'read_only=1', but not found as reader\n", hostname.c_str(), port);
+				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=1', but not found as reader\n", hostname.c_str(), port);
 				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
 
 				// clearing all writer nodes
 				host_server_mapping->clear(HostGroup_Server_Mapping::Type::WRITER);
 
 				update_mysql_servers_table = true;
+				proxy_info("Regenerating table 'mysql_servers' due to actions on server '%s:%d'\n", hostname.c_str(), port);
 			}
 		} else {
 			// LCOV_EXCL_START
@@ -7636,6 +7647,8 @@ MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std
 }
 
 void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type dest_type, Type src_type) {
+
+	assert(dest_type != src_type);
 
 	const std::vector<Node>& src_nodes = mapping[src_type];
 
