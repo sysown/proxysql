@@ -6093,12 +6093,16 @@ bool ProxySQL_Admin::init() {
 		debugdb_disk = new SQLite3DB();
 		debugdb_disk->open((char *)debugdb_disk_path.c_str(), SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 		debugdb_disk->execute("CREATE TABLE IF NOT EXISTS debug_log (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , time INT NOT NULL , lapse INT NOT NULL , thread INT NOT NULL , file VARCHAR NOT NULL , line INT NOT NULL , funct VARCHAR NOT NULL , modnum INT NOT NULL , modname VARCHAR NOT NULL , verbosity INT NOT NULL , message VARCHAR , note VARCHAR , backtrace VARCHAR)");
+/*
+		// DO NOT CREATE INDEX.
+		// We can create index on a running instance or an archived DB if needed
 		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_time ON debug_log (time)");
 		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_thread ON debug_log (thread)");
 		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_file ON debug_log (file)");
 		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_file_line ON debug_log (file,line)");
 		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_funct ON debug_log (funct)");
 		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_modnum ON debug_log (modnum)");
+*/
 		debugdb_disk->execute("PRAGMA synchronous=0");
 		string cmd = "ATTACH DATABASE '" + debugdb_disk_path + "' AS debugdb_disk";
 		admindb->execute(cmd.c_str());
