@@ -1,0 +1,150 @@
+@@ -30,6 +30,12 @@
+ #include <openssl/conf.h>
+ #include <openssl/md4.h>
+ 
++#include <sys/mman.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++
+ #if defined(_WIN32) && !defined(_OPENSSL_Applink) && defined(HAVE_OPENSSL_APPLINK_C)
+ #include <openssl/applink.c>
+ #endif
+@@ -73,6 +79,81 @@
+ extern my_bool ma_tls_initialized;
+ extern unsigned int mariadb_deinitialize_ssl;
+ 
++__thread SSL_CTX * thread_ctx = NULL;
++__thread void * local_x509store = NULL;
++__thread char **local_x509_files = NULL;
++__thread char **local_x509_sha1s = NULL;
++
++static int proxysql_SSL_CTX_local_x509store_add_file(SSL_CTX *ctx, const char *CAfile, int add_in_store) {
++  int found = 0;
++  int i = 0;
++
++  int fd = -1;
++  struct stat statbuf;
++  unsigned char temp[SHA_DIGEST_LENGTH];
++  char file_sha1[SHA_DIGEST_LENGTH*2+2];
++  memset(file_sha1,0,SHA_DIGEST_LENGTH*2+2);
++
++  fd = open(CAfile, O_RDONLY);
++  if (fd == -1) return 0;
++
++  if(fstat(fd, &statbuf) == 0) {
++    unsigned char *fb = (unsigned char *)mmap(0, statbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
++    if (fb != MAP_FAILED) {
++      SHA1(fb, statbuf.st_size, temp);
++      int i;
++      for (i=0; i < SHA_DIGEST_LENGTH; i++) {
++        sprintf((char*)&(file_sha1[i*2]), "%02x", temp[i]);
++      }
++      munmap(fb,statbuf.st_size);
++    } else {
++      return 0;
++    }
++  } else {
++    return 0;
++  }
++
++  if (local_x509_files == NULL) {
++    local_x509_files = (char **)malloc(sizeof(char *)*1);
++    local_x509_sha1s = (char **)malloc(sizeof(char *)*1);
++    local_x509_files[0] = NULL;
++    local_x509_sha1s[0] = NULL;
++  }
++
++  while (found == 0 && local_x509_files[i] != NULL) {
++   if (strcmp(CAfile, local_x509_files[i]) == 0) {
++     found = 1;
++   } else {
++     i++;
++   }
++  }
++  if (found == 1) {
++    if (strncmp(local_x509_sha1s[i],file_sha1,SHA_DIGEST_LENGTH*2)==0) {
++      return 1; // all good
++    } else {
++      int rc = 1;
++      free(local_x509_sha1s[i]);
++      local_x509_sha1s[i] = strdup(file_sha1);
++      rc = SSL_CTX_load_verify_file(ctx, CAfile);
++      return rc;
++    }
++  } else {
++    local_x509_files = (char **)realloc(local_x509_files,sizeof(char *)*(i+2));
++    local_x509_sha1s = (char **)realloc(local_x509_sha1s,sizeof(char *)*(i+2));
++    local_x509_files[i+1] = NULL;
++    local_x509_sha1s[i+1] = NULL;	
++    local_x509_files[i] = strdup(CAfile);
++    local_x509_sha1s[i] = strdup(file_sha1);
++    if (add_in_store == 1) {
++      int rc = 1;
++      rc = SSL_CTX_load_verify_file(ctx, CAfile);
++      return rc;
++    }
++    return 1;
++  }
++  return 1;
++}
++
+ #define MAX_SSL_ERR_LEN 100
+ char tls_library_version[TLS_VERSION_LENGTH];
+ 
+@@ -456,7 +537,7 @@
+   char *pw= (mysql->options.extension) ?
+             mysql->options.extension->tls_pw : NULL;
+   SSL_CTX *ctx= SSL_get_SSL_CTX(ssl);
+-
++  int ssl_rc = 0;
+   
+   /* add cipher */
+   if ((mysql->options.ssl_cipher &&
+@@ -467,16 +548,32 @@
+    }
+ 
+   /* ca_file and ca_path */
+-  if (!SSL_CTX_load_verify_locations(ctx,
++  if (local_x509store != NULL && mysql->options.ssl_ca != NULL && mysql->options.ssl_capath == NULL) {
++    SSL_CTX_set1_cert_store(ctx, local_x509store);
++    ssl_rc = proxysql_SSL_CTX_local_x509store_add_file(ctx, mysql->options.ssl_ca, 1);
++  } else {
++    // default behavior
++    ssl_rc = SSL_CTX_load_verify_locations(ctx,
+                                     mysql->options.ssl_ca,
+-                                    mysql->options.ssl_capath))
+-  {
++                                    mysql->options.ssl_capath);
++    if (ssl_rc == 1) {
++      if (local_x509store == NULL)
++        if (SSL_CTX_get_cert_store(ctx) != NULL) {
++          local_x509store = SSL_CTX_get_cert_store(ctx);
++          thread_ctx = SSL_CTX_new(TLS_client_method());
++          SSL_CTX_set1_cert_store(thread_ctx, local_x509store);
++          if (mysql->options.ssl_ca != NULL) {
++            proxysql_SSL_CTX_local_x509store_add_file(ctx,mysql->options.ssl_ca, 0);
++          }
++		}
++    }
++  }
++  if (ssl_rc == 0) {
+     if (mysql->options.ssl_ca || mysql->options.ssl_capath)
+       goto error;
+     if (SSL_CTX_set_default_verify_paths(ctx) == 0)
+       goto error;
+   }
+-
+   if (keyfile && !certfile)
+     certfile= keyfile;
+   if (certfile && !keyfile)
+@@ -566,6 +663,8 @@
+   SSL_CTX_sess_set_remove_cb(ctx, ma_tls_remove_session_cb);
+ #endif
+ 
++//	if (local_x509store != NULL)
++//		SSL_CTX_set1_cert_store(ctx, local_x509store);
+   if (!(ssl= SSL_new(ctx)))
+     goto error;
+ 
