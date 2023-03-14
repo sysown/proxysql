@@ -424,8 +424,31 @@ class MySQL_HostGroups_Manager {
 		~HostGroup_Server_Mapping() = default;
 
 		// Note: copy_if_not_exists, remove, clear method also makes changes to MyHostGroups
+
+		/**
+		  * @brief Copies all unique nodes from source vector to destination vector.
+		  * @details Copies all unique nodes from source vector to destination vector. The source and destination vectors are identified by an input enumeration type, 
+		  *			 which can be either a reader or a writer. During the copying process, the function also adds servers to the HostGroup connection container.
+		  * @param dest_type Input  Can be reader or writer
+		  * @param src_type Input  Can be reader or writer
+		*/
 		void copy_if_not_exists(Type dest_type, Type src_type);
+
+		/**
+		  * @brief Removes node located at the specified index.
+		  * @details Node is removed from vector located at the specified index identified by an input enumeration type. 
+					 Node that was removed is marked as offline in the HostGroup connection container.
+		  * @param dest_type Input  Can be reader or writer
+		  * @param index Input  Index of node to be removed
+		*/
 		void remove(Type type, size_t index);
+
+		/**
+		  * @brief Removes all nodes.
+		  * @details All nodes are removed from vector, identified by an input enumeration type.
+					 Nodes that are removed is marked as offline in the HostGroup connection container.
+		  * @param type Input  Can be reader or writer
+		*/
 		void clear(Type type);
 		//
 
