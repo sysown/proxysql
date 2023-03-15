@@ -1288,6 +1288,8 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
+#define SQL_MODE_SPECIAL_QUERY "SET SESSION sql_mode=' '"
+
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
@@ -1538,8 +1540,8 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	}
 	// Handle SQL_MODE with space. Issue #3863.
 	if (
-		pkt->size == strlen((char *)"SET SESSION sql_mode=' '") + 5 &&
-		strncasecmp((char *)"SET SESSION sql_mode=' '", (char *)pkt->ptr + 5, pkt->size - 5) == 0
+		pkt->size == sizeof(SQL_MODE_SPECIAL_QUERY) - 1 + 5 &&
+		strncasecmp((char *)SQL_MODE_SPECIAL_QUERY, (char *)pkt->ptr + 5, pkt->size - 5) == 0
 	) {
 		// Replace pkt with a new one with the same query but without the
 		// space, and let handler() process it.
@@ -1553,8 +1555,8 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		memcpy(pkt_2.ptr, &hrd, sizeof(mysql_hdr));
 		memcpy(
 			(char *)pkt_2.ptr + 5,
-			(char *)"SET SESSION sql_mode=''",
-			strlen((char *)"SET SESSION sql_mode=''")
+			(char *)SQL_MODE_SPECIAL_QUERY,
+			sizeof(SQL_MODE_SPECIAL_QUERY) - 1
 		);
 		l_free(pkt->size, pkt->ptr);
 		pkt->size = pkt_2.size;
