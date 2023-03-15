@@ -2868,18 +2868,16 @@ const std::unordered_map<std::string, int> query_cache_types_umap {{"OFF", 0}, {
 
 void MySQL_Connection::compare_system_variable(const char *name, const size_t name_length) {
 	const MARIADB_CHARSET_INFO *ci = NULL;
-	uint64_t proxysql_max_join_size_value;
 	std::string name_str, value_str;
-	const char *value, *ci_name;
 	int idx = -1, value_int;
 	size_t value_length;
+	const char *value;
 
 	mysql_session_track_get_next(
 		mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
 	);
 
 	if (strncasecmp("autocommit", name, name_length) == 0) {
-		proxy_info("autocommit\n");
 		value_str = std::string(value, value_length);
 		try {
 			value_int = query_cache_types_umap.at(value_str);
@@ -2927,37 +2925,50 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 	// value in a different way than the backend.
 	switch (idx) {
 	case SQL_MAX_JOIN_SIZE:
-		proxysql_max_join_size_value = atoi(variables[idx].value);
-		if (strcasecmp(variables[idx].value, MAX_JOIN_SIZE_DEFAULT_STR_VALUE) == 0)
-			proxysql_max_join_size_value = MAX_JOIN_SIZE_DEFAULT_INT_VALUE;
-		if (proxysql_max_join_size_value != strtoull(std::string(value, value_length).c_str(), NULL, 10))
-			assert(0);
+		value_str = std::string(value, value_length);
+		if (MAX_JOIN_SIZE_DEFAULT_INT_VALUE == strtoull(std::string(value, value_length).c_str(), NULL, 10))
+			value_str = MAX_JOIN_SIZE_DEFAULT_STR_VALUE;
+		if (!variables[idx].value || strcasecmp(variables[idx].value, value_str.c_str()) != 0) {
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		}
 		break;
 	case SQL_QUERY_CACHE_TYPE:
 		value_str = std::string(value, value_length);
 		try {
 			value_int = query_cache_types_umap.at(value_str);
-			if (atoi(variables[idx].value) != value_int)
-				assert(0);
 		}
 		catch (std::out_of_range const&) {
 			assert(0);
 		}
+		if (!variables[idx].value || atoi(variables[idx].value) != value_int) {
+			value_str = std::to_string(value_int);
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		}
 		break;
 	case SQL_LONG_QUERY_TIME:
 	case SQL_TIMESTAMP:
-		if (atof(variables[idx].value) != atof(std::string(value, value_length).c_str()))
-			assert(0);
+		if (!variables[idx].value || atof(variables[idx].value) != atof(std::string(value, value_length).c_str())) {
+			value_str = std::string(value, value_length);
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		}
 		break;
 	case SQL_SQL_MODE:
-		value_str = variables[idx].value;
-		if (strcasecmp(variables[idx].value, SQL_MODE_TRADITIONAL) == 0) {
-			value_str = SQL_MODE_TRADITIONAL_EQUIVALENT;
-			if (strncmp(mysql->server_version, MYSQL_VERSION_5_7, sizeof(MYSQL_VERSION_5_7) - 1) == 0)
-				value_str = SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7;
+		if (strncasecmp(SQL_MODE_TRADITIONAL_EQUIVALENT, value, value_length) == 0) {
+			value_str = SQL_MODE_TRADITIONAL;
+		} else if (
+			strncmp(mysql->server_version, MYSQL_VERSION_5_7, sizeof(MYSQL_VERSION_5_7) - 1) == 0 &&
+			strncasecmp(SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7, value, value_length) == 0
+		) {
+			value_str = SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7;
+		} else {
+			value_str = std::string(value, value_length);
 		}
-		if (strncasecmp(value_str.c_str(), value, value_length) != 0) {
-			assert(0);
+		if (!variables[idx].value || strcasecmp(variables[idx].value, value_str.c_str()) != 0) {
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
 		}
 		break;
 	case SQL_CHARACTER_SET_DATABASE:
@@ -2967,23 +2978,28 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 	case SQL_COLLATION_CONNECTION:
 	case SQL_SET_NAMES:
 		if (value_length == 0) {
-			if (strcasecmp(variables[idx].value, "NULL") != 0)
-				assert(0);
+			if (!variables[idx].value || strcasecmp(variables[idx].value, "NULL") != 0) {
+				mysql_variables.client_set_value(myds->sess, idx, "NULL");
+				mysql_variables.server_set_value(myds->sess, idx, "NULL");
+			}
 			break;
 		}
-		ci = proxysql_find_charset_nr(atoi(variables[idx].value));
+		if (idx == SQL_COLLATION_CONNECTION)
+			ci = proxysql_find_charset_collate(std::string(value, value_length).c_str());
+		else
+			ci = proxysql_find_charset_name(std::string(value, value_length).c_str());
 		if (!ci)
 			assert(0);
-		ci_name = ci->csname;
-		if (idx == SQL_COLLATION_CONNECTION)
-			ci_name = ci->name;
-		if (!ci_name || strncasecmp(ci_name, value, value_length) != 0)
-			assert(0);
+		if (!variables[idx].value || strtoul(variables[idx].value, NULL, 10) != ci->nr) {
+			value_str = std::to_string(ci->nr);
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		}
 		break;
 	case -1:
 		break;
 	default:
-		if (strncasecmp(variables[idx].value, value, value_length) != 0) {
+		if (!variables[idx].value || strncasecmp(variables[idx].value, value, value_length) != 0) {
 			value_str = std::string(value, value_length);
 			mysql_variables.client_set_value(myds->sess, idx, value_str);
 			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
