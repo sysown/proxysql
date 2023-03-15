@@ -512,11 +512,11 @@ bool Query_Info::is_select_NOT_for_update() {
 	return true;
 }
 
-#define NET_COMMAND_BYTE 1
+#define NET_COMMAND_SIZE 1
 
 void Query_Info::replace_query_ptr(const PtrSize_t& pkt) {
-	QueryPointer = static_cast<unsigned char*>(pkt.ptr) + (sizeof(mysql_hdr) + NET_COMMAND_BYTE);
-	QueryLength = pkt.size - (sizeof(mysql_hdr) + NET_COMMAND_BYTE);
+	QueryPointer = static_cast<unsigned char*>(pkt.ptr) + (sizeof(mysql_hdr) + NET_COMMAND_SIZE);
+	QueryLength = pkt.size - (sizeof(mysql_hdr) + NET_COMMAND_SIZE);
 }
 
 void * MySQL_Session::operator new(size_t size) {
@@ -1295,8 +1295,6 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 	l_free(pkt->size,pkt->ptr);
 }
 
-#define SQL_MODE_SPECIAL_QUERY "SET SESSION sql_mode=' '"
-
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
@@ -1544,9 +1542,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		}
 	}
 	// Handle SQL_MODE with space. Issue #3863.
+	const char sql_mode_special_query[] = { "set session sql_mode=' '" };
+	const size_t sql_mode_special_query_length = strlen(sql_mode_special_query);
 	if (
-		pkt->size == sizeof(SQL_MODE_SPECIAL_QUERY) - 1 + 5 &&
-		strncasecmp((char *)SQL_MODE_SPECIAL_QUERY, (char *)pkt->ptr + 5, pkt->size - 5) == 0
+		pkt->size == sql_mode_special_query_length + 5 &&
+		strncasecmp(sql_mode_special_query, (char *)pkt->ptr + 5, pkt->size - 5) == 0
 	) {
 		// Replace pkt with a new one with the same query but without the
 		// space, and let handler() process it.
@@ -1558,11 +1558,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		hrd.pkt_length = pkt_2.size - 5;
 		memcpy((char *)pkt_2.ptr + 4, (char *)pkt->ptr + 4, 1);
 		memcpy(pkt_2.ptr, &hrd, sizeof(mysql_hdr));
-		memcpy(
-			(char *)pkt_2.ptr + 5,
-			(char *)SQL_MODE_SPECIAL_QUERY,
-			sizeof(SQL_MODE_SPECIAL_QUERY) - 1
-		);
+		memcpy((char *)pkt_2.ptr + 5, sql_mode_special_query, sql_mode_special_query_length);
 		l_free(pkt->size, pkt->ptr);
 		pkt->size = pkt_2.size;
 		pkt->ptr = pkt_2.ptr;
