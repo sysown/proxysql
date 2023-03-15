@@ -1382,8 +1382,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
-			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
-			CurrentQuery.QueryLength = pkt_2.size;
+			CurrentQuery.replace_query_ptr(pkt_2);
 		}
 	}
 	if ((pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
@@ -1406,8 +1405,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
-			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
-			CurrentQuery.QueryLength = pkt_2.size;
+			CurrentQuery.replace_query_ptr(pkt_2);
 		}
 	}
 	if (
@@ -7741,8 +7739,7 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	_pkt->size = _pkt->size + strlen(b);
 	_pkt->ptr = _new_pkt.ptr;
 	free(b);
-	CurrentQuery.QueryLength = _pkt->size - 5;
-	CurrentQuery.QueryPointer = (unsigned char *)_pkt->ptr + 5;
+	CurrentQuery.replace_query_ptr(*_pkt);
 }
 
 void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
