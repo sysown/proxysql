@@ -512,6 +512,13 @@ bool Query_Info::is_select_NOT_for_update() {
 	return true;
 }
 
+#define NET_COMMAND_BYTE 1
+
+void Query_Info::replace_query_ptr(const PtrSize_t& pkt) {
+	QueryPointer = static_cast<unsigned char*>(pkt.ptr) + (sizeof(mysql_hdr) + NET_COMMAND_BYTE);
+	QueryLength = pkt.size - (sizeof(mysql_hdr) + NET_COMMAND_BYTE);
+}
+
 void * MySQL_Session::operator new(size_t size) {
 	return l_alloc(size);
 }
@@ -1563,8 +1570,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		pkt->ptr = pkt_2.ptr;
 		// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 		// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
-		CurrentQuery.QueryPointer = static_cast<unsigned char*>((unsigned char *)pkt_2.ptr + 5);
-		CurrentQuery.QueryLength = pkt_2.size - 5;
+		CurrentQuery.replace_query_ptr(pkt_2);
 	}
 
 	return false;
