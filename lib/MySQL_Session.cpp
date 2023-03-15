@@ -1539,7 +1539,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	// Handle SQL_MODE with space. Issue #3863.
 	if (
 		pkt->size == strlen((char *)"SET SESSION sql_mode=' '") + 5 &&
-		strncmp((char *)"SET SESSION sql_mode=' '", (char *)pkt->ptr+5, pkt->size-5) == 0
+		strncasecmp((char *)"SET SESSION sql_mode=' '", (char *)pkt->ptr + 5, pkt->size - 5) == 0
 	) {
 		// Replace pkt with a new one with the same query but without the
 		// space, and let handler() process it.
