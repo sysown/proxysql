@@ -31,7 +31,6 @@ static pthread_rwlock_t filters_rwlock;
 static SQLite3DB * debugdb_disk = NULL;
 sqlite3_stmt *statement1=NULL;
 static unsigned int debug_output = 1;
-static unsigned long long last_checkpoint = 0;
 #endif /* DEBUG */
 
 /*
@@ -214,12 +213,6 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 			}
 		}
 		if (write_to_disk == true) {
-			if (last_checkpoint == 0 || (curtime > last_checkpoint + 10*1000*1000)) {
-				// commit every 10 seconds
-				last_checkpoint = curtime;
-				db->execute("COMMIT");
-				db->execute("BEGIN");
-			}
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 1, curtime); ASSERT_SQLITE_OK(rc, db);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 2, curtime-pretime); ASSERT_SQLITE_OK(rc, db);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 3, thr); ASSERT_SQLITE_OK(rc, db);
