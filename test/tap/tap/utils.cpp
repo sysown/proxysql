@@ -957,6 +957,8 @@ int get_cur_backend_conns(MYSQL* proxy_admin, const string& conn_type, uint32_t&
 int wait_for_backend_conns(
 	MYSQL* proxy_admin, const string& conn_type, uint32_t exp_conn_num, uint32_t timeout
 ) {
+	diag("Waiting for backend connections - type: %s, exp: %d, timeout: %d", conn_type.c_str(), exp_conn_num, timeout);
+
 	uint32_t total_conn_num = 0;
 	uint32_t waited = 0;
 
@@ -967,12 +969,14 @@ int wait_for_backend_conns(
 		if (total_conn_num == exp_conn_num) {
 			break;
 		} else {
+			diag("Not reached - exp: %d, act: %d, waiting: %ds", exp_conn_num, total_conn_num, 1);
 			sleep(1);
 			waited += 1;
 		}
 	}
 
 	if (waited >= timeout) {
+		diag("Timeout exceeded - type: %s, exp: %d, act: %d", conn_type.c_str(), exp_conn_num, total_conn_num);
 		return EXIT_FAILURE;
 	} else {
 		return EXIT_SUCCESS;
