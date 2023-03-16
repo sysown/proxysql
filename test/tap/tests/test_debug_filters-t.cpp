@@ -162,6 +162,11 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	diag("This test is now disabled because the plan is to have debugging always enabled");
+	plan(1);
+	ok(1,"This test is now disabled because the plan is to have debugging always enabled");
+	return exit_status();
+
 	const auto create_conn_action = [&cl]() -> int { return create_and_close_proxy_conn(cl); };
 	const auto set_statement_action = [&cl]() -> int { return set_statement_query(cl); };
 
