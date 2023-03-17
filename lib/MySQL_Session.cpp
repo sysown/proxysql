@@ -95,6 +95,7 @@ static const std::set<std::string> mysql_variables_numeric = {
 	"max_heap_table_size",
 	"max_join_size",
 	"max_sort_length",
+	"max_statement_time",
 	"optimizer_prune_level",
 	"optimizer_search_depth",
 	"optimizer_use_condition_selectivity",
