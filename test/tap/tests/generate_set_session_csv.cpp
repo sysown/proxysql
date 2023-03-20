@@ -205,6 +205,9 @@ int main() {
 	vars["sort_buffer_size"] = new variable("sort_buffer_size", true, true, false);
 	vars["sort_buffer_size"]->add(int_values, 40123);
 	vars["sort_buffer_size"]->add("18446744073709551615");
+	vars["max_statement_time"] = new variable("max_statement_time", true, true, false);
+	vars["max_statement_time"]->add(int_values, 12012);
+	vars["max_statement_time"]->add("0");
 	vars["max_execution_time"] = new variable("max_execution_time", true, true, false);
 	vars["max_execution_time"]->add(int_values, 12930);
 	vars["max_execution_time"]->add("0");
