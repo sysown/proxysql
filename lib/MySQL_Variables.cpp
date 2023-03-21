@@ -31,6 +31,8 @@ MySQL_Variables::MySQL_Variables() {
 	ignore_vars.push_back("net_buffer_length");
 	ignore_vars.push_back("read_buffer_size");
 	ignore_vars.push_back("read_rnd_buffer_size");
+	ignore_vars.push_back("session_track_state_change");
+	ignore_vars.push_back("session_track_system_variables");
 	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
 	ignore_vars.push_back("session_track_schema");
 	variables_regexp = "";

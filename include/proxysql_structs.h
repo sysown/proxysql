@@ -206,6 +206,8 @@ enum mysql_variable_name {
 	SQL_OPTIMIZER_USE_CONDITION_SELECTIVITY,
 	SQL_PROFILING,
 	SQL_QUERY_CACHE_TYPE,
+	SQL_SESSION_TRACK_STATE_CHANGE,
+	SQL_SESSION_TRACK_SYSTEM_VARIABLES,
 	SQL_SORT_BUFFER_SIZE,
 	SQL_SQL_AUTO_IS_NULL,
 	SQL_SQL_BIG_SELECTS,
@@ -855,6 +857,7 @@ __thread bool mysql_thread___log_mysql_warnings_enabled;
 __thread bool mysql_thread___enable_load_data_local_infile;
 __thread int mysql_thread___client_host_cache_size;
 __thread int mysql_thread___client_host_error_counts;
+__thread bool mysql_thread___enable_session_state_trackers;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -1021,6 +1024,7 @@ extern __thread bool mysql_thread___log_mysql_warnings_enabled;
 extern __thread bool mysql_thread___enable_load_data_local_infile;
 extern __thread int mysql_thread___client_host_cache_size;
 extern __thread int mysql_thread___client_host_error_counts;
+extern __thread bool mysql_thread___enable_session_state_trackers;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
@@ -1163,6 +1167,8 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_OPTIMIZER_USE_CONDITION_SELECTIVITY, SETTING_VARIABLE, false,  false, true, false, (char*)"optimizer_use_condition_selectivity", NULL, (char*)"" , false} ,
 	{ SQL_PROFILING,                  SETTING_VARIABLE, true,  false, false, true, ( char *)"profiling",                  NULL, (char *)"" , false} ,
 	{ SQL_QUERY_CACHE_TYPE,           SETTING_VARIABLE, false, false, true,  true, ( char *)"query_cache_type",           NULL, (char *)"" , false} , // note that this variable can act both as boolean AND a number. See https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_query_cache_type
+	{ SQL_SESSION_TRACK_STATE_CHANGE, SETTING_VARIABLE, false, false, false,  false, (char *)"session_track_state_change", NULL, (char *)"ON" , false} ,
+	{ SQL_SESSION_TRACK_SYSTEM_VARIABLES, SETTING_VARIABLE, true, false, false,  false, (char *)"session_track_system_variables", NULL, (char *)"*" , false} ,
 	{ SQL_SORT_BUFFER_SIZE,           SETTING_VARIABLE, false, false, true,  false, (char *)"sort_buffer_size",           NULL, (char *)"18446744073709551615" , false} ,
 	{ SQL_SQL_AUTO_IS_NULL,           SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_auto_is_null",           NULL, (char *)"OFF" , false} ,
 	{ SQL_SQL_BIG_SELECTS,            SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_big_selects",            NULL, (char *)"OFF" , true} ,

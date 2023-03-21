@@ -578,6 +578,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
+	(char *)"enable_session_state_trackers",
 	NULL
 };
 
@@ -1215,6 +1216,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
 	variables.log_mysql_warnings_enabled=false;
+	variables.enable_session_state_trackers=true;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -2135,6 +2137,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_bool["stats_time_query_processor"]      = make_tuple(&variables.stats_time_query_processor,      false);
 		VariablesPointers_bool["use_tcp_keepalive"]               = make_tuple(&variables.use_tcp_keepalive,               false);
 		VariablesPointers_bool["verbose_query_error"]             = make_tuple(&variables.verbose_query_error,             false);
+		VariablesPointers_bool["enable_session_state_trackers"]   = make_tuple(&variables.enable_session_state_trackers,   false);
 #ifdef IDLE_THREADS
 		VariablesPointers_bool["session_idle_show_processlist"] = make_tuple(&variables.session_idle_show_processlist, false);
 #endif // IDLE_THREADS
@@ -4148,6 +4151,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
 	mysql_thread___client_host_cache_size=GloMTH->get_variable_int((char *)"client_host_cache_size");
 	mysql_thread___client_host_error_counts=GloMTH->get_variable_int((char *)"client_host_error_counts");
+	mysql_thread___enable_session_state_trackers=(bool)GloMTH->get_variable_int((char *)"enable_session_state_trackers");
+
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
