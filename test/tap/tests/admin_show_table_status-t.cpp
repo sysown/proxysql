@@ -54,6 +54,7 @@ int main() {
 	while ((row = mysql_fetch_row(proxy_res))) {
 		std::string table(row[0]);
 		tables.push_back(table);
+		diag("Adding table: %s", row[0]);
 	}
 	mysql_free_result(proxy_res);
 	mysql_close(proxysql_admin);
@@ -76,6 +77,7 @@ int main() {
 		char *query = (char *) malloc(strlen(queries[0]) + it->length() + 8);
 		for (std::vector<const char *>::iterator it2 = queries.begin(); it2 != queries.end(); it2++) {
 			sprintf(query,*it2, it->c_str());
+			diag("Running query: %s", query);
 			MYSQL_QUERY(proxysql_admin, query);
 			MYSQL_RES* proxy_res = mysql_store_result(proxysql_admin);
 			unsigned long rows = proxy_res->row_count;
