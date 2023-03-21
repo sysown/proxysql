@@ -6104,8 +6104,14 @@ bool ProxySQL_Admin::init() {
 		debugdb_disk->execute("CREATE INDEX IF NOT EXISTS idx_debug_log_modnum ON debug_log (modnum)");
 */
 		debugdb_disk->execute("PRAGMA synchronous=0");
+/*
+		// DO NOT ATTACH DATABASE
+		// it seems sqlite starts randomly failing. For example these 2 TAP tests:
+		// - admin_show_fields_from-t
+		// - admin_show_table_status-t
 		string cmd = "ATTACH DATABASE '" + debugdb_disk_path + "' AS debugdb_disk";
 		admindb->execute(cmd.c_str());
+*/
 		proxysql_set_admin_debugdb_disk(debugdb_disk);
 	}
 #endif /* DEBUG */
