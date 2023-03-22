@@ -7,6 +7,16 @@
 #include <vector>
 #define PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
 
+#ifndef SAFE_SQLITE3_STEP2
+#define SAFE_SQLITE3_STEP2(_stmt) do {\
+  do {\
+    rc=(*proxy_sqlite3_step)(_stmt);\
+    if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
+      usleep(100);\
+    }\
+  } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
+} while (0)
+#endif // SAFE_SQLITE3_STEP2
 
 #ifndef MAIN_PROXY_SQLITE3
 extern int (*proxy_sqlite3_bind_double)(sqlite3_stmt*, int, double);

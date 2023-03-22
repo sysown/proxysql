@@ -332,6 +332,10 @@ class ProxySQL_Admin {
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
 	SQLite3DB *statsdb_disk; // on disk
+#ifdef DEBUG
+	SQLite3DB *debugdb_disk; // on disk for debug
+	int debug_output;
+#endif
 	int pipefd[2];
 	void print_version();
 	bool init();
