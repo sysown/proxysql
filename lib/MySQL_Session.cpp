@@ -3698,6 +3698,16 @@ __get_pkts_from_client:
 						return handler_ret;
 						break;
 				}
+				if (mysql_thread___enable_session_state_trackers) {
+					mysql_variables.client_set_value(
+						this, SQL_SESSION_TRACK_STATE_CHANGE,
+						mysql_tracked_variables[SQL_SESSION_TRACK_STATE_CHANGE].default_value
+					);
+					mysql_variables.client_set_value(
+						this, SQL_SESSION_TRACK_SYSTEM_VARIABLES,
+						mysql_tracked_variables[SQL_SESSION_TRACK_SYSTEM_VARIABLES].default_value
+					);
+				}
 				break;
 
 			case WAITING_CLIENT_DATA:
