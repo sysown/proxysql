@@ -457,10 +457,25 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			continue;
 		}
 		if (strcmp(row[0],"mysql_servers")==0) {
+			if (GloAdmin->checksum_variables.checksum_mysql_servers == false) {
+				// TODO: Explain why this copy is required and relationship with global-checksums
+				if (strcmp(checksums_values.mysql_servers.checksum, row[3])) {
+					strcpy(checksums_values.mysql_servers.checksum, row[3]);
+					checksums_values.mysql_servers.last_changed = 0;
+					unsigned long long version = atoll(row[1]);
+					unsigned long long epoch = atoll(row[2]);
+
+					proxy_info(
+						"Cluster: detected a new checksum for mysql_servers from peer %s:%d, version %llu, epoch %llu, checksum %s. Not syncing due to 'admin-checksum_mysql_servers=false'.\n",
+						hostname, port, version, epoch, checksums_values.mysql_servers.checksum
+					);
+				}
+				continue;
+			}
 			checksums_values.mysql_servers.version = atoll(row[1]);
 			checksums_values.mysql_servers.epoch = atoll(row[2]);
 			checksums_values.mysql_servers.last_updated = now;
-			if (strcmp(checksums_values.mysql_servers.checksum, row[3])) {
+			if (strcmp(checksums_values.mysql_servers.checksum, row[3]) || checksums_values.mysql_servers.last_changed == 0) {
 				strcpy(checksums_values.mysql_servers.checksum, row[3]);
 				checksums_values.mysql_servers.last_changed = now;
 				checksums_values.mysql_servers.diff_check = 1;
