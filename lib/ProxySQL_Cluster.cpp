@@ -2005,7 +2005,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 							GloAdmin->flush_mysql_variables__from_memory_to_disk();
 						}
 					} else if (var_type == "admin") {
-						GloAdmin->load_admin_variables_to_runtime(expected_checksum, epoch);
+						GloAdmin->load_admin_variables_to_runtime(expected_checksum, epoch, false);
 
 						if (GloProxyCluster->cluster_admin_variables_save_to_disk == true) {
 							proxy_info("Cluster: Saving to disk Admin Variables from peer %s:%d\n", hostname, port);
@@ -2470,6 +2470,20 @@ bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQ
 	}
 	pthread_mutex_unlock(&mutex);
 	return ret;
+}
+
+void ProxySQL_Cluster_Nodes::Reset_Global_Checksums(bool lock) {
+	if (lock) {
+		pthread_mutex_lock(&mutex);
+	}
+
+	for (auto& proxy_node_entry : umap_proxy_nodes) {
+		proxy_node_entry.second->global_checksum = 0;
+	}
+
+	if (lock) {
+		pthread_mutex_unlock(&mutex);
+	}
 }
 
 // if it returns false , the node doesn't exist anymore and the monitor should stop

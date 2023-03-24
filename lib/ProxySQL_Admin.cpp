@@ -6512,7 +6512,9 @@ void ProxySQL_Admin::load_or_update_global_settings(SQLite3DB *db) {
 	}
 }
 
-void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const string& checksum, const time_t epoch) {
+void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
+	SQLite3DB *db, bool replace, const string& checksum, const time_t epoch, bool lock
+) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
 	char *error=NULL;
 	int cols=0;
@@ -6527,7 +6529,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 		wrlock();
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			bool rc=set_variable(r->fields[0],r->fields[1]);
+			bool rc=set_variable(r->fields[0],r->fields[1], lock);
 			if (rc==false) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
 				if (replace) {
@@ -7907,7 +7909,7 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 	free_tokenizer( &tok );
 }
 
-bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the public function, accessible from admin
+bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this is the public function, accessible from admin
 	size_t vallen=strlen(value);
 
 	if (!strcasecmp(name,"admin_credentials")) {
@@ -8387,15 +8389,23 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		return false;
 	}
 	if (!strcasecmp(name,"checksum_mysql_servers")) {
+		bool new_value = true;
+
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			checksum_variables.checksum_mysql_servers=true;
-			return true;
+			new_value = true;
+		} else if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			new_value = false;
+		} else {
+			return false;
 		}
-		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			checksum_variables.checksum_mysql_servers=false;
-			return true;
+
+		if (checksum_variables.checksum_mysql_servers == false && new_value == true) {
+			proxy_info("Updated 'admin-checksum_mysql_servers' to 'true'. Resetting global checksums to force Cluster re-sync.");
+			GloProxyCluster->Reset_Global_Checksums(lock);
 		}
-		return false;
+
+		checksum_variables.checksum_mysql_servers = new_value;
+		return true;
 	}
 	if (!strcasecmp(name,"checksum_mysql_users")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
