@@ -417,6 +417,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	MYSQL_ROW row;
 	time_t now = time(NULL);
 	pthread_mutex_lock(&GloVars.checksum_mutex);
+
+	// Fetch the checksum variables to ensure consistency at local scope
+	bool admin_checksum_mysql_servers = GloAdmin->checksum_variables.checksum_mysql_servers;
+
 	while ( _r && (row = mysql_fetch_row(_r))) {
 		if (strcmp(row[0],"admin_variables")==0) {
 			checksums_values.admin_variables.version = atoll(row[1]);
@@ -457,36 +461,34 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			continue;
 		}
 		if (strcmp(row[0],"mysql_servers")==0) {
-			if (GloAdmin->checksum_variables.checksum_mysql_servers == false) {
-				// TODO: Explain why this copy is required and relationship with global-checksums
-				if (strcmp(checksums_values.mysql_servers.checksum, row[3])) {
-					strcpy(checksums_values.mysql_servers.checksum, row[3]);
-					checksums_values.mysql_servers.last_changed = 0;
-					unsigned long long version = atoll(row[1]);
-					unsigned long long epoch = atoll(row[2]);
-
-					proxy_info(
-						"Cluster: detected a new checksum for mysql_servers from peer %s:%d, version %llu, epoch %llu, checksum %s. Not syncing due to 'admin-checksum_mysql_servers=false'.\n",
-						hostname, port, version, epoch, checksums_values.mysql_servers.checksum
-					);
-				}
-				continue;
-			}
 			checksums_values.mysql_servers.version = atoll(row[1]);
 			checksums_values.mysql_servers.epoch = atoll(row[2]);
 			checksums_values.mysql_servers.last_updated = now;
-			if (strcmp(checksums_values.mysql_servers.checksum, row[3]) || checksums_values.mysql_servers.last_changed == 0) {
+			if (strcmp(checksums_values.mysql_servers.checksum, row[3])) {
 				strcpy(checksums_values.mysql_servers.checksum, row[3]);
 				checksums_values.mysql_servers.last_changed = now;
 				checksums_values.mysql_servers.diff_check = 1;
-				proxy_info("Cluster: detected a new checksum for mysql_servers from peer %s:%d, version %llu, epoch %llu, checksum %s . Not syncing yet ...\n", hostname, port, checksums_values.mysql_servers.version, checksums_values.mysql_servers.epoch, checksums_values.mysql_servers.checksum);
-				if (strcmp(checksums_values.mysql_servers.checksum, GloVars.checksums_values.mysql_servers.checksum) == 0) {
-					proxy_info("Cluster: checksum for mysql_servers from peer %s:%d matches with local checksum %s , we won't sync.\n", hostname, port, GloVars.checksums_values.mysql_servers.checksum);
+
+				// See 'DISABLED MODULE CHECKSUMS' at 'admin_variables' above
+				if (admin_checksum_mysql_servers) {
+					proxy_info(
+						"Cluster: detected a new checksum for mysql_servers from peer %s:%d, version %llu, epoch %llu, checksum %s . Not syncing yet ...\n",
+						hostname, port, checksums_values.mysql_servers.version, checksums_values.mysql_servers.epoch, checksums_values.mysql_servers.checksum
+					);
+				} else {
+					proxy_info(
+						"Cluster: detected a new checksum for mysql_servers from peer %s:%d, version %llu, epoch %llu, checksum %s. Not syncing due to 'admin-checksum_mysql_servers=false'.\n",
+						hostname, port, checksums_values.mysql_servers.version, checksums_values.mysql_servers.epoch, checksums_values.mysql_servers.checksum
+					);
 				}
 			} else {
 				checksums_values.mysql_servers.diff_check++;
 			}
 			if (strcmp(checksums_values.mysql_servers.checksum, GloVars.checksums_values.mysql_servers.checksum) == 0) {
+				// See LOGGING-NOTE at 'admin_variables' above.
+				if (checksums_values.mysql_servers.last_changed == now) {
+					proxy_info("Cluster: checksum for mysql_servers from peer %s:%d matches with local checksum %s , we won't sync.\n", hostname, port, GloVars.checksums_values.mysql_servers.checksum);
+				}
 				checksums_values.mysql_servers.diff_check = 0;
 			}
 			continue;
@@ -629,7 +631,8 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	// note that this is done outside the critical section
 	// as mutex on GloVars.checksum_mutex is already released
 	unsigned int diff_mqr = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync,0);
-	unsigned int diff_ms = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0);
+	unsigned int diff_ms = admin_checksum_mysql_servers ?
+		(unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync,0) : 0;
 	unsigned int diff_mu = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_users_diffs_before_sync,0);
 	unsigned int diff_ps = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync,0);
 	unsigned int diff_mv = (unsigned int)__sync_fetch_and_add(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync,0);
