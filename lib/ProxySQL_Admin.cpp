@@ -8400,7 +8400,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 
 		if (checksum_variables.checksum_mysql_servers == false && new_value == true) {
-			proxy_info("Updated 'admin-checksum_mysql_servers' to 'true'. Resetting global checksums to force Cluster re-sync.");
+			proxy_info("Updated 'admin-checksum_mysql_servers' to 'true'. Resetting global checksums to force Cluster re-sync.\n");
 			GloProxyCluster->Reset_Global_Checksums(lock);
 		}
 
