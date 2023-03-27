@@ -2900,6 +2900,8 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 	}
 	sess->client_myds->myconn->options.session_track_gtids=strdup(mysql_thread___default_session_track_gtids);
 
+	mysql_variables.enable_session_state_trackers(sess);
+
 	return sess;
 }
 
