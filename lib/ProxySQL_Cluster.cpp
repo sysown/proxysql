@@ -538,7 +538,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 			if (strcmp(checksums_values.mysql_servers.checksum, GloVars.checksums_values.mysql_servers.checksum) == 0) {
 				// See LOGGING-NOTE at 'admin_variables' above.
 				if (checksums_values.mysql_servers.last_changed == now) {
-					proxy_info("Cluster: checksum for mysql_servers from peer %s:%d matches with local checksum %s , we won't sync.\n", hostname, port, GloVars.checksums_values.mysql_servers.checksum);
+					proxy_info(
+						"Cluster: checksum for mysql_servers from peer %s:%d matches with local checksum %s , we won't sync.\n",
+						hostname, port, GloVars.checksums_values.mysql_servers.checksum
+					);
 				}
 				checksums_values.mysql_servers.diff_check = 0;
 			}
