@@ -7831,7 +7831,11 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	string digest_str = string(CurrentQuery.get_digest_text());
 	string& nqn = ( mysql_thread___parse_failure_logs_digest == true ? digest_str : query_str );
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
-	if (qpo->multiplex == -1) {
+	if (
+		qpo->multiplex == -1 &&
+		(mybe->server_myds->myconn->var_absent[SQL_SESSION_TRACK_STATE_CHANGE] ||
+		mybe->server_myds->myconn->var_absent[SQL_SESSION_TRACK_SYSTEM_VARIABLES])
+	) {
 		// we have no rule about this SET statement. We set hostgroup locking
 		if (locked_on_hostgroup < 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "SET query to cause setting lock_hostgroup: %s\n", nqn.c_str());

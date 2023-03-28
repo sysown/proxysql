@@ -2866,18 +2866,13 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 
 const std::unordered_map<std::string, int> query_cache_types_umap {{"OFF", 0}, {"ON", 1}, {"DEMAND", 2}};
 
-void MySQL_Connection::compare_system_variable(const char *name, const size_t name_length) {
+void MySQL_Connection::compare_system_variable(const std::string name, const std::string value) {
 	const MARIADB_CHARSET_INFO *ci = NULL;
 	std::string name_str, value_str;
 	int idx = -1, value_int;
 	size_t value_length;
-	const char *value;
 
-	mysql_session_track_get_next(
-		mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
-	);
-
-	if (strncasecmp("autocommit", name, name_length) == 0) {
+	if (strcasecmp("autocommit", name.c_str()) == 0) {
 		value_str = std::string(value, value_length);
 		try {
 			value_int = query_cache_types_umap.at(value_str);
@@ -2910,9 +2905,8 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 		return;
 	}
 
-	name_str = std::string(name, name_length);
 	try {
-		idx = mysql_variables.mysql_tracked_variables_umap.at(name_str);
+		idx = mysql_variables.mysql_tracked_variables_umap.at(name);
 	}
 	catch (std::out_of_range const&) {
 		proxy_warning(
@@ -2956,11 +2950,11 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 		}
 		break;
 	case SQL_SQL_MODE:
-		if (strncasecmp(SQL_MODE_TRADITIONAL_EQUIVALENT, value, value_length) == 0) {
+		if (strcasecmp(SQL_MODE_TRADITIONAL_EQUIVALENT, value.c_str()) == 0) {
 			value_str = SQL_MODE_TRADITIONAL;
 		} else if (
 			strncmp(mysql->server_version, MYSQL_VERSION_5_7, sizeof(MYSQL_VERSION_5_7) - 1) == 0 &&
-			strncasecmp(SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7, value, value_length) == 0
+			strcasecmp(SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7, value.c_str()) == 0
 		) {
 			value_str = SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7;
 		} else {
@@ -2999,7 +2993,7 @@ void MySQL_Connection::compare_system_variable(const char *name, const size_t na
 	case -1:
 		break;
 	default:
-		if (!variables[idx].value || strncasecmp(variables[idx].value, value, value_length) != 0) {
+		if (!variables[idx].value || strcasecmp(variables[idx].value, value.c_str()) != 0) {
 			value_str = std::string(value, value_length);
 			mysql_variables.client_set_value(myds->sess, idx, value_str);
 			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
@@ -3015,8 +3009,9 @@ void MySQL_Connection::get_system_variables() {
 	if (mysql) {
 		if (mysql->net.last_errno==0) { // only if there is no error
 			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
-				const char *name;
-				size_t name_length;
+				const char *name, *value;
+				size_t name_length, value_length;
+				std::unordered_map<std::string, std::string> changed_vars;
 				// When a session system variable is assigned, two values per
 				// variable are returned (in separate calls). For the first
 				// call, we receive the variable name as a string and its
@@ -3028,14 +3023,44 @@ void MySQL_Connection::get_system_variables() {
 						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
 					) == 0
 				) {
-					compare_system_variable(name, name_length);
+					mysql_session_track_get_next(
+						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
+					);
+					changed_vars[std::string(name, name_length)] = std::string(value, value_length);
 					while (
 						mysql_session_track_get_next(
 							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
 						) == 0
 					) {
-						compare_system_variable(name, name_length);
+						mysql_session_track_get_next(
+							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
+						);
+						changed_vars[std::string(name, name_length)] = std::string(value, value_length);
 					}
+				}
+				for (const std::pair<std::string, std::string> var : changed_vars) {
+					try {
+						mysql_variables.mysql_tracked_variables_umap.at(var.first);
+					} catch (std::out_of_range const&) {
+						if (strncasecmp("autocommit", name, name_length) != 0) {
+							proxy_warning(
+								"System variable '%s' changed, but it not tracked by ProxySQL\n",
+								var.first.c_str()
+							);
+							if (myds->sess->qpo->destination_hostgroup >= 0) {
+								if (myds->sess->transaction_persistent_hostgroup == -1) {
+									myds->sess->current_hostgroup = myds->sess->qpo->destination_hostgroup;
+								}
+							}
+							myds->sess->locked_on_hostgroup = myds->sess->current_hostgroup;
+							myds->sess->thread->status_variables.stvar[st_var_hostgroup_locked]++;
+							myds->sess->thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+							return;
+						}
+					}
+				}
+				for (const std::pair<std::string, std::string> var : changed_vars) {
+					compare_system_variable(var.first, var.second);
 				}
 			}
 		}
