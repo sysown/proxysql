@@ -6558,7 +6558,9 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(
 			}
 		}
 		//commit(); NOT IMPLEMENTED
-		if (checksum_variables.checksum_admin_variables) {
+
+		// Checksums are always generated - 'admin-checksum_*' deprecated
+		{
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
 			flush_admin_variables___runtime_to_database(admindb, false, false, false, true);
@@ -6905,7 +6907,9 @@ void ProxySQL_Admin::flush_mysql_variables___database_to_runtime(SQLite3DB *db, 
 		free(previous_default_collation_connection);
 		GloMTH->commit();
 		GloMTH->wrunlock();
-		if (checksum_variables.checksum_mysql_variables) {
+
+		// Checksums are always generated - 'admin-checksum_*' deprecated
+		{
 			// NOTE: 'GloMTH->wrunlock()' should have been called before this point to avoid possible
 			// deadlocks. See issue #3847.
 			pthread_mutex_lock(&GloVars.checksum_mutex);
@@ -7574,8 +7578,8 @@ void ProxySQL_Admin::flush_ldap_variables___database_to_runtime(SQLite3DB *db, b
 		}
 		GloMyLdapAuth->wrunlock();
 
-		// update variables checksum
-		if (checksum_variables.checksum_ldap_variables) {
+		// Checksums are always generated - 'admin-checksum_*' deprecated
+		{
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			// generate checksum for cluster
 			flush_ldap_variables___runtime_to_database(admindb, false, false, false, true);
@@ -8130,6 +8134,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_query_rules_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			if (variables.cluster_mysql_query_rules_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_admin_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
 			variables.cluster_mysql_query_rules_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync, intv);
 			return true;
@@ -8140,6 +8148,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_servers_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			if (variables.cluster_mysql_servers_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_mysql_servers_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
 			variables.cluster_mysql_servers_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync, intv);
 			return true;
@@ -8150,6 +8162,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_users_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			if (variables.cluster_mysql_users_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_mysql_users_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
 			variables.cluster_mysql_users_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_diffs_before_sync, intv);
 			return true;
@@ -8160,6 +8176,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_proxysql_servers_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			if (variables.cluster_proxysql_servers_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_proxysql_servers_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
 			variables.cluster_proxysql_servers_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_proxysql_servers_diffs_before_sync, intv);
 			return true;
@@ -8170,6 +8190,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_variables_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			if (variables.cluster_mysql_variables_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_mysql_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
 			variables.cluster_mysql_variables_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync, intv);
 			return true;
@@ -8180,6 +8204,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_admin_variables_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			if (variables.cluster_admin_variables_diffs_before_sync == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_admin_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
 			variables.cluster_admin_variables_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_admin_variables_diffs_before_sync, intv);
 			return true;
@@ -8190,6 +8218,10 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_ldap_variables_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			if (variables.cluster_ldap_variables_save_to_disk == 0 && intv != 0) {
+				proxy_info("Re-enabled previously disabled 'admin-cluster_ldap_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
 			variables.cluster_ldap_variables_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync, intv);
 			return true;
@@ -8384,28 +8416,25 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_query_rules=false;
+			variables.cluster_mysql_query_rules_diffs_before_sync = 0;
+			proxy_warning("Disabling deprecated 'admin-checksum_mysql_query_rules', setting 'admin-cluster_mysql_query_rules_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
 	}
 	if (!strcasecmp(name,"checksum_mysql_servers")) {
-		bool new_value = true;
-
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
-			new_value = true;
-		} else if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
-			new_value = false;
-		} else {
-			return false;
+			checksum_variables.checksum_mysql_servers=true;
+			return true;
+		}
+		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
+			checksum_variables.checksum_mysql_servers=false;
+			variables.cluster_mysql_servers_diffs_before_sync = 0;
+			proxy_warning("Disabling deprecated 'admin-checksum_mysql_servers', setting 'admin-cluster_mysql_servers_diffs_before_sync=0'\n");
+			return true;
 		}
 
-		if (checksum_variables.checksum_mysql_servers == false && new_value == true) {
-			proxy_info("Updated 'admin-checksum_mysql_servers' to 'true'. Resetting global checksums to force Cluster re-sync.\n");
-			GloProxyCluster->Reset_Global_Checksums(lock);
-		}
-
-		checksum_variables.checksum_mysql_servers = new_value;
-		return true;
+		return false;
 	}
 	if (!strcasecmp(name,"checksum_mysql_users")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -8414,6 +8443,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_users=false;
+			variables.cluster_mysql_users_diffs_before_sync = 0;
+			proxy_warning("Disabling deprecated 'admin-checksum_mysql_users', setting 'admin-cluster_mysql_users_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -8425,6 +8456,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_variables=false;
+			variables.cluster_mysql_variables_diffs_before_sync = 0;
+			proxy_warning("Disabling deprecated 'admin-checksum_mysql_variables', setting 'admin-cluster_mysql_variables_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -8436,6 +8469,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_admin_variables=false;
+			variables.cluster_admin_variables_diffs_before_sync = 0;
+			proxy_warning("Disabling deprecated 'admin-checksum_admin_variables', setting 'admin-cluster_admin_variables_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -8447,6 +8482,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_ldap_variables=false;
+			variables.cluster_ldap_variables_diffs_before_sync = 0;
+			proxy_warning("Disabling deprecated 'admin-checksum_ldap_variables', setting 'admin-cluster_ldap_variables_diffs_before_sync=0'\n");
 			return true;
 		}
 		return false;
@@ -10578,14 +10615,9 @@ void ProxySQL_Admin::add_admin_users() {
 void ProxySQL_Admin::__refresh_users(
 	 unique_ptr<SQLite3_result>&& mysql_users_resultset, const string& checksum, const time_t epoch
 ) {
-	bool calculate_checksum = false;
 	bool no_resultset_supplied = mysql_users_resultset == nullptr;
-
-	if (checksum_variables.checksum_mysql_users) {
-		calculate_checksum = true;
-	}
-	if (calculate_checksum)
-		pthread_mutex_lock(&GloVars.checksum_mutex);
+	// Checksums are always generated - 'admin-checksum_*' deprecated
+	pthread_mutex_lock(&GloVars.checksum_mutex);
 
 	__delete_inactive_users(USERNAME_BACKEND);
 	__delete_inactive_users(USERNAME_FRONTEND);
@@ -10605,7 +10637,8 @@ void ProxySQL_Admin::__refresh_users(
 	GloMyAuth->remove_inactives(USERNAME_FRONTEND);
 	set_variable((char *)"admin_credentials",(char *)"");
 
-	if (calculate_checksum) {
+	// Checksums are always generated - 'admin-checksum_*' deprecated
+	{
 		char* buff = nullptr;
 		char buf[20] = { 0 };
 
@@ -10642,8 +10675,9 @@ void ProxySQL_Admin::__refresh_users(
 
 		// store the new 'added_users' resultset after generating the new checksum
 		GloMyAuth->save_mysql_users(std::move(mysql_users_resultset));
-		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}
+	pthread_mutex_unlock(&GloVars.checksum_mutex);
+
 	proxy_info(
 		"Computed checksum for 'LOAD MYSQL USERS TO RUNTIME' was '%s', with epoch '%llu'\n",
 		GloVars.checksums_values.mysql_users.checksum, GloVars.checksums_values.mysql_users.epoch
@@ -12184,7 +12218,9 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		for (int i=0; i<10; i++) {
 #endif // BENCHMARK_FASTROUTING_LOAD
-		if (checksum_variables.checksum_mysql_query_rules) {
+
+		// Checksums are always generated - 'admin-checksum_*' deprecated
+		{
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			char* buff = nullptr;
 			char buf[20];

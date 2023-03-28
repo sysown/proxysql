@@ -1857,8 +1857,8 @@ bool MySQL_HostGroups_Manager::commit(
 		generate_mysql_hostgroup_attributes_table();
 	}
 
-
-	if ( GloAdmin && GloAdmin->checksum_variables.checksum_mysql_servers ) {
+	// Checksums are always generated - 'admin-checksum_*' deprecated
+	{
 		uint64_t hash1=0, hash2=0;
 		SpookyHash myhash;
 		char buf[80];
