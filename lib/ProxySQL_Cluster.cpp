@@ -455,12 +455,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 						hostname, port, checksums_values.admin_variables.version, checksums_values.admin_variables.epoch, checksums_values.admin_variables.checksum
 					);
 				} else {
-					if (checksums_values.admin_variables.diff_check == 0) {
-						proxy_info(
-							"Cluster: detected a new checksum for admin_variables from peer %s:%d, version %llu, epoch %llu, checksum %s. Not syncing due to 'admin-checksum_admin_variables=false'.\n",
-							hostname, port, checksums_values.admin_variables.version, checksums_values.admin_variables.epoch, checksums_values.admin_variables.checksum
-						);
-					}
+					proxy_info(
+						"Cluster: detected a new checksum for admin_variables from peer %s:%d, version %llu, epoch %llu, checksum %s. Not syncing due to 'admin-checksum_admin_variables=false'.\n",
+						hostname, port, checksums_values.admin_variables.version, checksums_values.admin_variables.epoch, checksums_values.admin_variables.checksum
+					);
 				}
 			} else {
 				checksums_values.admin_variables.diff_check++;
@@ -494,12 +492,10 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 						hostname, port, checksums_values.mysql_query_rules.version, checksums_values.mysql_query_rules.epoch, checksums_values.mysql_query_rules.checksum
 					);
 				} else {
-					if (checksums_values.mysql_query_rules.diff_check == 0) {
-						proxy_info(
-							"Cluster: detected a new checksum for mysql_query_rules from peer %s:%d, version %llu, epoch %llu, checksum %s. Not syncing due to 'admin-checksum_mysql_query_rules=false'.\n",
-							hostname, port, checksums_values.mysql_query_rules.version, checksums_values.mysql_query_rules.epoch, checksums_values.mysql_query_rules.checksum
-						);
-					}
+					proxy_info(
+						"Cluster: detected a new checksum for mysql_query_rules from peer %s:%d, version %llu, epoch %llu, checksum %s. Not syncing due to 'admin-checksum_mysql_query_rules=false'.\n",
+						hostname, port, checksums_values.mysql_query_rules.version, checksums_values.mysql_query_rules.epoch, checksums_values.mysql_query_rules.checksum
+					);
 				}
 			} else {
 				checksums_values.mysql_query_rules.diff_check++;
