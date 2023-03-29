@@ -2794,6 +2794,7 @@ void MySQL_Connection::reset() {
 			free(variables[i].value);
 			variables[i].value = NULL;
 			var_hash[i] = 0;
+			var_absent[i] = false;
 		}
 	}
 	dynamic_variables_idx.clear();
