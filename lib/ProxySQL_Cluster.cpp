@@ -2640,7 +2640,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_query_rules(char **host, uin
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check > diff_mqr) {
+				if (v->diff_check >= diff_mqr) {
 					epoch = v->epoch;
 					version = v->version;
 					if (hostname) {
@@ -2700,7 +2700,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers(char **host, uint16_
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check > diff_ms) {
+				if (v->diff_check >= diff_ms) {
 					epoch = v->epoch;
 					version = v->version;
 					if (pc) {
@@ -2766,7 +2766,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_users(char **host, uint16_t 
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check > diff_mu) {
+				if (v->diff_check >= diff_mu) {
 					epoch = v->epoch;
 					version = v->version;
 					if (hostname) {
@@ -2821,7 +2821,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_variables(char **host, uint1
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check > diff_mu) {
+				if (v->diff_check >= diff_mu) {
 					epoch = v->epoch;
 					version = v->version;
 					if (hostname) {
@@ -2876,7 +2876,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_admin_variables(char **host, uint1
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check > diff_mu) {
+				if (v->diff_check >= diff_mu) {
 					epoch = v->epoch;
 					version = v->version;
 					if (hostname) {
@@ -2930,7 +2930,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_ldap_variables(char **host, uint16
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check > diff_mu) {
+				if (v->diff_check >= diff_mu) {
 					epoch = v->epoch;
 					version = v->version;
 					if (hostname) {
@@ -2986,7 +2986,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_proxysql_servers(char **host, uint
 		if (v->version > 1) {
 			if ( v->epoch > epoch ) {
 				max_epoch = v->epoch;
-				if (v->diff_check > diff_ps) {
+				if (v->diff_check >= diff_ps) {
 					epoch = v->epoch;
 					version = v->version;
 					if (hostname) {
