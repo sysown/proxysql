@@ -1,4 +1,5 @@
 [![CI-selftests](https://github.com/sysown/proxysql/actions/workflows/ci-selftests.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/ci-selftests.yml)
+[![CI-repltests](https://github.com/sysown/proxysql/actions/workflows/ci-repltests.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/ci-repltests.yml)
 [![CodeQL](https://github.com/sysown/proxysql/actions/workflows/codeql.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/codeql.yml)
 [![Package-Build](https://github.com/sysown/proxysql/actions/workflows/package-build.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/package-build.yml)
 
