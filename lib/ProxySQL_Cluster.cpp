@@ -350,8 +350,7 @@ ProxySQL_Node_Entry::ProxySQL_Node_Entry(char* _hostname, uint16_t _port, uint64
 	weight = _weight;
 	if (_comment == NULL) {
 		comment = strdup((char*)"");
-	}
-	else {
+	} else {
 		comment = strdup(_comment);
 	}
 
@@ -522,8 +521,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum for mysql_servers_incoming from peer %s:%d matches with local checksum %s, we won't sync.\n", hostname, port, GloVars.checksums_values.mysql_servers_incoming.checksum);
 					proxy_info("Cluster: checksum for mysql_servers_incoming from peer %s:%d matches with local checksum %s, we won't sync.\n", hostname, port, GloVars.checksums_values.mysql_servers_incoming.checksum);
 				}
-			}
-			else {
+			} else {
 				checksums_values.mysql_servers_incoming.diff_check++;
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Checksum for mysql_servers_incoming from peer %s:%d, version %llu, epoch %llu, checksum %s is different from local checksum %s. Incremented diff_check %d ...\n", hostname, port, checksums_values.mysql_servers_incoming.version, checksums_values.mysql_servers_incoming.epoch,
 					checksums_values.mysql_servers_incoming.checksum, GloVars.checksums_values.mysql_servers_incoming.checksum, checksums_values.mysql_servers_incoming.diff_check);
@@ -783,8 +781,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				proxy_error("Cluster: detected a peer %s:%d with mysql_servers_incoming version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms * 10));
 				GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_mysql_servers_share_epoch]->Increment();
 			}
-		}
-		else {
+		} else {
 			if (v->diff_check && (v->diff_check % (diff_ms * 10)) == 0) {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms * 10));
 				proxy_warning("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms * 10));
@@ -818,8 +815,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					proxy_error("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u, checksum %s. Own version: %llu, epoch: %llu, checksum %s. Sync conflict, epoch times are EQUAL, can't determine which server holds the latest config, we won't sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, v->checksum, own_version, own_epoch, own_checksum, (diff_ms * 10));
 					GloProxyCluster->metrics.p_counter_array[p_cluster_counter::sync_conflict_mysql_servers_share_epoch]->Increment();
 				}
-			}
-			else {
+			} else {
 				if (v->diff_check && (v->diff_check % (diff_ms * 10)) == 0) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms * 10));
 					proxy_warning("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. diff_check is increasing, but version 1 doesn't allow sync. This message will be repeated every %u checks until LOAD MYSQL SERVERS TO RUNTIME is executed on candidate master.\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch, (diff_ms * 10));
@@ -1905,8 +1901,7 @@ void ProxySQL_Cluster::pull_mysql_servers_incoming_from_peer(const mysql_servers
 
 					if (it_err == 0) {
 						results[i] = fetch_res;
-					}
-					else {
+					} else {
 						fetching_error = true;
 						break;
 					}
@@ -1931,7 +1926,7 @@ void ProxySQL_Cluster::pull_mysql_servers_incoming_from_peer(const mysql_servers
 					MYSQL_RES* fetch_res = nullptr;
 					if (fetch_and_store(conn, query, &fetch_res) == 0) {
 						results[6] = fetch_res;
-					}else {
+					} else {
 						fetching_error = true;
 					}
 				}
@@ -2033,8 +2028,7 @@ void ProxySQL_Cluster::pull_mysql_servers_incoming_from_peer(const mysql_servers
 								if (o != row[8]) {
 									free(o);
 								}
-							}
-							else {
+							} else {
 								// In case of comment being null, placeholder must not have ''
 								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
@@ -2077,8 +2071,7 @@ void ProxySQL_Cluster::pull_mysql_servers_incoming_from_peer(const mysql_servers
 								if (o != row[8]) {
 									free(o);
 								}
-							}
-							else {
+							} else {
 								// In case of comment being null, placeholder must not have ''
 								fqs += "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
@@ -2121,8 +2114,7 @@ void ProxySQL_Cluster::pull_mysql_servers_incoming_from_peer(const mysql_servers
 								if (o != row[13]) {
 									free(o);
 								}
-							}
-							else {
+							} else {
 								// In case of comment being null, placeholder must not have ''
 								fqs += "VALUES (%s, %s, %s, %s, '%s', %s, %s, %s, %s, %s, %s, %s, %s, %s)";
 								o = const_cast<char*>("NULL");
@@ -2185,14 +2177,12 @@ void ProxySQL_Cluster::pull_mysql_servers_incoming_from_peer(const mysql_servers
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk MySQL Servers Incoming from peer %s:%d\n", hostname, port);
 							proxy_info("Cluster: Saving to disk MySQL Servers Incoming from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
-						}
-						else {
+						} else {
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Not saving to disk MySQL Servers from peer %s:%d failed.\n", hostname, port);
 							proxy_info("Cluster: Not saving to disk MySQL Servers from peer %s:%d failed.\n", hostname, port);
 						}
 						GloAdmin->mysql_servers_wrunlock();
-					}
-					else {
+					} else {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Servers from peer %s:%d failed: Checksum changed from %s to %s\n",
 							hostname, port, peer_mysql_servers_incoming_checksum, computed_checksum.c_str());
 						proxy_info(
@@ -2209,8 +2199,7 @@ void ProxySQL_Cluster::pull_mysql_servers_incoming_from_peer(const mysql_servers
 
 					metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_success]->Increment();
 				}
-			}
-			else {
+			} else {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment();

@@ -1519,8 +1519,7 @@ void MySQL_HostGroups_Manager::update_runtime_mysql_servers_table(SQLite3_result
 	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
-	}
-	else {
+	} else {
 		if (GloMTH->variables.hostgroup_manager_verbose) {
 			proxy_info("Dumping mysql_servers LEFT JOIN mysql_servers_incoming\n");
 			resultset->dump_to_stderr();
@@ -1550,8 +1549,7 @@ void MySQL_HostGroups_Manager::update_runtime_mysql_servers_table(SQLite3_result
 	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
 	if (error) {
 		proxy_error("Error on %s : %s\n", query, error);
-	}
-	else {
+	} else {
 
 		if (GloMTH->variables.hostgroup_manager_verbose) {
 			proxy_info("Dumping mysql_servers JOIN mysql_servers_incoming\n");
@@ -1596,8 +1594,7 @@ void MySQL_HostGroups_Manager::update_runtime_mysql_servers_table(SQLite3_result
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 6, "Server %u:%s:%d has gtid_port enabled, setting use_gitd=true if not already set\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port);
 					use_gtid = true;
 				}
-			}
-			else {
+			} else {
 				bool run_update = false;
 				MySrvC* mysrvc = (MySrvC*)ptr;
 				// carefully increase the 2nd index by 1 for every new column added
@@ -1688,8 +1685,7 @@ void MySQL_HostGroups_Manager::update_runtime_mysql_servers_table(SQLite3_result
 	}
 	if (use_gtid) {
 		has_gtid_port = true;
-	}
-	else {
+	} else {
 		has_gtid_port = false;
 	}
 	if (resultset) { delete resultset; resultset = NULL; }
@@ -1717,8 +1713,7 @@ void MySQL_HostGroups_Manager::update_runtime_mysql_servers_table(SQLite3_result
 	if (peer_runtime_mysql_server.epoch != 0 && peer_runtime_mysql_server.checksum.empty() == false &&
 		GloVars.checksums_values.mysql_servers.checksum == peer_runtime_mysql_server.checksum) {
 		GloVars.checksums_values.mysql_servers.epoch = peer_runtime_mysql_server.epoch;
-	}
-	else {
+	} else {
 		GloVars.checksums_values.mysql_servers.epoch = t;
 	}
 
@@ -1888,8 +1883,7 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 						std::unique_ptr<HostGroup_Server_Mapping> server_mapping(new HostGroup_Server_Mapping(this));
 						fetched_server_mapping = server_mapping.get();
 						hostgroup_server_mapping.insert({ server_id, std::move(server_mapping) });
-					}
-					else {
+					} else {
 						fetched_server_mapping = itr->second.get();
 					}
 
@@ -2190,8 +2184,7 @@ bool MySQL_HostGroups_Manager::commit(
 		if (peer_runtime_mysql_server.epoch != 0 && peer_runtime_mysql_server.checksum.empty() == false &&
 			GloVars.checksums_values.mysql_servers.checksum == peer_runtime_mysql_server.checksum) {
 			GloVars.checksums_values.mysql_servers.epoch = peer_runtime_mysql_server.epoch;
-		}
-		else {
+		} else {
 			GloVars.checksums_values.mysql_servers.epoch = t;
 		}
 
@@ -2203,8 +2196,7 @@ bool MySQL_HostGroups_Manager::commit(
 		if (peer_mysql_server_incoming.epoch != 0 && peer_mysql_server_incoming.checksum.empty() == false &&
 			GloVars.checksums_values.mysql_servers_incoming.checksum == peer_mysql_server_incoming.checksum) {
 			GloVars.checksums_values.mysql_servers_incoming.epoch = peer_mysql_server_incoming.epoch;
-		}
-		else {
+		} else {
 			GloVars.checksums_values.mysql_servers_incoming.epoch = t;
 		}
 
@@ -2275,8 +2267,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 			if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
 				rm_rows_count += 1;
 				return true;
-			}
-			else {
+			} else {
 				return false;
 			}
 		};
@@ -2287,8 +2278,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 		resultset->rows_count = init_row_count - rm_rows_count;
 
 		save_runtime_mysql_servers(resultset);
-	}
-	else {
+	} else {
 		save_runtime_mysql_servers(runtime_mysql_servers);
 	}
 
@@ -2330,8 +2320,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_incoming_checksum(SQLite3_r
 					if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
 						rm_rows_count += 1;
 						return true;
-					}
-					else {
+					} else {
 						return false;
 					}
 				};
@@ -2343,8 +2332,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_incoming_checksum(SQLite3_r
 
 				save_mysql_servers_incoming(resultset);
 			}
-		}
-		else {
+		} else {
 			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_incoming", (long unsigned int)0);
 		}
 	} else {
@@ -2387,8 +2375,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_incoming_checksum(SQLite3_r
 					if (strcasecmp(status, "ONLINE") == 0 ||
 						strcasecmp(status, "SHUNNED") == 0) {
 						status_conv = "0";
-					}
-					else if (strcasecmp(status, "OFFLINE_SOFT") == 0) {
+					} else if (strcasecmp(status, "OFFLINE_SOFT") == 0) {
 						status_conv = "2";
 					}
 				}
