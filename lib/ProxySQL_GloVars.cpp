@@ -385,6 +385,11 @@ uint64_t ProxySQL_GlobalVariables::generate_global_checksum() {
 		myhash.Update(v->checksum,strlen(v->checksum));
 		myhash.Update(&v->version,sizeof(v->version));
 	}
+	v = &checksums_values.mysql_servers_incoming;
+	if (v->version) {
+		myhash.Update(v->checksum, strlen(v->checksum));
+		myhash.Update(&v->version, sizeof(v->version));
+	}
 	v = &checksums_values.mysql_users;
 	if (v->version) {
 		myhash.Update(v->checksum,strlen(v->checksum));

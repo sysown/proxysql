@@ -658,6 +658,7 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_mysql_variables_save_to_disk",
 	(char *)"cluster_admin_variables_save_to_disk",
 	(char *)"cluster_ldap_variables_save_to_disk",
+	(char *)"cluster_mysql_servers_sync_algorithm",
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
 	(char *)"checksum_mysql_users",
@@ -1057,20 +1058,33 @@ bool FlushCommandWrapper(MySQL_Session *sess, const string& modname, char *query
 incoming_servers_t::incoming_servers_t() {}
 
 incoming_servers_t::incoming_servers_t(
-	SQLite3_result* runtime_mysql_servers,
+	SQLite3_result* incoming_mysql_servers,
 	SQLite3_result* incoming_replication_hostgroups,
 	SQLite3_result* incoming_group_replication_hostgroups,
 	SQLite3_result* incoming_galera_hostgroups,
 	SQLite3_result* incoming_aurora_hostgroups,
-	SQLite3_result* incoming_hostgroup_attributes
+	SQLite3_result* incoming_hostgroup_attributes,
+	SQLite3_result* runtime_mysql_servers
 ) :
-	runtime_mysql_servers(runtime_mysql_servers),
+	incoming_mysql_servers(incoming_mysql_servers),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
 	incoming_group_replication_hostgroups(incoming_group_replication_hostgroups),
 	incoming_galera_hostgroups(incoming_galera_hostgroups),
 	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
-	incoming_hostgroup_attributes(incoming_hostgroup_attributes)
+	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
+	runtime_mysql_servers(runtime_mysql_servers)
 {}
+
+runtime_mysql_servers_checksum_t::runtime_mysql_servers_checksum_t() : epoch(0) {}
+
+runtime_mysql_servers_checksum_t::runtime_mysql_servers_checksum_t(const std::string& checksum, time_t epoch) : 
+	checksum(checksum), epoch(epoch) {}
+
+mysql_servers_incoming_checksum_t::mysql_servers_incoming_checksum_t() : epoch(0) {}
+
+mysql_servers_incoming_checksum_t::mysql_servers_incoming_checksum_t(const std::string& checksum, time_t epoch) :
+	checksum(checksum), epoch(epoch) {}
+
 
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	int r = 0;
@@ -3670,7 +3684,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		string tn = "";
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS))) {
+		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS))) {
 			tn = "mysql_servers";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
 			tn = "mysql_replication_hostgroups";
@@ -3682,6 +3696,8 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			tn = "mysql_aws_aurora_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES))) {
 			tn = "mysql_hostgroup_attributes";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_INCOMING, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_INCOMING))) {
+			tn = "mysql_servers_incoming";
 		}
 		if (tn != "") {
 			GloAdmin->mysql_servers_wrlock();
@@ -5763,6 +5779,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_mysql_variables_diffs_before_sync = 3;
 	variables.cluster_admin_variables_diffs_before_sync = 3;
 	variables.cluster_ldap_variables_diffs_before_sync = 3;
+	variables.cluster_mysql_servers_sync_algorithm = 1;
 	checksum_variables.checksum_mysql_query_rules = true;
 	checksum_variables.checksum_mysql_servers = true;
 	checksum_variables.checksum_mysql_users = true;
@@ -6485,7 +6502,8 @@ void ProxySQL_Admin::load_or_update_global_settings(SQLite3DB *db) {
 	}
 }
 
-void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const string& checksum, const time_t epoch) {
+void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const string& checksum, const time_t epoch,
+	bool lock) {
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "Flushing ADMIN variables. Replace:%d\n", replace);
 	char *error=NULL;
 	int cols=0;
@@ -6500,7 +6518,7 @@ void ProxySQL_Admin::flush_admin_variables___database_to_runtime(SQLite3DB *db, 
 		wrlock();
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
-			bool rc=set_variable(r->fields[0],r->fields[1]);
+			bool rc=set_variable(r->fields[0],r->fields[1],lock);
 			if (rc==false) {
 				proxy_debug(PROXY_DEBUG_ADMIN, 4, "Impossible to set variable %s with value \"%s\"\n", r->fields[0],r->fields[1]);
 				if (replace) {
@@ -7747,6 +7765,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.cluster_ldap_variables_diffs_before_sync);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"cluster_mysql_servers_sync_algorithm")) {
+		sprintf(intbuf, "%d", variables.cluster_mysql_servers_sync_algorithm);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"cluster_mysql_query_rules_save_to_disk")) {
 		return strdup((variables.cluster_mysql_query_rules_save_to_disk ? "true" : "false"));
 	}
@@ -7876,7 +7898,7 @@ void ProxySQL_Admin::delete_credentials(char *credentials) {
 	free_tokenizer( &tok );
 }
 
-bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the public function, accessible from admin
+bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this is the public function, accessible from admin
 	size_t vallen=strlen(value);
 
 	if (!strcasecmp(name,"admin_credentials")) {
@@ -8159,6 +8181,20 @@ bool ProxySQL_Admin::set_variable(char *name, char *value) {  // this is the pub
 		if (intv >= 0 && intv <= 1000) {
 			variables.cluster_ldap_variables_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_mysql_servers_sync_algorithm")) {
+		int intv=atoi(value);
+		if (intv >= 1 && intv <= 3) {
+			variables.cluster_mysql_servers_sync_algorithm =intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_sync_algorithm, intv);
+
+			proxy_info("'cluster_mysql_servers_sync_algorithm' updated. Resetting global checksums to force Cluster re-sync.");
+			GloProxyCluster->Reset_Global_Checksums(lock);
+
 			return true;
 		} else {
 			return false;
@@ -11021,6 +11057,14 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 	rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
+	rc = (*proxy_sqlite3_bind_text)(statement1, 1, "mysql_servers_incoming", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 2, GloVars.checksums_values.mysql_servers_incoming.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 3, GloVars.checksums_values.mysql_servers_incoming.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_text)(statement1, 4, GloVars.checksums_values.mysql_servers_incoming.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	SAFE_SQLITE3_STEP2(statement1);
+	rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+
 	if (GloMyLdapAuth) {
 		rc=(*proxy_sqlite3_bind_text)(statement1, 1, "ldap_variables", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, GloVars.checksums_values.ldap_variables.version); ASSERT_SQLITE_OK(rc, admindb);
@@ -11821,9 +11865,8 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 	resultset=NULL;
 }
 
-void ProxySQL_Admin::load_mysql_servers_to_runtime(
-	const incoming_servers_t& incoming_servers, const std::string& checksum, const time_t epoch
-) {
+void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers, 
+	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_incoming_checksum_t& peer_mysql_server_incoming) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *error=NULL;
 	int cols=0;
@@ -11835,6 +11878,8 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
+	SQLite3_result *resultset_mysql_servers_incoming = NULL;
+	SQLite3_result* resultset_mysql_servers_admin = NULL;
 
 	SQLite3_result* runtime_mysql_servers = incoming_servers.runtime_mysql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_servers.incoming_replication_hostgroups;
@@ -11842,11 +11887,15 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	SQLite3_result* incoming_galera_hostgroups = incoming_servers.incoming_galera_hostgroups;
 	SQLite3_result* incoming_aurora_hostgroups = incoming_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_servers.incoming_hostgroup_attributes;
+	SQLite3_result* incoming_mysql_servers = incoming_servers.incoming_mysql_servers;
 
 	char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_mysql_servers_admin);
+
 	if (runtime_mysql_servers == nullptr) {
-		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
+		resultset_servers = resultset_mysql_servers_admin;
+		resultset_mysql_servers_admin = nullptr;
 	} else {
 		resultset_servers = runtime_mysql_servers;
 	}
@@ -12010,7 +12059,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	}
 
 	// commit all the changes
-	MyHGM->commit(runtime_mysql_servers, checksum, epoch);
+	MyHGM->commit(runtime_mysql_servers, incoming_mysql_servers, peer_runtime_mysql_server, peer_mysql_server_incoming);
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);

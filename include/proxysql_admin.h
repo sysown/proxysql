@@ -117,6 +117,7 @@ struct admin_metrics_map_idx {
 extern int admin__web_verbosity;
 
 struct incoming_servers_t {
+	SQLite3_result* incoming_mysql_servers = NULL;
 	SQLite3_result* runtime_mysql_servers = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
 	SQLite3_result* incoming_group_replication_hostgroups = NULL;
@@ -125,8 +126,26 @@ struct incoming_servers_t {
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
 
 	incoming_servers_t();
-	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
+
+// Seperate structs for runtime mysql server and mysql server incoming to avoid human error
+struct runtime_mysql_servers_checksum_t {
+	std::string checksum;
+	time_t epoch;
+
+	runtime_mysql_servers_checksum_t();
+	runtime_mysql_servers_checksum_t(const std::string& checksum, time_t epoch);
+};
+
+struct mysql_servers_incoming_checksum_t {
+	std::string checksum;
+	time_t epoch;
+
+	mysql_servers_incoming_checksum_t();
+	mysql_servers_incoming_checksum_t(const std::string& checksum, time_t epoch);
+};
+//
 
 class ProxySQL_Admin {
 	private:
@@ -185,6 +204,7 @@ class ProxySQL_Admin {
 		int cluster_mysql_variables_diffs_before_sync;
 		int cluster_admin_variables_diffs_before_sync;
 		int cluster_ldap_variables_diffs_before_sync;
+		int cluster_mysql_servers_sync_algorithm;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
 		bool cluster_mysql_users_save_to_disk;
@@ -275,8 +295,8 @@ class ProxySQL_Admin {
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	char **get_variables_list();
-	bool set_variable(char *name, char *value);
-	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	bool set_variable(char *name, char *value, bool lock = true);
+	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
@@ -398,7 +418,8 @@ class ProxySQL_Admin {
 //	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
-	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const std::string& checksum = "", const time_t epoch = 0);
+	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
+		const mysql_servers_incoming_checksum_t& peer_mysql_server_incoming = {});
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
@@ -436,7 +457,8 @@ class ProxySQL_Admin {
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
 
-	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) { 
+		flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 	void load_or_update_global_settings(SQLite3DB *);
