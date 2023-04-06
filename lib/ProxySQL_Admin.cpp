@@ -3705,7 +3705,22 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			GloAdmin->mysql_servers_wrunlock();
 
 			if (resultset == nullptr) {
-				resultset=MyHGM->dump_table_mysql(tn);
+
+				// fetching mysql_servers records from admin table as HGM mysql_servers records might be different.
+				if (tn == "mysql_servers_incoming") {
+					char *error=NULL;
+					int cols=0;
+					int affected_rows=0;
+					const char* query = "SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+					
+					GloAdmin->mysql_servers_wrlock();
+					GloAdmin->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+					GloAdmin->mysql_servers_wrunlock();
+				} else {
+					resultset = MyHGM->dump_table_mysql(tn);
+				}
+
 				if (resultset) {
 					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 					delete resultset;

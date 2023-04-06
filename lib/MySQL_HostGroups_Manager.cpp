@@ -1842,6 +1842,13 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables() {
 	CUCFT1("mysql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES]);
 }
 
+/**
+ * @brief This code updates the 'hostgroup_server_mapping' table with the most recent mysql_servers and mysql_replication_hostgroups 
+ *	  records while utilizing checksums to prevent unnecessary updates.
+ * 
+ * IMPORTANT: Make sure wrlock() is called before calling this method.
+ * 
+*/
 void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 	if (hgsm_mysql_servers_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] ||
@@ -1912,6 +1919,11 @@ bool MySQL_HostGroups_Manager::commit(
 	bool only_commit_runtime_mysql_servers
 ) {
 	// if only_commit_runtime_mysql_servers is true, mysql_servers_incoming resultset will not be entertained and will cause memory leak.
+	if (only_commit_runtime_mysql_servers) {
+		proxy_info("Generating runtime mysql servers records only");
+	} else {
+		proxy_info("Generating runtime mysql servers and mysql servers incoming records");
+	}
 
 	unsigned long long curtime1=monotonic_time();
 	wrlock();
@@ -2120,9 +2132,6 @@ bool MySQL_HostGroups_Manager::commit(
 		has_gtid_port = false;
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
-	mydb->execute("DELETE FROM mysql_servers_incoming");
-
 
 	uint64_t mysql_servers_incoming_checksum = 0;
 
@@ -2165,6 +2174,10 @@ bool MySQL_HostGroups_Manager::commit(
 		mysql_servers_incoming_checksum = get_mysql_servers_incoming_checksum(mysql_servers_incoming, false);
 	}
 
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
+	mydb->execute("DELETE FROM mysql_servers_incoming");
+	
+	// regenerating mysql_servers records
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
 
