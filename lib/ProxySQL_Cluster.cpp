@@ -1736,7 +1736,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_mysql_servers from peer %s:%d into mysql_servers_incoming", hostname, port);
 						MyHGM->servers_add(runtime_mysql_servers_resultset.get());
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
-						MyHGM->update_runtime_mysql_servers_table(runtime_mysql_servers_resultset.get(), peer_runtime_mysql_server);
+						MyHGM->commit(runtime_mysql_servers_resultset.release(), peer_runtime_mysql_server, nullptr, {}, true);
 						MyHGM->wrunlock();
 
 						// free result
@@ -2847,7 +2847,7 @@ bool ProxySQL_Cluster_Nodes::Update_Global_Checksum(char * _h, uint16_t _p, MYSQ
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Global checksum 0x%llX for peer %s:%d matches\n", v, node->get_hostname(), node->get_port());
 				ret = false;
 			} else {
-				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Global checksum for peer %s:%d is different from fetched one. Local checksum:[0x%llX] Fetched checksum:[0x%llX]\n", node->get_hostname(), node->get_port(), node->global_checksum, v);
+				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Global checksum for peer %s:%d is different from fetched one. Local checksum:[0x%lX] Fetched checksum:[0x%lX]\n", node->get_hostname(), node->get_port(), node->global_checksum, v);
 				node->global_checksum = v;
 			}
 		}

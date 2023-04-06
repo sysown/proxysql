@@ -12059,7 +12059,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	}
 
 	// commit all the changes
-	MyHGM->commit(runtime_mysql_servers, incoming_mysql_servers, peer_runtime_mysql_server, peer_mysql_server_incoming);
+	MyHGM->commit(runtime_mysql_servers, peer_runtime_mysql_server, incoming_mysql_servers, peer_mysql_server_incoming);
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);

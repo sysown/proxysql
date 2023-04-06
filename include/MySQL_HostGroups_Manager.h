@@ -393,14 +393,14 @@ class MySQL_HostGroups_Manager {
 #endif
 
 	enum HGM_TABLES {
-		MYSQL_SERVERS = 0,
+		MYSQL_SERVERS_INCOMING = 0,
 		MYSQL_REPLICATION_HOSTGROUPS,
 		MYSQL_GROUP_REPLICATION_HOSTGROUPS,
 		MYSQL_GALERA_HOSTGROUPS,
 		MYSQL_AWS_AURORA_HOSTGROUPS,
 		MYSQL_HOSTGROUP_ATTRIBUTES,
+		MYSQL_SERVERS,
 
-		MYSQL_SERVERS_INCOMING,
 		__HGM_TABLES_SIZE
 	};
 
@@ -698,9 +698,10 @@ class MySQL_HostGroups_Manager {
 	void wrlock();
 	void wrunlock();
 	int servers_add(SQLite3_result *resultset);
-	void update_runtime_mysql_servers_table(SQLite3_result* runtime_mysql_servers, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server);
-	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, SQLite3_result* mysql_servers_incoming = nullptr,
-		const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {}, const mysql_servers_incoming_checksum_t& peer_mysql_server_incoming = {});
+	//void update_runtime_mysql_servers_table(SQLite3_result* runtime_mysql_servers, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server);
+	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
+		SQLite3_result* mysql_servers_incoming = nullptr, const mysql_servers_incoming_checksum_t& peer_mysql_server_incoming = {},
+		bool only_commit_runtime_mysql_servers = false);
 	void commit_update_checksums_from_tables();
 	void CUCFT1(const string& TableName, const string& ColumnName, uint64_t& raw_checksum); // used by commit_update_checksums_from_tables()
 
@@ -826,6 +827,8 @@ class MySQL_HostGroups_Manager {
 	MySrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
 
 private:
+	static uint64_t compute_mysql_servers_raw_checksum(const SQLite3_result* runtime_mysql_servers);
+
 	void update_hostgroup_manager_mappings();
 	uint64_t get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers = nullptr);
 	uint64_t get_mysql_servers_incoming_checksum(SQLite3_result* incoming_mysql_servers, bool use_precalculated_checksum = true);
