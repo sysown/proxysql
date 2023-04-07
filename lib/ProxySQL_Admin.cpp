@@ -1058,7 +1058,7 @@ bool FlushCommandWrapper(MySQL_Session *sess, const string& modname, char *query
 incoming_servers_t::incoming_servers_t() {}
 
 incoming_servers_t::incoming_servers_t(
-	SQLite3_result* incoming_mysql_servers,
+	SQLite3_result* incoming_mysql_servers_v2,
 	SQLite3_result* incoming_replication_hostgroups,
 	SQLite3_result* incoming_group_replication_hostgroups,
 	SQLite3_result* incoming_galera_hostgroups,
@@ -1066,7 +1066,7 @@ incoming_servers_t::incoming_servers_t(
 	SQLite3_result* incoming_hostgroup_attributes,
 	SQLite3_result* runtime_mysql_servers
 ) :
-	incoming_mysql_servers(incoming_mysql_servers),
+	incoming_mysql_servers_v2(incoming_mysql_servers_v2),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
 	incoming_group_replication_hostgroups(incoming_group_replication_hostgroups),
 	incoming_galera_hostgroups(incoming_galera_hostgroups),
@@ -1080,9 +1080,9 @@ runtime_mysql_servers_checksum_t::runtime_mysql_servers_checksum_t() : epoch(0) 
 runtime_mysql_servers_checksum_t::runtime_mysql_servers_checksum_t(const std::string& checksum, time_t epoch) : 
 	checksum(checksum), epoch(epoch) {}
 
-mysql_servers_incoming_checksum_t::mysql_servers_incoming_checksum_t() : epoch(0) {}
+mysql_servers_v2_checksum_t::mysql_servers_v2_checksum_t() : epoch(0) {}
 
-mysql_servers_incoming_checksum_t::mysql_servers_incoming_checksum_t(const std::string& checksum, time_t epoch) :
+mysql_servers_v2_checksum_t::mysql_servers_v2_checksum_t(const std::string& checksum, time_t epoch) :
 	checksum(checksum), epoch(epoch) {}
 
 
@@ -3696,8 +3696,8 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			tn = "mysql_aws_aurora_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES))) {
 			tn = "mysql_hostgroup_attributes";
-		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_INCOMING, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_INCOMING))) {
-			tn = "mysql_servers_incoming";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_V2))) {
+			tn = "mysql_servers_v2";
 		}
 		if (tn != "") {
 			GloAdmin->mysql_servers_wrlock();
@@ -3706,17 +3706,36 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 			if (resultset == nullptr) {
 
-				// fetching mysql_servers records from admin table as HGM mysql_servers records might be different.
-				if (tn == "mysql_servers_incoming") {
+				// This section of the code contains specific instructions for mysql_servers_v2, which is a virtual table 
+				// that represents the mysql_servers (admin) records. In order to generate the resultset, data will be retrieved 
+				// from mysql_server (admin) instead.
+				if (tn == "mysql_servers_v2") {
 					char *error=NULL;
 					int cols=0;
 					int affected_rows=0;
 					const char* query = "SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
-					
 					GloAdmin->mysql_servers_wrlock();
 					GloAdmin->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
 					GloAdmin->mysql_servers_wrunlock();
+					if (resultset && resultset->rows_count) {
+						const size_t init_row_count = resultset->rows_count;
+						size_t rm_rows_count = 0;
+						const auto is_offline_server = [&rm_rows_count](SQLite3_row* row) {
+							if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
+								rm_rows_count += 1;
+								return true;
+							} else {
+								return false;
+							}
+						};
+						resultset->rows.erase(
+							std::remove_if(resultset->rows.begin(), resultset->rows.end(), is_offline_server),
+							resultset->rows.end()
+						);
+
+						resultset->rows_count = init_row_count - rm_rows_count;
+					}
 				} else {
 					resultset = MyHGM->dump_table_mysql(tn);
 				}
@@ -11072,10 +11091,10 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 	rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
-	rc = (*proxy_sqlite3_bind_text)(statement1, 1, "mysql_servers_incoming", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-	rc = (*proxy_sqlite3_bind_int64)(statement1, 2, GloVars.checksums_values.mysql_servers_incoming.version); ASSERT_SQLITE_OK(rc, admindb);
-	rc = (*proxy_sqlite3_bind_int64)(statement1, 3, GloVars.checksums_values.mysql_servers_incoming.epoch); ASSERT_SQLITE_OK(rc, admindb);
-	rc = (*proxy_sqlite3_bind_text)(statement1, 4, GloVars.checksums_values.mysql_servers_incoming.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_text)(statement1, 1, "mysql_servers_v2", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 2, GloVars.checksums_values.mysql_servers_v2.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 3, GloVars.checksums_values.mysql_servers_v2.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_text)(statement1, 4, GloVars.checksums_values.mysql_servers_v2.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
 	SAFE_SQLITE3_STEP2(statement1);
 	rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
@@ -11881,7 +11900,7 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 }
 
 void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers, 
-	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_incoming_checksum_t& peer_mysql_server_incoming) {
+	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_v2_checksum_t& peer_mysql_server_v2) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *error=NULL;
 	int cols=0;
@@ -11893,8 +11912,6 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
-	SQLite3_result *resultset_mysql_servers_incoming = NULL;
-	SQLite3_result* resultset_mysql_servers_admin = NULL;
 
 	SQLite3_result* runtime_mysql_servers = incoming_servers.runtime_mysql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_servers.incoming_replication_hostgroups;
@@ -11902,15 +11919,12 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result* incoming_galera_hostgroups = incoming_servers.incoming_galera_hostgroups;
 	SQLite3_result* incoming_aurora_hostgroups = incoming_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_servers.incoming_hostgroup_attributes;
-	SQLite3_result* incoming_mysql_servers = incoming_servers.incoming_mysql_servers;
+	SQLite3_result* incoming_mysql_servers_v2 = incoming_servers.incoming_mysql_servers_v2;
 
-	char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
-	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_mysql_servers_admin);
-
+	const char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
 	if (runtime_mysql_servers == nullptr) {
-		resultset_servers = resultset_mysql_servers_admin;
-		resultset_mysql_servers_admin = nullptr;
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_servers);
 	} else {
 		resultset_servers = runtime_mysql_servers;
 	}
@@ -12074,7 +12088,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	}
 
 	// commit all the changes
-	MyHGM->commit(runtime_mysql_servers, peer_runtime_mysql_server, incoming_mysql_servers, peer_mysql_server_incoming);
+	MyHGM->commit(runtime_mysql_servers, peer_runtime_mysql_server, incoming_mysql_servers_v2, peer_mysql_server_v2);
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);

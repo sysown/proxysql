@@ -66,7 +66,8 @@ using json = nlohmann::json;
 
 #define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
-#define MYHGM_GEN_INCOMING_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming ORDER BY hostgroup_id, hostname, port"
+//#define MYHGM_GEN_INCOMING_MYSQL_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming ORDER BY hostgroup_id, hostname, port"
+#define MYHGM_GEN_ADMIN_MYSQL_SERVERS "SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port"
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
@@ -393,7 +394,7 @@ class MySQL_HostGroups_Manager {
 #endif
 
 	enum HGM_TABLES {
-		MYSQL_SERVERS_INCOMING = 0,
+		MYSQL_SERVERS_V2 = 0,
 		MYSQL_REPLICATION_HOSTGROUPS,
 		MYSQL_GROUP_REPLICATION_HOSTGROUPS,
 		MYSQL_GALERA_HOSTGROUPS,
@@ -553,7 +554,7 @@ class MySQL_HostGroups_Manager {
 	void generate_mysql_hostgroup_attributes_table();
 	SQLite3_result *incoming_hostgroup_attributes;
 
-	SQLite3_result* incoming_mysql_servers;
+	SQLite3_result* incoming_mysql_servers_v2;
 
 	std::thread *HGCU_thread;
 
@@ -700,7 +701,7 @@ class MySQL_HostGroups_Manager {
 	int servers_add(SQLite3_result *resultset);
 	//void update_runtime_mysql_servers_table(SQLite3_result* runtime_mysql_servers, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server);
 	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
-		SQLite3_result* mysql_servers_incoming = nullptr, const mysql_servers_incoming_checksum_t& peer_mysql_server_incoming = {},
+		SQLite3_result* mysql_servers_v2 = nullptr, const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {},
 		bool only_commit_runtime_mysql_servers = false);
 	void commit_update_checksums_from_tables();
 	void CUCFT1(const string& TableName, const string& ColumnName, uint64_t& raw_checksum); // used by commit_update_checksums_from_tables()
@@ -713,11 +714,11 @@ class MySQL_HostGroups_Manager {
 	void save_runtime_mysql_servers(SQLite3_result *);
 
 	/**
-	 * @brief Store the resultset for the 'mysql_servers_incoming' table.
+	 * @brief Store the resultset for the 'mysql_servers_v2' table.
 	 *  The store configuration is later used by Cluster to propagate current config.
 	 * @param The resulset to be stored replacing the current one.
 	 */
-	void save_mysql_servers_incoming(SQLite3_result* s);
+	void save_mysql_servers_v2(SQLite3_result* s);
 
 	/**
 	 * @brief These setters/getter functions store and retrieve the currently hold resultset for the
@@ -831,7 +832,7 @@ private:
 
 	void update_hostgroup_manager_mappings();
 	uint64_t get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers = nullptr);
-	uint64_t get_mysql_servers_incoming_checksum(SQLite3_result* incoming_mysql_servers, bool use_precalculated_checksum = true);
+	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
 };
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

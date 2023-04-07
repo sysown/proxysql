@@ -1356,7 +1356,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	incoming_galera_hostgroups=NULL;
 	incoming_aws_aurora_hostgroups = NULL;
 	incoming_hostgroup_attributes = NULL;
-	incoming_mysql_servers = NULL;
+	incoming_mysql_servers_v2 = NULL;
 	pthread_rwlock_init(&gtid_rwlock, NULL);
 	gtid_missing_nodes = false;
 	gtid_ev_loop=NULL;
@@ -1915,14 +1915,14 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 
 bool MySQL_HostGroups_Manager::commit(
 	SQLite3_result* runtime_mysql_servers, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
-	SQLite3_result* mysql_servers_incoming, const mysql_servers_incoming_checksum_t& peer_mysql_server_incoming,
+	SQLite3_result* mysql_servers_v2, const mysql_servers_v2_checksum_t& peer_mysql_server_v2,
 	bool only_commit_runtime_mysql_servers
 ) {
-	// if only_commit_runtime_mysql_servers is true, mysql_servers_incoming resultset will not be entertained and will cause memory leak.
+	// if only_commit_runtime_mysql_servers is true, mysql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_mysql_servers) {
-		proxy_info("Generating runtime mysql servers records only");
+		proxy_info("Generating runtime mysql servers records only.\n");
 	} else {
-		proxy_info("Generating runtime mysql servers and mysql servers incoming records");
+		proxy_info("Generating runtime mysql servers and mysql servers v2 records.\n");
 	}
 
 	unsigned long long curtime1=monotonic_time();
@@ -2133,7 +2133,7 @@ bool MySQL_HostGroups_Manager::commit(
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
 
-	uint64_t mysql_servers_incoming_checksum = 0;
+	uint64_t mysql_servers_v2_checksum = 0;
 
 	if (only_commit_runtime_mysql_servers == false) {
 		// replication
@@ -2171,7 +2171,7 @@ bool MySQL_HostGroups_Manager::commit(
 			generate_mysql_hostgroup_attributes_table();
 		}
 
-		mysql_servers_incoming_checksum = get_mysql_servers_incoming_checksum(mysql_servers_incoming, false);
+		mysql_servers_v2_checksum = get_mysql_servers_v2_checksum(mysql_servers_v2);
 	}
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
@@ -2202,16 +2202,16 @@ bool MySQL_HostGroups_Manager::commit(
 	}
 	
 	if (only_commit_runtime_mysql_servers == false) {
-		memcpy(&d32, &mysql_servers_incoming_checksum, sizeof(mysql_servers_incoming_checksum));
+		memcpy(&d32, &mysql_servers_v2_checksum, sizeof(mysql_servers_v2_checksum));
 		sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
-		GloVars.checksums_values.mysql_servers_incoming.set_checksum(buf);
-		GloVars.checksums_values.mysql_servers_incoming.version++;
+		GloVars.checksums_values.mysql_servers_v2.set_checksum(buf);
+		GloVars.checksums_values.mysql_servers_v2.version++;
 
-		if (peer_mysql_server_incoming.epoch != 0 && peer_mysql_server_incoming.checksum.empty() == false &&
-			GloVars.checksums_values.mysql_servers_incoming.checksum == peer_mysql_server_incoming.checksum) {
-			GloVars.checksums_values.mysql_servers_incoming.epoch = peer_mysql_server_incoming.epoch;
+		if (peer_mysql_server_v2.epoch != 0 && peer_mysql_server_v2.checksum.empty() == false &&
+			GloVars.checksums_values.mysql_servers_v2.checksum == peer_mysql_server_v2.checksum) {
+			GloVars.checksums_values.mysql_servers_v2.epoch = peer_mysql_server_v2.epoch;
 		} else {
-			GloVars.checksums_values.mysql_servers_incoming.epoch = t;
+			GloVars.checksums_values.mysql_servers_v2.epoch = t;
 		}
 	}
 
@@ -2255,6 +2255,16 @@ bool MySQL_HostGroups_Manager::commit(
 	return true;
 }
 
+/** 
+ * @brief Calculate the checksum for the runtime mysql_servers record, after excluding all the rows
+ *    with the status OFFLINE_HARD from the result set
+ * 
+ * @details The runtime mysql_servers is now considered as a distinct module and have a separate checksum calculation.
+ *    This is because the records in the runtime module may differ from those in the admin mysql_servers module, which
+ *	  can cause synchronization issues within the cluster.
+ * 
+ * @param runtime_mysql_servers resultset of runtime mysql_servers or can be a nullptr.
+*/
 uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers) {
 
 	//Note: GloVars.checksum_mutex needs to be locked
@@ -2302,40 +2312,29 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 
 	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = compute_mysql_servers_raw_checksum(resultset);
 	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS]);
-	
-	//char* error = NULL;
-	//int cols = 0;
-	//int affected_rows = 0;
-	//SQLite3_result* resultset = NULL;
-	//char* query = (char*)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port";
-	//mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
-	//if (resultset) {
-	//	if (resultset->rows_count) {
-	//		uint64_t hash1_ = resultset->raw_checksum();
-	//		table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = hash1_;
-	//		proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", hash1_);
-	//	}
-	//	delete resultset;
-	//} else {
-	//	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
-	//}
 
 	return table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
 }
 
-uint64_t MySQL_HostGroups_Manager::get_mysql_servers_incoming_checksum(SQLite3_result* incoming_mysql_servers, 
-	bool use_precalculated_checksum) {
+/** 
+ * @brief Computes checksum for the admin mysql_server resultset and generates an accumulated checksum by including the following modules: 
+ *    MYSQL_REPLICATION_HOSTGROUPS, MYSQL_GROUP_REPLICATION_HOSTGROUPS, MYSQL_GALERA_HOSTGROUPS, and MYSQL_HOSTGROUP_ATTRIBUTES.
+ * 
+ * @param incoming_mysql_servers_v2 resultset of admin mysql_servers or can be a nullptr.
+ */
+uint64_t MySQL_HostGroups_Manager::get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2) {
 
 	//Note: GloVars.checksum_mutex needs to be locked
 	SQLite3_result* resultset = nullptr;
 	
-	if (incoming_mysql_servers == nullptr) 
+	if (incoming_mysql_servers_v2 == nullptr) 
 	{
 		char* error = nullptr;
 		int cols = 0;
 		int affected_rows = 0;
 
-		mydb->execute_statement(MYHGM_GEN_INCOMING_MYSQL_SERVERS, &error, &cols, &affected_rows, &resultset);
+		GloAdmin->admindb->execute_statement(MYHGM_GEN_ADMIN_MYSQL_SERVERS, &error, &cols, &affected_rows, &resultset);
+
 		if (resultset) {
 			if (resultset->rows_count) {
 
@@ -2355,52 +2354,36 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_incoming_checksum(SQLite3_r
 				);
 				resultset->rows_count = init_row_count - rm_rows_count;
 
-				save_mysql_servers_incoming(resultset);
+				save_mysql_servers_v2(resultset);
 			} else {
 				delete resultset;
 				resultset = nullptr;
 			}
 		} else {
-			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_incoming", (long unsigned int)0);
+			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_v2", (long unsigned int)0);
 		}
 	} else {
-		resultset = incoming_mysql_servers;
-		save_mysql_servers_incoming(incoming_mysql_servers);
+		resultset = incoming_mysql_servers_v2;
+		save_mysql_servers_v2(incoming_mysql_servers_v2);
 	}
 
-	if (use_precalculated_checksum == false) {
-		// reset checksum
-		//table_resultset_checksum[MYSQL_SERVERS_INCOMING] = 0;
-		table_resultset_checksum[MYSQL_REPLICATION_HOSTGROUPS] = 0;
-		table_resultset_checksum[MYSQL_GROUP_REPLICATION_HOSTGROUPS] = 0;
-		table_resultset_checksum[MYSQL_GALERA_HOSTGROUPS] = 0;
-		table_resultset_checksum[MYSQL_AWS_AURORA_HOSTGROUPS] = 0;
-		table_resultset_checksum[MYSQL_HOSTGROUP_ATTRIBUTES] = 0;
-	}
+	// reset checksum excluding MYSQL_SERVERS_V2
+	table_resultset_checksum[MYSQL_REPLICATION_HOSTGROUPS] = 0;
+	table_resultset_checksum[MYSQL_GROUP_REPLICATION_HOSTGROUPS] = 0;
+	table_resultset_checksum[MYSQL_GALERA_HOSTGROUPS] = 0;
+	table_resultset_checksum[MYSQL_AWS_AURORA_HOSTGROUPS] = 0;
+	table_resultset_checksum[MYSQL_HOSTGROUP_ATTRIBUTES] = 0;
 
-	table_resultset_checksum[MYSQL_SERVERS_INCOMING] = compute_mysql_servers_raw_checksum(resultset);
-	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_incoming", table_resultset_checksum[MYSQL_SERVERS_INCOMING]);
-	
-	/*char* query = (char*)"SELECT hostgroup_id,hostname,port,gtid_port,CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, \
-		weight,compression,max_connections, max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE status<>3 ORDER BY hostgroup_id, hostname, port";
-	mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
-	if (resultset) {
-		if (resultset->rows_count) {
-			uint64_t hash1_ = resultset->raw_checksum();
-			table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS_INCOMING] = hash1_;
-			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_incoming", hash1_);
-		}
-	}*/
+	table_resultset_checksum[MYSQL_SERVERS_V2] = compute_mysql_servers_raw_checksum(resultset);
+	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_v2", table_resultset_checksum[MYSQL_SERVERS_V2]);
 
-	if (use_precalculated_checksum == false) {
-		commit_update_checksums_from_tables();
-	}
+	commit_update_checksums_from_tables();
 
 	uint64_t hash1 = 0, hash2 = 0;
 	SpookyHash myhash;
 	bool init = false;
 
-	hash1 = table_resultset_checksum[MYSQL_SERVERS_INCOMING];
+	hash1 = table_resultset_checksum[MYSQL_SERVERS_V2];
 	if (hash1) {
 		if (init == false) {
 			init = true;
@@ -4240,12 +4223,12 @@ void MySQL_HostGroups_Manager::save_runtime_mysql_servers(SQLite3_result *s) {
 	runtime_mysql_servers=s;
 }
 
-void MySQL_HostGroups_Manager::save_mysql_servers_incoming(SQLite3_result* s) {
-	if (incoming_mysql_servers) {
-		delete incoming_mysql_servers;
-		incoming_mysql_servers = nullptr;
+void MySQL_HostGroups_Manager::save_mysql_servers_v2(SQLite3_result* s) {
+	if (incoming_mysql_servers_v2) {
+		delete incoming_mysql_servers_v2;
+		incoming_mysql_servers_v2 = nullptr;
 	}
-	incoming_mysql_servers = s;
+	incoming_mysql_servers_v2 = s;
 }
 
 SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& name) {
@@ -4261,8 +4244,8 @@ SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& 
 		return this->incoming_hostgroup_attributes;
 	} else if (name == "mysql_servers") {
 		return this->runtime_mysql_servers;
-	} else if (name == "mysql_servers_incoming") {
-		return this->incoming_mysql_servers;
+	} else if (name == "mysql_servers_v2") {
+		return this->incoming_mysql_servers_v2;
 	} else {
 		assert(0);
 	}

@@ -22,7 +22,7 @@
  *   - 'runtime_mysql_servers': tables 'mysql_servers'
  *   - 'runtime_mysql_users'.
  *   - 'runtime_mysql_query_rules'.
- *   - 'mysql_servers_incoming': tables 'mysql_servers', 'mysql_replication_hostgroups', 'mysql_group_replication_hostroups',
+ *   - 'mysql_servers_v2': tables admin 'mysql_servers', 'mysql_replication_hostgroups', 'mysql_group_replication_hostroups',
  *     'mysql_galera_hostgroups', 'mysql_aws_aurora_hostgroups', 'mysql_hostgroup_attributes'.
  * IMPORTANT: For further clarify this means that it's important that the actual resultset produced by the intercepted
  * query preserve the filtering and ordering expressed in this queries.
@@ -31,8 +31,8 @@
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_servers'. See top comment for details. */
 #define CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
-/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'mysql_servers_incoming'. See top comment for details. */
-#define CLUSTER_QUERY_MYSQL_SERVERS_INCOMING "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'mysql_servers_v2'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_SERVERS_V2 "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_v2 WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_replication_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
@@ -193,7 +193,7 @@ class ProxySQL_Node_Entry {
 		ProxySQL_Checksum_Value_2 mysql_servers;
 		ProxySQL_Checksum_Value_2 mysql_users;
 		ProxySQL_Checksum_Value_2 proxysql_servers;
-		ProxySQL_Checksum_Value_2 mysql_servers_incoming;
+		ProxySQL_Checksum_Value_2 mysql_servers_v2;
 	} checksums_values;
 	uint64_t global_checksum;
 };
@@ -285,7 +285,7 @@ class ProxySQL_Cluster_Nodes {
 	SQLite3_result * stats_proxysql_servers_metrics();
 	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_runtime_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
-	void get_peer_to_sync_mysql_servers_incoming(char** host, uint16_t* port, char** peer_mysql_servers_incoming_checksum, 
+	void get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port, char** peer_mysql_servers_v2_checksum, 
 		char** peer_runtime_mysql_servers_checksum, char** ip_address);
 	void get_peer_to_sync_mysql_users(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address);
@@ -374,8 +374,8 @@ struct variable_type {
 };
 
 enum class mysql_servers_sync_algorithm {
-	runtime_mysql_servers_and_mysql_servers_incoming = 1, // sync runtime_mysql_servers and mysql_server_incoming from remote peer
-	mysql_servers_incoming = 2, // sync mysql_server_incoming from remote peer
+	runtime_mysql_servers_and_mysql_servers_v2 = 1, // sync runtime_mysql_servers and mysql_server_v2 from remote peer
+	mysql_servers_v2 = 2, // sync mysql_server_v2 from remote peer
 	auto_select = 3 // based on -M flag
 };
 
@@ -407,7 +407,7 @@ private:
 public:
 	pthread_mutex_t update_mysql_query_rules_mutex;
 	pthread_mutex_t update_runtime_mysql_servers_mutex;
-	pthread_mutex_t update_mysql_servers_incoming_mutex;
+	pthread_mutex_t update_mysql_servers_v2_mutex;
 	pthread_mutex_t update_mysql_users_mutex;
 	pthread_mutex_t update_mysql_variables_mutex;
 	pthread_mutex_t update_proxysql_servers_mutex;
@@ -486,7 +486,7 @@ public:
 	void join_term_thread();
 	void pull_mysql_query_rules_from_peer(const std::string& expected_checksum, const time_t epoch);
 	void pull_runtime_mysql_servers_from_peer(const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server);
-	void pull_mysql_servers_incoming_from_peer(const mysql_servers_incoming_checksum_t& peer_mysql_server_incoming,
+	void pull_mysql_servers_v2_from_peer(const mysql_servers_v2_checksum_t& peer_mysql_server_v2,
 		const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {}, bool fetch_runtime_mysql_servers = false);
 	void pull_mysql_users_from_peer(const std::string& expected_checksum, const time_t epoch);
 	/**
