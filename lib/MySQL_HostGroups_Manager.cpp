@@ -1060,6 +1060,12 @@ hg_metrics_map = std::make_tuple(
 			metric_tags {}
 		),
 		std::make_tuple (
+			p_hg_counter::com_backend_set_stmt,
+			"proxysql_com_backend_set_stmt_total",
+			"Total SET backend queries.",
+			metric_tags {}
+		),
+		std::make_tuple (
 			p_hg_counter::com_frontend_init_db,
 			"proxysql_com_frontend_init_db_total",
 			"Total INIT DB queries frontend.",
@@ -1075,6 +1081,18 @@ hg_metrics_map = std::make_tuple(
 			p_hg_counter::com_frontend_use_db,
 			"proxysql_com_frontend_use_db_total",
 			"Total USE DB queries frontend.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_frontend_set_stmt,
+			"proxysql_com_frontend_set_stmt_total",
+			"Total SET frontend queries.",
+			metric_tags {}
+		),
+		std::make_tuple (
+			p_hg_counter::com_frontend_failed_set_stmt,
+			"proxysql_com_frontend_failed_set_stmt_total",
+			"Total SET frontend failed queries.",
 			metric_tags {}
 		),
 		std::make_tuple (
@@ -1308,9 +1326,12 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	status.backend_change_user=0;
 	status.backend_init_db=0;
 	status.backend_set_names=0;
+	status.backend_set_stmt=0;
 	status.frontend_init_db=0;
 	status.frontend_set_names=0;
 	status.frontend_use_db=0;
+	status.frontend_set_stmt=0;
+	status.frontend_failed_set_stmt=0;
 	status.access_denied_wrong_password=0;
 	status.access_denied_max_connections=0;
 	status.access_denied_max_user_connections=0;
@@ -4606,9 +4627,12 @@ void MySQL_HostGroups_Manager::p_update_metrics() {
 	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_init_db], status.backend_init_db);
 	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_change_user], status.backend_change_user);
 	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_set_names], status.backend_set_names);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_backend_set_stmt], status.backend_set_stmt);
 	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_init_db], status.frontend_init_db);
 	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_set_names], status.frontend_set_names);
 	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_use_db], status.frontend_use_db);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_set_stmt], status.frontend_set_stmt);
+	p_update_counter(status.p_counter_array[p_hg_counter::com_frontend_failed_set_stmt], status.frontend_failed_set_stmt);
 
 	// Update *myconnpoll* related metrics
 	p_update_counter(status.p_counter_array[p_hg_counter::myhgm_myconnpool_get], status.myconnpoll_get);

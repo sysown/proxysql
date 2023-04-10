@@ -2659,7 +2659,8 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 				ret=true;
 			}
 		} else {
-			// rc==1 , nothing to do for now
+			// rc==1. SET statement sent. Record it and wait for the response.
+			__sync_fetch_and_add(&MyHGM->status.backend_set_stmt, 1);
 		}
 	}
 	return ret;
@@ -5999,6 +6000,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			) {
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing SET command %s\n", nq.c_str());
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nq.c_str());
+				if (strncasecmp(dig, (char *)"SET NAMES", strlen((char *)"SET NAMES")) != 0)
+					__sync_fetch_and_add(&MyHGM->status.frontend_set_stmt, 1);
 				SetParser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse1();
 				// Flag to be set if any variable within the 'SET' statement fails to be tracked,
@@ -6084,6 +6087,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						uint32_t sql_mode_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 						if (mysql_variables.client_get_hash(this, SQL_SQL_MODE) != sql_mode_int) {
 							if (!mysql_variables.client_set_value(this, SQL_SQL_MODE, value1.c_str())) {
+								__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 								return false;
 							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection SQL Mode to %s\n", value1.c_str());
@@ -6109,6 +6113,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							uint32_t var_hash_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 							if (mysql_variables.client_get_hash(this, mysql_tracked_variables[idx].idx) != var_hash_int) {
 								if (!mysql_variables.client_set_value(this, mysql_tracked_variables[idx].idx, value1.c_str())) {
+									__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 									return false;
 								}
 							}
@@ -6240,8 +6245,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						}
 						uint32_t time_zone_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 						if (mysql_variables.client_get_hash(this, SQL_TIME_ZONE) != time_zone_int) {
-							if (!mysql_variables.client_set_value(this, SQL_TIME_ZONE, value1.c_str()))
+							if (!mysql_variables.client_set_value(this, SQL_TIME_ZONE, value1.c_str())) {
+								__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 								return false;
+							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection Time zone to %s\n", value1.c_str());
 						}
 					} else if (var == "session_track_gtids") {
@@ -6312,10 +6319,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 									if (var == "character_set_results") {
 										if (!strcasecmp("NULL", value1.c_str())) {
 											if (!mysql_variables.client_set_value(this, idx, "NULL")) {
+												__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 												return false;
 											}
 										} else if (!strcasecmp("binary", value1.c_str())) {
 											if (!mysql_variables.client_set_value(this, idx, "binary")) {
+												__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 												return false;
 											}
 										} else {
@@ -6332,19 +6341,25 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 									 * and vice versa
 									 */
 									if (var == "collation_connection") {
-										if (!mysql_variables.client_set_value(this, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str()))
+										if (!mysql_variables.client_set_value(this, SQL_CHARACTER_SET_CONNECTION, ss.str().c_str())) {
+											__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 											return false;
+										}
 									}
 									if (var == "character_set_connection") {
-											if (!mysql_variables.client_set_value(this, SQL_COLLATION_CONNECTION, ss.str().c_str()))
+											if (!mysql_variables.client_set_value(this, SQL_COLLATION_CONNECTION, ss.str().c_str())) {
+												__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 												return false;
+											}
 									}
 
 									/* this is explicit statement from client. we do not multiplex, therefor we must
 									 * remember client's choice in the client's variable for future use in verifications, multiplexing etc.
 									 */
-									if (!mysql_variables.client_set_value(this, idx, ss.str().c_str()))
+									if (!mysql_variables.client_set_value(this, idx, ss.str().c_str())) {
+										__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 										return false;
+									}
 									proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing connection %s to %s\n", var.c_str(), value1.c_str());
 								}
 							}
@@ -6356,7 +6371,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						std::string value1 = *values++;
 						std::size_t found_at = value1.find("@");
 						if (found_at != std::string::npos) {
-							unable_to_parse_set_statement(lock_hostgroup);
+							unable_to_parse_set_statement(lock_hostgroup, true);
 							return false;
 						}
 						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET NAMES %s\n",  value1.c_str());
@@ -6399,8 +6414,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 							value1[pos] = ' ';
 						uint32_t isolation_level_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
 						if (mysql_variables.client_get_hash(this, SQL_ISOLATION_LEVEL) != isolation_level_int) {
-							if (!mysql_variables.client_set_value(this, SQL_ISOLATION_LEVEL, value1.c_str()))
+							if (!mysql_variables.client_set_value(this, SQL_ISOLATION_LEVEL, value1.c_str())) {
+								__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 								return false;
+							}
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 						}
 					} else if (std::find(mysql_variables.ignore_vars.begin(), mysql_variables.ignore_vars.end(), var) != mysql_variables.ignore_vars.end()) {
@@ -6457,8 +6474,10 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					if (rc) {
 						uint32_t sql_mode_int=SpookyHash::Hash32(s1.c_str(),s1.length(),10);
 						if (mysql_variables.client_get_hash(this, SQL_SQL_MODE) != sql_mode_int) {
-							if (!mysql_variables.client_set_value(this, SQL_SQL_MODE, s1.c_str()))
+							if (!mysql_variables.client_set_value(this, SQL_SQL_MODE, s1.c_str())) {
+								__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 								return false;
+							}
 							std::size_t found_at = s1.find("@");
 							if (found_at != std::string::npos) {
 								char *v1 = strdup(s1.c_str());
@@ -6499,6 +6518,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								else
 									nqn = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 								proxy_error2(10002, "Unable to parse query. If correct, report it as a bug: %s\n", nqn.c_str());
+								__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 								return false;
 							}
 						}
@@ -7818,12 +7838,14 @@ bool MySQL_Session::known_query_for_locked_on_hostgroup(uint64_t digest) {
 
 
 
-void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
+void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup, const bool is_set_names) {
 	// we couldn't parse the query
 	string query_str = string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 	string digest_str = string(CurrentQuery.get_digest_text());
 	string& nqn = ( mysql_thread___parse_failure_logs_digest == true ? digest_str : query_str );
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
+	if (!is_set_names)
+		__sync_fetch_and_add(&MyHGM->status.frontend_failed_set_stmt, 1);
 	if (qpo->multiplex == -1) {
 		// we have no rule about this SET statement. We set hostgroup locking
 		if (locked_on_hostgroup < 0) {
