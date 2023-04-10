@@ -1669,6 +1669,13 @@ incoming_servers_t convert_mysql_servers_resultsets(const std::vector<MYSQL_RES*
 /**
  * @brief mysql_servers records will be fetched from remote peer and saved locally.
  *
+ * @details This method involves fetching the mysql_servers records (also referred to as runtime_mysql_servers) from a remote peer 
+ *    and comparing their checksum to the remote peer's checksum. If the checksums match, the local mysql_servers (i.e., runtime_mysql_servers)
+ *    will be updated and saved to disk, but only if the cluster_mysql_servers_save_to_disk variable is set to true.
+ * 
+ *    It's important to note that the runtime_mysql_servers module is distinct from the mysql_servers_v2 module. It has 
+ *    its own independent checksum (does not have dependent modules) and represents the current runtime state of the mysql_servers.
+ * 
  * @param peer_runtime_mysql_server checksum and epoch of mysql_servers from remote peer 
  */
 void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server) {
@@ -1737,6 +1744,14 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						MyHGM->servers_add(runtime_mysql_servers_resultset.get());
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
 						MyHGM->commit(runtime_mysql_servers_resultset.release(), peer_runtime_mysql_server, nullptr, {}, true);
+
+						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
+							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime MySQL Servers to Database\n");
+							GloAdmin->save_mysql_servers_runtime_to_database(false);
+							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
+							proxy_info("Cluster: Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
+							GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
+						}
 						GloAdmin->mysql_servers_wrunlock();
 
 						// free result
@@ -1775,12 +1790,31 @@ __exit_pull_mysql_servers_from_peer:
 }
 
 /**
- * @brief mysql_servers_v2 records will be fetched from remote peer. mysql_servers records will be
- * fetched if fetch_runtime_mysql_servers flag is true.
+ * @brief mysql_servers_v2 records will be fetched from remote peer. mysql_servers records will be fetched if 
+ *    fetch_runtime_mysql_servers flag is true.
+ * 
+ * @details The previous implementation of the "pull_mysql_servers_from_peer" method fetched data from "mysql_servers" (equivalent to runtime mysql_servers) 
+ *    and other dependent modules like "mysql_replication_hostgroups", "mysql_group_replication_hostgroups", "mysql_galera_hostgroups", 
+ *    "mysql_aws_aurora_hostgroups", and "mysql_hostgroup_attributes". It then computed an accumulated checksum and compares it with the 
+ *    peer checksum. If they matched, the configuration was loaded and saved to disk if "cluster_mysql_servers_save_to_disk" was set to true.
+ *
+ *    The new implementation, "pull_mysql_servers_v2_from_peer", instead fetches data from "mysql_servers_v2" (equivalent to admin mysql_servers) 
+ *    and the same dependent modules. It then computes an accumulated checksum and compares it with the peer checksum. If they matched, the 
+ *    configuration was loaded and saved to disk if "cluster_mysql_servers_save_to_disk" was set to true. Additionally, if the "fetch_runtime_mysql_servers" 
+ *    option is enabled (if cluster_mysql_servers_sync_algorithm value is set to 1), the "mysql_servers" table will also be fetched and its checksum will be 
+ *    computed and matched with the peer checksum. If they match, the configuration will be loaded and saved to disk if the "cluster_mysql_servers_save_to_disk" 
+ *    option is true.
+ *
+ *    Apart from separately fetching the runtime mysql_servers, the primary distinction between the previous and new implementations lies in the 
+ *    fetching of different tables (mysql_servers vs mysql_servers_v2) and computing of checksum. In the previous version, 
+ *    the checksum for "mysql_servers" was computed and added to the checksums of other dependent modules. In contrast, the new version 
+ *    calculates the checksum for "mysql_servers_v2" and combines it with the checksums of other dependent modules.
  * 
  * @param peer_mysql_server_v2 checksum and epoch of mysql_servers_v2 from remote peer
  * @param peer_runtime_mysql_server checksum and epoch of mysql_servers from remote peer
  * @param fetch_runtime_mysql_servers fetch mysql_servers records if value is true
+ * 
+ * NOTE: pull_mysql_servers_v2_from_peer will always be called irrespective of cluster_mysql_servers_sync_algorithm value.
  */
 void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_checksum_t& peer_mysql_server_v2,
 	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, bool fetch_runtime_mysql_servers) {
@@ -2174,6 +2208,10 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						GloAdmin->load_mysql_servers_to_runtime(incoming_servers, peer_runtime_mysql_server, peer_mysql_server_v2);
 
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
+							if (fetch_runtime_mysql_servers == true) {
+								proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime MySQL Servers to Database\n");
+								GloAdmin->save_mysql_servers_runtime_to_database(false);
+                            }
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
 							proxy_info("Cluster: Saving to disk MySQL Servers v2 from peer %s:%d\n", hostname, port);
 							GloAdmin->flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
