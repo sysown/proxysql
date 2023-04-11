@@ -95,6 +95,9 @@ const double MAX_FAILURE_PCT = 15.0;
 const uint32_t NUM_ROWS = 3000;
 const uint32_t NUM_CHECKS = 500;
 
+int set_stmts_hg_50 = 0;
+int set_stmts_hg_60 = 0;
+
 map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mysql_res_row>& conn_pool_stats) {
 	uint32_t hg_50_queries = 0;
 	uint32_t hg_50_sync_queries = 0;
@@ -168,10 +171,11 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 	}
 
 	auto hg_stats { extract_hosgtroups_stats(conn_pool_stats) };
-	uint32_t hg_50_queries = hg_stats.at(50).first;
+	// Substract SET queries used for preparation of the connection
+	uint32_t hg_50_queries = hg_stats.at(50).first - set_stmts_hg_50;
 	uint32_t hg_50_sync_queries = hg_stats.at(50).second;;
-	uint32_t hg_60_queries = hg_stats.at(60).first;
-	uint32_t hg_60_sync_queries = hg_stats.at(60).second;;
+	uint32_t hg_60_queries = hg_stats.at(60).first - set_stmts_hg_60;
+	uint32_t hg_60_sync_queries = hg_stats.at(60).second - set_stmts_hg_60;
 
 	uint32_t hg_50_exp_queries =
 		3 +            // Database creation + Table DROP + Table creation
@@ -227,6 +231,30 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 	return EXIT_SUCCESS;
 }
 
+int get_backend_set_stmts(MYSQL* proxysql_admin) {
+	int backend_set_stmt = 0;
+	std::string query =
+		"SELECT * FROM stats_mysql_global "
+		"WHERE variable_name IN ('Com_backend_set_stmt')";
+	MYSQL_QUERY(proxysql_admin, query.c_str());
+	MYSQL_RES *result = mysql_store_result(proxysql_admin);
+	MYSQL_ROW row;
+
+	while ((row = mysql_fetch_row(result)))
+	{
+		if (strcmp(row[0], "Com_backend_set_stmt") == 0) {
+			backend_set_stmt = atoi(row[1]);
+		} else {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "unexpected status variable");
+			mysql_free_result(result);
+			return EXIT_FAILURE;
+		}
+	}
+	mysql_free_result(result);
+
+	return backend_set_stmt;
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -263,10 +291,17 @@ int main(int argc, char** argv) {
 	vector<mysql_res_row> reader_1_read {};
 	vector<mysql_res_row> reader_2_read {};
 
+	// Variables to store the number of SET statemets sent before and after write and read operations
+	int set_stmts_before = 0;
+	int set_stmts_after = 0;
+
 	// Reset connection pool stats
 	int rc = mysql_query(proxysql_admin, "SELECT * FROM stats.stats_mysql_connection_pool_reset");
 	if (rc != EXIT_SUCCESS) { goto cleanup; }
 	mysql_free_result(mysql_store_result(proxysql_admin));
+
+	set_stmts_before = get_backend_set_stmts(proxysql_admin);
+	if (set_stmts_before == EXIT_FAILURE) { goto cleanup; }
 
 	// Create testing tables
 	rc = create_testing_tables(proxysql_mysql);
@@ -275,9 +310,22 @@ int main(int argc, char** argv) {
 	rc = insert_random_data(proxysql_mysql, NUM_ROWS);
 	if (rc != EXIT_SUCCESS) { goto cleanup; }
 
+	set_stmts_after = get_backend_set_stmts(proxysql_admin);
+	if (set_stmts_after == EXIT_FAILURE) { goto cleanup; }
+
+	set_stmts_hg_50 += (set_stmts_after - set_stmts_before);
+
 	for (uint32_t i = 0; i < NUM_CHECKS; i++) {
+		set_stmts_before = get_backend_set_stmts(proxysql_admin);
+		if (set_stmts_before == EXIT_FAILURE) { goto cleanup; }
+
 		rc = perform_update(proxysql_mysql, NUM_ROWS);
 		if (rc != EXIT_SUCCESS) { goto cleanup; }
+
+		set_stmts_after = get_backend_set_stmts(proxysql_admin);
+		if (set_stmts_after == EXIT_FAILURE) { goto cleanup; }
+
+		set_stmts_hg_50 += (set_stmts_after - set_stmts_before);
 
 		MYSQL_RES* my_res = mysql_store_result(proxysql_admin);
 		vector<mysql_res_row> pre_select_rows = extract_mysql_rows(my_res);
@@ -289,12 +337,20 @@ int main(int argc, char** argv) {
 		string s_query {};
 		string_format("SELECT * FROM binlog_db.gtid_test WHERE id=%d", s_query, r_row);
 
+		set_stmts_before = get_backend_set_stmts(proxysql_admin);
+		if (set_stmts_before == EXIT_FAILURE) { goto cleanup; }
+
 		// Perform the select and ignore the result
 		rc = mysql_query(proxysql_mysql, s_query.c_str());
 		if (rc != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 			goto cleanup;
 		}
+
+		set_stmts_after = get_backend_set_stmts(proxysql_admin);
+		if (set_stmts_after == EXIT_FAILURE) { goto cleanup; }
+
+		set_stmts_hg_60 += (set_stmts_after - set_stmts_before);
 
 		MYSQL_RES* my_s_res = mysql_store_result(proxysql_mysql);
 		vector<mysql_res_row> res_row = extract_mysql_rows(my_s_res);
