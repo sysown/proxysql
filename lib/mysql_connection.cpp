@@ -1989,6 +1989,7 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 					myds->sess->active_transactions = 1;
 					myds->sess->transaction_started_at = myds->sess->thread->curtime;
 				}
+				myds->sess->try_to_unlock_with_session_tracking = false;
 			}
 			if (stmt_meta==NULL)
 				set_query(stmt,length);
@@ -2869,14 +2870,12 @@ const std::unordered_map<std::string, int> query_cache_types_umap {{"OFF", 0}, {
 
 void MySQL_Connection::compare_system_variable(const std::string name, const std::string value) {
 	const MARIADB_CHARSET_INFO *ci = NULL;
-	std::string name_str, value_str;
 	int idx = -1, value_int;
-	size_t value_length;
+	std::string value_str;
 
 	if (strcasecmp("autocommit", name.c_str()) == 0) {
-		value_str = std::string(value, value_length);
 		try {
-			value_int = query_cache_types_umap.at(value_str);
+			value_int = query_cache_types_umap.at(value);
 			// Always with compare autocommit status from mysql object and from
 			// MySQL_Session.
 			if (
@@ -2912,7 +2911,7 @@ void MySQL_Connection::compare_system_variable(const std::string name, const std
 	catch (std::out_of_range const&) {
 		proxy_warning(
 			"System variable '%s' changed, but it not tracked by ProxySQL\n",
-			name_str.c_str()
+			name.c_str()
 		);
 	}
 
@@ -2920,8 +2919,7 @@ void MySQL_Connection::compare_system_variable(const std::string name, const std
 	// value in a different way than the backend.
 	switch (idx) {
 	case SQL_MAX_JOIN_SIZE:
-		value_str = std::string(value, value_length);
-		if (MAX_JOIN_SIZE_DEFAULT_INT_VALUE == strtoull(std::string(value, value_length).c_str(), NULL, 10))
+		if (MAX_JOIN_SIZE_DEFAULT_INT_VALUE == strtoull(value.c_str(), NULL, 10))
 			value_str = MAX_JOIN_SIZE_DEFAULT_STR_VALUE;
 		if (!variables[idx].value || strcasecmp(variables[idx].value, value_str.c_str()) != 0) {
 			mysql_variables.client_set_value(myds->sess, idx, value_str);
@@ -2929,9 +2927,8 @@ void MySQL_Connection::compare_system_variable(const std::string name, const std
 		}
 		break;
 	case SQL_QUERY_CACHE_TYPE:
-		value_str = std::string(value, value_length);
 		try {
-			value_int = query_cache_types_umap.at(value_str);
+			value_int = query_cache_types_umap.at(value);
 		}
 		catch (std::out_of_range const&) {
 			assert(0);
@@ -2944,10 +2941,9 @@ void MySQL_Connection::compare_system_variable(const std::string name, const std
 		break;
 	case SQL_LONG_QUERY_TIME:
 	case SQL_TIMESTAMP:
-		if (!variables[idx].value || atof(variables[idx].value) != atof(std::string(value, value_length).c_str())) {
-			value_str = std::string(value, value_length);
-			mysql_variables.client_set_value(myds->sess, idx, value_str);
-			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		if (!variables[idx].value || atof(variables[idx].value) != atof(value.c_str())) {
+			mysql_variables.client_set_value(myds->sess, idx, value);
+			mysql_variables.server_set_value(myds->sess, idx, value.c_str());
 		}
 		break;
 	case SQL_SQL_MODE:
@@ -2959,7 +2955,7 @@ void MySQL_Connection::compare_system_variable(const std::string name, const std
 		) {
 			value_str = SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7;
 		} else {
-			value_str = std::string(value, value_length);
+			value_str = value;
 		}
 		if (!variables[idx].value || strcasecmp(variables[idx].value, value_str.c_str()) != 0) {
 			mysql_variables.client_set_value(myds->sess, idx, value_str);
@@ -2972,7 +2968,7 @@ void MySQL_Connection::compare_system_variable(const std::string name, const std
 	case SQL_CHARACTER_SET_CONNECTION:
 	case SQL_COLLATION_CONNECTION:
 	case SQL_SET_NAMES:
-		if (value_length == 0) {
+		if (value.size() == 0) {
 			if (!variables[idx].value || strcasecmp(variables[idx].value, "NULL") != 0) {
 				mysql_variables.client_set_value(myds->sess, idx, "NULL");
 				mysql_variables.server_set_value(myds->sess, idx, "NULL");
@@ -2980,24 +2976,23 @@ void MySQL_Connection::compare_system_variable(const std::string name, const std
 			break;
 		}
 		if (idx == SQL_COLLATION_CONNECTION)
-			ci = proxysql_find_charset_collate(std::string(value, value_length).c_str());
+			ci = proxysql_find_charset_collate(value.c_str());
 		else
-			ci = proxysql_find_charset_name(std::string(value, value_length).c_str());
+			ci = proxysql_find_charset_name(value.c_str());
 		if (!ci)
 			assert(0);
 		if (!variables[idx].value || strtoul(variables[idx].value, NULL, 10) != ci->nr) {
 			value_str = std::to_string(ci->nr);
-			mysql_variables.client_set_value(myds->sess, idx, value_str);
-			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+			mysql_variables.client_set_value(myds->sess, idx, value);
+			mysql_variables.server_set_value(myds->sess, idx, value.c_str());
 		}
 		break;
 	case -1:
 		break;
 	default:
 		if (!variables[idx].value || strcasecmp(variables[idx].value, value.c_str()) != 0) {
-			value_str = std::string(value, value_length);
-			mysql_variables.client_set_value(myds->sess, idx, value_str);
-			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+			mysql_variables.client_set_value(myds->sess, idx, value);
+			mysql_variables.server_set_value(myds->sess, idx, value.c_str());
 		}
 		break;
 	}
@@ -3045,17 +3040,9 @@ void MySQL_Connection::get_system_variables() {
 					} catch (std::out_of_range const&) {
 						if (strncasecmp("autocommit", name, name_length) != 0) {
 							proxy_warning(
-								"System variable '%s' changed, but it not tracked by ProxySQL\n",
-								var.first.c_str()
+								"System variable '%s' changed, but it not tracked by ProxySQL. "
+								"Keep lock on hostgroup\n", var.first.c_str()
 							);
-							if (myds->sess->qpo->destination_hostgroup >= 0) {
-								if (myds->sess->transaction_persistent_hostgroup == -1) {
-									myds->sess->current_hostgroup = myds->sess->qpo->destination_hostgroup;
-								}
-							}
-							myds->sess->locked_on_hostgroup = myds->sess->current_hostgroup;
-							myds->sess->thread->status_variables.stvar[st_var_hostgroup_locked]++;
-							myds->sess->thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
 							return;
 						}
 					}
@@ -3063,6 +3050,9 @@ void MySQL_Connection::get_system_variables() {
 				for (const std::pair<std::string, std::string> var : changed_vars) {
 					compare_system_variable(var.first, var.second);
 				}
+				// Back to unlocked
+				myds->sess->locked_on_hostgroup = -1;
+				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Removing lock on hostgroup\n");
 			}
 		}
 	}

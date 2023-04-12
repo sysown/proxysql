@@ -4684,7 +4684,12 @@ void MySQL_Session::handler_rc0_Process_Session_Track(MySQL_Connection *myconn) 
 			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
 		}
 	}
-	myconn->get_system_variables();
+	if (
+		try_to_unlock_with_session_tracking &&
+		!mybe->server_myds->myconn->var_absent[SQL_SESSION_TRACK_STATE_CHANGE] &&
+		!mybe->server_myds->myconn->var_absent[SQL_SESSION_TRACK_SYSTEM_VARIABLES]
+	)
+		myconn->get_system_variables();
 }
 
 int MySQL_Session::handler() {
@@ -5978,6 +5983,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					client_myds->addr.port, nqn.c_str()
 				);
 				*lock_hostgroup = true;
+				try_to_unlock_with_session_tracking = true;
 				return false;
 			}
 			int rc;
@@ -7831,11 +7837,7 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 	string digest_str = string(CurrentQuery.get_digest_text());
 	string& nqn = ( mysql_thread___parse_failure_logs_digest == true ? digest_str : query_str );
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Locking hostgroup for query %s\n", query_str.c_str());
-	if (
-		qpo->multiplex == -1 &&
-		(mybe->server_myds->myconn->var_absent[SQL_SESSION_TRACK_STATE_CHANGE] ||
-		mybe->server_myds->myconn->var_absent[SQL_SESSION_TRACK_SYSTEM_VARIABLES])
-	) {
+	if (qpo->multiplex == -1) {
 		// we have no rule about this SET statement. We set hostgroup locking
 		if (locked_on_hostgroup < 0) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "SET query to cause setting lock_hostgroup: %s\n", nqn.c_str());
@@ -7849,6 +7851,18 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 				}
 			}
 			*lock_hostgroup = true;
+			if (
+				lock_hostgroup &&
+				strcasecmp(
+					client_myds->myconn->variables[SQL_SESSION_TRACK_STATE_CHANGE].value,
+					mysql_tracked_variables[SQL_SESSION_TRACK_STATE_CHANGE].default_value
+				) == 0 &&
+				strcasecmp(
+					client_myds->myconn->variables[SQL_SESSION_TRACK_SYSTEM_VARIABLES].value,
+					mysql_tracked_variables[SQL_SESSION_TRACK_SYSTEM_VARIABLES].default_value
+				) == 0
+			)
+				try_to_unlock_with_session_tracking = true;
 		} else {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "SET query to cause setting lock_hostgroup, but already set: %s\n", nqn.c_str());
 			if (known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest)) {
