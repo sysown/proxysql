@@ -63,6 +63,10 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	// To avoid interference from extra SET statements during the test, disable session tracking
+	MYSQL_QUERY(admin, "SET mysql-enable_session_state_trackers=false");
+	MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
 	int before_backend_set_stmt = 0;
 	int before_frontend_set_stmt = 0;
 	int before_frontend_failed_set_stmt = 0;
