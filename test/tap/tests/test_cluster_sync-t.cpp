@@ -537,40 +537,6 @@ const vector<sync_payload_t> module_sync_payloads {
 	// },
 };
 
-using line_match_t = tuple<fstream::pos_type, string, std::smatch>;
-enum LINE_MATCH_T { POS, LINE, MATCHES };
-
-int open_file_and_seek_end(const string& f_path, fstream& f_logfile) {
-	f_logfile.open(f_path.c_str(), fstream::in | fstream::out);
-
-	if (!f_logfile.is_open() || !f_logfile.good()) {
-		printf("Failed to open 'proxysql.log' file: { path: %s, error: %d }", f_path.c_str(), errno);
-		return EXIT_FAILURE;
-	}
-
-	f_logfile.seekg(0, std::ios::end);
-
-	return EXIT_SUCCESS;
-}
-
-vector<line_match_t> get_matching_lines(fstream& f_logfile, const string& line_regex) {
-	vector<line_match_t> found_matches {};
-
-	string s_logline {};
-	fstream::pos_type line_pos {};
-
-	while (std::getline(f_logfile, s_logline)) {
-		std::regex regex_err_line { line_regex };
-		std::smatch match_results {};
-
-		if (std::regex_search(s_logline, match_results, regex_err_line)) {
-			found_matches.push_back({ f_logfile.tellg(), s_logline, match_results });
-		}
-	}
-
-	return found_matches;
-}
-
 int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t timeout) {
 	uint waited = 0;
 	bool not_synced = false;

@@ -812,9 +812,9 @@ int get_variable_value(
 		res = EXIT_SUCCESS;
 	}
 
-	mysql_free_result(admin_res);
-
 cleanup:
+
+	mysql_free_result(admin_res);
 
 	return res;
 }
@@ -1068,4 +1068,106 @@ int configure_endpoints(
 	}
 
 	return EXIT_SUCCESS;
+}
+
+int extract_sqlite3_host_port(MYSQL* admin, std::pair<std::string, int>& host_port) {
+	if (admin == nullptr) { return EINVAL; }
+
+	const char varname[] { "sqliteserver-mysql_ifaces" };
+	string sqlite3_ifaces {};
+
+	// ProxySQL is likely to have been launched without "--sqlite3-server" flag
+	if (get_variable_value(admin, varname, sqlite3_ifaces)) {
+		diag("ProxySQL was launched without '--sqlite3-server' flag");
+		return EXIT_FAILURE;
+	}
+
+	// Extract the correct port to connect to SQLite server
+	std::string::size_type colon_pos = sqlite3_ifaces.find(":");
+	if (colon_pos == std::string::npos) {
+		diag("ProxySQL returned a malformed 'sqliteserver-mysql_ifaces': %s", sqlite3_ifaces.c_str());
+		return EXIT_FAILURE;
+	}
+
+	std::string sqlite3_host { sqlite3_ifaces.substr(0, colon_pos) };
+	std::string sqlite3_port { sqlite3_ifaces.substr(colon_pos + 1) };
+
+	// Check that port has valid conversion
+	char* end_pos = nullptr;
+	int i_sqlite3_port = std::strtol(sqlite3_port.c_str(), &end_pos, 10);
+
+	if (errno == ERANGE || (end_pos != &sqlite3_port.back() + 1)) {
+		diag("ProxySQL returned a invalid port number within 'sqliteserver-mysql_ifaces': %s", sqlite3_ifaces.c_str());
+		return EXIT_FAILURE;
+	}
+
+	host_port = { sqlite3_host, i_sqlite3_port };
+
+	return EXIT_SUCCESS;
+}
+
+std::vector<std::string> split(const std::string& s, char delim) {
+	std::istringstream tokenStream(s);
+	std::vector<std::string> tokens {};
+
+	std::string token {};
+	while (std::getline(tokenStream, token, delim)) {
+		tokens.push_back(token);
+	}
+
+	return tokens;
+}
+
+string get_env(const string& var) {
+	string f_path {};
+
+	char* p_infra_datadir = std::getenv(var.c_str());
+	if (p_infra_datadir != nullptr) {
+		f_path = p_infra_datadir;
+	}
+
+	return f_path;
+}
+
+int open_file_and_seek_end(const string& f_path, std::fstream& f_stream) {
+	const char* c_f_path { f_path.c_str() };
+	f_stream.open(f_path.c_str(), std::fstream::in | std::fstream::out);
+
+	if (!f_stream.is_open() || !f_stream.good()) {
+		diag("Failed to open '%s' file: { path: %s, error: %d }", basename(c_f_path), c_f_path, errno);
+		return EXIT_FAILURE;
+	}
+
+	f_stream.seekg(0, std::ios::end);
+
+	return EXIT_SUCCESS;
+}
+
+std::vector<line_match_t> get_matching_lines(std::fstream& f_stream, const std::string& regex) {
+	std::vector<line_match_t> found_matches {};
+
+	std::string next_line {};
+	std::fstream::pos_type init_pos { f_stream.tellg() };
+
+	while (std::getline(f_stream, next_line)) {
+		std::regex regex_err_line { regex };
+		std::smatch match_results {};
+
+		if (std::regex_search(next_line, match_results, regex_err_line)) {
+			found_matches.push_back({ f_stream.tellg(), next_line, match_results });
+		}
+	}
+
+	if (found_matches.empty() == false) {
+		const std::string& last_match { std::get<LINE_MATCH_T::LINE>(found_matches.back()) };
+		const std::fstream::pos_type last_match_pos { std::get<LINE_MATCH_T::POS>(found_matches.back()) };
+
+		f_stream.clear(f_stream.rdstate() & ~std::ios_base::failbit);
+		f_stream.seekg(last_match_pos);
+	} else {
+		f_stream.clear(f_stream.rdstate() & ~std::ios_base::failbit);
+		f_stream.seekg(init_pos);
+	}
+
+	return found_matches;
 }

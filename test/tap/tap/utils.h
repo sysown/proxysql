@@ -7,6 +7,7 @@
 #include <random>
 #include <fstream>
 #include <sstream>
+#include <regex>
 
 #include <curl/curl.h>
 #include <mysql.h>
@@ -440,5 +441,47 @@ int configure_endpoints(
  * @return Number of matches of the 'substr' in the provided string.
  */
 std::size_t count_matches(const std::string& str, const std::string& substr);
+
+/**
+ * @brief Extracts the current 'sqliteserver-mysql_ifaces' from ProxySQL config.
+ * @param proxysql_admin An already opened connection to ProxySQL Admin.
+ * @param host_port Output param to hold the host and port of the current 'sqliteserver-mysql_ifaces'.
+ * @return EXIT_SUCCESS for success, EXIT_FAILURE otherwise. Error cause is logged.
+ */
+int extract_sqlite3_host_port(MYSQL* admin, std::pair<std::string, int>& host_port);
+
+/**
+ * @brief Split the supplied string with the supplied delimiter.
+ * @param s The string to be split.
+ * @param delimiter The delimiter to use for splitting the string.
+ * @return String splits.
+ */
+std::vector<std::string> split(const std::string& s, char delim);
+
+/**
+ * @brief Gets the supplied environmental variable as a std::string.
+ * @param var The variable to value to extract.
+ * @return The variable value if present, an empty string if not found.
+ */
+std::string get_env(const std::string& var);
+
+/**
+ * @brief Opens the file in the supplied path in the provided stream, and seeks the end of it.
+ * @param f_path Path to the file to open.
+ * @param f_logfile Output parameter with the stream to be updated with the oppened file.
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise. Error casuse is logged.
+ */
+int open_file_and_seek_end(const std::string& f_path, std::fstream& f_stream);
+
+using line_match_t = std::tuple<std::fstream::pos_type, std::string, std::smatch>;
+enum LINE_MATCH_T { POS, LINE, MATCHES };
+
+/**
+ * @brief Extracts the lines matching the regex from the supplied stream till reaching EOF.
+ * @param f_stream The stream to be matched with the regex.
+ * @param regex The regex used to match the stream line-by-line.
+ * @return All the lines found matching the regex.
+ */
+std::vector<line_match_t> get_matching_lines(std::fstream& f_stream, const std::string& regex);
 
 #endif // #define UTILS_H
