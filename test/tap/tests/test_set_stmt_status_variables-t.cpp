@@ -11,17 +11,70 @@
 
 #include "tap.h"
 #include "utils.h"
+#include <cstdlib>
 #include <string>
+#include <tuple>
+
+std::tuple<int, int, int> get_set_stmt_status_variables(MYSQL* admin) {
+	int backend_set_stmt = 0;
+	int frontend_set_stmt = 0;
+	int frontend_failed_set_stmt = 0;
+
+	const std::string query_set_stmt_status_variables =
+		"SELECT * FROM stats_mysql_global "
+		"WHERE variable_name IN ('Com_backend_set_stmt','Com_frontend_set_stmt', 'Com_frontend_failed_set_stmt')";
+    if (mysql_query(admin, query_set_stmt_status_variables.c_str())) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return std::make_tuple(-1, -1, -1);
+	}
+	MYSQL_RES *result = mysql_store_result(admin);
+	MYSQL_ROW row;
+	while ((row = mysql_fetch_row(result)))
+	{
+		if (strcmp(row[0], "Com_backend_set_stmt") == 0) {
+			backend_set_stmt = atoi(row[1]);
+		} else if (strcmp(row[0], "Com_frontend_set_stmt") == 0) {
+			frontend_set_stmt = atoi(row[1]);
+		} else if (strcmp(row[0], "Com_frontend_failed_set_stmt") == 0) {
+			frontend_failed_set_stmt = atoi(row[1]);
+		} else {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "unexpected status variable");
+			return std::make_tuple(-1, -1, -1);
+		}
+	}
+	mysql_free_result(result);
+
+	return std::make_tuple(backend_set_stmt, frontend_set_stmt, frontend_failed_set_stmt);
+}
 
 int main(int argc, char** argv) {
 	CommandLine cl;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
-		return -1;
+		return EXIT_FAILURE;
 	}
 
 	plan(3);
+
+	MYSQL* admin = mysql_init(NULL);
+	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
+		return EXIT_FAILURE;
+	}
+
+	int before_backend_set_stmt = 0;
+	int before_frontend_set_stmt = 0;
+	int before_frontend_failed_set_stmt = 0;
+	std::tie(
+		before_backend_set_stmt,
+		before_frontend_set_stmt,
+		before_frontend_failed_set_stmt
+	) = get_set_stmt_status_variables(admin);
+	if (before_backend_set_stmt == -1 || before_frontend_set_stmt == -1 || before_frontend_failed_set_stmt == -1) {
+		mysql_close(admin);
+		return EXIT_FAILURE;
+	}
 
 	MYSQL* proxy = mysql_init(NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
@@ -48,6 +101,8 @@ int main(int argc, char** argv) {
 	const std::string wrong_set_stmt = "SET FOO='BAR'";
 	int err = mysql_query(proxy, wrong_set_stmt.c_str());
 	if (err != 1) {
+		mysql_close(admin);
+		mysql_close(proxy);
 		fprintf(stderr, "File %s, line %d, Error: %d - %s\n", __FILE__, __LINE__, err, mysql_error(proxy));
 		return EXIT_FAILURE;
 	}
@@ -59,38 +114,24 @@ int main(int argc, char** argv) {
 
 	mysql_close(proxy);
 
-	MYSQL* admin = mysql_init(NULL);
-	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
-		return -1;
+	int after_backend_set_stmt = 0;
+	int after_frontend_set_stmt = 0;
+	int after_frontend_failed_set_stmt = 0;
+	std::tie(
+		after_backend_set_stmt,
+		after_frontend_set_stmt,
+		after_frontend_failed_set_stmt
+	) = get_set_stmt_status_variables(admin);
+	if (after_backend_set_stmt == -1 || after_frontend_set_stmt == -1 || after_frontend_failed_set_stmt == -1) {
+		mysql_close(admin);
+		return EXIT_FAILURE;
 	}
 
-	int backend_set_stmt = 0;
-	int frontend_set_stmt = 0;
-	int frontend_failed_set_stmt = 0;
-	std::string query =
-		"SELECT * FROM stats_mysql_global "
-		"WHERE variable_name IN ('Com_backend_set_stmt','Com_frontend_set_stmt', 'Com_frontend_failed_set_stmt')";
-	MYSQL_QUERY(admin, query.c_str());
-	MYSQL_RES *result = mysql_store_result(admin);
-	MYSQL_ROW row;
-	while ((row = mysql_fetch_row(result)))
-	{
-		if (strcmp(row[0], "Com_backend_set_stmt") == 0) {
-			backend_set_stmt = atoi(row[1]);
-		} else if (strcmp(row[0], "Com_frontend_set_stmt") == 0) {
-			frontend_set_stmt = atoi(row[1]);
-		} else if (strcmp(row[0], "Com_frontend_failed_set_stmt") == 0) {
-			frontend_failed_set_stmt = atoi(row[1]);
-		} else {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "unexpected status variable");
-			return EXIT_FAILURE;
-		}
-	}
-
-	mysql_free_result(result);
 	mysql_close(admin);
 
+	int backend_set_stmt = after_backend_set_stmt - before_backend_set_stmt;
+	int frontend_set_stmt = after_frontend_set_stmt - before_frontend_set_stmt;
+	int frontend_failed_set_stmt = after_frontend_failed_set_stmt - before_frontend_failed_set_stmt;
 	int expected_backend_set_stmt = 3;
 	int expected_frontend_set_stmt = 3;
 	int expected_frontend_failed_set_stmt = 1;
