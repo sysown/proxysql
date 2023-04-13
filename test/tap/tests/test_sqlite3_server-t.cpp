@@ -482,10 +482,19 @@ int main(int argc, char** argv) {
 			ok(query_err == 0, "Query should be executed successfully '%s'", admin_query.c_str());
 		}
 
-		iface_err = enforce_sqlite_iface_change(proxysql_admin, errlog);
+		iface_err = enforce_sqlite_iface_change(proxysql_admin, errlog, 20);
 		ok(iface_err == 0, "SQLite3 iface should change without error being reported.");
 
-		std::string old_intf_conn_err { connect_with_retries(proxysql_sqlite3, cl, host_port) };
+		std::string old_intf_conn_err {};
+
+		// NOTE: If the interface change has failed after the previously specified retries, we assume the
+		// interface could be locked somehow by ProxySQL, and we avoid trying to stablish a connection that
+		// could stall the test. Instead we intentionally fail.
+		if (iface_err == 0) {
+			old_intf_conn_err = connect_with_retries(proxysql_sqlite3, cl, host_port);
+		} else {
+			old_intf_conn_err = "Interface failed to be changed. Skipping connection attempt...";
+		}
 
 		ok(
 			old_intf_conn_err.empty() == true,
