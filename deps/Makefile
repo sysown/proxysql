@@ -82,6 +82,11 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 
+BIO_MATCH := $(shell ./libssl/verify-bio_st-match.sh \&>/dev/null; echo $$?)
+ifneq ($(BIO_MATCH),0)
+$(error Incompatible OpenSSL version: struct bio_st mismatch!)
+endif
+
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
@@ -92,6 +97,7 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ln -s . lib # curl wants this path
 
 libssl: libssl/openssl/libssl.a
+
 
 MIN_VERSION := 4.9.0
 GCC_VERSION := $(shell gcc -dumpversion)
