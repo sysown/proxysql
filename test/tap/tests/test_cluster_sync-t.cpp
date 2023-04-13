@@ -2255,6 +2255,20 @@ int main(int, char**) {
 
 	sleep(2);
 
+	// NOTE: Recovering the DISK configuration shouldn't be required. But due to current limitations
+	// regarding monitor a server could be permanently moved from it's original hostgroup in user
+	// configuration (mysql_servers table). A scenario like this could for example be:
+	//   - A server is moved by Monitoring actions during any of the previous sync tests for hostgroups
+	//   tables, for example, placed in the OFFLINE_HOSTGROUP.
+	//   - A later reconfiguration via 'read_only_action' rewrites Admin 'mysql_servers' table, making this
+	//   server permanent in user config.
+	//   - The following checks expects to find this server in a particular hostgroup. But config is
+	//   permanently altered, and fail.
+	// The possibility of this scenario make the backup mechanism of the previous sections insufficient. So
+	// right now the safest option is recover DISK configuration.
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS FROM DISK");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
 	// Check sync disable via 'admin-cluster_*_sync' variables
 	{
 		int checksum_sync_res = check_modules_checksums_sync(proxy_admin, r_proxy_admin, cl);
