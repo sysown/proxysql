@@ -3836,6 +3836,13 @@ __get_pkts_from_client:
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									if (thread->variables.stats_time_query_processor) {
+										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+										thread->status_variables.stvar[st_var_query_processor_time]=thread->status_variables.stvar[st_var_query_processor_time] +
+											(endt.tv_sec*1000000000+endt.tv_nsec) -
+											(begint.tv_sec*1000000000+begint.tv_nsec);
+									}
+									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									// This block was moved from 'handler_special_queries' to support
 									// handling of 'USE' statements which are preceded by a comment.
 									// For more context check issue: #3493.
@@ -3877,13 +3884,6 @@ __get_pkts_from_client:
 									if (qpo->max_lag_ms >= 0) {
 										thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 									}
-									if (thread->variables.stats_time_query_processor) {
-										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
-										thread->status_variables.stvar[st_var_query_processor_time]=thread->status_variables.stvar[st_var_query_processor_time] +
-											(endt.tv_sec*1000000000+endt.tv_nsec) -
-											(begint.tv_sec*1000000000+begint.tv_nsec);
-									}
-									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (mirror==false && rc_break==false) {
 										if (mysql_thread___automatic_detect_sqli) {
