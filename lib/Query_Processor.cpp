@@ -1205,10 +1205,10 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	size_t map_size = digest_umap_aux.size();
+	curtime1 = monotonic_time(); // curtime1 must always be initialized
 	if (use_resultset) {
 		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
 			result = new SQLite3_result(14, true);
-			curtime1 = monotonic_time();
 		} else {
 			result = new SQLite3_result(14);
 		}
@@ -1268,7 +1268,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
 		curtime2 = curtime2/1000;
-		proxy_info("Running query on stats_mysql_query_digest: %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
+		proxy_info("Running query on stats_mysql_query_digest: (not locked) %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
 	}
 
 	// Once we finish creating the resultset or writing to SQLite, we use a
@@ -1341,9 +1341,9 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	size_t map_size = digest_umap.size();
+	curtime1 = monotonic_time(); // curtime1 must always be initialized
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
 		result = new SQLite3_result(14, true);
-		curtime1 = monotonic_time();
 	} else {
 		result = new SQLite3_result(14);
 	}
@@ -1419,11 +1419,11 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(
 	bool defer_free = false;
 	int n=DIGEST_STATS_FAST_THREADS;
 	get_query_digests_parallel_args args[n];
+	curtime1 = monotonic_time(); // curtime1 must always be initialized
 	if (use_resultset) {
 		free_me = true;
 		defer_free = true;
 		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-			curtime1=monotonic_time();
 			result = new SQLite3_result(14, true);
 		} else {
 			result = new SQLite3_result(14);
@@ -1500,7 +1500,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(
 		curtime2=monotonic_time();
 		curtime1 = curtime1/1000;
 		curtime2 = curtime2/1000;
-		proxy_info("Running query on stats_mysql_query_digest_reset: %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
+		proxy_info("Running query on stats_mysql_query_digest: (not locked) %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
 		if (free_me) {
 			if (defer_free) {
 				for (int i=0; i<n; i++) {
@@ -1535,8 +1535,8 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	int n=DIGEST_STATS_FAST_THREADS;
 	get_query_digests_parallel_args args[n];
 	size_t map_size = digest_umap.size();
+	curtime1 = monotonic_time(); // curtime1 must always be initialized
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		curtime1=monotonic_time();
 		result = new SQLite3_result(14, true);
 	} else {
 		result = new SQLite3_result(14);
