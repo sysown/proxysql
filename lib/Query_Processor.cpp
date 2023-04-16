@@ -1049,50 +1049,45 @@ unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool p
 unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	unsigned long long ret = 0;
 	pthread_rwlock_wrlock(&digest_rwlock);
-	unsigned long long curtime1=monotonic_time();
-	size_t map1_size = digest_umap.size();
-	size_t map2_size = digest_text_umap.size();
-	ret = map1_size + map2_size;
-	unsigned long long i = 0;
-	QP_query_digest_stats **array1 = (QP_query_digest_stats **)malloc(sizeof(QP_query_digest_stats *)*map1_size);
-	char **array2 = (char **)malloc(sizeof(char *)*map2_size);
 
-	i=0;
-	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
-		array1[i]=(QP_query_digest_stats *)it->second;
-		i++;
-		//delete qds;
-	}
-	i=0;
-	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap.begin(); it!=digest_text_umap.end(); ++it) {
-		array2[i] = it->second;
-		//free(it->second);
-		i++;
-	}
-	digest_umap.erase(digest_umap.begin(),digest_umap.end());
-	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
+
+	umap_query_digest digest_umap_aux;
+	umap_query_digest_text digest_text_umap_aux;
+	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_umap.swap(digest_umap_aux);
+	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
-	unsigned long long curtime2=monotonic_time();
-	curtime1 = curtime1/1000;
-	curtime2 = curtime2/1000;
-	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
-		proxy_info("Purging stats_mysql_query_digest: locked for %llums to remove %lu entries\n", curtime2-curtime1, map1_size);
-	}
-	char buf[128];
-	sprintf(buf, "Query digest map locked for %llums", curtime2-curtime1);
-	*msg = strdup(buf);
-	for (i=0; i<map1_size; i++) {
-		QP_query_digest_stats *qds = array1[i];
+	int num_rows = 0;
+	unsigned long long curtime1=monotonic_time();
+	size_t map1_size = digest_umap_aux.size();
+	size_t map2_size = digest_text_umap_aux.size();
+	ret = map1_size + map2_size;
+
+
+	for (
+		std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
+		it != digest_umap_aux.end();
+		++it
+	) {
+		QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
 		delete qds;
 	}
-	for (i=0; i<map2_size; i++) {
-		char *p = array2[i];
-		free(p);
+	digest_umap_aux.clear();
+	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap_aux.begin(); it!=digest_text_umap_aux.end(); ++it) {
+		free(it->second);
 	}
-	free(array1);
-	free(array2);
+	digest_text_umap_aux.clear();
+
+
+	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
+		unsigned long long curtime2=monotonic_time();
+		curtime1 = curtime1/1000;
+		curtime2 = curtime2/1000;
+		proxy_info("TRUNCATE stats_mysql_query_digest: (not locked) %llums to remove %lu entries\n", curtime2-curtime1, map1_size);
+	}
 	return ret;
 }
+
 
 unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 	unsigned long long ret = 0;
