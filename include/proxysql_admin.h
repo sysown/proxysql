@@ -5,6 +5,7 @@
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 
+#include "query_processor.h"
 #include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -421,7 +422,12 @@ class ProxySQL_Admin {
 
 	void p_update_metrics();
 	void stats___mysql_query_rules();
-	void stats___mysql_query_digests(bool reset, bool copy=false);
+	int stats___save_mysql_query_digest_to_sqlite(
+		const bool reset, const bool copy, const SQLite3_result *resultset,
+		const umap_query_digest *digest_umap, const umap_query_digest_text *digest_text_umap
+	);
+	int stats___mysql_query_digests(bool reset, bool copy=false);
+	int stats___mysql_query_digests_v2(bool reset, bool copy, bool use_resultset);
 	//void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();

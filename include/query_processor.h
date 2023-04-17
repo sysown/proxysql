@@ -61,8 +61,12 @@ class QP_query_digest_stats {
 	unsigned long long rows_sent;
 	int hid;
 	QP_query_digest_stats(char *u, char *s, uint64_t d, char *dt, int h, char *ca);
-	void add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs);
+	void add_time(
+		unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
+		unsigned long long cnt = 1
+	);
 	~QP_query_digest_stats();
+	char *get_digest_text(const umap_query_digest_text *digest_text_umap);
 	char **get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp);
 };
 
@@ -319,6 +323,10 @@ class Query_Processor {
 	SQLite3_result * get_stats_commands_counters();
 	SQLite3_result * get_query_digests();
 	SQLite3_result * get_query_digests_reset();
+	std::pair<SQLite3_result *, int> get_query_digests_v2(const bool use_resultset = true);
+	std::pair<SQLite3_result *, int> get_query_digests_reset_v2(
+		const bool copy, const bool use_resultset = true
+	);
 	void get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt);
 	unsigned long long purge_query_digests(bool async_purge, bool parallel, char **msg);
 	unsigned long long purge_query_digests_async(char **msg);
