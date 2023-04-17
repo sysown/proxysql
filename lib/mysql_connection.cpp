@@ -1989,7 +1989,6 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 					myds->sess->active_transactions = 1;
 					myds->sess->transaction_started_at = myds->sess->thread->curtime;
 				}
-				myds->sess->try_to_unlock_with_session_tracking = false;
 			}
 			if (stmt_meta==NULL)
 				set_query(stmt,length);
@@ -3040,9 +3039,23 @@ void MySQL_Connection::get_system_variables() {
 					} catch (std::out_of_range const&) {
 						if (strncasecmp("autocommit", name, name_length) != 0) {
 							proxy_warning(
-								"System variable '%s' changed, but it not tracked by ProxySQL. "
-								"Keep lock on hostgroup\n", var.first.c_str()
+								"System variable '%s' changed, but it is not tracked by ProxySQL. "
+								"As we cannot guarantee synchronization between the ProxySQL variables and the "
+								"backend variables, we are disabling session tracking.\n",
+								var.first.c_str()
 							);
+							myds->sess->session_tracking_failed = true;
+							if (myds->sess->locked_on_hostgroup < 0) {
+								proxy_warning("Locking on hostgroup now.\n");
+								if (myds->sess->qpo->destination_hostgroup >= 0) {
+									if (myds->sess->transaction_persistent_hostgroup == -1) {
+										myds->sess->current_hostgroup = myds->sess->qpo->destination_hostgroup;
+									}
+								}
+								myds->sess->locked_on_hostgroup = myds->sess->current_hostgroup;
+								myds->sess->thread->status_variables.stvar[st_var_hostgroup_locked]++;
+								myds->sess->thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+							}
 							return;
 						}
 					}
@@ -3052,7 +3065,7 @@ void MySQL_Connection::get_system_variables() {
 				}
 				// Back to unlocked
 				myds->sess->locked_on_hostgroup = -1;
-				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "Removing lock on hostgroup\n");
+				proxy_warning("Removing lock on hostgroup\n");
 			}
 		}
 	}

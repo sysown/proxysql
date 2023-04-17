@@ -4684,11 +4684,7 @@ void MySQL_Session::handler_rc0_Process_Session_Track(MySQL_Connection *myconn) 
 			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
 		}
 	}
-	if (
-		try_to_unlock_with_session_tracking &&
-		!mybe->server_myds->myconn->var_absent[SQL_SESSION_TRACK_STATE_CHANGE] &&
-		!mybe->server_myds->myconn->var_absent[SQL_SESSION_TRACK_SYSTEM_VARIABLES]
-	)
+	if (!session_tracking_failed)
 		myconn->get_system_variables();
 }
 
@@ -5983,7 +5979,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					client_myds->addr.port, nqn.c_str()
 				);
 				*lock_hostgroup = true;
-				try_to_unlock_with_session_tracking = true;
 				return false;
 			}
 			int rc;
@@ -7851,18 +7846,6 @@ void MySQL_Session::unable_to_parse_set_statement(bool *lock_hostgroup) {
 				}
 			}
 			*lock_hostgroup = true;
-			if (
-				lock_hostgroup &&
-				strcasecmp(
-					client_myds->myconn->variables[SQL_SESSION_TRACK_STATE_CHANGE].value,
-					mysql_tracked_variables[SQL_SESSION_TRACK_STATE_CHANGE].default_value
-				) == 0 &&
-				strcasecmp(
-					client_myds->myconn->variables[SQL_SESSION_TRACK_SYSTEM_VARIABLES].value,
-					mysql_tracked_variables[SQL_SESSION_TRACK_SYSTEM_VARIABLES].default_value
-				) == 0
-			)
-				try_to_unlock_with_session_tracking = true;
 		} else {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "SET query to cause setting lock_hostgroup, but already set: %s\n", nqn.c_str());
 			if (known_query_for_locked_on_hostgroup(CurrentQuery.QueryParserArgs.digest)) {

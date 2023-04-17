@@ -254,7 +254,7 @@ class MySQL_Session
 	 */
 	int default_charset;
 	int locked_on_hostgroup;
-	bool try_to_unlock_with_session_tracking = false;
+	bool session_tracking_failed = false;
 	int next_query_flagIN;
 	int mirror_hostgroup;
 	int mirror_flagOUT;
