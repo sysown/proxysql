@@ -4584,18 +4584,17 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
  * @param mysql_servers List of servers having hostname, port and read only value.
  * 
  */
-void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<std::string,int,int>>& mysql_servers) {
+void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers) {
 
-	std::string hostname;
-	int port = -1;
-	int read_only = -1;
 	bool update_mysql_servers_table = false;
 
 	unsigned long long curtime1 = monotonic_time();
 	wrlock();
 	for (const auto& server : mysql_servers) {
 		bool is_writer = false;
-		std::tie(hostname, port, read_only) = server;
+		const std::string& hostname = std::get<READ_ONLY_SERVER_T::HOSTNAME>(server);
+		const int port = std::get<READ_ONLY_SERVER_T::PORT>(server);
+		const int read_only = std::get<READ_ONLY_SERVER_T::READONLY>(server);
 		const std::string& srv_id = hostname + ":::" + std::to_string(port);
 		
 		auto itr = hostgroup_server_mapping.find(srv_id);
@@ -4622,11 +4621,8 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=0', but not found as writer\n", hostname.c_str(), port);
 				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
-				if (mysql_thread___monitor_writer_is_also_reader) {
-					// server is also a reader, we copy all nodes from writer to reader (previous reader nodes will be reused)
-					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
-				} else {
-					// server can only be a writer
+				if (mysql_thread___monitor_writer_is_also_reader == false) {
+					// remove node from reader
 					host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
 				}
 
@@ -4671,11 +4667,8 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 					// copy all reader nodes to writer
 					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
-					if (mysql_thread___monitor_writer_is_also_reader) {
-						// server is also a reader, we copy all nodes from writer to reader (previous reader nodes will be reused)
-						host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
-					} else {
-						// server can only be a writer
+					if (mysql_thread___monitor_writer_is_also_reader == false) {
+						// remove node from reader
 						host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
 					}
 

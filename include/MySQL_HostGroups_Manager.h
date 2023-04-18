@@ -378,6 +378,23 @@ struct hg_metrics_map_idx {
 	};
 };
 
+/**
+ * @brief Required server info for the read_only Monitoring actions.
+ */
+using hostname_t = std::string;
+using port_t = int;
+using read_only_t = int;
+
+using read_only_server_t = std::tuple<hostname_t,port_t,read_only_t>;
+
+enum READ_ONLY_SERVER_T {
+	HOSTNAME = 0,
+	PORT,
+	READONLY,
+	__SIZE
+};
+//
+
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -748,7 +765,7 @@ class MySQL_HostGroups_Manager {
 	void replication_lag_action_inner(MyHGC *, char*, unsigned int, int);
 	void replication_lag_action(int, char*, unsigned int, int);
 	void read_only_action(char *hostname, int port, int read_only);
-	void read_only_action_v2(const std::list<std::tuple<std::string,int,int>>& mysql_servers);
+	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);
