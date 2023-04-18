@@ -3476,22 +3476,19 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 	}
 }
 
-void MySQL_HostGroups_Manager::replication_lag_action(const std::list<std::tuple<int, std::string, unsigned int, int>>& mysql_servers) {
+void MySQL_HostGroups_Manager::replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers) {
 
 	//this method does not use admin table, so this lock is not needed. 
 	//GloAdmin->mysql_servers_wrlock();
-
-	int hid = -1;
-	std::string address;
-	unsigned int port = 0;
-	int current_replication_lag = -1;
-
 	unsigned long long curtime1 = monotonic_time();
 	wrlock();
 
 	for (const auto& server : mysql_servers) {
 
-		std::tie(hid, address, port, current_replication_lag) = server;
+		const int hid = std::get<REPLICATION_LAG_SERVER_T::HOSTGROUP_ID>(server);
+		const std::string& address = std::get<REPLICATION_LAG_SERVER_T::ADDRESS>(server);
+		const unsigned int port = std::get<REPLICATION_LAG_SERVER_T::PORT>(server);
+		const int current_replication_lag = std::get<REPLICATION_LAG_SERVER_T::CURRENT_REPLICATION_LAG>(server);
 
 		if (mysql_thread___monitor_replication_lag_group_by_host == false) {
 			// legacy check. 1 check per server per hostgroup
