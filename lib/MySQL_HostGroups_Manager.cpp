@@ -2319,7 +2319,10 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 /** 
  * @brief Computes checksum for the admin mysql_server resultset and generates an accumulated checksum by including the following modules: 
  *    MYSQL_REPLICATION_HOSTGROUPS, MYSQL_GROUP_REPLICATION_HOSTGROUPS, MYSQL_GALERA_HOSTGROUPS, and MYSQL_HOSTGROUP_ATTRIBUTES.
- * 
+ *
+ * @details The 'incoming_mysql_servers_v2' includes the same records as 'main.mysql_servers'. If this set of records is empty, then the
+ *    records are retrieved from 'main.mysql_servers'.
+ *
  * @param incoming_mysql_servers_v2 resultset of admin mysql_servers or can be a nullptr.
  */
 uint64_t MySQL_HostGroups_Manager::get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2) {

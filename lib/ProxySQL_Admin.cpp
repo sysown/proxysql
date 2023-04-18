@@ -8223,12 +8223,14 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_servers_sync_algorithm")) {
 		int intv=atoi(value);
 		if (intv >= 1 && intv <= 3) {
-			variables.cluster_mysql_servers_sync_algorithm =intv;
+
+			if (variables.cluster_mysql_servers_sync_algorithm != intv) {
+				proxy_info("'cluster_mysql_servers_sync_algorithm' updated. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
+
+			variables.cluster_mysql_servers_sync_algorithm=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_sync_algorithm, intv);
-
-			proxy_info("'cluster_mysql_servers_sync_algorithm' updated. Resetting global checksums to force Cluster re-sync.");
-			GloProxyCluster->Reset_Global_Checksums(lock);
-
 			return true;
 		} else {
 			return false;
