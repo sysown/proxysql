@@ -10969,6 +10969,15 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 						SHA1_Init(&sha1_context);
 						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
 						SHA1_Final(hash_stage2, &sha1_context);
+
+						unsigned char md1_buf[SHA_DIGEST_LENGTH];
+						unsigned char md2_buf[SHA_DIGEST_LENGTH];
+						SHA1((const unsigned char *)r->fields[1], strlen(r->fields[1]),md1_buf);
+						assert(memcmp(md1_buf,hash_stage1,SHA_DIGEST_LENGTH)==0);
+						SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
+						assert(memcmp(md2_buf,hash_stage2,SHA_DIGEST_LENGTH)==0);
+
+
 						password=sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
 					}
 				} else {
