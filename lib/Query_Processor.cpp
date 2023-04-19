@@ -431,7 +431,7 @@ static void __delete_query_rule(QP_rule_t *qr) {
 // delete all the query rules in a Query Processor Table
 // Note that this function is called by GloQPro with &rules (generic table)
 //     and is called by each mysql thread with _thr_SQP_rules (per thread table)
-static void __reset_rules(std::vector<QP_rule_t *> * qrs) {
+void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Resetting rules in Query Processor Table %p\n", qrs);
 	if (qrs==NULL) return;
 	QP_rule_t *qr;
@@ -546,7 +546,8 @@ Query_Processor::Query_Processor() {
 	}
 	query_rules_resultset = NULL;
 	fast_routing_resultset = NULL;
-	rules_fast_routing = kh_init(khStrInt); // create a hashtable
+	// 'rules_fast_routing' structures created on demand
+	rules_fast_routing = nullptr;
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
 	new_req_conns_count = 0;
@@ -555,7 +556,9 @@ Query_Processor::Query_Processor() {
 Query_Processor::~Query_Processor() {
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) delete commands_counters[i];
 	__reset_rules(&rules);
-	kh_destroy(khStrInt, rules_fast_routing);
+	if (rules_fast_routing) {
+		kh_destroy(khStrInt, rules_fast_routing);
+	}
 	if (rules_fast_routing___keys_values) {
 		free(rules_fast_routing___keys_values);
 		rules_fast_routing___keys_values = NULL;
@@ -597,7 +600,8 @@ void Query_Processor::init_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Initializing Per-Thread Query Processor Table with version=0\n");
 	_thr_SQP_version=0;
 	_thr_SQP_rules=new std::vector<QP_rule_t *>;
-	_thr_SQP_rules_fast_routing = kh_init(khStrInt); // create a hashtable
+	// per-thread 'rules_fast_routing' structures are created on demand
+	_thr_SQP_rules_fast_routing = nullptr;
 	_thr___rules_fast_routing___keys_values = NULL;
 	for (int i=0; i<MYSQL_COM_QUERY___NONE; i++) _thr_commands_counters[i] = new Command_Counter(i);
 };
@@ -607,7 +611,9 @@ void Query_Processor::end_thread() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Destroying Per-Thread Query Processor Table with version=%d\n", _thr_SQP_version);
 	__reset_rules(_thr_SQP_rules);
 	delete _thr_SQP_rules;
-	kh_destroy(khStrInt, _thr_SQP_rules_fast_routing);
+	if (_thr_SQP_rules_fast_routing) {
+		kh_destroy(khStrInt, _thr_SQP_rules_fast_routing);
+	}
 	if (_thr___rules_fast_routing___keys_values) {
 		free(_thr___rules_fast_routing___keys_values);
 		_thr___rules_fast_routing___keys_values = NULL;
@@ -727,21 +733,29 @@ void Query_Processor::delete_query_rule(QP_rule_t *qr) {
 	__delete_query_rule(qr);
 };
 
-void Query_Processor::reset_all(bool lock) {
+rules_mem_sts_t Query_Processor::reset_all(bool lock) {
 	if (lock)
 		pthread_rwlock_wrlock(&rwlock);
-	__reset_rules(&rules);
+
+	rules_mem_sts_t hashmaps_data {};
+	this->rules.swap(hashmaps_data.query_rules);
+
 	if (rules_fast_routing) {
-		kh_destroy(khStrInt, rules_fast_routing);
-		rules_fast_routing = NULL;
-		rules_fast_routing = kh_init(khStrInt); // create a hashtable
+		hashmaps_data.rules_fast_routing = rules_fast_routing;
+		rules_fast_routing = nullptr;
 	}
-	free(rules_fast_routing___keys_values);
-	rules_fast_routing___keys_values = NULL;
-	rules_fast_routing___keys_values___size = 0;
+
+	if (rules_fast_routing___keys_values) {
+		hashmaps_data.rules_fast_routing___keys_values = rules_fast_routing___keys_values;
+		rules_fast_routing___keys_values = NULL;
+		rules_fast_routing___keys_values___size = 0;
+	}
+
 	if (lock)
 		pthread_rwlock_unlock(&rwlock);
 	rules_mem_used=0;
+
+	return hashmaps_data;
 };
 
 bool Query_Processor::insert(QP_rule_t *qr, bool lock) {
@@ -912,6 +926,35 @@ SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 	}
 	pthread_rwlock_unlock(&rwlock);
 	return result;
+}
+
+int Query_Processor::search_rules_fast_routing_dest_hg(
+	khash_t(khStrInt)* _rules_fast_routing, const char* u, const char* s, int flagIN
+) {
+	int dest_hg = -1;
+	char keybuf[256];
+	char * keybuf_ptr = keybuf;
+	size_t keylen = strlen(u)+strlen(rand_del)+strlen(s)+30; // 30 is a big number
+	if (keylen > 250) {
+		keybuf_ptr = (char *)malloc(keylen);
+	}
+	sprintf(keybuf_ptr,"%s%s%s---%d", u, rand_del, s, flagIN);
+	khiter_t k = kh_get(khStrInt, _rules_fast_routing, keybuf_ptr);
+	if (k == kh_end(_rules_fast_routing)) {
+		sprintf(keybuf_ptr,"%s%s---%d", rand_del, s, flagIN);
+		khiter_t k2 = kh_get(khStrInt, _rules_fast_routing, keybuf_ptr);
+		if (k2 == kh_end(_rules_fast_routing)) {
+		} else {
+			dest_hg = kh_val(_rules_fast_routing,k2);
+		}
+	} else {
+		dest_hg = kh_val(_rules_fast_routing,k);
+	}
+	if (keylen > 250) {
+		free(keybuf_ptr);
+	}
+
+	return dest_hg;
 }
 
 struct get_query_digests_parallel_args {
@@ -1703,23 +1746,39 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				_thr_SQP_rules->push_back(qr2);
 			}
 		}
-		kh_destroy(khStrInt, _thr_SQP_rules_fast_routing);
-		_thr_SQP_rules_fast_routing = kh_init(khStrInt); // create a hashtable
-		if (_thr___rules_fast_routing___keys_values) {
-			free(_thr___rules_fast_routing___keys_values);
-			_thr___rules_fast_routing___keys_values = NULL;
-		}
-		if (rules_fast_routing___keys_values___size) {
-			_thr___rules_fast_routing___keys_values = (char *)malloc(rules_fast_routing___keys_values___size);
-			memcpy(_thr___rules_fast_routing___keys_values, rules_fast_routing___keys_values, rules_fast_routing___keys_values___size);
-			char *ptr = _thr___rules_fast_routing___keys_values;
-			while (ptr < _thr___rules_fast_routing___keys_values + rules_fast_routing___keys_values___size) {
-				char *ptr2 = ptr+strlen(ptr)+1;
-				int destination_hostgroup = atoi(ptr2);
-				int ret;
-				khiter_t k = kh_put(khStrInt, _thr_SQP_rules_fast_routing, ptr, &ret); // add the key
-				kh_value(_thr_SQP_rules_fast_routing, k) = destination_hostgroup; // set the value of the key
-				ptr = ptr2+strlen(ptr2)+1;
+		if (mysql_thread___query_rules_fast_routing_algorithm == 1) {
+			if (_thr_SQP_rules_fast_routing) {
+				kh_destroy(khStrInt, _thr_SQP_rules_fast_routing);
+				_thr_SQP_rules_fast_routing = nullptr;
+			}
+			if (_thr___rules_fast_routing___keys_values) {
+				free(_thr___rules_fast_routing___keys_values);
+				_thr___rules_fast_routing___keys_values = NULL;
+			}
+			if (rules_fast_routing___keys_values___size) {
+				_thr_SQP_rules_fast_routing = kh_init(khStrInt); // create a hashtable
+				_thr___rules_fast_routing___keys_values = (char *)malloc(rules_fast_routing___keys_values___size);
+				memcpy(_thr___rules_fast_routing___keys_values, rules_fast_routing___keys_values, rules_fast_routing___keys_values___size);
+				rules_mem_used += rules_fast_routing___keys_values___size; // per-thread
+				char *ptr = _thr___rules_fast_routing___keys_values;
+				while (ptr < _thr___rules_fast_routing___keys_values + rules_fast_routing___keys_values___size) {
+					char *ptr2 = ptr+strlen(ptr)+1;
+					int destination_hostgroup = atoi(ptr2);
+					int ret;
+					khiter_t k = kh_put(khStrInt, _thr_SQP_rules_fast_routing, ptr, &ret); // add the key
+					kh_value(_thr_SQP_rules_fast_routing, k) = destination_hostgroup; // set the value of the key
+					rules_mem_used += ((sizeof(int) + sizeof(char *) + 4)); // not sure about memory overhead
+					ptr = ptr2+strlen(ptr2)+1;
+				}
+			}
+		} else {
+			if (_thr_SQP_rules_fast_routing) {
+				kh_destroy(khStrInt, _thr_SQP_rules_fast_routing);
+				_thr_SQP_rules_fast_routing = nullptr;
+			}
+			if (_thr___rules_fast_routing___keys_values) {
+				free(_thr___rules_fast_routing___keys_values);
+				_thr___rules_fast_routing___keys_values = nullptr;
 			}
 		}
 		//for (std::unordered_map<std::string, int>::iterator it = rules_fast_routing.begin(); it != rules_fast_routing.end(); ++it) {
@@ -1993,30 +2052,23 @@ __exit_process_mysql_query:
 	if (qr == NULL || qr->apply == false) {
 		// now it is time to check mysql_query_rules_fast_routing
 		// it is only check if "apply" is not true
-		if (_thr___rules_fast_routing___keys_values) {
-			char keybuf[256];
-			char * keybuf_ptr = keybuf;
-			const char * u = sess->client_myds->myconn->userinfo->username;
-			const char * s = sess->client_myds->myconn->userinfo->schemaname;
-			size_t keylen = strlen(u)+strlen(rand_del)+strlen(s)+30; // 30 is a big number
-			if (keylen > 250) {
-				keybuf_ptr = (char *)malloc(keylen);
-			}
-			sprintf(keybuf_ptr,"%s%s%s---%d", u, rand_del, s, flagIN);
-			khiter_t k = kh_get(khStrInt, _thr_SQP_rules_fast_routing, keybuf_ptr);
-			if (k == kh_end(_thr_SQP_rules_fast_routing)) {
-				sprintf(keybuf_ptr,"%s%s---%d", rand_del, s, flagIN);
-				khiter_t k2 = kh_get(khStrInt, _thr_SQP_rules_fast_routing, keybuf_ptr);
-				if (k2 == kh_end(_thr_SQP_rules_fast_routing)) {
-				} else {
-					ret->destination_hostgroup = kh_val(_thr_SQP_rules_fast_routing,k2);
-				}
-			} else {
-				ret->destination_hostgroup = kh_val(_thr_SQP_rules_fast_routing,k);
-			}
-			if (keylen > 250) {
-				free(keybuf_ptr);
-			}
+		const char * u = sess->client_myds->myconn->userinfo->username;
+		const char * s = sess->client_myds->myconn->userinfo->schemaname;
+
+		int dst_hg = -1;
+
+		if (_thr_SQP_rules_fast_routing != nullptr) {
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
+			dst_hg = search_rules_fast_routing_dest_hg(_thr_SQP_rules_fast_routing, u, s, flagIN);
+		} else if (rules_fast_routing != nullptr) {
+			pthread_rwlock_rdlock(&this->rwlock);
+			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
+			dst_hg = search_rules_fast_routing_dest_hg(rules_fast_routing, u, s, flagIN);
+			pthread_rwlock_unlock(&this->rwlock);
+		}
+
+		if (dst_hg != -1) {
+			ret->destination_hostgroup = dst_hg;
 		}
 	}
 	// FIXME : there is too much data being copied around
@@ -3029,11 +3081,15 @@ void Query_Processor::save_query_rules(SQLite3_result *resultset) {
 	query_rules_resultset = resultset; // save it
 }
 
-void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
-	unsigned long long tot_size = 0;
+fast_routing_hashmap_t Query_Processor::create_fast_routing_hashmap(SQLite3_result* resultset) {
+	khash_t(khStrInt)* fast_routing = nullptr;
+	char* keys_values = nullptr;
+	unsigned long long keys_values_size = 0;
+
 	size_t rand_del_size = strlen(rand_del);
 	int num_rows = resultset->rows_count;
 	if (num_rows) {
+		unsigned long long tot_size = 0;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			size_t row_length = strlen(r->fields[0]) + strlen(r->fields[1]) + strlen(r->fields[2]) + strlen(r->fields[3]);
@@ -3042,19 +3098,18 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 			row_length += rand_del_size;
 			tot_size += row_length;
 		}
-		int nt = GloMTH->num_threads;
-		rules_fast_routing___keys_values = (char *)malloc(tot_size);
-		rules_fast_routing___keys_values___size = tot_size;
-		rules_mem_used += rules_fast_routing___keys_values___size; // global
-		rules_mem_used += rules_fast_routing___keys_values___size * nt; // per-thread
-		char *ptr = rules_fast_routing___keys_values;
+		keys_values = (char *)malloc(tot_size);
+		keys_values_size = tot_size;
+		char *ptr = keys_values;
+		fast_routing = kh_init(khStrInt);
+
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			sprintf(ptr,"%s%s%s---%s",r->fields[0],rand_del,r->fields[1],r->fields[2]);
 			int destination_hostgroup = atoi(r->fields[3]);
 			int ret;
-			khiter_t k = kh_put(khStrInt, rules_fast_routing, ptr, &ret); // add the key
-			kh_value(rules_fast_routing, k) = destination_hostgroup; // set the value of the key
+			khiter_t k = kh_put(khStrInt, fast_routing, ptr, &ret); // add the key
+			kh_value(fast_routing, k) = destination_hostgroup; // set the value of the key
 			int l = strlen((const char *)ptr);
 			ptr += l;
 			ptr++; // NULL 1
@@ -3062,13 +3117,35 @@ void Query_Processor::load_fast_routing(SQLite3_result *resultset) {
 			memcpy(ptr,r->fields[3],l+1);
 			ptr += l;
 			ptr++; // NULL 2
-			rules_mem_used += ((sizeof(int) + sizeof(char *) + 4 )); // not sure about memory overhead
-			rules_mem_used += ((sizeof(int) + sizeof(char *) + 4 ) * nt); // per-thread . not sure about memory overhead
 		}
 	}
-	delete fast_routing_resultset;
-	fast_routing_resultset = resultset; // save it
-	rules_mem_used += fast_routing_resultset->get_size();
+
+	return { resultset, resultset->get_size(), fast_routing, keys_values, keys_values_size };
+}
+
+SQLite3_result* Query_Processor::load_fast_routing(const fast_routing_hashmap_t& fast_routing_hashmap) {
+	khash_t(khStrInt)* _rules_fast_routing = fast_routing_hashmap.rules_fast_routing;
+	SQLite3_result* _rules_resultset = fast_routing_hashmap.rules_resultset;
+
+	if (_rules_fast_routing && _rules_resultset) {
+		// Replace map structures, assumed to be previously reset
+		this->rules_fast_routing___keys_values = fast_routing_hashmap.rules_fast_routing___keys_values;
+		this->rules_fast_routing___keys_values___size = fast_routing_hashmap.rules_fast_routing___keys_values___size;
+		this->rules_fast_routing = _rules_fast_routing;
+		// Update global memory stats
+		rules_mem_used += rules_fast_routing___keys_values___size; // global
+		khint_t map_size = kh_size(_rules_fast_routing);
+		rules_mem_used += map_size * ((sizeof(int) + sizeof(char *) + 4 )); // not sure about memory overhead
+	}
+
+	// Backup current resultset for later freeing
+	SQLite3_result* prev_fast_routing_resultset = this->fast_routing_resultset;
+	// Save new resultset
+	fast_routing_resultset = _rules_resultset;
+	// Use resultset pre-computed size
+	rules_mem_used += fast_routing_hashmap.rules_resultset_size;
+
+	return prev_fast_routing_resultset;
 };
 
 // this testing function doesn't care if the user exists or not
@@ -3100,44 +3177,22 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing(char *u
 
 // this testing function implement the dual search: with and without username
 // if the length of username is 0 , it will search for random username (that shouldn't exist!)
-int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing_dual(char *username, char *schemaname, int flagIN) {
+int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing_dual(
+	khash_t(khStrInt)* _rules_fast_routing, char* username, char* schemaname, int flagIN, bool lock
+) {
 	int ret = -1;
-	const char * random_user = (char *)"my_ReaLLy_Rand_User_123456";
-	char * u = NULL;
-	if (strlen(username)) {
-		u = username;
-	} else {
-		u = (char *)random_user;
+	khash_t(khStrInt)* rules_fast_routing = _rules_fast_routing ? _rules_fast_routing : this->rules_fast_routing;
+
+	if (lock) {
+		pthread_rwlock_rdlock(&rwlock);
 	}
-	pthread_rwlock_rdlock(&rwlock);
 	if (rules_fast_routing) {
-		char keybuf[256];
-		char * keybuf_ptr = keybuf;
-		size_t keylen = strlen(u)+strlen(rand_del)+strlen(schemaname)+30; // 30 is a big number
-		if (keylen > 250) {
-			keybuf_ptr = (char *)malloc(keylen);
-		}
-		sprintf(keybuf_ptr,"%s%s%s---%d", username, rand_del, schemaname, flagIN);
-		khiter_t k = kh_get(khStrInt, rules_fast_routing, keybuf_ptr);
-		if (k == kh_end(rules_fast_routing)) {
-		} else {
-			ret = kh_val(rules_fast_routing,k);
-		}
-		if (ret == -1) { // we didn't find it
-			if (strlen(username)==0) { // we need to search for empty username
-				sprintf(keybuf_ptr,"%s%s---%d", rand_del, schemaname, flagIN); // no username here
-				khiter_t k = kh_get(khStrInt, rules_fast_routing, keybuf_ptr);
-				if (k == kh_end(rules_fast_routing)) {
-				} else {
-					ret = kh_val(rules_fast_routing,k);
-				}
-			}
-		}
-		if (keylen > 250) {
-			free(keybuf_ptr);
-		}
+		ret = search_rules_fast_routing_dest_hg(rules_fast_routing, username, schemaname, flagIN);
 	}
-	pthread_rwlock_unlock(&rwlock);
+	if (lock) {
+		pthread_rwlock_unlock(&rwlock);
+	}
+
 	return ret;
 }
 

@@ -509,6 +509,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_digests_max_query_length",
 	(char *)"query_digests_grouping_limit",
 	(char *)"query_digests_groups_grouping_limit",
+	(char *)"query_rules_fast_routing_algorithm",
 	(char *)"wait_timeout",
 	(char *)"throttle_max_bytes_per_second_to_client",
 	(char *)"throttle_ratio_server_to_client",
@@ -1119,6 +1120,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.threshold_resultset_size=4*1024*1024;
 	variables.query_digests_max_digest_length=2*1024;
 	variables.query_digests_max_query_length=65000; // legacy default
+	variables.query_rules_fast_routing_algorithm=1;
 	variables.wait_timeout=8*3600*1000;
 	variables.throttle_max_bytes_per_second_to_client=0;
 	variables.throttle_ratio_server_to_client=0;
@@ -2203,6 +2205,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_digests_groups_grouping_limit"] = make_tuple(&variables.query_digests_groups_grouping_limit, 0, 2089, false);
 		VariablesPointers_int["query_digests_max_digest_length"] = make_tuple(&variables.query_digests_max_digest_length, 16, 1*1024*1024, false);
 		VariablesPointers_int["query_digests_max_query_length"]  = make_tuple(&variables.query_digests_max_query_length,  16, 1*1024*1024, false);
+		VariablesPointers_int["query_rules_fast_routing_algorithm"]  = make_tuple(&variables.query_rules_fast_routing_algorithm,  1, 2, false);
 		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
 		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
@@ -3967,6 +3970,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___threshold_resultset_size=GloMTH->get_variable_int((char *)"threshold_resultset_size");
 	mysql_thread___query_digests_max_digest_length=GloMTH->get_variable_int((char *)"query_digests_max_digest_length");
 	mysql_thread___query_digests_max_query_length=GloMTH->get_variable_int((char *)"query_digests_max_query_length");
+	mysql_thread___query_rules_fast_routing_algorithm=GloMTH->get_variable_int((char *)"query_rules_fast_routing_algorithm");
 	mysql_thread___wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
 	mysql_thread___throttle_max_bytes_per_second_to_client=GloMTH->get_variable_int((char *)"throttle_max_bytes_per_second_to_client");
 	mysql_thread___throttle_ratio_server_to_client=GloMTH->get_variable_int((char *)"throttle_ratio_server_to_client");

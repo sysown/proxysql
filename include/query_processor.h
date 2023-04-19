@@ -255,6 +255,33 @@ class Command_Counter {
 	}
 };
 
+/**
+ * @brief Frees the supplied query rules and cleans the vector.
+ */
+void __reset_rules(std::vector<QP_rule_t*>* qrs);
+
+/**
+ * @brief Helper type for performing the 'mysql_rules_fast_routing' hashmaps creation.
+ * @details Holds all the info 'Query_Processor' requires about the hashmap.
+ */
+struct fast_routing_hashmap_t {
+	SQLite3_result* rules_resultset;
+	unsigned long long rules_resultset_size;
+	khash_t(khStrInt)* rules_fast_routing;
+	char* rules_fast_routing___keys_values;
+	unsigned long long rules_fast_routing___keys_values___size;
+};
+
+/**
+ * @brief Helper type for backing up 'query_rules' memory structures.
+ * @details Used when reinitializing the query rules.
+ */
+struct rules_mem_sts_t {
+	std::vector<QP_rule_t*> query_rules;
+	char* rules_fast_routing___keys_values;
+	khash_t(khStrInt)* rules_fast_routing;
+};
+
 class Query_Processor {
 	private:
 	char rand_del[16];
@@ -268,6 +295,7 @@ class Query_Processor {
 	khash_t(khStrInt) * rules_fast_routing;
 	char * rules_fast_routing___keys_values;
 	unsigned long long rules_fast_routing___keys_values___size;
+	unsigned long long rules_fast_routing___number;
 	Command_Counter * commands_counters[MYSQL_COM_QUERY___NONE];
 
 	// firewall
@@ -289,7 +317,7 @@ class Query_Processor {
 	Query_Processor();
 	~Query_Processor();
 	void print_version();
-	void reset_all(bool lock=true);
+	rules_mem_sts_t reset_all(bool lock=true);
 	void wrlock();		// explicit write lock, to be used in multi-insert
 	void wrunlock();	// explicit write unlock
 	bool insert(QP_rule_t *qr, bool lock=true);		// insert a new rule. Uses a generic void pointer to a structure that may vary depending from the Query Processor
@@ -342,12 +370,25 @@ class Query_Processor {
 
 	// fast routing
 	SQLite3_result * fast_routing_resultset; // here we save a copy of resultset for query rules fast routing
-	void load_fast_routing(SQLite3_result *resultset);
+	/**
+	 * @brief Creates a hashmap for 'rules_fast_routing' from the provided resultset.
+	 * @param resultset A resulset from which to create a hashmap.
+	 * @return A hashmap encapsulated into the 'fast_routing_hashmap_t' type.
+	 */
+	fast_routing_hashmap_t create_fast_routing_hashmap(SQLite3_result* resultset);
+	/**
+	 * @brief Swaps the current 'rules_fast_routing' hashmap, updating all the required related info.
+	 * @details This function assumes caller has taken write access over ''
+	 * @param fast_routing_hashmap New hashmap and info replacing current.
+	 * @return Old 'fast_routing_resultset' that has been replaced. Required to be freed by caller.
+	 */
+	SQLite3_result* load_fast_routing(const fast_routing_hashmap_t& fast_routing_hashmap);
+	int search_rules_fast_routing_dest_hg(khash_t(khStrInt)* _rules_fast_routing, const char* u, const char* s, int flagIN);
 	SQLite3_result * get_current_query_rules_fast_routing();
 	SQLite3_result * get_current_query_rules_fast_routing_inner();
 	int get_current_query_rules_fast_routing_count();
 	int testing___find_HG_in_mysql_query_rules_fast_routing(char *username, char *schemaname, int flagIN);
-	int testing___find_HG_in_mysql_query_rules_fast_routing_dual(char *username, char *schemaname, int flagIN);
+	int testing___find_HG_in_mysql_query_rules_fast_routing_dual(khash_t(khStrInt)* _rules_fast_routing, char *username, char *schemaname, int flagIN, bool lock);
 
 	// firewall
 	void load_mysql_firewall(SQLite3_result *u, SQLite3_result *r, SQLite3_result *sf);
