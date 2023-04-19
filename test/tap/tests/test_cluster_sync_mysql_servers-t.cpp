@@ -299,45 +299,83 @@ int wait_for_node_sync(MYSQL* r_proxy_admin, uint64_t master_checksum, const std
 };
 
 int check_mysql_servers_sync(
-	const CommandLine& cl, MYSQL* proxy_admin, MYSQL* r_proxy_withmonitor_admin, MYSQL* r_proxy_nomonitor_admin, 
-	 int cluster_sync_mysql_servers_algorithm
+	const CommandLine& cl, MYSQL* proxy_admin, MYSQL* r_proxy_withmonitor_admin, MYSQL* r_proxy_nomonitor_admin
 ) {
 	std::string print_master_mysql_servers_hostgroups;
 	string_format(t_debug_query, print_master_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM mysql_servers");
 	std::string print_master_runtime_mysql_servers_hostgroups;
 	string_format(t_debug_query, print_master_runtime_mysql_servers_hostgroups, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_servers");
-	
+
 	std::string print_nomonitor_replica_mysql_servers_hostgroups;
 	string_format(t_debug_query, print_nomonitor_replica_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM mysql_servers");
 	std::string print_nomonitor_replica_runtime_mysql_servers_hostgroups;
 	string_format(t_debug_query, print_nomonitor_replica_runtime_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
+	std::string print_nomonitor_replica_disk_mysql_servers_hostgroups;
+	string_format(t_debug_query, print_nomonitor_replica_disk_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_NOMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
 
 	std::string print_withmonitor_replica_mysql_servers_hostgroups;
 	string_format(t_debug_query, print_withmonitor_replica_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM mysql_servers");
 	std::string print_withmonitor_replica_runtime_mysql_servers_hostgroups;
 	string_format(t_debug_query, print_withmonitor_replica_runtime_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM runtime_mysql_servers");
+	std::string print_withmonitor_replica_disk_mysql_servers_hostgroups;
+	string_format(t_debug_query, print_withmonitor_replica_disk_mysql_servers_hostgroups, "radmin", "radmin", cl.host, R_WITHMONITOR_PORT, "SELECT * FROM disk.mysql_servers");
 
+
+	std::string variable_val;
+
+	// get mysql_servers sync algorithm value
+	int g_err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_sync_algorithm", variable_val);
+	if (g_err) { return EXIT_FAILURE; }
+	const int cluster_sync_mysql_servers_algorithm = atoi(variable_val.c_str());
+
+	// get monitor enabled variable value
+	g_err = get_variable_value(proxy_admin, "mysql-monitor_enabled", variable_val);
+	if (g_err) { return EXIT_FAILURE; }
+
+	bool monitor_enabled = false;
+	if (strcasecmp(variable_val.c_str(), "true") == 0 || strcasecmp(variable_val.c_str(), "1") == 0) {
+		monitor_enabled = true;
+	}
+
+	// get save-to-disk variable value
+	g_err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_save_to_disk", variable_val);
+	if (g_err) { return EXIT_FAILURE; }
+	bool save_to_disk_value = false;
+	if (strcasecmp(variable_val.c_str(), "true") == 0 || strcasecmp(variable_val.c_str(), "1") == 0) {
+		save_to_disk_value = true;
+	}
+
+	// get read_only interval variable value
+	g_err = get_variable_value(proxy_admin, "mysql-monitor_read_only_interval", variable_val);
+	if (g_err) { return EXIT_FAILURE; }
+	const long monitor_read_only_interval = std::stol(variable_val);
+
+	// get read_only timeout variable value
+	g_err = get_variable_value(proxy_admin, "mysql-monitor_read_only_timeout", variable_val);
+	if (g_err) { return EXIT_FAILURE; }
+	const long monitor_read_only_timeout = std::stol(variable_val);
+
+	diag("Checking mysql_servers_sync status "
+		"[admin-cluster_mysql_servers_sync_algorithm:'%d', "
+		"mysql-monitor_enabled:'%s', "
+		"admin-cluster_mysql_servers_save_to_disk:'%s'"
+		"]...", cluster_sync_mysql_servers_algorithm, (monitor_enabled ? "true" : "false"), (save_to_disk_value ? "true" : "false"));
+	
 	std::cout << "MASTER 'MYSQL SERVERS' TABLE BEFORE SYNC:" << std::endl;
 	system(print_master_mysql_servers_hostgroups.c_str());
+	std::cout << std::endl;
 
 	// Wait till read_only actions have been performed
-	std::string monitor_read_only_interval;
-	int g_err = get_variable_value(proxy_admin, "mysql-monitor_read_only_interval", monitor_read_only_interval);
-	if (g_err) { return EXIT_FAILURE; }
-	std::string monitor_read_only_timeout {};
-	g_err = get_variable_value(proxy_admin, "mysql-monitor_read_only_timeout", monitor_read_only_timeout);
-	if (g_err) { return EXIT_FAILURE; }
-
-	uint64_t wait = std::stol(monitor_read_only_interval) + std::stol(monitor_read_only_timeout);
-	usleep((wait*1000)*2);
+	uint64_t wait = monitor_read_only_interval + monitor_read_only_timeout;
+	usleep((wait * 1000) * 2);
 
 	std::cout << "MASTER 'RUNTIME MYSQL SERVERS' TABLE BEFORE SYNC:" << std::endl;
 	system(print_master_runtime_mysql_servers_hostgroups.c_str());
+	std::cout << std::endl;
 
-	
 	uint64_t master_mysql_servers_checksum = 0;
 	uint64_t master_runtime_mysql_servers_checksum = 0;
-	
+
 	// fetch master mysql_servers resultset and compute it's hash
 	{
 		MYSQL_QUERY(proxy_admin, "SELECT * FROM mysql_servers");
@@ -354,73 +392,176 @@ int check_mysql_servers_sync(
 		mysql_free_result(mysql_servers_res);
 	}
 
+	// This comment is exclusively for this TAP test
+	// If monitor is enabled, records of runtime_mysql_servers and mysql_servers should not match
+	if (monitor_enabled == true) { 
+		ok(master_mysql_servers_checksum != master_runtime_mysql_servers_checksum, "'runtime_mysql_servers' and 'mysql_servers' should not match.");
+	} else {
+		ok(master_mysql_servers_checksum == master_runtime_mysql_servers_checksum, "'runtime_mysql_servers' and 'mysql_servers' should match.");
+	}
+	//
+	
 	// SYNCH CHECK
 	bool not_synced_query = false;
 
-	if (cluster_sync_mysql_servers_algorithm == 1) {
+	if (save_to_disk_value == false) {
 
-		not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_mysql_servers_checksum, "mysql_servers");
-		std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_withmonitor_replica_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+		if (cluster_sync_mysql_servers_algorithm == 1) {
+			// Algo: 1 [Sync mysql_servers_v2 and runtime_mysql_servers]
+			
+			// Replica [WITHMONITOR] mysql_servers for both the replica and master will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_mysql_servers_checksum, "mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
 
-		not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "mysql_servers");
-		std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_nomonitor_replica_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			// Replica [NOMONITOR] mysql_servers for both the replica and master will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
 
-		not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
-		std::cout << "REPLICA [WITHMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_withmonitor_replica_runtime_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			// Replica [WITHMONITOR] runtime_mysql_servers for both the replica and master will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_runtime_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
 
-		not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
-		std::cout << "REPLICA [NOMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_nomonitor_replica_runtime_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
-	} else if (cluster_sync_mysql_servers_algorithm == 2) {
+			// Replica [NOMONITOR] runtime_mysql_servers for both the replica and master will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_runtime_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
+		} else if (cluster_sync_mysql_servers_algorithm == 2) {
+			// Algo: 2 [Sync mysql_servers_v2 only]
 
-		not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_mysql_servers_checksum, "mysql_servers");
-		std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_withmonitor_replica_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			// Replica [WITHMONITOR] mysql_servers for both the replica and master will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_mysql_servers_checksum, "mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
 
-		not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "mysql_servers");
-		std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_nomonitor_replica_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			// Replica [NOMONITOR] mysql_servers for both the replica and master will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
 
-		not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
-		std::cout << "REPLICA [WITHMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_withmonitor_replica_runtime_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			// Replica [WITHMONITOR] runtime_mysql_servers for both the replica and master will be identical.
+			// Reason: Replica [WITHMONITOR] has monitoring checks enabled and will generate identical runtime_mysql_servers records.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_runtime_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
 
-		not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "runtime_mysql_servers");
-		std::cout << "REPLICA [NOMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_nomonitor_replica_runtime_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
-	} else if (cluster_sync_mysql_servers_algorithm == 3) {
-	
-		not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_mysql_servers_checksum, "mysql_servers");
-		std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_withmonitor_replica_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			// Replica [NOMONITOR] runtime_mysql_servers will be identical to master mysql_servers.
+			// Reason: Replica [NOMONITOR] has monitoring checks disabled, so runtime_mysql_servers will be identical to mysql_servers records.
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "runtime_mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_runtime_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
+		} else if (cluster_sync_mysql_servers_algorithm == 3) {
+			// Algo: 3 [If the command line includes the argument "-M", Algorithm 1 will be selected. 
+			// If "-M" is not provided, then Algorithm 2 will be chosen.]
 
-		not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "mysql_servers");
-		std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_nomonitor_replica_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			// Replica [WITHMONITOR] mysql_servers for both the replica and master will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_mysql_servers_checksum, "mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
 
-		not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
-		std::cout << "REPLICA [WITHMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_withmonitor_replica_runtime_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			// Replica [NOMONITOR] mysql_servers for both the replica and master will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
 
-		not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
-		std::cout << "REPLICA [NOMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
-		system(print_nomonitor_replica_runtime_mysql_servers_hostgroups.c_str());
-		ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			// Replica [WITHMONITOR] runtime_mysql_servers for both the replica and master will be identical.
+			// Reason: Algorithm 2 will be selected [Sync mysql_servers_v2]. After read_only_action, 
+			// the runtime_mysql_servers for replica becomes identical to master.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_runtime_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
+
+			// Replica [NOMONITOR] runtime_mysql_servers for both the replica and master will be identical.
+			// Reason: Algorithm 1 will be selected [Sync mysql_servers_v2 and runtime_mysql_servers]
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_runtime_mysql_servers_checksum, "runtime_mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'RUNTIME MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_runtime_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'runtime_mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
+		}
+	} else { //save_to_disk_value is true
+
+		// If Algorithm 1 is selected, the runtime_mysql_servers data will be saved to disk. 
+		// If Algorithm 2 is selected, the mysql_servers data will be saved to disk. 
+		// However, for Algorithm 3, the data saved to disk will depend on the algorithm that is chosen based on the -M argument.
+
+		if (cluster_sync_mysql_servers_algorithm == 1) {
+
+			// Replica [WITHMONITOR] disk.mysql_servers and master runtime_mysql_servers will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_runtime_mysql_servers_checksum, "disk.mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_disk_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'disk.mysql_servers' should be identical to 'runtime_mysql_servers'.");
+			std::cout << std::endl;
+
+			// Replica [NOMONITOR] disk.mysql_servers and master runtime_mysql_servers will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_runtime_mysql_servers_checksum, "disk.mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_disk_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'disk.mysql_servers' should be identical to 'runtime_mysql_servers'.");
+			std::cout << std::endl;
+
+		} else if (cluster_sync_mysql_servers_algorithm == 2) {
+
+			// Replica [WITHMONITOR] disk.mysql_servers and master mysql_servers will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_mysql_servers_checksum, "disk.mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_disk_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'disk.mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
+
+			// Replica [NOMONITOR] disk.mysql_servers and master mysql_servers will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_mysql_servers_checksum, "disk.mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_disk_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'disk.mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
+		} else if (cluster_sync_mysql_servers_algorithm == 3) {
+
+			// Replica [WITHMONITOR] disk.mysql_servers and master mysql_servers will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_withmonitor_admin, master_mysql_servers_checksum, "disk.mysql_servers");
+			std::cout << "REPLICA [WITHMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_withmonitor_replica_disk_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'disk.disk.mysql_servers' with NULL comments should be synced.");
+			std::cout << std::endl;
+
+			// Replica [NOMONITOR] disk.mysql_servers and master runtime_mysql_servers will be identical.
+			not_synced_query = wait_for_node_sync(r_proxy_nomonitor_admin, master_runtime_mysql_servers_checksum, "disk.mysql_servers");
+			std::cout << "REPLICA [NOMONITOR] 'MYSQL SERVERS' TABLE AFTER SYNC:" << std::endl;
+			system(print_nomonitor_replica_disk_mysql_servers_hostgroups.c_str());
+			ok(not_synced_query == false, "'disk.mysql_servers' with NULL comments should be synced.");
+		}
 	}
+
+	diag("Checking mysql_servers_sync status "
+		"[admin-cluster_mysql_servers_sync_algorithm:'%d', "
+		"mysql-monitor_enabled:'%s', "
+		"admin-cluster_mysql_servers_save_to_disk:'%s'"
+		"]... Done", cluster_sync_mysql_servers_algorithm, (monitor_enabled ? "true" : "false"), (save_to_disk_value ? "true" : "false"));
 
 	return EXIT_SUCCESS;
 }
@@ -574,6 +715,113 @@ int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::s
 	return EXIT_SUCCESS;
 }
 
+int get_read_only_value(const std::string& host, uint16_t port, const std::string& username, const std::string& password,
+	int* read_only_val) {
+
+	// check is mysql server has read_only value 0
+	MYSQL* mysqldb = mysql_init(NULL);
+
+	// Initialize connections
+	if (!mysqldb) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqldb));
+		return EXIT_FAILURE;
+	}
+
+	// Connnect to local proxysql
+	if (!mysql_real_connect(mysqldb, host.c_str(), username.c_str(), password.c_str(), NULL, port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqldb));
+		mysql_close(mysqldb);
+		return EXIT_FAILURE;
+	}
+
+	const int rc_query = mysql_query(mysqldb,"SELECT @@global.read_only read_only");
+
+	if (rc_query == 0) {
+		MYSQL_RES *result = mysql_store_result(mysqldb);
+		MYSQL_ROW row;
+
+		while ((row = mysql_fetch_row(result))) {
+
+			if (row[0]) {
+				*read_only_val = static_cast<uint16_t>(std::strtoul(row[0], NULL, 10));
+			}
+		}
+
+		mysql_free_result(result);
+	}
+
+	mysql_close(mysqldb);
+
+	return EXIT_SUCCESS;
+}
+
+std::vector<std::vector<std::string>> queries = {
+	{
+		"SET mysql-monitor_read_only_interval=200", // setting read_only variables
+		"SET mysql-monitor_read_only_timeout=100",
+		"SET mysql-monitor_enabled='true'", // enabling monitor
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-cluster_mysql_servers_save_to_disk'", // setting admin-cluster_mysql_servers_save_to_disk to false
+		"UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",// setting admin-cluster_mysql_servers_sync_algorithm to 1 -> fetch mysql_servers_v2 and runtime_mysql_servers
+		"LOAD ADMIN VARIABLES TO RUNTIME"
+	},
+	{
+		"UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type) VALUES (999,998,'read_only')", // adding dummy data so replica nodes can sync after algorithm change from 1 to 2. 
+		"LOAD MYSQL SERVERS TO RUNTIME"
+	},
+	{
+		"UPDATE global_variables SET variable_value='3' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup=999 AND reader_hostgroup=998 AND check_type='read_only'", // deleting dummy data so replica nodes can sync after algorithm change from 2 to 3. 
+		"LOAD MYSQL SERVERS TO RUNTIME"
+	},
+	{
+		"SET mysql-monitor_enabled='false'",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"LOAD MYSQL SERVERS TO RUNTIME"
+	},
+	{
+		"UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		"LOAD ADMIN VARIABLES TO RUNTIME"
+	},
+	{
+		"UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type) VALUES (999,998,'read_only')",// adding dummy data so replica nodes can sync after algorithm change from 1 to 2. 
+		"LOAD MYSQL SERVERS TO RUNTIME"
+	},
+	{
+		"UPDATE global_variables SET variable_value='3' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup=999 AND reader_hostgroup=998 AND check_type='read_only'", // deleting dummy data so replica nodes can sync after algorithm change from 2 to 3. 
+		"LOAD MYSQL SERVERS TO RUNTIME"
+	},
+	{
+		// save to disk
+		"SET mysql-monitor_enabled='true'",
+		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"UPDATE global_variables SET variable_value='true' WHERE variable_name='admin-cluster_mysql_servers_save_to_disk'", // setting admin-cluster_mysql_servers_save_to_disk to true
+		"UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type) VALUES (997,996,'read_only')", // adding dummy data so replica nodes can sync after algorithm change from 1 to 2. 
+		"LOAD MYSQL SERVERS TO RUNTIME"
+	},
+	{
+		"UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup=997 AND reader_hostgroup=996 AND check_type='read_only'", // deleting dummy data so replica nodes can sync after algorithm change from 2 to 3. 
+		"LOAD MYSQL SERVERS TO RUNTIME"
+	},
+	{
+		"UPDATE global_variables SET variable_value='3' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
+		"LOAD ADMIN VARIABLES TO RUNTIME",
+		"INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type) VALUES (997,996,'read_only')",// adding dummy data so replica nodes can sync after algorithm change from 1 to 2. 
+		"LOAD MYSQL SERVERS TO RUNTIME"
+	}
+};
+
 int main(int, char**) {
 	int res = 0;
 	CommandLine cl;
@@ -584,8 +832,12 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	
-	plan(32);
+	plan( 1 + 1 // replica instances
+		+ 1 // confirming mysql server 127.0.0.1:13306 is a writer
+		+ (7 * 5) // calling check_mysql_servers_sync 7 times, 5 differnt checks in each call
+		+ (3 * 3)
+		+ 1 + 1 // shutting down replica instances
+	);
 
 	MYSQL* proxy_admin = mysql_init(NULL);
 
@@ -682,19 +934,17 @@ int main(int, char**) {
 			goto cleanup;
 		}
 	
-		// setting read_only variables and enabling monitor
-		MYSQL_QUERY(proxy_admin, "SET mysql-monitor_read_only_interval=200");
-		MYSQL_QUERY(proxy_admin, "SET mysql-monitor_read_only_timeout=100");
-		MYSQL_QUERY(proxy_admin, "SET mysql-monitor_enabled='true'");
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		int read_only_val = -1;
+		int result = get_read_only_value("127.0.0.1", 13306, "root", "root", &read_only_val);
+		if (result != EXIT_SUCCESS) {
+			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
+			res = -1;
+			goto cleanup;
+		}
 
-		// setting admin-cluster_mysql_servers_save_to_disk to false
-		MYSQL_QUERY(proxy_admin, "UPDATE global_variables SET variable_value='0' WHERE variable_name='admin-cluster_mysql_servers_save_to_disk'");
-		
-		// setting admin-cluster_mysql_servers_sync_algorithm to 1 -> fetch mysql_servers_v2 and runtime_mysql_servers
-		MYSQL_QUERY(proxy_admin, "UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'");
-		MYSQL_QUERY(proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-		sleep(1);
+		// For thorough testing of synchronization under all possible scenarios, it is necessary for 
+		// the MySQL server at 127.0.0.1:13306 to function as a writer.
+		ok(read_only_val == 0, "MySQL Server '127.0.0.1:13306' should function as a writer");
 
 		const std::vector<mysql_server_tuple> insert_mysql_servers_values {
 			std::make_tuple(1, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, ""), // this server has read_only value 0 (writer)
@@ -704,12 +954,11 @@ int main(int, char**) {
 		};
 
 		const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
-			std::make_tuple(0, 1, "read_only")
+			std::make_tuple(0, 1, "read_only") // Here we are assigning the hostgroup to the reader, and read-only actions will creating a new entry in hostgroup 0.
 		};
 
 		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'. 
-		// Here we are assigning the hostgroup to the reader, and read-only actions will creating a new entry in hostgroup 0.
-		int result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
+		result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
 
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Failed to insert records in mysql_servers table.");
@@ -717,158 +966,19 @@ int main(int, char**) {
 			goto cleanup;
 		}
 
-		std::string mysql_servers_sync_algorithm;
-		int err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_sync_algorithm", mysql_servers_sync_algorithm);
-		if (err) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching 'admin-cluster_mysql_servers_sync_algorithm' variable value failed.");
-			res = -1;
-			goto cleanup;
-		}
+		for (const auto& pre_queries : queries) {
 
-		diag("Checking mysql_servers_sync status... admin-cluster_mysql_servers_sync_algorithm variable value '%s'\n", mysql_servers_sync_algorithm.c_str());
-		result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin, std::stol(mysql_servers_sync_algorithm));
+			for (const std::string& query : pre_queries) {
+				MYSQL_QUERY(proxy_admin, query.c_str());
+			}
+			sleep(1);
 
-		if (result != EXIT_SUCCESS) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		MYSQL_QUERY(proxy_admin, "UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'");
-		MYSQL_QUERY(proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-
-		// adding dummy data so replica nodes can sync after algorithm change from 1 to 2. 
-		MYSQL_QUERY(proxy_admin, "INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type) VALUES  (999,998,'read_only')");
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		sleep(1);
-
-		err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_sync_algorithm", mysql_servers_sync_algorithm);
-		if (err) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching 'admin-cluster_mysql_servers_sync_algorithm' variable value failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		diag("Checking mysql_servers_sync status... admin-cluster_mysql_servers_sync_algorithm variable value '%s'\n", mysql_servers_sync_algorithm.c_str());
-		result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin, std::stol(mysql_servers_sync_algorithm));
-
-		if (result != EXIT_SUCCESS) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		MYSQL_QUERY(proxy_admin, "UPDATE global_variables SET variable_value='3' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'");
-		MYSQL_QUERY(proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-
-		// deleting dummy data so replica nodes can sync after algorithm change from 2 to 3. 
-		MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup=999 AND reader_hostgroup=998 AND check_type='read_only'");
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		sleep(2);
-
-		err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_sync_algorithm", mysql_servers_sync_algorithm);
-		if (err) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching 'admin-cluster_mysql_servers_sync_algorithm' variable value failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		diag("Checking mysql_servers_sync status... admin-cluster_mysql_servers_sync_algorithm variable value '%s'\n", mysql_servers_sync_algorithm.c_str());
-		result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin, std::stol(mysql_servers_sync_algorithm));
-
-		if (result != EXIT_SUCCESS) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		MYSQL_QUERY(proxy_admin, "SET mysql-monitor_enabled='false'");
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		sleep(1);
-
-		err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_sync_algorithm", mysql_servers_sync_algorithm);
-		if (err) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching 'admin-cluster_mysql_servers_sync_algorithm' variable value failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		diag("Checking mysql_servers_sync status... admin-cluster_mysql_servers_sync_algorithm variable value '%s'\n", mysql_servers_sync_algorithm.c_str());
-		result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin, std::stol(mysql_servers_sync_algorithm));
-
-		if (result != EXIT_SUCCESS) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		MYSQL_QUERY(proxy_admin, "UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'");
-		MYSQL_QUERY(proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-		sleep(1);
-
-		err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_sync_algorithm", mysql_servers_sync_algorithm);
-		if (err) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching 'admin-cluster_mysql_servers_sync_algorithm' variable value failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		diag("Checking mysql_servers_sync status... admin-cluster_mysql_servers_sync_algorithm variable value '%s'\n", mysql_servers_sync_algorithm.c_str());
-		result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin, std::stol(mysql_servers_sync_algorithm));
-
-		if (result != EXIT_SUCCESS) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		MYSQL_QUERY(proxy_admin, "UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'");
-		MYSQL_QUERY(proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-
-		// adding dummy data so replica nodes can sync after algorithm change from 1 to 2. 
-		MYSQL_QUERY(proxy_admin, "INSERT INTO mysql_replication_hostgroups (writer_hostgroup, reader_hostgroup, check_type) VALUES  (999,998,'read_only')");
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		sleep(1);
-
-		err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_sync_algorithm", mysql_servers_sync_algorithm);
-		if (err) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching 'admin-cluster_mysql_servers_sync_algorithm' variable value failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		diag("Checking mysql_servers_sync status... admin-cluster_mysql_servers_sync_algorithm variable value '%s'\n", mysql_servers_sync_algorithm.c_str());
-		result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin, std::stol(mysql_servers_sync_algorithm));
-
-		if (result != EXIT_SUCCESS) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		MYSQL_QUERY(proxy_admin, "UPDATE global_variables SET variable_value='3' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'");
-		MYSQL_QUERY(proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-
-		// deleting dummy data so replica nodes can sync after algorithm change from 2 to 3. 
-		MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_replication_hostgroups WHERE writer_hostgroup=999 AND reader_hostgroup=998 AND check_type='read_only'");
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-		sleep(1);
-
-		err = get_variable_value(proxy_admin, "admin-cluster_mysql_servers_sync_algorithm", mysql_servers_sync_algorithm);
-		if (err) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching 'admin-cluster_mysql_servers_sync_algorithm' variable value failed.");
-			res = -1;
-			goto cleanup;
-		}
-
-		diag("Checking mysql_servers_sync status... admin-cluster_mysql_servers_sync_algorithm variable value '%s'\n", mysql_servers_sync_algorithm.c_str());
-		result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin, std::stol(mysql_servers_sync_algorithm));
-
-		if (result != EXIT_SUCCESS) {
-			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
-			res = -1;
-			goto cleanup;
+			result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin);
+			if (result != EXIT_SUCCESS) {
+				fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
+				res = -1;
+				goto cleanup;
+			}
 		}
 	}
 
