@@ -551,6 +551,9 @@ Query_Processor::Query_Processor() {
 	rules_fast_routing___keys_values = NULL;
 	rules_fast_routing___keys_values___size = 0;
 	new_req_conns_count = 0;
+	if (GloMTH) {
+		query_rules_fast_routing_algorithm = GloMTH->get_variable_int("query_rules_fast_routing_algorithm");
+	}
 };
 
 Query_Processor::~Query_Processor() {
@@ -1746,7 +1749,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				_thr_SQP_rules->push_back(qr2);
 			}
 		}
-		if (mysql_thread___query_rules_fast_routing_algorithm == 1) {
+		if (this->query_rules_fast_routing_algorithm == 1) {
 			if (_thr_SQP_rules_fast_routing) {
 				kh_destroy(khStrInt, _thr_SQP_rules_fast_routing);
 				_thr_SQP_rules_fast_routing = nullptr;
@@ -1759,7 +1762,6 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 				_thr_SQP_rules_fast_routing = kh_init(khStrInt); // create a hashtable
 				_thr___rules_fast_routing___keys_values = (char *)malloc(rules_fast_routing___keys_values___size);
 				memcpy(_thr___rules_fast_routing___keys_values, rules_fast_routing___keys_values, rules_fast_routing___keys_values___size);
-				rules_mem_used += rules_fast_routing___keys_values___size; // per-thread
 				char *ptr = _thr___rules_fast_routing___keys_values;
 				while (ptr < _thr___rules_fast_routing___keys_values + rules_fast_routing___keys_values___size) {
 					char *ptr2 = ptr+strlen(ptr)+1;
@@ -1767,7 +1769,6 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 					int ret;
 					khiter_t k = kh_put(khStrInt, _thr_SQP_rules_fast_routing, ptr, &ret); // add the key
 					kh_value(_thr_SQP_rules_fast_routing, k) = destination_hostgroup; // set the value of the key
-					rules_mem_used += ((sizeof(int) + sizeof(char *) + 4)); // not sure about memory overhead
 					ptr = ptr2+strlen(ptr2)+1;
 				}
 			}
@@ -3128,14 +3129,21 @@ SQLite3_result* Query_Processor::load_fast_routing(const fast_routing_hashmap_t&
 	SQLite3_result* _rules_resultset = fast_routing_hashmap.rules_resultset;
 
 	if (_rules_fast_routing && _rules_resultset) {
+		unsigned int nt = GloMTH->num_threads;
 		// Replace map structures, assumed to be previously reset
 		this->rules_fast_routing___keys_values = fast_routing_hashmap.rules_fast_routing___keys_values;
 		this->rules_fast_routing___keys_values___size = fast_routing_hashmap.rules_fast_routing___keys_values___size;
 		this->rules_fast_routing = _rules_fast_routing;
 		// Update global memory stats
 		rules_mem_used += rules_fast_routing___keys_values___size; // global
+		if (this->query_rules_fast_routing_algorithm == 1) {
+			rules_mem_used += rules_fast_routing___keys_values___size * nt; // per-thread
+		}
 		khint_t map_size = kh_size(_rules_fast_routing);
 		rules_mem_used += map_size * ((sizeof(int) + sizeof(char *) + 4 )); // not sure about memory overhead
+		if (this->query_rules_fast_routing_algorithm == 1) {
+			rules_mem_used += map_size * ((sizeof(int) + sizeof(char *) + 4 )) * nt; // not sure about memory overhead
+		}
 	}
 
 	// Backup current resultset for later freeing

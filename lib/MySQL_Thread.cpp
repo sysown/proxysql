@@ -1668,7 +1668,14 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 					proxy_warning("'mysql-auto_increment_delay_multiplex_timeout_ms' is set to a low value: %ums. Remember value is in 'ms'\n", intv);
 				}
 			}
-
+			if (nameS == "query_rules_fast_routing_algorithm") {
+				if (GloQPro) {
+					int intv = atoi(value);
+					if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
+						GloQPro->query_rules_fast_routing_algorithm = intv;
+					}
+				}
+			}
 			bool special_variable = std::get<3>(it->second); // if special_variable is true, min and max values are ignored, and more input validation is needed
 			if (special_variable == false) {
 				int intv=atoi(value);
@@ -3970,7 +3977,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___threshold_resultset_size=GloMTH->get_variable_int((char *)"threshold_resultset_size");
 	mysql_thread___query_digests_max_digest_length=GloMTH->get_variable_int((char *)"query_digests_max_digest_length");
 	mysql_thread___query_digests_max_query_length=GloMTH->get_variable_int((char *)"query_digests_max_query_length");
-	mysql_thread___query_rules_fast_routing_algorithm=GloMTH->get_variable_int((char *)"query_rules_fast_routing_algorithm");
 	mysql_thread___wait_timeout=GloMTH->get_variable_int((char *)"wait_timeout");
 	mysql_thread___throttle_max_bytes_per_second_to_client=GloMTH->get_variable_int((char *)"throttle_max_bytes_per_second_to_client");
 	mysql_thread___throttle_ratio_server_to_client=GloMTH->get_variable_int((char *)"throttle_ratio_server_to_client");

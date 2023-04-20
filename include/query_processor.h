@@ -370,6 +370,7 @@ class Query_Processor {
 
 	// fast routing
 	SQLite3_result * fast_routing_resultset; // here we save a copy of resultset for query rules fast routing
+	uint32_t query_rules_fast_routing_algorithm = 1;
 	/**
 	 * @brief Creates a hashmap for 'rules_fast_routing' from the provided resultset.
 	 * @param resultset A resulset from which to create a hashmap.
