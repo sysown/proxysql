@@ -585,9 +585,7 @@ int update_proxysql_servers(const CommandLine& cl, MYSQL* admin) {
 }
 
 int setup_config_file(const CommandLine& cl, uint32_t r_port, const std::string& config_filename) {
-
 	const std::string& workdir = std::string(cl.workdir);
-
 	const std::string& t_fmt_config_file = workdir + "test_cluster_sync_config/test_cluster_sync-t.cnf";
 	const std::string& fmt_config_file = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/test_cluster_sync.cnf";
 	const std::string& datadir_path = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename;
@@ -677,22 +675,18 @@ int setup_config_file(const CommandLine& cl, uint32_t r_port, const std::string&
 int launch_proxysql_replica(const CommandLine& cl, uint32_t r_port, const std::string config_filename, bool monitor_enabled, 
 	const std::atomic<bool>& save_proxy_stderr) {
 
-		// Setup the config file using the env variables in 'CommandLine'
-	if (setup_config_file(cl, r_port, config_filename)) {
-		return EXIT_FAILURE;
-	}
-
 	const std::string& workdir = std::string(cl.workdir);
-
 	const std::string& replica_stderr = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/cluster_sync_node_stderr.txt";
 	const std::string& proxysql_db = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/proxysql.db";
 	const std::string& stats_db = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/proxysql_stats.db";
 	const std::string& fmt_config_file = workdir + "test_cluster_sync_config/test_cluster_sync_" + config_filename + "/test_cluster_sync.cnf";
 
-	std::string proxy_stdout {};
-	std::string proxy_stderr {};
-	const std::string& proxy_binary_path = workdir + "../../../src/proxysql";
+	// Setup the config file using the env variables in 'CommandLine'
+	if (setup_config_file(cl, r_port, config_filename)) {
+		return EXIT_FAILURE;
+	}
 
+	const std::string& proxy_binary_path = workdir + "../../../src/proxysql";
 	const std::string& proxy_command = proxy_binary_path + " -f " + (monitor_enabled == false ? "-M" : "") + " -c " + fmt_config_file + " > " + replica_stderr + " 2>&1";
 
 	diag("Launching replica ProxySQL [%s] via 'system' with command : `%s`", config_filename.c_str(), proxy_command.c_str());
@@ -761,7 +755,6 @@ std::vector<std::vector<std::string>> queries = {
 		"SET mysql-monitor_read_only_timeout=100",
 		"SET mysql-monitor_enabled='true'", // enabling monitor
 		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-cluster_mysql_servers_save_to_disk'", // setting admin-cluster_mysql_servers_save_to_disk to false
 		"UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",// setting admin-cluster_mysql_servers_sync_algorithm to 1 -> fetch mysql_servers_v2 and runtime_mysql_servers
 		"LOAD ADMIN VARIABLES TO RUNTIME"
 	},
@@ -782,7 +775,7 @@ std::vector<std::vector<std::string>> queries = {
 		"LOAD MYSQL VARIABLES TO RUNTIME",
 		"UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
 		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME"
+		"LOAD MYSQL SERVERS TO RUNTIME" // to regenerate runtime_mysql_servers
 	},
 	{
 		"UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
@@ -885,7 +878,14 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, update_proxysql_servers.c_str());
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
-	
+	// disable admin-cluster_mysql_servers_save_to_disk before executing replicas
+	MYSQL_QUERY(proxy_admin, "UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-cluster_mysql_servers_save_to_disk'"); // setting admin-cluster_mysql_servers_save_to_disk to false
+	MYSQL_QUERY(proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME"); 
+
+	// cleaning old records
+	MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_servers");
+	MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
+
 	// Launch proxysql with cluster config and monitor feature disabled
 	std::thread proxysql_replica_nomonitor_thd(launch_proxysql_replica, std::ref(cl), R_NOMONITOR_PORT, "nomonitor", false, std::ref(save_proxy_stderr));
 	
@@ -963,12 +963,10 @@ int main(int, char**) {
 		for (const auto& pre_queries : queries) {
 
 			for (const std::string& query : pre_queries) {
-				if (mysql_query(proxy_admin, query.c_str())) { 
-					fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, mysql_error(proxy_admin));
-					goto cleanup;
-				}
+				MYSQL_QUERY__(proxy_admin, query.c_str());
+				usleep(100000);
 			}
-			sleep(1);
+			sleep(2);
 
 			result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin);
 			if (result != EXIT_SUCCESS) {
