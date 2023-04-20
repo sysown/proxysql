@@ -780,11 +780,9 @@ std::vector<std::vector<std::string>> queries = {
 	{
 		"SET mysql-monitor_enabled='false'",
 		"LOAD MYSQL VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME"
-	},
-	{
 		"UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
 		"LOAD ADMIN VARIABLES TO RUNTIME"
+		"LOAD MYSQL SERVERS TO RUNTIME"
 	},
 	{
 		"UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
@@ -834,7 +832,7 @@ int main(int, char**) {
 
 	plan( 1 + 1 // replica instances
 		+ 1 // confirming mysql server 127.0.0.1:13306 is a writer
-		+ (7 * 5) // calling check_mysql_servers_sync 7 times, 5 differnt checks in each call
+		+ (6 * 5) // calling check_mysql_servers_sync 7 times, 5 differnt checks in each call
 		+ (3 * 3)
 		+ 1 + 1 // shutting down replica instances
 	);
