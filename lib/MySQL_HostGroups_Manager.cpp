@@ -7748,7 +7748,7 @@ MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, srv->status, srv, hostgroup_id);
 
 	MySrvC* new_srv = new MySrvC(srv->address, srv->port, srv->gtid_port, srv->weight, srv->status, srv->compression,
-		srv->max_connections, srv->max_replication_lag, srv->use_ssl, srv->max_latency_us, srv->comment);
+		srv->max_connections, srv->max_replication_lag, srv->use_ssl, (srv->max_latency_us/1000), srv->comment);
 
 	hostgroup_container->mysrvs->add(new_srv);
 
