@@ -17,6 +17,7 @@ admin_variables=
     cluster_mysql_users_diffs_before_sync=3
     cluster_admin_variables_diffs_before_sync=3
     cluster_proxysql_servers_diffs_before_sync=3
+    cluster_sync_interfaces=false
 }
 
 mysql_variables=

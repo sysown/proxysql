@@ -781,7 +781,7 @@ std::vector<std::vector<std::string>> queries = {
 		"SET mysql-monitor_enabled='false'",
 		"LOAD MYSQL VARIABLES TO RUNTIME",
 		"UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
-		"LOAD ADMIN VARIABLES TO RUNTIME"
+		"LOAD ADMIN VARIABLES TO RUNTIME",
 		"LOAD MYSQL SERVERS TO RUNTIME"
 	},
 	{
@@ -821,7 +821,7 @@ std::vector<std::vector<std::string>> queries = {
 };
 
 int main(int, char**) {
-	int res = 0;
+
 	CommandLine cl;
 	std::atomic<bool> save_proxy_stderr(false);
 
@@ -910,7 +910,6 @@ int main(int, char**) {
 
 		if (r_proxysql_nomonitor_admin == nullptr) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(r_proxysql_nomonitor_admin));
-			res = -1;
 			goto cleanup;
 		}
 
@@ -928,7 +927,6 @@ int main(int, char**) {
 
 		if (r_proxysql_withmonitor_admin == nullptr) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(r_proxysql_withmonitor_admin));
-			res = -1;
 			goto cleanup;
 		}
 	
@@ -936,7 +934,6 @@ int main(int, char**) {
 		int result = get_read_only_value("127.0.0.1", 13306, "root", "root", &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
-			res = -1;
 			goto cleanup;
 		}
 
@@ -960,21 +957,22 @@ int main(int, char**) {
 
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Failed to insert records in mysql_servers table.");
-			res = -1;
 			goto cleanup;
 		}
 
 		for (const auto& pre_queries : queries) {
 
 			for (const std::string& query : pre_queries) {
-				MYSQL_QUERY(proxy_admin, query.c_str());
+				if (mysql_query(proxy_admin, query.c_str())) { 
+					fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, mysql_error(proxy_admin));
+					goto cleanup;
+				}
 			}
 			sleep(1);
 
 			result = check_mysql_servers_sync(cl, proxy_admin, r_proxysql_withmonitor_admin, r_proxysql_nomonitor_admin);
 			if (result != EXIT_SUCCESS) {
 				fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Checking mysql servers sync records failed.");
-				res = -1;
 				goto cleanup;
 			}
 		}
