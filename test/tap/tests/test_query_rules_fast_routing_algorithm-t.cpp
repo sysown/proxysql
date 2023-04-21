@@ -19,7 +19,6 @@
 #include "tap.h"
 #include "utils.h"
 #include "command_line.h"
-#include "sqlite3db.h"
 
 #include "json.hpp"
 
@@ -31,167 +30,6 @@ using std::vector;
 
 // Used for 'extract_module_host_port'
 #include "modules_server_test.h"
-
-//       UTILS TAKEN FROM PR 4161 - TODO: REMOVE AFTER PR MERGED
-///////////////////////////////////////////////////////////////////////////////
-
-#include <regex>
-
-string _get_env(const string& var) {
-	string f_path {};
-
-	char* p_infra_datadir = std::getenv(var.c_str());
-	if (p_infra_datadir != nullptr) {
-		f_path = p_infra_datadir;
-	}
-
-	return f_path;
-}
-
-int _open_file_and_seek_end(const string& f_path, std::fstream& f_stream) {
-	const char* c_f_path { f_path.c_str() };
-	f_stream.open(f_path.c_str(), std::fstream::in | std::fstream::out);
-
-	if (!f_stream.is_open() || !f_stream.good()) {
-		diag("Failed to open '%s' file: { path: %s, error: %d }", basename(c_f_path), c_f_path, errno);
-		return EXIT_FAILURE;
-	}
-
-	f_stream.seekg(0, std::ios::end);
-
-	return EXIT_SUCCESS;
-}
-
-using _line_match_t = std::tuple<std::fstream::pos_type, std::string, std::smatch>;
-enum _LINE_MATCH_T { POS, LINE, MATCHES };
-
-std::vector<_line_match_t> _get_matching_lines(std::fstream& f_stream, const std::string& regex) {
-	std::vector<_line_match_t> found_matches {};
-
-	std::string next_line {};
-	std::fstream::pos_type init_pos { f_stream.tellg() };
-
-	while (std::getline(f_stream, next_line)) {
-		std::regex regex_err_line { regex };
-		std::smatch match_results {};
-
-		if (std::regex_search(next_line, match_results, regex_err_line)) {
-			found_matches.push_back({ f_stream.tellg(), next_line, match_results });
-		}
-	}
-
-	if (found_matches.empty() == false) {
-		const std::string& last_match { std::get<_LINE_MATCH_T::LINE>(found_matches.back()) };
-		const std::fstream::pos_type last_match_pos { std::get<_LINE_MATCH_T::POS>(found_matches.back()) };
-
-		f_stream.clear(f_stream.rdstate() & ~std::ios_base::failbit);
-		f_stream.seekg(last_match_pos);
-	} else {
-		f_stream.clear(f_stream.rdstate() & ~std::ios_base::failbit);
-		f_stream.seekg(init_pos);
-	}
-
-	return found_matches;
-}
-
-const uint32_t USLEEP_SQLITE_LOCKED = 100;
-
-int open_sqlite3_db(const string& f_path, sqlite3** db, int flags) {
-	const char* c_f_path { f_path.c_str() };
-	const char* base_path { basename(c_f_path) };
-	int rc = sqlite3_open_v2(f_path.c_str(), db, flags, NULL);
-
-	if (rc) {
-		const char* err_msg = *db == nullptr ? "Failed to allocate" : sqlite3_errmsg(*db);
-		diag("Failed to open sqlite3 db-file '%s': { path: %s, error: %s }", base_path, c_f_path, err_msg);
-		return EXIT_FAILURE;
-	} else {
-		return EXIT_SUCCESS;
-	}
-}
-
-using sq3_col_def_t = string;
-using sq3_row_t = vector<string>;
-using sq3_err_t = string;
-using sq3_result_t = std::tuple<vector<sq3_col_def_t>,vector<sq3_row_t>,int64_t,sq3_err_t>;
-
-enum SQ3_RESULT_T {
-	COLUMNS_DEF,
-	ROWS,
-	AFFECTED_ROWS,
-	ERR
-};
-
-sq3_result_t sqlite3_execute_stmt(sqlite3* db, const string& query) {
-	int rc = 0;
-	sqlite3_stmt* stmt = NULL;
-	sq3_result_t res {};
-
-	do {
-		rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, 0);
-		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {
-			usleep(USLEEP_SQLITE_LOCKED);
-		}
-	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
-
-	if (rc != SQLITE_OK) {
-		res = {{}, {}, {}, sqlite3_errmsg(db)};
-		goto cleanup;
-	}
-
-	{
-		// extract a resultset or just evaluate
-		uint32_t cols_count = sqlite3_column_count(stmt);
-
-		if (cols_count == 0) {
-			do {
-				rc = sqlite3_step(stmt);
-				if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {
-					usleep(USLEEP_SQLITE_LOCKED);
-				}
-			} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
-
-			if (rc == SQLITE_DONE) {
-				uint32_t affected_rows = sqlite3_changes(db);
-				res = {{}, {}, affected_rows, {}};
-			} else {
-				res = {{}, {}, {}, sqlite3_errmsg(db)};
-				goto cleanup;
-			}
-		} else {
-			vector<sq3_col_def_t> cols_defs {};
-			vector<sq3_row_t> rows {};
-
-			for (uint32_t i = 0; i < cols_count; i++) {
-				cols_defs.push_back(sqlite3_column_name(stmt, i));
-			}
-
-			while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
-				sq3_row_t row {};
-
-				for (uint32_t i = 0; i < cols_count; i++) {
-					if (sqlite3_column_type(stmt, i) == SQLITE_NULL) {
-						row.push_back({});
-					} else {
-						row.push_back(reinterpret_cast<const char*>(sqlite3_column_text(stmt, i)));
-					}
-				}
-
-				rows.push_back(row);
-			}
-
-			res = { cols_defs, rows, 0, {} };
-		}
-	}
-
-cleanup:
-	sqlite3_reset(stmt);
-	sqlite3_finalize(stmt);
-
-	return res;
-}
-
-///////////////////////////////////////////////////////////////////////////////
 
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;
@@ -292,8 +130,8 @@ int check_fast_routing_rules(MYSQL* proxy, uint32_t rng_init, uint32_t rng_end) 
 };
 
 string get_last_debug_log_id(sqlite3* sq3_db) {
-	sq3_result_t last_id_res { sqlite3_execute_stmt(sq3_db, "SELECT id FROM debug_log ORDER BY id DESC limit 1") };
-	const vector<sq3_row_t>& last_id_rows { std::get<SQ3_RESULT_T::ROWS>(last_id_res) };
+	sq3_res_t last_id_res { sqlite3_execute_stmt(sq3_db, "SELECT id FROM debug_log ORDER BY id DESC limit 1") };
+	const vector<sq3_row_t>& last_id_rows { std::get<SQ3_RES_T::SQ3_ROWS>(last_id_res) };
 	if (last_id_rows.empty()) {
 		diag("Empty resultset from 'proxysql_debug.db', database failed to be updated");
 		return {};
@@ -347,14 +185,14 @@ int sq3_get_matching_msg_entries(sqlite3* db, const string& query_regex, const s
 	string init_db_query {
 		"SELECT COUNT() FROM debug_log WHERE message LIKE '%" + query_regex + "%' AND id > " + id
 	};
-	sq3_result_t sq3_entries_res { sqlite3_execute_stmt(db, init_db_query) };
-	const string& sq3_err { std::get<SQ3_RESULT_T::ERR>(sq3_entries_res) };
+	sq3_res_t sq3_entries_res { sqlite3_execute_stmt(db, init_db_query) };
+	const string& sq3_err { std::get<SQ3_RES_T::SQ3_ERR>(sq3_entries_res) };
 	if (!sq3_err.empty()) {
 		diag("Query failed to be executed in SQLite3 - query: `%s`, err: `%s`", init_db_query.c_str(), sq3_err.c_str());
 		return EXIT_FAILURE;
 	}
 
-	const vector<sq3_row_t>& sq3_rows { std::get<SQ3_RESULT_T::ROWS>(sq3_entries_res) };
+	const vector<sq3_row_t>& sq3_rows { std::get<SQ3_RES_T::SQ3_ROWS>(sq3_entries_res) };
 	int32_t matching_rows = std::atoi(sq3_rows[0][0].c_str());
 
 	return matching_rows;
@@ -378,7 +216,7 @@ int test_fast_routing_algorithm(
 	MYSQL_QUERY_T(admin, "LOAD DEBUG TO RUNTIME");
 
 	// Open the SQLite3 db for debugging
-	const string db_path { _get_env("REGULAR_INFRA_DATADIR") + "/proxysql_debug.db" };
+	const string db_path { get_env("REGULAR_INFRA_DATADIR") + "/proxysql_debug.db" };
 	sqlite3* sq3_db = nullptr;
 
 	int odb_err = open_sqlite3_db(db_path, &sq3_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
@@ -420,7 +258,7 @@ int test_fast_routing_algorithm(
 
 	const string init_algo_scope { init_algo == 1 ? "thread-local" : "global" };
 	const string init_search_regex { "Searching " + init_algo_scope + " 'rules_fast_routing' hashmap" };
-	vector<_line_match_t> matched_lines { _get_matching_lines(errlog, init_search_regex) };
+	vector<line_match_t> matched_lines { get_matching_lines(errlog, init_search_regex) };
 
 	ok(
 		matched_lines.size() == rng_end - rng_init,
@@ -459,7 +297,7 @@ int test_fast_routing_algorithm(
 	// Give some time for the error log to be written
 	usleep(100*1000);
 
-	matched_lines = _get_matching_lines(errlog, init_search_regex);
+	matched_lines = get_matching_lines(errlog, init_search_regex);
 
 	ok(
 		matching_rows == rng_end - rng_init,
@@ -499,7 +337,7 @@ int test_fast_routing_algorithm(
 
 	const string new_algo_scope { new_algo == 1 ? "thread-local" : "global" };
 	const string new_search_regex { "Searching " + new_algo_scope + " 'rules_fast_routing' hashmap" };
-	vector<_line_match_t> new_matched_lines { _get_matching_lines(errlog, new_search_regex) };
+	vector<line_match_t> new_matched_lines { get_matching_lines(errlog, new_search_regex) };
 
 	ok(
 		new_matched_lines.size() == rng_end - rng_init,
@@ -580,10 +418,10 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
 	{
-		const string f_path { _get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
+		const string f_path { get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
 		fstream errlog {};
 
-		int of_err = _open_file_and_seek_end(f_path, errlog);
+		int of_err = open_file_and_seek_end(f_path, errlog);
 		if (of_err) {
 			diag("Failed to open ProxySQL log file. Aborting further testing...");
 			goto cleanup;

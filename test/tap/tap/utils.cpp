@@ -1171,3 +1171,88 @@ std::vector<line_match_t> get_matching_lines(std::fstream& f_stream, const std::
 
 	return found_matches;
 }
+
+const uint32_t USLEEP_SQLITE_LOCKED = 100;
+
+int open_sqlite3_db(const string& f_path, sqlite3** db, int flags) {
+	const char* c_f_path { f_path.c_str() };
+	const char* base_path { basename(c_f_path) };
+	int rc = sqlite3_open_v2(f_path.c_str(), db, flags, NULL);
+
+	if (rc) {
+		const char* err_msg = *db == nullptr ? "Failed to allocate" : sqlite3_errmsg(*db);
+		diag("Failed to open sqlite3 db-file '%s': { path: %s, error: %s }", base_path, c_f_path, err_msg);
+		return EXIT_FAILURE;
+	} else {
+		return EXIT_SUCCESS;
+	}
+}
+
+sq3_res_t sqlite3_execute_stmt(sqlite3* db, const string& query) {
+	int rc = 0;
+	sqlite3_stmt* stmt = NULL;
+	sq3_res_t res {};
+
+	do {
+		rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, 0);
+		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {
+			usleep(USLEEP_SQLITE_LOCKED);
+		}
+	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
+
+	if (rc != SQLITE_OK) {
+		res = {{}, {}, {}, sqlite3_errmsg(db)};
+		goto cleanup;
+	}
+
+	{
+		// extract a resultset or just evaluate
+		uint32_t cols_count = sqlite3_column_count(stmt);
+
+		if (cols_count == 0) {
+			do {
+				rc = sqlite3_step(stmt);
+				if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {
+					usleep(USLEEP_SQLITE_LOCKED);
+				}
+			} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
+
+			if (rc == SQLITE_DONE) {
+				uint32_t affected_rows = sqlite3_changes(db);
+				res = {{}, {}, affected_rows, {}};
+			} else {
+				res = {{}, {}, {}, sqlite3_errmsg(db)};
+				goto cleanup;
+			}
+		} else {
+			vector<sq3_col_def_t> cols_defs {};
+			vector<sq3_row_t> rows {};
+
+			for (uint32_t i = 0; i < cols_count; i++) {
+				cols_defs.push_back(sqlite3_column_name(stmt, i));
+			}
+
+			while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+				sq3_row_t row {};
+
+				for (uint32_t i = 0; i < cols_count; i++) {
+					if (sqlite3_column_type(stmt, i) == SQLITE_NULL) {
+						row.push_back({});
+					} else {
+						row.push_back(reinterpret_cast<const char*>(sqlite3_column_text(stmt, i)));
+					}
+				}
+
+				rows.push_back(row);
+			}
+
+			res = { cols_defs, rows, 0, {} };
+		}
+	}
+
+cleanup:
+	sqlite3_reset(stmt);
+	sqlite3_finalize(stmt);
+
+	return res;
+}
