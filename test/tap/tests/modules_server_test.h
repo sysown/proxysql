@@ -37,6 +37,8 @@ int get_module_ifaces(MYSQL* proxysql_admin, const std::string varname, std::str
 
 cleanup:
 
+	mysql_free_result(admin_res);
+
 	return res;
 }
 

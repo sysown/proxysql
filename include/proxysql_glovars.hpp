@@ -125,18 +125,29 @@ class ProxySQL_GlobalVariables {
 	} statuses;
 	pthread_mutex_t checksum_mutex;
 	time_t epoch_version;
-	struct {
-		ProxySQL_Checksum_Value admin_variables;
-		ProxySQL_Checksum_Value mysql_query_rules;
-		ProxySQL_Checksum_Value mysql_servers;
-		ProxySQL_Checksum_Value mysql_users;
-		ProxySQL_Checksum_Value mysql_variables;
-		ProxySQL_Checksum_Value ldap_variables;
-		ProxySQL_Checksum_Value proxysql_servers;
-		uint64_t global_checksum;
-		unsigned long long updates_cnt;
-		unsigned long long dumped_at;
-	} checksums_values;
+	/**
+	 * @brief Anonymous union holding just the member 'checksums_values'.
+	 * @details This encapsulation is performed to prevent the call to 'ProxySQL_Checksum_Value' destructor for
+	 *  'checksums_values' members. These checksums memory is never freed during ProxySQL execution
+	 *  lifetime (only reused during update operations), and they are concurrently access by multiple threads,
+	 *  including during shutdown phase. Since 'GloVars' (unique instance of this class) is declared global,
+	 *  it's impossible to control de destruction order with respect to the other modules. To avoid invalid
+	 *  memory accesses during shutdown, we avoid calling the destructor of the members at all.
+	 */
+	union {
+		struct {
+			ProxySQL_Checksum_Value admin_variables;
+			ProxySQL_Checksum_Value mysql_query_rules;
+			ProxySQL_Checksum_Value mysql_servers;
+			ProxySQL_Checksum_Value mysql_users;
+			ProxySQL_Checksum_Value mysql_variables;
+			ProxySQL_Checksum_Value ldap_variables;
+			ProxySQL_Checksum_Value proxysql_servers;
+			uint64_t global_checksum;
+			unsigned long long updates_cnt;
+			unsigned long long dumped_at;
+		} checksums_values;
+	};
 	uint64_t generate_global_checksum();
 	ProxySQL_GlobalVariables();
 	~ProxySQL_GlobalVariables();

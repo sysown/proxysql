@@ -20,15 +20,20 @@
  *
  *  NOTE: 'sqliteserver-read_only' is completely omitted from this test because
  *  it's **currently unused**.
+ *
+ *  NOTE: For manually checking that the test is resilient to port change collisions, the script
+ *  'test_sqlite3_server.sh' can be used. Check the file itself for a more detailed description.
  */
 
 #include <cstring>
+#include <fstream>
 #include <vector>
 #include <tuple>
 #include <string>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
 
 #include <mysql.h>
 #include <mysql/mysqld_error.h>
@@ -36,6 +41,11 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+
+using std::fstream;
+using std::string;
+using std::pair;
+using std::vector;
 
 using query_spec = std::tuple<std::string, int>;
 
@@ -225,6 +235,99 @@ std::vector<std::string> sqlite_intf_queries {
 	"LOAD SQLITESERVER VARIABLES TO RUNTIME"
 };
 
+int check_errorlog_for_addrinuse(MYSQL* admin, fstream& logfile) {
+	const string command_regex { ".*\\[INFO\\] Received LOAD SQLITESERVER VARIABLES (FROM DISK|TO RUNTIME) command" };
+	std::vector<line_match_t> cmd_lines { get_matching_lines(logfile, command_regex) };
+
+	// NOTE: Delay for poll_timeout for SQLite3_Server - harcoded 500ms
+	usleep(1000 * 1000);
+
+	const string bind_err_regex { ".*\\[ERROR\\] bind\\(\\): Address already in use" };
+	std::vector<line_match_t> err_lines { get_matching_lines(logfile, bind_err_regex) };
+
+	if (cmd_lines.empty()) {
+		diag("ERROR: Commands 'LOAD SQLITESERVER' not logged as expected");
+		return -1;
+	}
+
+	if (err_lines.empty() == false) {
+		const string& fst_errline { std::get<LINE_MATCH_T::LINE>(err_lines.front()) };
+		diag("Error line detected in logfile: `%s`", fst_errline.c_str());
+
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+string connect_with_retries(MYSQL* sqlite3, const CommandLine& cl, const pair<string,int>& host_port) {
+	uint32_t n = 0;
+	uint32_t retries = 10;
+	bool conn_success = false;
+
+	const char* host { host_port.first.c_str() };
+	const int port { host_port.second };
+	string conn_err {};
+
+	diag("Attempting connection to new interface on (%s,%d)", host, port);
+
+	while (n < retries) {
+		MYSQL* sqlite3 = mysql_init(NULL);
+		conn_err.clear();
+
+		if (!mysql_real_connect(sqlite3, host, cl.username, cl.password, NULL, port, NULL, 0)) {
+			conn_err = mysql_error(sqlite3);
+		}
+		mysql_close(sqlite3);
+
+		if (conn_err.empty() == false) {
+			diag("Connection attempt '%d 'to the new interface failed with error `%s`. Retring...", n, conn_err.c_str());
+			usleep(500 * 1000);
+			n += 1;
+		} else {
+			break;
+		}
+	}
+
+	return conn_err;
+}
+
+int enforce_sqlite_iface_change(MYSQL*admin, fstream& logfile, const uint32_t retries = 10) {
+	std::pair<string,int> host_port {};
+	if (extract_sqlite3_host_port(admin, host_port)) {
+		return -1;
+	}
+
+	int logcheck_err = check_errorlog_for_addrinuse(admin, logfile);
+	if (logcheck_err == -1) {
+		return logcheck_err;
+	}
+
+	uint32_t n = 0;
+	while (logcheck_err == 1 && n < retries) {
+		const string old_sqlite3_port { std::to_string(host_port.second) };
+		const string new_sqlite3_port { std::to_string(host_port.second + 5) };
+
+		MYSQL_QUERY_T(admin, ("SET sqliteserver-mysql_ifaces='127.0.0.1:" + new_sqlite3_port + "'").c_str());
+		MYSQL_QUERY_T(admin, "LOAD SQLITESERVER VARIABLES TO RUNTIME");
+
+		usleep(100 * 1000);
+
+		MYSQL_QUERY_T(admin, ("SET sqliteserver-mysql_ifaces='127.0.0.1:" + old_sqlite3_port + "'").c_str());
+		MYSQL_QUERY_T(admin, "LOAD SQLITESERVER VARIABLES TO RUNTIME");
+
+		logcheck_err = check_errorlog_for_addrinuse(admin, logfile);
+
+		if (logcheck_err == EXIT_SUCCESS) {
+			break;
+		} else {
+			n += 1;
+		}
+	}
+
+	return logcheck_err;
+}
+
 int main(int argc, char** argv) {
 	CommandLine cl;
 
@@ -232,7 +335,8 @@ int main(int argc, char** argv) {
 	plan(
 		2 /* Fail to connect with wrong username and password */ + successful_queries.size()
 		+ unsuccessful_queries.size() + admin_queries.size() + sqlite_intf_queries.size()
-		+ 1 /* Connect to new setup interface */
+		+ 2 /* Check port is properly taken by ProxySQL without error after each change */
+		+ 2 /* Connect to new/old interfaces when changed */
 	);
 
 	if (cl.getEnv()) {
@@ -258,7 +362,7 @@ int main(int argc, char** argv) {
 
 	{
 		std::pair<std::string, int> host_port {};
-		int host_port_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", host_port); 
+		int host_port_err = extract_module_host_port(proxysql_admin, "sqliteserver-mysql_ifaces", host_port);
 		if (host_port_err) {
 			diag("Failed to get and parse 'sqliteserver-mysql_ifaces' at line '%d'", __LINE__);
 			goto cleanup;
@@ -334,22 +438,24 @@ int main(int argc, char** argv) {
 
 		// Reinitialize MYSQL handle
 		mysql_close(proxysql_sqlite3);
-		proxysql_sqlite3 = mysql_init(NULL);
+
+		const string f_path { get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
+		fstream errlog {};
+
+		int of_err = open_file_and_seek_end(f_path, errlog);
+		if (of_err) {
+			diag("Failed to open ProxySQL log file. Aborting further testing...");
+			goto cleanup;
+		}
 
 		// Change SQLite interface and connect to new port
 		for (const auto& admin_query : sqlite_intf_queries) {
 			int query_err = mysql_query(proxysql_admin, admin_query.c_str());
-			ok(
-				query_err == 0, "Admin query '%s' should succeed. Line: %d, Err: '%s'",
-				admin_query.c_str(), __LINE__, mysql_error(proxysql_admin)
-			);
+			ok(query_err == 0, "Query should be executed successfully '%s'", admin_query.c_str());
 		}
 
-		// NOTE: Wait for ProxySQL to reconfigure, changing SQLite3 interface.
-		// Trying to perform a connection immediately after changing the
-		// interface could lead to 'EADDRINUSE' in ProxySQL side.
-		// UPDATE: Timeout increased to '5' seconds to avoid previously described issue.
-		sleep(5);
+		int iface_err = enforce_sqlite_iface_change(proxysql_admin, errlog);
+		ok(iface_err == 0, "SQLite3 iface should change without error being reported.");
 
 		// Connect to the new interface
 		std::pair<std::string, int> new_host_port {};
@@ -359,35 +465,42 @@ int main(int argc, char** argv) {
 			goto cleanup;
 		}
 
-		// Connect with invalid username
-		bool success_to_connect = true;
-		std::string new_intf_conn_err {};
-		if (
-			!mysql_real_connect(
-				proxysql_sqlite3, new_host_port.first.c_str(), cl.username, cl.password,
-				NULL, new_host_port.second, NULL, 0
-			)
-		) {
-			new_intf_conn_err = mysql_error(proxysql_sqlite3);
-			success_to_connect = false;
-		}
+		std::string new_intf_conn_err { connect_with_retries(proxysql_sqlite3, cl, new_host_port) };
 
 		ok(
-			success_to_connect,
-			"A connection to the new selected interface should success, error was: '%s'",
+			new_intf_conn_err.empty() == true,
+			"A connection to the new interface should success, error was: '%s'",
 			new_intf_conn_err.c_str()
 		);
 
-		mysql_close(proxysql_sqlite3);
+		// Seek current end-of-file
+		errlog.seekg(0, std::ios::end);
 
 		// Perform the final Admin queries
 		for (const auto& admin_query : admin_queries) {
 			int query_err = mysql_query(proxysql_admin, admin_query.c_str());
-			ok(
-				query_err == 0, "Admin query '%s' should succeed. Line: %d, Err: '%s'",
-				admin_query.c_str(), __LINE__, mysql_error(proxysql_admin)
-			);
+			ok(query_err == 0, "Query should be executed successfully '%s'", admin_query.c_str());
 		}
+
+		iface_err = enforce_sqlite_iface_change(proxysql_admin, errlog, 20);
+		ok(iface_err == 0, "SQLite3 iface should change without error being reported.");
+
+		std::string old_intf_conn_err {};
+
+		// NOTE: If the interface change has failed after the previously specified retries, we assume the
+		// interface could be locked somehow by ProxySQL, and we avoid trying to stablish a connection that
+		// could stall the test. Instead we intentionally fail.
+		if (iface_err == 0) {
+			old_intf_conn_err = connect_with_retries(proxysql_sqlite3, cl, host_port);
+		} else {
+			old_intf_conn_err = "Interface failed to be changed. Skipping connection attempt...";
+		}
+
+		ok(
+			old_intf_conn_err.empty() == true,
+			"A connection to the old interface should success, error was: '%s'",
+			old_intf_conn_err.c_str()
+		);
 	}
 
 cleanup:
