@@ -276,8 +276,8 @@ class ProxySQL_Admin {
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	char **get_variables_list();
-	bool set_variable(char *name, char *value);
-	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	bool set_variable(char *name, char *value, bool lock = true);
+	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
@@ -310,6 +310,11 @@ class ProxySQL_Admin {
 	void flush_ldap_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	public:
+	/**
+	 * @brief Mutex taken by 'ProxySQL_Admin::admin_session_handler'. It's used prevent multiple
+	 *   ProxySQL_Admin 'sessions' from running in parallel, or for preventing collisions between
+	 *   modules performing operations over the internal SQLite database and 'ProxySQL_Admin' sessions.
+	 */
 	pthread_mutex_t sql_query_global_mutex;
 	struct {
 		void *opt;
@@ -350,7 +355,31 @@ class ProxySQL_Admin {
 	void init_mysql_firewall();
 	void init_proxysql_servers();
 	void save_mysql_users_runtime_to_database(bool _runtime);
-	void save_mysql_servers_runtime_to_database(bool);
+	/**
+	 * @brief Save the current MySQL servers reported by 'MySQL_HostGroups_Manager', scanning the
+	 *   current MySQL servers structures for all hostgroups, into either the
+	 *   'main.runtime_mysql_servers' or 'main.mysql_servers' table.
+	 * @param _runtime If true the servers reported by 'MySQL_HostGroups_Manager' are stored into
+	 *   'main.runtime_mysql_servers', otherwise into 'main.runtime_mysql_servers'.
+	 * @details This functions requires the caller to have locked `mysql_servers_wrlock()`, but it
+	 *   doesn't start a transaction as other function that perform several operations over the
+	 *   database. This is because, it's not required doing so, and also because if a transaction
+	 *   was started in the following fashion:
+	 *
+	 *   ```
+	 *   admindb->execute("BEGIN IMMEDIATE");
+	 *   ```
+	 *
+	 *   ProxySQL would lock in 'MySQL_HostGroups_Manager::dump_table_mysql_servers()', or in any
+	 *   other operation from 'MySQL_HostGroups_Manager' that would try to modify the database.
+	 *   Reason being is that trying to modify an attached database during a transaction. Database
+	 *   is only attached for `DEBUG` builds as part of `MySQL_Admin::init()`. Line:
+	 *
+	 *   ```
+	 *   admindb->execute("ATTACH DATABASE 'file:mem_mydb?mode=memory&cache=shared' AS myhgm");
+	 *   ```
+	 */
+	void save_mysql_servers_runtime_to_database(bool _runtime);
 	void admin_shutdown();
 	bool is_command(std::string);
 	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
@@ -412,7 +441,7 @@ class ProxySQL_Admin {
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
 
-	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 	void load_or_update_global_settings(SQLite3DB *);
@@ -514,6 +543,14 @@ class ProxySQL_Admin {
 #ifdef TEST_GROUPREP
 	void enable_grouprep_testing();
 #endif // TEST_GROUPREP
+
+#ifdef TEST_READONLY
+	void enable_readonly_testing();
+#endif // TEST_READONLY
+
+#ifdef TEST_REPLICATIONLAG
+	void enable_replicationlag_testing();
+#endif // TEST_REPLICATIONLAG
 
 	unsigned int ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int, bool);
 	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual, int ths, bool lock, bool maps_per_thread);

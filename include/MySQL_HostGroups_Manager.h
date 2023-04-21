@@ -378,6 +378,25 @@ struct hg_metrics_map_idx {
 	};
 };
 
+
+/**
+ * @brief Required server info for the replication_lag Monitoring actions.
+ */
+using hostgroupid_t = int;
+using address_t = std::string;
+using port_t = unsigned int;
+using current_replication_lag = int;
+
+using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag>;
+
+enum REPLICATION_LAG_SERVER_T {
+	HOSTGROUP_ID = 0,
+	ADDRESS,
+	PORT,
+	CURRENT_REPLICATION_LAG,
+	__SIZE
+};
+
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -390,6 +409,89 @@ class MySQL_HostGroups_Manager {
 #else
 	rwlock_t rwlock;
 #endif
+
+	enum HGM_TABLES {
+		MYSQL_SERVERS = 0,
+		MYSQL_REPLICATION_HOSTGROUPS,
+		MYSQL_GROUP_REPLICATION_HOSTGROUPS,
+		MYSQL_GALERA_HOSTGROUPS,
+		MYSQL_AWS_AURORA_HOSTGROUPS,
+		MYSQL_HOSTGROUP_ATTRIBUTES,
+
+		__HGM_TABLES_SIZE
+	};
+
+	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum;
+
+	class HostGroup_Server_Mapping {
+	public:
+		enum Type {
+			WRITER = 0,
+			READER = 1
+		};
+
+		struct Node {
+			MySrvC* srv = NULL;
+			unsigned int reader_hostgroup_id = -1;
+			unsigned int writer_hostgroup_id = -1;
+			MySerStatus server_status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
+		};
+
+		HostGroup_Server_Mapping() : readonly_flag(1), myHGM(NULL) { }
+		~HostGroup_Server_Mapping() = default;
+
+		// Note: copy, remove, clear method also makes changes to MyHostGroups
+		void copy(Type dest_type, Type src_type, bool update_if_exists = true);
+		void remove(Type type, size_t index);
+		void clear(Type type);
+		//
+
+		inline
+		const std::vector<Node>& get(Type type) const {
+			return mapping[type];
+		}
+
+		inline
+		void add(Type type, Node& node) {
+			mapping[type].push_back(node);
+		}
+
+		inline
+		void set(Type type, const std::vector<Node>& nodes) {
+			mapping[type] = nodes;
+		}
+
+		inline
+		void set_readonly_flag(int val) {
+			readonly_flag = val;
+		}
+
+		inline
+		int get_readonly_flag() const {
+			return readonly_flag;
+		}
+
+		inline
+		void set_HGM(MySQL_HostGroups_Manager* hgm) {
+			myHGM = hgm;
+		}
+
+	private:
+		unsigned int get_hostgroup_id(Type type, size_t index) const;
+		unsigned int get_hostgroup_id(Type type, const Node& node) const;
+		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
+		void remove_HGM(MySrvC* srv);
+
+		std::array<std::vector<Node>, 2> mapping;
+		int readonly_flag;
+		MySQL_HostGroups_Manager* myHGM;
+	};
+
+	std::unordered_map<std::string, HostGroup_Server_Mapping> hostgroup_server_mapping;
+	uint64_t hgsm_mysql_servers_checksum = 0;
+	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
+
+
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, MyHGC *>MyHostGroups_map;
 
@@ -601,7 +703,7 @@ class MySQL_HostGroups_Manager {
 	int servers_add(SQLite3_result *resultset);
 	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void commit_update_checksums_from_tables(SpookyHash& myhash, bool& init);
-	void CUCFT1(SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName); // used by commit_update_checksums_from_tables()
+	void CUCFT1(SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName, uint64_t& raw_checksum); // used by commit_update_checksums_from_tables()
 
 	/**
 	 * @brief Store the resultset for the 'runtime_mysql_servers' table set that have been loaded to runtime.
@@ -650,9 +752,10 @@ class MySQL_HostGroups_Manager {
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
-	void replication_lag_action_inner(MyHGC *, char*, unsigned int, int);
-	void replication_lag_action(int, char*, unsigned int, int);
+	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int);
+	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
 	void read_only_action(char *hostname, int port, int read_only);
+	void read_only_action_v2(const std::list<std::tuple<std::string,int,int>>& mysql_servers);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);

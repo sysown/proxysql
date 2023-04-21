@@ -50,7 +50,15 @@ class SQLite3_Server {
 	std::unordered_map<std::string, group_rep_status> grouprep_map;
 	std::vector<table_def_t *> *tables_defs_grouprep;
 #endif // TEST_GROUPREP
-#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP)
+#ifdef TEST_READONLY
+	std::unordered_map<std::string, bool> readonly_map;
+	std::vector<table_def_t *> *tables_defs_readonly;
+#endif // TEST_READONLY
+#ifdef TEST_REPLICATIONLAG
+	std::unordered_map<std::string, int> replicationlag_map;
+	std::vector<table_def_t*>* tables_defs_replicationlag;
+#endif // TEST_REPLICATIONLAG
+#if defined(TEST_AURORA) || defined(TEST_GALERA) || defined(TEST_GROUPREP) || defined(TEST_READONLY) || defined(TEST_REPLICATIONLAG)
 	void insert_into_tables_defs(std::vector<table_def_t *> *, const char *table_name, const char *table_def);
 	void drop_tables_defs(std::vector<table_def_t *> *tables_defs);
 	void check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs);
@@ -80,6 +88,22 @@ class SQLite3_Server {
 	void init_grouprep_ifaces_string(std::string& s);
 	group_rep_status grouprep_test_value(const std::string& srv_addr);
 #endif // TEST_GROUPREP
+#ifdef TEST_READONLY
+	pthread_mutex_t test_readonly_mutex;
+	void load_readonly_table(MySQL_Session *sess);
+	int readonly_test_value(char *p);
+	int readonly_map_size() {
+		return readonly_map.size();
+	}
+#endif // TEST_READONLY
+#ifdef TEST_REPLICATIONLAG
+	pthread_mutex_t test_replicationlag_mutex;
+	void load_replicationlag_table(MySQL_Session* sess);
+	int replicationlag_test_value(const char* p);
+	int replicationlag_map_size() {
+		return replicationlag_map.size();
+	}
+#endif // TEST_REPLICATIONLAG
 	SQLite3_Server();
 	~SQLite3_Server();
 	char **get_variables_list();
