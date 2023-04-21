@@ -38,6 +38,15 @@ jobs:
         
         Status : **Build in progress**
         EOF
+
+    - name: Clean repo
+      uses: appleboy/ssh-action@v0.1.8
+      with:
+        host: ${{ secrets.REPO_HOST }}
+        username: ${{ secrets.REPO_USER }}
+        key: ${{ secrets.REPO_PRIVATE_KEY }}
+        script: |
+          ls -1 ${{ secrets.REPO_TARGET }} | sort -rV | tail +11 | xargs -n1 rm -rf
     
   build:
     runs-on: ubuntu-22.04
@@ -97,6 +106,7 @@ jobs:
         GH-Action Package-Build on PR merge into v2.x
         
         Updated : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
+
         Status : **Build in progress**
         EOF
         fi      
@@ -151,7 +161,7 @@ jobs:
         
         Finished : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
         
-        Status : **Build in finished**
+        Status : **Build is finished**
         
         [![Package-Build](https://github.com/${{ github.repository }}/actions/workflows/package-build.yml/badge.svg)](https://github.com/${{ github.repository }}/actions/workflows/package-build.yml)
         
