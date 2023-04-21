@@ -88,6 +88,9 @@ testgrouprep: build_deps_debug build_lib_testgrouprep build_src_testgrouprep
 .PHONY: testreadonly
 testreadonly: build_deps_debug build_lib_testreadonly build_src_testreadonly
 
+.PHONY: testreplicationlag
+testreplicationlag: build_deps_debug build_lib_testreplicationlag build_src_testreplicationlag
+
 .PHONY: testall
 testall: build_deps_debug build_lib_testall build_src_testall
 
@@ -151,13 +154,21 @@ build_src_testreadonly: build_deps build_lib_testreadonly
 build_lib_testreadonly: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_READONLY" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_src_testreplicationlag
+build_src_testreplicationlag: build_deps build_lib_testreplicationlag
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_testreplicationlag
+build_lib_testreplicationlag: build_deps_debug
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
+
 .PHONY: build_src_testall
 build_src_testall: build_deps build_lib_testall
-	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY" CC=${CC} CXX=${CXX} ${MAKE}
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testall
 build_lib_testall: build_deps_debug
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY" CC=${CC} CXX=${CXX} ${MAKE}
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_tap_test
 build_tap_test: build_src

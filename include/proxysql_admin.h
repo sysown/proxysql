@@ -5,6 +5,7 @@
 #include <prometheus/counter.h>
 #include <prometheus/gauge.h>
 
+#include "query_processor.h"
 #include "proxy_defines.h"
 #include "proxysql.h"
 #include "cpp.h"
@@ -275,8 +276,8 @@ class ProxySQL_Admin {
 	void flush_mysql_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
 
 	char **get_variables_list();
-	bool set_variable(char *name, char *value);
-	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	bool set_variable(char *name, char *value, bool lock = true);
+	void flush_admin_variables___database_to_runtime(SQLite3DB *db, bool replace, const std::string& checksum = "", const time_t epoch = 0, bool lock = true);
 	void flush_admin_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void disk_upgrade_mysql_query_rules();
 	void disk_upgrade_mysql_servers();
@@ -337,6 +338,10 @@ class ProxySQL_Admin {
 	SQLite3DB *configdb; // on disk
 	SQLite3DB *monitordb;	// in memory
 	SQLite3DB *statsdb_disk; // on disk
+#ifdef DEBUG
+	SQLite3DB *debugdb_disk; // on disk for debug
+	int debug_output;
+#endif
 	int pipefd[2];
 	void print_version();
 	bool init();
@@ -436,7 +441,7 @@ class ProxySQL_Admin {
 	void load_scheduler_to_runtime();
 	void save_scheduler_runtime_to_database(bool);
 
-	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void load_admin_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0, bool lock = true) { flush_admin_variables___database_to_runtime(admindb, true, checksum, epoch, lock); }
 	void save_admin_variables_from_runtime() { flush_admin_variables___runtime_to_database(admindb, true, true, false); }
 
 	void load_or_update_global_settings(SQLite3DB *);
@@ -446,7 +451,12 @@ class ProxySQL_Admin {
 
 	void p_update_metrics();
 	void stats___mysql_query_rules();
-	void stats___mysql_query_digests(bool reset, bool copy=false);
+	int stats___save_mysql_query_digest_to_sqlite(
+		const bool reset, const bool copy, const SQLite3_result *resultset,
+		const umap_query_digest *digest_umap, const umap_query_digest_text *digest_text_umap
+	);
+	int stats___mysql_query_digests(bool reset, bool copy=false);
+	int stats___mysql_query_digests_v2(bool reset, bool copy, bool use_resultset);
 	//void stats___mysql_query_digests_reset();
 	void stats___mysql_commands_counters();
 	void stats___mysql_processlist();
@@ -537,6 +547,10 @@ class ProxySQL_Admin {
 #ifdef TEST_READONLY
 	void enable_readonly_testing();
 #endif // TEST_READONLY
+
+#ifdef TEST_REPLICATIONLAG
+	void enable_replicationlag_testing();
+#endif // TEST_REPLICATIONLAG
 
 	unsigned int ProxySQL_Test___GenerateRandom_mysql_query_rules_fast_routing(unsigned int, bool);
 	bool ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual);

@@ -31,18 +31,6 @@ using std::pair;
 using std::string;
 using std::tuple;
 
-std::vector<std::string> split(const std::string& s, char delimiter) {
-	std::vector<std::string> tokens {};
-	std::string token {};
-	std::istringstream tokenStream(s);
-
-	while (std::getline(tokenStream, token, delimiter)) {
-		tokens.push_back(token);
-	}
-
-	return tokens;
-}
-
 int mysql_query_d(MYSQL* mysql, const char* query) {
 	diag("Query: Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port);
 	return mysql_query(mysql, query);

@@ -274,6 +274,7 @@ class ProxySQL_Cluster_Nodes {
 	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time);
 	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r);
 	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r);
+	void Reset_Global_Checksums(bool lock);
 	void update_prometheus_nodes_metrics();
 	SQLite3_result * dump_table_proxysql_servers();
 	SQLite3_result * stats_proxysql_servers_checksums();
@@ -452,6 +453,9 @@ class ProxySQL_Cluster {
 	}
 	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r = NULL) {
 		return nodes.Update_Node_Checksums(_h, _p, _r);
+	}
+	void Reset_Global_Checksums(bool lock) {
+		nodes.Reset_Global_Checksums(lock);
 	}
 	SQLite3_result *dump_table_proxysql_servers() {
 		return nodes.dump_table_proxysql_servers();

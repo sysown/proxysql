@@ -31,6 +31,7 @@
 #include <thread>
 #include <future>
 extern MySQL_Threads_Handler *GloMTH;
+extern ProxySQL_Admin *GloAdmin;
 
 static int int_cmp(const void *a, const void *b) {
 	const unsigned long long *ia = (const unsigned long long *)a;
@@ -186,8 +187,11 @@ QP_query_digest_stats::QP_query_digest_stats(char *u, char *s, uint64_t d, char 
 	rows_sent=0;
 	hid=h;
 }
-void QP_query_digest_stats::add_time(unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs) {
-	count_star++;
+void QP_query_digest_stats::add_time(
+	unsigned long long t, unsigned long long n, unsigned long long ra, unsigned long long rs,
+	unsigned long long cnt
+) {
+	count_star += cnt;
 	sum_time+=t;
 	rows_affected+=ra;
 	rows_sent+=rs;
@@ -229,6 +233,30 @@ QP_query_digest_stats::~QP_query_digest_stats() {
 		client_address=NULL;
 	}
 }
+
+// Funtion to get the digest text associated to a QP_query_digest_stats.
+// QP_query_digest_stats member type "char *digest_text" may by NULL, so we
+// have to get the digest text from "digest_text_umap".
+char *QP_query_digest_stats::get_digest_text(const umap_query_digest_text *digest_text_umap) {
+	char *digest_text_str = NULL;
+
+	if (digest_text) {
+		digest_text_str = digest_text;
+	} else {
+		std::unordered_map<uint64_t, char *>::const_iterator it;
+		it = digest_text_umap->find(digest);
+		if (it != digest_text_umap->end()) {
+			digest_text_str = it->second;
+		} else {
+			// LCOV_EXCL_START
+			assert(0);
+			// LCOV_EXCL_STOP
+		}
+	}
+
+	return digest_text_str;
+}
+
 char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, query_digest_stats_pointers_t *qdsp) {
 	char **pta=qdsp->pta;
 
@@ -244,19 +272,7 @@ char **QP_query_digest_stats::get_row(umap_query_digest_text *digest_text_umap, 
 	sprintf(qdsp->digest,"0x%016llX", (long long unsigned int)digest);
 	pta[3]=qdsp->digest;
 
-	if (digest_text) {
-		pta[4]=digest_text;
-	} else {
-		std::unordered_map<uint64_t, char *>::iterator it;
-		it=digest_text_umap->find(digest);
-		if (it != digest_text_umap->end()) {
-			pta[4] = it->second;
-		} else {
-			// LCOV_EXCL_START
-			assert(0);
-			// LCOV_EXCL_STOP
-		}
-	}
+	pta[4] = get_digest_text(digest_text_umap);
 
 	//sprintf(qdsp->count_star,"%u",count_star);
 	my_itoa(qdsp->count_star, count_star);
@@ -1033,50 +1049,45 @@ unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool p
 unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	unsigned long long ret = 0;
 	pthread_rwlock_wrlock(&digest_rwlock);
-	unsigned long long curtime1=monotonic_time();
-	size_t map1_size = digest_umap.size();
-	size_t map2_size = digest_text_umap.size();
-	ret = map1_size + map2_size;
-	unsigned long long i = 0;
-	QP_query_digest_stats **array1 = (QP_query_digest_stats **)malloc(sizeof(QP_query_digest_stats *)*map1_size);
-	char **array2 = (char **)malloc(sizeof(char *)*map2_size);
 
-	i=0;
-	for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap.begin(); it!=digest_umap.end(); ++it) {
-		array1[i]=(QP_query_digest_stats *)it->second;
-		i++;
-		//delete qds;
-	}
-	i=0;
-	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap.begin(); it!=digest_text_umap.end(); ++it) {
-		array2[i] = it->second;
-		//free(it->second);
-		i++;
-	}
-	digest_umap.erase(digest_umap.begin(),digest_umap.end());
-	digest_text_umap.erase(digest_text_umap.begin(),digest_text_umap.end());
+
+	umap_query_digest digest_umap_aux;
+	umap_query_digest_text digest_text_umap_aux;
+	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_umap.swap(digest_umap_aux);
+	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
-	unsigned long long curtime2=monotonic_time();
-	curtime1 = curtime1/1000;
-	curtime2 = curtime2/1000;
-	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
-		proxy_info("Purging stats_mysql_query_digest: locked for %llums to remove %lu entries\n", curtime2-curtime1, map1_size);
-	}
-	char buf[128];
-	sprintf(buf, "Query digest map locked for %llums", curtime2-curtime1);
-	*msg = strdup(buf);
-	for (i=0; i<map1_size; i++) {
-		QP_query_digest_stats *qds = array1[i];
+	int num_rows = 0;
+	unsigned long long curtime1=monotonic_time();
+	size_t map1_size = digest_umap_aux.size();
+	size_t map2_size = digest_text_umap_aux.size();
+	ret = map1_size + map2_size;
+
+
+	for (
+		std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
+		it != digest_umap_aux.end();
+		++it
+	) {
+		QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
 		delete qds;
 	}
-	for (i=0; i<map2_size; i++) {
-		char *p = array2[i];
-		free(p);
+	digest_umap_aux.clear();
+	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap_aux.begin(); it!=digest_text_umap_aux.end(); ++it) {
+		free(it->second);
 	}
-	free(array1);
-	free(array2);
+	digest_text_umap_aux.clear();
+
+
+	if (map1_size >= DIGEST_STATS_FAST_MINSIZE) {
+		unsigned long long curtime2=monotonic_time();
+		curtime1 = curtime1/1000;
+		curtime2 = curtime2/1000;
+		proxy_info("TRUNCATE stats_mysql_query_digest: (not locked) %llums to remove %lu entries\n", curtime2-curtime1, map1_size);
+	}
 	return ret;
 }
+
 
 unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 	unsigned long long ret = 0;
@@ -1173,6 +1184,151 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 	return ret;
 }
 
+std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const bool use_resultset) {
+	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
+	SQLite3_result *result = NULL;
+	// Create two auxiliary maps and swap its content with the main maps. This
+	// way, this function can read query digests stored until now while other
+	// threads write in the other map. We need to lock while swapping.
+	umap_query_digest digest_umap_aux, digest_umap_aux_2;
+	umap_query_digest_text digest_text_umap_aux, digest_text_umap_aux_2;
+	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_umap.swap(digest_umap_aux);
+	digest_text_umap.swap(digest_text_umap_aux);
+	pthread_rwlock_unlock(&digest_rwlock);
+	int num_rows = 0;
+	unsigned long long curtime1;
+	unsigned long long curtime2;
+	size_t map_size = digest_umap_aux.size();
+	curtime1 = monotonic_time(); // curtime1 must always be initialized
+	if (use_resultset) {
+		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+			result = new SQLite3_result(14, true);
+		} else {
+			result = new SQLite3_result(14);
+		}
+		result->add_column_definition(SQLITE_TEXT,"hid");
+		result->add_column_definition(SQLITE_TEXT,"schemaname");
+		result->add_column_definition(SQLITE_TEXT,"username");
+		result->add_column_definition(SQLITE_TEXT,"client_address");
+		result->add_column_definition(SQLITE_TEXT,"digest");
+		result->add_column_definition(SQLITE_TEXT,"digest_text");
+		result->add_column_definition(SQLITE_TEXT,"count_star");
+		result->add_column_definition(SQLITE_TEXT,"first_seen");
+		result->add_column_definition(SQLITE_TEXT,"last_seen");
+		result->add_column_definition(SQLITE_TEXT,"sum_time");
+		result->add_column_definition(SQLITE_TEXT,"min_time");
+		result->add_column_definition(SQLITE_TEXT,"max_time");
+		result->add_column_definition(SQLITE_TEXT,"rows_affected");
+		result->add_column_definition(SQLITE_TEXT,"rows_sent");
+		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+			int n=DIGEST_STATS_FAST_THREADS;
+			get_query_digests_parallel_args args[n];
+			for (int i=0; i<n; i++) {
+				args[i].m=i;
+				args[i].gu = &digest_umap_aux;
+				args[i].gtu = &digest_text_umap_aux;
+				args[i].result = result;
+				args[i].free_me = false;
+			}
+			for (int i=0; i<n; i++) {
+				if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+					// LCOV_EXCL_START
+					assert(0);
+					// LCOV_EXCL_STOP
+				}
+			}
+			for (int i=0; i<n; i++) {
+				pthread_join(args[i].thr, NULL);
+			}
+		} else {
+			for (
+				std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
+				it != digest_umap_aux.end();
+				++it
+			) {
+				QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+				query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
+				char **pta=qds->get_row(&digest_text_umap_aux, a);
+				result->add_row(pta);
+				free(a);
+			}
+		}
+	} else {
+		num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
+			false, false, NULL, &digest_umap_aux, &digest_text_umap_aux
+		);
+	}
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		curtime2=monotonic_time();
+		curtime1 = curtime1/1000;
+		curtime2 = curtime2/1000;
+		proxy_info("Running query on stats_mysql_query_digest: (not locked) %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
+	}
+
+	// Once we finish creating the resultset or writing to SQLite, we use a
+	// second group of auxiliary maps to swap it with the first group of
+	// auxiliary maps.  This way, we can merge the main maps and the first
+	// auxiliary maps without locking the mutex during the process. This is
+	// useful because writing to SQLite can take a lot of time, so the first
+	// group of auxiliary maps could grow large.
+	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_umap.swap(digest_umap_aux_2);
+	digest_text_umap.swap(digest_text_umap_aux_2);
+	pthread_rwlock_unlock(&digest_rwlock);
+
+	// Once we do the swap, we merge the content of the first auxiliary maps
+	// in the main maps and clear the content of the auxiliary maps.
+	for (const auto& element : digest_umap_aux_2) {
+		uint64_t digest = element.first;
+		QP_query_digest_stats *qds = (QP_query_digest_stats *)element.second;
+		std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.find(digest);
+		if (it != digest_umap_aux.end()) {
+			// found
+			QP_query_digest_stats *qds_equal = (QP_query_digest_stats *)it->second;
+			qds_equal->add_time(
+				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
+			);
+			delete qds;
+		} else {
+			digest_umap_aux.insert(element);
+		}
+	}
+	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
+	digest_umap_aux_2.clear();
+	digest_text_umap_aux_2.clear();
+
+	// Once we finish merging the main maps and the first auxiliary maps, we
+	// lock and swap the main maps with the second auxiliary maps. Then, we
+	// merge the content of the auxiliary maps in the main maps and clear the
+	// content of the auxiliary maps.
+	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_umap_aux.swap(digest_umap);
+	digest_text_umap_aux.swap(digest_text_umap);
+	for (const auto& element : digest_umap_aux) {
+		uint64_t digest = element.first;
+		QP_query_digest_stats *qds = (QP_query_digest_stats *)element.second;
+		std::unordered_map<uint64_t, void *>::iterator it = digest_umap.find(digest);
+		if (it != digest_umap.end()) {
+			// found
+			QP_query_digest_stats *qds_equal = (QP_query_digest_stats *)it->second;
+			qds_equal->add_time(
+				qds->min_time, qds->last_seen, qds->rows_affected, qds->rows_sent, qds->count_star
+			);
+			delete qds;
+		} else {
+			digest_umap.insert(element);
+		}
+	}
+	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
+	pthread_rwlock_unlock(&digest_rwlock);
+	digest_umap_aux.clear();
+	digest_text_umap_aux.clear();
+
+	std::pair<SQLite3_result *, int> res{result, num_rows};
+	return res;
+}
+
 SQLite3_result * Query_Processor::get_query_digests() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
 	SQLite3_result *result = NULL;
@@ -1180,9 +1336,9 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	unsigned long long curtime1;
 	unsigned long long curtime2;
 	size_t map_size = digest_umap.size();
+	curtime1 = monotonic_time(); // curtime1 must always be initialized
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
 		result = new SQLite3_result(14, true);
-		curtime1 = monotonic_time();
 	} else {
 		result = new SQLite3_result(14);
 	}
@@ -1240,6 +1396,122 @@ SQLite3_result * Query_Processor::get_query_digests() {
 	return result;
 }
 
+std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(
+	const bool copy, const bool use_resultset
+) {
+	SQLite3_result *result = NULL;
+	umap_query_digest digest_umap_aux;
+	umap_query_digest_text digest_text_umap_aux;
+	pthread_rwlock_wrlock(&digest_rwlock);
+	digest_umap.swap(digest_umap_aux);
+	digest_text_umap.swap(digest_text_umap_aux);
+	pthread_rwlock_unlock(&digest_rwlock);
+	int num_rows = 0;
+	unsigned long long curtime1;
+	unsigned long long curtime2;
+	size_t map_size = digest_umap_aux.size(); // we need to use the new map
+	bool free_me = false;
+	bool defer_free = false;
+	int n=DIGEST_STATS_FAST_THREADS;
+	get_query_digests_parallel_args args[n];
+	curtime1 = monotonic_time(); // curtime1 must always be initialized
+	if (use_resultset) {
+		free_me = true;
+		defer_free = true;
+		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+			result = new SQLite3_result(14, true);
+		} else {
+			result = new SQLite3_result(14);
+		}
+		result->add_column_definition(SQLITE_TEXT,"hid");
+		result->add_column_definition(SQLITE_TEXT,"schemaname");
+		result->add_column_definition(SQLITE_TEXT,"username");
+		result->add_column_definition(SQLITE_TEXT,"client_address");
+		result->add_column_definition(SQLITE_TEXT,"digest");
+		result->add_column_definition(SQLITE_TEXT,"digest_text");
+		result->add_column_definition(SQLITE_TEXT,"count_star");
+		result->add_column_definition(SQLITE_TEXT,"first_seen");
+		result->add_column_definition(SQLITE_TEXT,"last_seen");
+		result->add_column_definition(SQLITE_TEXT,"sum_time");
+		result->add_column_definition(SQLITE_TEXT,"min_time");
+		result->add_column_definition(SQLITE_TEXT,"max_time");
+		result->add_column_definition(SQLITE_TEXT,"rows_affected");
+		result->add_column_definition(SQLITE_TEXT,"rows_sent");
+		if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+			for (int i=0; i<n; i++) {
+				args[i].m=i;
+				args[i].gu = &digest_umap_aux;
+				args[i].gtu = &digest_text_umap_aux;
+				args[i].result = result;
+				args[i].free_me = free_me;
+				args[i].defer_free = defer_free;
+			}
+			for (int i=0; i<n; i++) {
+				if ( pthread_create(&args[i].thr, NULL, &get_query_digests_parallel, &args[i]) != 0 ) {
+					// LCOV_EXCL_START
+					assert(0);
+					// LCOV_EXCL_STOP
+				}
+			}
+			for (int i=0; i<n; i++) {
+				pthread_join(args[i].thr, NULL);
+			}
+			if (free_me == false) {
+				for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap_aux.begin(); it!=digest_umap_aux.end(); ++it) {
+					QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+					delete qds;
+				}
+			}
+		} else {
+			for (std::unordered_map<uint64_t, void *>::iterator it=digest_umap_aux.begin(); it!=digest_umap_aux.end(); ++it) {
+				QP_query_digest_stats *qds=(QP_query_digest_stats *)it->second;
+				query_digest_stats_pointers_t *a = (query_digest_stats_pointers_t *)malloc(sizeof(query_digest_stats_pointers_t));
+				char **pta=qds->get_row(&digest_text_umap_aux, a);
+				result->add_row(pta);
+				free(a);
+				delete qds;
+			}
+		}
+	} else {
+		num_rows = GloAdmin->stats___save_mysql_query_digest_to_sqlite(
+			true, copy, result, &digest_umap_aux, &digest_text_umap_aux
+		);
+		for (
+			std::unordered_map<uint64_t, void *>::iterator it = digest_umap_aux.begin();
+			it != digest_umap_aux.end();
+			++it
+		) {
+			QP_query_digest_stats *qds = (QP_query_digest_stats *)it->second;
+			delete qds;
+		}
+	}
+	digest_umap_aux.clear();
+	// this part is always single-threaded
+	for (std::unordered_map<uint64_t, char *>::iterator it=digest_text_umap_aux.begin(); it!=digest_text_umap_aux.end(); ++it) {
+		free(it->second);
+	}
+	digest_text_umap_aux.clear();
+	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
+		curtime2=monotonic_time();
+		curtime1 = curtime1/1000;
+		curtime2 = curtime2/1000;
+		proxy_info("Running query on stats_mysql_query_digest: (not locked) %llums to retrieve %lu entries\n", curtime2-curtime1, map_size);
+		if (free_me) {
+			if (defer_free) {
+				for (int i=0; i<n; i++) {
+					for (unsigned long long r = 0; r < args[i].ret; r++) {
+						QP_query_digest_stats *qds = args[i].array_qds[r];
+						delete qds;
+					}
+					free(args[i].array_qds);
+				}
+			}
+		}
+	}
+
+	std::pair<SQLite3_result *, int> res{result, num_rows};
+	return res;
+}
 
 void Query_Processor::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
 	pthread_rwlock_wrlock(&digest_rwlock);
@@ -1258,8 +1530,8 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 	int n=DIGEST_STATS_FAST_THREADS;
 	get_query_digests_parallel_args args[n];
 	size_t map_size = digest_umap.size();
+	curtime1 = monotonic_time(); // curtime1 must always be initialized
 	if (map_size >= DIGEST_STATS_FAST_MINSIZE) {
-		curtime1=monotonic_time();
 		result = new SQLite3_result(14, true);
 	} else {
 		result = new SQLite3_result(14);

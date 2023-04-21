@@ -79,8 +79,13 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	}
 };
 
+/**
+ * @brief ProxySQL_GlobalVariables constructor
+ * @details 'checksums_values' constructor is required to be explicitly called as it's encapsulated in a
+ *  anonymous union.
+ */
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
-	prometheus_registry(std::make_shared<prometheus::Registry>())
+	prometheus_registry(std::make_shared<prometheus::Registry>()), checksums_values()
 {
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;

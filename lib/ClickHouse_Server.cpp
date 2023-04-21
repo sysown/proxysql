@@ -58,15 +58,6 @@
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
-#define SAFE_SQLITE3_STEP2(_stmt) do {\
-	do {\
-	rc=(*proxy_sqlite3_step)(_stmt);\
-		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
-			usleep(100);\
-		}\
-	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
-} while (0)
-
 #include "clickhouse/client.h"
 
 using namespace clickhouse;
