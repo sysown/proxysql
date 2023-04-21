@@ -302,9 +302,10 @@ Query_Info::Query_Info() {
 	stmt_info=NULL;
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
-	have_affected_rows=false;
+	have_affected_rows=false; // if affected rows is set, last_insert_id is set too
 	waiting_since = 0;
 	affected_rows=0;
+	last_insert_id = 0;
 	rows_sent=0;
 	start_time=0;
 	end_time=0;
@@ -335,9 +336,10 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	}
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
-	have_affected_rows=false;
+	have_affected_rows=false; // if affected rows is set, last_insert_id is set too
 	waiting_since = 0;
 	affected_rows=0;
+	last_insert_id = 0;
 	rows_sent=0;
 	sess->gtid_hid=-1;
 	stmt_client_id=0;
@@ -374,9 +376,10 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	MyComQueryCmd = MYSQL_COM_QUERY__UNINITIALIZED;
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
-	have_affected_rows=false;
+	have_affected_rows=false; // if affected rows is set, last_insert_id is set too
 	waiting_since = 0;
 	affected_rows=0;
+	last_insert_id = 0;
 	rows_sent=0;
 }
 

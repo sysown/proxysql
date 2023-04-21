@@ -18,7 +18,7 @@ using json = nlohmann::json;
 #else
 #define DEB ""
 #endif /* DEBUG */
-#define PROXYSQL_MYSQL_LOGGER_VERSION "2.0.0714" DEB
+#define PROXYSQL_MYSQL_LOGGER_VERSION "2.5.0421" DEB
 
 extern MySQL_Logger *GloMyLogger;
 
@@ -56,23 +56,37 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	extra_info = NULL;
 	have_affected_rows=false;
 	affected_rows=0;
+	last_insert_id = 0;
 	have_rows_sent=false;
 	rows_sent=0;
 	client_stmt_id=0;
+	gtid = NULL;
 }
 
 void MySQL_Event::set_client_stmt_id(uint32_t client_stmt_id) {
 	this->client_stmt_id = client_stmt_id;
 }
 
-void MySQL_Event::set_affected_rows(uint64_t ar) {
+// if affected rows is set, last_insert_id is set too.
+// They are part of the same OK packet
+void MySQL_Event::set_affected_rows(uint64_t ar, uint64_t lid) {
 	have_affected_rows=true;
 	affected_rows=ar;
+	last_insert_id=lid;
 }
 
 void MySQL_Event::set_rows_sent(uint64_t rs) {
 	have_rows_sent=true;
 	rows_sent=rs;
+}
+
+void MySQL_Event::set_gtid(MySQL_Session *sess) {
+	if (sess != NULL) {
+		if (sess->gtid_buf[0] != 0) {
+			have_gtid = true;
+			gtid = sess->gtid_buf;
+		}
+	}
 }
 
 void MySQL_Event::set_extra_info(char *_err) {
@@ -264,6 +278,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	total_bytes+=mysql_encode_length(end_time,NULL);
 	total_bytes+=mysql_encode_length(client_stmt_id,NULL);
 	total_bytes+=mysql_encode_length(affected_rows,NULL);
+	total_bytes+=mysql_encode_length(last_insert_id,NULL); // as in MySQL Protocol, last_insert_id is immediately after affected_rows
 	total_bytes+=mysql_encode_length(rows_sent,NULL);
 
 	total_bytes+=mysql_encode_length(query_digest,NULL);
@@ -330,6 +345,10 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 	write_encoded_length(buf,affected_rows,len,buf[0]);
 	f->write((char *)buf,len);
 
+	len=mysql_encode_length(last_insert_id,buf);
+	write_encoded_length(buf,last_insert_id,len,buf[0]);
+	f->write((char *)buf,len);
+
 	len=mysql_encode_length(rows_sent,buf);
 	write_encoded_length(buf,rows_sent,len,buf[0]);
 	f->write((char *)buf,len);
@@ -370,26 +389,36 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	}
 	if (username) {
 		j["username"] = username;
-	} else {
-		j["username"] = "";
+	//} else {
+	//	j["username"] = "";
 	}
 	if (schemaname) {
 		j["schemaname"] = schemaname;
-	} else {
-		j["schemaname"] = "";
+	//} else {
+	//	j["schemaname"] = "";
 	}
 	if (client) {
 		j["client"] = client;
-	} else {
-		j["client"] = "";
+	//} else {
+	//	j["client"] = "";
 	}
 	if (hid!=UINT64_MAX) {
 		if (server) {
 			j["server"] = server;
 		}
 	}
-	j["rows_affected"] = affected_rows;
-	j["rows_sent"] = rows_sent;
+	if (have_affected_rows == true) {
+		// in JSON format we only log rows_affected and last_insert_id
+		// if they are present (even if 0)
+		j["rows_affected"] = affected_rows;
+		j["last_insert_id"] = last_insert_id;
+	}
+	if (have_rows_sent == true) {
+		j["rows_sent"] = rows_sent;
+	}
+	if (have_gtid == true) {
+		j["last_gtid"] = gtid;
+	}
 	j["query"] = string(query_ptr,query_len);
 	j["starttime_timestamp_us"] = start_time;
 	{
@@ -729,9 +758,10 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 	}
 
 	if (sess->CurrentQuery.have_affected_rows) {
-		me.set_affected_rows(sess->CurrentQuery.affected_rows);
+		me.set_affected_rows(sess->CurrentQuery.affected_rows, sess->CurrentQuery.last_insert_id);
 	}
 	me.set_rows_sent(sess->CurrentQuery.rows_sent);
+	me.set_gtid(sess);
 
 	int sl=0;
 	char *sa=(char *)""; // default
