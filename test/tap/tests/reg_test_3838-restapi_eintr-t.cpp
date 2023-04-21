@@ -20,7 +20,7 @@
 #include <signal.h>
 #include <unistd.h>
 
-#include <curl/curl.h>
+#include "curl/curl.h"
 
 #include <mysql.h>
 #include <mysql/mysqld_error.h>
