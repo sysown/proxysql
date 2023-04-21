@@ -19,6 +19,7 @@
 #include "tap.h"
 #include "utils.h"
 #include "command_line.h"
+#include "sqlite3db.h"
 
 #include "json.hpp"
 
@@ -91,6 +92,103 @@ std::vector<_line_match_t> _get_matching_lines(std::fstream& f_stream, const std
 	}
 
 	return found_matches;
+}
+
+const uint32_t USLEEP_SQLITE_LOCKED = 100;
+
+int open_sqlite3_db(const string& f_path, sqlite3** db, int flags) {
+	const char* c_f_path { f_path.c_str() };
+	const char* base_path { basename(c_f_path) };
+	int rc = sqlite3_open_v2(f_path.c_str(), db, flags, NULL);
+
+	if (rc) {
+		const char* err_msg = *db == nullptr ? "Failed to allocate" : sqlite3_errmsg(*db);
+		diag("Failed to open sqlite3 db-file '%s': { path: %s, error: %s }", base_path, c_f_path, err_msg);
+		return EXIT_FAILURE;
+	} else {
+		return EXIT_SUCCESS;
+	}
+}
+
+using sq3_col_def_t = string;
+using sq3_row_t = vector<string>;
+using sq3_err_t = string;
+using sq3_result_t = std::tuple<vector<sq3_col_def_t>,vector<sq3_row_t>,int64_t,sq3_err_t>;
+
+enum SQ3_RESULT_T {
+	COLUMNS_DEF,
+	ROWS,
+	AFFECTED_ROWS,
+	ERR
+};
+
+sq3_result_t sqlite3_execute_stmt(sqlite3* db, const string& query) {
+	int rc = 0;
+	sqlite3_stmt* stmt = NULL;
+	sq3_result_t res {};
+
+	do {
+		rc = sqlite3_prepare_v2(db, query.c_str(), -1, &stmt, 0);
+		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {
+			usleep(USLEEP_SQLITE_LOCKED);
+		}
+	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
+
+	if (rc != SQLITE_OK) {
+		res = {{}, {}, {}, sqlite3_errmsg(db)};
+		goto cleanup;
+	}
+
+	{
+		// extract a resultset or just evaluate
+		uint32_t cols_count = sqlite3_column_count(stmt);
+
+		if (cols_count == 0) {
+			do {
+				rc = sqlite3_step(stmt);
+				if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {
+					usleep(USLEEP_SQLITE_LOCKED);
+				}
+			} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);
+
+			if (rc == SQLITE_DONE) {
+				uint32_t affected_rows = sqlite3_changes(db);
+				res = {{}, {}, affected_rows, {}};
+			} else {
+				res = {{}, {}, {}, sqlite3_errmsg(db)};
+				goto cleanup;
+			}
+		} else {
+			vector<sq3_col_def_t> cols_defs {};
+			vector<sq3_row_t> rows {};
+
+			for (uint32_t i = 0; i < cols_count; i++) {
+				cols_defs.push_back(sqlite3_column_name(stmt, i));
+			}
+
+			while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+				sq3_row_t row {};
+
+				for (uint32_t i = 0; i < cols_count; i++) {
+					if (sqlite3_column_type(stmt, i) == SQLITE_NULL) {
+						row.push_back({});
+					} else {
+						row.push_back(reinterpret_cast<const char*>(sqlite3_column_text(stmt, i)));
+					}
+				}
+
+				rows.push_back(row);
+			}
+
+			res = { cols_defs, rows, 0, {} };
+		}
+	}
+
+cleanup:
+	sqlite3_reset(stmt);
+	sqlite3_finalize(stmt);
+
+	return res;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -193,9 +291,260 @@ int check_fast_routing_rules(MYSQL* proxy, uint32_t rng_init, uint32_t rng_end) 
 	return EXIT_SUCCESS;
 };
 
+string get_last_debug_log_id(sqlite3* sq3_db) {
+	sq3_result_t last_id_res { sqlite3_execute_stmt(sq3_db, "SELECT id FROM debug_log ORDER BY id DESC limit 1") };
+	const vector<sq3_row_t>& last_id_rows { std::get<SQ3_RESULT_T::ROWS>(last_id_res) };
+	if (last_id_rows.empty()) {
+		diag("Empty resultset from 'proxysql_debug.db', database failed to be updated");
+		return {};
+	}
+
+	return last_id_rows[0][0];
+}
+
+int create_mysql_servers_range(
+	const CommandLine& cl, MYSQL* admin, const pair<string,int>& host_port, uint32_t rng_init, uint32_t rng_end
+) {
+	const string init { std::to_string(rng_init) };
+	const string end { std::to_string(rng_end) };
+
+	MYSQL_QUERY_T(admin, ("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN " + init + " AND " + end).c_str());
+
+	for (uint32_t i = rng_init; i < rng_end; i += 2) {
+		std::string q = "INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES ";
+		q += "(" + std::to_string(i)   + ",'" + host_port.first + "'," + std::to_string(host_port.second) + ")";
+		q += ",";
+		q += "(" + std::to_string(i+1) + ",'" + host_port.first + "'," + std::to_string(host_port.second) + ")";
+		MYSQL_QUERY(admin, q.c_str());
+	}
+
+	return EXIT_SUCCESS;
+};
+
+int create_fast_routing_rules_range(
+	const CommandLine& cl, MYSQL* admin, const pair<string,int>& host_port, uint32_t rng_init, uint32_t rng_end
+) {
+	const string init { std::to_string(rng_init) };
+	const string end { std::to_string(rng_end) };
+
+	MYSQL_QUERY_T(admin, ("DELETE FROM mysql_query_rules_fast_routing WHERE destination_hostgroup BETWEEN " + init + " AND " + end).c_str());
+
+	for (uint32_t i = rng_init; i < rng_end; i += 2) {
+		const string schema { "randomschemaname" + std::to_string(i) + "" };
+		const string user { cl.username };
+		string q = "INSERT INTO mysql_query_rules_fast_routing (username, schemaname, flagIN, destination_hostgroup, comment) VALUES ";
+
+		q += "('" + user + "', '" + schema + "' , 0, " + std::to_string(i)   + ", 'writer" + std::to_string(i) +   "'),";
+		q += "('" + user + "', '" + schema + "' , 1, " + std::to_string(i+1) + ", 'reader" + std::to_string(i+1) + "')";
+
+		MYSQL_QUERY(admin, q.c_str());
+	}
+
+	return EXIT_SUCCESS;
+};
+
+int sq3_get_matching_msg_entries(sqlite3* db, const string& query_regex, const string& id) {
+	string init_db_query {
+		"SELECT COUNT() FROM debug_log WHERE message LIKE '%" + query_regex + "%' AND id > " + id
+	};
+	sq3_result_t sq3_entries_res { sqlite3_execute_stmt(db, init_db_query) };
+	const string& sq3_err { std::get<SQ3_RESULT_T::ERR>(sq3_entries_res) };
+	if (!sq3_err.empty()) {
+		diag("Query failed to be executed in SQLite3 - query: `%s`, err: `%s`", init_db_query.c_str(), sq3_err.c_str());
+		return EXIT_FAILURE;
+	}
+
+	const vector<sq3_row_t>& sq3_rows { std::get<SQ3_RESULT_T::ROWS>(sq3_entries_res) };
+	int32_t matching_rows = std::atoi(sq3_rows[0][0].c_str());
+
+	return matching_rows;
+};
+
+int test_fast_routing_algorithm(
+	const CommandLine& cl, MYSQL* admin, MYSQL* proxy, const pair<string,int>& host_port, fstream& errlog,
+	int init_algo, int new_algo
+) {
+	uint32_t rng_init = 1000;
+	uint32_t rng_end = 1020;
+	const char query_rules_mem_stats_query[] {
+		"SELECT variable_value FROM stats_memory_metrics WHERE variable_name='mysql_query_rules_memory'"
+	};
+
+	// Enable Admin debug, set debug_output to log and DB, and increase verbosity for Query_Processor
+	MYSQL_QUERY_T(admin, "SET admin-debug=1");
+	MYSQL_QUERY_T(admin, "SET admin-debug_output=3");
+	MYSQL_QUERY_T(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	MYSQL_QUERY_T(admin, "UPDATE debug_levels SET verbosity=7 WHERE module='debug_mysql_query_processor'");
+	MYSQL_QUERY_T(admin, "LOAD DEBUG TO RUNTIME");
+
+	// Open the SQLite3 db for debugging
+	const string db_path { _get_env("REGULAR_INFRA_DATADIR") + "/proxysql_debug.db" };
+	sqlite3* sq3_db = nullptr;
+
+	int odb_err = open_sqlite3_db(db_path, &sq3_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE);
+	if (odb_err) { return EXIT_FAILURE; }
+	int c_err = create_mysql_servers_range(cl, admin, host_port, rng_init, rng_end);
+	if (c_err) { return EXIT_FAILURE; }
+	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+	printf("\n");
+	diag("Testing 'query_rules_fast_routing_algorithm=%d'", init_algo);
+	MYSQL_QUERY_T(admin, ("SET mysql-query_rules_fast_routing_algorithm=" + std::to_string(init_algo)).c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	// Always cleanup the rules before the test to get proper memory usage diff
+	MYSQL_QUERY_T(admin, "DELETE FROM mysql_query_rules_fast_routing");
+	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+
+	int init_rules_mem_stats = -1;
+	int get_mem_stats_err = get_query_int_res(admin, query_rules_mem_stats_query, init_rules_mem_stats);
+	if (get_mem_stats_err) { return EXIT_FAILURE; }
+	diag("Initial 'mysql_query_rules_memory' of '%d'", init_rules_mem_stats);
+
+	// Check that fast_routing rules are being properly triggered
+	c_err = create_fast_routing_rules_range(cl, admin, host_port, rng_init, rng_end);
+	if (c_err) { return EXIT_FAILURE; }
+	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+
+	// Seek end of file for error log
+	errlog.seekg(0, std::ios::end);
+	// Get current last id from debug db
+	string last_debug_log_id { get_last_debug_log_id(sq3_db) };
+	if (last_debug_log_id.empty()) { return EXIT_FAILURE; }
+
+	// Check that fast_routing rules are properly working for the defined range
+	check_fast_routing_rules(proxy, rng_init, rng_end);
+
+	// Give some time for the error log and SQLite3 to be written
+	usleep(100*1000);
+
+	const string init_algo_scope { init_algo == 1 ? "thread-local" : "global" };
+	const string init_search_regex { "Searching " + init_algo_scope + " 'rules_fast_routing' hashmap" };
+	vector<_line_match_t> matched_lines { _get_matching_lines(errlog, init_search_regex) };
+
+	ok(
+		matched_lines.size() == rng_end - rng_init,
+		"Number of '%s' searchs in error log should match issued queries - Exp: %d, Act: %ld",
+		init_algo_scope.c_str(), rng_end - rng_init, matched_lines.size()
+	);
+
+	const string sq3_query_regex { "Searching " + init_algo_scope + " ''rules_fast_routing'' hashmap" };
+	int matching_rows = sq3_get_matching_msg_entries(sq3_db, sq3_query_regex, last_debug_log_id);
+
+	ok(
+		matching_rows == rng_end - rng_init,
+		"Number of '%s' entries in SQLite3 'debug_log' should match issued queries - Exp: %d, Act: %ld",
+		init_algo_scope.c_str(), rng_end - rng_init, matched_lines.size()
+	);
+	printf("\n");
+
+	int old_mem_stats = -1;
+	get_mem_stats_err = get_query_int_res(admin, query_rules_mem_stats_query, old_mem_stats);
+	if (get_mem_stats_err) { return EXIT_FAILURE; }
+
+	// Changing the algorithm shouldn't have any effect
+	diag("Testing 'query_rules_fast_routing_algorithm=%d'", new_algo);
+	MYSQL_QUERY_T(admin, ("SET mysql-query_rules_fast_routing_algorithm=" + std::to_string(new_algo)).c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	// Seek end of file for error log
+	errlog.seekg(0, std::ios::end);
+	// Get current last id from debug db
+	last_debug_log_id = get_last_debug_log_id(sq3_db);
+	if (last_debug_log_id.empty()) { return EXIT_FAILURE; }
+
+	diag("Search should still be performed 'per-thread'. Only variable has changed.");
+	check_fast_routing_rules(proxy, rng_init, rng_end);
+
+	// Give some time for the error log to be written
+	usleep(100*1000);
+
+	matched_lines = _get_matching_lines(errlog, init_search_regex);
+
+	ok(
+		matching_rows == rng_end - rng_init,
+		"Number of '%s' entries in SQLite3 'debug_log' should match issued queries - Exp: %d, Act: %ld",
+		init_algo_scope.c_str(), rng_end - rng_init, matched_lines.size()
+	);
+
+	matching_rows = sq3_get_matching_msg_entries(sq3_db, sq3_query_regex, last_debug_log_id);
+
+	ok(
+		matched_lines.size() == rng_end - rng_init,
+		"Number of 'thread-local' searchs in error log should match issued queries - Exp: %d, Act: %ld",
+		rng_end - rng_init, matched_lines.size()
+	);
+
+	int new_mem_stats = -1;
+	get_mem_stats_err = get_query_int_res(admin, query_rules_mem_stats_query, new_mem_stats);
+	if (get_mem_stats_err) { return EXIT_FAILURE; }
+
+	diag("Memory SHOULDN'T have changed just because of a variable change");
+	ok(
+		old_mem_stats - init_rules_mem_stats == new_mem_stats - init_rules_mem_stats,
+		"Memory stats shouldn't increase just by the variable change - old: %d, new: %d",
+		old_mem_stats - init_rules_mem_stats, new_mem_stats - init_rules_mem_stats
+	);
+	printf("\n");
+
+	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	diag("Search should now be using the per thread-maps");
+
+	// Seek end of file for error log
+	errlog.seekg(0, std::ios::end);
+	check_fast_routing_rules(proxy, rng_init, rng_end);
+
+	// Give some time for the error log to be written
+	usleep(100*1000);
+
+	const string new_algo_scope { new_algo == 1 ? "thread-local" : "global" };
+	const string new_search_regex { "Searching " + new_algo_scope + " 'rules_fast_routing' hashmap" };
+	vector<_line_match_t> new_matched_lines { _get_matching_lines(errlog, new_search_regex) };
+
+	ok(
+		new_matched_lines.size() == rng_end - rng_init,
+		"Number of '%s' searchs in error log should match issued queries - Exp: %d, Act: %ld",
+		new_algo_scope.c_str(), rng_end - rng_init, new_matched_lines.size()
+	);
+
+	const string new_sq3_query_regex { "Searching " + new_algo_scope + " ''rules_fast_routing'' hashmap" };
+	int new_matching_rows = sq3_get_matching_msg_entries(sq3_db, sq3_query_regex, last_debug_log_id);
+
+	ok(
+		new_matching_rows == rng_end - rng_init,
+		"Number of '%s' entries in SQLite3 'debug_log' should match issued queries - Exp: %d, Act: %d",
+		new_algo_scope.c_str(), rng_end - rng_init, new_matching_rows
+	);
+
+	get_mem_stats_err = get_query_int_res(admin, query_rules_mem_stats_query, new_mem_stats);
+	if (get_mem_stats_err) { return EXIT_FAILURE; }
+
+	bool mem_check_res = false;
+	string exp_change { "" };
+
+	if (init_algo == 1 && new_algo == 2) {
+		mem_check_res = (old_mem_stats - init_rules_mem_stats) > (new_mem_stats - init_rules_mem_stats);
+		exp_change = "decrease";
+	} else if (init_algo == 2 && new_algo == 1) {
+		mem_check_res = (old_mem_stats - init_rules_mem_stats) < (new_mem_stats - init_rules_mem_stats);
+		exp_change = "increase";
+	} else {
+		mem_check_res = (old_mem_stats - init_rules_mem_stats) == (new_mem_stats - init_rules_mem_stats);
+		exp_change = "not change";
+	}
+
+	ok(
+		mem_check_res,
+		"Memory stats should %s after 'LOAD MYSQL QUERY RULES TO RUNTIME' - old: %d, new: %d",
+		exp_change.c_str(), (old_mem_stats - init_rules_mem_stats), (new_mem_stats - init_rules_mem_stats)
+	);
+
+	return EXIT_SUCCESS;
+};
+
 int main(int argc, char** argv) {
 	// `5` logic checks + 20*3 checks per query rule, per test
-	plan((5 + 20*3) * 2);
+	plan((8 + 20*3) * 2);
 
 	CommandLine cl;
 
@@ -216,199 +565,6 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
-
-	const auto create_mysql_servers_range = [] (
-		const CommandLine& cl, MYSQL* admin, const pair<string,int>& host_port, uint32_t rng_init, uint32_t rng_end
-	) -> int {
-		const string init { std::to_string(rng_init) };
-		const string end { std::to_string(rng_end) };
-
-		MYSQL_QUERY_T(admin, ("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN " + init + " AND " + end).c_str());
-
-		for (uint32_t i = rng_init; i < rng_end; i += 2) {
-			std::string q = "INSERT INTO mysql_servers (hostgroup_id, hostname, port) VALUES ";
-			q += "(" + std::to_string(i)   + ",'" + host_port.first + "'," + std::to_string(host_port.second) + ")";
-			q += ",";
-			q += "(" + std::to_string(i+1) + ",'" + host_port.first + "'," + std::to_string(host_port.second) + ")";
-			MYSQL_QUERY(admin, q.c_str());
-		}
-
-		return EXIT_SUCCESS;
-	};
-
-	const auto create_fast_routing_rules_range = [] (
-		const CommandLine& cl, MYSQL* admin, const pair<string,int>& host_port, uint32_t rng_init, uint32_t rng_end
-	) -> int {
-		const string init { std::to_string(rng_init) };
-		const string end { std::to_string(rng_end) };
-
-		MYSQL_QUERY_T(admin, ("DELETE FROM mysql_query_rules_fast_routing WHERE destination_hostgroup BETWEEN " + init + " AND " + end).c_str());
-
-		for (uint32_t i = rng_init; i < rng_end; i += 2) {
-			const string schema { "randomschemaname" + std::to_string(i) + "" };
-			const string user { cl.username };
-			string q = "INSERT INTO mysql_query_rules_fast_routing (username, schemaname, flagIN, destination_hostgroup, comment) VALUES ";
-
-			q += "('" + user + "', '" + schema + "' , 0, " + std::to_string(i)   + ", 'writer" + std::to_string(i) +   "'),";
-			q += "('" + user + "', '" + schema + "' , 1, " + std::to_string(i+1) + ", 'reader" + std::to_string(i+1) + "')";
-
-			MYSQL_QUERY(admin, q.c_str());
-		}
-
-		return EXIT_SUCCESS;
-	};
-
-	const auto test_fast_routing_algorithm = [&create_mysql_servers_range, &create_fast_routing_rules_range] (
-		const CommandLine& cl, MYSQL* admin, MYSQL* proxy, const pair<string,int>& host_port, fstream& errlog, int init_algo, int new_algo
-	) {
-		uint32_t rng_init = 1000;
-		uint32_t rng_end = 1020;
-		const char query_rules_mem_stats_query[] {
-			"SELECT variable_value FROM stats_memory_metrics WHERE variable_name='mysql_query_rules_memory'"
-		};
-
-		// Enable Admin debug and increase verbosity for Query_Processor
-		MYSQL_QUERY_T(admin, "SET admin-debug=1");
-		MYSQL_QUERY_T(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-		MYSQL_QUERY_T(admin, "UPDATE debug_levels SET verbosity=7 WHERE module='debug_mysql_query_processor'");
-		MYSQL_QUERY_T(admin, "LOAD DEBUG TO RUNTIME");
-
-		int c_err = create_mysql_servers_range(cl, admin, host_port, rng_init, rng_end);
-		if (c_err) {
-			return EXIT_FAILURE;
-		}
-		MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
-
-		printf("\n");
-		diag("Testing 'query_rules_fast_routing_algorithm=%d'", init_algo);
-		MYSQL_QUERY_T(admin, ("SET mysql-query_rules_fast_routing_algorithm=" + std::to_string(init_algo)).c_str());
-		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-
-		// Always cleanup the rules before the test to get proper memory usage diff
-		MYSQL_QUERY_T(admin, "DELETE FROM mysql_query_rules_fast_routing");
-		MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-
-		int init_rules_mem_stats = -1;
-		int get_mem_stats_err = get_query_int_res(admin, query_rules_mem_stats_query, init_rules_mem_stats);
-		if (get_mem_stats_err) {
-			return EXIT_FAILURE;
-		}
-		diag("Initial 'mysql_query_rules_memory' of '%d'", init_rules_mem_stats);
-
-		// Check that fast_routing rules are being properly triggered
-		c_err = create_fast_routing_rules_range(cl, admin, host_port, rng_init, rng_end);
-		if (c_err) {
-			return EXIT_FAILURE;
-		}
-		MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-
-		// Seek end of file for error log
-		errlog.seekg(0, std::ios::end);
-
-		// Check that fast_routing rules are properly working for the defined range
-		check_fast_routing_rules(proxy, rng_init, rng_end);
-
-		// Give some time for the error log to be written
-		usleep(100*1000);
-
-		const string init_algo_scope { init_algo == 1 ? "thread-local" : "global" };
-		const string init_search_regex { "Searching " + init_algo_scope + " 'rules_fast_routing' hashmap" };
-		vector<_line_match_t> matched_lines { _get_matching_lines(errlog, init_search_regex) };
-
-		ok(
-			matched_lines.size() == rng_end - rng_init,
-			"Number of '%s' searchs in error log should match issued queries - Exp: %d, Act: %ld",
-			init_algo_scope.c_str(), rng_end - rng_init, matched_lines.size()
-		);
-		printf("\n");
-
-		int old_mem_stats = -1;
-		get_mem_stats_err = get_query_int_res(admin, query_rules_mem_stats_query, old_mem_stats);
-		if (get_mem_stats_err) {
-			return EXIT_FAILURE;
-		}
-
-		// Changing the algorithm shouldn't have any effect
-		diag("Testing 'query_rules_fast_routing_algorithm=%d'", new_algo);
-		MYSQL_QUERY_T(admin, ("SET mysql-query_rules_fast_routing_algorithm=" + std::to_string(new_algo)).c_str());
-		MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-
-		errlog.seekg(0, std::ios::end);
-
-		diag("Search should still be performed 'per-thread'. Only variable has changed.");
-		check_fast_routing_rules(proxy, rng_init, rng_end);
-		matched_lines = _get_matching_lines(errlog, init_search_regex);
-
-		// Give some time for the error log to be written
-		usleep(100*1000);
-
-		ok(
-			matched_lines.size() == rng_end - rng_init,
-			"Number of 'thread-local' searchs in error log should match issued queries - Exp: %d, Act: %ld",
-			rng_end - rng_init, matched_lines.size()
-		);
-
-		int new_mem_stats = -1;
-		get_mem_stats_err = get_query_int_res(admin, query_rules_mem_stats_query, new_mem_stats);
-		if (get_mem_stats_err) {
-			return EXIT_FAILURE;
-		}
-
-		diag("Memory SHOULDN'T have changed just because of a variable change");
-		ok(
-			old_mem_stats - init_rules_mem_stats == new_mem_stats - init_rules_mem_stats,
-			"Memory stats shouldn't increase just by the variable change - old: %d, new: %d",
-			old_mem_stats - init_rules_mem_stats, new_mem_stats - init_rules_mem_stats
-		);
-		printf("\n");
-
-		MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
-		diag("Search should now be using the per thread-maps");
-
-		// Seek end of file for error log
-		errlog.seekg(0, std::ios::end);
-		check_fast_routing_rules(proxy, rng_init, rng_end);
-
-		// Give some time for the error log to be written
-		usleep(100*1000);
-
-		const string new_algo_scope { new_algo == 1 ? "thread-local" : "global" };
-		const string new_search_regex { "Searching " + new_algo_scope + " 'rules_fast_routing' hashmap" };
-		vector<_line_match_t> global_matched_lines { _get_matching_lines(errlog, new_search_regex) };
-
-		ok(
-			global_matched_lines.size() == rng_end - rng_init,
-			"Number of '%s' searchs in error log should match issued queries - Exp: %d, Act: %ld",
-			new_algo_scope.c_str(), rng_end - rng_init, global_matched_lines.size()
-		);
-
-		get_mem_stats_err = get_query_int_res(admin, query_rules_mem_stats_query, new_mem_stats);
-		if (get_mem_stats_err) {
-			return EXIT_FAILURE;
-		}
-
-		bool mem_check_res = false;
-		string exp_change { "" };
-
-		if (init_algo == 1 && new_algo == 2) {
-			mem_check_res = (old_mem_stats - init_rules_mem_stats) > (new_mem_stats - init_rules_mem_stats);
-			exp_change = "decrease";
-		} else if (init_algo == 2 && new_algo == 1) {
-			mem_check_res = (old_mem_stats - init_rules_mem_stats) < (new_mem_stats - init_rules_mem_stats);
-			exp_change = "increase";
-		} else {
-			mem_check_res = (old_mem_stats - init_rules_mem_stats) == (new_mem_stats - init_rules_mem_stats);
-			exp_change = "not change";
-		}
-
-		ok(
-			mem_check_res,
-			"Memory stats should %s after 'LOAD MYSQL QUERY RULES TO RUNTIME' - old: %d, new: %d",
-			exp_change.c_str(), (old_mem_stats - init_rules_mem_stats), (new_mem_stats - init_rules_mem_stats)
-		);
-
-		return EXIT_SUCCESS;
-	};
 
 	pair<string,int> host_port {};
 	int host_port_err = extract_module_host_port(admin, "sqliteserver-mysql_ifaces", host_port);
