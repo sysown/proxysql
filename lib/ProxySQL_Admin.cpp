@@ -11786,7 +11786,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 10, atoi(r1->fields[9])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_int64)(statement1, 11, atoi(r1->fields[10])); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_bind_text)(statement1, 12, r1->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
-				SAFE_SQLITE3_STEP(statement1);
+				SAFE_SQLITE3_STEP2(statement1);
 				rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 				rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 			}
@@ -13611,6 +13611,48 @@ void ProxySQL_Admin::enable_grouprep_testing() {
 }
 #endif // TEST_GROUPREP
 
+#ifdef TEST_READONLY
+void ProxySQL_Admin::enable_readonly_testing() {
+	proxy_info("Admin is enabling Read Only Testing using SQLite3 Server and HGs from 4201 to 4800\n");
+	mysql_servers_wrlock();
+	string q;
+	q = "DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 4201 AND 4800";
+	admindb->execute(q.c_str());
+
+/*
+ *  NOTE: This section can be uncomment for manual testing. It populates the `mysql_servers`
+ *  and `mysql_replication_hostgroups`.
+ */
+// **************************************************************************************
+//	for (int i=1; i < 4; i++) {
+//		for (int j=2; j<100; j+=2) {
+//			for (int k=1; k<5; k++) {
+//				q = "INSERT INTO mysql_servers (hostgroup_id, hostname, use_ssl, comment) VALUES (" + std::to_string(4000+i*200+j) + ", '127.5."+ std::to_string(i) +"." + std::to_string(j*2+k) + "', 0, '')";
+//				admindb->execute(q.c_str());
+//			}
+//			q = "INSERT INTO mysql_replication_hostgroups(writer_hostgroup, reader_hostgroup) VALUES (" + std::to_string(4000+i*200+j-1) + "," + std::to_string(4000+i*200+j) + ")";
+//			admindb->execute(q.c_str());
+//		}
+//	}
+// **************************************************************************************
+
+	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
+}
+#endif // TEST_READONLY
+
+#ifdef TEST_REPLICATIONLAG
+void ProxySQL_Admin::enable_replicationlag_testing() {
+	proxy_info("Admin is enabling Replication Lag Testing using SQLite3 Server and HGs from 5201 to 5800\n");
+	mysql_servers_wrlock();
+	
+	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 5201 AND 5800");
+
+	load_mysql_servers_to_runtime();
+	mysql_servers_wrunlock();
+}
+#endif // TEST_REPLICATIONLAG
+
 void ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_generate_many_clusters() {
 	mysql_servers_wrlock();
 	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 10001 AND 20000");
@@ -13668,9 +13710,9 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read
 			sprintf(hostnamebuf1,"hostname%d", i*10+1);
 			sprintf(hostnamebuf2,"hostname%d", i*10+2);
 			sprintf(hostnamebuf3,"hostname%d", i*10+3);
-			MyHGM->read_only_action(hostnamebuf1, 3306, 0);
-			MyHGM->read_only_action(hostnamebuf2, 3306, 1);
-			MyHGM->read_only_action(hostnamebuf3, 3306, 1);
+			MyHGM->read_only_action_v2({ { std::string(hostnamebuf1), 3306, 0 },
+										 { std::string(hostnamebuf2), 3306, 1 },
+										 { std::string(hostnamebuf3), 3306, 1 } });
 		}
 	}
 	unsigned long long t2 = monotonic_time();
