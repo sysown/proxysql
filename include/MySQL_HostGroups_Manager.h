@@ -378,23 +378,32 @@ struct hg_metrics_map_idx {
 	};
 };
 
-
 /**
- * @brief Required server info for the replication_lag Monitoring actions.
+ * @brief Required server info for the read_only Monitoring actions and replication_lag Monitoring actions.
  */
 using hostgroupid_t = int;
+using hostname_t = std::string;
 using address_t = std::string;
 using port_t = unsigned int;
+using read_only_t = int;
 using current_replication_lag = int;
 
+using read_only_server_t = std::tuple<hostname_t,port_t,read_only_t>;
 using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag>;
 
+enum READ_ONLY_SERVER_T {
+	ROS_HOSTNAME = 0,
+	ROS_PORT,
+	ROS_READONLY,
+	ROS__SIZE
+};
+
 enum REPLICATION_LAG_SERVER_T {
-	HOSTGROUP_ID = 0,
-	ADDRESS,
-	PORT,
-	CURRENT_REPLICATION_LAG,
-	__SIZE
+	RLS_HOSTGROUP_ID = 0,
+	RLS_ADDRESS,
+	RLS_PORT,
+	RLS_CURRENT_REPLICATION_LAG,
+	RLS__SIZE
 };
 
 class MySQL_HostGroups_Manager {
@@ -421,13 +430,15 @@ class MySQL_HostGroups_Manager {
 		__HGM_TABLES_SIZE
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum;
+	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { 0 };
 
 	class HostGroup_Server_Mapping {
 	public:
 		enum Type {
 			WRITER = 0,
-			READER = 1
+			READER = 1,
+
+			__TYPE_SIZE
 		};
 
 		struct Node {
@@ -437,14 +448,35 @@ class MySQL_HostGroups_Manager {
 			MySerStatus server_status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
 		};
 
-		HostGroup_Server_Mapping() : readonly_flag(1), myHGM(NULL) { }
+		HostGroup_Server_Mapping(MySQL_HostGroups_Manager* hgm) : readonly_flag(1), myHGM(hgm) { }
 		~HostGroup_Server_Mapping() = default;
 
-		// Note: copy, remove, clear method also makes changes to MyHostGroups
-		void copy(Type dest_type, Type src_type, bool update_if_exists = true);
+		/**
+		  * @brief Copies all unique nodes from source vector to destination vector.
+		  * @details Copies all unique nodes from source vector to destination vector. The source and destination 
+		  *   vectors are identified by an input enumeration type, which can be either a reader or a writer. 
+		  *	  During the copying process, the function also adds servers to the HostGroup connection container.
+		  * @param dest_type Input  Can be reader or writer
+		  * @param src_type Input  Can be reader or writer
+		*/
+		void copy_if_not_exists(Type dest_type, Type src_type);
+
+		/**
+		  * @brief Removes node located at the specified index.
+		  * @details Node is removed from vector located at the specified index identified by an input enumeration type. 
+		  *	  Node that was removed is marked as offline in the HostGroup connection container.
+		  * @param dest_type Input  Can be reader or writer
+		  * @param index Input  Index of node to be removed
+		*/
 		void remove(Type type, size_t index);
+
+		/**
+		  * @brief Removes all nodes.
+		  * @details All nodes are removed from vector, identified by an input enumeration type.
+		  *	  Nodes that are removed is marked as offline in the HostGroup connection container.
+		  * @param type Input  Can be reader or writer
+		*/
 		void clear(Type type);
-		//
 
 		inline
 		const std::vector<Node>& get(Type type) const {
@@ -457,11 +489,6 @@ class MySQL_HostGroups_Manager {
 		}
 
 		inline
-		void set(Type type, const std::vector<Node>& nodes) {
-			mapping[type] = nodes;
-		}
-
-		inline
 		void set_readonly_flag(int val) {
 			readonly_flag = val;
 		}
@@ -471,23 +498,17 @@ class MySQL_HostGroups_Manager {
 			return readonly_flag;
 		}
 
-		inline
-		void set_HGM(MySQL_HostGroups_Manager* hgm) {
-			myHGM = hgm;
-		}
-
 	private:
-		unsigned int get_hostgroup_id(Type type, size_t index) const;
 		unsigned int get_hostgroup_id(Type type, const Node& node) const;
 		MySrvC* insert_HGM(unsigned int hostgroup_id, const MySrvC* srv);
 		void remove_HGM(MySrvC* srv);
 
-		std::array<std::vector<Node>, 2> mapping;
+		std::array<std::vector<Node>, __TYPE_SIZE> mapping; // index 0 contains reader and 1 contains writer hostgroups
 		int readonly_flag;
 		MySQL_HostGroups_Manager* myHGM;
 	};
 
-	std::unordered_map<std::string, HostGroup_Server_Mapping> hostgroup_server_mapping;
+	std::unordered_map<std::string, std::unique_ptr<HostGroup_Server_Mapping>> hostgroup_server_mapping;
 	uint64_t hgsm_mysql_servers_checksum = 0;
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
 
@@ -755,7 +776,7 @@ class MySQL_HostGroups_Manager {
 	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int);
 	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
 	void read_only_action(char *hostname, int port, int read_only);
-	void read_only_action_v2(const std::list<std::tuple<std::string,int,int>>& mysql_servers);
+	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);

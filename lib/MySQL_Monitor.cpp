@@ -7129,7 +7129,7 @@ __again:
 
 bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 
-	std::list<std::tuple<std::string, int, int>> mysql_servers;
+	std::list<read_only_server_t> mysql_servers;
 
 	for (auto& mmsd : mmsds) {
 
