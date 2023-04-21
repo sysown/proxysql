@@ -8,7 +8,7 @@
 #include <fstream>
 #include <sstream>
 
-#include <curl/curl.h>
+#include "curl/curl.h"
 #include <mysql.h>
 
 #include "command_line.h"
