@@ -38,8 +38,6 @@ public:
 	void update_restapi_table(SQLite3_result *result);
 	void load_restapi_to_runtime();
 	void save_restapi_runtime_to_database(bool);
-	void flush_restapi__from_memory_to_disk();
-	void flush_restapi__from_disk_to_memory();
 };
 
 #endif // #ifndef __PROXYSQL_RESTAPI_H__
