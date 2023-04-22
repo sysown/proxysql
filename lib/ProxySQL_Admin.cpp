@@ -54,6 +54,8 @@
 #include "platform.h"
 #include "microhttpd.h"
 
+#include "coredumper/coredumper.h"
+
 #include <uuid/uuid.h>
 
 using std::string;
@@ -1512,6 +1514,53 @@ bool admin_handler_command_kill_connection(char *query_no_space, unsigned int qu
  * 	return true if the command is not a valid one and needs to be executed by SQLite (that will return an error)
  */
 bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_space_length, MySQL_Session *sess, ProxySQL_Admin *pa) {
+
+#if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
+	// currently only support x86-32, x86-64, ARM, and MIPS on Linux
+	if (!(strncasecmp("PROXYSQL COREDUMP", query_no_space, strlen("PROXYSQL COREDUMP")))) {
+		string filename = "core";
+		if (query_no_space_length > strlen("PROXYSQL COREDUMP")) {
+			if (query_no_space[strlen("PROXYSQL COREDUMP")] == ' ') {
+				filename = string(query_no_space+strlen("PROXYSQL COREDUMP "));
+			} else {
+				filename = "";
+			}
+		}
+		if (filename == "") {
+			proxy_error("Received incorrect PROXYSQL COREDUMP command: %s\n", query_no_space);
+		} else {
+			proxy_info("Received PROXYSQL COREDUMP command: %s\n", query_no_space);
+			// generates a core dump
+			WriteCoreDump(filename.c_str());
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			string msg = "Coredump: " + filename;
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)msg.c_str());
+			return false;
+		}
+	}
+	if (!(strncasecmp("PROXYSQL COMPRESSEDCOREDUMP", query_no_space, strlen("PROXYSQL COMPRESSEDCOREDUMP")))) {
+		string filename = "core";
+		if (query_no_space_length > strlen("PROXYSQL COMPRESSEDCOREDUMP")) {
+			if (query_no_space[strlen("PROXYSQL COMPRESSEDCOREDUMP")] == ' ') {
+				filename = string(query_no_space+strlen("PROXYSQL COMPRESSEDCOREDUMP "));
+			} else {
+				filename = "";
+			}
+		}
+		if (filename == "") {
+			proxy_error("Received incorrect PROXYSQL COMPRESSEDCOREDUMP command: %s\n", query_no_space);
+		} else {
+			proxy_info("Received PROXYSQL COMPRESSEDCOREDUMP command: %s\n", query_no_space);
+			// generates a compressed core dump
+			WriteCompressedCoreDump(filename.c_str(), SIZE_MAX, COREDUMPER_COMPRESSED, NULL);
+			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+			string msg = "Coredump: " + filename;
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)msg.c_str());
+			return false;
+		}
+	}
+#endif
+
 	if (!(strncasecmp("PROXYSQL CLUSTER_NODE_UUID ", query_no_space, strlen("PROXYSQL CLUSTER_NODE_UUID ")))) {
 		int l = strlen("PROXYSQL CLUSTER_NODE_UUID ");
 		if (sess->client_myds->addr.port == 0) {

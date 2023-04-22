@@ -57,9 +57,9 @@ endif
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp coredumper
 else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp coredumper
 endif
 .PHONY: default
 
@@ -136,6 +136,13 @@ libev/libev/.libs/libev.a:
 
 ev: libev/libev/.libs/libev.a
 
+
+coredumper/coredumper/src/libcoredumper.a:
+	cd coredumper && rm -rf coredumper-*/ || true
+	cd coredumper && tar -zxf coredumper-*.tar.gz
+	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
+	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
+coredumper: coredumper/coredumper/src/libcoredumper.a
 
 curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && rm -rf curl-*/ || true
@@ -364,5 +371,6 @@ cleanall:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
 	cd cityhash && rm -rf cityhash-*/ || true
+	cd coredumper && rm -rf coredumper-*/ || true
 .PHONY: cleanall
 
