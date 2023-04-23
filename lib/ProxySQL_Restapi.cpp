@@ -51,20 +51,6 @@ void ProxySQL_Restapi::update_restapi_table(SQLite3_result *resultset) {
 #endif
 }
 
-void ProxySQL_Restapi::flush_restapi__from_disk_to_memory() {
-	admindb->wrlock();
-	admindb->execute("DELETE FROM main.restapi_routes");
-	admindb->execute("INSERT INTO main.restapi_routes SELECT * FROM disk.restapi_routes");
-	admindb->wrunlock();
-}
-
-void ProxySQL_Restapi::flush_restapi__from_memory_to_disk() {
-	admindb->wrlock();
-	admindb->execute("DELETE FROM disk.restapi_routes");
-	admindb->execute("INSERT INTO disk.restapi_routes SELECT * FROM main.restapi_routes");
-	admindb->wrunlock();
-}
-
 void ProxySQL_Restapi::save_restapi_runtime_to_database(bool _runtime) {
 	const char *query = _runtime ? "DELETE FROM main.runtime_restapi_routes" : "DELETE FROM main.restapi_routes";
 	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);

@@ -118,6 +118,7 @@ static const vector<string> mysql_firewall_tablenames = {
 static const vector<string> mysql_query_rules_tablenames = { "mysql_query_rules", "mysql_query_rules_fast_routing" };
 static const vector<string> scheduler_tablenames = { "scheduler" };
 static const vector<string> proxysql_servers_tablenames = { "proxysql_servers" };
+static const vector<string> restapi_tablenames = { "restapi_routes" };
 
 static unordered_map<string, const vector<string>&> module_tablenames = {
 	{ "mysql_servers", mysql_servers_tablenames },
@@ -125,6 +126,7 @@ static unordered_map<string, const vector<string>&> module_tablenames = {
 	{ "mysql_query_rules", mysql_query_rules_tablenames },
 	{ "scheduler", scheduler_tablenames },
 	{ "proxysql_servers", proxysql_servers_tablenames },
+	{ "restapi", restapi_tablenames },
 };
 
 static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, const string& p2, const string& p3) {
@@ -1030,7 +1032,8 @@ bool FlushCommandWrapper(MySQL_Session *sess, const std::vector<std::string>& cm
 			msg += "from DISK to MEMORY";
 		else
 			assert(0);
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loaded mysql servers to MEMORY\n");
+		msg += "\n";
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, msg.c_str());
 #endif // DEBUG
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return true;
@@ -2005,35 +2008,8 @@ bool admin_handler_command_load_or_save(char *query_no_space, unsigned int query
 
 	if ((query_no_space_length>13) && ( (!strncasecmp("SAVE RESTAPI ", query_no_space, 13)) || (!strncasecmp("LOAD RESTAPI ", query_no_space, 13))) ) {
 
-		if (
-			(query_no_space_length==strlen("LOAD RESTAPI TO MEMORY") && !strncasecmp("LOAD RESTAPI TO MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD RESTAPI TO MEM") && !strncasecmp("LOAD RESTAPI TO MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("LOAD RESTAPI FROM DISK") && !strncasecmp("LOAD RESTAPI FROM DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->proxysql_restapi().flush_restapi__from_disk_to_memory();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Loading restapi to to MEMORY\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
+		if (FlushCommandWrapper(sess, "restapi", query_no_space, query_no_space_length) == true)
 			return false;
-		}
-
-		if (
-			(query_no_space_length==strlen("SAVE RESTAPI FROM MEMORY") && !strncasecmp("SAVE RESTAPI FROM MEMORY",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE RESTAPI FROM MEM") && !strncasecmp("SAVE RESTAPI FROM MEM",query_no_space, query_no_space_length))
-			||
-			(query_no_space_length==strlen("SAVE RESTAPI TO DISK") && !strncasecmp("SAVE RESTAPI TO DISK",query_no_space, query_no_space_length))
-		) {
-			proxy_info("Received %s command\n", query_no_space);
-			ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
-			SPA->proxysql_restapi().flush_restapi__from_memory_to_disk();
-			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Saving restapi to DISK\n");
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
-			return false;
-		}
 
 		if (
 			(query_no_space_length==strlen("LOAD RESTAPI FROM MEMORY") && !strncasecmp("LOAD RESTAPI FROM MEMORY",query_no_space, query_no_space_length))
@@ -5763,6 +5739,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	generate_load_save_disk_commands("mysql_servers",     "MYSQL SERVERS");
 	generate_load_save_disk_commands("mysql_variables",   "MYSQL VARIABLES");
 	generate_load_save_disk_commands("scheduler",         "SCHEDULER");
+	generate_load_save_disk_commands("restapi",           "RESTAPI");
 	generate_load_save_disk_commands("proxysql_servers",  "PROXYSQL SERVERS");
 
 	{
@@ -10567,8 +10544,8 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	}
 	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables");
 	BQE1(admindb, scheduler_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
-	admindb->execute("INSERT OR REPLACE INTO main.restapi_routes SELECT * FROM disk.restapi_routes");
-	admindb->execute("INSERT OR REPLACE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
+	BQE1(admindb, restapi_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
+	BQE1(admindb, proxysql_servers_tablenames, "", "INSERT OR REPLACE INTO main.", " SELECT * FROM disk.");
 #ifdef DEBUG
 	admindb->execute("INSERT OR REPLACE INTO main.debug_levels SELECT * FROM disk.debug_levels");
 	admindb->execute("INSERT OR REPLACE INTO main.debug_filters SELECT * FROM disk.debug_filters");
@@ -10622,7 +10599,8 @@ void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, mysql_firewall_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 	admindb->execute("INSERT OR REPLACE INTO disk.global_variables SELECT * FROM main.global_variables");
 	BQE1(admindb, scheduler_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
-	admindb->execute("INSERT OR REPLACE INTO disk.proxysql_servers SELECT * FROM main.proxysql_servers");
+	BQE1(admindb, restapi_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
+	BQE1(admindb, proxysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
 #ifdef DEBUG
 	admindb->execute("INSERT OR REPLACE INTO disk.debug_levels SELECT * FROM main.debug_levels");
 	admindb->execute("INSERT OR REPLACE INTO disk.debug_filters SELECT * FROM main.debug_filters");
