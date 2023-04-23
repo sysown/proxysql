@@ -1672,7 +1672,9 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				if (GloQPro) {
 					int intv = atoi(value);
 					if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
+						GloQPro->wrlock();
 						GloQPro->query_rules_fast_routing_algorithm = intv;
+						GloQPro->wrunlock();
 					}
 				}
 			}
