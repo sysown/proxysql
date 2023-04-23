@@ -31,11 +31,13 @@ class ProxySQL_Checksum_Value {
 	char *checksum;
 	unsigned long long version;
 	unsigned long long epoch;
+	bool in_shutdown;
 	ProxySQL_Checksum_Value() {
 		checksum = (char *)malloc(20);
 		memset(checksum,0,20);
 		version = 0;
 		epoch = 0;
+		in_shutdown = false;
 	}
 	void set_checksum(char *c) {
 		memset(checksum,0,20);
@@ -43,8 +45,15 @@ class ProxySQL_Checksum_Value {
 		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
-		free(checksum);
-		checksum = NULL;
+		if (in_shutdown == false) {
+			/**
+			 * @brief the in_shutdown flag is false by default, but set to true
+			 * in the destructor of ProxySQL_GlobalVariables.
+			 * See comments there for futher details.
+			 */
+			free(checksum);
+			checksum = NULL;
+		}
 	}
 };
 
@@ -125,29 +134,18 @@ class ProxySQL_GlobalVariables {
 	} statuses;
 	pthread_mutex_t checksum_mutex;
 	time_t epoch_version;
-	/**
-	 * @brief Anonymous union holding just the member 'checksums_values'.
-	 * @details This encapsulation is performed to prevent the call to 'ProxySQL_Checksum_Value' destructor for
-	 *  'checksums_values' members. These checksums memory is never freed during ProxySQL execution
-	 *  lifetime (only reused during update operations), and they are concurrently access by multiple threads,
-	 *  including during shutdown phase. Since 'GloVars' (unique instance of this class) is declared global,
-	 *  it's impossible to control de destruction order with respect to the other modules. To avoid invalid
-	 *  memory accesses during shutdown, we avoid calling the destructor of the members at all.
-	 */
-	union {
-		struct {
-			ProxySQL_Checksum_Value admin_variables;
-			ProxySQL_Checksum_Value mysql_query_rules;
-			ProxySQL_Checksum_Value mysql_servers;
-			ProxySQL_Checksum_Value mysql_users;
-			ProxySQL_Checksum_Value mysql_variables;
-			ProxySQL_Checksum_Value ldap_variables;
-			ProxySQL_Checksum_Value proxysql_servers;
-			uint64_t global_checksum;
-			unsigned long long updates_cnt;
-			unsigned long long dumped_at;
-		} checksums_values;
-	};
+	struct {
+		ProxySQL_Checksum_Value admin_variables;
+		ProxySQL_Checksum_Value mysql_query_rules;
+		ProxySQL_Checksum_Value mysql_servers;
+		ProxySQL_Checksum_Value mysql_users;
+		ProxySQL_Checksum_Value mysql_variables;
+		ProxySQL_Checksum_Value ldap_variables;
+		ProxySQL_Checksum_Value proxysql_servers;
+		uint64_t global_checksum;
+		unsigned long long updates_cnt;
+		unsigned long long dumped_at;
+	} checksums_values;
 	uint64_t generate_global_checksum();
 	ProxySQL_GlobalVariables();
 	~ProxySQL_GlobalVariables();
