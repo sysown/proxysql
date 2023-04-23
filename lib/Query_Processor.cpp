@@ -429,8 +429,13 @@ static void __delete_query_rule(QP_rule_t *qr) {
 };
 
 // delete all the query rules in a Query Processor Table
-// Note that this function is called by GloQPro with &rules (generic table)
-//     and is called by each mysql thread with _thr_SQP_rules (per thread table)
+// Note that this function is called by:
+//  - GloQPro with &rules (generic table). In Query_Processor destrutor.
+//  - Each mysql thread with _thr_SQP_rules (per thread table). During destruction or rules recreation.
+//  - ProxySQL_Admin at 'load_mysql_variables_to_runtime', during global rules recreation. For this case, the
+//    function is used outside the 'Query_Processor' due to flow present in 'load_mysql_variables_to_runtime'
+//    of freeing the previous resources associated to the 'query_rules' and 'query_rules_fast_routing' out of
+//    the 'Query_Processor' general locking ('wrlock').
 void __reset_rules(std::vector<QP_rule_t *> * qrs) {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Resetting rules in Query Processor Table %p\n", qrs);
 	if (qrs==NULL) return;
