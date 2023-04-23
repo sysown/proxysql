@@ -7536,8 +7536,8 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	rc=admindb->prepare_v2(a, &statement1);
 	ASSERT_SQLITE_OK(rc, admindb);
 	admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
-	char * username_buf = (char *)malloc(32);
-	char * schemaname_buf = (char *)malloc(64);
+	char * username_buf = (char *)malloc(128);
+	char * schemaname_buf = (char *)malloc(256);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
 	if (empty==false) {
@@ -7548,7 +7548,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	strcpy(schemaname_buf,"shard_name_");
 	int _k;
 	for (unsigned int i=0; i<cnt; i++) {
-		_k = fastrand()%20 + 1;
+		_k = fastrand()%117 + 1;
 		if (empty == false) {
 			for (int _i=0 ; _i<_k ; _i++) {
 				int b = fastrand()%10;
@@ -7556,7 +7556,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 			}
 			username_buf[10+_k]='\0';
 		}
-		_k = fastrand()%30 + 1;
+		_k = fastrand()%244+ 1;
 		for (int _i=0 ; _i<_k ; _i++) {
 			int b = fastrand()%10;
 			schemaname_buf[11+_i]='0' + b;

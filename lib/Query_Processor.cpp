@@ -932,20 +932,26 @@ SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 }
 
 int Query_Processor::search_rules_fast_routing_dest_hg(
-	khash_t(khStrInt)* _rules_fast_routing, const char* u, const char* s, int flagIN
+	khash_t(khStrInt)* _rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
 ) {
 	int dest_hg = -1;
+	const size_t u_len = strlen(u);
+	size_t keylen = u_len+strlen(rand_del)+strlen(s)+30; // 30 is a big number
+
 	char keybuf[256];
 	char * keybuf_ptr = keybuf;
-	size_t keylen = strlen(u)+strlen(rand_del)+strlen(s)+30; // 30 is a big number
-	if (keylen > 250) {
+
+	if (keylen >= sizeof(keybuf)) {
 		keybuf_ptr = (char *)malloc(keylen);
 	}
 	sprintf(keybuf_ptr,"%s%s%s---%d", u, rand_del, s, flagIN);
+
+	if (lock) {
+		pthread_rwlock_rdlock(&this->rwlock);
+	}
 	khiter_t k = kh_get(khStrInt, _rules_fast_routing, keybuf_ptr);
 	if (k == kh_end(_rules_fast_routing)) {
-		sprintf(keybuf_ptr,"%s%s---%d", rand_del, s, flagIN);
-		khiter_t k2 = kh_get(khStrInt, _rules_fast_routing, keybuf_ptr);
+		khiter_t k2 = kh_get(khStrInt, _rules_fast_routing, keybuf_ptr + u_len);
 		if (k2 == kh_end(_rules_fast_routing)) {
 		} else {
 			dest_hg = kh_val(_rules_fast_routing,k2);
@@ -953,7 +959,11 @@ int Query_Processor::search_rules_fast_routing_dest_hg(
 	} else {
 		dest_hg = kh_val(_rules_fast_routing,k);
 	}
-	if (keylen > 250) {
+	if (lock) {
+		pthread_rwlock_unlock(&this->rwlock);
+	}
+
+	if (keylen >= sizeof(keybuf)) {
 		free(keybuf_ptr);
 	}
 
@@ -2060,12 +2070,10 @@ __exit_process_mysql_query:
 
 		if (_thr_SQP_rules_fast_routing != nullptr) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			dst_hg = search_rules_fast_routing_dest_hg(_thr_SQP_rules_fast_routing, u, s, flagIN);
+			dst_hg = search_rules_fast_routing_dest_hg(_thr_SQP_rules_fast_routing, u, s, flagIN, false);
 		} else if (rules_fast_routing != nullptr) {
-			pthread_rwlock_rdlock(&this->rwlock);
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			dst_hg = search_rules_fast_routing_dest_hg(rules_fast_routing, u, s, flagIN);
-			pthread_rwlock_unlock(&this->rwlock);
+			dst_hg = search_rules_fast_routing_dest_hg(rules_fast_routing, u, s, flagIN, true);
 		}
 
 		if (dst_hg != -1) {
@@ -3191,14 +3199,8 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing_dual(
 	int ret = -1;
 	khash_t(khStrInt)* rules_fast_routing = _rules_fast_routing ? _rules_fast_routing : this->rules_fast_routing;
 
-	if (lock) {
-		pthread_rwlock_rdlock(&rwlock);
-	}
 	if (rules_fast_routing) {
-		ret = search_rules_fast_routing_dest_hg(rules_fast_routing, username, schemaname, flagIN);
-	}
-	if (lock) {
-		pthread_rwlock_unlock(&rwlock);
+		ret = search_rules_fast_routing_dest_hg(rules_fast_routing, username, schemaname, flagIN, lock);
 	}
 
 	return ret;
