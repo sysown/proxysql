@@ -54,7 +54,10 @@
 #include "platform.h"
 #include "microhttpd.h"
 
+#if (defined(__i386__) || defined(__x86_64__) || defined(__ARM_ARCH_3__) || defined(__mips__)) && defined(__linux)
+// currently only support x86-32, x86-64, ARM, and MIPS on Linux
 #include "coredumper/coredumper.h"
+#endif
 
 #include <uuid/uuid.h>
 

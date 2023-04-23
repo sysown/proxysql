@@ -56,11 +56,14 @@ endif
 
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
-ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp coredumper
-else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp coredumper
+tmpdefault=libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+ifeq ($(UNAME_S),Linux)
+  tmpdefault+= coredumper
 endif
+ifeq ($(PROXYSQLCLICKHOUSE),1)
+  tmpdefault+= clickhouse-cpp
+endif
+default: $(tmpdefault)
 .PHONY: default
 
 
