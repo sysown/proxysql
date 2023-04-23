@@ -9644,7 +9644,7 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 	int num_rows = resultset ? resultset->rows_count : digest_umap->size();
 	int max_bulk_row_idx = num_rows/32;
 	max_bulk_row_idx=max_bulk_row_idx*32;
-	auto it = resultset ? (std::unordered_map<uint64_t, void *>::iterator)NULL : digest_umap->cbegin();
+	auto it = resultset ? digest_umap->cend() : digest_umap->cbegin();
 	int i = 0;
 	// If the function do not receives a resultset, it gets the values directly from the digest_umap
 	while (resultset ? i != resultset->rows_count : it != digest_umap->end()) {
