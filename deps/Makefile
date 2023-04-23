@@ -169,9 +169,6 @@ else
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
 #	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 endif
-ifeq ($(UNAME_S),Darwin)
-	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
-endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
