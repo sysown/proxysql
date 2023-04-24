@@ -85,7 +85,7 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
  *  anonymous union.
  */
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
-	prometheus_registry(std::make_shared<prometheus::Registry>()), checksums_values()
+	prometheus_registry(std::make_shared<prometheus::Registry>()), checksums_values( {} )
 {
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;
