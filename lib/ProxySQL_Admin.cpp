@@ -13749,9 +13749,11 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_read
 			sprintf(hostnamebuf1,"hostname%d", i*10+1);
 			sprintf(hostnamebuf2,"hostname%d", i*10+2);
 			sprintf(hostnamebuf3,"hostname%d", i*10+3);
-			MyHGM->read_only_action_v2({ { std::string(hostnamebuf1), 3306, 0 },
-										 { std::string(hostnamebuf2), 3306, 1 },
-										 { std::string(hostnamebuf3), 3306, 1 } });
+			MyHGM->read_only_action_v2( std::list<read_only_server_t> {
+										read_only_server_t { std::string(hostnamebuf1), 3306, 0 },
+										read_only_server_t { std::string(hostnamebuf2), 3306, 1 },
+										read_only_server_t { std::string(hostnamebuf3), 3306, 1 }
+										} );
 		}
 	}
 	unsigned long long t2 = monotonic_time();

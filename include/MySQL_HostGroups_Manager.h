@@ -430,7 +430,7 @@ class MySQL_HostGroups_Manager {
 		__HGM_TABLES_SIZE
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { 0 };
+	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { {0} };
 
 	class HostGroup_Server_Mapping {
 	public:
