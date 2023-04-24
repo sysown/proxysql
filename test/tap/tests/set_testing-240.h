@@ -32,7 +32,9 @@ const std::vector<std::string> possible_unknown_variables = {
 	"wsrep_sync_wait",
 	"max_execution_time",
 	"optimizer_use_condition_selectivity",
-	"max_statement_time"
+	"max_statement_time",
+	"sql_generate_invisible_primary_key",
+	"sql_require_primary_key"
 	};
 
 int readTestCases(const std::string& fileName) {
