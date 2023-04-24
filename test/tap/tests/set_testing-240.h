@@ -32,6 +32,7 @@ const std::vector<std::string> possible_unknown_variables = {
 	"wsrep_sync_wait",
 	"max_execution_time",
 	"optimizer_use_condition_selectivity",
+	"max_statement_time"
 	};
 
 int readTestCases(const std::string& fileName) {
