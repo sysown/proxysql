@@ -61,7 +61,6 @@ class ProxySQL_Checksum_Value_2: public ProxySQL_Checksum_Value {
 	time_t last_changed;
 	unsigned int diff_check;
 	ProxySQL_Checksum_Value_2() {
-		ProxySQL_Checksum_Value();
 		last_changed = 0;
 		last_updated = 0;
 		diff_check = 0;

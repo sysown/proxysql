@@ -78,7 +78,9 @@ static const std::set<std::string> mysql_variables_boolean = {
 	"innodb_table_locks",
 	"sql_auto_is_null",
 	"sql_big_selects",
+	"sql_generate_invisible_primary_key",
 	"sql_log_bin",
+	"sql_require_primary_key",
 	"sql_safe_updates",
 	"unique_checks",
 };
@@ -95,6 +97,7 @@ static const std::set<std::string> mysql_variables_numeric = {
 	"max_heap_table_size",
 	"max_join_size",
 	"max_sort_length",
+	"max_statement_time",
 	"optimizer_prune_level",
 	"optimizer_search_depth",
 	"optimizer_use_condition_selectivity",

@@ -509,6 +509,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_digests_max_query_length",
 	(char *)"query_digests_grouping_limit",
 	(char *)"query_digests_groups_grouping_limit",
+	(char *)"query_rules_fast_routing_algorithm",
 	(char *)"wait_timeout",
 	(char *)"throttle_max_bytes_per_second_to_client",
 	(char *)"throttle_ratio_server_to_client",
@@ -649,25 +650,6 @@ th_metrics_map = std::make_tuple(
 			"Total number of bytes (sent|received) in frontend connections.",
 			metric_tags {
 				{ "traffic_flow", "received" }
-			}
-		),
-		// ====================================================================
-
-		// ====================================================================
-		std::make_tuple (
-			p_th_counter::client_connections_created,
-			"proxysql_client_connections_total",
-			"Total number of client connections created or failed (including improperly closed).",
-			metric_tags {
-				{ "status", "created" }
-			}
-		),
-		std::make_tuple (
-			p_th_counter::client_connections_aborted,
-			"proxysql_client_connections_total",
-			"Total number of client connections created or failed (including improperly closed).",
-			metric_tags {
-				{ "status", "aborted" }
 			}
 		),
 		// ====================================================================
@@ -1119,6 +1101,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.threshold_resultset_size=4*1024*1024;
 	variables.query_digests_max_digest_length=2*1024;
 	variables.query_digests_max_query_length=65000; // legacy default
+	variables.query_rules_fast_routing_algorithm=1;
 	variables.wait_timeout=8*3600*1000;
 	variables.throttle_max_bytes_per_second_to_client=0;
 	variables.throttle_ratio_server_to_client=0;
@@ -1666,7 +1649,16 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 					proxy_warning("'mysql-auto_increment_delay_multiplex_timeout_ms' is set to a low value: %ums. Remember value is in 'ms'\n", intv);
 				}
 			}
-
+			if (nameS == "query_rules_fast_routing_algorithm") {
+				if (GloQPro) {
+					int intv = atoi(value);
+					if (intv >= std::get<1>(it->second) && intv <= std::get<2>(it->second)) {
+						GloQPro->wrlock();
+						GloQPro->query_rules_fast_routing_algorithm = intv;
+						GloQPro->wrunlock();
+					}
+				}
+			}
 			bool special_variable = std::get<3>(it->second); // if special_variable is true, min and max values are ignored, and more input validation is needed
 			if (special_variable == false) {
 				int intv=atoi(value);
@@ -2203,6 +2195,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_digests_groups_grouping_limit"] = make_tuple(&variables.query_digests_groups_grouping_limit, 0, 2089, false);
 		VariablesPointers_int["query_digests_max_digest_length"] = make_tuple(&variables.query_digests_max_digest_length, 16, 1*1024*1024, false);
 		VariablesPointers_int["query_digests_max_query_length"]  = make_tuple(&variables.query_digests_max_query_length,  16, 1*1024*1024, false);
+		VariablesPointers_int["query_rules_fast_routing_algorithm"]  = make_tuple(&variables.query_rules_fast_routing_algorithm,  1, 2, false);
 		VariablesPointers_int["query_processor_iterations"]      = make_tuple(&variables.query_processor_iterations,       0,   1000*1000, false);
 		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);

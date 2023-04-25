@@ -205,6 +205,9 @@ int main() {
 	vars["sort_buffer_size"] = new variable("sort_buffer_size", true, true, false);
 	vars["sort_buffer_size"]->add(int_values, 40123);
 	vars["sort_buffer_size"]->add("18446744073709551615");
+	vars["max_statement_time"] = new variable("max_statement_time", true, true, false);
+	vars["max_statement_time"]->add(int_values, 12012);
+	vars["max_statement_time"]->add("0");
 	vars["max_execution_time"] = new variable("max_execution_time", true, true, false);
 	vars["max_execution_time"]->add(int_values, 12930);
 	vars["max_execution_time"]->add("0");
@@ -277,6 +280,12 @@ int main() {
 
 	vars["wsrep_osu_method"] = new variable("wsrep_osu_method", true, false, false);
 	add_values_and_quotes("wsrep_osu_method", {"TOI","RSU"});
+
+	vars["sql_require_primary_key"] = new variable("sql_require_primary_key", true, false, true);
+	vars["sql_require_primary_key"]->add(bool_values);
+
+	vars["sql_generate_invisible_primary_key"] = new variable("sql_generate_invisible_primary_key", true, false, true);
+	vars["sql_generate_invisible_primary_key"]->add(bool_values);
 /*
 example:
 "SET sql_mode='NO_ENGINE_SUBSTITUTION', sql_select_limit=3030, session_track_gtids=OWN_GTID; SET max_join_size=10000; ", "{'sql_mode':'NO_ENGINE_SUBSTITUTION','sql_select_limit':'3030', 'max_join_size':'10000', 'session_track_gtids':'OWN_GTID'}"
