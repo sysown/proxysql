@@ -3919,10 +3919,12 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			int test_n = 0;
 			int test_arg1 = 0;
 			int test_arg2 = 0;
+			int test_arg3 = -1;
+			int test_arg4 = -1;
 			int r1 = 0;
 			proxy_warning("Received PROXYSQLTEST command: %s\n", query_no_space);
 			char *msg = NULL;
-			sscanf(query_no_space+strlen("PROXYSQLTEST "),"%d %d %d", &test_n, &test_arg1, &test_arg2);
+			sscanf(query_no_space+strlen("PROXYSQLTEST "),"%d %d %d %d %d", &test_n, &test_arg1, &test_arg2, &test_arg3, &test_arg4);
 			if (test_n) {
 				switch (test_n) {
 					case 1:
@@ -4030,13 +4032,28 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						break;
 					case 14: // old algorithm
 					case 17: // perform dual lookup, with and without username
-						// verify all mysql_query_rules_fast_routing rules
+						// Allows to verify and benchmark 'mysql_query_rules_fast_routing'. Every options
+						// verifies all 'mysql_query_rules_fast_routing' rules:
+						//   - Test num: 14 old algorithm, 17 perform a dual lookup.
+						//   - arg1: 1-N Number of times the computation should be repeated.
+						//   - arg2: 1-N Number of parallel threads for the test.
+						//   - arg3: 1-0 Wether or not to acquire a read_lock before searching in the hashmap.
+						//   - arg4: 1-0 Wether or not to create thread specific hashmaps for the search.
 						if (test_arg1==0) {
 							test_arg1=1;
 						}
+						// To preserve classic mode
+						if (test_arg3 == -1) {
+							test_arg3 = 1;
+						}
+						if (test_arg4 == -1) {
+							test_arg4 = 0;
+						}
 						{
 							int ret1, ret2;
-							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(&ret1, &ret2, test_arg1, (test_n==14 ? 0 : 1));
+							bool bret = SPA->ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
+								&ret1, &ret2, test_arg1, (test_n==14 ? 0 : 1), test_arg2, test_arg3, test_arg4
+							);
 							if (bret) {
 								SPA->send_MySQL_OK(&sess->client_myds->myprot, (char *)"Verified all rules in mysql_query_rules_fast_routing", ret1);
 							} else {
@@ -7407,59 +7424,137 @@ bool ProxySQL_Admin::ProxySQL_Test___Load_MySQL_Whitelist(int *ret1, int *ret2, 
 }
 
 // if dual is not 0 , we call the new search algorithm
-bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(int *ret1, int *ret2, int cnt, int dual) {
+bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
+	int *ret1, int *ret2, int cnt, int dual, int ths, bool lock, bool maps_per_thread
+) {
+	// A thread param of '0' is equivalent to not testing
+	if (ths == 0) { ths = 1; }
 	char *q = (char *)"SELECT username, schemaname, flagIN, destination_hostgroup FROM mysql_query_rules_fast_routing ORDER BY RANDOM()";
-	char *error=NULL;
-	int cols=0;
-	int affected_rows=0;
-	SQLite3_result *resultset=NULL;
-	int matching_rows = 0;
+
 	bool ret = true;
-	admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
-	if (error) {
-		proxy_error("Error on %s : %s\n", q, error);
-		*ret1 = -1;
-		return false;
-	} else {
-		*ret2 = resultset->rows_count;
+	int matching_rows = 0;
+
+	SQLite3_result *resultset=NULL;
+	{
+		char *error=NULL;
+		int cols=0;
+		int affected_rows=0;
+		admindb->execute_statement(q, &error , &cols , &affected_rows , &resultset);
+
+		if (error) {
+			proxy_error("Error on %s : %s\n", q, error);
+			*ret1 = -1;
+			return false;
+		}
+	}
+	*ret2 = resultset->rows_count;
+
+	char *query2=(char *)"SELECT username, schemaname, flagIN, destination_hostgroup, comment FROM main.mysql_query_rules_fast_routing ORDER BY username, schemaname, flagIN";
+	SQLite3_result* resultset2 = nullptr;
+
+	if (maps_per_thread) {
+		char* error2 = nullptr;
+		int cols2 = 0;
+		int affected_rows2 = 0;
+		admindb->execute_statement(query2, &error2 , &cols2 , &affected_rows2 , &resultset2);
+
+		if (error2) {
+			proxy_error("Error on %s : %s\n", query2, error2);
+			return false;
+		}
+	}
+
+	vector<uint32_t> results(ths, 0);
+	vector<fast_routing_hashmap_t> th_hashmaps {};
+
+	if (maps_per_thread) {
+		for (uint32_t i = 0; i < ths; i++) {
+			th_hashmaps.push_back(GloQPro->create_fast_routing_hashmap(resultset2));
+		}
+	}
+
+	const auto perform_searches =
+		[&results,&dual](khash_t(khStrInt)* hashmap, SQLite3_result* resultset, uint32_t pos, bool lock) -> void
+	{
+		uint32_t matching_rows = 0;
+
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			int dest_HG = atoi(r->fields[3]);
-			int ret_HG;
-			if (dual==0) {
-				// legacy algorithm
-				ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
+			int ret_HG = -1;
+			if (dual) {
+				ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing_dual(
+					hashmap, r->fields[0], r->fields[1], atoi(r->fields[2]), lock
+				);
 			} else {
-				ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing_dual(r->fields[0], r->fields[1], atoi(r->fields[2]));
+				ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(
+					r->fields[0], r->fields[1], atoi(r->fields[2])
+				);
 			}
+
 			if (dest_HG == ret_HG) {
 				matching_rows++;
 			}
 		}
+
+		results[pos] = matching_rows;
+	};
+
+	proxy_info("Test with params - cnt: %d, threads: %d, lock: %d, maps_per_thread: %d\n", cnt, ths, lock, maps_per_thread);
+
+	unsigned long long curtime1 = monotonic_time() / 1000;
+	std::vector<std::thread> workers {};
+
+	for (uint32_t i = 0; i < ths; i++) {
+		khash_t(khStrInt)* hashmap = maps_per_thread ? th_hashmaps[i].rules_fast_routing : nullptr;
+		workers.push_back(std::thread(perform_searches, hashmap, resultset, i, lock));
 	}
-	if (matching_rows !=  resultset->rows_count) {
+
+	for (std::thread& w : workers) {
+		w.join();
+	}
+
+	matching_rows = results[0];
+	if (matching_rows != resultset->rows_count) {
 		ret = false;
 	}
 	*ret1 = matching_rows;
+
 	if (ret == true) {
 		if (cnt > 1) {
 			for (int i=1 ; i < cnt; i++) {
-				for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
-					SQLite3_row *r=*it;
-					int dest_HG = atoi(r->fields[3]);
-					int ret_HG;
-					if (dual==0) {
-						// legacy algorithm
-						ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing(r->fields[0], r->fields[1], atoi(r->fields[2]));
-					} else {
-						ret_HG = GloQPro->testing___find_HG_in_mysql_query_rules_fast_routing_dual(r->fields[0], r->fields[1], atoi(r->fields[2]));
-					}
-					assert(dest_HG==ret_HG);
+				std::vector<std::thread> workers {};
+
+				for (uint32_t i = 0; i < ths; i++) {
+					khash_t(khStrInt)* hashmap = maps_per_thread ? th_hashmaps[i].rules_fast_routing : nullptr;
+					workers.push_back(std::thread(perform_searches, hashmap, resultset, i, lock));
+				}
+
+				for (std::thread& w : workers) {
+					w.join();
 				}
 			}
 		}
 	}
+
+	unsigned long long curtime2 = monotonic_time() / 1000;
+	uint32_t total_maps_size = 0;
+
+	for (const fast_routing_hashmap_t& hashmap : th_hashmaps) {
+		total_maps_size += hashmap.rules_fast_routing___keys_values___size;
+		total_maps_size += kh_size(hashmap.rules_fast_routing) * ((sizeof(int) + sizeof(char *) + 4));
+
+		kh_destroy(khStrInt, hashmap.rules_fast_routing);
+		free(hashmap.rules_fast_routing___keys_values);
+	}
+
+	proxy_info("Test took %llums\n", curtime2 - curtime1);
+	proxy_info("Verified rows %d\n", results[0]);
+	proxy_info("Total maps size %dkb\n", total_maps_size / 1024);
+
 	if (resultset) delete resultset;
+	if (resultset2) delete resultset2;
+
 	return ret;
 }
 
@@ -7470,8 +7565,8 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	rc=admindb->prepare_v2(a, &statement1);
 	ASSERT_SQLITE_OK(rc, admindb);
 	admindb->execute("DELETE FROM mysql_query_rules_fast_routing");
-	char * username_buf = (char *)malloc(32);
-	char * schemaname_buf = (char *)malloc(64);
+	char * username_buf = (char *)malloc(128);
+	char * schemaname_buf = (char *)malloc(256);
 	//ui.username = username_buf;
 	//ui.schemaname = schemaname_buf;
 	if (empty==false) {
@@ -7482,7 +7577,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 	strcpy(schemaname_buf,"shard_name_");
 	int _k;
 	for (unsigned int i=0; i<cnt; i++) {
-		_k = fastrand()%20 + 1;
+		_k = fastrand()%117 + 1;
 		if (empty == false) {
 			for (int _i=0 ; _i<_k ; _i++) {
 				int b = fastrand()%10;
@@ -7490,7 +7585,7 @@ unsigned int ProxySQL_Admin::ProxySQL_Test___GenerateRandom_mysql_query_rules_fa
 			}
 			username_buf[10+_k]='\0';
 		}
-		_k = fastrand()%30 + 1;
+		_k = fastrand()%244+ 1;
 		for (int _i=0 ; _i<_k ; _i++) {
 			int b = fastrand()%10;
 			schemaname_buf[11+_i]='0' + b;
@@ -8849,9 +8944,6 @@ void ProxySQL_Admin::stats___memory_metrics() {
 		}
 		if (GloQPro) {
 			unsigned long long mu = GloQPro->get_rules_mem_used();
-			if (GloMTH) {
-				mu += mu * GloMTH->num_threads;
-			}
 			vn=(char *)"mysql_query_rules_memory";
 			sprintf(bu,"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
@@ -12429,11 +12521,24 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	} else if (error2) {
 		proxy_error("Error on %s : %s\n", query2, error2);
 	} else {
-		GloQPro->wrlock();
+		fast_routing_hashmap_t fast_routing_hashmap { GloQPro->create_fast_routing_hashmap(resultset2) };
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		for (int i=0; i<10; i++) {
 #endif // BENCHMARK_FASTROUTING_LOAD
+		// Computed resultsets checksums outside of critical sections
+		uint64_t hash1 = 0;
+		uint64_t hash2 = 0;
 
+		if (
+			SQLite3_query_rules_resultset == nullptr ||
+			SQLite3_query_rules_fast_routing_resultset == nullptr
+		) {
+			hash1 = resultset->raw_checksum();
+			hash2 = resultset2->raw_checksum();
+		}
+
+		unsigned long long curtime1 = monotonic_time();
+		GloQPro->wrlock();
 		// Checksums are always generated - 'admin-checksum_*' deprecated
 		{
 			pthread_mutex_lock(&GloVars.checksum_mutex);
@@ -12445,8 +12550,6 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 				SQLite3_query_rules_resultset == nullptr ||
 				SQLite3_query_rules_fast_routing_resultset == nullptr
 			) {
-				uint64_t hash1 = resultset->raw_checksum();
-				uint64_t hash2 = resultset2->raw_checksum();
 				hash1 += hash2;
 				uint32_t d32[2];
 				memcpy(&d32, &hash1, sizeof(hash1));
@@ -12484,7 +12587,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 				GloVars.checksums_values.mysql_query_rules.checksum, GloVars.checksums_values.mysql_query_rules.epoch
 			);
 		}
-		GloQPro->reset_all(false);
+		rules_mem_sts_t prev_rules_data { GloQPro->reset_all(false) };
 		QP_rule_t * nqpr;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
@@ -12553,13 +12656,30 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 #else
 		// load the original resultset and resultset2
 		GloQPro->save_query_rules(resultset);
-		GloQPro->load_fast_routing(resultset2);
+		SQLite3_result* prev_fast_routing_resultset = GloQPro->load_fast_routing(fast_routing_hashmap);
 #endif // BENCHMARK_FASTROUTING_LOAD
 		GloQPro->commit();
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		}
 #endif // BENCHMARK_FASTROUTING_LOAD
 		GloQPro->wrunlock();
+		unsigned long long curtime2 = monotonic_time();
+		unsigned long long elapsed_ms = (curtime2/1000) - (curtime1/1000);
+		if (elapsed_ms > 5) {
+			proxy_info("Query processor locked for %llums\n", curtime2 - curtime1);
+		}
+
+		// Free previous 'fast_routing' structures outside of critical section
+		{
+			delete prev_fast_routing_resultset;
+			if (prev_rules_data.rules_fast_routing) {
+				kh_destroy(khStrInt, prev_rules_data.rules_fast_routing);
+			}
+			if (prev_rules_data.rules_fast_routing___keys_values) {
+				free(prev_rules_data.rules_fast_routing___keys_values);
+			}
+			__reset_rules(&prev_rules_data.query_rules);
+		}
 	}
 	// if (resultset) delete resultset; // never delete it. GloQPro saves it
 	// if (resultset2) delete resultset2; // never delete it. GloQPro saves it
