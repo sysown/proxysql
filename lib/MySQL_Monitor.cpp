@@ -1734,7 +1734,9 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		}
 
 		if (timeout_reached == false && mmsd->interr == 0) {
-			MyHGM->read_only_action_v2({ { mmsd->hostname, mmsd->port, read_only } }); // default behavior
+			MyHGM->read_only_action_v2( std::list<read_only_server_t> {
+										read_only_server_t { mmsd->hostname, mmsd->port, read_only }
+										} ); // default behavior
 		} else {
 			char *error=NULL;
 			int cols=0;
@@ -1753,7 +1755,9 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 						// disable host
 						proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, max_failures);
 						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECKS_MISSED);
-						MyHGM->read_only_action_v2({ { mmsd->hostname, mmsd->port, read_only } }); // N timeouts reached
+						MyHGM->read_only_action_v2( std::list<read_only_server_t> {
+													read_only_server_t { mmsd->hostname, mmsd->port, read_only }
+													} ); // N timeouts reached
 					}
 					delete resultset;
 					resultset=NULL;
@@ -2778,7 +2782,9 @@ __exit_monitor_replication_lag_thread:
 				SAFE_SQLITE3_STEP2(statement);
 				rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 				rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
-				MyHGM->replication_lag_action({ {mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag} });
+				MyHGM->replication_lag_action( std::list<replication_lag_server_t> {
+												replication_lag_server_t {mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag}
+												} );
 			(*proxy_sqlite3_finalize)(statement);
 			if (mmsd->mysql_error_msg == NULL) {
 				replication_lag_success = true;
@@ -7224,7 +7230,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 
 		if (task_result == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 			//MyHGM->read_only_action_v2(mmsd->hostname, mmsd->port, read_only); // default behavior
-			mysql_servers.push_back({ mmsd->hostname, mmsd->port, read_only });
+			mysql_servers.push_back( std::tuple<std::string,int,int> { mmsd->hostname, mmsd->port, read_only });
 		} else {
 			char* error = NULL;
 			int cols = 0;
@@ -7244,7 +7250,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 						proxy_error("Server %s:%d missed %d read_only checks. Assuming read_only=1\n", mmsd->hostname, mmsd->port, max_failures);
 						MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECKS_MISSED);
 						//MyHGM->read_only_action_v2(mmsd->hostname, mmsd->port, read_only); // N timeouts reached
-						mysql_servers.push_back({ mmsd->hostname, mmsd->port, read_only });
+						mysql_servers.push_back( std::tuple<std::string,int,int> { mmsd->hostname, mmsd->port, read_only });
 					}
 					delete resultset;
 					resultset = NULL;
@@ -7665,7 +7671,7 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 		rc = (*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mmsd->mondb);
 		//MyHGM->replication_lag_action(mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag);
 		(*proxy_sqlite3_finalize)(statement);
-		mysql_servers.push_back({ mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag });
+		mysql_servers.push_back( std::tuple<int,std::string,int,int> { mmsd->hostgroup_id, mmsd->hostname, mmsd->port, repl_lag });
 	}
 
 	//executing replication lag action
