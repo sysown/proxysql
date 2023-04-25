@@ -77,15 +77,26 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 		free(ldap_auth_plugin);
 		ldap_auth_plugin = NULL;
 	}
+	/**
+	 * @brief set in_shutdown flag just the member 'checksums_values'.
+	 * @details This is performed to prevent the free() inside the 'ProxySQL_Checksum_Value' destructor for
+	 *  'checksums_values' members. These checksums memory is never freed during ProxySQL execution
+	 *  lifetime (only reused during update operations), and they are concurrently access by multiple threads,
+	 *  including during shutdown phase. Since 'GloVars' (unique instance of this class) is declared global,
+	 *  it's impossible to control de destruction order with respect to the other modules. To avoid invalid
+	 *  memory accesses during shutdown, we avoid calling free() inside the destructor of the members.
+	 */
+	checksums_values.admin_variables.in_shutdown = true;
+	checksums_values.mysql_query_rules.in_shutdown = true;
+	checksums_values.mysql_servers.in_shutdown = true;
+	checksums_values.mysql_users.in_shutdown = true;
+	checksums_values.mysql_variables.in_shutdown = true;
+	checksums_values.ldap_variables.in_shutdown = true;
+	checksums_values.proxysql_servers.in_shutdown = true;
 };
 
-/**
- * @brief ProxySQL_GlobalVariables constructor
- * @details 'checksums_values' constructor is required to be explicitly called as it's encapsulated in a
- *  anonymous union.
- */
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
-	prometheus_registry(std::make_shared<prometheus::Registry>()), checksums_values()
+	prometheus_registry(std::make_shared<prometheus::Registry>())
 {
 	confFile=NULL;
 	__cmd_proxysql_config_file=NULL;
