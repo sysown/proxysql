@@ -10,6 +10,7 @@ endif
 
 DEPS_PATH=../deps
 
+UNAME_S := $(shell uname -s)
 
 MARIADB_PATH=$(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR=$(MARIADB_PATH)/include
@@ -41,8 +42,11 @@ LIBHTTPSERVER_IDIR=-I$(LIBHTTPSERVER_DIR)/src
 MICROHTTPD_DIR=$(DEPS_PATH)/libmicrohttpd/libmicrohttpd
 MICROHTTPD_IDIR=-I$(MICROHTTPD_DIR) -I$(MICROHTTPD_DIR)/src/include
 
+COREDUMPER_DIR=$(DEPS_PATH)/coredumper/coredumper
+COREDUMPER_IDIR=$(COREDUMPER_DIR)/include
+
 CURL_DIR=$(DEPS_PATH)/curl/curl
-CURL_IDIR=-I$(CURL_DIR)/include
+CURL_IDIR=$(CURL_DIR)/include
 
 SSL_DIR=$(DEPS_PATH)/libssl/openssl/
 SSL_IDIR=$(SSL_DIR)/include
@@ -57,8 +61,10 @@ PROMETHEUS_LDIR=$(PROMETHEUS_PATH)/lib
 
 IDIR=../include
 
-IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) -I$(CLICKHOUSE_CPP_DIR)/contrib/ $(MICROHTTPD_IDIR) $(LIBHTTPSERVER_IDIR) $(LIBINJECTION_IDIR) $(CURL_IDIR) -I$(EV_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR)
-
+IDIRS=-I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(RE2_IDIR) -I$(SQLITE3_DIR) -I$(PCRE_PATH) -I/usr/local/include -I$(CLICKHOUSE_CPP_DIR) -I$(CLICKHOUSE_CPP_DIR)/contrib/ $(MICROHTTPD_IDIR) $(LIBHTTPSERVER_IDIR) $(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_DIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR)
+ifeq ($(UNAME_S),Linux)
+	IDIRS+= -I$(COREDUMPER_IDIR)
+endif
 LDIRS=-L$(JEMALLOC_PATH)/lib -L$(RE2_PATH)/obj -L$(INJECTION_PATH) -L$(PROMETHEUS_LDIR)
 
 #LIBS=-rdynamic -Wl,-Bstatic -ljemalloc_pic -lre2 -Wl,-Bdynamic -ldl -lpthread -lm -lz -lrt $(EXTRALINK)
@@ -94,8 +100,6 @@ WGCOV=-DWITHGCOV --coverage -lgcov
 else
 WGCOV=
 endif
-
-UNAME_S := $(shell uname -s)
 
 
 # determine good compiler version for stdc++17

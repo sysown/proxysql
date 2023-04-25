@@ -3795,7 +3795,7 @@ unique_ptr<MySQL_Thread> init_mysql_thread_struct() {
 	return mysql_thr;
 }
 
-struct thread_info_t {
+struct mon_thread_info_t {
 	pthread_t pthread;
 	uint32_t writer_hg;
 };
@@ -3924,18 +3924,18 @@ void* monitor_GR_thread_HG(void *arg) {
 /**
  * @brief Creates a monitoring thread for each 'GroupReplication' cluster determined by writer hostgroups.
  * @param writer_hgs The writer hostgroups to use when creating the threads.
- * @return A vector of 'thread_info_t' holding info of the created threads.
+ * @return A vector of 'mon_thread_info_t' holding info of the created threads.
  */
-vector<thread_info_t> create_group_replication_worker_threads(const set<uint32_t>& writer_hgs) {
+vector<mon_thread_info_t> create_group_replication_worker_threads(const set<uint32_t>& writer_hgs) {
 	proxy_info("Activating Monitoring of %lu Group Replication clusters\n", writer_hgs.size());
 
-	vector<thread_info_t> threads_info {};
+	vector<mon_thread_info_t> threads_info {};
 
 	for (const uint32_t writer_hg : writer_hgs) {
 		threads_info.push_back({pthread_t {}, writer_hg});
 	}
 
-	for (thread_info_t& thread_info : threads_info) {
+	for (mon_thread_info_t& thread_info : threads_info) {
 		proxy_info("Starting Monitor thread for Group Replication writer HG %u\n", thread_info.writer_hg);
 		int err = pthread_create(&thread_info.pthread, NULL, monitor_GR_thread_HG, &thread_info.writer_hg);
 
@@ -3963,7 +3963,7 @@ void* MySQL_Monitor::monitor_group_replication_2() {
 	unique_ptr<MySQL_Thread> mysql_thr { init_mysql_thread_struct() };
 
 	// Info of the current GR monitoring threads: handle + writer_hg
-	vector<thread_info_t> threads_info {};
+	vector<mon_thread_info_t> threads_info {};
 
 	while (GloMyMon->shutdown == false && mysql_thread___monitor_enabled == true) {
 		// Quick exit during shutdown/restart
@@ -3988,7 +3988,7 @@ void* MySQL_Monitor::monitor_group_replication_2() {
 
 			// Wait for the threads to terminate; Threads should exit on config change
 			if (threads_info.empty() == false) {
-				for (const thread_info_t& thread_info : threads_info) {
+				for (const mon_thread_info_t& thread_info : threads_info) {
 					pthread_join(thread_info.pthread, NULL);
 					proxy_info("Stopped Monitor thread for Group Replication writer HG %u\n", thread_info.writer_hg);
 				}
