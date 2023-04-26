@@ -496,11 +496,20 @@ int MySQL_Data_Stream::read_from_net() {
 	if (encrypted) {
 		//proxy_info("Entering\n");
 	}
-	if ((revents & POLLIN)==0) return 0;
-	if (revents & POLLHUP) {
+	if ( (revents & POLLHUP) && ((revents & POLLIN)==0) ) {
+		// Previously this was (revents & POLLHUP) , but now
+		// we call shut_soft() only if POLLIN is not set .
+		//
+		// This means that if we receive data (POLLIN) we process it
+		// temporarily ignoring POLLHUP .
+		// In this way we can intercept a COM_QUIT executed by the client
+		// before closing the socket
 		shut_soft();
 		return -1;
 	}
+	// this check was moved after the previous one about POLLHUP,
+	// otherwise the previous check was never true
+	if ((revents & POLLIN)==0) return 0;
 
 	int r=0;
 	int s=queue_available(queueIN);

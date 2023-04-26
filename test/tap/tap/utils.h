@@ -7,9 +7,11 @@
 #include <random>
 #include <fstream>
 #include <sstream>
+#include <regex>
 
-#include <curl/curl.h>
+#include "curl/curl.h"
 #include <mysql.h>
+#include "sqlite3db.h"
 
 #include "command_line.h"
 
@@ -440,5 +442,80 @@ int configure_endpoints(
  * @return Number of matches of the 'substr' in the provided string.
  */
 std::size_t count_matches(const std::string& str, const std::string& substr);
+
+/**
+ * @brief Extracts the current 'sqliteserver-mysql_ifaces' from ProxySQL config.
+ * @param proxysql_admin An already opened connection to ProxySQL Admin.
+ * @param host_port Output param to hold the host and port of the current 'sqliteserver-mysql_ifaces'.
+ * @return EXIT_SUCCESS for success, EXIT_FAILURE otherwise. Error cause is logged.
+ */
+int extract_sqlite3_host_port(MYSQL* admin, std::pair<std::string, int>& host_port);
+
+/**
+ * @brief Split the supplied string with the supplied delimiter.
+ * @param s The string to be split.
+ * @param delimiter The delimiter to use for splitting the string.
+ * @return String splits.
+ */
+std::vector<std::string> split(const std::string& s, char delim);
+
+/**
+ * @brief Gets the supplied environmental variable as a std::string.
+ * @param var The variable to value to extract.
+ * @return The variable value if present, an empty string if not found.
+ */
+std::string get_env(const std::string& var);
+
+/**
+ * @brief Opens the file in the supplied path in the provided stream, and seeks the end of it.
+ * @param f_path Path to the file to open.
+ * @param f_logfile Output parameter with the stream to be updated with the oppened file.
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise. Error casuse is logged.
+ */
+int open_file_and_seek_end(const std::string& f_path, std::fstream& f_stream);
+
+using line_match_t = std::tuple<std::fstream::pos_type, std::string, std::smatch>;
+enum LINE_MATCH_T { POS, LINE, MATCHES };
+
+/**
+ * @brief Extracts the lines matching the regex from the supplied stream till reaching EOF.
+ * @param f_stream The stream to be matched with the regex.
+ * @param regex The regex used to match the stream line-by-line.
+ * @return All the lines found matching the regex.
+ */
+std::vector<line_match_t> get_matching_lines(std::fstream& f_stream, const std::string& regex);
+
+/**
+ * @brief Opens a sqlite3 db file located in the supplied path with the provided flags.
+ * @param f_path Path to the 'db' file.
+ * @param db Output parameter to the sqlite3 object to be opened.
+ * @param flags The flags used to open the file.
+ * @return EXIT_SUCCESS in case of success, EXIT_FAILURE otherwise. Error cause is logged.
+ */
+int open_sqlite3_db(const std::string& f_path, sqlite3** db, int flags);
+
+using sq3_col_def_t = std::string;
+using sq3_row_t = std::vector<std::string>;
+using sq3_err_t = std::string;
+using sq3_res_t = std::tuple<std::vector<sq3_col_def_t>,std::vector<sq3_row_t>,int64_t,sq3_err_t>;
+
+enum SQ3_RES_T {
+	SQ3_COLUMNS_DEF,
+	SQ3_ROWS,
+	SQ3_AFFECTED_ROWS,
+	SQ3_ERR
+};
+
+/**
+ * @brief Executes the provided query in the supplied sqlite3 db object.
+ * @param db Already initialized 'sqlite3' handler.
+ * @param query The query to be executed.
+ * @return An 'sq3_result_t' object holding the result, depending on the type of query and result, different
+ *  fields will be populated, in case of success:
+ *   - For DQL stmts COLUMN_DEF and ROWS will hold the columns definitions and the rows from the resultset.
+ *   - For DML stmts the AFFECTED_ROWS will show the number of modified rows.
+ *  In case of failure, ERR field will be populated and others will remain empty.
+ */
+sq3_res_t sqlite3_execute_stmt(sqlite3* db, const std::string& query);
 
 #endif // #define UTILS_H

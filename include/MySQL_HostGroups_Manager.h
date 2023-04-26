@@ -380,6 +380,34 @@ struct hg_metrics_map_idx {
 	};
 };
 
+/**
+ * @brief Required server info for the read_only Monitoring actions and replication_lag Monitoring actions.
+ */
+using hostgroupid_t = int;
+using hostname_t = std::string;
+using address_t = std::string;
+using port_t = unsigned int;
+using read_only_t = int;
+using current_replication_lag = int;
+
+using read_only_server_t = std::tuple<hostname_t,port_t,read_only_t>;
+using replication_lag_server_t = std::tuple<hostgroupid_t,address_t,port_t,current_replication_lag>;
+
+enum READ_ONLY_SERVER_T {
+	ROS_HOSTNAME = 0,
+	ROS_PORT,
+	ROS_READONLY,
+	ROS__SIZE
+};
+
+enum REPLICATION_LAG_SERVER_T {
+	RLS_HOSTGROUP_ID = 0,
+	RLS_ADDRESS,
+	RLS_PORT,
+	RLS_CURRENT_REPLICATION_LAG,
+	RLS__SIZE
+};
+
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -405,7 +433,7 @@ class MySQL_HostGroups_Manager {
 		__HGM_TABLES_SIZE
 	};
 
-	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { 0 };
+	std::array<uint64_t, __HGM_TABLES_SIZE> table_resultset_checksum { {0} };
 
 	class HostGroup_Server_Mapping {
 	public:
@@ -761,10 +789,10 @@ class MySQL_HostGroups_Manager {
 	void push_MyConn_to_pool_array(MySQL_Connection **, unsigned int);
 	void destroy_MyConn_from_pool(MySQL_Connection *, bool _lock=true);	
 
-	void replication_lag_action_inner(MyHGC *, char*, unsigned int, int);
-	void replication_lag_action(int, char*, unsigned int, int);
+	void replication_lag_action_inner(MyHGC *, const char*, unsigned int, int);
+	void replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers);
 	void read_only_action(char *hostname, int port, int read_only);
-	void read_only_action_v2(const std::list<std::tuple<std::string,int,int>>& mysql_servers);
+	void read_only_action_v2(const std::list<read_only_server_t>& mysql_servers);
 	unsigned int get_servers_table_version();
 	void wait_servers_table_version(unsigned, unsigned);
 	bool shun_and_killall(char *hostname, int port);

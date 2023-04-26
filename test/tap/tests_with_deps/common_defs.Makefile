@@ -80,7 +80,7 @@ LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PAT
 	  -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR)\
 	  -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lmariadbclient -lcurl -lssl -lcrypto -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lmariadbclient -lcurl -lssl -lcrypto -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lsqlite3
 STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 
 # Root directory for the deps used for testing purposes

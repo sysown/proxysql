@@ -31,11 +31,13 @@ class ProxySQL_Checksum_Value {
 	char *checksum;
 	unsigned long long version;
 	unsigned long long epoch;
+	bool in_shutdown;
 	ProxySQL_Checksum_Value() {
 		checksum = (char *)malloc(20);
 		memset(checksum,0,20);
 		version = 0;
 		epoch = 0;
+		in_shutdown = false;
 	}
 	void set_checksum(char *c) {
 		memset(checksum,0,20);
@@ -43,8 +45,15 @@ class ProxySQL_Checksum_Value {
 		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
-		free(checksum);
-		checksum = NULL;
+		if (in_shutdown == false) {
+			/**
+			 * @brief the in_shutdown flag is false by default, but set to true
+			 * in the destructor of ProxySQL_GlobalVariables.
+			 * See comments there for futher details.
+			 */
+			free(checksum);
+			checksum = NULL;
+		}
 	}
 };
 

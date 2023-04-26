@@ -42,15 +42,6 @@ static unsigned long long array_mysrvc_cands = 0;
   } while (rc!=SQLITE_DONE);\
 } while (0)
 
-#define SAFE_SQLITE3_STEP2(_stmt) do {\
-	do {\
-		rc=(*proxy_sqlite3_step)(_stmt);\
-		if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
-			usleep(100);\
-		}\
-	} while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
-} while (0)
-
 extern ProxySQL_Admin *GloAdmin;
 
 extern MySQL_Threads_Handler *GloMTH;
@@ -3835,7 +3826,7 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	myhgc->mysrvs->add(mysrvc);
 }
 
-void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, char *address, unsigned int port, int current_replication_lag) {
+void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const char *address, unsigned int port, int current_replication_lag) {
 	int j;
 	for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
@@ -3887,23 +3878,42 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, char *
 	}
 }
 
-void MySQL_HostGroups_Manager::replication_lag_action(int _hid, char *address, unsigned int port, int current_replication_lag) {
-	GloAdmin->mysql_servers_wrlock();
+void MySQL_HostGroups_Manager::replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers) {
+
+	//this method does not use admin table, so this lock is not needed. 
+	//GloAdmin->mysql_servers_wrlock();
+	unsigned long long curtime1 = monotonic_time();
 	wrlock();
-	if (mysql_thread___monitor_replication_lag_group_by_host == false) {
-		// legacy check. 1 check per server per hostgroup
-		MyHGC *myhgc = MyHGC_find(_hid);
-		replication_lag_action_inner(myhgc,address,port,current_replication_lag);
-	} else {
-		// only 1 check per server, no matter the hostgroup
-		// all hostgroups must be searched
-		for (unsigned int i=0; i<MyHostGroups->len; i++) {
-			MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
-			replication_lag_action_inner(myhgc,address,port,current_replication_lag);
+
+	for (const auto& server : mysql_servers) {
+
+		const int hid = std::get<REPLICATION_LAG_SERVER_T::RLS_HOSTGROUP_ID>(server);
+		const std::string& address = std::get<REPLICATION_LAG_SERVER_T::RLS_ADDRESS>(server);
+		const unsigned int port = std::get<REPLICATION_LAG_SERVER_T::RLS_PORT>(server);
+		const int current_replication_lag = std::get<REPLICATION_LAG_SERVER_T::RLS_CURRENT_REPLICATION_LAG>(server);
+
+		if (mysql_thread___monitor_replication_lag_group_by_host == false) {
+			// legacy check. 1 check per server per hostgroup
+			MyHGC *myhgc = MyHGC_find(hid);
+			replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
+		}
+		else {
+			// only 1 check per server, no matter the hostgroup
+			// all hostgroups must be searched
+			for (unsigned int i=0; i<MyHostGroups->len; i++) {
+				MyHGC*myhgc=(MyHGC*)MyHostGroups->index(i);
+				replication_lag_action_inner(myhgc,address.c_str(),port,current_replication_lag);
+			}
 		}
 	}
+
 	wrunlock();
-	GloAdmin->mysql_servers_wrunlock();
+	//GloAdmin->mysql_servers_wrunlock();
+
+	unsigned long long curtime2 = monotonic_time();
+	curtime1 = curtime1 / 1000;
+	curtime2 = curtime2 / 1000;
+	proxy_debug(PROXY_DEBUG_MONITOR, 7, "MySQL_HostGroups_Manager::replication_lag_action() locked for %llums (server count:%ld)\n", curtime2 - curtime1, mysql_servers.size());
 }
 
 /**
@@ -4990,18 +5000,17 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
  * @param mysql_servers List of servers having hostname, port and read only value.
  * 
  */
-void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<std::string,int,int>>& mysql_servers) {
+void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers) {
 
-	std::string hostname;
-	int port = -1;
-	int read_only = -1;
 	bool update_mysql_servers_table = false;
 
 	unsigned long long curtime1 = monotonic_time();
 	wrlock();
 	for (const auto& server : mysql_servers) {
 		bool is_writer = false;
-		std::tie(hostname, port, read_only) = server;
+		const std::string& hostname = std::get<READ_ONLY_SERVER_T::ROS_HOSTNAME>(server);
+		const int port = std::get<READ_ONLY_SERVER_T::ROS_PORT>(server);
+		const int read_only = std::get<READ_ONLY_SERVER_T::ROS_READONLY>(server);
 		const std::string& srv_id = hostname + ":::" + std::to_string(port);
 		
 		auto itr = hostgroup_server_mapping.find(srv_id);
@@ -5028,11 +5037,8 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 				proxy_debug(PROXY_DEBUG_MONITOR, 5, "Server '%s:%d' found with 'read_only=0', but not found as writer\n", hostname.c_str(), port);
 				host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
-				if (mysql_thread___monitor_writer_is_also_reader) {
-					// server is also a reader, we copy all nodes from writer to reader (previous reader nodes will be reused)
-					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
-				} else {
-					// server can only be a writer
+				if (mysql_thread___monitor_writer_is_also_reader == false) {
+					// remove node from reader
 					host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
 				}
 
@@ -5077,11 +5083,8 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<std::tuple<st
 					// copy all reader nodes to writer
 					host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::WRITER, HostGroup_Server_Mapping::Type::READER);
 
-					if (mysql_thread___monitor_writer_is_also_reader) {
-						// server is also a reader, we copy all nodes from writer to reader (previous reader nodes will be reused)
-						host_server_mapping->copy_if_not_exists(HostGroup_Server_Mapping::Type::READER, HostGroup_Server_Mapping::Type::WRITER);
-					} else {
-						// server can only be a writer
+					if (mysql_thread___monitor_writer_is_also_reader == false) {
+						// remove node from reader
 						host_server_mapping->clear(HostGroup_Server_Mapping::Type::READER);
 					}
 
@@ -8115,7 +8118,7 @@ MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, srv->status, srv, hostgroup_id);
 
 	MySrvC* new_srv = new MySrvC(srv->address, srv->port, srv->gtid_port, srv->weight, srv->status, srv->compression,
-		srv->max_connections, srv->max_replication_lag, srv->use_ssl, srv->max_latency_us, srv->comment);
+		srv->max_connections, srv->max_replication_lag, srv->use_ssl, (srv->max_latency_us/1000), srv->comment);
 
 	hostgroup_container->mysrvs->add(new_srv);
 

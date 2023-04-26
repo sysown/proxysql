@@ -38,6 +38,15 @@ jobs:
         
         Status : **Build in progress**
         EOF
+
+    - name: Clean repo
+      uses: appleboy/ssh-action@v0.1.8
+      with:
+        host: ${{ secrets.REPO_HOST }}
+        username: ${{ secrets.REPO_USER }}
+        key: ${{ secrets.REPO_PRIVATE_KEY }}
+        script: |
+          ls -1 ${{ secrets.REPO_TARGET }} | sort -rV | tail +11 | xargs -n1 rm -rf
     
   build:
     runs-on: ubuntu-22.04
@@ -77,7 +86,7 @@ jobs:
       uses: actions/checkout@v3
       with:
         repository: 'sysown/proxysql'
-        ref: 'v2.x'
+#        ref: 'v2.x'
         fetch-depth: 0
       
     - name: Set GIT_VERSION
@@ -97,6 +106,7 @@ jobs:
         GH-Action Package-Build on PR merge into v2.x
         
         Updated : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
+
         Status : **Build in progress**
         EOF
         fi      
@@ -107,16 +117,16 @@ jobs:
         echo "BIN_PKG=$(ls -1 binaries/*[mb])" >> $GITHUB_ENV
         echo "BIN_HASH=$(ls -1 binaries/*.id-hash)" >> $GITHUB_ENV
     
-#    - name: Deploy to Repo
-#      uses: easingthemes/ssh-deploy@main
-#      env:
-#          SSH_PRIVATE_KEY: ${{ secrets.REPO_PRIVATE_KEY }}
-#          ARGS: "-aic"
-#         SOURCE: ${{ env.BIN_PKG }}
-#          REMOTE_HOST: ${{ secrets.REPO_HOST }}
-#          REMOTE_USER: ${{ secrets.REPO_USER }}
-#          TARGET: ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}/
-#          EXCLUDE: binaries/.gitignore
+    - name: Deploy to Repo
+      uses: easingthemes/ssh-deploy@main
+      env:
+          SSH_PRIVATE_KEY: ${{ secrets.REPO_PRIVATE_KEY }}
+          ARGS: "-aic"
+          SOURCE: ${{ env.BIN_PKG }}
+          REMOTE_HOST: ${{ secrets.REPO_HOST }}
+          REMOTE_USER: ${{ secrets.REPO_USER }}
+          TARGET: ${{ secrets.REPO_TARGET }}/binaries-${{ env.GIT_VERSION }}/
+          EXCLUDE: binaries/.gitignore
     
     - name: Push packages
       env:
@@ -151,7 +161,7 @@ jobs:
         
         Finished : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
         
-        Status : **Build in finished**
+        Status : **Build is finished**
         
         [![Package-Build](https://github.com/${{ github.repository }}/actions/workflows/package-build.yml/badge.svg)](https://github.com/${{ github.repository }}/actions/workflows/package-build.yml)
         

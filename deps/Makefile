@@ -56,11 +56,14 @@ endif
 
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
-ifeq ($(PROXYSQLCLICKHOUSE),1)
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre clickhouse-cpp lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
-else
-default: libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+tmpdefault=libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+ifeq ($(UNAME_S),Linux)
+  tmpdefault+= coredumper
 endif
+ifeq ($(PROXYSQLCLICKHOUSE),1)
+  tmpdefault+= clickhouse-cpp
+endif
+default: $(tmpdefault)
 .PHONY: default
 
 
@@ -82,6 +85,11 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 
+BIO_MATCH := $(shell ./libssl/verify-bio_st-match.sh \&>/dev/null; echo $$?)
+ifneq ($(BIO_MATCH),0)
+$(error Incompatible OpenSSL version: struct bio_st mismatch!)
+endif
+
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
@@ -92,6 +100,7 @@ libssl/openssl/libssl.a:
 	cd libssl/openssl && ln -s . lib # curl wants this path
 
 libssl: libssl/openssl/libssl.a
+
 
 MIN_VERSION := 4.9.0
 GCC_VERSION := $(shell gcc -dumpversion)
@@ -131,12 +140,21 @@ libev/libev/.libs/libev.a:
 ev: libev/libev/.libs/libev.a
 
 
+coredumper/coredumper/src/libcoredumper.a:
+	cd coredumper && rm -rf coredumper-*/ || true
+	cd coredumper && tar -zxf coredumper-*.tar.gz
+	cd coredumper/coredumper && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
+	cd coredumper/coredumper && CC=${CC} CXX=${CXX} ${MAKE}
+coredumper: coredumper/coredumper/src/libcoredumper.a
+
 curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && rm -rf curl-*/ || true
 	cd curl && tar -zxf curl-*.tar.gz
 #	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
-#	cd curl/curl && patch configure < ../configure.patch
 	cd curl/curl && autoreconf -fi
+ifeq ($(UNAME_S),Darwin)
+	cd curl/curl && patch configure < ../configure.patch
+endif
 	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
 
 curl: curl/curl/lib/.libs/libcurl.a
@@ -152,9 +170,6 @@ else
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.75 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
 #	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
-endif
-ifeq ($(UNAME_S),Darwin)
-	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/mhd_sockets.c < ../mhd_sockets.c-issue-5977.patch
 endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -358,5 +373,6 @@ cleanall:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
 	cd cityhash && rm -rf cityhash-*/ || true
+	cd coredumper && rm -rf coredumper-*/ || true
 .PHONY: cleanall
 
