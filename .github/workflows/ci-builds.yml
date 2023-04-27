@@ -47,6 +47,7 @@ jobs:
     
     - name: Cache build
       id: cache
+      if: ${{ matrix.dist == '-tap' }}
       uses: actions/cache@v3
       with:
 #        key: ${{ github.workflow }}_${{ matrix.dist }}${{ matrix.type }}_${{ env.GIT_VERSION }}
@@ -73,6 +74,7 @@ jobs:
 #        echo "GIT_VERSION=${GIT_VERSION}" >> $GITHUB_ENV
         
     - name: Build
+      id: build
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
       run: |
         cd proxysql/
@@ -82,18 +84,18 @@ jobs:
           make ${{ matrix.dist }}-dbg
           # build tap tests
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make build_tap_test_debug WITHGCOV=1'" docker-compose.yml
-          make ${{ matrix.dist }}-dbg
+          make ${{ matrix.dist }}-dbg | tee ../build.log
         elif [[ "${{ matrix.type }}" =~ "-test" ]]; then
           TYPE=${{ matrix.type }}
           # build TYPE
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make ${TYPE#-}'" docker-compose.yml
-          make ${{ matrix.dist }}
+          make ${{ matrix.dist }} | tee ../build.log
         else
-          make ${{ matrix.dist }}${{ matrix.type }}
+          make ${{ matrix.dist }}${{ matrix.type }} | tee ../build.log
         fi
         
-    - name: Check
+    - name: Check build
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
       run: |
-        ls -l proxysql/src
+        grep 'exited with code 0' build.log
         
