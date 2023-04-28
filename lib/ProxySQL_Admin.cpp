@@ -12521,7 +12521,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 	} else if (error2) {
 		proxy_error("Error on %s : %s\n", query2, error2);
 	} else {
-		fast_routing_hashmap_t fast_routing_hashmap { GloQPro->create_fast_routing_hashmap(resultset2) };
+		fast_routing_hashmap_t fast_routing_hashmap( GloQPro->create_fast_routing_hashmap(resultset2) );
 #ifdef BENCHMARK_FASTROUTING_LOAD
 		for (int i=0; i<10; i++) {
 #endif // BENCHMARK_FASTROUTING_LOAD
@@ -12587,7 +12587,7 @@ char* ProxySQL_Admin::load_mysql_query_rules_to_runtime(SQLite3_result* SQLite3_
 				GloVars.checksums_values.mysql_query_rules.checksum, GloVars.checksums_values.mysql_query_rules.epoch
 			);
 		}
-		rules_mem_sts_t prev_rules_data { GloQPro->reset_all(false) };
+		rules_mem_sts_t prev_rules_data( GloQPro->reset_all(false) );
 		QP_rule_t * nqpr;
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
