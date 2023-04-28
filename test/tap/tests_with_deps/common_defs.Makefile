@@ -10,7 +10,6 @@ MARIADB_LDIR=$(MARIADB_PATH)/libmariadb
 JEMALLOC_PATH=$(DEPS_PATH)/jemalloc/jemalloc
 JEMALLOC_IDIR=$(JEMALLOC_PATH)/include/jemalloc
 
-SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
 JSON_IDIR=$(DEPS_PATH)/json
 
 RE2_PATH=$(DEPS_PATH)/re2/re2
