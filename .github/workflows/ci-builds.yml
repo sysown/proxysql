@@ -73,6 +73,10 @@ jobs:
 #        echo "GIT_VERSION=${GIT_VERSION}"
 #        echo "GIT_VERSION=${GIT_VERSION}" >> $GITHUB_ENV
         
+    - name: hot fix include
+      run: |
+        sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
+        
     - name: Build
       id: build
       if: ${{ steps.cache.outputs.cache-hit != 'true' }}
