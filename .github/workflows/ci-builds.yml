@@ -76,6 +76,7 @@ jobs:
     - name: hot fix include
       run: |
         sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
+        cat proxysql/test/tap/tests/Makefile
         
     - name: Build
       id: build
