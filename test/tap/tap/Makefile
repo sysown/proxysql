@@ -1,22 +1,24 @@
 DEPS_PATH=../../../deps
 
 JSON_IDIR=$(DEPS_PATH)/json
+
 MARIADB_PATH=$(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR=$(MARIADB_PATH)/include
 MARIADB_LDIR=$(MARIADB_PATH)/libmariadb
-CURL_DIR=$(DEPS_PATH)/curl/curl
-CURL_IDIR=$(CURL_DIR)/include
-CURL_LDIR=$(CURL_DIR)/lib/.libs
 
 CURL_DIR=$(DEPS_PATH)/curl/curl
 CURL_IDIR=$(CURL_DIR)/include
 CURL_LDIR=$(CURL_DIR)/lib/.libs
+
+SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
+SQLITE3_IDIR=$(SQLITE3_DIR)
+SQLITE3_LDIR=$(SQLITE3_DIR)
 
 IDIR=../../../include
 LDIR=../../../lib
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
-INCLUDEDIRS=-I$(IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -I${CURL_IDIR}
+INCLUDEDIRS=-I$(IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR}
 
 .PHONY: all
 all: libtap.a
