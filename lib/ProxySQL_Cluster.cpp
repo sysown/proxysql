@@ -3205,7 +3205,7 @@ void ProxySQL_Cluster_Nodes::get_peer_to_sync_mysql_servers_v2(char** host, uint
 		if (v->version > 1) {
 			if (v->epoch > epoch) {
 				max_epoch = v->epoch;
-				if (v->diff_check > diff_ms) {
+				if (v->diff_check >= diff_ms) {
 					epoch = v->epoch;
 					version = v->version;
 					if (mysql_servers_v2_checksum) {

@@ -502,7 +502,7 @@ int update_proxysql_servers(const CommandLine& cl, MYSQL* admin) {
 const vector<sync_payload_t> module_sync_payloads {
 	{
 		update_mysql_servers,
-		"mysql_servers",
+		"mysql_servers_v2",
 		"admin-cluster_mysql_servers_diffs_before_sync",
 	},
 	{
@@ -2156,6 +2156,7 @@ int main(int, char**) {
 			std::make_tuple("admin-cluster_mysql_variables_save_to_disk"       , "true"                      ),
 			std::make_tuple("admin-cluster_proxysql_servers_diffs_before_sync" , "4"                         ),
 			std::make_tuple("admin-cluster_proxysql_servers_save_to_disk"      , "true"                      ),
+			std::make_tuple("admin-cluster_mysql_servers_sync_algorithm"       , "1"						 ),
 		//	std::make_tuple("admin-cluster_username"                           , ""                          ), Known issue, can't clear
 		//	std::make_tuple("admin-cluster_password"                           , ""                          ), Known issue, can't clear
 		//	std::make_tuple("admin-debug"                                      , "false"                     ), Should not be synced
