@@ -137,14 +137,14 @@ jobs:
         # gh release upload v2.x-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
         gh release upload v2.x-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
     
-    - name: Archive artifacts
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: binaries-${{ env.GIT_VERSION }}
-        path: |
-          ./binaries/
-          !./**/.gitignore
+#    - name: Archive artifacts
+#      if: always()
+#      uses: actions/upload-artifact@v3
+#      with:
+#        name: binaries-${{ env.GIT_VERSION }}
+#        path: |
+#          ./binaries/
+#          !./**/.gitignore
     
   finalize:
     runs-on: ubuntu-22.04
