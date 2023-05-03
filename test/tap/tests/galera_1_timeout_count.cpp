@@ -252,7 +252,7 @@ void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *p
 					ok(actual_timeouts == num_timeouts, "Another timeout processed. Number expected timeouts is equal to number of actual timeouts. Expected [%d]. Actual [%d]", num_timeouts, actual_timeouts);
 
 				auto max_timeouts = mysql_thread___monitor_galera_healthcheck_max_timeout_count;
-				std::unique_ptr<SQLite3_result> rs = std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql_servers());
+				std::unique_ptr<SQLite3_result> rs = std::unique_ptr<SQLite3_result>(MyHGM->dump_table_mysql("mysql_servers"));
 				for (auto r : rs->rows) {
 					if (!strcmp(r->fields[1], "127.1.1.11") && !strcmp(r->fields[0],"2274") && actual_timeouts == max_timeouts && num_timeouts == max_timeouts) {
 						ok(true, "Number of max timeouts reached. Host goes offline. Max timeouts count %d, actual number of timeouts %d", max_timeouts, actual_timeouts);
