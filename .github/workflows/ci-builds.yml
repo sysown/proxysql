@@ -52,7 +52,7 @@ jobs:
       with:
 #        key: ${{ github.workflow }}_${{ matrix.dist }}${{ matrix.type }}_${{ env.GIT_VERSION }}
         key: ${{ github.workflow }}_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}
-        lookup-only: true
+#        lookup-only: true
         path: |
           proxysql/
           
