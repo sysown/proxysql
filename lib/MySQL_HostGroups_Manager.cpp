@@ -2002,7 +2002,7 @@ bool MySQL_HostGroups_Manager::commit(
 				}
 				
 				HostGroup_Server_Mapping::Node node;
-				node.server_status = static_cast<MySerStatus>(atoi(r->fields[3]));
+				//node.server_status = static_cast<MySerStatus>(atoi(r->fields[3]));
 				node.reader_hostgroup_id = atoi(r->fields[4]);
 				node.writer_hostgroup_id = atoi(r->fields[5]);
 				node.srv = reinterpret_cast<MySrvC*>(atoll(r->fields[6]));
@@ -7700,6 +7700,14 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type
 	//dest_nodes.insert(dest_nodes.end(), append.begin(), append.end());
 
 	for (auto& node : append) {
+
+		if (node.srv->status == MYSQL_SERVER_STATUS_SHUNNED ||
+			node.srv->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
+			// Status updated from "*SHUNNED" to "ONLINE" as "read_only" value was successfully 
+			// retrieved from the backend server, indicating server is now online.
+			node.srv->status = MYSQL_SERVER_STATUS_ONLINE;
+		}
+
 		MySrvC* new_srv = insert_HGM(get_hostgroup_id(dest_type, node), node.srv);
 			
 		if (!new_srv) assert(0);
