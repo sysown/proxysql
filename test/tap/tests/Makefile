@@ -61,6 +61,10 @@ CITYHASH_DIR=$(DEPS_PATH)/cityhash/cityhash/
 CITYHASH_IDIR=$(CITYHASH_DIR)
 CITYHASH_LDIR=$(CITYHASH_DIR)/src/.libs
 
+COREDUMPER_DIR=$(DEPS_PATH)/coredumper/coredumper
+COREDUMPER_IDIR=$(COREDUMPER_DIR)/include
+COREDUMPER_LDIR=$(COREDUMPER_DIR)/src
+
 IDIR=../../../include
 LDIR=../../../lib
 TAP_LIBDIR=../tap
@@ -76,8 +80,18 @@ OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o ../../../src/obj/
 INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR)
 LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
+UNAME_S := $(shell uname -s)
+
+ifeq ($(UNAME_S),Linux)
+	LDIRS+= -L$(COREDUMPER_LDIR)
+endif
+
 MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK) -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a $(CITYHASH_LDIR)/libcityhash.a
+
+ifeq ($(UNAME_S),Linux)
+  STATIC_LIBS+= $(COREDUMPER_LDIR)/libcoredumper.a
+endif
 
 .PHONY: all
 all: tests
