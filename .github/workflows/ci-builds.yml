@@ -47,7 +47,7 @@ jobs:
     
     - name: Cache build
       id: cache
-      if: ${{ matrix.dist == '-tap' }}
+      if: ${{ matrix.type == '-tap' }}
       uses: actions/cache@v3
       with:
 #        key: ${{ github.workflow }}_${{ matrix.dist }}${{ matrix.type }}_${{ env.GIT_VERSION }}
