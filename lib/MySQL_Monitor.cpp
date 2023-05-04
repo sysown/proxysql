@@ -50,6 +50,10 @@ static MySQL_Monitor *GloMyMon;
 	} while (rc!=SQLITE_DONE);\
 } while (0)
 
+#define MYSQL_OPENSSL_ERROR_CLEAR(_mysql) if (_mysql->options.use_ssl == 1) {\
+	ERR_clear_error();\
+}
+
 using std::string;
 using std::set;
 using std::vector;
@@ -6923,6 +6927,11 @@ __again:
 		t2 = monotonic_time();
 		if (interr) {
 			mysql_error_msg = strdup(mysql_error(mysql));
+
+			// In the case of SSL-based connection to the backend server, any connection-related errors will cause 
+			// all subsequent calls to the backend servers to fail. This is because OpenSSL maintains a thread-based error 
+			// queue that must be cleared after an error occurs to ensure the next call executes successfully.
+			MYSQL_OPENSSL_ERROR_CLEAR(mysql);
 			NEXT_IMMEDIATE(ASYNC_PING_FAILED);
 		} else {
 			NEXT_IMMEDIATE(ASYNC_PING_SUCCESSFUL);
@@ -7075,6 +7084,11 @@ __again:
 		t2 = monotonic_time();
 		if (interr) {
 			mysql_error_msg = strdup(mysql_error(mysql));
+
+			// In the case of SSL-based connection to the backend server, any connection-related errors will cause 
+			// all subsequent calls to the backend servers to fail. This is because OpenSSL maintains a thread-based error 
+			// queue that must be cleared after an error occurs to ensure the next call executes successfully.
+			MYSQL_OPENSSL_ERROR_CLEAR(mysql);
 			NEXT_IMMEDIATE(ASYNC_QUERY_FAILED);
 		} else {
 			NEXT_IMMEDIATE(ASYNC_QUERY_SUCCESSFUL);
@@ -7111,6 +7125,11 @@ __again:
 		t2 = monotonic_time();
 		if (mysql_errno(mysql)) {
 			mysql_error_msg = strdup(mysql_error(mysql));
+
+			// In the case of SSL-based connection to the backend server, any connection-related errors will cause 
+			// all subsequent calls to the backend servers to fail. This is because OpenSSL maintains a thread-based error 
+			// queue that must be cleared after an error occurs to ensure the next call executes successfully.
+			MYSQL_OPENSSL_ERROR_CLEAR(mysql);
 			NEXT_IMMEDIATE(ASYNC_STORE_RESULT_FAILED);
 		} else {
 			NEXT_IMMEDIATE(ASYNC_STORE_RESULT_SUCCESSFUL);
