@@ -72,7 +72,7 @@ jobs:
     - name: Configure env.sh
       run: |
         cd jenkins-build-scripts
-        git rm --cached proxysql_qa_test_suite
+        #git rm --cached proxysql_qa_test_suite
         # configure paths
         sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
         sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
