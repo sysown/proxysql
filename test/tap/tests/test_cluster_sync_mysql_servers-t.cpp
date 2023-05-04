@@ -773,9 +773,9 @@ std::vector<std::vector<std::string>> queries = {
 	{
 		"SET mysql-monitor_enabled='false'",
 		"LOAD MYSQL VARIABLES TO RUNTIME",
+		"LOAD MYSQL SERVERS TO RUNTIME", // to regenerate runtime_mysql_servers
 		"UPDATE global_variables SET variable_value='1' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
-		"LOAD ADMIN VARIABLES TO RUNTIME",
-		"LOAD MYSQL SERVERS TO RUNTIME" // to regenerate runtime_mysql_servers
+		"LOAD ADMIN VARIABLES TO RUNTIME"
 	},
 	{
 		"UPDATE global_variables SET variable_value='2' WHERE variable_name='admin-cluster_mysql_servers_sync_algorithm'",
@@ -885,6 +885,7 @@ int main(int, char**) {
 	// cleaning old records
 	MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_servers");
 	MYSQL_QUERY(proxy_admin, "DELETE FROM mysql_replication_hostgroups");
+	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Launch proxysql with cluster config and monitor feature disabled
 	std::thread proxysql_replica_nomonitor_thd(launch_proxysql_replica, std::ref(cl), R_NOMONITOR_PORT, "nomonitor", false, std::ref(save_proxy_stderr));
@@ -964,7 +965,7 @@ int main(int, char**) {
 
 			for (const std::string& query : pre_queries) {
 				MYSQL_QUERY__(proxy_admin, query.c_str());
-				usleep(100000);
+				usleep(1000000);
 			}
 			sleep(2);
 
