@@ -409,9 +409,13 @@ uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
 	}
 	if (have_affected_rows == true) {
 		// in JSON format we only log rows_affected and last_insert_id
-		// if they are present (even if 0)
+		// if they are present.
+		// rows_affected is logged also if 0, while
+		// last_insert_id is log logged if 0
 		j["rows_affected"] = affected_rows;
-		j["last_insert_id"] = last_insert_id;
+		if (last_insert_id != 0) {
+			j["last_insert_id"] = last_insert_id;
+		}
 	}
 	if (have_rows_sent == true) {
 		j["rows_sent"] = rows_sent;
