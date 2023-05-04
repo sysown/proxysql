@@ -49,7 +49,7 @@ jobs:
       uses: actions/checkout@v3
       with:
         repository: 'sysown/proxysql'
-        ref: 'v2.x'
+#        ref: 'v2.x'
         fetch-depth: 0
         path: 'proxysql'
         
