@@ -49,7 +49,7 @@ jobs:
       uses: actions/checkout@v3
       with:
         repository: 'sysown/proxysql'
-#        ref: 'v2.x'
+        ref: 'v2.x'
         fetch-depth: 0
         path: 'proxysql'
         
@@ -102,8 +102,8 @@ jobs:
       run: |
         cd proxysql/
         # fix compile issues
-        grep -rl "<curl/curl.h>" test/ | xargs sed -i 's|<curl/curl.h>|"curl/curl.h"|'
-        sed -i 's|-I/usr/include/mysql |-I/usr/include/mysql -I$(CURL_IDIR) |' test/tap/tests/Makefile
+        #grep -rl "<curl/curl.h>" test/ | xargs sed -i 's|<curl/curl.h>|"curl/curl.h"|'
+        #sed -i 's|-I/usr/include/mysql |-I/usr/include/mysql -I$(CURL_IDIR) |' test/tap/tests/Makefile
         
         # build proxysql
         sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make debug_clickhouse WITHGCOV=1'" docker-compose.yml
@@ -135,7 +135,7 @@ jobs:
         
     - name: Prepare tests
       id: set-matrix
-      if: always()
+      if: ${{ always() }}
       run: |
         find proxysql/src -type f -executable -print > proxysql/executable.txt
         find proxysql/test -type f -executable -print >> proxysql/executable.txt
@@ -144,7 +144,7 @@ jobs:
         echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
         
     - name: Archive artifacts
-      if: always()
+      if: ${{ always() }}
       uses: actions/upload-artifact@v3
       with:
         name: ci-taptests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
@@ -230,7 +230,7 @@ jobs:
     - name: Configure env.sh
       run: |
         cd jenkins-build-scripts
-        git rm --cached proxysql_qa_test_suite
+        #git rm --cached proxysql_qa_test_suite
         # configure paths
         sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
         sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
@@ -304,13 +304,13 @@ jobs:
         exit $RC
         
     - name: Fix premissions
-      if: always()
+      if: ${{ always() }}
       run: |
         sudo chmod -R 777 ${{ github.workspace }}/*
         echo "${{ matrix.testgroup }}" | tr -d '*|' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
         
     - name: Archive artifacts
-      if: always()
+      if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
         name: ci-selftests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
