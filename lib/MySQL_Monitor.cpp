@@ -4623,8 +4623,8 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				unsigned int qsize = dns_resolver_queue.size();
 				unsigned int num_threads = dns_resolver_threads.size();
 
-				if (qsize > static_cast<unsigned int>(mysql_thread___monitor_local_dns_resolver_queue_maxsize) / 8) {
-					proxy_warning("DNS resolver queue too big: %d\n", qsize);
+				if (qsize > (static_cast<unsigned int>(mysql_thread___monitor_local_dns_resolver_queue_maxsize) / 8)) {
+					proxy_warning("DNS resolver queue too big: %d. Please refer to https://proxysql.com/documentation/dns-cache/ for further information.\n", qsize);
 
 					unsigned int threads_max = num_dns_resolver_max_threads;
 
@@ -4665,16 +4665,16 @@ void* MySQL_Monitor::monitor_dns_cache() {
 				unsigned int qsize = dns_resolver_queue.size();
 				unsigned int num_threads = dns_resolver_threads.size();
 
-				if (qsize > static_cast<unsigned int>(mysql_thread___monitor_local_dns_resolver_queue_maxsize) / 8) {
-					proxy_warning("DNS resolver queue too big: %d\n", qsize);
+				if (qsize > (static_cast<unsigned int>(mysql_thread___monitor_local_dns_resolver_queue_maxsize) / 4)) {
+					proxy_warning("DNS resolver queue too big: %d. Please refer to https://proxysql.com/documentation/dns-cache/ for further information.\n", qsize);
 
 					unsigned int threads_max = num_dns_resolver_max_threads;
 
 					if (threads_max > num_threads) {
 						unsigned int new_threads = threads_max - num_threads;
 
-						if ((qsize / 8) < new_threads) {
-							new_threads = qsize / 8; // try to not burst threads
+						if ((qsize / 4) < new_threads) {
+							new_threads = qsize / 4; // try to not burst threads
 						}
 
 						if (new_threads) {
