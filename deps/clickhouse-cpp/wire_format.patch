@@ -1,0 +1,10 @@
+--- clickhouse-cpp/clickhouse/base/wire_format.h	2022-11-23 09:33:15.000000000 +0000
++++ clickhouse-cpp/clickhouse/base/wire_format.h	2023-05-02 19:17:50.000000000 +0000
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <string>
++#include <stdint.h>
+ 
+ namespace clickhouse {
+ 

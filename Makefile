@@ -231,7 +231,7 @@ amd64-ubuntu: ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg 
 amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg
 .PHONY: amd64-debian
 
-amd64-fedora: fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg fedora36 fedora36-clang fedora36-dbg fedora37 fedora37-clang fedora37-dbg
+amd64-fedora: fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg fedora36 fedora36-clang fedora36-dbg fedora37 fedora37-clang fedora37-dbg fedora38 fedora38-clang fedora38-dbg
 .PHONY: amd64-fedora
 
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
@@ -255,7 +255,7 @@ arm64-debian: debian9-arm64 debian10-arm64 debian11-arm64
 arm64-ubuntu: ubuntu16-arm64 ubuntu18-arm64 ubuntu20-arm64 ubuntu22-arm64
 .PHONY: arm64-ubuntu
 
-arm64-fedora: fedora33-arm64 fedora34-arm64 fedora36-arm64 fedora37-arm64
+arm64-fedora: fedora33-arm64 fedora34-arm64 fedora36-arm64 fedora37-arm64 fedora38-arm64
 .PHONY: arm64-fedora
 
 arm64-opensuse: opensuse15-arm64
@@ -349,16 +349,29 @@ fedora36-dbg: binaries/proxysql-${CURVER}-1-dbg-fedora36.x86_64.rpm
 
 
 fedora37: binaries/proxysql-${CURVER}-1-fedora37.x86_64.rpm
-.PHONY: fedora36
+.PHONY: fedora37
 
 fedora37-arm64: binaries/proxysql-${CURVER}-1-fedora37.aarch64.rpm
-.PHONY: fedora36-arm64
+.PHONY: fedora37-arm64
 
 fedora37-clang: binaries/proxysql-${CURVER}-1-fedora37-clang.x86_64.rpm
-.PHONY: fedora36-clang
+.PHONY: fedora37-clang
 
 fedora37-dbg: binaries/proxysql-${CURVER}-1-dbg-fedora37.x86_64.rpm
-.PHONY: fedora36-dbg
+.PHONY: fedora37-dbg
+
+
+fedora38: binaries/proxysql-${CURVER}-1-fedora38.x86_64.rpm
+.PHONY: fedora38
+
+fedora38-arm64: binaries/proxysql-${CURVER}-1-fedora38.aarch64.rpm
+.PHONY: fedora38-arm64
+
+fedora38-clang: binaries/proxysql-${CURVER}-1-fedora38-clang.x86_64.rpm
+.PHONY: fedora38-clang
+
+fedora38-dbg: binaries/proxysql-${CURVER}-1-dbg-fedora38.x86_64.rpm
+.PHONY: fedora38-dbg
 
 
 ubuntu14: binaries/proxysql_${CURVER}-ubuntu14_amd64.deb
@@ -612,6 +625,23 @@ binaries/proxysql-${CURVER}-1-fedora37-clang.x86_64.rpm:
 
 binaries/proxysql-${CURVER}-1-dbg-fedora37.x86_64.rpm:
 	docker-compose up fedora37_dbg_build
+	docker-compose rm -f
+
+
+binaries/proxysql-${CURVER}-1-fedora38.x86_64.rpm:
+	docker-compose up fedora38_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-fedora38.aarch64.rpm:
+	docker-compose up fedora38_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-fedora38-clang.x86_64.rpm:
+	docker-compose up fedora38_clang_build
+	docker-compose rm -f
+
+binaries/proxysql-${CURVER}-1-dbg-fedora38.x86_64.rpm:
+	docker-compose up fedora38_dbg_build
 	docker-compose rm -f
 
 
