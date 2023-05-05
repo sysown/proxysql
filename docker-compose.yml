@@ -245,7 +245,7 @@ services:
 
 ####################################################################################################
   fedora38_build:
-    image: proxysql/packaging:build-fedora37
+    image: proxysql/packaging:build-fedora38
     volumes:
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
       - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
