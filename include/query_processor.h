@@ -111,6 +111,9 @@ struct _Query_Processor_rule_t {
 	void *regex_engine2;
 	uint64_t hits;
 	struct _Query_Processor_rule_t *parent; // pointer to parent, to speed up parent update
+	std::vector<int> * flagOUT_ids;
+	std::vector<int> * flagOUT_weights;
+	int flagOUT_weights_total;
 };
 
 typedef struct _Query_Processor_rule_t QP_rule_t;
