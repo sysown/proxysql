@@ -74,7 +74,8 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_mysql, "DO 1");
 
 	{
-		const string f_path { get_env("REGULAR_INFRA_DATADIR") + "loginsertid.log.00000001" };
+		const string f_path { get_env("REGULAR_INFRA_DATADIR") + "/loginsertid.log.00000001" };
+		diag("Trying to open file %s" , f_path.c_str());
 		fstream querylog;
 		unsigned int nentries = 0;
 		unsigned int lid = 0;
@@ -92,6 +93,8 @@ int main(int argc, char** argv) {
 				}
 			}
 			ok(nentries == 6, "Expected queries: 6, actual: %d", nentries);
+		} else {
+			diag("Failed to open file %s" , f_path.c_str());
 		}
 	}
 
