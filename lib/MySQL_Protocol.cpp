@@ -138,13 +138,6 @@ static inline int write_encoded_length_and_string(unsigned char *p, uint64_t val
 
 void proxy_compute_sha1_hash_multi(uint8_t *digest, const char *buf1, int len1, const char *buf2, int len2) {
   PROXY_TRACE();
-  
-  SHA_CTX sha1_context;
-  SHA1_Init(&sha1_context);
-  SHA1_Update(&sha1_context, buf1, len1);
-  SHA1_Update(&sha1_context, buf2, len2);
-  SHA1_Final(digest, &sha1_context);
-
 	uint8_t md[SHA_DIGEST_LENGTH];
 	const EVP_MD *evp_digest = EVP_get_digestbyname("sha1");
 	assert(evp_digest != NULL);
@@ -156,17 +149,18 @@ void proxy_compute_sha1_hash_multi(uint8_t *digest, const char *buf1, int len1, 
 	unsigned int olen = 0;
 	EVP_DigestFinal(ctx, md, &olen);
 	EVP_MD_CTX_free(ctx);
+#ifdef DEBUG // FIXME: remove this in future release
+  SHA_CTX sha1_context;
+  SHA1_Init(&sha1_context);
+  SHA1_Update(&sha1_context, buf1, len1);
+  SHA1_Update(&sha1_context, buf2, len2);
+  SHA1_Final(digest, &sha1_context);
 	assert(memcmp(md, digest, SHA_DIGEST_LENGTH)==0);
+#endif
 }
 
 void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
   PROXY_TRACE();
-  
-  SHA_CTX sha1_context;
-  SHA1_Init(&sha1_context);
-  SHA1_Update(&sha1_context, buf, len);
-  SHA1_Final(digest, &sha1_context);
-
 	uint8_t md[SHA_DIGEST_LENGTH];
 	const EVP_MD *evp_digest = EVP_get_digestbyname("sha1");
 	assert(evp_digest != NULL);
@@ -177,7 +171,13 @@ void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
 	unsigned int olen = 0;
 	EVP_DigestFinal(ctx, md, &olen);
 	EVP_MD_CTX_free(ctx);
+#ifdef DEBUG // FIXME: remove this in future release 
+  SHA_CTX sha1_context;
+  SHA1_Init(&sha1_context);
+  SHA1_Update(&sha1_context, buf, len);
+  SHA1_Final(digest, &sha1_context);
 	assert(memcmp(md, digest, SHA_DIGEST_LENGTH)==0);
+#endif
 }
 
 void proxy_compute_two_stage_sha1_hash(const char *password, size_t pass_len, uint8_t *hash_stage1, uint8_t *hash_stage2) {
@@ -2144,6 +2144,12 @@ __do_auth:
 						unhex_pass(hash_stage2,sha1_2);
 */
 						proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
+						unsigned char md1_buf[SHA_DIGEST_LENGTH];
+						unsigned char md2_buf[SHA_DIGEST_LENGTH];
+						SHA1(pass,pass_len,md1_buf);
+						SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
+
+#ifdef DEBUG // FIXME: remove this in future release
 						uint8_t hash_stage1[SHA_DIGEST_LENGTH];
 						uint8_t hash_stage2[SHA_DIGEST_LENGTH];
 						SHA_CTX sha1_context;
@@ -2153,25 +2159,21 @@ __do_auth:
 						SHA1_Init(&sha1_context);
 						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
 						SHA1_Final(hash_stage2, &sha1_context);
-
-						unsigned char md1_buf[SHA_DIGEST_LENGTH];
-						unsigned char md2_buf[SHA_DIGEST_LENGTH];
-						SHA1(pass,pass_len,md1_buf);
 						assert(memcmp(md1_buf,hash_stage1,SHA_DIGEST_LENGTH)==0);
-						SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
 						assert(memcmp(md2_buf,hash_stage2,SHA_DIGEST_LENGTH)==0);
+#endif
 
-						char *double_hashed_password = sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
+						char *double_hashed_password = sha1_pass_hex((char *)md2_buf); // note that sha1_pass_hex() returns a new buffer
 
 						if (strcasecmp(double_hashed_password,password)==0) {
 							ret = true;
 							if (sha1_pass==NULL) {
 								// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-								GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,hash_stage1);
+								GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,md1_buf);
 							}
 							if (userinfo->sha1_pass)
 								free(userinfo->sha1_pass);
-							userinfo->sha1_pass=sha1_pass_hex((char *)hash_stage1);
+							userinfo->sha1_pass=sha1_pass_hex((char *)md1_buf);
 						} else {
 							ret = false;
 						}

@@ -1863,7 +1863,7 @@ bool MySQL_HostGroups_Manager::commit(
 	{
 		uint64_t hash1 = 0, hash2 = 0;
 		SpookyHash myhash;
-		char buf[80];
+		char buf[ProxySQL_Checksum_Value_LENGTH];
 		bool init = false;
 		{
 			mydb->execute("DELETE FROM mysql_servers");
@@ -4762,7 +4762,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 				myhash.Final(&hash, &hash2);
 			}
 
-			char buf[80];
+			char buf[ProxySQL_Checksum_Value_LENGTH];
 			uint32_t d32[2];
 			memcpy(&d32, &hash, sizeof(hash));
 			sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
