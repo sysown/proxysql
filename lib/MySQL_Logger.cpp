@@ -58,6 +58,7 @@ MySQL_Event::MySQL_Event (log_event_type _et, uint32_t _thread_id, char * _usern
 	affected_rows=0;
 	last_insert_id = 0;
 	have_rows_sent=false;
+	have_gtid=false;
 	rows_sent=0;
 	client_stmt_id=0;
 	gtid = NULL;
