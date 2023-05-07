@@ -28,9 +28,12 @@ class MySQL_Event {
 	char *extra_info;
 	bool have_affected_rows;
 	bool have_rows_sent;
+	bool have_gtid;
 	uint64_t affected_rows;
+	uint64_t last_insert_id;
 	uint64_t rows_sent;
 	uint32_t client_stmt_id;
+	const char * gtid;
 	public:
 	MySQL_Event(log_event_type _et, uint32_t _thread_id, char * _username, char * _schemaname , uint64_t _start_time , uint64_t _end_time , uint64_t _query_digest, char *_client, size_t _client_len);
 	uint64_t write(std::fstream *f, MySQL_Session *sess);
@@ -41,8 +44,9 @@ class MySQL_Event {
 	void set_query(const char *ptr, int len);
 	void set_server(int _hid, const char *ptr, int len);
 	void set_extra_info(char *);
-	void set_affected_rows(uint64_t ar);
+	void set_affected_rows(uint64_t ar, uint64_t lid);
 	void set_rows_sent(uint64_t rs);
+	void set_gtid(MySQL_Session *sess);
 };
 
 class MySQL_Logger {
