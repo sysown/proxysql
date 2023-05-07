@@ -25,7 +25,11 @@
 
 #include "ev.h"
 
+#include <functional>
 #include <mutex>
+#include <type_traits>
+
+using std::function;
 
 #ifdef TEST_AURORA
 static unsigned long long array_mysrvc_total = 0;
@@ -727,7 +731,11 @@ void MySrvConnList::drop_all_connections() {
 }
 
 
-MySrvC::MySrvC(char *add, uint16_t p, uint16_t gp, unsigned int _weight, enum MySerStatus _status, unsigned int _compression /*, uint8_t _charset */, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment) {
+MySrvC::MySrvC(
+	char* add, uint16_t p, uint16_t gp, int64_t _weight, enum MySerStatus _status, unsigned int _compression,
+	int64_t _max_connections, unsigned int _max_replication_lag, int32_t _use_ssl, unsigned int _max_latency_ms,
+	char* _comment
+) {
 	address=strdup(add);
 	port=p;
 	gtid_port=gp;
@@ -877,6 +885,10 @@ MyHGC::MyHGC(int _hid) {
 	new_connections_now = 0;
 	attributes.initialized = false;
 	reset_attributes();
+	// Uninitialized server defaults. Should later be initialized via 'mysql_hostgroup_attributes'.
+	servers_defaults.weight = -1;
+	servers_defaults.max_connections = -1;
+	servers_defaults.use_ssl = -1;
 }
 
 void MyHGC::reset_attributes() {
@@ -2579,7 +2591,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	} else if (name == "mysql_replication_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
 	} else if (name == "mysql_hostgroup_attributes") {
-		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
+		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
 	} else if (name == "mysql_servers") {
 		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;	
 	} else {
@@ -3428,6 +3440,32 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 	mysrvc->queries_sent = get_prometheus_counter_val(this->status.p_connection_pool_queries_map, endpoint_id);
 
 	MyHGC *myhgc=MyHGC_lookup(_hid);
+
+	if (mysrvc->weight == -1) {
+		if (myhgc->servers_defaults.weight != -1) {
+			mysrvc->weight = myhgc->servers_defaults.weight;
+		} else {
+			// Same harcoded default as in 'CREATE TABLE mysql_servers ...'
+			mysrvc->weight = 1;
+		}
+	}
+	if (mysrvc->max_connections == -1) {
+		if (myhgc->servers_defaults.max_connections != -1) {
+			mysrvc->max_connections = myhgc->servers_defaults.max_connections;
+		} else {
+			// Same harcoded default as in 'CREATE TABLE mysql_servers ...'
+			mysrvc->max_connections = 1000;
+		}
+	}
+	if (mysrvc->use_ssl == -1) {
+		if (myhgc->servers_defaults.use_ssl != -1) {
+			mysrvc->use_ssl = myhgc->servers_defaults.use_ssl;
+		} else {
+			// Same harcoded default as in 'CREATE TABLE mysql_servers ...'
+			mysrvc->use_ssl = 0;
+		}
+	}
+
 	myhgc->mysrvs->add(mysrvc);
 }
 
@@ -6847,6 +6885,93 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
 	return ret;
 }
 
+/**
+ * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
+ *
+ * @param j JSON object constructed from 'servers_defaults' field.
+ * @param hid Hostgroup for which the 'servers_defaults' is defined in 'mysql_hostgroup_attributes'. Used for
+ *  error logging.
+ * @param key The key for the value to be extracted.
+ * @param val_check A validation function, checks if the value is within a expected range.
+ *
+ * @return The value extracted from the supplied JSON. In case of error '-1', and error cause is logged.
+ */
+template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
+T j_get_srv_default_int_val(
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+) {
+	if (j.find(key) != j.end()) {
+		const json::value_t val_type = j[key].type();
+		const char* type_name = j[key].type_name();
+
+		if (val_type == json::value_t::number_integer || val_type == json::value_t::number_unsigned) {
+			T val = j[key].get<T>();
+
+			if (val_check(val)) {
+				return val;
+			} else {
+				proxy_error(
+					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+						" Value NOT UPDATED.\n",
+					static_cast<int64_t>(val), key.c_str(), hid
+				);
+			}
+		} else {
+			proxy_error(
+				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					" Value NOT UPDATED.\n",
+				type_name, val_type, key.c_str(), hid
+			);
+		}
+	}
+
+	return static_cast<T>(-1);
+}
+
+/**
+ * @brief Initializes the supplied 'MyHGC' with the specified 'servers_defaults'.
+ * @details Input verification is performed in the supplied 'server_defaults'. It's expected to be a valid
+ *  JSON that may contain the following fields:
+ *   - weight: Must be an unsigned integer >= 0.
+ *   - max_connections: Must be an unsigned integer >= 0.
+ *   - use_ssl: Must be a integer with either value 0 or 1.
+ *
+ *  In case input verification fails for a field, supplied 'MyHGC' is NOT updated for that field. An error
+ *  message is logged specifying the source of the error.
+ *
+ * @param servers_defaults String containing a JSON defined in 'mysql_hostgroup_attributes'.
+ * @param myhgc The 'MyHGC' of the target hostgroup of the supplied 'servers_defaults'.
+ */
+void init_myhgc_servers_defaults(char* servers_defaults, MyHGC* myhgc) {
+	uint32_t hid = myhgc->hid;
+
+	if (strcmp(servers_defaults, "") != 0) {
+		try {
+		    nlohmann::json j = nlohmann::json::parse(servers_defaults);
+
+			const auto weight_check = [] (int64_t weight) -> bool { return weight >= 0; };
+			int64_t weight = j_get_srv_default_int_val<int64_t>(j, hid, "weight", weight_check);
+
+			myhgc->servers_defaults.weight = weight;
+
+			const auto max_conns_check = [] (int64_t max_conns) -> bool { return max_conns >= 0; };
+			int64_t max_conns = j_get_srv_default_int_val<int64_t>(j, hid, "max_connections", max_conns_check);
+
+			myhgc->servers_defaults.max_connections = max_conns;
+
+			const auto use_ssl_check = [] (int32_t use_ssl) -> bool { return use_ssl == 0 || use_ssl == 1; };
+			int32_t use_ssl = j_get_srv_default_int_val<int32_t>(j, hid, "use_ssl", use_ssl_check);
+
+			myhgc->servers_defaults.use_ssl = use_ssl;
+		} catch (const json::exception& e) {
+			proxy_error(
+				"JSON parsing for 'mysql_hostgroup_attributes.servers_defaults' for hostgroup %d failed with exception `%s`.\n",
+				hid, e.what()
+			);
+		}
+	}
+}
+
 void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	if (incoming_hostgroup_attributes==NULL) {
 		return;
@@ -6857,8 +6982,8 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	const char * query=(const char *)"INSERT INTO mysql_hostgroup_attributes ( "
 		"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 		"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
-		"ignore_session_variables, comment) VALUES "
-		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+		"ignore_session_variables, servers_defaults, comment) VALUES "
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
 
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
 	rc = mydb->prepare_v2(query, &statement);
@@ -6894,11 +7019,12 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		int connection_warming           = atoi(r->fields[6]);
 		int throttle_connections_per_sec = atoi(r->fields[7]);
 		char * ignore_session_variables  = r->fields[8];
-		char * comment                   = r->fields[9];
-		proxy_info("Loading MySQL Hostgroup Attributes info for (%d,%d,%d,%d,\"%s\",%d,%d,%d,\"%s\",\"%s\")\n",
+		char * servers_defaults          = r->fields[9];
+		char * comment                   = r->fields[10];
+		proxy_info("Loading MySQL Hostgroup Attributes info for (%d,%d,%d,%d,\"%s\",%d,%d,%d,\"%s\",'%s',\"%s\")\n",
 			hid, max_num_online_servers, autocommit, free_connections_pct,
 			init_connect, multiplex, connection_warming, throttle_connections_per_sec,
-			ignore_session_variables, comment
+			ignore_session_variables, servers_defaults, comment
 		);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 1, hid);                          ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 2, max_num_online_servers);       ASSERT_SQLITE_OK(rc, mydb);
@@ -6909,7 +7035,8 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		rc=(*proxy_sqlite3_bind_int64)(statement, 7, connection_warming);           ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 8, throttle_connections_per_sec); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_text)(statement,  9, ignore_session_variables,  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 10, comment,                   -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 10, servers_defaults,          -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 11, comment,                   -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -6945,6 +7072,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 				// TODO: assign the variables
 			}
 		}
+		init_myhgc_servers_defaults(servers_defaults, myhgc);
 	}
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
