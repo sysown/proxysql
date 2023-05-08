@@ -138,7 +138,6 @@ static inline int write_encoded_length_and_string(unsigned char *p, uint64_t val
 
 void proxy_compute_sha1_hash_multi(uint8_t *digest, const char *buf1, int len1, const char *buf2, int len2) {
   PROXY_TRACE();
-	uint8_t md[SHA_DIGEST_LENGTH];
 	const EVP_MD *evp_digest = EVP_get_digestbyname("sha1");
 	assert(evp_digest != NULL);
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -147,13 +146,12 @@ void proxy_compute_sha1_hash_multi(uint8_t *digest, const char *buf1, int len1, 
 	EVP_DigestUpdate(ctx, buf1, len1);
 	EVP_DigestUpdate(ctx, buf2, len2);
 	unsigned int olen = 0;
-	EVP_DigestFinal(ctx, md, &olen);
+	EVP_DigestFinal(ctx, digest, &olen);
 	EVP_MD_CTX_free(ctx);
 }
 
 void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
   PROXY_TRACE();
-	uint8_t md[SHA_DIGEST_LENGTH];
 	const EVP_MD *evp_digest = EVP_get_digestbyname("sha1");
 	assert(evp_digest != NULL);
 	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -161,7 +159,7 @@ void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
 	EVP_DigestInit_ex(ctx, evp_digest, NULL);
 	EVP_DigestUpdate(ctx, buf, len);
 	unsigned int olen = 0;
-	EVP_DigestFinal(ctx, md, &olen);
+	EVP_DigestFinal(ctx, digest, &olen);
 	EVP_MD_CTX_free(ctx);
 }
 
