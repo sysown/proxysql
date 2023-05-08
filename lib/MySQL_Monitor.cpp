@@ -212,6 +212,9 @@ public:
 __conn_register_label:
 		for (unsigned int i=0; i<conns->len; i++) {
 			MYSQL *my1 = (MYSQL *)conns->index(i);
+			// 'my1' can be NULL due to connection cleanup
+			if (my1 == nullptr) continue;
+
 			assert(my!=my1);
 			//assert(my->net.fd!=my1->net.fd); // FIXME: we changed this with the next section of code
 			if (my->net.fd == my1->net.fd) {
@@ -232,6 +235,7 @@ __conn_register_label:
 #endif // DEBUG
 		return;
 	};
+	// TODO: Document 'unregister' flow related async fetching and 'task_handlers'.
 	void conn_unregister(MySQL_Monitor_State_Data *mmsd) {
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
@@ -322,6 +326,9 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 				if (my) {
 					for (unsigned int j=0; j<conns->len; j++) {
 						MYSQL *my1 = (MYSQL *)conns->index(j);
+						// 'my1' can be NULL due to connection cleanup
+						if (!my1) continue;
+
 						assert(my!=my1);
 						assert(my->net.fd!=my1->net.fd);
 					}
@@ -3695,12 +3702,16 @@ void gr_handle_actions_over_unresp_srvs(const vector<gr_host_def_t>& hosts_defs,
  *  before placing the connection back into the 'ConnectionPool', on failure, we discard the connection.
  * @param mmsd The mmsd wrapper holding all information for returning the connection.
  */
-void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd, bool unregister_conn_on_failure) {
+void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
 	if (mmsd == nullptr) return;
 
 	if (mmsd->mysql) {
 		if (mmsd->interr || mmsd->mysql_error_msg) {
-			if (unregister_conn_on_failure) {
+			// If 'MySQL_Monitor_State_Data' reaches the end of a task_handler without 'TASK_RESULT_UNKNOWN':
+			//  1. Connection failed to be created, 'task_result' should be 'TASK_RESULT_UNKNOWN'. No
+			//     unregister needed.
+			//  2. Fetching operation failed, the async fetching handler already handled the 'unregister'.
+			if (mmsd->get_task_result() == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			}
 			mysql_close(mmsd->mysql);
@@ -3717,7 +3728,7 @@ void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd, bool unregister_conn
 					MyHGM->p_update_mysql_error_counter(
 						p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
 					);
-					if (unregister_conn_on_failure) {
+					if (mmsd->get_task_result() == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 						GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					}
 					mysql_close(mmsd->mysql);
@@ -3766,7 +3777,7 @@ void gr_report_fetching_errs(MySQL_Monitor_State_Data* mmsd) {
  * @param mmsd The server 'MySQL_Monitor_State_Data' after the fetching is completed. It should either
  *  hold a valid 'MYSQL_RES' or an error.
  */
-void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd, bool unregister_conn_on_failure) {
+void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
 	// We base 'start_time' on the conn init for 'MySQL_Monitor_State_Data'. If a conn creation was
 	// required, we take into account this time into account, otherwise we asume that 'start_time=t1'.
 	uint64_t start_time = 0;
@@ -3789,7 +3800,7 @@ void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd, bool unregiste
 	}
 
 	// Handle 'mmsd' MySQL conn return to 'ConnectionPool'
-	handle_mmsd_mysql_conn(mmsd, unregister_conn_on_failure);
+	handle_mmsd_mysql_conn(mmsd);
 }
 
 /**
@@ -3905,7 +3916,7 @@ void* monitor_GR_thread_HG(void *arg) {
 
 		// Handle 'mmsds' that failed to optain conns
 		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : fail_mmsds) {
-			async_gr_mon_actions_handler(mmsd.get(), true);
+			async_gr_mon_actions_handler(mmsd.get());
 		}
 
 		// Update 't1' for subsequent fetch operations and reset errors
@@ -7554,7 +7565,7 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks_2(
 	for (MySQL_Monitor_State_Data* mmsd : mmsds) {
 		const MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
-		async_gr_mon_actions_handler(mmsd, false);
+		async_gr_mon_actions_handler(mmsd);
 	}
 
 	return true;
