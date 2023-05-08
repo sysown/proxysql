@@ -930,8 +930,8 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					proxy_info("Cluster: Fetch mysql_servers_v2:'YES', mysql_servers:'%s' from peer %s:%d\n", (fetch_runtime ? "YES" : "NO"),
 						hostname, port);
 
-					GloProxyCluster->pull_mysql_servers_v2_from_peer({ v->checksum, v->epoch },
-							{ runtime_mysql_server_checksum->checksum, runtime_mysql_server_checksum->epoch }, fetch_runtime);
+					GloProxyCluster->pull_mysql_servers_v2_from_peer({ v->checksum, static_cast<time_t>(v->epoch) },
+							{ runtime_mysql_server_checksum->checksum, static_cast<time_t>(runtime_mysql_server_checksum->epoch) }, fetch_runtime);
 
 					runtime_mysql_servers_already_loaded = fetch_runtime;
 				}
@@ -967,7 +967,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					if (v->diff_check >= diff_ms) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 						proxy_info("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-						GloProxyCluster->pull_runtime_mysql_servers_from_peer({ v->checksum, v->epoch });
+						GloProxyCluster->pull_runtime_mysql_servers_from_peer({ v->checksum, static_cast<time_t>(v->epoch) });
 					}
 				}
 				if ((v->epoch == own_epoch) && v->diff_check && ((v->diff_check % (diff_ms * 10)) == 0)) {

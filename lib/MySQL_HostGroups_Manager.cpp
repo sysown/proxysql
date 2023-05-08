@@ -1879,7 +1879,9 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 					if (itr == hostgroup_server_mapping.end()) {
 						std::unique_ptr<HostGroup_Server_Mapping> server_mapping(new HostGroup_Server_Mapping(this));
 						fetched_server_mapping = server_mapping.get();
-						hostgroup_server_mapping.insert({ server_id, std::move(server_mapping) });
+						hostgroup_server_mapping.insert( std::pair<std::string,std::unique_ptr<MySQL_HostGroups_Manager::HostGroup_Server_Mapping>> {
+															server_id, std::move(server_mapping)
+															} );
 					} else {
 						fetched_server_mapping = itr->second.get();
 					}
