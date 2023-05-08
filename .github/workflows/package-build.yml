@@ -55,7 +55,7 @@ jobs:
       fail-fast: false
       matrix:
 #        dist: [ 'centos7' ]
-        dist: [ 'almalinux8','almalinux9','centos6','centos7','centos8','debian8','debian9','debian10','debian11','fedora27','fedora28','fedora33','fedora34','fedora36','fedora37','opensuse15','ubuntu14','ubuntu16','ubuntu18','ubuntu20','ubuntu22' ]
+        dist: [ 'almalinux8','almalinux9','centos6','centos7','centos8','debian8','debian9','debian10','debian11','fedora27','fedora28','fedora33','fedora34','fedora36','fedora37','fedora38','opensuse15','ubuntu14','ubuntu16','ubuntu18','ubuntu20','ubuntu22' ]
         type: [ '','-dbg','-clang' ]
         exclude:
           - dist: 'centos6'
@@ -137,14 +137,14 @@ jobs:
         # gh release upload v2.x-head --repo ${{ github.repository }} --clobber binaries/proxysql*${{ matrix.dist }}*[mb]
         gh release upload v2.x-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
     
-    - name: Archive artifacts
-      if: always()
-      uses: actions/upload-artifact@v3
-      with:
-        name: binaries-${{ env.GIT_VERSION }}
-        path: |
-          ./binaries/
-          !./**/.gitignore
+#    - name: Archive artifacts
+#      if: always()
+#      uses: actions/upload-artifact@v3
+#      with:
+#        name: binaries-${{ env.GIT_VERSION }}
+#        path: |
+#          ./binaries/
+#          !./**/.gitignore
     
   finalize:
     runs-on: ubuntu-22.04

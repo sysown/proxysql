@@ -1362,7 +1362,7 @@ static void *child_mysql(void *arg) {
 		}
 		myds->revents=fds[0].revents;
 		int rb = 0;
-		rb - myds->read_from_net();
+		rb = myds->read_from_net();
 		if (myds->net_failure) goto __exit_child_mysql;
 		myds->read_pkts();
 		if (myds->encrypted == true) {

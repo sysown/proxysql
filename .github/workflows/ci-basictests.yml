@@ -185,12 +185,12 @@ jobs:
         exit $RC
         
     - name: Fix premissions
-      if: always()
+      if: ${{ always() }}
       run: |
         sudo chmod -R 777 ${{ github.workspace }}/*
         
     - name: Archive artifacts
-      if: always()
+      if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
         name: ci-selftests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}

@@ -302,9 +302,10 @@ Query_Info::Query_Info() {
 	stmt_info=NULL;
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
-	have_affected_rows=false;
+	have_affected_rows=false; // if affected rows is set, last_insert_id is set too
 	waiting_since = 0;
 	affected_rows=0;
+	last_insert_id = 0;
 	rows_sent=0;
 	start_time=0;
 	end_time=0;
@@ -335,9 +336,10 @@ void Query_Info::begin(unsigned char *_p, int len, bool mysql_header) {
 	}
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
-	have_affected_rows=false;
+	have_affected_rows=false; // if affected rows is set, last_insert_id is set too
 	waiting_since = 0;
 	affected_rows=0;
+	last_insert_id = 0;
 	rows_sent=0;
 	sess->gtid_hid=-1;
 	stmt_client_id=0;
@@ -374,9 +376,10 @@ void Query_Info::init(unsigned char *_p, int len, bool mysql_header) {
 	MyComQueryCmd = MYSQL_COM_QUERY__UNINITIALIZED;
 	bool_is_select_NOT_for_update=false;
 	bool_is_select_NOT_for_update_computed=false;
-	have_affected_rows=false;
+	have_affected_rows=false; // if affected rows is set, last_insert_id is set too
 	waiting_since = 0;
 	affected_rows=0;
+	last_insert_id = 0;
 	rows_sent=0;
 }
 
@@ -3836,6 +3839,13 @@ __get_pkts_from_client:
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
 									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									if (thread->variables.stats_time_query_processor) {
+										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+										thread->status_variables.stvar[st_var_query_processor_time]=thread->status_variables.stvar[st_var_query_processor_time] +
+											(endt.tv_sec*1000000000+endt.tv_nsec) -
+											(begint.tv_sec*1000000000+begint.tv_nsec);
+									}
+									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									// This block was moved from 'handler_special_queries' to support
 									// handling of 'USE' statements which are preceded by a comment.
 									// For more context check issue: #3493.
@@ -3877,13 +3887,6 @@ __get_pkts_from_client:
 									if (qpo->max_lag_ms >= 0) {
 										thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 									}
-									if (thread->variables.stats_time_query_processor) {
-										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
-										thread->status_variables.stvar[st_var_query_processor_time]=thread->status_variables.stvar[st_var_query_processor_time] +
-											(endt.tv_sec*1000000000+endt.tv_nsec) -
-											(begint.tv_sec*1000000000+begint.tv_nsec);
-									}
-									assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
 									rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
 									if (mirror==false && rc_break==false) {
 										if (mysql_thread___automatic_detect_sqli) {

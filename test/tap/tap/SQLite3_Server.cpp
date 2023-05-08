@@ -23,7 +23,6 @@
 #include <resolv.h>
 #include <arpa/inet.h>
 #include <pthread.h>
-#include "SpookyV2.h"
 
 #include <fcntl.h>
 #include <sys/utsname.h>

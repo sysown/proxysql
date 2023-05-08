@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-n-test:
     runs-on: ubuntu-22.04
     
     steps:
@@ -68,7 +68,7 @@ jobs:
         echo 'DONE'
         exit $RC
     - name: Archive artifacts
-      if: always()
+      if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
         name: ci-selftests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}

@@ -1,4 +1,4 @@
-name: CI-repltests
+name: CI-shuntest
 
 on:
   push:
@@ -47,6 +47,7 @@ jobs:
         cd proxysql/
         git fetch --tags --force
         echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
+        
     - name: Build
       run: |
         cd proxysql/
@@ -57,7 +58,7 @@ jobs:
         cd jenkins-build-scripts/infra-docker-hoster
         docker-compose up -d
         
-    - name: Replication-tests
+    - name: Shun-tests
       run: |
         set +e
         
@@ -68,16 +69,14 @@ jobs:
         sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
         
         cd proxysql_repl_tests
-        #./exec_repl_test.sh 5.7 no-ssl debezium
-        ./exec_all_repl_tests.sh
+        ./exec_shun_test.sh
         RC=$?
         
-        #./docker-compose-destroy.bash
         sudo chmod -R 777 ${{ github.workspace }}/*
         exit $RC
         
     - name: Archive artifacts
-      if: ${{ failure() }}
+      if: always()
       uses: actions/upload-artifact@v3
       with:
         name: ci-selftests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}

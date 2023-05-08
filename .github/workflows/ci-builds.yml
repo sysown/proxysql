@@ -47,12 +47,12 @@ jobs:
     
     - name: Cache build
       id: cache
-      if: ${{ matrix.dist == '-tap' }}
+      if: ${{ matrix.type == '-tap' }}
       uses: actions/cache@v3
       with:
 #        key: ${{ github.workflow }}_${{ matrix.dist }}${{ matrix.type }}_${{ env.GIT_VERSION }}
         key: ${{ github.workflow }}_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}
-        lookup-only: true
+#        lookup-only: true
         path: |
           proxysql/
           
@@ -73,9 +73,17 @@ jobs:
 #        echo "GIT_VERSION=${GIT_VERSION}"
 #        echo "GIT_VERSION=${GIT_VERSION}" >> $GITHUB_ENV
         
-    - name: hot fix include
+    - name: hot-fixes
       run: |
         sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
+        sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/aurora.cpp
+        sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tap/SQLite3_Server.cpp
+        sed -i '/LDIRS=/a LDIRS+= -L$(DEPS_PATH)/coredumper/coredumper/src' proxysql/test/tap/tests/Makefile
+        sed -i '/STATIC_LIBS=/a STATIC_LIBS+= $(DEPS_PATH)/coredumper/coredumper/src/libcoredumper.a' proxysql/test/tap/tests/Makefile
+        sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/galera_1_timeout_count.cpp
+        sed -i 's/dump_table_mysql_servers()/dump_table_mysql("mysql_servers")/' proxysql/test/tap/tests/galera_1_timeout_count.cpp
+        sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/galera_2_timeout_no_count.cpp
+        sed -i 's/dump_table_mysql_servers()/dump_table_mysql("mysql_servers")/' proxysql/test/tap/tests/galera_2_timeout_no_count.cpp
         
     - name: Build
       id: build

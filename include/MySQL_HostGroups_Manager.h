@@ -448,7 +448,7 @@ class MySQL_HostGroups_Manager {
 			MySrvC* srv = NULL;
 			unsigned int reader_hostgroup_id = -1;
 			unsigned int writer_hostgroup_id = -1;
-			MySerStatus server_status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
+			//MySerStatus server_status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
 		};
 
 		HostGroup_Server_Mapping(MySQL_HostGroups_Manager* hgm) : readonly_flag(1), myHGM(hgm) { }
