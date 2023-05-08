@@ -133,6 +133,8 @@ int main(int, char**) {
 	}
 
 	// Cleanup
+	MYSQL_QUERY_T(admin, "DROP TABLE mysql_hostgroup_attributes_0508");
+	MYSQL_QUERY_T(admin, "CREATE TABLE mysql_hostgroup_attributes_0508 AS SELECT * FROM disk.mysql_hostgroup_attributes");
 	MYSQL_QUERY_T(admin, "DELETE FROM mysql_hostgroup_attributes");
 	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
@@ -170,6 +172,8 @@ int main(int, char**) {
 
 cleanup:
 
+	MYSQL_QUERY_T(admin, "DELETE FROM disk.mysql_hostgroup_attributes");
+	MYSQL_QUERY_T(admin, "INSERT INTO disk.mysql_hostgroup_attributes SELECT * FROM mysql_hostgroup_attributes_0508");
 	mysql_close(admin);
 
 	return exit_status();
