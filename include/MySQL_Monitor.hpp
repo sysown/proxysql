@@ -200,6 +200,17 @@ enum class MySQL_Monitor_State_Data_Task_Result {
 	TASK_RESULT_PENDING
 };
 
+/**
+ * @brief Holds the info from a GR server definition.
+ */
+struct gr_host_def_t {
+	string host;
+	int port;
+	int use_ssl;
+	bool writer_is_also_reader;
+	int max_transactions_behind;
+	int max_transactions_behind_count;
+};
 
 class MySQL_Monitor_State_Data {
 public:
@@ -237,6 +248,11 @@ public:
 	 * @details Currently only used by 'group_replication'.
 	 */
 	uint64_t init_time = 0;
+	/**
+	 * @brief Used by GroupReplication to determine if servers reported by cluster 'members' are already monitored.
+	 * @details This way we avoid non-needed locking on 'MySQL_HostGroups_Manager' for server search.
+	 */
+	const std::vector<gr_host_def_t>* cur_monitored_gr_srvs = nullptr;
 
 	MySQL_Monitor_State_Data(MySQL_Monitor_State_Data_Task_Type task_type, char* h, int p, bool _use_ssl = 0, int g = 0);
 	~MySQL_Monitor_State_Data();

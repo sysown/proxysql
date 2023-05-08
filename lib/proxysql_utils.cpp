@@ -362,6 +362,18 @@ int wexecvp(
 	return child_err;
 }
 
+std::vector<std::string> split_str(const std::string& s, char delimiter) {
+	std::vector<std::string> tokens {};
+	std::string token {};
+	std::istringstream tokenStream(s);
+
+	while (std::getline(tokenStream, token, delimiter)) {
+		tokens.push_back(token);
+	}
+
+	return tokens;
+}
+
 std::string replace_str(const std::string& str, const std::string& match, const std::string& repl) {
 	if(match.empty()) {
 		return str;

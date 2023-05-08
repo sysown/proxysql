@@ -203,6 +203,13 @@ uint64_t get_timestamp_us();
  */
 std::string replace_str(const std::string& str, const std::string& match, const std::string& repl);
 
+/**
+ * @brief Split a string into a vector of strings with the provided 'char' delimiter.
+ * @param s String to be split.
+ * @param delimiter Delimiter to be used.
+ * @return Vector with the string splits. Empty if none is found.
+ */
+std::vector<std::string> split_str(const std::string& s, char delimiter);
 
 std::string generate_multi_rows_query(int rows, int params);
 #endif

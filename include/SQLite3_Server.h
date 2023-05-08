@@ -5,6 +5,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 #include <vector>
+#include <string>
 
 class SQLite3_Session {
 	public:
@@ -14,7 +15,7 @@ class SQLite3_Session {
 };
 
 #ifdef TEST_GROUPREP
-using group_rep_status = std::tuple<bool, bool, uint32_t>;
+using group_rep_status = std::tuple<bool, bool, uint32_t, std::string>;
 #endif
 
 class SQLite3_Server {

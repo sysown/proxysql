@@ -751,7 +751,7 @@ __run_query:
 				// NOTE: This query should be in one place that can be reused by
 				// 'ProxySQL_Monitor' module.
 				const std::string grouprep_monitor_test_query_start {
-					"SELECT viable_candidate,read_only,transactions_behind "
+					"SELECT viable_candidate,read_only,transactions_behind,members "
 						"FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS "
 				};
 
@@ -769,14 +769,15 @@ __run_query:
 					free(query);
 
 					std::string t_select_as_query {
-						"SELECT '%s' AS viable_candidate, '%s' AS read_only, %d AS transactions_behind"
+						"SELECT '%s' AS viable_candidate, '%s' AS read_only, %d AS transactions_behind, '%s' AS members"
 					};
 					std::string select_as_query {};
 					string_format(
 						t_select_as_query, select_as_query,
 						std::get<0>(gr_srv_status) ? "YES" : "NO",
 						std::get<1>(gr_srv_status) ? "YES" : "NO",
-						std::get<2>(gr_srv_status)
+						std::get<2>(gr_srv_status),
+						std::get<3>(gr_srv_status).c_str()
 					);
 
 					query = static_cast<char*>(malloc(select_as_query.length() + 1));
@@ -913,7 +914,7 @@ __run_query:
 
 #ifdef TEST_GROUPREP
 group_rep_status SQLite3_Server::grouprep_test_value(const std::string& srv_addr) {
-	group_rep_status cur_srv_st { "YES", "YES", 0 };
+	group_rep_status cur_srv_st { "YES", "YES", 0, "" };
 
 	auto it = grouprep_map.find(srv_addr);
 	if (it != grouprep_map.end()) {
@@ -1471,7 +1472,8 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind
 			const group_rep_status srv_status {
 				std::string { r->fields[2] } == "YES" ? true : false,
 				std::string { r->fields[3] } == "YES" ? true : false,
-				atoi(r->fields[4])
+				atoi(r->fields[4]),
+				std::string { r->fields[5] }
 			};
 
 			this->grouprep_map[srv_addr] = srv_status;
@@ -1498,16 +1500,16 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind
 			int hostgroup_id = atoi(r->fields[2]);
 			const std::string t_insert_query {
 				"INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS"
-					" (hostname, port, viable_candidate, read_only, transactions_behind) VALUES"
-					" ('%s', %d, '%s', '%s', 0)"
+					" (hostname, port, viable_candidate, read_only, transactions_behind, members) VALUES"
+					" ('%s', %d, '%s', '%s', 0, '%s')"
 			};
 			std::string insert_query {};
 
 			if (hostgroup_id % 4 == 0) {
-				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "NO");
+				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "NO", "");
 				sessdb->execute(insert_query.c_str());
 			} else {
-				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "YES");
+				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "YES", "");
 				sessdb->execute(insert_query.c_str());
 			}
 		}
@@ -1588,7 +1590,7 @@ bool SQLite3_Server::init() {
 	insert_into_tables_defs(tables_defs_grouprep,
 		(const char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS",
 		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS ("
-			"hostname VARCHAR NOT NULL, port INT NOT NULL, viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null, PRIMARY KEY (hostname, port)"
+			"hostname VARCHAR NOT NULL, port INT NOT NULL, viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null, members VARCHAR NOT NULL, PRIMARY KEY (hostname, port)"
 		")"
 	);
 

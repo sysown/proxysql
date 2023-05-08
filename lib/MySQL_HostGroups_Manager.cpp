@@ -2427,6 +2427,11 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 
 
 	// it is now time to build a new structure in Monitor
+	generate_mysql_group_replication_hostgroups_monitor_resultset();
+	pthread_mutex_unlock(&Group_Replication_Info_mutex);
+}
+
+void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_monitor_resultset() {
 	pthread_mutex_lock(&GloMyMon->group_replication_mutex);
 	{
 		char *error=NULL;
@@ -2445,8 +2450,6 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 		}
 	}
 	pthread_mutex_unlock(&GloMyMon->group_replication_mutex);
-
-	pthread_mutex_unlock(&Group_Replication_Info_mutex);
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
@@ -5643,6 +5646,69 @@ void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hos
 		// we couldn't find the cluster, exits
 	}
 	pthread_mutex_unlock(&Group_Replication_Info_mutex);
+}
+
+void MySQL_HostGroups_Manager::update_group_replication_add_autodiscovered(
+	const string& _host, int _port, int _wr_hg
+) {
+	pthread_mutex_lock(&Group_Replication_Info_mutex);
+	const auto gr_info_map_it = this->Group_Replication_Info_Map.find(_wr_hg);
+	int32_t reader_hg = -1;
+
+	if (gr_info_map_it == Group_Replication_Info_Map.end()) {
+		assert(0);
+	} else {
+		reader_hg = gr_info_map_it->second->reader_hostgroup;
+	}
+	pthread_mutex_unlock(&Group_Replication_Info_mutex);
+
+	wrlock();
+
+	MyHGC *myhgc = MyHGC_lookup(reader_hg);
+	bool srv_found = false;
+	bool srv_found_offline = false;
+
+	for (uint32_t j = 0; j < myhgc->mysrvs->cnt(); j++) {
+		MySrvC* mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
+
+		// TODO: Motivation for this logic needs to be better described
+		if (strcmp(mysrvc->address,_host.c_str())==0 && mysrvc->port==_port) {
+			srv_found = true;
+			if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				proxy_info(
+					"Found healthy previously discovered GR node %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
+						" hostgroup=%d, weight=%ld, max_connections=%ld, use_ssl=%d\n",
+					_host.c_str(), _port, reader_hg, mysrvc->weight, mysrvc->max_connections, mysrvc->use_ssl
+				);
+				mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+				srv_found_offline = true;
+			}
+		}
+	}
+
+	if (srv_found == false) {
+		MySrvC* mysrvc = new MySrvC(
+			const_cast<char*>(_host.c_str()), _port, 0, -1, MYSQL_SERVER_STATUS_ONLINE, 0, -1, 0, -1, 0, const_cast<char*>("")
+		);
+		add(mysrvc, reader_hg);
+		proxy_info(
+			"Adding new discovered GR node %s:%d with: hostgroup=%d, weight=%ld, max_connections=%ld, use_ssl=%d\n",
+			_host.c_str(), _port, reader_hg, mysrvc->weight, mysrvc->max_connections, mysrvc->use_ssl
+		);
+	}
+
+	if (srv_found == false || srv_found_offline) {
+		purge_mysql_servers_table();
+
+		mydb->execute("DELETE FROM mysql_servers");
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+
+		generate_mysql_servers_table();
+		update_table_mysql_servers_for_monitor(false);
+		generate_mysql_group_replication_hostgroups_monitor_resultset();
+	}
+
+	wrunlock();
 }
 
 Galera_Info::Galera_Info(int w, int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {

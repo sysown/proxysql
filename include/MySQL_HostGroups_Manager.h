@@ -585,6 +585,17 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *incoming_replication_hostgroups;
 
 	void generate_mysql_group_replication_hostgroups_table();
+	/**
+	 * @brief Regenerates the resultset used by 'MySQL_Monitor' containing the servers to be monitored.
+	 * @details This function is required to be called after any action that results in the addition of a new
+	 * 	server that 'MySQL_Monitor' should be aware of for 'group_replication', i.e. a server added to the
+	 * 	hostgroups present in any entry of 'mysql_group_replication_hostgroups'. E.g:
+	 * 	  - Inside 'generate_mysql_group_replication_hostgroups_table'.
+	 * 	  - Autodiscovery.
+	 *
+	 * 	NOTE: This is a common pattern for all the clusters monitoring.
+	 */
+	void generate_mysql_group_replication_hostgroups_monitor_resultset();
 	SQLite3_result *incoming_group_replication_hostgroups;
 
 	pthread_mutex_t Group_Replication_Info_mutex;
@@ -812,6 +823,31 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
+	/**
+	 * @brief Tries to add a new server found during GR autodiscovery to the supplied hostgroup.
+	 * @details For adding the new server, several actions are performed:
+	 *  1. Lookup the target server in the corresponding MyHGC for the supplied hostgroup.
+	 *  2. If server is found, and it's status isn't 'OFFLINE_HARD' do nothing. Otherwise:
+	 *      - If server is found as 'OFFLINE_HARD', re-enable the server, log the action.
+	 *      - If server isn't found, create it in the corresponding reader hostgroup of the supplied writer
+	 *        hostgroup, setting all 'servers_defaults' params as '-1', log the action.pasalo
+	 *      - After any of the two previous actions, always regenerate servers data structures.
+	 *
+	 *  NOTE: Server data structures regeneration requires:
+	 *   1. Purging the 'mysql_servers_table' (Lazy removal of 'OFFLINE_HARD' servers.)
+	 *   2. Regenerate the actual 'myhgm::mysql_servers' table from memory structures.
+	 *   3. Update the 'mysql_servers' resultset used for monitoring. This resultset is used for general
+	 *      monitoring actions like 'ping', 'connect'.
+	 *   4. Regenerate the specific resultset for 'Group Replication' monitoring. This resultset is the way to
+	 *      communicate back to the main monitoring thread that servers config has changed, and a new thread
+	 *      shall be created with the new servers config. This same principle is used for Aurora.
+	 *
+	 * @param _host Server address.
+	 * @param _port Server port.
+	 * @param _wr_hg Writer hostgroup of the cluster being monitored. Autodiscovered servers are always added
+	 *   to the reader hostgroup by default, later monitoring actions will re-position the server is required.
+	 */
+	void update_group_replication_add_autodiscovered(const std::string& _host, int _port, int _wr_hg);
 	void converge_group_replication_config(int _writer_hostgroup);
 	/**
 	 * @brief Set the supplied server as SHUNNED, this function shall be called
