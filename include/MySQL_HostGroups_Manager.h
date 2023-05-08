@@ -155,7 +155,7 @@ class MySrvC {	// MySQL Server Container
 	unsigned int connect_OK;
 	unsigned int connect_ERR;
 	unsigned int cur_replication_lag_count;
-	// note that these variables are in microsecond, while user defines max lantency in millisecond
+	// note that these variables are in microsecond, while user defines max latency in millisecond
 	unsigned int current_latency_us;
 	unsigned int max_latency_us;
 	time_t time_last_detected_error;
@@ -171,7 +171,7 @@ class MySrvC {	// MySQL Server Container
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
 	/**
-	 * @brief ConstructConstructss a new MySQL Server Container.
+	 * @brief Constructs a new MySQL Server Container.
 	 * @details For 'server_defaults' parameters, if '-1' is supplied, they try to be obtained from
 	 *  'servers_defaults' entry from 'mysql_hostgroup_attributes' when adding the server to it's target
 	 *  hostgroup(via 'MySQL_HostGroups_Manager::add'), if not found, value is set with 'mysql_servers'
@@ -197,9 +197,8 @@ class MySrvC {	// MySQL Server Container
 	void connect_error(int, bool get_mutex=true);
 	void shun_and_killall();
 	/**
-	 * Update the maximum number of used connections
-	 * @return 
-	 *  the maximum number of used connections
+	 * @brief Update the maximum number of used connections
+	 * @return The maximum number of used connections
 	 */
 	unsigned int update_max_connections_used()
 	{
