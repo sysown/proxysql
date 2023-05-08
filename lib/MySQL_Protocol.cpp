@@ -149,14 +149,6 @@ void proxy_compute_sha1_hash_multi(uint8_t *digest, const char *buf1, int len1, 
 	unsigned int olen = 0;
 	EVP_DigestFinal(ctx, md, &olen);
 	EVP_MD_CTX_free(ctx);
-#ifdef DEBUG // FIXME: remove this in future release
-  SHA_CTX sha1_context;
-  SHA1_Init(&sha1_context);
-  SHA1_Update(&sha1_context, buf1, len1);
-  SHA1_Update(&sha1_context, buf2, len2);
-  SHA1_Final(digest, &sha1_context);
-	assert(memcmp(md, digest, SHA_DIGEST_LENGTH)==0);
-#endif
 }
 
 void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
@@ -171,13 +163,6 @@ void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
 	unsigned int olen = 0;
 	EVP_DigestFinal(ctx, md, &olen);
 	EVP_MD_CTX_free(ctx);
-#ifdef DEBUG // FIXME: remove this in future release 
-  SHA_CTX sha1_context;
-  SHA1_Init(&sha1_context);
-  SHA1_Update(&sha1_context, buf, len);
-  SHA1_Final(digest, &sha1_context);
-	assert(memcmp(md, digest, SHA_DIGEST_LENGTH)==0);
-#endif
 }
 
 void proxy_compute_two_stage_sha1_hash(const char *password, size_t pass_len, uint8_t *hash_stage1, uint8_t *hash_stage2) {
@@ -2148,20 +2133,6 @@ __do_auth:
 						unsigned char md2_buf[SHA_DIGEST_LENGTH];
 						SHA1(pass,pass_len,md1_buf);
 						SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
-
-#ifdef DEBUG // FIXME: remove this in future release
-						uint8_t hash_stage1[SHA_DIGEST_LENGTH];
-						uint8_t hash_stage2[SHA_DIGEST_LENGTH];
-						SHA_CTX sha1_context;
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context, pass, pass_len);
-						SHA1_Final(hash_stage1, &sha1_context);
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
-						SHA1_Final(hash_stage2, &sha1_context);
-						assert(memcmp(md1_buf,hash_stage1,SHA_DIGEST_LENGTH)==0);
-						assert(memcmp(md2_buf,hash_stage2,SHA_DIGEST_LENGTH)==0);
-#endif
 
 						char *double_hashed_password = sha1_pass_hex((char *)md2_buf); // note that sha1_pass_hex() returns a new buffer
 
