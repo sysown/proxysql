@@ -1890,7 +1890,7 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 				}
 
 				HostGroup_Server_Mapping::Node node;
-				node.server_status = static_cast<MySerStatus>(atoi(r->fields[3]));
+				//node.server_status = static_cast<MySerStatus>(atoi(r->fields[3]));
 				node.reader_hostgroup_id = atoi(r->fields[4]);
 				node.writer_hostgroup_id = atoi(r->fields[5]);
 				node.srv = reinterpret_cast<MySrvC*>(atoll(r->fields[6]));

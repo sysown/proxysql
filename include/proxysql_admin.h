@@ -130,7 +130,7 @@ struct incoming_servers_t {
 	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
-// Seperate structs for runtime mysql server and mysql server v2 to avoid human error
+// Separate structs for runtime mysql server and mysql server v2 to avoid human error
 struct runtime_mysql_servers_checksum_t {
 	std::string checksum;
 	time_t epoch;
