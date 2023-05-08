@@ -1871,7 +1871,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Loading runtime_mysql_servers from peer %s:%d into mysql_servers_incoming", hostname, port);
 						MyHGM->servers_add(runtime_mysql_servers_resultset.get());
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Updating runtime_mysql_servers from peer %s:%d", hostname, port);
-						MyHGM->commit(runtime_mysql_servers_resultset.release(), peer_runtime_mysql_server, nullptr, {}, true);
+						MyHGM->commit(runtime_mysql_servers_resultset.release(), peer_runtime_mysql_server, nullptr, {}, true, true);
 
 						if (GloProxyCluster->cluster_mysql_servers_save_to_disk == true) {
 							proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Saving Runtime MySQL Servers to Database\n");

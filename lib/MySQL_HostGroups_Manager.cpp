@@ -1907,7 +1907,7 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 bool MySQL_HostGroups_Manager::commit(
 	SQLite3_result* runtime_mysql_servers, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
 	SQLite3_result* mysql_servers_v2, const mysql_servers_v2_checksum_t& peer_mysql_server_v2,
-	bool only_commit_runtime_mysql_servers
+	bool only_commit_runtime_mysql_servers, bool update_version
 ) {
 	// if only_commit_runtime_mysql_servers is true, mysql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_mysql_servers) {
@@ -2182,7 +2182,10 @@ bool MySQL_HostGroups_Manager::commit(
 	sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
 	pthread_mutex_lock(&GloVars.checksum_mutex);
 	GloVars.checksums_values.mysql_servers.set_checksum(buf);
-	GloVars.checksums_values.mysql_servers.version++;
+
+	if (update_version)
+		GloVars.checksums_values.mysql_servers.version++;
+
 	//struct timespec ts;
 	//clock_gettime(CLOCK_REALTIME, &ts);
 	if (peer_runtime_mysql_server.epoch != 0 && peer_runtime_mysql_server.checksum.empty() == false &&
@@ -2196,7 +2199,9 @@ bool MySQL_HostGroups_Manager::commit(
 		memcpy(&d32, &mysql_servers_v2_checksum, sizeof(mysql_servers_v2_checksum));
 		sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
 		GloVars.checksums_values.mysql_servers_v2.set_checksum(buf);
-		GloVars.checksums_values.mysql_servers_v2.version++;
+
+		if (update_version)
+			GloVars.checksums_values.mysql_servers_v2.version++;
 
 		if (peer_mysql_server_v2.epoch != 0 && peer_mysql_server_v2.checksum.empty() == false &&
 			GloVars.checksums_values.mysql_servers_v2.checksum == peer_mysql_server_v2.checksum) {
@@ -5128,7 +5133,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 		sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
 		pthread_mutex_lock(&GloVars.checksum_mutex);
 		GloVars.checksums_values.mysql_servers.set_checksum(buf);
-		GloVars.checksums_values.mysql_servers.version++;
+		//GloVars.checksums_values.mysql_servers.version++;
 		//struct timespec ts;
 		//clock_gettime(CLOCK_REALTIME, &ts);
 		time_t t = time(NULL);
