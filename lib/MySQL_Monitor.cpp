@@ -235,7 +235,20 @@ __conn_register_label:
 #endif // DEBUG
 		return;
 	};
-	// TODO: Document 'unregister' flow related async fetching and 'task_handlers'.
+	/**
+	 * @brief Unregister the conn from the supplied 'mmsd'.
+	 * @details DEBUG only helper function useful for checking the get/put connection flow
+	 *  for 'MySQL_Monitor_Connection_Pool'. This function should be called whenever a monitoring action does
+	 *  no longer require the conn of it's 'MMSD' and the conn has been considered 'non-suited' for being
+	 *  returned to the conn pool. This can be due to a failure in the data querying from the server itself,
+	 *  or due to unexpected data retrieved from the server. Due to this, the flow for calling this function
+	 *  during 'async' monitoring actions is:
+	 *   - If an error has taken place during the fetching itself, this function shall be called as soon as
+	 *     the failure is detected by the async state machine.
+	 *   - In case no error has taken place (TASK_RESULT_SUCCESS), this function should be called by the
+	 *     task-handler if it determines that the retrieved data is malformed. See handle_mmsd_mysql_conn.
+	 * @param mmsd The 'mmsd' which conn should be unregistered.
+	 */
 	void conn_unregister(MySQL_Monitor_State_Data *mmsd) {
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);

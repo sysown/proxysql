@@ -3427,23 +3427,13 @@ inline double get_prometheus_counter_val(
 	return current_val;
 }
 
-void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding MySrvC %p (%s:%d) for hostgroup %d\n", mysrvc, mysrvc->address, mysrvc->port, _hid);
+void reset_hg_attrs_server_defaults(MySrvC* mysrvc) {
+	mysrvc->weight = -1;
+	mysrvc->max_connections = -1;
+	mysrvc->use_ssl = -1;
+}
 
-	// Since metrics for servers are stored per-endpoint; the metrics for a particular endpoint can live longer than the
-	// 'MySrvC' itself. For example, a failover or a server config change could remove the server from a particular
-	// hostgroup, and a subsequent one bring it back to the original hostgroup. For this reason, everytime a 'mysrvc' is
-	// created and added to a particular hostgroup, we update the endpoint metrics for it.
-	std::string endpoint_id { std::to_string(_hid) + ":" + string { mysrvc->address } + ":" + std::to_string(mysrvc->port) };
-
-	mysrvc->bytes_recv = get_prometheus_counter_val(this->status.p_conn_pool_bytes_data_recv_map, endpoint_id);
-	mysrvc->bytes_sent = get_prometheus_counter_val(this->status.p_conn_pool_bytes_data_sent_map, endpoint_id);
-	mysrvc->connect_ERR = get_prometheus_counter_val(this->status.p_connection_pool_conn_err_map, endpoint_id);
-	mysrvc->connect_OK = get_prometheus_counter_val(this->status.p_connection_pool_conn_ok_map, endpoint_id);
-	mysrvc->queries_sent = get_prometheus_counter_val(this->status.p_connection_pool_queries_map, endpoint_id);
-
-	MyHGC *myhgc=MyHGC_lookup(_hid);
-
+void update_hg_attrs_server_defaults(MySrvC* mysrvc, MyHGC* myhgc) {
 	if (mysrvc->weight == -1) {
 		if (myhgc->servers_defaults.weight != -1) {
 			mysrvc->weight = myhgc->servers_defaults.weight;
@@ -3468,7 +3458,25 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 			mysrvc->use_ssl = 0;
 		}
 	}
+}
 
+void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding MySrvC %p (%s:%d) for hostgroup %d\n", mysrvc, mysrvc->address, mysrvc->port, _hid);
+
+	// Since metrics for servers are stored per-endpoint; the metrics for a particular endpoint can live longer than the
+	// 'MySrvC' itself. For example, a failover or a server config change could remove the server from a particular
+	// hostgroup, and a subsequent one bring it back to the original hostgroup. For this reason, everytime a 'mysrvc' is
+	// created and added to a particular hostgroup, we update the endpoint metrics for it.
+	std::string endpoint_id { std::to_string(_hid) + ":" + string { mysrvc->address } + ":" + std::to_string(mysrvc->port) };
+
+	mysrvc->bytes_recv = get_prometheus_counter_val(this->status.p_conn_pool_bytes_data_recv_map, endpoint_id);
+	mysrvc->bytes_sent = get_prometheus_counter_val(this->status.p_conn_pool_bytes_data_sent_map, endpoint_id);
+	mysrvc->connect_ERR = get_prometheus_counter_val(this->status.p_connection_pool_conn_err_map, endpoint_id);
+	mysrvc->connect_OK = get_prometheus_counter_val(this->status.p_connection_pool_conn_ok_map, endpoint_id);
+	mysrvc->queries_sent = get_prometheus_counter_val(this->status.p_connection_pool_queries_map, endpoint_id);
+
+	MyHGC *myhgc=MyHGC_lookup(_hid);
+	update_hg_attrs_server_defaults(mysrvc, myhgc);
 	myhgc->mysrvs->add(mysrvc);
 }
 
@@ -5671,10 +5679,16 @@ void MySQL_HostGroups_Manager::update_group_replication_add_autodiscovered(
 	for (uint32_t j = 0; j < myhgc->mysrvs->cnt(); j++) {
 		MySrvC* mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
 
-		// TODO: Motivation for this logic needs to be better described
+		// If the server is found as 'OFFLINE_HARD' we reset the 'MySrvC' values corresponding with the
+		// 'servers_defaults' (as in a new 'MySrvC' creation). We then later update these values with the
+		// 'servers_defaults' attributes from its corresponding 'MyHGC'. This way we ensure uniform behavior
+		// of new servers, and 'OFFLINE_HARD' ones when a user update 'servers_defaults' values, and reloads
+		// the servers to runtime.
 		if (strcmp(mysrvc->address,_host.c_str())==0 && mysrvc->port==_port) {
 			srv_found = true;
 			if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				reset_hg_attrs_server_defaults(mysrvc);
+				update_hg_attrs_server_defaults(mysrvc, mysrvc->myhgc);
 				proxy_info(
 					"Found healthy previously discovered GR node %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
 						" hostgroup=%d, weight=%ld, max_connections=%ld, use_ssl=%d\n",

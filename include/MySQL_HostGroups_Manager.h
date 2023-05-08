@@ -828,9 +828,11 @@ class MySQL_HostGroups_Manager {
 	 * @details For adding the new server, several actions are performed:
 	 *  1. Lookup the target server in the corresponding MyHGC for the supplied hostgroup.
 	 *  2. If server is found, and it's status isn't 'OFFLINE_HARD' do nothing. Otherwise:
-	 *      - If server is found as 'OFFLINE_HARD', re-enable the server, log the action.
+	 *      - If server is found as 'OFFLINE_HARD', reset the internal values corresponding to
+	 *        'servers_defaults' values to '-1', update the defaulted values to the ones in its 'MyHGC', lastly
+	 *        re-enable the server and log the action.
 	 *      - If server isn't found, create it in the corresponding reader hostgroup of the supplied writer
-	 *        hostgroup, setting all 'servers_defaults' params as '-1', log the action.pasalo
+	 *        hostgroup, setting all 'servers_defaults' params as '-1', log the action.
 	 *      - After any of the two previous actions, always regenerate servers data structures.
 	 *
 	 *  NOTE: Server data structures regeneration requires:
