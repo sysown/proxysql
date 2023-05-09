@@ -3582,13 +3582,20 @@ gr_srv_st_t extract_gr_srv_st(MySQL_Monitor_State_Data* mmsd) {
 		num_rows = mysql_num_rows(mmsd->result);
 
 		if (fields == NULL || num_fields!=4 || num_rows!=1) {
-			proxy_error(
-				"'mysql_fetch_fields' returns 'NULL', or 'mysql_num_fields(%d)', or 'mysql_num_rows(%d)' are incorrect."
-					" Server %s:%d. See bug #1994\n",
-				num_fields, num_rows, mmsd->hostname, mmsd->port
-			);
+			if (num_rows == 0) {
+				proxy_error(
+					"Empty resultset for GR monitoring query from server %s:%d. Server is likely misconfigured\n",
+					mmsd->hostname, mmsd->port
+				);
+			} else {
+				proxy_error(
+					"Invalid resultset for GR monitoring query from server %s:%d. Either 'mysql_fetch_fields=NULL' or unexpected 'mysql_num_fields=%d'."
+						" Please report this incident\n",
+					 mmsd->hostname, mmsd->port, num_fields
+				);
+			}
 			if (mmsd->mysql_error_msg == NULL) {
-				mmsd->mysql_error_msg = strdup("Unknown error");
+				mmsd->mysql_error_msg = strdup("Invalid or malformed resultset");
 			}
 			gr_srv_st.inv_srv_state = true;
 		} else {
@@ -3861,7 +3868,7 @@ void gr_report_fetching_errs(MySQL_Monitor_State_Data* mmsd) {
  */
 void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
 	// We base 'start_time' on the conn init for 'MySQL_Monitor_State_Data'. If a conn creation was
-	// required, we take into account this time into account, otherwise we asume that 'start_time=t1'.
+	// required, we take into account this time into account, otherwise we assume that 'start_time=t1'.
 	uint64_t start_time = 0;
 	if (mmsd->created_conn) {
 		start_time = mmsd->init_time;
