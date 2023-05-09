@@ -30,7 +30,7 @@ jobs:
         
     - name: hot-fixes
       run: |
-        sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
+        #sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
         #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/aurora.cpp
         #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tap/SQLite3_Server.cpp
         #sed -i '/LDIRS=/a LDIRS+= -L$(DEPS_PATH)/coredumper/coredumper/src' proxysql/test/tap/tests/Makefile
