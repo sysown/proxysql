@@ -3682,7 +3682,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		if (!strncasecmp("LOGENTRY ", query_no_space, strlen("LOGENTRY "))) {
 			proxy_debug(PROXY_DEBUG_ADMIN, 4, "Received command LOGENTRY: %s\n", query_no_space + strlen("LOGENTRY "));
 			proxy_info("Received command LOGENTRY: %s\n", query_no_space + strlen("LOGENTRY "));
-			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, NULL);
+			SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL, 0);
 			run_query=false;
 			goto __run_query;
 		 }
@@ -7468,7 +7468,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 	vector<fast_routing_hashmap_t> th_hashmaps {};
 
 	if (maps_per_thread) {
-		for (uint32_t i = 0; i < ths; i++) {
+		for (int i = 0; i < ths; i++) {
 			th_hashmaps.push_back(GloQPro->create_fast_routing_hashmap(resultset2));
 		}
 	}
@@ -7505,7 +7505,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 	unsigned long long curtime1 = monotonic_time() / 1000;
 	std::vector<std::thread> workers {};
 
-	for (uint32_t i = 0; i < ths; i++) {
+	for (int i = 0; i < ths; i++) {
 		khash_t(khStrInt)* hashmap = maps_per_thread ? th_hashmaps[i].rules_fast_routing : nullptr;
 		workers.push_back(std::thread(perform_searches, hashmap, resultset, i, lock));
 	}
@@ -7525,7 +7525,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 			for (int i=1 ; i < cnt; i++) {
 				std::vector<std::thread> workers {};
 
-				for (uint32_t i = 0; i < ths; i++) {
+				for (int i = 0; i < ths; i++) {
 					khash_t(khStrInt)* hashmap = maps_per_thread ? th_hashmaps[i].rules_fast_routing : nullptr;
 					workers.push_back(std::thread(perform_searches, hashmap, resultset, i, lock));
 				}
@@ -11141,16 +11141,12 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 					if (r->fields[1][0]=='*') { // the password is already hashed
 						password=strdup(r->fields[1]);
 					} else { // we must hash it
-						uint8 hash_stage1[SHA_DIGEST_LENGTH];
-						uint8 hash_stage2[SHA_DIGEST_LENGTH];
-						SHA_CTX sha1_context;
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context, r->fields[1], strlen(r->fields[1]));
-						SHA1_Final(hash_stage1, &sha1_context);
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
-						SHA1_Final(hash_stage2, &sha1_context);
-						password=sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
+						unsigned char md1_buf[SHA_DIGEST_LENGTH];
+						unsigned char md2_buf[SHA_DIGEST_LENGTH];
+						SHA1((const unsigned char *)r->fields[1], strlen(r->fields[1]),md1_buf);
+						SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
+
+						password=sha1_pass_hex((char *)md2_buf); // note that sha1_pass_hex() returns a new buffer
 					}
 				} else {
 					password=strdup((char *)""); // we also generate a new string if hash_passwords is set
