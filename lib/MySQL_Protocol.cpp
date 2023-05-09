@@ -1434,26 +1434,20 @@ bool MySQL_Protocol::verify_user_pass(
 		} else {
 			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 				proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
-				uint8_t hash_stage1[SHA_DIGEST_LENGTH];
-				uint8_t hash_stage2[SHA_DIGEST_LENGTH];
-				SHA_CTX sha1_context;
-				SHA1_Init(&sha1_context);
-				SHA1_Update(&sha1_context, pass, pass_len);
-				SHA1_Final(hash_stage1, &sha1_context);
-				SHA1_Init(&sha1_context);
-				SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
-				SHA1_Final(hash_stage2, &sha1_context);
-				// note that sha1_pass_hex() returns a new buffer
-				char *double_hashed_password = sha1_pass_hex((char *)hash_stage2);
+				unsigned char md1_buf[SHA_DIGEST_LENGTH];
+				unsigned char md2_buf[SHA_DIGEST_LENGTH];
+				SHA1((const unsigned char *)pass,pass_len,md1_buf);
+				SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
+				char *double_hashed_password = sha1_pass_hex((char *)md2_buf); // note that sha1_pass_hex() returns a new buffer
 
 				if (strcasecmp(double_hashed_password,password)==0) {
 					ret = true;
 					if (sha1_pass==NULL) {
-						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,hash_stage1);
+						GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,md1_buf);
 					}
 					if (userinfo->sha1_pass)
 						free(userinfo->sha1_pass);
-					userinfo->sha1_pass=sha1_pass_hex((char *)hash_stage1);
+					userinfo->sha1_pass=sha1_pass_hex((char *)md1_buf);
 				} else {
 					ret = false;
 				}
@@ -2066,6 +2060,7 @@ void MySQL_Protocol::PPHR_7auth2(
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, vars1.user, session_type);
+/*
 		uint8_t hash_stage1[SHA_DIGEST_LENGTH];
 		uint8_t hash_stage2[SHA_DIGEST_LENGTH];
 		SHA_CTX sha1_context;
@@ -2076,15 +2071,22 @@ void MySQL_Protocol::PPHR_7auth2(
 		SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
 		SHA1_Final(hash_stage2, &sha1_context);
 		char *double_hashed_password = sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
+*/
+		unsigned char md1_buf[SHA_DIGEST_LENGTH];
+		unsigned char md2_buf[SHA_DIGEST_LENGTH];
+		SHA1(vars1.pass, vars1.pass_len, md1_buf);
+		SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
+		char *double_hashed_password = sha1_pass_hex((char *)md2_buf); // note that sha1_pass_hex() returns a new buffer
+
 		if (strcasecmp(double_hashed_password,vars1.password)==0) {
 			ret = true;
 			if (sha1_pass==NULL) {
 				// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-				GloMyAuth->set_SHA1((char *)vars1.user, USERNAME_FRONTEND,hash_stage1);
+				GloMyAuth->set_SHA1((char *)vars1.user, USERNAME_FRONTEND,md1_buf);
 			}
 			if (userinfo->sha1_pass)
 				free(userinfo->sha1_pass);
-			userinfo->sha1_pass=sha1_pass_hex((char *)hash_stage1);
+			userinfo->sha1_pass=sha1_pass_hex((char *)md1_buf);
 		} else {
 			ret = false;
 		}
