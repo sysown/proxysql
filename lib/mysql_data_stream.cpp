@@ -290,7 +290,7 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	DSS=STATE_NOT_CONNECTED;
 	encrypted=false;
 	switching_auth_stage = 0;
-	switching_auth_type = 0;
+	switching_auth_type = -1;
 	auth_in_progress = 0;
 	x509_subject_alt_name=NULL;
 	ssl=NULL;

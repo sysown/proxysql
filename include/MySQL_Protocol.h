@@ -131,12 +131,14 @@ class MySQL_Protocol {
 	bool dump_pkt;
 #endif
 	MySQL_Prepared_Stmt_info *current_PreStmt;
+	int sent_auth_plugin_id;
 	int auth_plugin_id;
 	uint16_t prot_status;
 	bool more_data_needed;
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	MySQL_Protocol() {
-		auth_plugin_id = 0;
+		sent_auth_plugin_id = 0;
+		auth_plugin_id = -1;
 		prot_status=0;
 		more_data_needed = false;
 	}
@@ -164,7 +166,7 @@ class MySQL_Protocol {
 	bool generate_pkt_field(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, char *schema, char *table, char *org_table, char *name, char *org_name, uint16_t charset, uint32_t column_length, uint8_t type, uint16_t flags, uint8_t decimals, bool field_list, uint64_t defvalue_length, char *defvalue, MySQL_ResultSet *myrs=NULL);
 	bool generate_pkt_row(bool send, void **ptr, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt);
 	uint8_t generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *len, uint8_t sequence_id, int colnums, unsigned long *fieldslen, char **fieldstxt, unsigned long rl);
-	bool generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *thread_id, bool deprecate_eof_active);
+	bool generate_pkt_initial_handshake(bool send, void **ptr, unsigned int *len, uint32_t *thread_id, bool deprecate_eof_active, int use_plugin_id = 0);
 //	bool generate_statistics_response(MySQL_Data_Stream *myds, bool send, void **ptr, unsigned int *len);
 	bool generate_statistics_response(bool send, void **ptr, unsigned int *len);
 
