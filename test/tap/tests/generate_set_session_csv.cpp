@@ -125,11 +125,13 @@ void add_values_and_quotes(const std::string& name, const std::vector<std::strin
 int main() {
 
 	srand(1);
+	vars["log_queries_not_using_indexes"] = new variable("log_queries_not_using_indexes", false, false, true);
+	vars["log_queries_not_using_indexes"]->add(bool_values);
 	vars["sql_log_bin"] = new variable("sql_log_bin", false, false, true);
 	vars["sql_log_bin"]->add(bool_values);
 	vars["sql_safe_updates"] = new variable("sql_safe_updates", true, false, true);
 	vars["sql_safe_updates"]->add(bool_values);
-	vars["sql_big_selects"] = new variable("sql_safe_updates", true, false, true);
+	vars["sql_big_selects"] = new variable("sql_big_selects", true, false, true);
 	vars["sql_big_selects"]->add(bool_values);
 //	vars["wsrep_sync_wait"] = new variable("wsrep_sync_wait", true, false);
 //	vars["wsrep_sync_wait"]->add(bool_values);
@@ -231,8 +233,8 @@ int main() {
 	vars["session_track_gtids"]->add("OWN_GTID");
 //	vars["session_track_gtids"]->add("OFF");
 //	vars["session_track_gtids"]->add("ALL_GTID");
-	
-	
+
+
 	vars["optimizer_switch"] = new variable("optimizer_switch", true, false, false);
 	vars["optimizer_switch"]->add(std::vector<std::string> {"'materialization=off'", "`materialization=on`", "\"materialization=off\""});
 	vars["optimizer_switch"]->add(std::vector<std::string> {"'index_merge_union=off'", "`index_merge_union=on`", "\"index_merge_union=off\""});
@@ -251,6 +253,10 @@ int main() {
 	vars["lc_messages"]->add(std::vector<std::string> {"it_IT", "'it_IT'", "`it_IT`", "\"it_IT\""});
 	vars["lc_messages"]->add(std::vector<std::string> {"es_ES", "'es_ES'", "`es_ES`", "\"es_ES\""});
 	vars["lc_messages"]->add(std::vector<std::string> {"fr_FR", "'fr_FR'", "`fr_FR`", "\"fr_FR\""});
+
+    vars["log_slow_filter"] = new variable("log_slow_filter", true, false, false);
+	vars["log_slow_filter"]->add(std::vector<std::string> {"not_using_index", "'not_using_index'", "`not_using_index`", "\"not_using_index\""});
+	vars["log_slow_filter"]->add(std::vector<std::string> {"admin, filesort, filesort_on_disk, full_join", "'admin, filesort, filesort_on_disk, full_join'", "`admin, filesort, filesort_on_disk, full_join`", "\"admin, filesort, filesort_on_disk, full_join\""});
 
 	vars["time_zone"] = new variable("time_zone", true, false, false);
 	vars["time_zone"]->add(std::vector<std::string> {"'+01:00'", "`+02:15`", "\"+03:30\""});

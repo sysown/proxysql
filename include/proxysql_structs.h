@@ -195,6 +195,8 @@ enum mysql_variable_name {
 	SQL_LC_MESSAGES,
 	SQL_LC_TIME_NAMES,
 	SQL_LOCK_WAIT_TIMEOUT,
+	SQL_LOG_QUERIES_NOT_USING_INDEXES,
+	SQL_LOG_SLOW_FILTER,
 	SQL_LONG_QUERY_TIME,
 	SQL_MAX_EXECUTION_TIME,
 	SQL_MAX_HEAP_TABLE_SIZE,
@@ -549,7 +551,7 @@ struct __SQP_query_parser_t {
 struct _PtrSize_t {
   unsigned int size;
   void *ptr;
-}; 
+};
 // struct for debugging module
 #ifdef DEBUG
 struct _debug_level {
@@ -600,7 +602,7 @@ struct mysql_protocol_events {
 
 // this struct define global variable entries, and how these are configured during startup
 struct _global_variable_entry_t {
-	const char *group_name;	// [group name] in proxysql.cnf 
+	const char *group_name;	// [group name] in proxysql.cnf
 	const char *key_name;	// key name
 	int dynamic;	// if dynamic > 0 , reconfigurable
 	//GOptionArg arg;	// type of variable
@@ -762,7 +764,7 @@ EXTERN global_variables glovars;
 #ifndef GLOBAL_DEFINED_OPTS_ENTRIES
 #define GLOBAL_DEFINED_OPTS_ENTRIES
 ProxySQL_GlobalVariables GloVars {};
-#endif // GLOBAL_DEFINED_OPTS_ENTRIES 
+#endif // GLOBAL_DEFINED_OPTS_ENTRIES
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
 MySQL_HostGroups_Manager *MyHGM;
@@ -1155,6 +1157,8 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_LC_MESSAGES,                SETTING_VARIABLE, true,  false, false, false, (char *)"lc_messages",                NULL, (char *)"" , false} ,
 	{ SQL_LC_TIME_NAMES,              SETTING_VARIABLE, true,  false, false, false, (char *)"lc_time_names",              NULL, (char *)"" , false} ,
 	{ SQL_LOCK_WAIT_TIMEOUT,          SETTING_VARIABLE, false, false, true,  false, (char *)"lock_wait_timeout",          NULL, (char *)"" , false} ,
+	{ SQL_LOG_QUERIES_NOT_USING_INDEXES, SETTING_VARIABLE, true,  false, false, true, (char *)"log_queries_not_using_indexes", NULL, (char *)"OFF" , true} ,
+	{ SQL_LOG_SLOW_FILTER,            SETTING_VARIABLE, true,  false, false, false, (char *)"log_slow_filter",            NULL, (char *)"" , false} ,
 	{ SQL_LONG_QUERY_TIME,            SETTING_VARIABLE, false, false, true,  false, (char *)"long_query_time",            NULL, (char *)"" , false} ,
 	{ SQL_MAX_EXECUTION_TIME,         SETTING_VARIABLE, false, false, true,  false, (char *)"max_execution_time",         NULL, (char *)"" , false} ,
 	{ SQL_MAX_HEAP_TABLE_SIZE,        SETTING_VARIABLE, false, false, true,  false, (char *)"max_heap_table_size",        NULL, (char *)"18446744073709547520" , false} ,
