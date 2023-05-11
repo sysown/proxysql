@@ -75,15 +75,15 @@ jobs:
         
     - name: hot-fixes
       run: |
-        sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
-        sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/aurora.cpp
-        sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tap/SQLite3_Server.cpp
-        sed -i '/LDIRS=/a LDIRS+= -L$(DEPS_PATH)/coredumper/coredumper/src' proxysql/test/tap/tests/Makefile
-        sed -i '/STATIC_LIBS=/a STATIC_LIBS+= $(DEPS_PATH)/coredumper/coredumper/src/libcoredumper.a' proxysql/test/tap/tests/Makefile
-        sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/galera_1_timeout_count.cpp
-        sed -i 's/dump_table_mysql_servers()/dump_table_mysql("mysql_servers")/' proxysql/test/tap/tests/galera_1_timeout_count.cpp
-        sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/galera_2_timeout_no_count.cpp
-        sed -i 's/dump_table_mysql_servers()/dump_table_mysql("mysql_servers")/' proxysql/test/tap/tests/galera_2_timeout_no_count.cpp
+        #sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
+        #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/aurora.cpp
+        #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tap/SQLite3_Server.cpp
+        #sed -i '/LDIRS=/a LDIRS+= -L$(DEPS_PATH)/coredumper/coredumper/src' proxysql/test/tap/tests/Makefile
+        #sed -i '/STATIC_LIBS=/a STATIC_LIBS+= $(DEPS_PATH)/coredumper/coredumper/src/libcoredumper.a' proxysql/test/tap/tests/Makefile
+        #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/galera_1_timeout_count.cpp
+        #sed -i 's/dump_table_mysql_servers()/dump_table_mysql("mysql_servers")/' proxysql/test/tap/tests/galera_1_timeout_count.cpp
+        #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/galera_2_timeout_no_count.cpp
+        #sed -i 's/dump_table_mysql_servers()/dump_table_mysql("mysql_servers")/' proxysql/test/tap/tests/galera_2_timeout_no_count.cpp
         
     - name: Build
       id: build
