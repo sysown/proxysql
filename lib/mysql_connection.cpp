@@ -710,7 +710,7 @@ void MySQL_Connection::connect_start() {
 		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
-	if (parent->use_ssl) {
+	if (parent->use_ssl && parent->port) {
 		mysql_ssl_set(mysql,
 				mysql_thread___ssl_p2s_key,
 				mysql_thread___ssl_p2s_cert,
@@ -857,6 +857,7 @@ void MySQL_Connection::connect_start() {
 
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
+		client_flags &= ~(CLIENT_COMPRESS); // disabling compression for connections made via Unix socket
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
