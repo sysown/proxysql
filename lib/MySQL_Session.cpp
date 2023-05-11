@@ -177,7 +177,7 @@ bool Session_Regex::match(char *m) {
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread* _mt) :
 	KillArgs(u, p, h, P, _hid, i, kt, _mt, NULL) {
 	// resolving DNS if available in Cache
-	if (h) {
+	if (h && P) {
 		const std::string& ip = MySQL_Monitor::dns_lookup(h, false);
 
 		if (ip.empty() == false) {
@@ -265,7 +265,7 @@ void * kill_query_thread(void *arg) {
 		goto __exit_kill_query_thread;
 	}
 
-	MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
+	MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
 
 	char buf[100];
 	switch (ka->kill_type) {
