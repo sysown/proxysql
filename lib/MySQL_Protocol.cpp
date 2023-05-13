@@ -1108,6 +1108,10 @@ uint8_t MySQL_Protocol::generate_pkt_row3(MySQL_ResultSet *myrs, unsigned int *l
 
 bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, unsigned int *len) {
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 7, "Generating auth switch request pkt\n");
+	const char *plugins_names[3] = { "mysql_native_password", "mysql_clear_password", "caching_sha2_password" };
+	size_t plugins_lens[3];
+	for (int i=0; i<3; i++)
+		plugins_lens[i] = strlen(plugins_names[i]);
   mysql_hdr myhdr;
   myhdr.pkt_id=2;
 	if ((*myds)->encrypted) {
@@ -1120,15 +1124,21 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 	}
 
 	switch((*myds)->switching_auth_type) {
-		case 0:
+		case AUTH_MYSQL_NATIVE_PASSWORD:
 			myhdr.pkt_length=1 // fe
-				+ (strlen("mysql_native_password")+1)
+				+ (plugins_lens[0]+1)
 				+ 20 // scramble
 				+ 1; // 00
 			break;
-		case 1:
+		case AUTH_MYSQL_CLEAR_PASSWORD:
 			myhdr.pkt_length=1 // fe
-				+ (strlen("mysql_clear_password")+1)
+				+ (plugins_lens[1]+1)
+				+ 1; // 00
+			break;
+		case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+			myhdr.pkt_length=1 // fe
+				+ (plugins_lens[2]+1)
+				+ 20 // scramble
 				+ 1; // 00
 			break;
 		default:
@@ -1147,16 +1157,22 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
   _ptr[l]=0xfe; l++; //0xfe
 
 	switch((*myds)->switching_auth_type) {
-		case 0:
-			memcpy(_ptr+l,"mysql_native_password",strlen("mysql_native_password"));
-			l+=strlen("mysql_native_password");
+		case AUTH_MYSQL_NATIVE_PASSWORD:
+			memcpy(_ptr+l,plugins_names[0],plugins_lens[0]);
+			l+=plugins_lens[0];
 			_ptr[l]=0x00; l++;
 			memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 20); l+=20;
 			break;
-		case 1:
-			memcpy(_ptr+l,"mysql_clear_password",strlen("mysql_clear_password"));
-			l+=strlen("mysql_clear_password");
+		case AUTH_MYSQL_CLEAR_PASSWORD:
+			memcpy(_ptr+l,plugins_names[1],plugins_lens[1]);
+			l+=plugins_lens[1];
 			_ptr[l]=0x00; l++;
+			break;
+		case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+			memcpy(_ptr+l,plugins_names[2],plugins_lens[2]);
+			l+=plugins_lens[2];
+			_ptr[l]=0x00; l++;
+			memcpy(_ptr+l, (*myds)->myconn->scramble_buff+0, 20); l+=20;
 			break;
 		default:
 			// LCOV_EXCL_START
@@ -2043,6 +2059,31 @@ void MySQL_Protocol::PPHR_5passwordFalse_auth2(
 	}
 }
 
+void MySQL_Protocol::PPHR_6auth2(
+	bool& ret,
+	MyProt_tmp_auth_vars& vars1
+	) {
+	enum proxysql_session_type session_type = (*myds)->sess->session_type;
+	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+		unsigned char a[SHA256_DIGEST_LENGTH];
+		unsigned char b[SHA256_DIGEST_LENGTH];
+		unsigned char c[SHA256_DIGEST_LENGTH+20];
+		unsigned char d[SHA256_DIGEST_LENGTH];
+		unsigned char e[SHA256_DIGEST_LENGTH];
+		SHA256((const unsigned char *)vars1.password, strlen(vars1.password), a);
+		SHA256(a, SHA256_DIGEST_LENGTH, b);
+		memcpy(c,b,SHA256_DIGEST_LENGTH);
+		memcpy(c+SHA256_DIGEST_LENGTH, (*myds)->myconn->scramble_buff, 20);
+		SHA256(c, SHA256_DIGEST_LENGTH+20, d);
+		for (int i=0; i<SHA256_DIGEST_LENGTH; i++) {
+			e[i] = a[i] ^ d[i];
+		}
+		if (memcmp(e,vars1.pass,SHA256_DIGEST_LENGTH)==0) {
+			ret = true;
+		}
+	}
+}
+
 void MySQL_Protocol::PPHR_7auth1(
 	unsigned char *pkt, unsigned int len,
 	bool& ret,
@@ -2195,26 +2236,48 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 
 
 	if (sent_auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
+		switch (auth_plugin_id) {
+			case AUTH_UNKNOWN_PLUGIN:
+				bool_rc = PPHR_4auth0(pkt, len, ret, vars1);
+				if (bool_rc == false) {
+					goto __exit_process_pkt_handshake_response;
+				} else {
+				}
+				break;
+			case AUTH_MYSQL_NATIVE_PASSWORD:
+				bool_rc = PPHR_4auth1(pkt, len, ret, vars1);
+				if (bool_rc == false) {
+					goto __exit_process_pkt_handshake_response;
+				} else {
+				}
+				break;
+			case AUTH_MYSQL_CLEAR_PASSWORD:
+				break;
+			case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+				// this should never happen.
+				// in PPHR_3 we set auth_plugin_id = AUTH_UNKNOWN_PLUGIN
+				// if sent_auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD
+				assert(0);
+				break;
+			default:
+				assert(0);
+				break;
+		}
+/*
 		if (auth_plugin_id == AUTH_UNKNOWN_PLUGIN) { // unknown plugin
+*/
 /*
 			ret = false;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response . Unknown auth plugin\n", (*myds), (*myds)->sess, vars1.user);
 			goto __exit_process_pkt_handshake_response;
 		} else if (auth_plugin_id == AUTH_UNKNOWN_PLUGIN) {
 */
-			bool_rc = PPHR_4auth0(pkt, len, ret, vars1);
-			if (bool_rc == false) {
-				goto __exit_process_pkt_handshake_response;
-			} else {
-			}
+/*
 		} else if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
-			bool_rc = PPHR_4auth1(pkt, len, ret, vars1);
-			if (bool_rc == false) {
-				goto __exit_process_pkt_handshake_response;
-			} else {
-			}
 		} else if (auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD) {
 		} else if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) { // caching_sha2_password
+*/
+/*
 			unsigned char a[SHA256_DIGEST_LENGTH];
 			unsigned char b[SHA256_DIGEST_LENGTH];
 			unsigned char c[SHA256_DIGEST_LENGTH+20];
@@ -2229,8 +2292,30 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 				e[i] = a[i] ^ d[i];
 			}
 			assert(1);
+*/
+/*
 		} else {
 			assert(0);
+		}
+*/
+	} else if (sent_auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
+		switch (auth_plugin_id) {
+			case AUTH_UNKNOWN_PLUGIN:
+			case AUTH_MYSQL_NATIVE_PASSWORD:
+				// for now we always switch to mysql_native_password
+				bool_rc = PPHR_4auth0(pkt, len, ret, vars1);
+				if (bool_rc == false) {
+					goto __exit_process_pkt_handshake_response;
+				} else {
+				}
+				break;
+			case AUTH_MYSQL_CLEAR_PASSWORD:
+				break;
+			case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+				break;
+			default:
+				assert(0);
+				break;
 		}
 	} else {
 		assert(0);
@@ -2275,7 +2360,7 @@ __do_auth:
 		} else {
 			ret=false; // by default, assume this will fail
 			// try LDAP
-			if (auth_plugin_id==1) {
+			if (auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD) {
 				PPHR_5passwordFalse_auth2(pkt, len, ret, vars1, reply, attr1, sha1_pass);
 			}
 		}
@@ -2294,23 +2379,27 @@ __do_auth:
 			free(tmp_pass);
 #endif // debug
 			if (vars1.password[0]!='*') { // clear text password
-				if (auth_plugin_id == 0) { // mysql_native_password
+				if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) { // mysql_native_password
 					proxy_scramble(reply, (*myds)->myconn->scramble_buff, vars1.password);
 					if (vars1.pass_len != 0 && memcmp(reply, vars1.pass, SHA_DIGEST_LENGTH)==0) {
 						ret=true;
 					}
-				} else if (auth_plugin_id == 1)  { // mysql_clear_password
+				} else if (auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD)  { // mysql_clear_password
 					if (strcmp(vars1.password, (char *) vars1.pass) == 0) {
 						ret = true;
 					}
+				} else if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) { // caching_sha2_password
+					PPHR_6auth2(ret, vars1);
 				} else {
 					assert(0);
 				}
 			} else {
-				if (auth_plugin_id == 0) {
+				if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) { // mysql_native_password
 					PPHR_7auth1(pkt, len, ret, vars1, reply, attr1, sha1_pass);
-				} else if (auth_plugin_id == 1) { // mysql_clear_password
+				} else if (auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD) { // mysql_clear_password
 					PPHR_7auth2(pkt, len, ret, vars1, reply, attr1, sha1_pass);
+				} else if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) { // caching_sha2_password
+					assert(0);
 				} else {
 					assert(0);
 				}
