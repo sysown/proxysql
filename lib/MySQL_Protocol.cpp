@@ -1201,7 +1201,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
     + 1  // 0x00
 //    + (strlen("mysql_native_password")+1);
     + (strlen(plugins[use_plugin_id])+1);
-	sent_auth_plugin_id = use_plugin_id;
+	sent_auth_plugin_id = (enum proxysql_auth_plugins)use_plugin_id;
 
   unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
   unsigned char *_ptr=(unsigned char *)malloc(size);
@@ -1399,15 +1399,15 @@ bool MySQL_Protocol::verify_user_pass(
 
 	char reply[SHA_DIGEST_LENGTH+1];
 	reply[SHA_DIGEST_LENGTH]='\0';
-	auth_plugin_id = -1; // default
+	auth_plugin_id = AUTH_UNKNOWN_PLUGIN; // default
 
 	if (strncmp((char *)auth_plugin,plugins[0],strlen(plugins[0]))==0) { // mysql_native_password
-		auth_plugin_id = 0;
+		auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
 	} else if (strncmp((char *)auth_plugin,plugins[1],strlen(plugins[1]))==0) { // mysql_clear_password
-		auth_plugin_id = 1;
+		auth_plugin_id = AUTH_MYSQL_CLEAR_PASSWORD;
 	} else if (strncmp((char *)auth_plugin,plugins[2],strlen(plugins[2]))==0) { // caching_sha2_password
 		//auth_plugin_id = 2; // FIXME: this is temporary, because yet not supported
-		auth_plugin_id = 0; // FIXME: this is temporary, because yet not supported . It must become 3
+		auth_plugin_id = AUTH_MYSQL_CACHING_SHA2_PASSWORD; // FIXME: this is temporary, because yet not supported . It must become 3
 	}
 
 	if (password[0]!='*') { // clear text password
@@ -1536,7 +1536,7 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 			// is required. We default to 'mysql_native_password'. See #3504 for more context.
 			if (pass_len == 0) {
 				// mysql_native_password
-				(*myds)->switching_auth_type = 0;
+				(*myds)->switching_auth_type = AUTH_MYSQL_NATIVE_PASSWORD;
 				// started 'Auth Switch Request' for 'CHANGE_USER' in MySQL_Session.
 				(*myds)->sess->change_user_auth_switch = true;
 
@@ -1801,18 +1801,26 @@ bool MySQL_Protocol::PPHR_2(unsigned char *pkt, unsigned int len, bool& ret, MyP
 void MySQL_Protocol::PPHR_3(MyProt_tmp_auth_vars& vars1) { // detect plugin id
 	if (vars1.auth_plugin == NULL) {
 		vars1.auth_plugin = (unsigned char *)"mysql_native_password"; // default
-		auth_plugin_id = 0;
+		auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, vars1.user, auth_plugin_id);
 
-	if (auth_plugin_id == -1) {
+	if (auth_plugin_id == AUTH_UNKNOWN_PLUGIN) {
 		if (strncmp((char *)vars1.auth_plugin,plugins[0],strlen(plugins[0]))==0) { // mysql_native_password
-			auth_plugin_id = 0;
+			auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
 		} else if (strncmp((char *)vars1.auth_plugin,plugins[1],strlen(plugins[1]))==0) { // mysql_clear_password
-			auth_plugin_id = 1;
+			auth_plugin_id = AUTH_MYSQL_CLEAR_PASSWORD;
 		} else if (strncmp((char *)vars1.auth_plugin,plugins[2],strlen(plugins[2]))==0) { // caching_sha2_password
-			auth_plugin_id = 2; // FIXME: this is temporary, because yet not supported
-			//auth_plugin_id = -1; // FIXME: this is temporary, because yet not supported . It must become 2
+			if (sent_auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
+				// if we send mysql_native_password as default authentication plugin we do not support
+				// clients using caching_sha2_password , thus we define "unknown plugin" and force the
+				// client to switch to mysql_native_password
+				auth_plugin_id = AUTH_UNKNOWN_PLUGIN;
+			} else if (sent_auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
+				auth_plugin_id = AUTH_MYSQL_CACHING_SHA2_PASSWORD;
+			} else {
+				assert(0);
+			}
 		}
 	}
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, vars1.user, auth_plugin_id);
@@ -1841,9 +1849,9 @@ bool MySQL_Protocol::PPHR_4auth0(unsigned char *pkt, unsigned int len, bool& ret
 #endif /* PROXYSQLCLICKHOUSE */
 		}
 		if (user_exists) {
-			(*myds)->switching_auth_type = 0; // mysql_native_password
+			(*myds)->switching_auth_type = AUTH_MYSQL_NATIVE_PASSWORD; // mysql_native_password
 		} else {
-			(*myds)->switching_auth_type = 1; // mysql_clear_password
+			(*myds)->switching_auth_type = AUTH_MYSQL_CLEAR_PASSWORD; // mysql_clear_password
 		}
 		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user_exists=%d , user='%s' , setting switching_auth_type=%d\n", (*myds), (*myds)->sess, user_exists, vars1.user, (*myds)->switching_auth_type);
 		generate_pkt_auth_switch_request(true, NULL, NULL);
@@ -1873,7 +1881,7 @@ bool MySQL_Protocol::PPHR_4auth1(unsigned char *pkt, unsigned int len, bool& ret
 			}
 #endif /* PROXYSQLCLICKHOUSE */
 			if (user_exists == false) {
-				(*myds)->switching_auth_type = 1; // mysql_clear_password
+				(*myds)->switching_auth_type = AUTH_MYSQL_CLEAR_PASSWORD; // mysql_clear_password
 				(*myds)->switching_auth_stage = 1;
 				(*myds)->auth_in_progress = 1;
 				generate_pkt_auth_switch_request(true, NULL, NULL);
@@ -2144,7 +2152,7 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	if (dump_pkt) { __dump_pkt(__func__,pkt,len); }
 #endif
 	bool ret = false;
-	auth_plugin_id = -1;
+	auth_plugin_id = AUTH_UNKNOWN_PLUGIN;
 
 	char reply[SHA_DIGEST_LENGTH+1] = { 0 };
 	enum proxysql_session_type session_type = (*myds)->sess->session_type;
@@ -2185,35 +2193,47 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 	PPHR_3(vars1); // detect plugin id
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' , auth_plugin_id=%d\n", (*myds), (*myds)->sess, vars1.user, auth_plugin_id);
 
-	if (auth_plugin_id == -1) {
-		bool_rc = PPHR_4auth0(pkt, len, ret, vars1);
-		if (bool_rc == false)
+
+	if (sent_auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
+		if (auth_plugin_id == AUTH_UNKNOWN_PLUGIN) { // unknown plugin
+/*
+			ret = false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response . Unknown auth plugin\n", (*myds), (*myds)->sess, vars1.user);
 			goto __exit_process_pkt_handshake_response;
-	} else if (auth_plugin_id == 1) {
-		bool_rc = PPHR_4auth1(pkt, len, ret, vars1);
-		if (bool_rc == false)
-			goto __exit_process_pkt_handshake_response;
-	} else if (auth_plugin_id == 2) { // caching_sha2_password
-		unsigned char a[SHA256_DIGEST_LENGTH];
-		unsigned char b[SHA256_DIGEST_LENGTH];
-		unsigned char c[SHA256_DIGEST_LENGTH+20];
-		unsigned char d[SHA256_DIGEST_LENGTH];
-		unsigned char e[SHA256_DIGEST_LENGTH];
-		SHA256((const unsigned char *)"admin", strlen("admin"), a);
-		SHA256(a, SHA256_DIGEST_LENGTH, b);
-		memcpy(c,b,SHA256_DIGEST_LENGTH);
-		memcpy(c+SHA256_DIGEST_LENGTH, (*myds)->myconn->scramble_buff, 20);
-		SHA256(c, SHA256_DIGEST_LENGTH+20, d);
-		for (int i=0; i<SHA256_DIGEST_LENGTH; i++) {
-			e[i] = a[i] ^ d[i];
+		} else if (auth_plugin_id == AUTH_UNKNOWN_PLUGIN) {
+*/
+			bool_rc = PPHR_4auth0(pkt, len, ret, vars1);
+			if (bool_rc == false) {
+				goto __exit_process_pkt_handshake_response;
+			} else {
+			}
+		} else if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
+			bool_rc = PPHR_4auth1(pkt, len, ret, vars1);
+			if (bool_rc == false) {
+				goto __exit_process_pkt_handshake_response;
+			} else {
+			}
+		} else if (auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD) {
+		} else if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) { // caching_sha2_password
+			unsigned char a[SHA256_DIGEST_LENGTH];
+			unsigned char b[SHA256_DIGEST_LENGTH];
+			unsigned char c[SHA256_DIGEST_LENGTH+20];
+			unsigned char d[SHA256_DIGEST_LENGTH];
+			unsigned char e[SHA256_DIGEST_LENGTH];
+			SHA256((const unsigned char *)"admin", strlen("admin"), a);
+			SHA256(a, SHA256_DIGEST_LENGTH, b);
+			memcpy(c,b,SHA256_DIGEST_LENGTH);
+			memcpy(c+SHA256_DIGEST_LENGTH, (*myds)->myconn->scramble_buff, 20);
+			SHA256(c, SHA256_DIGEST_LENGTH+20, d);
+			for (int i=0; i<SHA256_DIGEST_LENGTH; i++) {
+				e[i] = a[i] ^ d[i];
+			}
+			assert(1);
+		} else {
+			assert(0);
 		}
-		assert(1);
-	}
-	if (auth_plugin_id == -1) { // unknown plugin
-		// this code is probably never executed, because PPHR_4auth0 will handle auth_plugin_id==0
-		ret = false;
-		proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response . Unknown auth plugin\n", (*myds), (*myds)->sess, vars1.user);
-		goto __exit_process_pkt_handshake_response;
+	} else {
+		assert(0);
 	}
 
 __do_auth:

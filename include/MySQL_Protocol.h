@@ -16,6 +16,14 @@ extern MySQL_Variables mysql_variables;
 #define CLIENT_DEPRECATE_EOF     (1UL << 24)
 #endif
 
+
+enum proxysql_auth_plugins {
+	AUTH_UNKNOWN_PLUGIN = -1,
+	AUTH_MYSQL_NATIVE_PASSWORD = 0,
+	AUTH_MYSQL_CLEAR_PASSWORD,
+	AUTH_MYSQL_CACHING_SHA2_PASSWORD
+};
+
 class MySQL_ResultSet {
 	private:
 	bool deprecate_eof_active;
@@ -131,14 +139,14 @@ class MySQL_Protocol {
 	bool dump_pkt;
 #endif
 	MySQL_Prepared_Stmt_info *current_PreStmt;
-	int sent_auth_plugin_id;
-	int auth_plugin_id;
+	enum proxysql_auth_plugins sent_auth_plugin_id;
+	enum proxysql_auth_plugins auth_plugin_id;
 	uint16_t prot_status;
 	bool more_data_needed;
 	MySQL_Data_Stream *get_myds() { return *myds; }
 	MySQL_Protocol() {
-		sent_auth_plugin_id = 0;
-		auth_plugin_id = -1;
+		sent_auth_plugin_id = AUTH_MYSQL_NATIVE_PASSWORD;
+		auth_plugin_id = AUTH_UNKNOWN_PLUGIN;
 		prot_status=0;
 		more_data_needed = false;
 	}
