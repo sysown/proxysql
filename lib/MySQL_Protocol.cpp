@@ -1246,7 +1246,10 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_COMPRESS;
 	}
-	if (mysql_thread___have_ssl) {
+	if (mysql_thread___have_ssl==true || mysql_thread___default_authentication_plugin_int==2) {
+		// we enable SSL for client connections for either of these 2 conditions:
+		// - have_ssl is enabled
+		// - default_authentication_plugin=caching_sha2_password
 		mysql_thread___server_capabilities |= CLIENT_SSL;
 	} else {
 		mysql_thread___server_capabilities &= ~CLIENT_SSL;
