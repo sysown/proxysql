@@ -2338,41 +2338,6 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 				assert(0);
 				break;
 		}
-/*
-		if (auth_plugin_id == AUTH_UNKNOWN_PLUGIN) { // unknown plugin
-*/
-/*
-			ret = false;
-			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , user='%s' . goto __exit_process_pkt_handshake_response . Unknown auth plugin\n", (*myds), (*myds)->sess, vars1.user);
-			goto __exit_process_pkt_handshake_response;
-		} else if (auth_plugin_id == AUTH_UNKNOWN_PLUGIN) {
-*/
-/*
-		} else if (auth_plugin_id == AUTH_MYSQL_NATIVE_PASSWORD) {
-		} else if (auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD) {
-		} else if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) { // caching_sha2_password
-*/
-/*
-			unsigned char a[SHA256_DIGEST_LENGTH];
-			unsigned char b[SHA256_DIGEST_LENGTH];
-			unsigned char c[SHA256_DIGEST_LENGTH+20];
-			unsigned char d[SHA256_DIGEST_LENGTH];
-			unsigned char e[SHA256_DIGEST_LENGTH];
-			SHA256((const unsigned char *)"admin", strlen("admin"), a);
-			SHA256(a, SHA256_DIGEST_LENGTH, b);
-			memcpy(c,b,SHA256_DIGEST_LENGTH);
-			memcpy(c+SHA256_DIGEST_LENGTH, (*myds)->myconn->scramble_buff, 20);
-			SHA256(c, SHA256_DIGEST_LENGTH+20, d);
-			for (int i=0; i<SHA256_DIGEST_LENGTH; i++) {
-				e[i] = a[i] ^ d[i];
-			}
-			assert(1);
-*/
-/*
-		} else {
-			assert(0);
-		}
-*/
 	} else if (sent_auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
 		switch (auth_plugin_id) {
 			case AUTH_UNKNOWN_PLUGIN:
