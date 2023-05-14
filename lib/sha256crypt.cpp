@@ -292,7 +292,7 @@ static const char sha256_salt_prefix[] = "$5$";
 static const char sha256_rounds_prefix[] = "rounds=";
 
 /* Maximum salt string length.  */
-#define SALT_LEN_MAX 16
+#define SALT_LEN_MAX 20
 /* Default number of rounds if not explicitly specified.  */
 #define ROUNDS_DEFAULT 5000
 /* Minimum number of rounds.  */
@@ -305,8 +305,7 @@ static const char b64t[65] =
 "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 
-static char *
-sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen)
+char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int buflen)
 {
   unsigned char alt_result[32]
     __attribute__ ((__aligned__ (__alignof__ (uint32_t))));

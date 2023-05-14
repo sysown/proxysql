@@ -5454,8 +5454,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=false;
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
-				uint8_t _pid = 2;
-				if (client_myds->switching_auth_stage) _pid+=2;
+				//uint8_t _pid = 2;
+				//if (client_myds->switching_auth_stage) _pid+=2;
+				uint8_t _pid = client_myds->pkt_sid; _pid++;
 				if (max_connections_reached==true) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p , Too many connections\n", this, client_myds);
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,_pid,1040,(char *)"08004", (char *)"Too many connections", true);
@@ -5515,9 +5516,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					} else {
 						client_addr = strdup((char *)"");
 					}
-					uint8_t _pid = 2;
-					if (client_myds->switching_auth_stage) _pid+=2;
-					if (is_encrypted) _pid++;
+					//uint8_t _pid = 2;
+					//if (client_myds->switching_auth_stage) _pid+=2;
+					//if (is_encrypted) _pid++;
+					uint8_t _pid = client_myds->pkt_sid; _pid++;
 					if (
 						(strcmp(client_addr,(char *)"127.0.0.1")==0)
 						||
@@ -5543,8 +5545,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					free(client_addr);
 				} else {
 					uint8_t _pid = 2;
-					if (client_myds->switching_auth_stage) _pid+=2;
-					if (is_encrypted) _pid++;
+					//if (client_myds->switching_auth_stage) _pid+=2;
+					//if (is_encrypted) _pid++;
+					_pid = client_myds->pkt_sid; _pid++;
 					// If this condition is met, it means that the
 					// 'STATE_SERVER_HANDSHAKE' being performed isn't from the start of a
 					// connection, but as a consequence of a 'COM_USER_CHANGE' which
@@ -5614,9 +5617,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 		if (client_myds->myconn->userinfo->username) {
 			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-			uint8_t _pid = 2;
-			if (client_myds->switching_auth_stage) _pid+=2;
-			if (is_encrypted) _pid++;
+			//uint8_t _pid = 2;
+			//if (client_myds->switching_auth_stage) _pid+=2;
+			//if (is_encrypted) _pid++;
+			uint8_t _pid = client_myds->pkt_sid; _pid++;
 #ifdef DEBUG
 		if (client_myds->myconn->userinfo->password) {
 			char *tmp_pass=strdup(client_myds->myconn->userinfo->password);
