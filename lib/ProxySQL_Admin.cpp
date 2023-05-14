@@ -637,7 +637,7 @@ static char * admin_variables_names[]= {
 	(char *)"telnet_stats_ifaces",
 	(char *)"refresh_interval",
 	(char *)"read_only",
-	(char *)"hash_passwords",
+//	(char *)"hash_passwords",
 	(char *)"vacuum_stats",
 	(char *)"version",
 	(char *)"cluster_username",
@@ -5834,7 +5834,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.telnet_stats_ifaces=NULL;
 	variables.refresh_interval=2000;
 	variables.mysql_show_processlist_extended = false;
-	variables.hash_passwords=true;	// issue #676
+//	variables.hash_passwords=true;	// issue #676
 	variables.vacuum_stats=true;	// issue #1011
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 	variables.admin_version=(char *)PROXYSQL_VERSION;
@@ -6309,10 +6309,12 @@ void ProxySQL_Admin::init_sqliteserver_variables() {
 }
 
 void ProxySQL_Admin::init_ldap_variables() {
+/*
 	if (variables.hash_passwords==true) {
 		proxy_info("Impossible to set admin-hash_passwords=true when LDAP is enabled. Reverting to false\n");
 		variables.hash_passwords=false;
 	}
+*/
 	flush_ldap_variables___runtime_to_database(configdb, false, false, false);
 	flush_ldap_variables___runtime_to_database(admindb, false, true, false);
 	flush_ldap_variables___database_to_runtime(admindb,true);
@@ -7977,9 +7979,11 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"read_only")) {
 		return strdup((variables.admin_read_only ? "true" : "false"));
 	}
+/*
 	if (!strcasecmp(name,"hash_passwords")) {
 		return strdup((variables.hash_passwords ? "true" : "false"));
 	}
+*/
 	if (!strcasecmp(name,"vacuum_stats")) {
 		return strdup((variables.vacuum_stats ? "true" : "false"));
 	}
@@ -8405,6 +8409,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			return false;
 		}
 	}
+/*
 	if (!strcasecmp(name,"hash_passwords")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.hash_passwords=true;
@@ -8420,6 +8425,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 		return false;
 	}
+*/
 	if (!strcasecmp(name,"vacuum_stats")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.vacuum_stats=true;
@@ -11135,6 +11141,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 	      SQLite3_row *r=*it;
 			char *password=NULL;
+/*
 			if (variables.hash_passwords) { // We must use hashed password. See issue #676
 				// Admin needs to hash the password
 				if (r->fields[1] && strlen(r->fields[1])) {
@@ -11152,12 +11159,13 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 					password=strdup((char *)""); // we also generate a new string if hash_passwords is set
 				}
 			} else {
-				if (r->fields[1]) {
-					password=r->fields[1];
-				} else {
-					password=(char *)"";
-				}
+*/
+			if (r->fields[1]) {
+				password=r->fields[1];
+			} else {
+				password=(char *)"";
 			}
+//			}
 
 			std::vector<enum cred_username_type> usertypes {};
 			char* max_connections = nullptr;
@@ -11216,9 +11224,11 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 				sqlite_result->add_row(&pta[0]);
 			}
 
+/*
 			if (variables.hash_passwords) {
 				free(password); // because we always generate a new string
 			}
+*/
 		}
 
 		if (__user == nullptr) {
