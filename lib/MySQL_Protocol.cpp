@@ -2461,7 +2461,7 @@ __do_auth:
 			if (
 				auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
 				&&
-				strlen(vars1.password) > 60
+				strlen(vars1.password) == 70
 				&&
 				strncasecmp(vars1.password,"$A$0",4)==0
 			) {
