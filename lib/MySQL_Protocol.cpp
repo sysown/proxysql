@@ -446,6 +446,15 @@ bool MySQL_Protocol::generate_pkt_ERR(bool send, void **ptr, unsigned int *len, 
 					break;
 				}
 			default:
+				if (sess->status == CONNECTING_SERVER) {
+					if (sess->previous_status.empty() == false) {
+						if (sess->previous_status.top() == CONNECTING_CLIENT_RESUME) {
+							// this is an exception. We are trying to shortcut the
+							// client authentication against the server
+							break;
+						}
+					}
+				}
 				// LCOV_EXCL_START
 				assert(0);
 				// LCOV_EXCL_STOP
@@ -2226,6 +2235,56 @@ void MySQL_Protocol::PPHR_sha2full(
 	}
 }
 
+void MySQL_Protocol::PPHR_sha2full_unknown_user(
+	bool& ret,
+	MyProt_tmp_auth_vars& vars1,
+	enum proxysql_auth_plugins passformat
+	) {
+	if ((*myds)->switching_auth_stage == 0) {
+		const unsigned char perform_full_authentication = '\4';
+		generate_one_byte_pkt(perform_full_authentication);
+		(*myds)->switching_auth_type = auth_plugin_id;
+		(*myds)->switching_auth_stage = 4;
+		(*myds)->auth_in_progress = 1;
+	} else if ((*myds)->switching_auth_stage == 5) {
+		if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
+			//assert(strlen(vars1.password) == 70);
+			(*myds)->switching_auth_stage = 6;
+			(*myds)->auth_in_progress = 1;
+			assert(vars1.password == NULL);
+			userinfo->password=strdup((const char *)vars1.pass);
+			if (vars1.db != NULL) {
+				userinfo->schemaname=strdup((const char *)vars1.db);
+			} else {
+				userinfo->schemaname=strdup((const char *)mysql_thread___default_schema);
+			}
+			sess->default_hostgroup = 0;
+			sess->current_hostgroup = sess->default_hostgroup;
+			sess->mybe = sess->find_or_create_backend(sess->current_hostgroup);
+			// TODO: add timeout
+			sess->mybe->server_myds->connect_retries_on_failure = 0;
+			sess->previous_status.push(CONNECTING_CLIENT_RESUME);
+			sess->set_status(CONNECTING_SERVER);
+		} else {
+			assert(0);
+		}
+	} else if ((*myds)->switching_auth_stage == 6) {
+		if (passformat == AUTH_MYSQL_CACHING_SHA2_PASSWORD) {
+			if (sess->mybe) {
+				if (sess->mybe->server_myds) {
+					if (sess->mybe->server_myds->myconn) {
+						GloMyAuth->set_clear_text_password((char *)vars1.user, USERNAME_FRONTEND, sess->mybe->server_myds->myconn->userinfo->password);
+						ret = true;
+					}
+				}
+			}
+		}
+		(*myds)->auth_in_progress = 0;
+	} else {
+		assert(0);
+	}
+}
+
 void MySQL_Protocol::PPHR_SetConnAttrs(MyProt_tmp_auth_vars& vars1, MyProt_tmp_auth_attrs& attr1) {
 	MySQL_Connection *myconn = NULL;
 	myconn=sess->client_myds->myconn;
@@ -2442,6 +2501,12 @@ __do_auth:
 			// try LDAP
 			if (auth_plugin_id == AUTH_MYSQL_CLEAR_PASSWORD) {
 				PPHR_5passwordFalse_auth2(pkt, len, ret, vars1, reply, attr1, sha1_pass);
+			} else if (
+				auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+				&&
+				((*myds)->sess->session_type == PROXYSQL_SESSION_MYSQL)
+				) { // caching_sha2_password
+				PPHR_sha2full_unknown_user(ret, vars1, AUTH_MYSQL_CACHING_SHA2_PASSWORD);
 			}
 		}
 	} else {
@@ -2461,7 +2526,13 @@ __do_auth:
 			if (
 				auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
 				&&
-				strlen(vars1.password) > 60
+				vars1.password == NULL
+			) {
+				assert(0);
+			} else if (
+				auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD
+				&&
+				strlen(vars1.password) == 70
 				&&
 				strncasecmp(vars1.password,"$A$0",4)==0
 			) {
@@ -2541,13 +2612,16 @@ __exit_do_auth:
 
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username=strdup((const char *)vars1.user);
-		userinfo->password=strdup((const char *)vars1.password);
+		if (userinfo->password == NULL)
+			userinfo->password=strdup((const char *)vars1.password);
 		if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db));
 	} else {
 		// we always duplicate username and password, or crashes happen
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username=strdup((const char *)vars1.user);
-		if (vars1.pass_len) userinfo->password=strdup((const char *)"");
+		if (vars1.pass_len)
+			if (userinfo->password == NULL)
+				userinfo->password=strdup((const char *)"");
 	}
 	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
 

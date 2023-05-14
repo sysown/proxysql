@@ -226,6 +226,7 @@ enum mysql_variable_name {
 
 enum session_status {
 	CONNECTING_CLIENT,
+	CONNECTING_CLIENT_RESUME,
 	CONNECTING_SERVER,
 	LDAP_AUTH_CLIENT,
 	PINGING_SERVER,

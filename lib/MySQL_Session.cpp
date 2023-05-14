@@ -611,6 +611,7 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+
 }
 
 void MySQL_Session::init() {
@@ -664,6 +665,7 @@ void MySQL_Session::reset() {
 			client_myds->myconn->reset();
 		}
 	}
+
 }
 
 MySQL_Session::~MySQL_Session() {
@@ -2983,9 +2985,18 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 						// see bug #979
 						RequestEnd(myds);
 					}
-					while (previous_status.size()) {
-						st=previous_status.top();
-						previous_status.pop();
+					if (previous_status.empty() == false) {
+						if (previous_status.top() == CONNECTING_CLIENT_RESUME) {
+							myds->destroy_MySQL_Connection_From_Pool( myerr ? true : false );
+							st=previous_status.top();
+							previous_status.pop();
+							NEXT_IMMEDIATE_NEW(st);
+						} else {
+							while (previous_status.size()) {
+								st=previous_status.top();
+								previous_status.pop();
+							}
+						}
 					}
 					if (mirror) {
 						PROXY_TRACE();
@@ -4748,6 +4759,27 @@ handler_again:
 		case CONNECTING_CLIENT:
 			//fprintf(stderr,"CONNECTING_CLIENT\n");
 			// FIXME: to implement
+			break;
+		case CONNECTING_CLIENT_RESUME:
+			if (mybe != NULL) {
+				if (mybe->server_myds != NULL) {
+					if (mybe->server_myds->myconn != NULL) {
+						proxy_warning("Resuming client connection\n");
+						set_status(CONNECTING_CLIENT);
+						uint8_t _pid = client_myds->pkt_sid; _pid++;
+						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_OK, this, NULL);
+						client_myds->DSS = STATE_CLIENT_HANDSHAKE;
+						client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
+						status=WAITING_CLIENT_DATA;
+						client_myds->DSS=STATE_CLIENT_AUTH_OK;
+						mybe->server_myds->return_MySQL_Connection_To_Pool();
+						break;
+					}
+				}
+			}
+			// something was wrong , we destroy the session
+			handler_ret = -1;
+			return handler_ret;
 			break;
 		case PINGING_SERVER:
 			{
@@ -6971,7 +7003,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 		}
-		if (session_fast_forward == false && qpo->create_new_conn == false) {
+		bool resume_client_authentication = false;
+		if (previous_status.empty() == false) {
+			if (previous_status.top() == CONNECTING_CLIENT_RESUME) {
+				resume_client_authentication = true;
+			}
+		}
+		if (session_fast_forward == false && qpo->create_new_conn == false && resume_client_authentication == false) {
 			if (qpo->min_gtid) {
 				gtid_uuid = qpo->min_gtid;
 				with_gtid = true;
@@ -7031,9 +7069,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn || resume_client_authentication), uuid, trxid, -1);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn || resume_client_authentication), NULL, 0, (int)qpo->max_lag_ms);
 			}
 #ifdef STRESSTEST_POOL
 			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {

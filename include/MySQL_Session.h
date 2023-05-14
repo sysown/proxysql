@@ -310,6 +310,7 @@ class MySQL_Session
 	// this variable is relevant only if status == SETTING_VARIABLE
 	enum mysql_variable_name changing_variable_idx;
 
+
 	MySQL_Session();
 	~MySQL_Session();
 
