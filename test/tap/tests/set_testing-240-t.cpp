@@ -464,10 +464,12 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
+/* admin-hash_passwords has been deprecated
 	diag("Disabling admin-hash_passwords to be able to run test on MySQL 8");
 	MYSQL_QUERY(proxysql_admin, "SET admin-hash_passwords='false'");
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
+*/
 
 	diag("Creating new hostgroup 101: DELETE FROM mysql_servers WHERE hostgroup_id = 101");
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
