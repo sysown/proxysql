@@ -8409,8 +8409,9 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			return false;
 		}
 	}
-/*
 	if (!strcasecmp(name,"hash_passwords")) {
+		proxy_warning("Variable admin-hash_passwords is now deprecated and removed. See github issue #4218\n");
+/*
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.hash_passwords=true;
 			if (GloMyLdapAuth) {
@@ -8424,8 +8425,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			return true;
 		}
 		return false;
-	}
 */
+	}
 	if (!strcasecmp(name,"vacuum_stats")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.vacuum_stats=true;
