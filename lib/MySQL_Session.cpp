@@ -2173,6 +2173,7 @@ bool MySQL_Session::handler_again___status_SETTING_INIT_CONNECT(int *_rc) {
 	}
 	int rc=myconn->async_send_simple_command(myds->revents,myconn->options.init_connect,strlen(myconn->options.init_connect));
 	if (rc==0) {
+		handler_rc0_Process_Session_Track(myconn);
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		//myds->free_mysql_real_query();
 		myds->DSS = STATE_MARIADB_GENERIC;
@@ -2277,6 +2278,7 @@ bool MySQL_Session::handler_again___status_SETTING_LDAP_USER_VARIABLE(int *_rc) 
 		rc = myconn->async_send_simple_command(myds->revents,(char *)"", 0);
 	}
 	if (rc==0) {
+		handler_rc0_Process_Session_Track(myconn);
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		//myds->free_mysql_real_query();
 		myds->DSS = STATE_MARIADB_GENERIC;
@@ -2353,6 +2355,7 @@ bool MySQL_Session::handler_again___status_SETTING_SQL_LOG_BIN(int *_rc) {
 		query=NULL;
 	}
 	if (rc==0) {
+		handler_rc0_Process_Session_Track(myconn);
 		if (!strcmp("0", mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN)) || !strcasecmp("OFF",  mysql_variables.client_get_value(this, SQL_SQL_LOG_BIN))) {
 			// Pay attention here. STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0 sets sql_log_bin to ZERO:
 			//   - sql_log_bin=0 => true
@@ -2564,6 +2567,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		query=NULL;
 	}
 	if (rc==0) {
+		handler_rc0_Process_Session_Track(myconn);
 		myds->revents|=POLLOUT;	// we also set again POLLOUT to send a query immediately!
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
@@ -4679,13 +4683,15 @@ void MySQL_Session::housekeeping_before_pkts() {
 }
 
 // this function was inline
-void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
+void MySQL_Session::handler_rc0_Process_Session_Track(MySQL_Connection *myconn) {
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
 		if (mysql_thread___client_session_track_gtid) {
 			gtid_hid = current_hostgroup;
 			memcpy(gtid_buf,mybe->gtid_uuid,sizeof(gtid_buf));
 		}
 	}
+	if (!session_tracking_failed)
+		myconn->get_system_variables();
 }
 
 int MySQL_Session::handler() {
@@ -4978,8 +4984,6 @@ handler_again:
 						}
 					}
 
-					handler_rc0_Process_GTID(myconn);
-
 					// if we are locked on hostgroup, the value of autocommit is copied from the backend connection
 					// see bug #3549
 					if (locked_on_hostgroup >= 0) {
@@ -4987,6 +4991,8 @@ handler_again:
 						assert(myconn->mysql != NULL);
 						autocommit = myconn->mysql->server_status & SERVER_STATUS_AUTOCOMMIT;
 					}
+
+					handler_rc0_Process_Session_Track(myconn);
 
 					if (mirror == false) {
 						// Support for LAST_INSERT_ID()
@@ -6828,6 +6834,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE) {
 		reset();
 		init();
+		mysql_variables.enable_session_state_trackers(this);
 		if (client_authenticated) {
 			if (use_ldap_auth == false) {
 				GloMyAuth->decrease_frontend_user_connections(client_myds->myconn->userinfo->username);
@@ -6914,6 +6921,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		this->default_hostgroup = default_hostgroup;
 		this->transaction_persistent = transaction_persistent;
 		client_myds->myconn->set_charset(default_charset, NAMES);
+		mysql_variables.enable_session_state_trackers(this);
 
 		if (user_attributes != NULL && strlen(user_attributes)) {
 			nlohmann::json j_user_attributes = nlohmann::json::parse(user_attributes);

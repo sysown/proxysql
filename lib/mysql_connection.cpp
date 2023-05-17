@@ -2795,6 +2795,7 @@ void MySQL_Connection::reset() {
 			free(variables[i].value);
 			variables[i].value = NULL;
 			var_hash[i] = 0;
+			var_absent[i] = false;
 		}
 	}
 	dynamic_variables_idx.clear();
@@ -2851,4 +2852,222 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 		}
 	}
 	return ret;
+}
+
+#define MAX_JOIN_SIZE_DEFAULT_STR_VALUE "DEFAULT"
+#define MAX_JOIN_SIZE_DEFAULT_INT_VALUE 18446744073709551615ULL
+
+#define MYSQL_VERSION_5_7 "5.7"
+#define SQL_MODE_TRADITIONAL "TRADITIONAL"
+#define SQL_MODE_TRADITIONAL_EQUIVALENT \
+	"STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE," \
+	"NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,TRADITIONAL,NO_ENGINE_SUBSTITUTION"
+#define SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7 \
+	"STRICT_TRANS_TABLES,STRICT_ALL_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO," \
+	"TRADITIONAL,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION"
+
+const std::unordered_map<std::string, int> query_cache_types_umap {{"OFF", 0}, {"ON", 1}, {"DEMAND", 2}};
+
+void MySQL_Connection::compare_system_variable(const std::string name, const std::string value) {
+	const MARIADB_CHARSET_INFO *ci = NULL;
+	int idx = -1, value_int;
+	std::string value_str;
+
+	if (strcasecmp("autocommit", name.c_str()) == 0) {
+		try {
+			value_int = query_cache_types_umap.at(value);
+			// Always with compare autocommit status from mysql object and from
+			// MySQL_Session.
+			if (
+				(bool)(mysql->server_status & SERVER_STATUS_AUTOCOMMIT) != value_int ||
+				myds->sess->autocommit != value_int
+			)
+				assert(0);
+			// We are not locked on hostgroup, so MySQL_Connection is aware of
+			// the "SET autocommit=" queries the frontend does.
+			if (myds->sess->locked_on_hostgroup == -1) {
+				// If the connection was reset, IsAutoCommit() should always
+				// return true.
+				if (options.last_set_autocommit == -1) {
+					if (IsAutoCommit() != true)
+						assert(0);
+				// In a normal situation, IsAutoCommit() should match the value
+				// sent by MySQL.
+				} else {
+					if (IsAutoCommit() != value_int)
+						assert(0);
+				}
+			}
+		}
+		catch (std::out_of_range const&) {
+			assert(0);
+		}
+		return;
+	}
+
+	try {
+		idx = mysql_variables.mysql_tracked_variables_umap.at(name);
+	}
+	catch (std::out_of_range const&) {
+		proxy_warning(
+			"System variable '%s' changed, but it not tracked by ProxySQL\n",
+			name.c_str()
+		);
+	}
+
+	// Some system variables need special handling because ProxySQL stores the
+	// value in a different way than the backend.
+	switch (idx) {
+	case SQL_MAX_JOIN_SIZE:
+		if (MAX_JOIN_SIZE_DEFAULT_INT_VALUE == strtoull(value.c_str(), NULL, 10))
+			value_str = MAX_JOIN_SIZE_DEFAULT_STR_VALUE;
+		if (!variables[idx].value || strcasecmp(variables[idx].value, value_str.c_str()) != 0) {
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		}
+		break;
+	case SQL_QUERY_CACHE_TYPE:
+		try {
+			value_int = query_cache_types_umap.at(value);
+		}
+		catch (std::out_of_range const&) {
+			assert(0);
+		}
+		if (!variables[idx].value || atoi(variables[idx].value) != value_int) {
+			value_str = std::to_string(value_int);
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		}
+		break;
+	case SQL_LONG_QUERY_TIME:
+	case SQL_TIMESTAMP:
+		if (!variables[idx].value || atof(variables[idx].value) != atof(value.c_str())) {
+			mysql_variables.client_set_value(myds->sess, idx, value);
+			mysql_variables.server_set_value(myds->sess, idx, value.c_str());
+		}
+		break;
+	case SQL_SQL_MODE:
+		if (strcasecmp(SQL_MODE_TRADITIONAL_EQUIVALENT, value.c_str()) == 0) {
+			value_str = SQL_MODE_TRADITIONAL;
+		} else if (
+			strncmp(mysql->server_version, MYSQL_VERSION_5_7, sizeof(MYSQL_VERSION_5_7) - 1) == 0 &&
+			strcasecmp(SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7, value.c_str()) == 0
+		) {
+			value_str = SQL_MODE_TRADITIONAL_EQUIVALENT_MYSQL_5_7;
+		} else {
+			value_str = value;
+		}
+		if (!variables[idx].value || strcasecmp(variables[idx].value, value_str.c_str()) != 0) {
+			mysql_variables.client_set_value(myds->sess, idx, value_str);
+			mysql_variables.server_set_value(myds->sess, idx, value_str.c_str());
+		}
+		break;
+	case SQL_CHARACTER_SET_DATABASE:
+	case SQL_CHARACTER_SET_CLIENT:
+	case SQL_CHARACTER_SET_RESULTS:
+	case SQL_CHARACTER_SET_CONNECTION:
+	case SQL_COLLATION_CONNECTION:
+	case SQL_SET_NAMES:
+		if (value.size() == 0) {
+			if (!variables[idx].value || strcasecmp(variables[idx].value, "NULL") != 0) {
+				mysql_variables.client_set_value(myds->sess, idx, "NULL");
+				mysql_variables.server_set_value(myds->sess, idx, "NULL");
+			}
+			break;
+		}
+		if (idx == SQL_COLLATION_CONNECTION)
+			ci = proxysql_find_charset_collate(value.c_str());
+		else
+			ci = proxysql_find_charset_name(value.c_str());
+		if (!ci)
+			assert(0);
+		if (!variables[idx].value || strtoul(variables[idx].value, NULL, 10) != ci->nr) {
+			value_str = std::to_string(ci->nr);
+			mysql_variables.client_set_value(myds->sess, idx, value);
+			mysql_variables.server_set_value(myds->sess, idx, value.c_str());
+		}
+		break;
+	case -1:
+		break;
+	default:
+		if (!variables[idx].value || strcasecmp(variables[idx].value, value.c_str()) != 0) {
+			mysql_variables.client_set_value(myds->sess, idx, value);
+			mysql_variables.server_set_value(myds->sess, idx, value.c_str());
+		}
+		break;
+	}
+}
+
+// Use MySQL setting "session_track_system_variables" to track changes in
+// system variables in the backend.
+// See: https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_session_track_system_variables
+void MySQL_Connection::get_system_variables() {
+	if (mysql) {
+		if (mysql->net.last_errno==0) { // only if there is no error
+			if (mysql->server_status & SERVER_SESSION_STATE_CHANGED) { // only if status changed
+				const char *name, *value;
+				size_t name_length, value_length;
+				std::unordered_map<std::string, std::string> changed_vars;
+				// When a session system variable is assigned, two values per
+				// variable are returned (in separate calls). For the first
+				// call, we receive the variable name as a string and its
+				// length. For the second call, we receive the variable value
+				// as a string and its length. Both string are NOT null
+				// terminated.
+				if (
+					mysql_session_track_get_first(
+						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
+					) == 0
+				) {
+					mysql_session_track_get_next(
+						mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
+					);
+					changed_vars[std::string(name, name_length)] = std::string(value, value_length);
+					while (
+						mysql_session_track_get_next(
+							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &name, &name_length
+						) == 0
+					) {
+						mysql_session_track_get_next(
+							mysql, SESSION_TRACK_SYSTEM_VARIABLES, &value, &value_length
+						);
+						changed_vars[std::string(name, name_length)] = std::string(value, value_length);
+					}
+				}
+				for (const std::pair<std::string, std::string> var : changed_vars) {
+					try {
+						mysql_variables.mysql_tracked_variables_umap.at(var.first);
+					} catch (std::out_of_range const&) {
+						if (strncasecmp("autocommit", name, name_length) != 0) {
+							proxy_warning(
+								"System variable '%s' changed, but it is not tracked by ProxySQL. "
+								"As we cannot guarantee synchronization between the ProxySQL variables and the "
+								"backend variables, we are disabling session tracking.\n",
+								var.first.c_str()
+							);
+							myds->sess->session_tracking_failed = true;
+							if (myds->sess->locked_on_hostgroup < 0) {
+								proxy_warning("Locking on hostgroup now.\n");
+								if (myds->sess->qpo->destination_hostgroup >= 0) {
+									if (myds->sess->transaction_persistent_hostgroup == -1) {
+										myds->sess->current_hostgroup = myds->sess->qpo->destination_hostgroup;
+									}
+								}
+								myds->sess->locked_on_hostgroup = myds->sess->current_hostgroup;
+								myds->sess->thread->status_variables.stvar[st_var_hostgroup_locked]++;
+								myds->sess->thread->status_variables.stvar[st_var_hostgroup_locked_set_cmds]++;
+							}
+							return;
+						}
+					}
+				}
+				for (const std::pair<std::string, std::string> var : changed_vars) {
+					compare_system_variable(var.first, var.second);
+				}
+				// Back to unlocked
+				myds->sess->locked_on_hostgroup = -1;
+				proxy_warning("Removing lock on hostgroup\n");
+			}
+		}
+	}
 }

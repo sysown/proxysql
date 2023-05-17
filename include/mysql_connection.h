@@ -55,6 +55,7 @@ class MySQL_Connection {
 	private:
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
+	void compare_system_variable(const std::string name, const std::string value);
 	public:
 	struct {
 		char *server_version;
@@ -233,6 +234,7 @@ class MySQL_Connection {
 	void reset();
 
 	bool get_gtid(char *buff, uint64_t *trx_id);
+	void get_system_variables();
 	void reduce_auto_increment_delay_token() { if (auto_increment_delay_token) auto_increment_delay_token--; };
 
 	bool match_tracked_options(const MySQL_Connection *c);

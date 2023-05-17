@@ -31,6 +31,8 @@ MySQL_Variables::MySQL_Variables() {
 	ignore_vars.push_back("net_buffer_length");
 	ignore_vars.push_back("read_buffer_size");
 	ignore_vars.push_back("read_rnd_buffer_size");
+	ignore_vars.push_back("session_track_state_change");
+	ignore_vars.push_back("session_track_system_variables");
 	// NOTE: This variable has been temporarily ignored. Check issues #3442 and #3441.
 	ignore_vars.push_back("session_track_schema");
 	variables_regexp = "";
@@ -39,6 +41,9 @@ MySQL_Variables::MySQL_Variables() {
 		if (mysql_tracked_variables[i].internal_variable_name == NULL) {
 			mysql_tracked_variables[i].internal_variable_name = mysql_tracked_variables[i].set_variable_name;
 		}
+		mysql_tracked_variables_umap.insert(
+			{mysql_tracked_variables[i].set_variable_name, mysql_tracked_variables[i].idx}
+		);
 	}
 /*
    NOTE:
@@ -616,3 +621,15 @@ bool MySQL_Variables::parse_variable_number(MySQL_Session *sess, int idx, string
 	return true;
 }
 
+void MySQL_Variables::enable_session_state_trackers(MySQL_Session *sess) {
+	if (mysql_thread___enable_session_state_trackers) {
+		mysql_variables.client_set_value(
+			sess, SQL_SESSION_TRACK_STATE_CHANGE,
+			mysql_tracked_variables[SQL_SESSION_TRACK_STATE_CHANGE].default_value
+		);
+		mysql_variables.client_set_value(
+			sess, SQL_SESSION_TRACK_SYSTEM_VARIABLES,
+			mysql_tracked_variables[SQL_SESSION_TRACK_SYSTEM_VARIABLES].default_value
+		);
+	}
+}
