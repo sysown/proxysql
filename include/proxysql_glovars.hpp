@@ -121,6 +121,7 @@ class ProxySQL_GlobalVariables {
 		char * ssl_key_pem_mem;
 		char * ssl_cert_pem_mem;
 		bool sqlite3_server;
+		int data_packets_history_size;
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */

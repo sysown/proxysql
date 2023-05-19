@@ -141,8 +141,23 @@ static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) 
 #define queue_r_ptr(_q) ((unsigned char *)_q.buffer+_q.tail)
 #define queue_w_ptr(_q) ((unsigned char *)_q.buffer+_q.head)
 
+#define add_to_data_packet_history(_o,_p,_s) if (unlikely(GloVars.global.data_packets_history_size)) { \
+	if (static_cast<int>(_o.get_max_size()) != GloVars.global.data_packets_history_size) { \
+		_o.set_max_size(GloVars.global.data_packets_history_size); \
+	} \
+	_o.push(_p,_s);\
+}
 
-
+// memory deallocation responsibility is now transferred to the queue as the buffer is directly assigned to it. 
+// if the size of data_packet_history is 0, the memory will be released.
+#define add_to_data_packet_history_without_alloc(_o,_p,_s) if (unlikely(GloVars.global.data_packets_history_size)) { \
+	if (static_cast<int>(_o.get_max_size()) != GloVars.global.data_packets_history_size) { \
+		_o.set_max_size(GloVars.global.data_packets_history_size); \
+	} \
+	_o.push<false>(_p,_s);\
+} else { \
+	l_free(_s,_p); \
+}
 //enum sslstatus { SSLSTATUS_OK, SSLSTATUS_WANT_IO, SSLSTATUS_FAIL};
 
 static enum sslstatus get_sslstatus(SSL* ssl, int n)
@@ -417,6 +432,11 @@ void MySQL_Data_Stream::init() {
 		if (PSarrayOUT==NULL) PSarrayOUT= new PtrSizeArray();
 //		if (PSarrayOUTpending==NULL) PSarrayOUTpending= new PtrSizeArray();
 		if (resultset==NULL) resultset = new PtrSizeArray();
+
+		if (unlikely(GloVars.global.data_packets_history_size)) {
+			data_packets_history_IN.set_max_size(GloVars.global.data_packets_history_size);
+			data_packets_history_OUT.set_max_size(GloVars.global.data_packets_history_size);
+		}
 	}
 	if (myds_type!=MYDS_FRONTEND) {
 		queue_destroy(queueIN);
@@ -941,6 +961,7 @@ int MySQL_Data_Stream::buffer2array() {
 			memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
 			queue_r(queueIN, queueIN.pkt.size);
 			PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+			add_to_data_packet_history(data_packets_history_IN,queueIN.pkt.ptr,queueIN.pkt.size);
 			queueIN.pkt.ptr = NULL;
 		} else {
 			if (PSarrayIN->len == 0) {
@@ -951,6 +972,7 @@ int MySQL_Data_Stream::buffer2array() {
 				memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
 				queue_r(queueIN, queueIN.pkt.size);
 				PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+				add_to_data_packet_history(data_packets_history_IN,queueIN.pkt.ptr,queueIN.pkt.size);
 				queueIN.pkt.ptr = NULL;
 			} else {
 				// get a pointer to the last entry in PSarrayIN
@@ -963,6 +985,7 @@ int MySQL_Data_Stream::buffer2array() {
 					memcpy(queueIN.pkt.ptr, queue_r_ptr(queueIN) , queueIN.pkt.size);
 					queue_r(queueIN, queueIN.pkt.size);
 					PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+					add_to_data_packet_history(data_packets_history_IN,queueIN.pkt.ptr,queueIN.pkt.size);
 					queueIN.pkt.ptr = NULL;
 				} else {
 					// we append the packet at the end of the previous packet
@@ -1125,6 +1148,7 @@ int MySQL_Data_Stream::buffer2array() {
 			queueIN.pkt.ptr=NULL;
 		} else {
 			PSarrayIN->add(queueIN.pkt.ptr,queueIN.pkt.size);
+			add_to_data_packet_history(data_packets_history_IN,queueIN.pkt.ptr,queueIN.pkt.size);
 			pkts_recv++;
 			queueIN.pkt.size=0;
 			queueIN.pkt.ptr=NULL;
@@ -1245,7 +1269,8 @@ int MySQL_Data_Stream::array2buffer() {
 			if (PSarrayOUT->len-idx) {
 				proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Removing a packet from array\n", sess, this);
 				if (queueOUT.pkt.ptr) {
-					l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
+					//l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
+					add_to_data_packet_history_without_alloc(data_packets_history_OUT,queueOUT.pkt.ptr,queueOUT.pkt.size);
 					queueOUT.pkt.ptr=NULL;
 				}
 		//VALGRIND_ENABLE_ERROR_REPORTING;
@@ -1290,7 +1315,8 @@ int MySQL_Data_Stream::array2buffer() {
 		ret=b;
 		if (queueOUT.partial==queueOUT.pkt.size) {
 			if (queueOUT.pkt.ptr) {
-				l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
+				//l_free(queueOUT.pkt.size,queueOUT.pkt.ptr);
+				add_to_data_packet_history_without_alloc(data_packets_history_OUT,queueOUT.pkt.ptr,queueOUT.pkt.size);
 				queueOUT.pkt.ptr=NULL;
 			}
 			proxy_debug(PROXY_DEBUG_PKT_ARRAY, 5, "Session=%p . DataStream: %p -- Packet completely written into send buffer\n", sess, this);
