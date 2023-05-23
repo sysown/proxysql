@@ -31,6 +31,19 @@ const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 
 int check_all_collations(const CommandLine& cl, MYSQL* admin) {
 	const MARIADB_CHARSET_INFO* c = mariadb_compiled_charsets;
+	uint32_t num_tests = 0;
+
+	{
+		mysql_query(admin, "SELECT COUNT(*) FROM mysql_collations WHERE id < 256");
+		MYSQL_RES* myres = mysql_store_result(admin);
+		MYSQL_ROW myrow = mysql_fetch_row(myres);
+
+		if (myrow && myrow[0]) {
+			num_tests = atoi(myrow[0]);
+		}
+	}
+
+	plan(num_tests);
 
 	do {
 		if (c[0].nr > 255) {
