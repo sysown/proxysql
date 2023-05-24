@@ -295,7 +295,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 #ifdef DEBUG
 	init_debug_struct();
 #endif
-
+	init_coredump_struct();
 };
 
 void ProxySQL_GlobalVariables::process_opts_post() {

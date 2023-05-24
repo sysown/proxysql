@@ -495,6 +495,7 @@ void MySQL_Data_Stream::check_data_flow() {
 		// there is data at both sides of the data stream: this is considered a fatal error
 		proxy_error("Session=%p, DataStream=%p -- Data at both ends of a MySQL data stream: IN <%d bytes %d packets> , OUT <%d bytes %d packets>\n", sess, this, PSarrayIN->len , queue_data(queueIN) , PSarrayOUT->len , queue_data(queueOUT));
 		shut_soft();
+		generate_coredump();
 	}
 	if ((myds_type==MYDS_BACKEND) && myconn && (myconn->fd==0) && (revents & POLLOUT)) {
 		int rc;

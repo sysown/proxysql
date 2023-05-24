@@ -25,6 +25,8 @@ endif
 ###     ```
 ###     make build_deps_debug -j$(nproc) && make debug -j$(nproc) && make build_tap_test_debug -j$(nproc)
 ###     ```
+###
+### ** to use on-demand coredump generation feature, compile code without ASAN option (WITHASAN=0).
 
 O0=-O0
 O2=-O2
