@@ -1,10 +1,12 @@
 #include "proxysql_utils.h"
 
+#include <algorithm>
 #include <functional>
 #include <sstream>
 
 #include <fcntl.h>
 #include <poll.h>
+#include <random>
 #include <signal.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -408,4 +410,29 @@ std::string generate_multi_rows_query(int rows, int params) {
 		}
 	}
 	return s;
+}
+
+string rand_str(std::size_t strSize) {
+	string dic { "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" };
+	std::random_device rd {};
+	std::mt19937 gen { rd() };
+
+	std::shuffle(dic.begin(), dic.end(), gen);
+
+	if (strSize < dic.size()) {
+		return dic.substr(0, strSize);
+	} else {
+		std::size_t req_modulus = static_cast<std::size_t>(strSize / dic.size());
+		std::size_t req_reminder = strSize % dic.size();
+		string random_str {};
+
+		for (std::size_t i = 0; i < req_modulus; i++) {
+			std::shuffle(dic.begin(), dic.end(), gen);
+			random_str.append(dic);
+		}
+
+		random_str.append(dic.substr(0, req_reminder));
+
+		return random_str;
+	}
 }

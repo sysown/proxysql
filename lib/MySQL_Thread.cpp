@@ -116,15 +116,44 @@ const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
 	return NULL;
 }
 
+/**
+ * @brief Finds the default (first) collation for the supplied 'charset name'.
+ * @details Previously, this function just returned the first collation found (default). Since v2.5.3, this
+ *   function takes into consideration the thread variable 'SQL_COLLATION_CONNECTION'
+ *   ('mysql-default_collation_connection'). This was introduced for being able to serve the same default
+ *   collation as the server (for bootstrap mode) in case it's detected to be a MySQL 8
+ *   ('utf8mb4_0900_ai_ci'), instead of the retrocompatible default collation ('utf8mb4_general_ci'). This
+ *   change also allows users to select the default collation that they please for a particular charset, if
+ *   the collection specified via 'mysql-default_collation_connection', isn't found, the first found collation
+ *   (original default) will be retrieved.
+ * @param name The 'charset name' for which to find the default collation.
+ * @return The collation found, NULL if none is find.
+ */
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name) {
+	const char* default_collation = mysql_thread___default_variables[SQL_COLLATION_CONNECTION];
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
+	MARIADB_CHARSET_INFO* charset_collation = nullptr;
+
 	do {
 		if (!strcasecmp(c->csname, name)) {
-			return c;
+			if (charset_collation == nullptr) {
+				charset_collation = c;
+			}
+
+			if (default_collation == nullptr) {
+				charset_collation = c;
+				break;
+			} else {
+				if (!strcmp(default_collation, c->name)) {
+					charset_collation = c;
+					break;
+				}
+			}
 		}
 		++c;
 	} while (c[0].nr != 0);
-	return NULL;
+
+	return charset_collation;
 }
 
 MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename) {

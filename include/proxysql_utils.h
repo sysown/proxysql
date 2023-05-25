@@ -212,4 +212,12 @@ std::string replace_str(const std::string& str, const std::string& match, const 
 std::vector<std::string> split_str(const std::string& s, char delimiter);
 
 std::string generate_multi_rows_query(int rows, int params);
+
+/**
+ * @brief Generates a random string of the length of the provider 'strSize' parameter.
+ * @param strSize The size of the string to be generated.
+ * @return A random string.
+ */
+std::string rand_str(std::size_t strSize);
+
 #endif
