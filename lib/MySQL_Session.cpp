@@ -611,6 +611,7 @@ MySQL_Session::MySQL_Session() {
 	last_HG_affected_rows = -1; // #1421 : advanced support for LAST_INSERT_ID()
 	proxysql_node_address = NULL;
 	use_ldap_auth = false;
+
 }
 
 void MySQL_Session::init() {
@@ -664,6 +665,7 @@ void MySQL_Session::reset() {
 			client_myds->myconn->reset();
 		}
 	}
+
 }
 
 MySQL_Session::~MySQL_Session() {
@@ -2983,9 +2985,18 @@ __exit_handler_again___status_CONNECTING_SERVER_with_err:
 						// see bug #979
 						RequestEnd(myds);
 					}
-					while (previous_status.size()) {
-						st=previous_status.top();
-						previous_status.pop();
+					if (previous_status.empty() == false) {
+						if (previous_status.top() == CONNECTING_CLIENT_RESUME) {
+							myds->destroy_MySQL_Connection_From_Pool( myerr ? true : false );
+							st=previous_status.top();
+							previous_status.pop();
+							NEXT_IMMEDIATE_NEW(st);
+						} else {
+							while (previous_status.size()) {
+								st=previous_status.top();
+								previous_status.pop();
+							}
+						}
 					}
 					if (mirror) {
 						PROXY_TRACE();
@@ -4749,6 +4760,27 @@ handler_again:
 			//fprintf(stderr,"CONNECTING_CLIENT\n");
 			// FIXME: to implement
 			break;
+		case CONNECTING_CLIENT_RESUME:
+			if (mybe != NULL) {
+				if (mybe->server_myds != NULL) {
+					if (mybe->server_myds->myconn != NULL) {
+						proxy_warning("Resuming client connection\n");
+						set_status(CONNECTING_CLIENT);
+						uint8_t _pid = client_myds->pkt_sid; _pid++;
+						GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_OK, this, NULL);
+						client_myds->DSS = STATE_CLIENT_HANDSHAKE;
+						client_myds->myprot.generate_pkt_OK(true, NULL, NULL, _pid, 0, 0, 2, 0, NULL);
+						status=WAITING_CLIENT_DATA;
+						client_myds->DSS=STATE_CLIENT_AUTH_OK;
+						mybe->server_myds->return_MySQL_Connection_To_Pool();
+						break;
+					}
+				}
+			}
+			// something was wrong , we destroy the session
+			handler_ret = -1;
+			return handler_ret;
+			break;
 		case PINGING_SERVER:
 			{
 				int rc=handler_again___status_PINGING_SERVER();
@@ -5343,7 +5375,8 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , handshake_response=%d , switching_auth_stage=%d , is_encrypted=%d , client_encrypted=%d\n", this, client_myds, handshake_response_return, client_myds->switching_auth_stage, is_encrypted, client_myds->encrypted);
 	if (
-		(handshake_response_return == false) && (client_myds->switching_auth_stage == 1)
+		//(handshake_response_return == false) && (client_myds->switching_auth_stage == 1)
+		(handshake_response_return == false) && (client_myds->auth_in_progress != 0)
 	) {
 		l_free(pkt->size,pkt->ptr);
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Returning\n", this, client_myds);
@@ -5453,8 +5486,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=false;
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
-				uint8_t _pid = 2;
-				if (client_myds->switching_auth_stage) _pid+=2;
+				//uint8_t _pid = 2;
+				//if (client_myds->switching_auth_stage) _pid+=2;
+				uint8_t _pid = client_myds->pkt_sid; _pid++;
 				if (max_connections_reached==true) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p , Too many connections\n", this, client_myds);
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,_pid,1040,(char *)"08004", (char *)"Too many connections", true);
@@ -5514,9 +5548,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					} else {
 						client_addr = strdup((char *)"");
 					}
-					uint8_t _pid = 2;
-					if (client_myds->switching_auth_stage) _pid+=2;
-					if (is_encrypted) _pid++;
+					//uint8_t _pid = 2;
+					//if (client_myds->switching_auth_stage) _pid+=2;
+					//if (is_encrypted) _pid++;
+					uint8_t _pid = client_myds->pkt_sid; _pid++;
 					if (
 						(strcmp(client_addr,(char *)"127.0.0.1")==0)
 						||
@@ -5542,8 +5577,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					free(client_addr);
 				} else {
 					uint8_t _pid = 2;
-					if (client_myds->switching_auth_stage) _pid+=2;
-					if (is_encrypted) _pid++;
+					//if (client_myds->switching_auth_stage) _pid+=2;
+					//if (is_encrypted) _pid++;
+					_pid = client_myds->pkt_sid; _pid++;
 					// If this condition is met, it means that the
 					// 'STATE_SERVER_HANDSHAKE' being performed isn't from the start of a
 					// connection, but as a consequence of a 'COM_USER_CHANGE' which
@@ -5613,9 +5649,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 		if (client_myds->myconn->userinfo->username) {
 			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-			uint8_t _pid = 2;
-			if (client_myds->switching_auth_stage) _pid+=2;
-			if (is_encrypted) _pid++;
+			//uint8_t _pid = 2;
+			//if (client_myds->switching_auth_stage) _pid+=2;
+			//if (is_encrypted) _pid++;
+			uint8_t _pid = client_myds->pkt_sid; _pid++;
 #ifdef DEBUG
 		if (client_myds->myconn->userinfo->password) {
 			char *tmp_pass=strdup(client_myds->myconn->userinfo->password);
@@ -6966,7 +7003,13 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 				}
 			}
 		}
-		if (session_fast_forward == false && qpo->create_new_conn == false) {
+		bool resume_client_authentication = false;
+		if (previous_status.empty() == false) {
+			if (previous_status.top() == CONNECTING_CLIENT_RESUME) {
+				resume_client_authentication = true;
+			}
+		}
+		if (session_fast_forward == false && qpo->create_new_conn == false && resume_client_authentication == false) {
 			if (qpo->min_gtid) {
 				gtid_uuid = qpo->min_gtid;
 				with_gtid = true;
@@ -7026,9 +7069,9 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 
 		if (mc==NULL) {
 			if (trxid) {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), uuid, trxid, -1);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn || resume_client_authentication), uuid, trxid, -1);
 			} else {
-				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn), NULL, 0, (int)qpo->max_lag_ms);
+				mc=MyHGM->get_MyConn_from_pool(mybe->hostgroup_id, this, (session_fast_forward || qpo->create_new_conn || resume_client_authentication), NULL, 0, (int)qpo->max_lag_ms);
 			}
 #ifdef STRESSTEST_POOL
 			if (mc && (loops < NUM_SLOW_LOOPS - 1)) {
