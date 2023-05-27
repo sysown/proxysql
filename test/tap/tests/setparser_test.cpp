@@ -34,6 +34,7 @@
  * For now we just declare it locally to avoid the linking error.
  */
 #include "openssl/ssl.h"
+#include "mysql.h"
 #include "proxysql_structs.h"
 #include "sqlite3db.h"
 #include "MySQL_LDAP_Authentication.hpp"
