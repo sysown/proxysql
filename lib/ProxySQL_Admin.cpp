@@ -1042,7 +1042,7 @@ bool FlushCommandWrapper(MySQL_Session *sess, const std::vector<std::string>& cm
 		else
 			assert(0);
 		msg += "\n";
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, msg.c_str());
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s", msg.c_str());
 #endif // DEBUG
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return true;
@@ -7936,7 +7936,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 	vector<fast_routing_hashmap_t> th_hashmaps {};
 
 	if (maps_per_thread) {
-		for (uint32_t i = 0; i < ths; i++) {
+		for (uint32_t i = 0; i < static_cast<uint32_t>(ths); i++) {
 			th_hashmaps.push_back(GloQPro->create_fast_routing_hashmap(resultset2));
 		}
 	}
