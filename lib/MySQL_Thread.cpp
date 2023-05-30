@@ -211,6 +211,7 @@ ProxySQL_Poll::ProxySQL_Poll() {
 	len=0;
 	pending_listener_add=0;
 	pending_listener_del=0;
+	bootstrapping_listeners = true;
 	size=MIN_POLL_LEN;
 	fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
 	myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
@@ -3198,18 +3199,25 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		pthread_mutex_unlock(&thread_mutex);
-		while ( // spin here if ...
-			(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
-			||
-			(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
-		) {
-			if (n) {
-				poll_listener_add(n);
-				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
-			}
+		if (unlikely(mypolls.bootstrapping_listeners == true)) {
+			while ( // spin here if ...
+				(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
+				||
+				(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
+			) {
+				if (n) {
+					poll_listener_add(n);
+					assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+				} else {
+					if (GloMTH->bootstrapping_listeners == false) {
+						// we stop looping
+						mypolls.bootstrapping_listeners = false;
+					}
+				}
 #ifdef DEBUG
-			usleep(5+rand()%10);
+				usleep(5+rand()%10);
 #endif
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
@@ -3243,17 +3251,19 @@ __run_skip_1a:
 		}
 #endif // IDLE_THREADS
 
-		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
-			if (static_cast<int>(n) == -1) {
-				for (unsigned int i = 0; i < mypolls.len; i++) {
-					if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
-						poll_listener_del(mypolls.myds[i]->fd);
+		if (unlikely(maintenance_loop == true)) {
+			while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
+				if (static_cast<int>(n) == -1) {
+					for (unsigned int i = 0; i < mypolls.len; i++) {
+						if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
+							poll_listener_del(mypolls.myds[i]->fd);
+						}
 					}
+				} else {
+					poll_listener_del(n);
 				}
-			} else {
-				poll_listener_del(n);
+				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 			}
-			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
 		pthread_mutex_lock(&thread_mutex);

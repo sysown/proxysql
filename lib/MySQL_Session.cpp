@@ -7488,7 +7488,9 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 			// if a prepared statement is executed, LogQuery was already called
 			break;
 		default:
-			LogQuery(myds);
+			if (session_fast_forward==false) {
+				LogQuery(myds);
+			}
 			break;
 	}
 
@@ -7502,13 +7504,15 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 		}
 		myds->free_mysql_real_query();
 	}
-	// reset status of the session
-	status=WAITING_CLIENT_DATA;
-	if (client_myds) {
-		// reset status of client data stream
-		client_myds->DSS=STATE_SLEEP;
-		// finalize the query
-		CurrentQuery.end();
+	if (session_fast_forward==false) {
+		// reset status of the session
+		status=WAITING_CLIENT_DATA;
+		if (client_myds) {
+			// reset status of client data stream
+			client_myds->DSS=STATE_SLEEP;
+			// finalize the query
+			CurrentQuery.end();
+		}
 	}
 	started_sending_data_to_client=false;
 	previous_hostgroup = current_hostgroup;
