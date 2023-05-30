@@ -1362,6 +1362,7 @@ int ProxySQL_Test___GenerateRandomQueryInDigestTable(int n) {
 			}
 		}
 	}
+	generate_coredump();
 	delete sess;
 	mysql_thread___query_digests_normalize_digest_text = orig_norm;
 	return n*1000;
