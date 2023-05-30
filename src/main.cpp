@@ -1504,7 +1504,7 @@ const char BOOTSTRAP_SELECT_USERS[] {
 	"SELECT DISTINCT user,ssl_type,authentication_string,plugin,password_expired FROM mysql.user"
 		" WHERE user NOT LIKE 'mysql.%' AND user NOT LIKE 'bt_proxysql_%'"
 #ifndef DEBUG
-		" AND user != 'root'";
+		" AND user != 'root'"
 #endif
 };
 
