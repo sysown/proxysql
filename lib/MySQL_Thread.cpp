@@ -608,6 +608,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
+	(char *)"data_packets_history_size",
 	NULL
 };
 
@@ -1227,6 +1228,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
 	variables.log_mysql_warnings_enabled=false;
+	variables.data_packets_history_size=0;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -2110,6 +2112,16 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"data_packets_history_size")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv < INT_MAX) {
+			variables.data_packets_history_size = intv;
+			GloVars.global.data_packets_history_size = intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
 	return false;
 }
 
@@ -2288,7 +2300,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
-
+		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
 
 	}
 

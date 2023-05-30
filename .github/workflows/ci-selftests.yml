@@ -47,6 +47,11 @@ jobs:
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SELECT version();" 2>&1 | grep -v 'Using a password'
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SET mysql-verbose_query_error=true;" 2>&1 | grep -v 'Using a password'
         
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL COREDUMP;" 2>&1 | grep -v 'Using a password'
+        (ls -l ./core* && file ./core* && rm ./core*) || exit 1
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL COMPRESSEDCOREDUMP;" 2>&1 | grep -v 'Using a password'
+        (ls -l ./core* && file ./core* && rm ./core*) || exit 1
+        
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv 2>&1 << EOF | grep -v 'Using a password'
         SELECT COUNT(*) FROM stats_mysql_query_digest;
         SELECT COUNT(*) FROM stats_mysql_query_digest_reset;

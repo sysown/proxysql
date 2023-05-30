@@ -58,7 +58,7 @@
 #include "proxysql_structs.h"
 #include "proxysql_debug.h"
 #include "proxysql_macros.h"
-
+#include "proxysql_coredump.h"
 #include "jemalloc.h"
 
 #ifndef NOJEM

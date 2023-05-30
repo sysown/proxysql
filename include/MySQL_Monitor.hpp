@@ -431,7 +431,7 @@ class MySQL_Monitor {
 	public:
 	static std::string dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
 	static std::string dns_lookup(const char* hostname, bool return_hostname_if_lookup_fails = true, size_t* ip_count = NULL);
-	static bool dns_cache_update_socket(const std::string& hostname, int socket_fd);
+	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
 

@@ -26,6 +26,9 @@ inline void replace_checksum_zeros(char* checksum) {
 	}
 }
 
+#ifndef ProxySQL_Checksum_Value_LENGTH
+#define ProxySQL_Checksum_Value_LENGTH 20
+#endif
 class ProxySQL_Checksum_Value {
 	public:
 	char *checksum;
@@ -33,15 +36,15 @@ class ProxySQL_Checksum_Value {
 	unsigned long long epoch;
 	bool in_shutdown;
 	ProxySQL_Checksum_Value() {
-		checksum = (char *)malloc(20);
-		memset(checksum,0,20);
+		checksum = (char *)malloc(ProxySQL_Checksum_Value_LENGTH);
+		memset(checksum,0,ProxySQL_Checksum_Value_LENGTH);
 		version = 0;
 		epoch = 0;
 		in_shutdown = false;
 	}
 	void set_checksum(char *c) {
-		memset(checksum,0,20);
-		strncpy(checksum,c,18);
+		memset(checksum,0,ProxySQL_Checksum_Value_LENGTH);
+		strncpy(checksum,c,ProxySQL_Checksum_Value_LENGTH);
 		replace_checksum_zeros(checksum);
 	}
 	~ProxySQL_Checksum_Value() {
@@ -118,6 +121,7 @@ class ProxySQL_GlobalVariables {
 		char * ssl_key_pem_mem;
 		char * ssl_cert_pem_mem;
 		bool sqlite3_server;
+		int data_packets_history_size;
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */

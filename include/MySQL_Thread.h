@@ -122,7 +122,7 @@ enum MySQL_Thread_status_variable {
 	st_var_END
 };
 
-class MySQL_Thread
+class __attribute__((aligned(64))) MySQL_Thread
 {
 	private:
 	unsigned int servers_table_version_previous;
@@ -584,6 +584,7 @@ class MySQL_Threads_Handler
 		bool enable_server_deprecate_eof;
 		bool enable_load_data_local_infile;
 		bool log_mysql_warnings_enabled;
+		int data_packets_history_size;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

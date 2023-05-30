@@ -196,6 +196,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #endif
 
 	global.sqlite3_server=false;
+	global.data_packets_history_size=0;
 #ifdef PROXYSQLCLICKHOUSE
 	global.clickhouse_server=false;
 #endif /* PROXYSQLCLICKHOUSE */
@@ -427,7 +428,7 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 #ifdef DEBUG
 	init_debug_struct();
 #endif
-
+	init_coredump_struct();
 };
 
 void ProxySQL_GlobalVariables::process_opts_post() {

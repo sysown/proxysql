@@ -168,14 +168,14 @@ typedef struct signal_entry {
 } signal_entry;
 
 static signal_entry install_signal[]= {
-  { SIGINT,  handle_core_signal },
-  { SIGQUIT, handle_core_signal },
-  { SIGILL,  handle_core_signal },
-  { SIGABRT, handle_core_signal },
-  { SIGFPE,  handle_core_signal },
-  { SIGSEGV, handle_core_signal }
+//  { SIGINT,  handle_core_signal },
+//  { SIGQUIT, handle_core_signal },
+//  { SIGILL,  handle_core_signal },
+//  { SIGABRT, handle_core_signal },
+//  { SIGFPE,  handle_core_signal },
+//  { SIGSEGV, handle_core_signal }
 #ifdef SIGBUS
-  , { SIGBUS,  handle_core_signal }
+    { SIGBUS,  handle_core_signal }
 #endif
 #ifdef SIGXCPU
   , { SIGXCPU, handle_core_signal }

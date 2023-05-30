@@ -95,7 +95,7 @@ public:
 	uint16_t port;
 	ProxySQL_Node_Address(char *h, uint16_t p) : ProxySQL_Node_Address(h, p, NULL) {
 		// resolving DNS if available in Cache
-		if (h) {
+		if (h && p) {
 			size_t ip_count = 0;
 			const std::string& ip = MySQL_Monitor::dns_lookup(h, false, &ip_count);
 
