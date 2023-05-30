@@ -253,7 +253,9 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 
 	opt->add((const char *)"",0,0,0,(const char *)"Enable SQLite3 Server",(const char *)"--sqlite3-server");
 	// Bootstrap General options
-	opt->add((const char *)"",0,1,0,(const char *)"Start ProxySQL in Group Replication bootstrap mode",(const char *)"-B", (const char *)"--bootstrap");
+	opt->add((const char *)"",0,1,0,(const char *)"Start ProxySQL in Group Replication bootstrap mode."
+		" An URI needs to be specified for creating a connection to the bootstrap server, if no URI is provided,"
+		" a connection to the default local socket will be attempted.",(const char *)"-B", (const char *)"--bootstrap");
 	opt->add((const char *)"",0,1,0, (const char *)"Account to use by monitoring after bootstrap, either reuses a specify account or creates a new one;"
 		" this behavior is controlled by related option '--acount-create'. When used, a password must be provided." ,(const char *)"--account");
 	opt->add((const char *)"",0,1,0,(const char *)"Account creation policy for bootstrap. Possible values are:\n"
