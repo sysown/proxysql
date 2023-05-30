@@ -2480,8 +2480,6 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
-				status=WAITING_CLIENT_DATA;
-				client_myds->DSS=STATE_SLEEP;
 				RequestEnd(myds);
 			}
 		} else {
@@ -7466,8 +7464,6 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 		}
 	}
 }
-// this should execute most of the commands executed when a request is finalized
-// this should become the place to hook other functions
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	// check if multiplexing needs to be disabled
 	char *qdt = NULL;
