@@ -6089,8 +6089,8 @@ string build_boot_servers_insert(const vector<boot_srv_cnf_t>& srvs_info_defs) {
 	string t_srvs_values {};
 
 	for (const auto& info_defs : srvs_info_defs) {
-		const boot_srv_info_t& srv_info { info_defs.first };
-		const srv_defs_t& srv_defs { info_defs.second };
+		const boot_srv_info_t& srv_info = info_defs.first;
+		const srv_defs_t& srv_defs = info_defs.second;
 
 		const char t_values[] { "(%d, \"%s\", %d, \"%s\", %ld, %ld, %d)" };
 		string srv_values = cstr_format(

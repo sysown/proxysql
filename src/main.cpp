@@ -1753,7 +1753,7 @@ int main(int argc, const char * argv[]) {
 		//  - Connection string parsing is required
 		const string conn_uri { GloVars.global.gr_bootstrap_uri };
 		const pair<int32_t,conn_uri_t> parse_uri_res { parse_conn_uri(conn_uri) };
-		const conn_uri_t uri_data { parse_uri_res.second };
+		const conn_uri_t uri_data = parse_uri_res.second;
 
 		if (parse_uri_res.first == EXIT_FAILURE) {
 			proxy_info("Aborting bootstrap due to failed to parse or match URI - `%s`\n", to_string(uri_data).c_str());
