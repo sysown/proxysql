@@ -1355,18 +1355,25 @@ namespace {
  *     - '127.0.0.1:3306'
  *     - 'mysql-server-1:3306'
  *  + UserInfo is inside a non-capturing group to avoid matching '@'.
+ *  + Host,Port groups are inside a non-capturing group to allow URI like: 'mysql://user:pass@'
  *  + RegName matches any valid Ipv4 or domain name.
  *  + Ipv6 matches Ipv6, it's NOT spec conforming, we don't verify the supplied Ip in the regex.
  *  + Port matches the supplied port.
+ *  + Optionally match a supplied (/).
+ *  + Ensure match termination in HierPart group, forcing conditional subgroups matching.
  */
 const char CONN_URI_REGEX[] {
 	"^(:?(?P<Scheme>[a-z][a-z0-9\\+\\-\\.]*):\\/\\/)?"
-		"(?P<HierPart>"
-			"(?:(?P<UserInfo>(?:\\%[0-9a-f][0-9a-f]|[a-z0-9\\-\\.\\_\\~]|[\\!\\$\\&\\'\\(\\)\\*\\+\\,\\;\\=]|\\:)*)\\@)?"
+	"(?P<HierPart>"
+		"(?:(?P<UserInfo>(?:\\%[0-9a-f][0-9a-f]|[a-z0-9\\-\\.\\_\\~]|[\\!\\$\\&\\'\\(\\)\\*\\+\\,\\;\\=]|\\:)*)\\@)?"
+		"(:?"
 			"(?P<Host>"
 				"(?P<RegName>(?:\\%[0-9a-f][0-9a-f]|[a-z0-9\\-\\.\\_\\~]|[\\!\\$\\&\\'\\(\\)\\*\\+\\,\\;\\=]])*)|"
-				"(?P<Ipv6>\\[(?:[0-9a-f]|[\\:])*\\])):"
-			"(?P<Port>[0-9]+))?"
+				"(?P<Ipv6>\\[(?:[0-9a-f]|[\\:])*\\]))"
+			"(?:\\:(?P<Port>[0-9]+)?)?"
+		")?"
+		"(?:\\/)?"
+	")?$"
 };
 
 /**
@@ -1483,7 +1490,9 @@ string to_string(const conn_uri_t& conn_uri) {
 
 	j["scheme"] = conn_uri.scheme;
 	j["user"] = conn_uri.user;
+#ifdef DEBUG
 	j["pass"] = conn_uri.pass;
+#endif
 	j["host"] = conn_uri.host;
 	j["port"] = conn_uri.port;
 
@@ -1750,14 +1759,17 @@ int main(int argc, const char * argv[]) {
 			proxy_info("Aborting bootstrap due to failed to parse or match URI - `%s`\n", to_string(uri_data).c_str());
 			exit(parse_uri_res.first);
 		} else {
-			proxy_info("Starting bootstrap connection with data extracted from URI - `%s`\n", to_string(uri_data).c_str());
+			proxy_info("Bootstrap connection data supplied via URI - `%s`\n", to_string(uri_data).c_str());
 		}
 
 		const char* c_host = uri_data.host.c_str();
 		const char* c_user = uri_data.user.empty() ? "root" : uri_data.user.c_str();
 		const char* c_pass = nullptr;
-		uint32_t port = uri_data.port;
+		uint32_t port = uri_data.port == 0 ? 3306 : uri_data.port;
 		uint32_t flags = CLIENT_SSL;
+
+		nlohmann::ordered_json conn_data { { "host", c_host }, { "user", c_user }, { "port", port } };
+		proxy_info("Performing bootstrap connection using URI data and defaults - `%s`\n", conn_data.dump().c_str());
 
 		if (uri_data.pass.empty()) {
 			c_pass = getpass("Enter password: ");
