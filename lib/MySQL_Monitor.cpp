@@ -4463,11 +4463,9 @@ __error:
 
 void* MySQL_Monitor::monitor_dns_cache() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version = 0;
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
 	mysql_thr->curtime = monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version = GloMTH->get_global_version();
-	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	constexpr unsigned int num_dns_resolver_threads = 1;
