@@ -5360,11 +5360,16 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->DSS=STATE_SSL_INIT;
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl = GloVars.get_SSL_ctx();
+		client_myds->ssl = GloVars.get_SSL_new();
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
 		l_free(pkt->size,pkt->ptr);
+
+		SSL_CTX* ssl_ctx = GloVars.get_SSL_ctx();
+		if (ssl_ctx && (SSL_CTX_get_keylog_callback(ssl_ctx) == (SSL_CTX_keylog_cb_func)NULL)) {
+			SSL_CTX_set_keylog_callback(ssl_ctx, proxysql_keylog_write_line_callback);
+		}
 		return;
 	}
 

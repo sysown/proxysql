@@ -148,6 +148,7 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #ifdef PROXYSQLCLICKHOUSE
 	global.clickhouse_server=false;
 #endif /* PROXYSQLCLICKHOUSE */
+	global.ssl_keylog_enabled = false;
 	opt=new ez::ezOptionParser();
 	opt->overview="High Performance Advanced Proxy for MySQL";
 	opt->syntax="proxysql [OPTIONS]";
@@ -296,6 +297,8 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 	init_debug_struct();
 #endif
 	init_coredump_struct();
+
+	proxysql_keylog_init();
 };
 
 void ProxySQL_GlobalVariables::process_opts_post() {
