@@ -8758,7 +8758,6 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv >= 0 && intv < INT_MAX) {
 			variables.coredump_generation_interval_ms=intv;
 			coredump_generation_interval_ms=intv;
-			proxy_coredump_reset_stats();
 			return true;
 		} else {
 			return false;
@@ -8769,7 +8768,6 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv > 0 && intv <= 500) {
 			variables.coredump_generation_threshold=intv;
 			coredump_generation_threshold=intv;
-			proxy_coredump_reset_stats();
 			return true;
 		} else {
 			return false;
