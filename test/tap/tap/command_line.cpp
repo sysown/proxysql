@@ -11,7 +11,11 @@
 #include "command_line.h"
 #include "json.hpp"
 
+#include "dotenv.h"
+
 using nlohmann::json;
+using dotenv::env;
+//using namespace dotenv;
 
 CommandLine::CommandLine() {}
 
@@ -99,6 +103,25 @@ int CommandLine::getEnv() {
 		}
 		*field = strdup(value);
 	};
+
+	{
+//		char dir_name[256]
+//		getcwd(dir_name, sizeof(dir_name);
+//		strcat(dir_name,".env")
+//		env.load_dotenv(".env", true).load_dotenv(dir_name, true);
+
+		char temp[PATH_MAX];
+		std::string dir_name = getcwd(temp, sizeof(temp)) ? std::string( temp ) : std::string("");
+		env.load_dotenv(".env", true);
+		env.load_dotenv((dir_name.substr(dir_name.find_last_of('/') + 1) + ".env").c_str(), true);
+		fprintf(stdout, ">>> %s %s <<<\n", (dir_name + ".env").c_str(), (dir_name.substr(dir_name.find_last_of('/') + 1) + ".env").c_str());
+
+		std::string exe_name;
+		std::ifstream("/proc/self/comm") >> exe_name;
+		env.load_dotenv((exe_name + ".env").c_str(), true);
+		env.load_dotenv((exe_name.substr(0, exe_name.size() - 2) + ".env").c_str(), true);
+		fprintf(stdout, ">>> %s %s <<<\n", (exe_name + ".env").c_str(), (exe_name.substr(0, exe_name.size() - 2) + ".env").c_str());
+	}
 
 	value=getenv("TAP_HOST");
 	if(!value) return -1;

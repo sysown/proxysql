@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 
-#include <mysql.h>
+#include "mysql.h"
 
 #include "tap.h"
 #include "utils.h"
