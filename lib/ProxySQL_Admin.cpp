@@ -1804,7 +1804,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 		}
 		SPA->flush_error_log();
 		proxysql_keylog_close();
-		char* ssl_keylog_file = SPA->get_variable("ssl_keylog_file");
+		char* ssl_keylog_file = SPA->get_variable((char*)"ssl_keylog_file");
 		if (ssl_keylog_file != NULL) {
 			if (strlen(ssl_keylog_file) > 0) {
 				if (proxysql_keylog_open(ssl_keylog_file) == false) {
@@ -8805,7 +8805,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				if (value[0] == '/') { // absolute path
 					sslkeylogfile = strdup(value);
 				} else { // relative path
-					sslkeylogfile = (char*)malloc(strlen(GloVars.datadir) + strlen(value) + 1);
+					sslkeylogfile = (char*)malloc(strlen(GloVars.datadir) + strlen(value) + 2);
 					sprintf(sslkeylogfile, "%s/%s", GloVars.datadir, value);
 				}
 				if (proxysql_keylog_open(sslkeylogfile) == false) {

@@ -718,6 +718,7 @@ void MySQL_Connection::connect_start() {
 				mysql_thread___ssl_p2s_cipher);
 		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
 		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 	unsigned int timeout= 1;
 	const char *csname = NULL;
@@ -1166,15 +1167,6 @@ handler_again:
 				//vio_blocking(mysql->net.vio, FALSE, 0);
 				//fcntl(mysql->net.vio->sd, F_SETFL, O_RDWR|O_NONBLOCK);
 			//}
-			if (mysql->options.use_ssl == 1) {
-				SSL_CTX* ssl_ctx = NULL;
-				P_MARIADB_TLS* matls = (P_MARIADB_TLS*)mysql->net.pvio->ctls;
-				if (matls != NULL) ssl_ctx = SSL_get_SSL_CTX((SSL*)matls->ssl);
-
-				if (ssl_ctx && (SSL_CTX_get_keylog_callback(ssl_ctx) == (SSL_CTX_keylog_cb_func)NULL)) {
-						SSL_CTX_set_keylog_callback(ssl_ctx, proxysql_keylog_write_line_callback);
-				}
-			}
 			MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
 			break;
 		case ASYNC_CONNECT_FAILED:

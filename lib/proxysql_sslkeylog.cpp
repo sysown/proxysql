@@ -94,3 +94,9 @@ void proxysql_keylog_write_line_callback(const SSL *ssl, const char *line)
 __exit:
     pthread_rwlock_unlock(&keylog_file_rwlock);
 }
+
+void proxysql_keylog_attach_callback(SSL_CTX* ssl_ctx) {
+    if (ssl_ctx && (SSL_CTX_get_keylog_callback(ssl_ctx) == (SSL_CTX_keylog_cb_func)NULL)) {
+	    SSL_CTX_set_keylog_callback(ssl_ctx, proxysql_keylog_write_line_callback);
+    }
+}
