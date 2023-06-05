@@ -1,0 +1,32 @@
+@@ -3277,12 +3277,15 @@
+   case MYSQL_OPT_SSL_CRL:
+     OPT_SET_EXTENDED_VALUE_STR(&mysql->options, ssl_crl, (char *)arg1);
+     break;
+   case MYSQL_OPT_SSL_CRLPATH:
+     OPT_SET_EXTENDED_VALUE_STR(&mysql->options, ssl_crlpath, (char *)arg1);
+     break;
++  case MARIADB_OPT_SSL_KEYLOG_CALLBACK:
++    OPT_SET_EXTENDED_VALUE(&mysql->options, ssl_keylog_callback, arg1);
++    break;
+   case MYSQL_OPT_CONNECT_ATTR_DELETE:
+     {
+       uchar *h;
+       CHECK_OPT_EXTENSION_SET(&mysql->options);
+       if (hash_inited(&mysql->options.extension->connect_attrs) &&
+           (h= (uchar *)hash_search(&mysql->options.extension->connect_attrs, (uchar *)arg1,
+@@ -3614,12 +3617,15 @@
+   case MYSQL_OPT_SSL_CRL:
+     *((char **)arg)= mysql->options.extension ? mysql->options.ssl_cipher : NULL;
+     break;
+   case MYSQL_OPT_SSL_CRLPATH:
+     *((char **)arg)= mysql->options.extension ? mysql->options.extension->ssl_crlpath : NULL;
+     break;
++  case MARIADB_OPT_SSL_KEYLOG_CALLBACK:
++    *((void(**)(const void *, const char *))arg)= mysql->options.extension ? mysql->options.extension->ssl_keylog_callback : NULL;
++    break;
+   case MYSQL_OPT_CONNECT_ATTRS:
+     /* mysql_get_optionsv(mysql, MYSQL_OPT_CONNECT_ATTRS, keys, vals, elements) */
+     {
+       unsigned int i, *elements;
+       char **key= NULL;
+       void *arg1;
