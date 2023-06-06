@@ -111,6 +111,7 @@ heaptrack.*
 .vscode/
 
 #tap tests
+test/tap/tap/cpp-dotenv/cpp-dotenv-*
 *-t
 test/tap/tests/galera_1_timeout_count
 test/tap/tests/galera_2_timeout_no_count
