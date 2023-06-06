@@ -1810,7 +1810,7 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 				if (proxysql_keylog_open(ssl_keylog_file) == false) {
 					// re-opening file failed, setting ssl_keylog_enabled to false
 					GloVars.global.ssl_keylog_enabled = false;
-					proxy_warning("Cannot open file '%s' for writing.\n", ssl_keylog_file);
+					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", ssl_keylog_file);
 				}
 			}
 			free(ssl_keylog_file);
@@ -8810,7 +8810,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				}
 				if (proxysql_keylog_open(sslkeylogfile) == false) {
 					free(sslkeylogfile);
-					proxy_warning("Cannot open file '%s' for writing.\n", value);
+					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", value);
 					return false;
 				}
 				//free(sslkeylogfile);

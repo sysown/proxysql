@@ -1,6 +1,6 @@
 #include "proxysql_sslkeylog.h"
 
-// https://firefox-source-docs.mozilla.org/security/nss/legacy/key_log_format/index.html
+// http://udn.realityripple.com/docs/Mozilla/Projects/NSS/Key_Log_Format
 
 #define KEYLOG_LABEL_MAXLEN (sizeof("CLIENT_HANDSHAKE_TRAFFIC_SECRET") - 1)
 
