@@ -25,7 +25,7 @@ int main() {
 //	}
 	cl.getEnv();
 
-	plan(4);
+	plan(3);
 
 	value = getenv("TAP_ENV_VAR1");
 	ok((value != NULL) and (strcmp(value, ".env") == 0), "Env variable 'TAP_ENV_VAR1' from '.env' Expected: '.env' Actual: '%s'", value); // ok_1
