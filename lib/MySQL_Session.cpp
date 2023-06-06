@@ -224,6 +224,7 @@ void * kill_query_thread(void *arg) {
 	mysql=mysql_init(NULL);
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
+	//mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	if (!mysql) {
 		goto __exit_kill_query_thread;
 	}
@@ -5360,11 +5361,12 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->DSS=STATE_SSL_INIT;
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl = GloVars.get_SSL_ctx();
+		client_myds->ssl = GloVars.get_SSL_new();
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
 		l_free(pkt->size,pkt->ptr);
+		proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
 		return;
 	}
 

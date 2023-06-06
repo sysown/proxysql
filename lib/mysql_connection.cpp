@@ -9,7 +9,6 @@
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "MySQL_Variables.h"
-
 #include <atomic>
 
 // some of the code that follows is from mariadb client library memory allocator
@@ -719,6 +718,7 @@ void MySQL_Connection::connect_start() {
 				mysql_thread___ssl_p2s_cipher);
 		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
 		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 	unsigned int timeout= 1;
 	const char *csname = NULL;

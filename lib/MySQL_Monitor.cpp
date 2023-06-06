@@ -1510,6 +1510,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 					mysql_thread___ssl_p2s_cipher);
 			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
 			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+			mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 		}
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
 		if (timeout==0) timeout=1;
