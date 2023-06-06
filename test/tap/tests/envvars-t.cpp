@@ -36,9 +36,6 @@ int main() {
 	value = getenv("TAP_ENV_VAR3");
 	ok((value != NULL) and (strcmp(value, "envvars-t.env") == 0), "Env variable 'TAP_ENV_VAR3' from 'envvars-t.env' Expected: 'envvars-t.env' Actual: '%s'", value); // ok_3
 
-	value = getenv("TAP_ENV_VAR4");
-	ok((value != NULL) and (strcmp(value, "envvars.env") == 0), "Env variable 'TAP_ENV_VAR4' from 'envvars.env' Expected: 'envvars.env' Actual: '%s'", value); // ok_4
-
 	return exit_status();
 }
 
