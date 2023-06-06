@@ -119,10 +119,7 @@ int CommandLine::getEnv() {
 		env.load_dotenv((dir_path + "/" + dir_name + ".env").c_str(), true);
 
 		diag("reading: %s", (exe_path + ".env").c_str());
-		env.load_dotenv((exe_name + ".env").c_str(), true);
-
-		diag("reading: %s", (exe_path.substr(0, exe_path.size() - 2) + ".env").c_str());
-		env.load_dotenv((exe_name.substr(0, exe_name.size() - 2) + ".env").c_str(), true);
+		env.load_dotenv((exe_path + ".env").c_str(), true);
 	}
 
 	value=getenv("TAP_HOST");
