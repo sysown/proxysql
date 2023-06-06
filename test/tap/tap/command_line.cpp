@@ -105,22 +105,24 @@ int CommandLine::getEnv() {
 	};
 
 	{
-//		char dir_name[256]
-//		getcwd(dir_name, sizeof(dir_name);
-//		strcat(dir_name,".env")
-//		env.load_dotenv(".env", true).load_dotenv(dir_name, true);
-
 		char temp[PATH_MAX];
-		std::string dir_name = getcwd(temp, sizeof(temp)) ? std::string( temp ) : std::string("");
-		env.load_dotenv(".env", true);
-		env.load_dotenv((dir_name.substr(dir_name.find_last_of('/') + 1) + ".env").c_str(), true);
-		fprintf(stdout, ">>> %s %s <<<\n", (dir_name + ".env").c_str(), (dir_name.substr(dir_name.find_last_of('/') + 1) + ".env").c_str());
+		ssize_t len = readlink("/proc/self/exe", temp, sizeof(temp));
+		std::string exe_path = (len > 0) ? std::string(temp, len) : std::string("");
+		std::string exe_name = exe_path.substr(exe_path.find_last_of('/') + 1);
+		std::string dir_path = exe_path.substr(0, exe_path.find_last_of('/'));
+		std::string dir_name = dir_path.substr(dir_path.find_last_of('/') + 1);
 
-		std::string exe_name;
-		std::ifstream("/proc/self/comm") >> exe_name;
+		diag("reading: %s", (dir_path + "/.env").c_str());
+		env.load_dotenv((dir_path + "/.env").c_str(), true);
+
+		diag("reading: %s", (dir_path + "/" + dir_name + ".env").c_str());
+		env.load_dotenv((dir_path + "/" + dir_name + ".env").c_str(), true);
+
+		diag("reading: %s", (exe_path + ".env").c_str());
 		env.load_dotenv((exe_name + ".env").c_str(), true);
+
+		diag("reading: %s", (exe_path.substr(0, exe_path.size() - 2) + ".env").c_str());
 		env.load_dotenv((exe_name.substr(0, exe_name.size() - 2) + ".env").c_str(), true);
-		fprintf(stdout, ">>> %s %s <<<\n", (exe_name + ".env").c_str(), (exe_name.substr(0, exe_name.size() - 2) + ".env").c_str());
 	}
 
 	value=getenv("TAP_HOST");
