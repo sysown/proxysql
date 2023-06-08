@@ -54,10 +54,10 @@ jobs:
       run: |
         cd proxysql/
         # build proxysql
-        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j4 debug_clickhouse WITHGCOV=1'" docker-compose.yml
+        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j6 debug_clickhouse WITHGCOV=1'" docker-compose.yml
         make ${{ matrix.dist }}-dbg
         # build tap tests
-        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j4 build_tap_test_debug WITHGCOV=1'" docker-compose.yml
+        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j6 build_tap_test_debug WITHGCOV=1'" docker-compose.yml
         make ${{ matrix.dist }}-dbg | tee ../build.log
       
     - name: Check build
@@ -121,11 +121,6 @@ jobs:
         path: |
           proxysql/
       
-#    - name: Fix build
-#      run: |
-#        cat proxysql/executable.txt | xargs -n1 chmod +x
-#        sudo ln -s ${{ github.workspace }}/proxysql /opt/proxysql
-        
     - name: Checkout jenkins_build_scripts
       uses: actions/checkout@v3
       with:
@@ -210,9 +205,20 @@ jobs:
         
         exit $RC
         
-    - name: Fix premissions
-      if: ${{ failure() }}
+    - name: Cleanup
+      if: ${{ always() }}
       run: |
+        set +e
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
+        sleep 10
+        killall proxysql
+
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
+        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
+        ./docker-compose-destroy.bash
+        
         sudo chmod -R 777 ${{ github.workspace }}/*
         echo "${{ matrix.testgroup }}" | tr -d '*|' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
         
