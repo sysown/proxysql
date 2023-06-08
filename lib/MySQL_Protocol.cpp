@@ -138,21 +138,29 @@ static inline int write_encoded_length_and_string(unsigned char *p, uint64_t val
 
 void proxy_compute_sha1_hash_multi(uint8_t *digest, const char *buf1, int len1, const char *buf2, int len2) {
   PROXY_TRACE();
-  
-  SHA_CTX sha1_context;
-  SHA1_Init(&sha1_context);
-  SHA1_Update(&sha1_context, buf1, len1);
-  SHA1_Update(&sha1_context, buf2, len2);
-  SHA1_Final(digest, &sha1_context);
+	const EVP_MD *evp_digest = EVP_get_digestbyname("sha1");
+	assert(evp_digest != NULL);
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	EVP_MD_CTX_init(ctx);
+	EVP_DigestInit_ex(ctx, evp_digest, NULL);
+	EVP_DigestUpdate(ctx, buf1, len1);
+	EVP_DigestUpdate(ctx, buf2, len2);
+	unsigned int olen = 0;
+	EVP_DigestFinal(ctx, digest, &olen);
+	EVP_MD_CTX_free(ctx);
 }
 
 void proxy_compute_sha1_hash(uint8_t *digest, const char *buf, int len) {
   PROXY_TRACE();
-  
-  SHA_CTX sha1_context;
-  SHA1_Init(&sha1_context);
-  SHA1_Update(&sha1_context, buf, len);
-  SHA1_Final(digest, &sha1_context);
+	const EVP_MD *evp_digest = EVP_get_digestbyname("sha1");
+	assert(evp_digest != NULL);
+	EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+	EVP_MD_CTX_init(ctx);
+	EVP_DigestInit_ex(ctx, evp_digest, NULL);
+	EVP_DigestUpdate(ctx, buf, len);
+	unsigned int olen = 0;
+	EVP_DigestFinal(ctx, digest, &olen);
+	EVP_MD_CTX_free(ctx);
 }
 
 void proxy_compute_two_stage_sha1_hash(const char *password, size_t pass_len, uint8_t *hash_stage1, uint8_t *hash_stage2) {
@@ -1243,7 +1251,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
   const MARIADB_CHARSET_INFO *ci = NULL;
-  ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+  ci = proxysql_find_charset_collate(mysql_thread___default_variables[SQL_COLLATION_CONNECTION]);
   if (!ci) {
 		// LCOV_EXCL_START
 	  proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable.\n",
@@ -2120,26 +2128,22 @@ __do_auth:
 						unhex_pass(hash_stage2,sha1_2);
 */
 						proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , session_type=%d\n", (*myds), (*myds)->sess, user, session_type);
-						uint8_t hash_stage1[SHA_DIGEST_LENGTH];
-						uint8_t hash_stage2[SHA_DIGEST_LENGTH];
-						SHA_CTX sha1_context;
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context, pass, pass_len);
-						SHA1_Final(hash_stage1, &sha1_context);
-						SHA1_Init(&sha1_context);
-						SHA1_Update(&sha1_context,hash_stage1,SHA_DIGEST_LENGTH);
-						SHA1_Final(hash_stage2, &sha1_context);
-						char *double_hashed_password = sha1_pass_hex((char *)hash_stage2); // note that sha1_pass_hex() returns a new buffer
+						unsigned char md1_buf[SHA_DIGEST_LENGTH];
+						unsigned char md2_buf[SHA_DIGEST_LENGTH];
+						SHA1(pass,pass_len,md1_buf);
+						SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
+
+						char *double_hashed_password = sha1_pass_hex((char *)md2_buf); // note that sha1_pass_hex() returns a new buffer
 
 						if (strcasecmp(double_hashed_password,password)==0) {
 							ret = true;
 							if (sha1_pass==NULL) {
 								// currently proxysql doesn't know any sha1_pass for that specific user, let's set it!
-								GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,hash_stage1);
+								GloMyAuth->set_SHA1((char *)user, USERNAME_FRONTEND,md1_buf);
 							}
 							if (userinfo->sha1_pass)
 								free(userinfo->sha1_pass);
-							userinfo->sha1_pass=sha1_pass_hex((char *)hash_stage1);
+							userinfo->sha1_pass=sha1_pass_hex((char *)md1_buf);
 						} else {
 							ret = false;
 						}
@@ -2173,7 +2177,7 @@ __exit_do_auth:
 			}
 		}
 		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
-			(capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, tmp_pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
+			(capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, tmp_pass, db, (*myds)->myconn->options.max_allowed_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
 		free(tmp_pass);
 	}
 #endif

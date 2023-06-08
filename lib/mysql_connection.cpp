@@ -9,7 +9,6 @@
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
 #include "MySQL_Variables.h"
-
 #include <atomic>
 
 // some of the code that follows is from mariadb client library memory allocator
@@ -710,7 +709,7 @@ void MySQL_Connection::connect_start() {
 		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
-	if (parent->use_ssl) {
+	if (parent->use_ssl && parent->port) {
 		mysql_ssl_set(mysql,
 				mysql_thread___ssl_p2s_key,
 				mysql_thread___ssl_p2s_cert,
@@ -719,6 +718,7 @@ void MySQL_Connection::connect_start() {
 				mysql_thread___ssl_p2s_cipher);
 		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
 		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 	unsigned int timeout= 1;
 	const char *csname = NULL;
@@ -857,6 +857,7 @@ void MySQL_Connection::connect_start() {
 
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, host_ip, userinfo->username, auth_password, userinfo->schemaname, parent->port, NULL, client_flags);
 	} else {
+		client_flags &= ~(CLIENT_COMPRESS); // disabling compression for connections made via Unix socket
 		async_exit_status=mysql_real_connect_start(&ret_mysql, mysql, "localhost", userinfo->username, auth_password, userinfo->schemaname, parent->port, parent->address, client_flags);
 	}
 	fd=mysql_get_socket(mysql);
@@ -1166,7 +1167,7 @@ handler_again:
 				//vio_blocking(mysql->net.vio, FALSE, 0);
 				//fcntl(mysql->net.vio->sd, F_SETFL, O_RDWR|O_NONBLOCK);
 			//}
-			MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
+			MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
 			break;
 		case ASYNC_CONNECT_FAILED:
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, parent->myhgc->hid, parent->address, parent->port, mysql_errno(mysql));

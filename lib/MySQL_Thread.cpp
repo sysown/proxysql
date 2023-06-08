@@ -211,6 +211,7 @@ ProxySQL_Poll::ProxySQL_Poll() {
 	len=0;
 	pending_listener_add=0;
 	pending_listener_del=0;
+	bootstrapping_listeners = true;
 	size=MIN_POLL_LEN;
 	fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
 	myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
@@ -579,6 +580,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"stats_time_backend_query",
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
+	(char *)"data_packets_history_size",
 	NULL
 };
 
@@ -1198,6 +1200,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
 	variables.log_mysql_warnings_enabled=false;
+	variables.data_packets_history_size=0;
 	// status variables
 	status_variables.mirror_sessions_current=0;
 	__global_MySQL_Thread_Variables_version=1;
@@ -2081,6 +2084,16 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 		return false;
 	}
+	if (!strcasecmp(name,"data_packets_history_size")) {
+		int intv=atoi(value);
+		if (intv >= 0 && intv < INT_MAX) {
+			variables.data_packets_history_size = intv;
+			GloVars.global.data_packets_history_size = intv;
+			return true;
+		} else {
+			return false;
+		}
+	}
 	return false;
 }
 
@@ -2259,7 +2272,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["binlog_reader_connect_retry_msec"] = make_tuple(&variables.binlog_reader_connect_retry_msec, 0, 0, true);
 		VariablesPointers_int["eventslog_format"] = make_tuple(&variables.eventslog_format, 0, 0, true);
 		VariablesPointers_int["wait_timeout"]     = make_tuple(&variables.wait_timeout,     0, 0, true);
-
+		VariablesPointers_int["data_packets_history_size"] = make_tuple(&variables.data_packets_history_size, 0, 0, true);
 
 	}
 
@@ -3186,18 +3199,25 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		pthread_mutex_unlock(&thread_mutex);
-		while ( // spin here if ...
-			(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
-			||
-			(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
-		) {
-			if (n) {
-				poll_listener_add(n);
-				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
-			}
+		if (unlikely(mypolls.bootstrapping_listeners == true)) {
+			while ( // spin here if ...
+				(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
+				||
+				(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
+			) {
+				if (n) {
+					poll_listener_add(n);
+					assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+				} else {
+					if (GloMTH->bootstrapping_listeners == false) {
+						// we stop looping
+						mypolls.bootstrapping_listeners = false;
+					}
+				}
 #ifdef DEBUG
-			usleep(5+rand()%10);
+				usleep(5+rand()%10);
 #endif
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
@@ -3231,17 +3251,19 @@ __run_skip_1a:
 		}
 #endif // IDLE_THREADS
 
-		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
-			if (static_cast<int>(n) == -1) {
-				for (unsigned int i = 0; i < mypolls.len; i++) {
-					if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
-						poll_listener_del(mypolls.myds[i]->fd);
+		if (unlikely(maintenance_loop == true)) {
+			while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
+				if (static_cast<int>(n) == -1) {
+					for (unsigned int i = 0; i < mypolls.len; i++) {
+						if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
+							poll_listener_del(mypolls.myds[i]->fd);
+						}
 					}
+				} else {
+					poll_listener_del(n);
 				}
-			} else {
-				poll_listener_del(n);
+				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 			}
-			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
 		pthread_mutex_lock(&thread_mutex);

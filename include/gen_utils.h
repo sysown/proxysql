@@ -2,7 +2,7 @@
 #define __CLASS_PTR_ARRAY_H
 
 #include <memory>
-
+#include <queue>
 #include "proxysql.h"
 #include "sqlite3db.h"
 
@@ -189,6 +189,86 @@ class PtrSizeArray {
 		return intsize;
 	}
 };
+
+typedef struct {
+	void*  data = nullptr;
+	size_t len = 0;        
+	size_t capacity = 0;
+} buffer_t;
+
+class FixedSizeQueue : public std::queue<buffer_t> {
+private:
+	using std::queue<buffer_t>::push;
+	using std::queue<buffer_t>::emplace;
+	using std::queue<buffer_t>::swap;
+	size_t _max_size = 0;
+
+public:
+	FixedSizeQueue() = default;
+	FixedSizeQueue(size_t max_size) : _max_size(max_size) {}
+	~FixedSizeQueue() {
+		while (empty() == false) {
+			auto& node = front();
+			l_free(node.len, node.data);
+			pop();
+		}
+	}
+	
+	inline
+	size_t get_max_size() const {
+		return _max_size;
+	}
+
+	void set_max_size(size_t max_size) {
+		if (_max_size == max_size)
+			return;
+
+		_max_size = max_size;
+
+		if (size() > max_size) {
+			while (size() != max_size) {
+				auto& node = front();
+				l_free(node.len, node.data);
+				pop();
+			}
+		}
+	}
+
+	// using template here to create compile-time separate definition of push, one for true and one for false
+	template<bool ALLOC_MEM = true>
+	void push(void* buff, size_t len) {
+		if (_max_size == 0) return;
+		assert(buff && len);
+
+		buffer_t mybuff;
+
+		if (size() == _max_size) {
+			mybuff = front();
+			pop();
+		}
+
+		if (ALLOC_MEM == true) {
+			if (mybuff.capacity < len) {
+				if (mybuff.data) free(mybuff.data);
+
+				mybuff.data = l_alloc(len);
+				mybuff.capacity = len;
+			}
+
+			memcpy(mybuff.data, buff, len);
+			mybuff.len = len;
+
+		} else {
+			if (mybuff.data) free(mybuff.data);
+
+			mybuff.data = buff;
+			mybuff.capacity = mybuff.len = len;
+		}
+
+		emplace(mybuff);
+	}
+};
+
 #endif /* __CLASS_PTR_ARRAY_H */
 
 

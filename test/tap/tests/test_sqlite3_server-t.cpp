@@ -231,7 +231,7 @@ std::vector<std::string> admin_queries {
  * @brief Perform several admin queries to exercise more paths.
  */
 std::vector<std::string> sqlite_intf_queries {
-	"SET sqliteserver-mysql_ifaces='127.0.0.1:6035'",
+	"SET sqliteserver-mysql_ifaces='127.0.0.1:6036'",
 	"LOAD SQLITESERVER VARIABLES TO RUNTIME"
 };
 

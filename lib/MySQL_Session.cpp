@@ -177,7 +177,7 @@ bool Session_Regex::match(char *m) {
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread* _mt) :
 	KillArgs(u, p, h, P, _hid, i, kt, _mt, NULL) {
 	// resolving DNS if available in Cache
-	if (h) {
+	if (h && P) {
 		const std::string& ip = MySQL_Monitor::dns_lookup(h, false);
 
 		if (ip.empty() == false) {
@@ -224,6 +224,7 @@ void * kill_query_thread(void *arg) {
 	mysql=mysql_init(NULL);
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
+	//mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	if (!mysql) {
 		goto __exit_kill_query_thread;
 	}
@@ -265,7 +266,7 @@ void * kill_query_thread(void *arg) {
 		goto __exit_kill_query_thread;
 	}
 
-	MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
+	MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
 
 	char buf[100];
 	switch (ka->kill_type) {
@@ -5360,11 +5361,12 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->DSS=STATE_SSL_INIT;
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl = GloVars.get_SSL_ctx();
+		client_myds->ssl = GloVars.get_SSL_new();
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
 		l_free(pkt->size,pkt->ptr);
+		proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
 		return;
 	}
 
@@ -6439,7 +6441,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 					// try case listed in #1373
 					// SET  @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO'),  @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 2147483
 					// this is not a complete solution. A right solution involves true parsing
-					int query_no_space_length = nq.length();
+					size_t query_no_space_length = nq.length();
 					char *query_no_space=(char *)malloc(query_no_space_length+1);
 					memcpy(query_no_space,nq.c_str(),query_no_space_length);
 					query_no_space[query_no_space_length]='\0';
@@ -7488,7 +7490,9 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 			// if a prepared statement is executed, LogQuery was already called
 			break;
 		default:
-			LogQuery(myds);
+			if (session_fast_forward==false) {
+				LogQuery(myds);
+			}
 			break;
 	}
 
@@ -7502,13 +7506,15 @@ void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 		}
 		myds->free_mysql_real_query();
 	}
-	// reset status of the session
-	status=WAITING_CLIENT_DATA;
-	if (client_myds) {
-		// reset status of client data stream
-		client_myds->DSS=STATE_SLEEP;
-		// finalize the query
-		CurrentQuery.end();
+	if (session_fast_forward==false) {
+		// reset status of the session
+		status=WAITING_CLIENT_DATA;
+		if (client_myds) {
+			// reset status of client data stream
+			client_myds->DSS=STATE_SLEEP;
+			// finalize the query
+			CurrentQuery.end();
+		}
 	}
 	started_sending_data_to_client=false;
 	previous_hostgroup = current_hostgroup;

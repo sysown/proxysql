@@ -1,6 +1,7 @@
 #ifndef COMMAND_LINE_H
 #define COMMAND_LINE_H
 
+#include <cstdint>
 #include <string.h>
 #include <string>
 
