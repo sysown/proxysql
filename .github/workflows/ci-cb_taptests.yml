@@ -54,10 +54,10 @@ jobs:
       run: |
         cd proxysql/
         # build proxysql
-        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make debug_clickhouse WITHGCOV=1'" docker-compose.yml
+        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j4 debug_clickhouse WITHGCOV=1'" docker-compose.yml
         make ${{ matrix.dist }}-dbg
         # build tap tests
-        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make build_tap_test_debug WITHGCOV=1'" docker-compose.yml
+        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j4 build_tap_test_debug WITHGCOV=1'" docker-compose.yml
         make ${{ matrix.dist }}-dbg | tee ../build.log
       
     - name: Check build
