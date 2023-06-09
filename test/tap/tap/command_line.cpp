@@ -112,58 +112,54 @@ int CommandLine::getEnv() {
 		std::string dir_path = exe_path.substr(0, exe_path.find_last_of('/'));
 		std::string dir_name = dir_path.substr(dir_path.find_last_of('/') + 1);
 
-		diag("reading: %s", (dir_path + "/.env").c_str());
+		diag("loading: %s", (dir_path + "/.env").c_str());
 		env.load_dotenv((dir_path + "/.env").c_str(), true);
 
-		diag("reading: %s", (dir_path + "/" + dir_name + ".env").c_str());
+		diag("loading: %s", (dir_path + "/" + dir_name + ".env").c_str());
 		env.load_dotenv((dir_path + "/" + dir_name + ".env").c_str(), true);
 
-		diag("reading: %s", (exe_path + ".env").c_str());
+		diag("loading: %s", (exe_path + ".env").c_str());
 		env.load_dotenv((exe_path + ".env").c_str(), true);
 	}
 
 	value=getenv("TAP_HOST");
-	if(!value) return -1;
-	replace_str_field(&this->host, value);
+	if (value)
+		replace_str_field(&this->host, value);
 
 	value=getenv("TAP_USERNAME");
-	if(!value) return -1;
-	replace_str_field(&this->username, value);
+	if (value)
+		replace_str_field(&this->username, value);
 
 	value=getenv("TAP_PASSWORD");
-	if(!value) return -1;
-	replace_str_field(&this->password, value);
+	if (value)
+		replace_str_field(&this->password, value);
 
 	value=getenv("TAP_ADMINUSERNAME");
-	if (value) {
+	if (value)
 		replace_str_field(&this->admin_username, value);
-	}
 
 	value=getenv("TAP_ADMINPASSWORD");
-	if (value) {
+	if (value)
 		replace_str_field(&this->admin_password, value);
+
+	int env_port = 0;
+	value=getenv("TAP_PORT");
+	if (value) {
+		env_port = strtol(value, NULL, 10);
+		if (env_port>0 && env_port<65536)
+			port = env_port;
 	}
 
-	int env_port=0;
-	value=getenv("TAP_PORT");
-	if(value)
-		env_port=strtol(value, NULL, 10);
-	else
-		env_port=6033;
-	if(env_port>0 && env_port<65536)
-		port=env_port;
-
 	value=getenv("TAP_ADMINPORT");
-	if(value)
-		env_port=strtol(value, NULL, 10);
-	else
-		env_port=6032;
-	if(env_port>0 && env_port<65536)
-		admin_port=env_port;
+	if (value) {
+		env_port = strtol(value, NULL, 10);
+		if (env_port>0 && env_port<65536)
+			admin_port = env_port;
+	}
 
 	value=getenv("TAP_WORKDIR");
-	if(!value) return -1;
-	replace_str_field(&this->workdir, value);
+	if (value)
+		replace_str_field(&this->workdir, value);
 
 	value=getenv("TAP_CLIENT_FLAGS");
 	if (value) {
@@ -172,7 +168,7 @@ int CommandLine::getEnv() {
 
 		const char* errmsg { NULL };
 
-		if (env_c_flags == 0 && value == end)  {
+		if (env_c_flags == 0 && value == end) {
 			errmsg = "Invalid string to parse";
 		} else if (env_c_flags == ULONG_MAX && errno == ERANGE) {
 			errmsg = strerror(errno);

@@ -4,12 +4,13 @@
 #include "tap.h"
 #include "command_line.h"
 
-int main() {
+int main(int argc, char** argv) {
 	CommandLine cl;
 
 	char* value = NULL;
 
 	// this test checks the env file loading mechanism implemented in tap/command_line.cpp:CommandLine::getEnv()
+	// foldername/.env - enviroment vars for whole folder
 	// foldername/foldername.env - enviroment vars for whole folder
 	// foldername/testname-t.env - enviroment vars only for testname-t 
 
@@ -17,13 +18,11 @@ int main() {
 	// echo 'TAP_ENV_VAR1=.env' > .env
 	// echo 'TAP_ENV_VAR2=tests.env' > tests.env
 	// echo 'TAP_ENV_VAR3=envvars-t.env' > envvars-t.env
-	// echo 'TAP_ENV_VAR4=envvars.env' > envvars.env
 
-//	if (cl.getEnv()) {
-//		diag("Failed to get the required environmental variables.");
-//		return -1;
-//	}
-	cl.getEnv();
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return -1;
+	}
 
 	plan(3);
 
