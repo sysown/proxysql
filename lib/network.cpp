@@ -12,65 +12,67 @@ int listen_on_port(char *ip, uint16_t port, int backlog, bool reuseport) {
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
-        struct addrinfo *next, *ai;
-        char port_string[NI_MAXSERV];
-        int sd = -1;
+	struct addrinfo *next, *ai;
+	char port_string[NI_MAXSERV];
+	int sd = -1;
 
-        snprintf(port_string, sizeof(port_string), "%d", port);
+	snprintf(port_string, sizeof(port_string), "%d", port);
 	rc = getaddrinfo(ip, port_string, &hints, &ai);
 	if (rc) {
 		proxy_error("getaddrinfo(): %s\n", gai_strerror(rc));
 		return -1;
 	}
 
-        for (next = ai; next != NULL; next = next->ai_next) {
-	        if ((sd = socket(next->ai_family, next->ai_socktype, next->ai_protocol)) == -1) 
-                        continue;
+	for (next = ai; next != NULL; next = next->ai_next) {
+		if ((sd = socket(next->ai_family, next->ai_socktype, next->ai_protocol)) == -1) {
+			proxy_error("socket() error for %s:%d: %s\n", ip, port, strerror(errno));
+			sd = -1;
+			continue;
+		}
 #ifdef IPV6_V6ONLY
-                if (next->ai_family == AF_INET6) {
-                        if(setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&arg_on, sizeof(arg_on)) == -1) 
-				proxy_error("setsockopt() IPV6_V6ONLY: %s\n", gai_strerror(errno));
-                }
+		if (next->ai_family == AF_INET6) {
+			if(setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY, (char *)&arg_on, sizeof(arg_on)) == -1) 
+			proxy_error("setsockopt() IPV6_V6ONLY: %s\n", gai_strerror(errno));
+		}
 #endif
 
-                if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (char *)&arg_on, sizeof(arg_on)) == -1) {
-                        proxy_error("setsockopt() SO_REUSEADDR: %s\n", gai_strerror(errno));
-                        close(sd);
-                        freeaddrinfo(ai);
-                        return -1;
-                }
+		if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, (char *)&arg_on, sizeof(arg_on)) == -1) {
+			proxy_error("setsockopt() SO_REUSEADDR error for %s:%d: %s\n", ip, port, gai_strerror(errno));
+			close(sd);
+			freeaddrinfo(ai);
+			return -1;
+		}
 
 #ifdef SO_REUSEPORT
   		if (reuseport) {
 			if (setsockopt(sd, SOL_SOCKET, SO_REUSEPORT, (char *)&arg_on, sizeof(arg_on)) == -1) {
-				proxy_error("setsockopt() SO_REUSEPORT: %s\n", gai_strerror(errno));
+				proxy_error("setsockopt() SO_REUSEPORT error for %s:%d: %s\n", ip, port, gai_strerror(errno));
 			}
 		}
 #endif /* SO_REUSEPORT */
 
-                if (bind(sd, next->ai_addr, next->ai_addrlen) == -1) {
-                        //if (errno != EADDRINUSE) {
-                                proxy_error("bind(): %s\n", strerror(errno));
-                                // in case of 'EADDRNOTAVAIL' suggest a solution to user. See #1614.
-                                if (errno == EADDRNOTAVAIL) {
-                                    proxy_info(
-                                       "Trying to 'bind()' failed due to 'EADDRNOTAVAIL'. If trying to bind to a "
-                                       "non-local IP address, make sure 'net.ipv4.ip_nonlocal_bind' is set to '1'\n"
-                                    );
-                                }
-                                close(sd);
-                                freeaddrinfo(ai);
-                                return -1;
-                        //}
-                } else {
-                        if (listen(sd, backlog) == -1) {
-                                proxy_error("listen(): %s\n", strerror(errno));
-                                close(sd);
-                                freeaddrinfo(ai);
-                                return -1;
-                        }
-                }
-        }
+		if (bind(sd, next->ai_addr, next->ai_addrlen) == -1) {
+			//if (errno != EADDRINUSE) {
+			proxy_error("bind() error for %s:%d: %s\n", ip, port, strerror(errno));
+			// in case of 'EADDRNOTAVAIL' suggest a solution to user. See #1614.
+			if (errno == EADDRNOTAVAIL) {
+				proxy_info(
+				   "Trying to 'bind()' failed due to 'EADDRNOTAVAIL'. If trying to bind to a "
+				   "non-local IP address, make sure 'net.ipv4.ip_nonlocal_bind' is set to '1'\n"
+				);
+			}
+			close(sd);
+			freeaddrinfo(ai);
+			return -1;
+		} else {
+			if (listen(sd, backlog) == -1) {
+				proxy_error("listen() error for %s:%d: %s\n", ip, port, strerror(errno));
+				close(sd);
+				freeaddrinfo(ai);
+				return -1;
+			}
+		}
+	}
 
 	freeaddrinfo(ai);
 	// return the socket
@@ -95,7 +97,7 @@ int listen_on_unix(char *path, int backlog) {
 
 	// create a socket
 	if ( ( sd = socket(AF_UNIX, SOCK_STREAM, 0)) <0 ) {
-		proxy_error("Error on creating socket\n");
+		proxy_error("Error on creating socket: %s\n", strerror(errno));
 		close(sd);
 		return -1;
 	}
@@ -106,14 +108,14 @@ int listen_on_unix(char *path, int backlog) {
 
 	// call bind() to bind the socket on the specified file
 	if ( bind(sd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr_un)) != 0 ) {
-		proxy_error("Error on Bind , Unix Socket %s\n", path);
+		proxy_error("Error on bind() for Unix Socket %s: %s\n", path, strerror(errno));
 		close(sd);
 		return -1;
 	}
 
 	// define the backlog
 	if ( listen(sd, backlog) != 0 ) {
-		proxy_error("Error on Listen , Unix Socket %s\n", path);
+		proxy_error("Error on listen() for Unix Socket %s: %s\n", path, strerror(errno));
 		close(sd);
 		return -1;
 	}
