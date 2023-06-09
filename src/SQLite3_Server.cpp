@@ -1083,12 +1083,16 @@ static void * sqlite3server_main_loop(void *arg)
 		for (i=1;i<nfds;i++) {
 			if (fds[i].revents==POLLIN) {
 				client_t = accept(fds[i].fd, (struct sockaddr*)&addr, &addr_size);
-				pthread_attr_getstacksize (&attr, &stacks);
-				pthread_mutex_lock (&sock_mutex);
-				client=(int *)malloc(sizeof(int));
-				*client= client_t;
-				if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 )
-					perror("Thread creation");
+				if (client_t > 0) { // minor error handling
+					pthread_attr_getstacksize (&attr, &stacks);
+					pthread_mutex_lock (&sock_mutex);
+					client=(int *)malloc(sizeof(int));
+					*client= client_t;
+					if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 )
+						perror("Thread creation");
+				} else {
+					proxy_error("accept() error:\n", strerror(errno));
+				}
 			}
 			fds[i].revents=0;
 		}
