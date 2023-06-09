@@ -1102,7 +1102,9 @@ static void * sqlite3server_main_loop(void *arg)
 		// already taken will result into an 'assert' in ProxySQL side.
 		if (nfds == 1 && fds[0].revents == POLLNVAL) {
 			proxy_error("revents==POLLNVAL for FD=%d, events=%d\n", fds[i].fd, fds[i].events);
-			assert(fds[0].revents != POLLNVAL);
+			if (glovars.shutdown==0 && *shutdown==0) {
+				assert(fds[0].revents != POLLNVAL);
+			}
 		}
 __end_while_pool:
 		if (S_amll.get_version()!=version) {
