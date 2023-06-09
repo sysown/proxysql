@@ -8098,7 +8098,18 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.coredump_generation_threshold);
 		return strdup(intbuf);
 	}
-	if (!strcasecmp(name,"ssl_keylog_file")) return s_strdup(variables.ssl_keylog_file);
+	if (!strcasecmp(name, "ssl_keylog_file")) {
+		char* ssl_keylog_file = s_strdup(variables.ssl_keylog_file);
+		if (ssl_keylog_file != NULL && strlen(ssl_keylog_file) > 0) {
+			if ((ssl_keylog_file[0] != '/')) { // relative path 
+				char* tmp_ssl_keylog_file = (char*)malloc(strlen(GloVars.datadir) + strlen(ssl_keylog_file) + 2);
+				sprintf(tmp_ssl_keylog_file, "%s/%s", GloVars.datadir, ssl_keylog_file);
+				free(ssl_keylog_file);
+				ssl_keylog_file = tmp_ssl_keylog_file;
+			}
+		}
+		return ssl_keylog_file;
+	}
 	return NULL;
 }
 
@@ -8799,8 +8810,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 				GloVars.global.ssl_keylog_enabled = false;
 			} else {
 				char* sslkeylogfile = NULL;
-
-				if (value[0] == '/') { // absolute path
+				const bool is_absolute_path = (value[0] == '/');
+				if (is_absolute_path) { // absolute path
 					sslkeylogfile = strdup(value);
 				} else { // relative path
 					sslkeylogfile = (char*)malloc(strlen(GloVars.datadir) + strlen(value) + 2);
@@ -8811,9 +8822,15 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", value);
 					return false;
 				}
-				//free(sslkeylogfile);
 				free(variables.ssl_keylog_file);
-				variables.ssl_keylog_file = sslkeylogfile; //strdup(value);
+				if (is_absolute_path) {
+					variables.ssl_keylog_file = sslkeylogfile;
+					sslkeylogfile = NULL;
+				} else {
+					variables.ssl_keylog_file = strdup(value);
+				}
+				if (sslkeylogfile)
+					free(sslkeylogfile);
 				GloVars.global.ssl_keylog_enabled = true;
 			}
 		}
