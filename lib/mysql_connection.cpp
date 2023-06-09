@@ -709,7 +709,7 @@ void MySQL_Connection::connect_start() {
 		}
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
-	if (parent->use_ssl && parent->port) {
+	if (parent->use_ssl) {
 		mysql_ssl_set(mysql,
 				mysql_thread___ssl_p2s_key,
 				mysql_thread___ssl_p2s_cert,

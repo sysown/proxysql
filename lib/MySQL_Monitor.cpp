@@ -1501,7 +1501,7 @@ __exit_set_wait_timeout:
 bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql=mysql_init(NULL);
 		assert(mysql);
-		if (use_ssl && port) {
+		if (use_ssl) {
 			mysql_ssl_set(mysql,
 					mysql_thread___ssl_p2s_key,
 					mysql_thread___ssl_p2s_cert,
