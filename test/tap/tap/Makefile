@@ -44,6 +44,8 @@ libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h cpp-do
 cpp-dotenv/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv && tar -zxf cpp-dotenv-*.tar.gz
+	cd cpp-dotenv/cpp-dotenv && patch src/dotenv.cpp < ../dotenv.cpp.patch
+	cd cpp-dotenv/cpp-dotenv && patch include/dotenv.h < ../dotenv.h.patch
 	cd cpp-dotenv/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
 	cd cpp-dotenv/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
 cpp-dotenv: cpp-dotenv/cpp-dotenv/libcpp_dotenv.a

@@ -15,7 +15,7 @@
 
 using nlohmann::json;
 using dotenv::env;
-//using namespace dotenv;
+
 
 CommandLine::CommandLine() {}
 
@@ -112,56 +112,64 @@ int CommandLine::getEnv() {
 		std::string dir_path = exe_path.substr(0, exe_path.find_last_of('/'));
 		std::string dir_name = dir_path.substr(dir_path.find_last_of('/') + 1);
 
-		diag("loading: %s", (dir_path + "/.env").c_str());
 		env.load_dotenv((dir_path + "/.env").c_str(), true);
+		bool loaded1 = env.loaded;
 
-		diag("loading: %s", (dir_path + "/" + dir_name + ".env").c_str());
 		env.load_dotenv((dir_path + "/" + dir_name + ".env").c_str(), true);
+		bool loaded2 = env.loaded;
 
-		diag("loading: %s", (exe_path + ".env").c_str());
 		env.load_dotenv((exe_path + ".env").c_str(), true);
+		bool loaded3 = env.loaded;
+
+		bool quiet = (bool) getenv("TAP_QUIET_ENVLOAD");
+		if (loaded1 && ! quiet)
+			diag("loaded: %s", (dir_path + "/.env").c_str());
+		if (loaded2 && ! quiet)
+			diag("loaded: %s", (dir_path + "/" + dir_name + ".env").c_str());
+		if (loaded3 && ! quiet)
+			diag("loaded: %s", (exe_path + ".env").c_str());
 	}
 
-	value=getenv("TAP_HOST");
+	value = getenv("TAP_HOST");
 	if (value)
 		replace_str_field(&this->host, value);
 
-	value=getenv("TAP_USERNAME");
+	value = getenv("TAP_USERNAME");
 	if (value)
 		replace_str_field(&this->username, value);
 
-	value=getenv("TAP_PASSWORD");
+	value = getenv("TAP_PASSWORD");
 	if (value)
 		replace_str_field(&this->password, value);
 
-	value=getenv("TAP_ADMINUSERNAME");
+	value = getenv("TAP_ADMINUSERNAME");
 	if (value)
 		replace_str_field(&this->admin_username, value);
 
-	value=getenv("TAP_ADMINPASSWORD");
+	value = getenv("TAP_ADMINPASSWORD");
 	if (value)
 		replace_str_field(&this->admin_password, value);
 
 	int env_port = 0;
-	value=getenv("TAP_PORT");
+	value = getenv("TAP_PORT");
 	if (value) {
 		env_port = strtol(value, NULL, 10);
 		if (env_port>0 && env_port<65536)
 			port = env_port;
 	}
 
-	value=getenv("TAP_ADMINPORT");
+	value = getenv("TAP_ADMINPORT");
 	if (value) {
 		env_port = strtol(value, NULL, 10);
 		if (env_port>0 && env_port<65536)
 			admin_port = env_port;
 	}
 
-	value=getenv("TAP_WORKDIR");
+	value = getenv("TAP_WORKDIR");
 	if (value)
 		replace_str_field(&this->workdir, value);
 
-	value=getenv("TAP_CLIENT_FLAGS");
+	value = getenv("TAP_CLIENT_FLAGS");
 	if (value) {
 		char* end = NULL;
 		uint64_t env_c_flags = strtoul(value, &end, 10);
