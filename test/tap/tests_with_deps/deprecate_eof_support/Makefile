@@ -67,7 +67,7 @@ fwd_eof_query: fwd_eof_query.cpp $(TESTS_DEPS)
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
 fwd_eof_ok_query: fwd_eof_query.cpp $(TAP_LIBDIR)/libtap.a
-	$(CXX) -DDEBUG fwd_eof_query.cpp $(OPT) -std=c++11 -I$(JSON_IDIR) -I$(TAP_LIBDIR) -I$(INCLUDEDIRS) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L/usr/lib/x86_64-linux-gnu/ -lmysqlclient -ltap -ldl -o fwd_eof_ok_query -DGITVERSION=\"$(GIT_VERSION)\"
+	$(CXX) -DDEBUG fwd_eof_query.cpp $(OPT) -std=c++11 -I$(JSON_IDIR) -I$(TAP_LIBDIR) -I /usr/include/mysql/ -I$(IDIR) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L/usr/lib/x86_64-linux-gnu/ -lmysqlclient -ltap -ldl -o fwd_eof_ok_query -DGITVERSION=\"$(GIT_VERSION)\"
 
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp $(TESTS_DEPS)
 	$(CXX) -DDEBUG deprecate_eof_cache-t.cpp $(OPT) -std=c++11 -I$(JSON_IDIR) -I$(TAP_LIBDIR) -I$(INCLUDEDIRS) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L$(MARIADB_TEST_DEP)/libmariadb -L$(SSL_LDIR) -L$(PROXYLDIR)  -ltap $(MYLIBS) -lproxysql -ldl -o deprecate_eof_cache-t -DGITVERSION=\"$(GIT_VERSION)\"
