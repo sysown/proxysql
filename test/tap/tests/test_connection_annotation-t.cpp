@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	plan(1);
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
