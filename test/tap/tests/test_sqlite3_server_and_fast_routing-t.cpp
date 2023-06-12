@@ -18,6 +18,10 @@ using query_spec = std::tuple<std::string, int>;
 
 const int sqlite3_port = 0;
 
+// because the test itself is a benchmark that uses a lot of TCP ports,
+// we leave some time to the OS to free resources
+const int ST = 5;
+
 #include "modules_server_test.h"
 
 inline unsigned long long monotonic_time() {
@@ -93,7 +97,8 @@ int benchmark_query_rules_fast_routing(CommandLine& cl, MYSQL* proxysql_admin, M
 		}
 		unsigned long long end = monotonic_time();
 		nofr += (end - begin);
-		std::cerr << double( end - begin ) / 1000 << " millisecs.\n" ;
+		double p = double( end - begin ) / 1000; diag("Completed in %f millisecs", p);
+		unsigned long long pause = ((end-begin)/1000/1000 + 1)*2 + ST ; diag("Sleeping %llu seconds at line %d", pause, __LINE__); sleep(pause);
 	}
 
 	s = "DELETE FROM mysql_query_rules";
@@ -121,7 +126,8 @@ int benchmark_query_rules_fast_routing(CommandLine& cl, MYSQL* proxysql_admin, M
 			mysql_free_result(result);
 		}
 		unsigned long long end = monotonic_time();
-		std::cerr << double( end - begin ) / 1000 << " millisecs.\n" ;
+		double p = double( end - begin ) / 1000; diag("Completed in %f millisecs", p);
+		unsigned long long pause = ((end-begin)/1000/1000 + 1)*2 + ST ; diag("Sleeping %llu seconds at line %d", pause, __LINE__); sleep(pause);
 		nofr += (end - begin);
 	}
 
@@ -160,7 +166,8 @@ int benchmark_query_rules_fast_routing(CommandLine& cl, MYSQL* proxysql_admin, M
 			mysql_free_result(result);
 		}
 		unsigned long long end = monotonic_time();
-		std::cerr << double( end - begin ) / 1000 << " millisecs.\n" ;
+		double p = double( end - begin ) / 1000; diag("Completed in %f millisecs", p);
+		unsigned long long pause = ((end-begin)/1000/1000 + 1)*2 + ST ; diag("Sleeping %llu seconds at line %d", pause, __LINE__); sleep(pause);
 		fr += (end - begin);
 	}
 	s = "DELETE FROM mysql_query_rules";
@@ -197,7 +204,8 @@ int benchmark_query_rules_fast_routing(CommandLine& cl, MYSQL* proxysql_admin, M
 			mysql_free_result(result);
 		}
 		unsigned long long end = monotonic_time();
-		std::cerr << double( end - begin ) / 1000 << " millisecs.\n" ;
+		double p = double( end - begin ) / 1000; diag("Completed in %f millisecs", p);
+		unsigned long long pause = ((end-begin)/1000/1000 + 1)*2 + ST ; diag("Sleeping %llu seconds at line %d", pause, __LINE__); sleep(pause);
 		fr += (end - begin);
 	}
 	ok (fr < (nofr * 3) , "Times for: Single HG = %dms , multi HG = %dms", (int)(nofr/1000), (int)(fr/1000));
@@ -210,6 +218,8 @@ int main(int argc, char** argv) {
 
 	MYSQL * proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
+
+	diag("This TAP test has several sleep() to give enough time to release TCP ports");
 
 	plan(2);
 	if (cl.getEnv()) {
@@ -234,7 +244,9 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "SET mysql-query_rules_fast_routing_algorithm=1");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
+	diag("Sleeping %d seconds at line %d", ST, __LINE__);
 	benchmark_query_rules_fast_routing(cl, proxysql_admin, proxysql_mysql);
+	diag("Sleeping %d seconds at line %d", ST, __LINE__);
 
 	MYSQL_QUERY(proxysql_admin, "SET mysql-query_rules_fast_routing_algorithm=2");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
@@ -243,6 +255,7 @@ int main(int argc, char** argv) {
 	proxysql_mysql = mysql_init(NULL);
 
 	benchmark_query_rules_fast_routing(cl, proxysql_admin, proxysql_mysql);
+	diag("Sleeping %d seconds at line %d", ST, __LINE__);
 
 cleanup:
 
