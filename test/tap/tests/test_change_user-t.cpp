@@ -62,64 +62,6 @@ int get_internal_session(MYSQL *my, json& j) {
 	return 0;
 }
 
-/*
-int get_user_def_hg(MYSQL* admin, const string& user) {
-	const string sel_q { "SELECT default_hostgroup FROM mysql_users WHERE username='" + user + "'" };
-	if (mysql_query(admin, sel_q.c_str())) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin)); \
-		return -1;
-	}
-
-	MYSQL_RES* myres = mysql_store_result(admin);
-	MYSQL_ROW myrow = mysql_fetch_row(myres);
-
-	if (myrow && myrow[0]) {
-		int def_hg = std::atoi(myrow[0]);
-		mysql_free_result(myres);
-
-		return def_hg;
-	} else {
-		const string err_msg { "Unexpected empty result received for query: " + sel_q };
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, err_msg.c_str());
-		return -1;
-	}
-}
-
-pair<string,int> get_def_srv_host_port(MYSQL* admin, int hg) {
-	const string sel_q { "SELECT hostname,port FROM mysql_servers WHERE hostgroup_id=" + std::to_string(hg) };
-	int myrc = mysql_query(admin, sel_q.c_str());
-
-	if (myrc) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
-		return { "", -1 };
-	} else {
-		MYSQL_RES* myres = mysql_store_result(admin);
-		MYSQL_ROW myrow = mysql_fetch_row(myres);
-
-		if (myrow && myrow[0] && myrow[1]) {
-			string host { myrow[0] };
-			int port { std::atoi(myrow[1]) };
-			mysql_free_result(myres);
-
-			return { host, port };
-		} else {
-			const string err_msg { "Unexpected empty result received for query: '" + sel_q + "'"};
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, err_msg.c_str());
-			return { "", -1 };
-		}
-	}
-}
-
-pair<string,int> get_def_srv_host(MYSQL* admin, const string user) {
-	// Get the server from the default hostgroup
-	int def_hg = get_user_def_hg(admin, user);
-	if (def_hg == -1) {
-		return { "", -1 };
-	}
-
-	return get_def_srv_host_port(admin, def_hg);
-}
-*/
 
 MYSQL* proxy[NCONNS];
 MYSQL* admin = NULL;
@@ -143,7 +85,15 @@ bool create_connections(const CommandLine& cl, const char *plugin, bool use_ssl,
 			flags = CLIENT_SSL;
 			mysql_optionsv(proxy[i], MYSQL_OPT_SSL_ENFORCE, (void *)&enforce_tls);
 		}
-		my = mysql_real_connect(proxy[i], cl.host, cl.username, cl.password, NULL, cl.port, NULL, flags);
+		string pass = string(cl.password); // default
+		if (incorrect_connect_password == true) {
+			if (i%2 == 0) {
+				pass = "a" + pass;
+			} else {
+				pass = pass + "a";
+			}
+		}
+		my = mysql_real_connect(proxy[i], cl.host, cl.username, pass.c_str(), NULL, cl.port, NULL, flags);
 		if (incorrect_connect_password == false) {
 			ok(my != NULL , "Connection created: %d", i);
 			if (my == NULL) {
@@ -178,90 +128,63 @@ void close_connections() {
 }
 
 
-int TestSet1(const CommandLine& cl, const char *plugin, bool test_ssl , bool test_plugin, bool change_user, bool incorrect_connect_password) {
-	{
+int TestSet1(const CommandLine& cl, const char *plugin, bool test_ssl , bool test_plugin, bool change_user,
+		bool incorrect_connect_password, bool incorrect_change_user_password) {
+	diag("%d: Starting tests with plugin: %s , test_ssl: %d , check_plugin: %d , change_user: %d , incorrect_connect_password: %d , incorrect_change_user_password: %d",
+		__LINE__, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password);
+	vector <pair<string,bool>> vec = {
+		{"mysql_native_password", false},
+		{"mysql_native_password", true},
+		{"caching_sha2_password", true}
+	};
+	for (auto it = vec.begin(); it != vec.end() ; it++) {
+		diag("%d: Starting testing plugin %s and ssl %d" , __LINE__, it->first.c_str(), it->second);
+
 		diag("Setting mysql-default_authentication_plugin='%s'", plugin);
-		vector<string> query_set = {"SET mysql-default_authentication_plugin='" + string(plugin) + "'", "LOAD MYSQL VARIABLES TO RUNTIME"};
-		if (run_queries_sets( query_set , admin, "Running on Admin"))
+		vector<string> query_set1 = {"SET mysql-default_authentication_plugin='" + string(plugin) + "'", "LOAD MYSQL VARIABLES TO RUNTIME"};
+		if (run_queries_sets( query_set1 , admin, "Running on Admin"))
 			return exit_status();
-	}
-	{
-		// ok() : NCONNS * 2
-		diag("mysql_native_password and no SSL");
-		const char *auth_plugin = (const char *)"mysql_native_password";
-		vector<string> query_set = {"SET mysql-have_ssl='false'", "LOAD MYSQL VARIABLES TO RUNTIME"};
-		if (run_queries_sets( query_set , admin, "Running on Admin"))
+
+		const char *auth_plugin = it->first.c_str();
+		vector<string> query_set2 = {string(string("SET mysql-have_ssl='") + (it->second ? "true" : "false") + "'"), "LOAD MYSQL VARIABLES TO RUNTIME"};
+		if (run_queries_sets( query_set2 , admin, "Running on Admin"))
 			return exit_status();
 		if (create_connections(cl, auth_plugin, false, true, test_ssl, incorrect_connect_password) != true) {
 			return exit_status();
 		}
-		if (test_plugin) {
-			for (int i = 0; i<NCONNS; i++) {
-				json j = {};
-				get_internal_session(proxy[i], j);
-				ok(j["client"]["prot"]["auth_plugin"] == string(auth_plugin) ,  "%s: %d: Plugin wanted: %s , used: %s", plugin, __LINE__, auth_plugin, string(j["client"]["prot"]["auth_plugin"]).c_str());
+		if (incorrect_connect_password == false) {
+			if (test_plugin) {
+				for (int i = 0; i<NCONNS; i++) {
+					json j = {};
+					get_internal_session(proxy[i], j);
+					// when mysql-default_authentication_plugin='mysql_native_password'
+					// mysql_native_password is used even if client tries caching_sha2_password
+					string s = string(auth_plugin);
+					if (it->first == "caching_sha2_password") {
+						s = string(plugin);
+					}
+					ok(j["client"]["prot"]["auth_plugin"] == s,
+						"%s: %d: Plugin wanted: %s , used: %s", plugin, __LINE__, auth_plugin, string(j["client"]["prot"]["auth_plugin"]).c_str());
+				}
 			}
-		}
-		if (change_user) {
-			for (int i = 0; i<NCONNS; i++) {
-				MYSQL *my = proxy[i];
-				int rc = mysql_change_user(my, cl.username, cl.password, NULL);
-				ok(rc == 0, "mysql_change_user():%d : Plugin(default,current): (%s,%s)" , __LINE__, plugin, auth_plugin);
-			}
-		}
-		close_connections;
-	}
-	{
-		// ok() : NCONNS * 2
-		diag("mysql_native_password and SSL");
-		const char *auth_plugin = (const char *)"mysql_native_password";
-		vector<string> query_set = {"SET mysql-have_ssl='true'", "LOAD MYSQL VARIABLES TO RUNTIME"};
-		if (run_queries_sets( query_set , admin, "Running on Admin"))
-			return exit_status();
-		if (create_connections(cl, auth_plugin, true, true, test_ssl, incorrect_connect_password) != true) {
-			return exit_status();
-		}
-		if (test_plugin) {
-			for (int i = 0; i<NCONNS; i++) {
-				json j = {};
-				get_internal_session(proxy[i], j);
-				ok(j["client"]["prot"]["auth_plugin"] == string(auth_plugin) ,  "%s: %d: Plugin wanted: %s , used: %s", plugin, __LINE__, auth_plugin, string(j["client"]["prot"]["auth_plugin"]).c_str());
-			}
-		}
-		if (change_user) {
-			for (int i = 0; i<NCONNS; i++) {
-				MYSQL *my = proxy[i];
-				int rc = mysql_change_user(my, cl.username, cl.password, NULL);
-				ok(rc == 0, "mysql_change_user():%d : Plugin(default,current): (%s,%s)" , __LINE__, plugin, auth_plugin);
-			}
-		}
-		close_connections;
-	}
-	{
-		// ok(): NCONNS * 2
-		diag("caching_sha2_password and SSL");
-		const char *auth_plugin = (const char *)"caching_sha2_password";
-		vector<string> query_set = {"SET mysql-have_ssl='true'", "LOAD MYSQL VARIABLES TO RUNTIME"};
-		if (run_queries_sets( query_set , admin, "Running on Admin"))
-			return exit_status();
-		if (create_connections(cl, auth_plugin, true, true, test_ssl, incorrect_connect_password) != true) {
-			return exit_status();
-		}
-		if (test_plugin) {
-			for (int i = 0; i<NCONNS; i++) {
-				json j = {};
-				get_internal_session(proxy[i], j);
-				// when mysql-default_authentication_plugin='mysql_native_password'
-				// mysql_native_password is used even if client tries caching_sha2_password
-				ok(j["client"]["prot"]["auth_plugin"] == string(plugin),
-					"%s: %d: Plugin wanted: %s , used: %s", plugin, __LINE__, auth_plugin, string(j["client"]["prot"]["auth_plugin"]).c_str());
-			}
-		}
-		if (change_user) {
-			for (int i = 0; i<NCONNS; i++) {
-				MYSQL *my = proxy[i];
-				int rc = mysql_change_user(my, cl.username, cl.password, NULL);
-				ok(rc == 0, "mysql_change_user():%d : Plugin(default,current): (%s,%s)" , __LINE__, plugin, auth_plugin);
+			if (change_user) {
+				for (int i = 0; i<NCONNS; i++) {
+					MYSQL *my = proxy[i];
+					string pass = string(cl.password); // default
+					if (incorrect_change_user_password == true) {
+						if (i%2 == 0) {
+							pass = "a" + pass;
+						} else {
+							pass = pass + "a";
+						}
+					}
+					int rc = mysql_change_user(my, cl.username, pass.c_str(), NULL);
+					if (incorrect_change_user_password == false) {
+						ok(rc == 0, "mysql_change_user():%d : Should succeed. Plugin(default,current): (%s,%s)" , __LINE__, plugin, auth_plugin);
+					} else {
+						ok(rc != 0, "mysql_change_user():%d : Should fail . Plugin(default,current): (%s,%s)" , __LINE__, plugin, auth_plugin);
+					}
+				}
 			}
 		}
 		close_connections;
@@ -288,6 +211,22 @@ int main(int argc, char** argv) {
 	p += NCONNS*2*2; // mysql_native_password with and without SSL
 	p += NCONNS*2*1; // caching_sha2_password with SSL
 
+	// with incorrect connect password
+	// with mysql-default_authentication_plugin = mysql_native_password
+	p += NCONNS*1*2; // mysql_native_password with and without SSL
+	p += NCONNS*1*1; // caching_sha2_password with SSL
+	// with mysql-default_authentication_plugin = caching_sha2_password
+	p += NCONNS*1*2; // mysql_native_password with and without SSL
+	p += NCONNS*1*1; // caching_sha2_password with SSL
+
+	// with incorrect change user password
+	// with mysql-default_authentication_plugin = mysql_native_password
+	p += NCONNS*2*2; // mysql_native_password with and without SSL
+	p += NCONNS*2*1; // caching_sha2_password with SSL
+	// with mysql-default_authentication_plugin = caching_sha2_password
+	p += NCONNS*2*2; // mysql_native_password with and without SSL
+	p += NCONNS*2*1; // caching_sha2_password with SSL
+
 	plan(p);
 
 	if (cl.getEnv()) {
@@ -306,20 +245,72 @@ int main(int argc, char** argv) {
 		}
 	}
 
+
+	char *plugin = NULL;
+	bool test_ssl;
+	bool test_plugin;
+	bool change_user;
+	bool incorrect_connect_password;
+	bool incorrect_change_user_password;
+
+
+	test_ssl=true; test_plugin=true; change_user=false; incorrect_connect_password=false; incorrect_change_user_password=false;
+
 	// ok() NCONNS*2*2 + NCONNS*2*1
-	if (TestSet1(cl,"mysql_native_password", true, true, false, false)) {
+	plugin = (char *)"mysql_native_password";
+	diag("%d: Starting batch tests", __LINE__);
+	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
 		return exit_status();
 	}
 	// ok() NCONNS*2*2 + NCONNS*2*1
-	if (TestSet1(cl,"caching_sha2_password", true, true, false, false)) {
+	plugin = (char *)"caching_sha2_password";
+	diag("%d: Starting batch tests", __LINE__);
+	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
+		return exit_status();
+	}
+
+	test_ssl=false; test_plugin=false; change_user=true; incorrect_connect_password=false; incorrect_change_user_password=false;
+
+	// ok() NCONNS*2*2 + NCONNS*2*1
+	plugin = (char *)"mysql_native_password";
+	diag("%d: Starting batch tests", __LINE__);
+	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
 		return exit_status();
 	}
 	// ok() NCONNS*2*2 + NCONNS*2*1
-	if (TestSet1(cl,"mysql_native_password", false, false, true, false)) {
+	plugin = (char *)"caching_sha2_password";
+	diag("%d: Starting batch tests", __LINE__);
+	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
+		return exit_status();
+	}
+
+	test_ssl=false; test_plugin=false; change_user=true; incorrect_connect_password=true;  incorrect_change_user_password=false;
+
+	// ok() NCONNS*1*2 + NCONNS*1*1
+	plugin = (char *)"mysql_native_password";
+	diag("%d: Starting batch tests", __LINE__);
+	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
+		return exit_status();
+	}
+	// ok() NCONNS*1*2 + NCONNS*1*1
+	diag("%d: Starting batch tests", __LINE__);
+	plugin = (char *)"caching_sha2_password";
+	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
+		return exit_status();
+	}
+
+	test_ssl=false; test_plugin=false; change_user=true; incorrect_connect_password=false; incorrect_change_user_password=true;
+
+	// ok() NCONNS*2*2 + NCONNS*2*1
+	plugin = (char *)"mysql_native_password";
+	diag("%d: Starting batch tests", __LINE__);
+	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
 		return exit_status();
 	}
 	// ok() NCONNS*2*2 + NCONNS*2*1
-	if (TestSet1(cl,"caching_sha2_password", false, false, true, false)) {
+	plugin = (char *)"caching_sha2_password";
+	diag("%d: Starting batch tests", __LINE__);
+	if (TestSet1(cl, plugin, test_ssl, test_plugin, change_user, incorrect_connect_password, incorrect_change_user_password)) {
 		return exit_status();
 	}
 
