@@ -31,6 +31,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
+	plan(3);
 	bool stop = false;
 	int q_load_res = -1;
 	int q_globals_res = -1;

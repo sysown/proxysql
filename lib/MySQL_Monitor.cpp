@@ -1501,7 +1501,7 @@ __exit_set_wait_timeout:
 bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql=mysql_init(NULL);
 		assert(mysql);
-		if (use_ssl && port) {
+		if (use_ssl) {
 			mysql_ssl_set(mysql,
 					mysql_thread___ssl_p2s_key,
 					mysql_thread___ssl_p2s_cert,
@@ -1510,6 +1510,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 					mysql_thread___ssl_p2s_cipher);
 			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
 			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+			mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 		}
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
 		if (timeout==0) timeout=1;
@@ -4463,11 +4464,9 @@ __error:
 
 void* MySQL_Monitor::monitor_dns_cache() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version = 0;
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
 	mysql_thr->curtime = monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version = GloMTH->get_global_version();
-	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	constexpr unsigned int num_dns_resolver_threads = 1;

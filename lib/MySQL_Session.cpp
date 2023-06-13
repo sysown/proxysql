@@ -173,9 +173,8 @@ bool Session_Regex::match(char *m) {
 	rc=RE2::PartialMatch(m,*(RE2 *)re);
 	return rc;
 }
-
-KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread* _mt) :
-	KillArgs(u, p, h, P, _hid, i, kt, _mt, NULL) {
+KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt) :
+	KillArgs(u, p, h, P, _hid, i, kt, _use_ssl, _mt, NULL) {
 	// resolving DNS if available in Cache
 	if (h && P) {
 		const std::string& ip = MySQL_Monitor::dns_lookup(h, false);
@@ -185,8 +184,7 @@ KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid,
 		}
 	}
 }
-
-KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, MySQL_Thread *_mt, char *ip) {
+KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread *_mt, char *ip) {
 	username=strdup(u);
 	password=strdup(p);
 	hostname=strdup(h);
@@ -197,6 +195,7 @@ KillArgs::KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid,
 	hid=_hid;
 	id=i;
 	kill_type=kt;
+	use_ssl=_use_ssl;
 	mt=_mt;
 }
 
@@ -217,13 +216,27 @@ const char* KillArgs::get_host_address() const {
 	return host_address;
 }
 
-void * kill_query_thread(void *arg) {
+void* kill_query_thread(void *arg) {
 	KillArgs *ka=(KillArgs *)arg;
-	MYSQL *mysql;
-	MySQL_Thread * thread = ka->mt;
-	mysql=mysql_init(NULL);
+	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
+	mysql_thr->curtime=monotonic_time();
+	mysql_thr->refresh_variables();
+	MYSQL *mysql=mysql_init(NULL);
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
+
+	if (ka->use_ssl && ka->port) {
+		mysql_ssl_set(mysql, 
+			mysql_thread___ssl_p2s_key,
+			mysql_thread___ssl_p2s_cert,
+			mysql_thread___ssl_p2s_ca,
+			mysql_thread___ssl_p2s_capath,
+			mysql_thread___ssl_p2s_cipher);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+	}
+
 	if (!mysql) {
 		goto __exit_kill_query_thread;
 	}
@@ -232,14 +245,14 @@ void * kill_query_thread(void *arg) {
 		switch (ka->kill_type) {
 			case KILL_QUERY:
 				proxy_warning("KILL QUERY %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
-				if (thread) {
-					thread->status_variables.stvar[st_var_killed_queries]++;
+				if (ka->mt) {
+					ka->mt->status_variables.stvar[st_var_killed_queries]++;
 				}
 				break;
 			case KILL_CONNECTION:
 				proxy_warning("KILL CONNECTION %lu on %s:%d\n", ka->id, ka->hostname, ka->port);
-				if (thread) {
-					thread->status_variables.stvar[st_var_killed_connections]++;
+				if (ka->mt) {
+					ka->mt->status_variables.stvar[st_var_killed_connections]++;
 				}
 				break;
 			default:
@@ -1778,7 +1791,7 @@ void MySQL_Session::handler_again___new_thread_to_kill_connection() {
 				}
 			}
 
-			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->mysql->thread_id, KILL_QUERY, thread, myds->myconn->connected_host_details.ip);
+			KillArgs *ka = new KillArgs(ui->username, auth_password, myds->myconn->parent->address, myds->myconn->parent->port, myds->myconn->parent->myhgc->hid, myds->myconn->mysql->thread_id, KILL_QUERY, myds->myconn->parent->use_ssl, thread, myds->myconn->connected_host_details.ip);
 			pthread_attr_t attr;
 			pthread_attr_init(&attr);
 			pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -5360,11 +5373,12 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		client_myds->DSS=STATE_SSL_INIT;
 		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
 		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl = GloVars.get_SSL_ctx();
+		client_myds->ssl = GloVars.get_SSL_new();
 		SSL_set_fd(client_myds->ssl, client_myds->fd);
 		SSL_set_accept_state(client_myds->ssl); 
 		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
 		l_free(pkt->size,pkt->ptr);
+		proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
 		return;
 	}
 

@@ -39,7 +39,7 @@ debug: libtap.a
 
 libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h cpp-dotenv
 	g++ -c tap.cpp command_line.cpp utils.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
-	ar rcs libtap.a tap.o command_line.o utils.o $$(find $(DOTENV_DIR)/ -name '*.o')
+	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o $$(find $(DOTENV_DIR)/ -name '*.o')
 
 cpp-dotenv/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv && rm -rf cpp-dotenv-*/ || true

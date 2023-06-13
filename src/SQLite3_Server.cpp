@@ -1083,12 +1083,16 @@ static void * sqlite3server_main_loop(void *arg)
 		for (i=1;i<nfds;i++) {
 			if (fds[i].revents==POLLIN) {
 				client_t = accept(fds[i].fd, (struct sockaddr*)&addr, &addr_size);
-				pthread_attr_getstacksize (&attr, &stacks);
-				pthread_mutex_lock (&sock_mutex);
-				client=(int *)malloc(sizeof(int));
-				*client= client_t;
-				if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 )
-					perror("Thread creation");
+				if (client_t > 0) { // minor error handling
+					pthread_attr_getstacksize (&attr, &stacks);
+					pthread_mutex_lock (&sock_mutex);
+					client=(int *)malloc(sizeof(int));
+					*client= client_t;
+					if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 )
+						perror("Thread creation");
+				} else {
+					proxy_error("accept() error:\n", strerror(errno));
+				}
 			}
 			fds[i].revents=0;
 		}
@@ -1098,7 +1102,9 @@ static void * sqlite3server_main_loop(void *arg)
 		// already taken will result into an 'assert' in ProxySQL side.
 		if (nfds == 1 && fds[0].revents == POLLNVAL) {
 			proxy_error("revents==POLLNVAL for FD=%d, events=%d\n", fds[i].fd, fds[i].events);
-			assert(fds[0].revents != POLLNVAL);
+			if (glovars.shutdown==0 && *shutdown==0) {
+				assert(fds[0].revents != POLLNVAL);
+			}
 		}
 __end_while_pool:
 		if (S_amll.get_version()!=version) {
@@ -1137,7 +1143,11 @@ __end_while_pool:
                                         c_split_2(sn, ":" , &add, &port);
                                 }
 
+#ifdef SO_REUSEPORT
+				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128, true) : listen_on_unix(add, 128));
+#else
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
+#endif // SO_REUSEPORT
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
 				if (add) free(add);
 				if (port) free(port);

@@ -28,7 +28,6 @@
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "SQLite3_Server.h"
-
 #include "Web_Interface.hpp"
 
 #include <dirent.h>
@@ -684,6 +683,7 @@ static char * admin_variables_names[]= {
 #endif /* DEBUG */
 	(char *)"coredump_generation_interval_ms",
 	(char *)"coredump_generation_threshold",
+	(char *)"ssl_keylog_file",
 	NULL
 };
 
@@ -1803,6 +1803,18 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			GloMyLogger->flush_log();
 		}
 		SPA->flush_error_log();
+		proxysql_keylog_close();
+		char* ssl_keylog_file = SPA->get_variable((char*)"ssl_keylog_file");
+		if (ssl_keylog_file != NULL) {
+			if (strlen(ssl_keylog_file) > 0) {
+				if (proxysql_keylog_open(ssl_keylog_file) == false) {
+					// re-opening file failed, setting ssl_keylog_enabled to false
+					GloVars.global.ssl_keylog_enabled = false;
+					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", ssl_keylog_file);
+				}
+			}
+			free(ssl_keylog_file);
+		}	
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
@@ -5933,6 +5945,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 #endif /* DEBUG */
 	variables.coredump_generation_interval_ms = 30000;
 	variables.coredump_generation_threshold = 10;
+	variables.ssl_keylog_file = strdup("");
 	last_p_memory_metrics_ts = 0;
 	// create the scheduler
 	scheduler=new ProxySQL_External_Scheduler();
@@ -6435,6 +6448,9 @@ void ProxySQL_Admin::admin_shutdown() {
 	}
 	if (variables.telnet_stats_ifaces) {
 		free(variables.telnet_stats_ifaces);
+	}
+	if (variables.ssl_keylog_file) {
+		free(variables.ssl_keylog_file);
 	}
 };
 
@@ -8082,6 +8098,18 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.coredump_generation_threshold);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name, "ssl_keylog_file")) {
+		char* ssl_keylog_file = s_strdup(variables.ssl_keylog_file);
+		if (ssl_keylog_file != NULL && strlen(ssl_keylog_file) > 0) {
+			if ((ssl_keylog_file[0] != '/')) { // relative path 
+				char* tmp_ssl_keylog_file = (char*)malloc(strlen(GloVars.datadir) + strlen(ssl_keylog_file) + 2);
+				sprintf(tmp_ssl_keylog_file, "%s/%s", GloVars.datadir, ssl_keylog_file);
+				free(ssl_keylog_file);
+				ssl_keylog_file = tmp_ssl_keylog_file;
+			}
+		}
+		return ssl_keylog_file;
+	}
 	return NULL;
 }
 
@@ -8758,7 +8786,6 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv >= 0 && intv < INT_MAX) {
 			variables.coredump_generation_interval_ms=intv;
 			coredump_generation_interval_ms=intv;
-			proxy_coredump_reset_stats();
 			return true;
 		} else {
 			return false;
@@ -8769,11 +8796,45 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv > 0 && intv <= 500) {
 			variables.coredump_generation_threshold=intv;
 			coredump_generation_threshold=intv;
-			proxy_coredump_reset_stats();
 			return true;
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name, "ssl_keylog_file")) {
+		if (strcmp(variables.ssl_keylog_file, value)) {
+			if (vallen == 0 || strcmp(value, "(null)") == 0) {
+				proxysql_keylog_close();
+				free(variables.ssl_keylog_file);
+				variables.ssl_keylog_file = strdup("");
+				GloVars.global.ssl_keylog_enabled = false;
+			} else {
+				char* sslkeylogfile = NULL;
+				const bool is_absolute_path = (value[0] == '/');
+				if (is_absolute_path) { // absolute path
+					sslkeylogfile = strdup(value);
+				} else { // relative path
+					sslkeylogfile = (char*)malloc(strlen(GloVars.datadir) + strlen(value) + 2);
+					sprintf(sslkeylogfile, "%s/%s", GloVars.datadir, value);
+				}
+				if (proxysql_keylog_open(sslkeylogfile) == false) {
+					free(sslkeylogfile);
+					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", value);
+					return false;
+				}
+				free(variables.ssl_keylog_file);
+				if (is_absolute_path) {
+					variables.ssl_keylog_file = sslkeylogfile;
+					sslkeylogfile = NULL;
+				} else {
+					variables.ssl_keylog_file = strdup(value);
+				}
+				if (sslkeylogfile)
+					free(sslkeylogfile);
+				GloVars.global.ssl_keylog_enabled = true;
+			}
+		}
+		return true;
 	}
 	return false;
 }

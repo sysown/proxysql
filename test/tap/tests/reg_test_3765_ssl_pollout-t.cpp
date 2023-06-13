@@ -105,6 +105,7 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	plan(3);
 	uint32_t idle_cpu_ms = 0;
 	uint32_t final_cpu_ms = 0;
 

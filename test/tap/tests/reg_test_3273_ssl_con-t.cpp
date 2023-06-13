@@ -80,6 +80,8 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	plan(1);
+
 	// set a traffic rule introducing the proper delay to reproduce the issue
 	int tc_err = system("sudo -n tc qdisc add dev lo root netem delay 1000ms");
 	if (tc_err) {

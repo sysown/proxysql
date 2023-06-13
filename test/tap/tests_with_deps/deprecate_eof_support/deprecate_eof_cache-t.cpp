@@ -54,6 +54,14 @@ std::vector<std::string> queries {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
+	uint32_t c_operations = 50;
+	to_opts_t opts { 10000*1000, 100*1000, 500*1000, 2000*1000 };
+
+	unsigned int p = 1; // create table
+	p += c_operations; // inserts
+	p += c_operations*12; // 12 tests each time
+	plan(p);
+
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return -1;
@@ -90,7 +98,6 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	uint32_t c_operations = 50;
 	vector<pair<string, string>> stored_pairs {};
 
 	// INSERT the required data for exercising the cache
@@ -142,12 +149,14 @@ int main(int argc, char** argv) {
 		std::string select_query {};
 		string_format(t_select_query, select_query, id);
 
-		to_opts_t opts { 10000*1000, 100*1000, 500*1000, 2000*1000 };
 
+		std::string binary = "";
 		// Query *without* support for EOF deprecation
+		binary = "fwd_eof_query";
+		diag("Calling %s%s with query: %s", cl.workdir, binary.c_str(), select_query.c_str());
 		auto eof_query = [&] (std::string& query_res, std::string& eof_query_err) -> int {
 			int exec_res = wexecvp(
-				std::string(cl.workdir) + "fwd_eof_query",
+				std::string(cl.workdir) + binary,
 				{ select_query.c_str() },
 				opts,
 				query_res,
@@ -158,9 +167,11 @@ int main(int argc, char** argv) {
 		};
 
 		// Query *with* support for EOF deprecation
+		binary = "fwd_eof_ok_query";
+		diag("Calling %s%s with query: %s", cl.workdir, binary.c_str(), select_query.c_str());
 		auto ok_query = [&] (std::string& query_res, std::string& ok_query_err) -> int {
 			int exec_res = wexecvp(
-				std::string(cl.workdir) + "fwd_eof_ok_query",
+				std::string(cl.workdir) + binary,
 				{ select_query.c_str() },
 				opts,
 				query_res,

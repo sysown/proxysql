@@ -67,6 +67,8 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	plan(5*RESET_CONNECTION_QUERIES);
+
 	bool param = false;
 	{
 		// we parse argv[0] to see if filename includes "param"
@@ -162,12 +164,15 @@ int main(int argc, char** argv) {
 				res = EXIT_FAILURE;
 				goto exit;
 			}
+			ok(stmt != NULL , "mysql_stmt_init() succeeded");
 
 			if (mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()))) {
 				diag("mysql_stmt_prepare at line %d failed: %s", __LINE__ , mysql_error(proxysql_mysql));
 				mysql_close(proxysql_mysql);
 				res = EXIT_FAILURE;
 				goto exit;
+			} else {
+				ok(1,"mysql_stmt_prepare() succeeded");
 			}
 
 			if (param) {
@@ -196,6 +201,8 @@ int main(int argc, char** argv) {
 				);
 				res = EXIT_FAILURE;
 				goto exit;
+			} else {
+				ok(1,"mysql_stmt_execute() succeeded");
 			}
 
 			MYSQL_BIND bind[3];
@@ -233,6 +240,8 @@ int main(int argc, char** argv) {
 				);
 				res = EXIT_FAILURE;
 				goto exit;
+			} else {
+				ok(1,"mysql_stmt_bind_result() succeeded");
 			}
 
 			if (mysql_stmt_fetch(stmt) == 1) {
@@ -242,6 +251,8 @@ int main(int argc, char** argv) {
 				);
 				res = EXIT_FAILURE;
 				goto exit;
+			} else {
+				ok(1,"mysql_stmt_fetch() succeeded");
 			}
 
 			bool data_match_expected =
