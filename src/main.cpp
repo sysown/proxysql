@@ -1009,6 +1009,9 @@ void UnloadPlugins() {
 }
 
 void ProxySQL_Main_init_phase2___not_started() {
+	std::string msg;
+	ProxySQL_create_or_load_TLS(false, msg);
+
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
@@ -1494,7 +1497,6 @@ gotofork:
 	}
 
 __start_label:
-
 	{
 		cpu_timer t;
 		ProxySQL_Main_init_phase2___not_started();
