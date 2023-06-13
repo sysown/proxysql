@@ -233,6 +233,9 @@ class ProxySQL_Admin {
 #ifdef DEBUG
 		bool debug;
 #endif /* DEBUG */
+		int coredump_generation_interval_ms;
+		int coredump_generation_threshold;
+		char* ssl_keylog_file;
 	} variables;
 
 	unsigned long long last_p_memory_metrics_ts;
@@ -258,6 +261,10 @@ class ProxySQL_Admin {
 	void flush_debug_filters_runtime_to_database(SQLite3DB *db);
 	void flush_debug_filters_database_to_runtime(SQLite3DB *db);
 #endif /* DEBUG */
+
+	// Coredump Filters
+	void dump_coredump_filter_values_table();
+	bool flush_coredump_filters_database_to_runtime(SQLite3DB *db);
 
 //	void __insert_or_ignore_maintable_select_disktable(); // commented in 2.3
 	void __insert_or_replace_maintable_select_disktable();
@@ -469,7 +476,10 @@ class ProxySQL_Admin {
 
 	void load_mysql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_mysql_variables___database_to_runtime(admindb, true, checksum, epoch); }
 	void save_mysql_variables_from_runtime() { flush_mysql_variables___runtime_to_database(admindb, true, true, false); }
-
+	
+	// Coredump filters
+	bool load_coredump_to_runtime() { return flush_coredump_filters_database_to_runtime(admindb); }
+	
 	void p_update_metrics();
 	void stats___mysql_query_rules();
 	int stats___save_mysql_query_digest_to_sqlite(

@@ -12,6 +12,8 @@
 int main(int argc, char** argv) {
 	CommandLine cl;
 
+	plan(1);
+
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return -1;

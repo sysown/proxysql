@@ -57,17 +57,18 @@ class ProxySQL_Poll {
 	void expand(unsigned int more);
 
 	public:
-	unsigned int poll_timeout;
-	unsigned long loops;
-	StatCounters *loop_counters;
 	unsigned int len;
 	unsigned int size;
 	struct pollfd *fds;
 	MySQL_Data_Stream **myds;
 	unsigned long long *last_recv;
 	unsigned long long *last_sent;
+	std::atomic<bool> bootstrapping_listeners;
 	volatile int pending_listener_add;
 	volatile int pending_listener_del;
+	unsigned int poll_timeout;
+	unsigned long loops;
+	StatCounters *loop_counters;
 
 	ProxySQL_Poll();
 	~ProxySQL_Poll();
@@ -122,7 +123,7 @@ enum MySQL_Thread_status_variable {
 	st_var_END
 };
 
-class MySQL_Thread
+class __attribute__((aligned(64))) MySQL_Thread
 {
 	private:
 	unsigned int servers_table_version_previous;
@@ -584,6 +585,7 @@ class MySQL_Threads_Handler
 		bool enable_server_deprecate_eof;
 		bool enable_load_data_local_infile;
 		bool log_mysql_warnings_enabled;
+		int data_packets_history_size;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

@@ -1,25 +1,5 @@
-//#include <iostream>
-//#include <thread>
 #include "proxysql.h"
-
-//#include <sys/types.h>
-//#include <sys/stat.h>
-
 #include "cpp.h"
-
-//#include "ProxySQL_Statistics.hpp"
-//#include "MySQL_PreparedStatement.h"
-//#include "ProxySQL_Cluster.hpp"
-//#include "MySQL_Logger.hpp"
-//#include "SQLite3_Server.h"
-//#include "query_processor.h"
-//#include "MySQL_Authentication.hpp"
-//#include "MySQL_LDAP_Authentication.hpp"
-//#include "proxysql_restapi.h"
-//#include "Web_Interface.hpp"
-
-
-
 #include <openssl/x509v3.h>
 
 static long

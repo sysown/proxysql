@@ -34,4 +34,4 @@ debug: libtap.a
 
 libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h
 	g++ -c tap.cpp command_line.cpp utils.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
-	ar rcs libtap.a tap.o command_line.o utils.o
+	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o

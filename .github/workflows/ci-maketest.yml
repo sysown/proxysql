@@ -1,0 +1,83 @@
+name: CI-maketest
+on:
+  push:
+    branches: [ "v2.x" ]
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  pull_request:
+    branches: [ "v2.x" ]
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+#  schedule:
+#    - cron: '15 13 * * 3'
+  workflow_dispatch:
+
+jobs:
+  builds:
+    runs-on: ubuntu-22.04
+    steps:
+         
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        repository: 'sysown/proxysql'
+#        ref: 'v2.x'
+        ref: ${{ github.head_ref }}
+        fetch-depth: 0
+        path: 'proxysql'
+        
+    - name: hot-fixes
+      run: |
+        sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
+        #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/aurora.cpp
+        #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tap/SQLite3_Server.cpp
+        #sed -i '/LDIRS=/a LDIRS+= -L$(DEPS_PATH)/coredumper/coredumper/src' proxysql/test/tap/tests/Makefile
+        #sed -i '/STATIC_LIBS=/a STATIC_LIBS+= $(DEPS_PATH)/coredumper/coredumper/src/libcoredumper.a' proxysql/test/tap/tests/Makefile
+        #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/galera_1_timeout_count.cpp
+        #sed -i 's/dump_table_mysql_servers()/dump_table_mysql("mysql_servers")/' proxysql/test/tap/tests/galera_1_timeout_count.cpp
+        #sed -i '/#include "SpookyV2.h"/d' proxysql/test/tap/tests/galera_2_timeout_no_count.cpp
+        #sed -i 's/dump_table_mysql_servers()/dump_table_mysql("mysql_servers")/' proxysql/test/tap/tests/galera_2_timeout_no_count.cpp
+        
+    - name: Make-test
+      run: |
+        cd proxysql/
+        #git fetch --tags --force
+        GIT_VERSION=$(git describe --long --abbrev=7)
+        echo "GIT_VERSION=${GIT_VERSION}"
+        echo "GIT_VERSION=${GIT_VERSION}" >> $GITHUB_ENV
+        
+        TARGETS=(testaurora testgalera testgrouprep testreadonly testreplicationlag testall)
+        for TARGET in ${TARGETS[@]}; do
+          echo "TARGET: ${TARGET}"
+          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make clean && make ${TARGET}'" docker-compose.yml
+          make ubuntu22-dbg | tee ../build-$TARGET.log
+        done
+        
+    - name: Check build
+      run: |
+        set +e
+        echo "================================================================================="
+        RCS=0
+        for LOG in $(ls -1 build-*.log); do
+          grep 'exited with code 0' $LOG >/dev/null
+          RC=$?
+          if [[ $RC -eq 0 ]]; then
+            echo "SUMMARY: PASS ${LOG} $RC"
+          else
+            echo "SUMMARY: FAIL ${LOG} $RC"
+          fi
+          RCS=$(( $RCS + $RC ))
+        done
+        echo "================================================================================="
+        exit $RCS
+        
+    - name: Archive artifacts
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ci-maketests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        path: |
+          ./build-*.log
+          

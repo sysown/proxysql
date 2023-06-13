@@ -226,7 +226,8 @@ void proxy_debug_func(enum debug_module module, int verbosity, int thr, const ch
 			rc=(*proxy_sqlite3_bind_text)(statement1, 11, longdebugbuff2, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
 			SAFE_SQLITE3_STEP2(statement1);
 			rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, db);
-			rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, db);
+			// Note: no assert() in proxy_debug_func() after sqlite3_reset() because it is possible that we are in shutdown
+			rc=(*proxy_sqlite3_reset)(statement1); // ASSERT_SQLITE_OK(rc, db);
 		}
 	}
 	pthread_mutex_unlock(&debug_mutex);
