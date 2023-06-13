@@ -1922,6 +1922,9 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 	// Trim spaces from var name to allow writing like 'var = value'
 	char *var_name = trim_spaces_in_place(untrimmed_var_name);
 
+	if (strstr(var_name,(char *)"password") || strcmp(var_name,(char *)"mysql-default_authentication_plugin")==0) {
+		proxy_info("Received SET command for %s\n", var_name);
+	}
 
 	bool run_query = false;
 	// Check if the command tries to set a non-existing variable.

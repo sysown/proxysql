@@ -1141,6 +1141,21 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 		}
 		j["client"]["DSS"] = client_myds->DSS;
 		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
+		j["client"]["prot"]["sent_auth_plugin_id"] = client_myds->myprot.sent_auth_plugin_id;
+		j["client"]["prot"]["auth_plugin_id"] = client_myds->myprot.auth_plugin_id;
+		switch (client_myds->myprot.auth_plugin_id) {
+			case AUTH_MYSQL_NATIVE_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "mysql_native_password";
+				break;
+			case AUTH_MYSQL_CLEAR_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "mysql_clear_password";
+				break;
+			case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "caching_sha2_password";
+				break;
+			default:
+				break;
+		}
 		if (client_myds->myconn != NULL) { // only if myconn is defined
 			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
 				j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
