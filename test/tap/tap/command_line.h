@@ -1,6 +1,7 @@
 #ifndef COMMAND_LINE_H
 #define COMMAND_LINE_H
 
+#include <cstdint>
 #include <string.h>
 #include <string>
 
@@ -16,13 +17,13 @@ class CommandLine {
 
 	char* host = strdup("127.0.0.1");
 	char* username = strdup("root");
-	char* password = strdup("");
+	char* password = strdup("root");
 	char* admin_username = strdup("admin");
 	char* admin_password = strdup("admin");
 
 	int	port = 6033;
 	int admin_port = 6032;
-	char* workdir = strdup("./tests/");
+	char* workdir = strdup("./");
 
 	uint64_t client_flags = 0;
 	int getEnv();

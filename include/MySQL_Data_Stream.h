@@ -113,6 +113,8 @@ class MySQL_Data_Stream
 
 	PtrSizeArray *PSarrayIN;
 	PtrSizeArray *PSarrayOUT;
+	FixedSizeQueue data_packets_history_IN;
+	FixedSizeQueue data_packets_history_OUT;
 	//PtrSizeArray *PSarrayOUTpending;
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;

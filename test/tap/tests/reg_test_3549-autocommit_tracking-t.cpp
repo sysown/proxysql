@@ -282,6 +282,8 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	plan(test_definitions.size());
+
 	for (const auto& test_def : test_definitions) {
 		MYSQL* proxysql_mysql = mysql_init(NULL);
 		if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {

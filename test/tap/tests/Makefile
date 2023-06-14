@@ -65,6 +65,10 @@ COREDUMPER_DIR=$(DEPS_PATH)/coredumper/coredumper
 COREDUMPER_IDIR=$(COREDUMPER_DIR)/include
 COREDUMPER_LDIR=$(COREDUMPER_DIR)/src
 
+DOTENV_DIR=../tap/cpp-dotenv/cpp-dotenv
+DOTENV_IDIR=$(DOTENV_DIR)/include
+DOTENV_LDIR=$(DOTENV_DIR)
+
 IDIR=../../../include
 LDIR=../../../lib
 TAP_LIBDIR=../tap
@@ -77,7 +81,7 @@ EXECUTABLE=proxysql
 
 OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o ../../../src/obj/proxy_tls.o
 
-INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR)
+INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR) -I$(DOTENV_IDIR)
 LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
 UNAME_S := $(shell uname -s)
@@ -89,8 +93,11 @@ endif
 MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lconfig -lproxysql -ldaemon -ljemalloc -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt $(EXTRALINK) -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a $(CITYHASH_LDIR)/libcityhash.a
 
+LIBCOREDUMPERAR=
+
 ifeq ($(UNAME_S),Linux)
-  STATIC_LIBS+= $(COREDUMPER_LDIR)/libcoredumper.a
+  LIBCOREDUMPERAR=$(COREDUMPER_LDIR)/libcoredumper.a
+  STATIC_LIBS+= $(LIBCOREDUMPERAR)
 endif
 
 .PHONY: all
@@ -162,7 +169,7 @@ test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_L
 	g++ test_mysql_query_digests_stages-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -lproxysql -ltap -Wl,--no-as-needed -ldl -lpthread -o test_mysql_query_digests_stages-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LIBDIR)/libtap.a
-	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o sqlite3-t -DGITVERSION=\"$(GIT_VERSION)\"
+	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread $(LIBCOREDUMPERAR) -o sqlite3-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LIBDIR)/libtap.a
 	g++ test_gtid_forwarding-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o test_gtid_forwarding-t -DGITVERSION=\"$(GIT_VERSION)\"
@@ -173,14 +180,14 @@ test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $
 create_connection_annotation: test_connection_annotation-t.cpp
 	g++ -DTEST_AURORA -DDEBUG test_connection_annotation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) -ltap -ldl $(STATIC_LIBS) -o test_connection_annotation-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR)
-	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
+setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) $(LIBCOREDUMPERAR) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
 
 reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp
 	$(CXX) -DDEBUG reg_test_3504-change_user_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"
 
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
-	$(CXX) -DLIBMYSQL_HELPER -DDEBUG reg_test_3504-change_user_helper.cpp -I/usr/include/mysql -I$(CURL_IDIR) -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"
+	$(CXX) -DLIBMYSQL_HELPER -DDEBUG reg_test_3504-change_user_helper.cpp -I/usr/include/mysql -I$(CURL_IDIR) -I$(SQLITE3_DIR) -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"
 
 test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp
 	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql -I$(CURL_IDIR) -I$(SQLITE3_DIR) -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o test_clickhouse_server_libmysql-t -DGITVERSION=\"$(GIT_VERSION)\"

@@ -64,7 +64,7 @@ using json = nlohmann::json;
 
 #define MYHGM_GEN_ADMIN_RUNTIME_SERVERS "SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 THEN \"ONLINE\" WHEN 1 THEN \"SHUNNED\" WHEN 2 THEN \"OFFLINE_SOFT\" WHEN 3 THEN \"OFFLINE_HARD\" WHEN 4 THEN \"SHUNNED\" END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers ORDER BY hostgroup_id, hostname, port"
 
-#define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
+#define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
@@ -145,17 +145,17 @@ class MySrvC {	// MySQL Server Container
 	uint16_t port;
 	uint16_t gtid_port;
 	uint16_t flags;
-	unsigned int weight;
+	int64_t weight;
 	enum MySerStatus status;
 	unsigned int compression;
-	unsigned int max_connections;
+	int64_t max_connections;
 	unsigned int aws_aurora_current_lag_us;
 	unsigned int max_replication_lag;
 	unsigned int max_connections_used; // The maximum number of connections that has been opened
 	unsigned int connect_OK;
 	unsigned int connect_ERR;
 	unsigned int cur_replication_lag_count;
-	// note that these variables are in microsecond, while user defines max lantency in millisecond
+	// note that these variables are in microsecond, while user defines max latency in millisecond
 	unsigned int current_latency_us;
 	unsigned int max_latency_us;
 	time_t time_last_detected_error;
@@ -166,18 +166,39 @@ class MySrvC {	// MySQL Server Container
 	unsigned long long bytes_recv;
 	bool shunned_automatic;
 	bool shunned_and_kill_all_connections; // if a serious failure is detected, this will cause all connections to die even if the server is just shunned
-	bool use_ssl;
+	int32_t use_ssl;
 	char *comment;
 	MySrvConnList *ConnectionsUsed;
 	MySrvConnList *ConnectionsFree;
-	MySrvC(char *, uint16_t, uint16_t, unsigned int, enum MySerStatus, unsigned int, unsigned int _max_connections, unsigned int _max_replication_lag, unsigned int _use_ssl, unsigned int _max_latency_ms, char *_comment);
+	/**
+	 * @brief Constructs a new MySQL Server Container.
+	 * @details For 'server_defaults' parameters, if '-1' is supplied, they try to be obtained from
+	 *  'servers_defaults' entry from 'mysql_hostgroup_attributes' when adding the server to it's target
+	 *  hostgroup(via 'MySQL_HostGroups_Manager::add'), if not found, value is set with 'mysql_servers'
+	 *  defaults.
+	 * @param addr Address of the server, specified either by IP or hostname.
+	 * @param port Server port.
+	 * @param gitd_port If non-zero, enables GTID tracking for the server.
+	 * @param _weight Server weight. 'server_defaults' param, check @details.
+	 * @param _status Initial server status.
+	 * @param _compression Enables compression for server connections.
+	 * @param _max_connections Max server connections. 'server_defaults' param, check @details.
+	 * @param _max_replication_lag If non-zero, enables replication lag checks.
+	 * @param _use_ssl Enables SSL for server connections. 'servers_defaults' param, check @details.
+	 * @param _max_latency_ms Max ping server latency. When exceeded, server gets excluded from conn-pool.
+	 * @param _comment User defined comment.
+	 */
+	MySrvC(
+		char* addr, uint16_t port, uint16_t gitd_port, int64_t _weight, enum MySerStatus _status, unsigned int _compression,
+		int64_t _max_connections, unsigned int _max_replication_lag, int32_t _use_ssl, unsigned int	_max_latency_ms,
+		char* _comment
+	);
 	~MySrvC();
 	void connect_error(int, bool get_mutex=true);
 	void shun_and_killall();
 	/**
-	 * Update the maximum number of used connections
-	 * @return 
-	 *  the maximum number of used connections
+	 * @brief Update the maximum number of used connections
+	 * @return The maximum number of used connections
 	 */
 	unsigned int update_max_connections_used()
 	{
@@ -222,6 +243,11 @@ class MyHGC {	// MySQL Host Group Container
 		bool initialized; // this variable controls if attributes were ever configured or not. Used by reset_attributes()
 		json ignore_session_variables_json; // the JSON format of ignore_session_variables
 	} attributes;
+	struct {
+		int64_t weight;
+		int64_t max_connections;
+		int32_t use_ssl;
+	} servers_defaults;
 	void reset_attributes();
 	MyHGC(int);
 	~MyHGC();

@@ -69,12 +69,16 @@ jobs:
         
         cd proxysql_repl_tests
         #./exec_repl_test.sh 5.7 no-ssl debezium
-        ./exec_all_repl_tests.sh
-        RC=$?
+        RCS=0
+        for N in {1..5}; do
+          ./exec_all_repl_tests.sh
+          RC=$?
+          RCS=$(( $RCS + $RC ))
+        done
         
         #./docker-compose-destroy.bash
         sudo chmod -R 777 ${{ github.workspace }}/*
-        exit $RC
+        exit $RCS
         
     - name: Archive artifacts
       if: ${{ failure() }}

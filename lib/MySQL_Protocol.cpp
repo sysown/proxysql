@@ -1300,7 +1300,7 @@ bool MySQL_Protocol::generate_pkt_initial_handshake(bool send, void **ptr, unsig
 	(*myds)->myconn->options.server_capabilities=mysql_thread___server_capabilities;
   memcpy(_ptr+l,&mysql_thread___server_capabilities, sizeof(mysql_thread___server_capabilities)/2); l+=sizeof(mysql_thread___server_capabilities)/2;
   const MARIADB_CHARSET_INFO *ci = NULL;
-  ci = proxysql_find_charset_name(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+  ci = proxysql_find_charset_collate(mysql_thread___default_variables[SQL_COLLATION_CONNECTION]);
   if (!ci) {
 		// LCOV_EXCL_START
 	  proxy_error("Cannot find character set for name [%s]. Configuration error. Check [%s] global variable.\n",
@@ -2481,7 +2481,7 @@ __exit_do_auth:
 			}
 		}
 		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
-			(vars1.capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), vars1.user, tmp_pass, vars1.db, vars1.max_pkt, vars1.capabilities, vars1.charset, ((*myds)->encrypted ? "yes" : "no"));
+			(vars1.capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), vars1.user, tmp_pass, vars1.db, (*myds)->myconn->options.max_allowed_pkt, vars1.capabilities, vars1.charset, ((*myds)->encrypted ? "yes" : "no"));
 		free(tmp_pass);
 	}
 #endif

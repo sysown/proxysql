@@ -373,9 +373,10 @@ public:
 	unsigned long id;
 	int kill_type;
 	unsigned int hid;
+	int use_ssl;
 
-	KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread* _mt);
-	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hdi, unsigned long i, int kt, MySQL_Thread *_mt, char *ip);
+	KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt);
+	KillArgs(char *u, char *p, char *h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt, char *ip);
 	~KillArgs();
 	const char* get_host_address() const;
 

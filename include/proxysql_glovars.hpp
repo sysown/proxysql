@@ -88,7 +88,8 @@ class ProxySQL_GlobalVariables {
 	char * sqlite3_plugin;
 	char * web_interface_plugin;
 	char * ldap_auth_plugin;
-	SSL * get_SSL_ctx();
+	SSL_CTX *get_SSL_ctx();
+	SSL *get_SSL_new();
 	void get_SSL_pem_mem(char **key, char **cert);
 	std::shared_ptr<prometheus::Registry> prometheus_registry { nullptr };
 	struct  {
@@ -121,10 +122,13 @@ class ProxySQL_GlobalVariables {
 		char * ssl_key_pem_mem;
 		char * ssl_cert_pem_mem;
 		bool sqlite3_server;
+		int data_packets_history_size;
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
 		pthread_mutex_t ext_glomth_mutex;
+
+		bool ssl_keylog_enabled;
 	} global;
 	struct mysql {
 		char *server_version;
