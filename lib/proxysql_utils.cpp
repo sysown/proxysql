@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <sstream>
+#include <algorithm>
 
 #include <fcntl.h>
 #include <poll.h>
