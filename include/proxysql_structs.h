@@ -1157,7 +1157,7 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_LC_MESSAGES,                SETTING_VARIABLE, true,  false, false, false, (char *)"lc_messages",                NULL, (char *)"" , false} ,
 	{ SQL_LC_TIME_NAMES,              SETTING_VARIABLE, true,  false, false, false, (char *)"lc_time_names",              NULL, (char *)"" , false} ,
 	{ SQL_LOCK_WAIT_TIMEOUT,          SETTING_VARIABLE, false, false, true,  false, (char *)"lock_wait_timeout",          NULL, (char *)"" , false} ,
-	{ SQL_LOG_QUERIES_NOT_USING_INDEXES, SETTING_VARIABLE, true,  false, false, true, (char *)"log_queries_not_using_indexes", NULL, (char *)"OFF" , true} ,
+	{ SQL_LOG_QUERIES_NOT_USING_INDEXES, SETTING_VARIABLE, false,  false, false, true, (char *)"log_queries_not_using_indexes", NULL, (char *)"OFF" , false} ,
 	{ SQL_LOG_SLOW_FILTER,            SETTING_VARIABLE, true,  false, false, false, (char *)"log_slow_filter",            NULL, (char *)"" , false} ,
 	{ SQL_LONG_QUERY_TIME,            SETTING_VARIABLE, false, false, true,  false, (char *)"long_query_time",            NULL, (char *)"" , false} ,
 	{ SQL_MAX_EXECUTION_TIME,         SETTING_VARIABLE, false, false, true,  false, (char *)"max_execution_time",         NULL, (char *)"" , false} ,

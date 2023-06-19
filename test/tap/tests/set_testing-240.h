@@ -34,6 +34,7 @@ const std::vector<std::string> possible_unknown_variables = {
 	"optimizer_use_condition_selectivity",
 	"max_statement_time",
 	"sql_generate_invisible_primary_key",
+	"log_slow_filter",
 	"sql_require_primary_key"
 	};
 
