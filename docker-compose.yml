@@ -370,6 +370,36 @@ services:
       - PKG_RELEASE=dbg-debian11
       - PROXYSQL_BUILD_TYPE=debug
 
+####################################################################################################
+  debian12_build:
+    image: proxysql/packaging:build-debian12
+    volumes:
+      - ./docker/images/proxysql/deb-compliant/latest-package/ctl/:/root/ctl/
+      - ./docker/images/proxysql/deb-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - MAKE
+      - MAKEOPT
+      - CURVER
+      - PKG_RELEASE=debian12
+      - PROXYSQL_BUILD_TYPE=clickhouse
+    command: bash -l -c /opt/entrypoint/entrypoint.bash
+
+  debian12_clang_build:
+    extends:
+      service: debian12_build
+    image: proxysql/packaging:build-clang-debian12
+    environment:
+      - PKG_RELEASE=debian12-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  debian12_dbg_build:
+    extends:
+      service: debian12_build
+    environment:
+      - PKG_RELEASE=dbg-debian12
+      - PROXYSQL_BUILD_TYPE=debug
+
 
 ####################################################################################################
 ####################################################################################################

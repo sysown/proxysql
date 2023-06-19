@@ -228,7 +228,7 @@ amd64-centos: centos6 centos6-dbg centos7 centos7-dbg centos8 centos8-clang cent
 amd64-ubuntu: ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
 .PHONY: amd64-ubuntu
 
-amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg
+amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
 .PHONY: amd64-debian
 
 amd64-fedora: fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg fedora36 fedora36-clang fedora36-dbg fedora37 fedora37-clang fedora37-dbg fedora38 fedora38-clang fedora38-dbg
@@ -249,7 +249,7 @@ arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensu
 arm64-centos: centos7-arm64 centos8-arm64
 .PHONY: arm64-centos
 
-arm64-debian: debian9-arm64 debian10-arm64 debian11-arm64
+arm64-debian: debian9-arm64 debian10-arm64 debian11-arm64 debian12-arm64
 .PHONY: arm64-debian
 
 arm64-ubuntu: ubuntu16-arm64 ubuntu18-arm64 ubuntu20-arm64 ubuntu22-arm64
@@ -465,6 +465,19 @@ debian11-arm64: binaries/proxysql_${CURVER}-debian11_arm64.deb
 
 debian11-dbg: binaries/proxysql_${CURVER}-dbg-debian11_amd64.deb
 .PHONY: debian11-dbg
+
+
+debian12: binaries/proxysql_${CURVER}-debian12_amd64.deb
+.PHONY: debian12
+
+debian12-clang: binaries/proxysql_${CURVER}-debian12-clang_amd64.deb
+.PHONY: debian12-clang
+
+debian12-arm64: binaries/proxysql_${CURVER}-debian12_arm64.deb
+.PHONY: debian12-arm64
+
+debian12-dbg: binaries/proxysql_${CURVER}-dbg-debian12_amd64.deb
+.PHONY: debian12-dbg
 
 
 opensuse15: binaries/proxysql-${CURVER}-1-opensuse15.x86_64.rpm
@@ -763,6 +776,23 @@ binaries/proxysql_${CURVER}-debian11_arm64.deb:
 
 binaries/proxysql_${CURVER}-dbg-debian11_amd64.deb:
 	docker-compose up debian11_dbg_build
+	docker-compose rm -f
+
+
+binaries/proxysql_${CURVER}-debian12_amd64.deb:
+	docker-compose up debian12_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-debian12-clang_amd64.deb:
+	docker-compose up debian12_clang_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-debian12_arm64.deb:
+	docker-compose up debian12_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-dbg-debian12_amd64.deb:
+	docker-compose up debian12_dbg_build
 	docker-compose rm -f
 
 
