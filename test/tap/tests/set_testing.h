@@ -29,6 +29,8 @@ const std::vector<std::string> possible_unknown_variables = {
 	"group_replication_consistency",
 	"query_cache_type",
 	"wsrep_osu_method",
+	"log_slow_filter",
+	"sql_quote_show_create",
 	};
 
 int readTestCases(const std::string& fileName) {
