@@ -189,23 +189,6 @@ static char * load_file (const char *filename) {
 */
 
 
-void close_all_non_term_fd() {
-	DIR *d;
-	struct dirent *dir;
-	d = opendir("/proc/self/fd");
-	if (d) {
-		while ((dir = readdir(d)) != NULL) {
-			if (strlen(dir->d_name) && dir->d_name[0] != '.') {
-				int fd = std::stol(std::string(dir->d_name));
-				if (fd > 2) {
-					close(fd);
-				}
-			}
-		}
-		closedir(d);
-	}
-}
-
 static int round_intv_to_time_interval(int& intv) {
 	if (intv > 300) {
 		intv = 600;
@@ -13620,7 +13603,7 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 					exit(EXIT_FAILURE);
 				}
 				if (cpid == 0) {
-					close_all_non_term_fd();
+					close_all_non_term_fd({});
 					char *newenviron[] = { NULL };
 					int rc;
 					rc=execve(sr->filename, newargs, newenviron);
