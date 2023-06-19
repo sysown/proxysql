@@ -47,7 +47,7 @@ char *schema=(char *)"information_schema";
 int silent = 0;
 int sysbench = 0;
 int local=0;
-int queries=3000;
+int queries=5000;
 int uniquequeries=0;
 int histograms=-1;
 

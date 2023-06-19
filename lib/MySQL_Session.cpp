@@ -81,6 +81,7 @@ static const std::set<std::string> mysql_variables_boolean = {
 	"sql_big_selects",
 	"sql_generate_invisible_primary_key",
 	"sql_log_bin",
+	"sql_quote_show_create",
 	"sql_require_primary_key",
 	"sql_safe_updates",
 	"unique_checks",

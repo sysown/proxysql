@@ -287,6 +287,9 @@ int main() {
 	vars["wsrep_osu_method"] = new variable("wsrep_osu_method", true, false, false);
 	add_values_and_quotes("wsrep_osu_method", {"TOI","RSU"});
 
+	vars["sql_quote_show_create"] = new variable("sql_quote_show_create", true, false, true);
+	vars["sql_quote_show_create"]->add(bool_values);
+
 	vars["sql_require_primary_key"] = new variable("sql_require_primary_key", true, false, true);
 	vars["sql_require_primary_key"]->add(bool_values);
 
