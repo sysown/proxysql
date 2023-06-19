@@ -76,7 +76,6 @@ static const std::set<std::string> mysql_variables_boolean = {
 	"foreign_key_checks",
 	"innodb_strict_mode",
 	"innodb_table_locks",
-	"log_queries_not_using_indexes",
 	"sql_auto_is_null",
 	"sql_big_selects",
 	"sql_generate_invisible_primary_key",
