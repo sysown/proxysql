@@ -2832,6 +2832,8 @@ MySQL_Thread::~MySQL_Thread() {
 		delete sr;
 		sr = match_regexes[3];
 		delete sr;
+		sr = match_regexes[4];
+		delete sr;
 		free(match_regexes);
 		match_regexes=NULL;
 	}
@@ -2941,7 +2943,7 @@ bool MySQL_Thread::init() {
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
 	assert(i==0);
 
-	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
+	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*5);
 //	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
 	
@@ -2951,6 +2953,7 @@ bool MySQL_Thread::init() {
 
 	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
 	match_regexes[3]=new Session_Regex((char *)"^(set)(?: +)((charset)|(character +set))(?: )");
+	match_regexes[4]=new Session_Regex((char *)"^SET(?: +)((GLOBAL( +))|(@@GLOBAL.))([[:alnum:]_]+)( *)(:|)=( *)");
 
 	return true;
 }
