@@ -43,7 +43,7 @@ DEBUG=${ALL_DEBUG}
 export MAKE
 export CURVER?=2.6.0
 ifneq (,$(wildcard /etc/os-release))
-	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
+	DISTRO := $(shell awk -F= '/^NAME/{print $$2}' /etc/os-release)
 else
 	DISTRO := Unknown
 endif
@@ -69,38 +69,38 @@ GROUPCHECK := $(shell getent group proxysql)
 
 
 .PHONY: default
-default: build_deps build_lib build_src
+default: build_src
 
 .PHONY: debug
-debug: build_deps_debug build_lib_debug build_src_debug
+debug: build_src_debug
 
 .PHONY: testaurora
-testaurora: build_deps_debug build_lib_testaurora build_src_testaurora
+testaurora: build_src_testaurora
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgalera
-testgalera: build_deps_debug build_lib_testgalera build_src_testgalera
+testgalera: build_src_testgalera
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgrouprep
-testgrouprep: build_deps_debug build_lib_testgrouprep build_src_testgrouprep
+testgrouprep: build_src_testgrouprep
 
 .PHONY: testreadonly
-testreadonly: build_deps_debug build_lib_testreadonly build_src_testreadonly
+testreadonly: build_src_testreadonly
 
 .PHONY: testreplicationlag
-testreplicationlag: build_deps_debug build_lib_testreplicationlag build_src_testreplicationlag
+testreplicationlag: build_src_testreplicationlag
 
 .PHONY: testall
-testall: build_deps_debug build_lib_testall build_src_testall
+testall: build_src_testall
 
 .PHONY: clickhouse
-clickhouse: build_deps_clickhouse build_lib_clickhouse build_src_clickhouse
+clickhouse: build_src_clickhouse
 
 .PHONY: debug_clickhouse
-debug_clickhouse: build_deps_debug_clickhouse build_lib_debug_clickhouse build_src_debug_clickhouse
+debug_clickhouse: build_src_debug_clickhouse
 
 
 
@@ -113,7 +113,7 @@ build_lib: build_deps
 	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src
-build_src: build_deps build_lib
+build_src: build_lib
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_deps_debug
@@ -125,7 +125,7 @@ build_lib_debug: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testaurora
-build_src_testaurora: build_deps build_lib_testaurora
+build_src_testaurora: build_lib_testaurora
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testaurora
@@ -133,7 +133,7 @@ build_lib_testaurora: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testgalera
-build_src_testgalera: build_deps build_lib_testgalera
+build_src_testgalera: build_lib_testgalera
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testgalera
@@ -141,7 +141,7 @@ build_lib_testgalera: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testgrouprep
-build_src_testgrouprep: build_deps build_lib_testgrouprep
+build_src_testgrouprep: build_lib_testgrouprep
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GROUPREP" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testgrouprep
@@ -149,7 +149,7 @@ build_lib_testgrouprep: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GROUPREP" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testreadonly
-build_src_testreadonly: build_deps build_lib_testreadonly
+build_src_testreadonly: build_lib_testreadonly
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_READONLY" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testreadonly
@@ -157,7 +157,7 @@ build_lib_testreadonly: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_READONLY" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testreplicationlag
-build_src_testreplicationlag: build_deps build_lib_testreplicationlag
+build_src_testreplicationlag: build_lib_testreplicationlag
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testreplicationlag
@@ -165,7 +165,7 @@ build_lib_testreplicationlag: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testall
-build_src_testall: build_deps build_lib_testall
+build_src_testall: build_lib_testall
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testall
@@ -181,7 +181,7 @@ build_tap_test_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
 .PHONY: build_src_debug
-build_src_debug: build_deps build_lib_debug
+build_src_debug: build_lib_debug
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_deps_clickhouse
@@ -201,11 +201,11 @@ build_lib_debug_clickhouse: build_deps_debug_clickhouse
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_clickhouse
-build_src_clickhouse: build_deps_clickhouse build_lib_clickhouse
+build_src_clickhouse: build_lib_clickhouse
 	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug_clickhouse
-build_src_debug_clickhouse: build_deps build_lib_debug_clickhouse
+build_src_debug_clickhouse: build_lib_debug_clickhouse
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 
