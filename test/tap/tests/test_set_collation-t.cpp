@@ -33,7 +33,7 @@ int create_proxysql_connections(const CommandLine& cl, const std::vector<std::st
 
 	for (const auto& collation : collations) {
 		MYSQL* mysql = mysql_init(NULL);
-		const MARIADB_CHARSET_INFO* charset = proxysql_find_charset_collate(collation.c_str());
+		const MARIADB_CHARSET_INFO* charset = proxysqlTap_find_charset_collate(collation.c_str());
 		mysql->charset = charset;
 
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
@@ -57,7 +57,7 @@ int run_change_user_on_all(const CommandLine& cl, const std::vector<std::string>
 	for (int i = 0; i < conns.size(); i++) {
 		MYSQL* mysql = conns[i];
 		MYSQL_QUERY(mysql, "START TRANSACTION");
-		const MARIADB_CHARSET_INFO* charset = proxysql_find_charset_collate(collations[i].c_str());
+		const MARIADB_CHARSET_INFO* charset = proxysqlTap_find_charset_collate(collations[i].c_str());
 		mysql->charset = charset;
 		if (mysql_change_user(mysql,cl.username, cl.password, NULL)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
