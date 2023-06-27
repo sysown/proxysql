@@ -243,5 +243,15 @@ static Test multiple[] = {
       Expected("character_set_client", { "utf8mb4" } ),
     }
   },
+  { "SET @@autocommit := 0 , NAMES \"utf8mb3\"", { Expected("autocommit",  {"0"}) , Expected("names",{"utf8mb3"}) } },
+  { "SET character_set_results=NULL,NAMES latin7,character_set_client='utf8mb4', autocommit := 1 , time_zone = 'Europe/Paris'",
+    {
+      Expected("character_set_results", { "NULL" } ),
+      Expected("names", { "latin7" } ),
+      Expected("character_set_client", { "utf8mb4" } ),
+      Expected("autocommit", { "1" } ),
+      Expected("time_zone", { "Europe/Paris" } ),
+    }
+  },
 };
 
