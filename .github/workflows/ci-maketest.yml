@@ -51,7 +51,7 @@ jobs:
         TARGETS=(testaurora testgalera testgrouprep testreadonly testreplicationlag testall)
         for TARGET in ${TARGETS[@]}; do
           echo "TARGET: ${TARGET}"
-          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make clean && make ${TARGET}'" docker-compose.yml
+          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make cleanall && make -j$(nproc) ${TARGET}'" docker-compose.yml
           make ubuntu22-dbg | tee ../build-$TARGET.log
         done
         
