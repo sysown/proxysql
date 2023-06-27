@@ -11,6 +11,11 @@
 // NOTE: Avoids definition of 'proxy_sqlite3_*' functions as 'extern'
 #define MAIN_PROXY_SQLITE3
 
+#include "command_line.h"
+#include "tap.h"
+
+#include <stdlib.h>
+
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "util/test.h"
@@ -38,6 +43,9 @@
 #include "proxysql_structs.h"
 #include "sqlite3db.h"
 #include "MySQL_LDAP_Authentication.hpp"
+
+using namespace std;
+
 MySQL_LDAP_Authentication *GloMyLdapAuth = nullptr;
 // ******************************************************************************************
 
@@ -52,18 +60,18 @@ bool iequals(const std::string& a, const std::string& b)
     return true;
 }
 
+
 void printMap(const std::string query, std::map<std::string, std::vector<std::string>> map) {
-	std::cout << "Query: " << query << "\r\n";
+	std::cout << "Query: " << query << endl;
 	for (const auto& entry : map) {
-		std::cout << "  - Key: " << entry.first << "\r\n";
+		std::cout << "  - Key: " << entry.first << endl;
 
 		for (const auto& value : entry.second) {
-			std::cout << "    + Value: " << value << "\r\n";
+			std::cout << "    + Value: " << value << endl;
 		}
 	}
-
-	std::cout << "\r\n";
 }
+
 
 struct Expected {
   const char* var;
@@ -111,7 +119,7 @@ static Test sql_mode[] = {
   { "SET sql_mode=''", { Expected("sql_mode", { "" } ) } },
   // Invalid 'non-matching' versions of 'sql_mode' should result into 'non-matching'
   { "SET sql_mode=(SELECT CONCA(@@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))", {} },
-  { "SET sql_mode=(SELECT CONCAT(@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))", {} },
+//  { "SET sql_mode=(SELECT CONCAT(@sql_mode, ',PIPES_AS_CONCAT,NO_ENGINE_SUBSTITUTION'))", {} }, // parse1v2 SHOULD process it
   { "SET sql_mode=(SELECT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", {} },
   { "SET sql_mode=(SELCT CONCAT(@@sql_mode, ',PIPES_AS_CONCAT[,NO_ENGINE_SUBSTITUTION'))", {} }
 };
@@ -123,22 +131,28 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
       data[it->var] = it->values;
     }
 
-    SetParser parser(tests[i].query);
-    std::map<std::string, std::vector<std::string>> result = parser.parse1();
+    SetParser parser(tests[i].query, 1);
+    //std::map<std::string, std::vector<std::string>> result = parser.parse1();
+    std::map<std::string, std::vector<std::string>> result = parser.parse1v2();
 
+	cout << endl;
     printMap("result", result);
+	cout << endl;
     printMap("expected", data);
+	cout << endl;
 
     CHECK_EQ(result.size(), data.size());
+	ok(result.size() == data.size() , "Sizes match: %lu, %lu" , result.size() , data.size());
     CHECK(std::equal(std::begin(result), std::end(result), std::begin(data)));
+	ok(std::equal(std::begin(result), std::end(result), std::begin(data)) == true, "Elements match");
   }
 }
 
-
+/*
 TEST(TestParse, SET_SQL_MODE) {
   TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
 }
-
+*/
 static Test time_zone[] = {
   { "SET @@time_zone = 'Europe/Paris'", { Expected("time_zone",  {"Europe/Paris"}) } },
   { "SET @@time_zone = '+00:00'", { Expected("time_zone",  {"+00:00"}) } },
@@ -148,9 +162,11 @@ static Test time_zone[] = {
   { "SET @@TIME_ZONE = @OLD_TIME_ZONE", { Expected("time_zone",  {"@OLD_TIME_ZONE"}) } },
 };
 
+/*
 TEST(TestParse, SET_TIME_ZONE) {
   TestParse(time_zone, arraysize(time_zone), "time_zone");
 }
+*/
 
 static Test session_track_gtids[] = {
   { "SET @@session_track_gtids = OFF", { Expected("session_track_gtids",  {"OFF"}) } },
@@ -164,9 +180,11 @@ static Test session_track_gtids[] = {
   { "SET SESSION session_track_gtids = ALL_GTIDS", { Expected("session_track_gtids",  {"ALL_GTIDS"}) } },
 };
 
+/*
 TEST(TestParse, SET_SESSION_TRACK_GTIDS) {
   TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");
 }
+*/
 
 static Test character_set_results[] = {
   { "SET @@character_set_results = utf8", { Expected("character_set_results",  {"utf8"}) } },
@@ -177,10 +195,6 @@ static Test character_set_results[] = {
   { "SET session character_set_results = NULL", { Expected("character_set_results",  {"NULL"}) } },
 };
 
-TEST(TestParse, SET_CHARACTER_SET_RESULTS) {
-  TestParse(character_set_results, arraysize(character_set_results), "character_set_results");
-}
-
 static Test names[] = {
   { "SET NAMES utf8", { Expected("names",  {"utf8"}) } },
   { "SET NAMES 'utf8'", { Expected("names",  {"utf8"}) } },
@@ -188,9 +202,6 @@ static Test names[] = {
   { "SET NAMES utf8 COLLATE unicode_ci", { Expected("names",  {"utf8", "unicode_ci"}) } },
 };
 
-TEST(TestParse, SET_NAMES) {
-  TestParse(names, arraysize(names), "names");
-}
 static Test various[] = {
   { "SET @@SESSION.SQL_SELECT_LIMIT= DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
   { "SET @@LOCAL.SQL_SELECT_LIMIT= DEFAULT", { Expected("sql_select_limit",  {"DEFAULT"}) } },
@@ -217,14 +228,11 @@ static Test various[] = {
   { "SET @@sql_safe_updates = ON", { Expected("sql_safe_updates",  {"ON"}) } },
 };
 
-TEST(TestParse, SET_VARIOUS) {
-  TestParse(various, arraysize(various), "various");
-}
-
 static Test multiple[] = {
   { "SET time_zone = 'Europe/Paris', sql_mode = 'TRADITIONAL'", { Expected("time_zone",  {"Europe/Paris"}), Expected("sql_mode", {"TRADITIONAL"}) } },
   { "SET time_zone = 'Europe/Paris', sql_mode = IFNULL(NULL,\"STRICT_TRANS_TABLES\")", { Expected("time_zone",  {"Europe/Paris"}), Expected("sql_mode", {"IFNULL(NULL,\"STRICT_TRANS_TABLES\")"}) } },
-  { "SET sql_mode = 'TRADITIONAL', NAMES 'utf8 COLLATE 'unicode_ci'", { Expected("sql_mode",  {"TRADITIONAL"}), Expected("names", {"utf8", "unicode_ci"}) } }, // FIXME: typo
+  //{ "SET sql_mode = 'TRADITIONAL', NAMES 'utf8 COLLATE 'unicode_ci'", { Expected("sql_mode",  {"TRADITIONAL"}), Expected("names", {"utf8", "unicode_ci"}) } }, // FIXME: this should return an error
+  { "SET sql_mode = 'TRADITIONAL', NAMES 'utf8' COLLATE 'unicode_ci'", { Expected("sql_mode",  {"TRADITIONAL"}), Expected("names", {"utf8", "unicode_ci"}) } },
   { "SET  @@SESSION.sql_mode = CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO'),  @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 2147483",
   { Expected("sql_mode",  {"CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO')"}), Expected("sql_auto_is_null", {"0"}),
   Expected("wait_timeout", {"2147483"}) } },
@@ -273,6 +281,29 @@ static Test multiple[] = {
   },
 };
 
-TEST(TestParse, MULTIPLE) {
-  TestParse(multiple, arraysize(multiple), "multiple");
+
+int main(int argc, char** argv) {
+	CommandLine cl;
+
+	if(cl.getEnv())
+		return exit_status();
+
+	unsigned int p = 0;
+	p += arraysize(sql_mode);
+	p += arraysize(time_zone);
+	p += arraysize(session_track_gtids);
+	p += arraysize(character_set_results);
+	p += arraysize(names);
+	p += arraysize(various);
+	p += arraysize(multiple);
+	p *= 2;
+	plan(p);
+	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
+	TestParse(time_zone, arraysize(time_zone), "time_zone");
+	TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");
+	TestParse(character_set_results, arraysize(character_set_results), "character_set_results");
+	TestParse(names, arraysize(names), "names");
+	TestParse(various, arraysize(various), "various");
+	TestParse(multiple, arraysize(multiple), "multiple");
+	return exit_status();
 }

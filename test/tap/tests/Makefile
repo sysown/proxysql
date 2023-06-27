@@ -128,6 +128,7 @@ debug: tests
 tests: tests-cpp tests-php tests-py \
 	setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper \
 	setparser_test2 setparser_test2-t \
+	setparser_test3 setparser_test3-t \
 	set_testing-240.csv test_clickhouse_server_libmysql-t reg_test_stmt_resultset_err_no_rows_libmysql-t \
 	prepare_statement_err3024_libmysql-t prepare_statement_err3024_async-t reg_test_mariadb_stmt_store_result_libmysql-t \
 	reg_test_mariadb_stmt_store_result_async-t
@@ -190,6 +191,13 @@ setparser_test2-t: setparser_test2
 
 setparser_test2: setparser_test2.cpp $(TAP_LIBDIR)/libtap.a $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
 	g++ -DDEBUG setparser_test2.cpp $(LDIR)/set_parser.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) $(LIBCOREDUMPERAR) -o setparser_test2 -DGITVERSION=\"$(GIT_VERSION)\"
+
+setparser_test3-t: setparser_test3
+	rm setparser_test3-t || true
+	ln -s setparser_test3 setparser_test3-t
+
+setparser_test3: setparser_test3.cpp $(TAP_LIBDIR)/libtap.a $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+	g++ -DDEBUG -DPARSERDEBUG setparser_test3.cpp $(LDIR)/set_parser.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -lproxysql $(MYLIBS) -ltap -ldl -lpthread $(WASAN) $(LIBCOREDUMPERAR) -o setparser_test3 -DGITVERSION=\"$(GIT_VERSION)\"
 
 reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp
 	$(CXX) -DDEBUG reg_test_3504-change_user_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"
