@@ -14,7 +14,9 @@
 #include <string.h>
 #include <unistd.h>
 
+using std::function;
 using std::string;
+using std::unique_ptr;
 using std::vector;
 
 __attribute__((__format__ (__printf__, 1, 2)))
@@ -435,4 +437,23 @@ string rand_str(std::size_t strSize) {
 
 		return random_str;
 	}
+}
+
+std::string get_checksum_from_hash(uint64_t hash) {
+	uint32_t d32[2] = { 0 };
+	memcpy(&d32, &hash, sizeof(hash));
+
+	vector<char> s_buf(ProxySQL_Checksum_Value_LENGTH, 0);
+	sprintf(&s_buf[0],"0x%0X%0X", d32[0], d32[1]);
+	replace_checksum_zeros(&s_buf[0]);
+
+	return string { &s_buf.front() };
+}
+
+void remove_sqlite3_resultset_rows(
+	unique_ptr<SQLite3_result>& resultset, const function<bool(SQLite3_row*)>& pred
+) {
+	const auto remove_it { std::remove_if(resultset->rows.begin(), resultset->rows.end(), pred) };
+	resultset->rows.erase(remove_it, resultset->rows.end());
+	resultset->rows_count = resultset->rows.size();
 }

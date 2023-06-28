@@ -964,17 +964,6 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 	}
 }
 
-std::string get_checksum_from_hash(uint64_t hash) {
-	uint32_t d32[2] = { 0 };
-	memcpy(&d32, &hash, sizeof(hash));
-
-	vector<char> s_buf(20, 0);
-	sprintf(&s_buf[0],"0x%0X%0X", d32[0], d32[1]);
-	replace_checksum_zeros(&s_buf[0]);
-
-	return string { &s_buf.front() };
-}
-
 /**
  * @brief Computes the checksum from a MySQL resultset in the same we already do in 'SQLite3_result::raw_checksum'.
  * @details For each received column computing the field length via 'strlen' is required, this is because we
