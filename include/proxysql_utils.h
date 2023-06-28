@@ -2,11 +2,18 @@
 #define __PROXYSQL_UTILS_H
 
 #include <cstdarg>
+#include <functional>
 #include <type_traits>
 #include <memory>
 #include <string>
 #include <vector>
 #include <sys/time.h>
+
+#include "sqlite3db.h"
+
+#ifndef ProxySQL_Checksum_Value_LENGTH
+#define ProxySQL_Checksum_Value_LENGTH 20
+#endif
 
 #ifndef ETIME
 // ETIME is not defined on FreeBSD
@@ -212,4 +219,33 @@ std::string replace_str(const std::string& str, const std::string& match, const 
 std::vector<std::string> split_str(const std::string& s, char delimiter);
 
 std::string generate_multi_rows_query(int rows, int params);
+
+/**
+ * @brief Helper function used to replace spaces and zeros by '0' char in the supplied checksum buffer.
+ * @param checksum Input buffer containing the checksum.
+ */
+inline void replace_checksum_zeros(char* checksum) {
+	for (int i=2; i<18; i++) {
+		if (checksum[i]==' ' || checksum[i]==0) {
+			checksum[i]='0';
+		}
+	}
+}
+
+/**
+ * @brief Generates a ProxySQL checksum as a string from the supplied integer hash.
+ * @param hash The integer hash to be formated as a string.
+ * @return String representation of the supplied hash.
+ */
+std::string get_checksum_from_hash(uint64_t hash);
+
+/**
+ * @brief Remove the rows from the resultset matching the supplied predicate.
+ * @param resultset The resultset which rows are to be removed.
+ * @param pred Predicate that should return 'true' for the rows to be removed.
+ */
+void remove_sqlite3_resultset_rows(
+	std::unique_ptr<SQLite3_result>& resultset, const std::function<bool(SQLite3_row*)>& pred
+);
+
 #endif

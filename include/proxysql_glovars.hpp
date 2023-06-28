@@ -5,26 +5,16 @@
 #define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
 
 #include <memory>
+#include <string.h>
 #include <prometheus/registry.h>
 
 #include "configfile.hpp"
 #include "proxy_defines.h"
+#include "proxysql_utils.h"
 
 namespace ez {
 class ezOptionParser;
 };
-
-/**
- * @brief Helper function used to replace spaces and zeros by '0' char in the supplied checksum buffer.
- * @param checksum Input buffer containing the checksum.
- */
-inline void replace_checksum_zeros(char* checksum) {
-	for (int i=2; i<18; i++) {
-		if (checksum[i]==' ' || checksum[i]==0) {
-			checksum[i]='0';
-		}
-	}
-}
 
 #ifndef ProxySQL_Checksum_Value_LENGTH
 #define ProxySQL_Checksum_Value_LENGTH 20

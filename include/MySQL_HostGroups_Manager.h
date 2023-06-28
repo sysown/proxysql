@@ -759,7 +759,10 @@ class MySQL_HostGroups_Manager {
 	void wrlock();
 	void wrunlock();
 	int servers_add(SQLite3_result *resultset);
+	std::string gen_global_mysql_servers_checksum();
 	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void commit_generate_mysql_servers_table(SQLite3_result* runtime_mysql_servers = nullptr);
+	void commit_update_checksum_from_mysql_servers(SpookyHash& myhash, bool& init);
 	void commit_update_checksums_from_tables(SpookyHash& myhash, bool& init);
 	void CUCFT1(SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName, uint64_t& raw_checksum); // used by commit_update_checksums_from_tables()
 
