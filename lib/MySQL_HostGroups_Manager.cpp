@@ -7558,6 +7558,86 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 	return ret;
 }
 
+int MySQL_HostGroups_Manager::create_new_server_in_hg(
+	uint32_t hid, const srv_info_t& srv_info, const srv_opts_t& srv_opts
+) {
+	int32_t res = -1;
+	MySrvC* mysrvc = find_server_in_hg(hid, srv_info.addr, srv_info.port);
+
+	if (mysrvc == nullptr) {
+		char* c_hostname { const_cast<char*>(srv_info.addr.c_str()) };
+		MySrvC* mysrvc = new MySrvC(
+			c_hostname, srv_info.port, 0, srv_opts.weigth, MYSQL_SERVER_STATUS_ONLINE, 0, srv_opts.max_conns, 0,
+			srv_opts.use_ssl, 0, const_cast<char*>("")
+		);
+		add(mysrvc,hid);
+		proxy_info(
+			"Adding new discovered %s node %s:%d with: hostgroup=%d, weight=%ld, max_connections=%ld, use_ssl=%d\n",
+			srv_info.kind.c_str(), c_hostname, srv_info.port, hid, mysrvc->weight, mysrvc->max_connections,
+			mysrvc->use_ssl
+		);
+
+		res = 0;
+	} else {
+		// If the server is found as 'OFFLINE_HARD' we reset the 'MySrvC' values corresponding with the
+		// 'servers_defaults' (as in a new 'MySrvC' creation). We then later update these values with the
+		// 'servers_defaults' attributes from its corresponding 'MyHGC'. This way we ensure uniform behavior
+		// of new servers, and 'OFFLINE_HARD' ones when a user update 'servers_defaults' values, and reloads
+		// the servers to runtime.
+		if (mysrvc && mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+			reset_hg_attrs_server_defaults(mysrvc);
+			update_hg_attrs_server_defaults(mysrvc, mysrvc->myhgc);
+			mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+
+			proxy_info(
+				"Found healthy previously discovered %s node %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
+					" hostgroup=%d, weight=%ld, max_connections=%ld, use_ssl=%d\n",
+				srv_info.kind.c_str(), srv_info.addr.c_str(), srv_info.port, hid, mysrvc->weight,
+				mysrvc->max_connections, mysrvc->use_ssl
+			);
+
+			res = 0;
+		}
+	}
+
+	return res;
+}
+
+int MySQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& addr, uint16_t port) {
+	MySrvC* mysrvc = find_server_in_hg(hid, addr, port);
+	if (mysrvc == nullptr) {
+		return -1;
+	}
+
+	uint64_t mysrvc_addr = reinterpret_cast<uint64_t>(mysrvc);
+
+	proxy_warning(
+		"Removed server at address %ld, hostgroup %d, address %s port %d."
+		" Setting status OFFLINE HARD and immediately dropping all free connections."
+		" Used connections will be dropped when trying to use them\n",
+		mysrvc_addr, hid, mysrvc->address, mysrvc->port
+	);
+
+	// Set the server status
+	mysrvc->status=MYSQL_SERVER_STATUS_OFFLINE_HARD;
+	mysrvc->ConnectionsFree->drop_all_connections();
+
+	// TODO-NOTE: This is only required in case the caller isn't going to perform:
+	//   - Full deletion of servers in the target 'hid'.
+	//   - Table regeneration for the servers in the target 'hid'.
+	// This is a very common pattern when further operations have been performed over the
+	// servers, e.g. a set of servers additions and deletions over the target hostgroups.
+	// ////////////////////////////////////////////////////////////////////////
+
+	// Remove the server from the table
+	const string del_srv_query { "DELETE FROM mysql_servers WHERE mem_pointer=" + std::to_string(mysrvc_addr) };
+	mydb->execute(del_srv_query.c_str());
+
+	// ////////////////////////////////////////////////////////////////////////
+
+	return 0;
+}
+
 // FIXME: complete this!!
 void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool verbose) {
 	int cols=0;

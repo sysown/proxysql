@@ -432,6 +432,27 @@ enum REPLICATION_LAG_SERVER_T {
 	RLS__SIZE
 };
 
+/**
+ * @brief Contains the minimal info for server creation.
+ */
+struct srv_info_t {
+	/* @brief Server address */
+	string addr;
+	/* @brief Server port */
+	uint16_t port;
+	/* @brief Server type identifier, used for logging, e.g: 'Aurora AWS', 'GR', etc... */
+	string kind;
+};
+
+/**
+ * @brief Contains options to be specified during server creation.
+ */
+struct srv_opts_t {
+	int64_t weigth;
+	int64_t max_conns;
+	int32_t use_ssl;
+};
+
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -801,6 +822,34 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
+	/**
+	 * @brief Creates a new server in the target hostgroup if isn't already present.
+	 * @details If the server is found already in the target hostgroup, no action is taken, unless its status
+	 *   is 'OFFLINE_HARD'. In case of finding it as 'OFFLINE_HARD':
+	 *     1. Server hostgroup attributes are reset to known values, so they can be updated.
+	 *     2. Server attributes are updated to either table definition values, or hostgroup 'servers_defaults'.
+	 *     3. Server is bring back as 'ONLINE'.
+	 * @param hid The hostgroup in which the server is to be created (or to bring it back as 'ONLINE').
+	 * @param srv_info Basic server info to be used during creation.
+	 * @param srv_opts Server creation options.
+	 * @return 0 in case of success, -1 in case of failure.
+	 */
+	int create_new_server_in_hg(uint32_t hid, const srv_info_t& srv_info, const srv_opts_t& srv_opts);
+	/**
+	 * @brief Completely removes server from the target hostgroup if found.
+	 * @details Several actions are taken if server is found:
+	 *   - Set the server as 'OFFLINE_HARD'.
+	 *   - Drop all current FREE connections to the server.
+	 *   - Delete the server from the 'myhgm.mysql_servers' table.
+	 *
+	 *   This later step is not required if the caller is already going to perform a full deletion of the
+	 *   servers in the target hostgroup. Which is a common operation during table regeneration.
+	 * @param hid Target hostgroup id.
+	 * @param addr Target server address.
+	 * @param port Target server port.
+	 * @return 0 in case of success, -1 in case of failure.
+	 */
+	int remove_server_in_hg(uint32_t hid, const string& addr, uint16_t port);
 
 	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 
