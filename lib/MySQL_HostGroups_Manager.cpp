@@ -5889,6 +5889,20 @@ void MySQL_HostGroups_Manager::update_group_replication_add_autodiscovered(
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 
 		generate_mysql_servers_table();
+
+		// Update the global checksums after 'mysql_servers' regeneration
+		{
+			unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
+			remove_resultset_offline_hard_servers(resultset);
+			save_runtime_mysql_servers(resultset.release());
+
+			string mysrvs_checksum { gen_global_mysql_servers_checksum() };
+			proxy_info("New computed global checksum for 'mysql_servers' is '%s'\n", mysrvs_checksum.c_str());
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			update_glovars_mysql_servers_checksum(mysrvs_checksum);
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
 		update_table_mysql_servers_for_monitor(false);
 		generate_mysql_group_replication_hostgroups_monitor_resultset();
 	}
