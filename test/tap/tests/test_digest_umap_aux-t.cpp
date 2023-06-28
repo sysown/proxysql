@@ -44,14 +44,14 @@ struct digest_stats {
 	string client_address;
 	string digest;
 	string digest_text;
-	int count_star;
-	int first_seen;
-	int last_seen;
-	int sum_time;
-	int min_time;
-	int max_time;
-	int sum_rows_affected;
-	int sum_rows_sent;
+	long long count_star;
+	long long first_seen;
+	long long last_seen;
+	long long sum_time;
+	long long min_time;
+	long long max_time;
+	long long sum_rows_affected;
+	long long sum_rows_sent;
 };
 
 class timer {
@@ -91,14 +91,14 @@ vector<digest_stats> get_digest_stats(MYSQL* proxy_admin) {
 		ds.client_address = row[3];
 		ds.digest = row[4];
 		ds.digest_text = row[5];
-		ds.count_star = atoi(row[6]);
-		ds.first_seen = atoi(row[7]);
-		ds.last_seen = atoi(row[8]);
-		ds.sum_time = atoi(row[9]);
-		ds.min_time = atoi(row[10]);
-		ds.max_time = atoi(row[11]);
-		ds.sum_rows_affected = atoi(row[12]);
-		ds.sum_rows_sent = atoi(row[13]);
+		ds.count_star = atoll(row[6]);
+		ds.first_seen = atoll(row[7]);
+		ds.last_seen = atoll(row[8]);
+		ds.sum_time = atoll(row[9]);
+		ds.min_time = atoll(row[10]);
+		ds.max_time = atoll(row[11]);
+		ds.sum_rows_affected = atoll(row[12]);
+		ds.sum_rows_sent = atoll(row[13]);
 		ds_vector.push_back(ds);
 	}
 	mysql_free_result(res);
@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
 			"    Client_address -> before:`%s` - after:`%s`.\n"
 			"    Digests -> before:`%s` - after:`%s`.\n"
 			"    Digests_text -> before:`%s` - after:`%s`.\n"
-			"    First_seen -> before:`%d` - after:`%d`.",
+			"    First_seen -> before:`%lld` - after:`%lldd`.",
 			ds_vector_before[i].hostgroup, ds_vector_after[i].hostgroup,
 			ds_vector_before[i].schemaname.c_str(), ds_vector_after[i].schemaname.c_str(),
 			ds_vector_before[i].username.c_str(), ds_vector_after[i].username.c_str(),
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
 		);
 		ok(
 			ds_vector_after[i].count_star - ds_vector_before[i].count_star == num_dummy_queries_executed,
-			"Query `%s` should be executed %d times. Act:'%d'",
+			"Query `%s` should be executed %lld times. Act:'%lld'",
 			ds_vector_after[i].digest_text.c_str(), num_dummy_queries_executed,
 			ds_vector_after[i].count_star - ds_vector_before[i].count_star
 		);
@@ -280,8 +280,8 @@ int main(int argc, char** argv) {
 			ds_vector_before[i].last_seen < ds_vector_after[i].last_seen &&
 			ds_vector_before[i].sum_time < ds_vector_after[i].sum_time,
 			"Last_seen and sum_time must have increased.\n"
-			"    Last_seen -> before:`%d` - after:`%d`.\n"
-			"    Sum_time -> before:`%d` - after:`%d`.",
+			"    Last_seen -> before:`%lld` - after:`%lld`.\n"
+			"    Sum_time -> before:`%lld` - after:`%lld`.",
 			ds_vector_before[i].last_seen, ds_vector_after[i].last_seen,
 			ds_vector_before[i].sum_time, ds_vector_after[i].sum_time
 		);
