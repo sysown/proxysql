@@ -191,6 +191,8 @@ static Test various[] = {
   { "SET SESSION sql_safe_updates = 1", { Expected("sql_safe_updates",  {"1"}) } },
   { "SET SQL_SAFE_UPDATES = OFF", { Expected("sql_safe_updates",  {"OFF"}) } },
   { "SET @@sql_safe_updates = ON", { Expected("sql_safe_updates",  {"ON"}) } },
+  { "SET optimizer_switch=`index_merge=OFF`" , { Expected("optimizer_switch",  {"index_merge=OFF"}) } },
+  { "SET optimizer_switch='index_merge=on,index_merge_union=off,index_merge_sort_union=on'" , { Expected("optimizer_switch",  {"index_merge=on,index_merge_union=off,index_merge_sort_union=on"}) } },
 };
 
 static Test multiple[] = {

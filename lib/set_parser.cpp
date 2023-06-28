@@ -15,7 +15,7 @@ static void remove_quotes(string& v) {
 		char firstChar = v[0];
 		char lastChar = v[v.length()-1];
 		if (firstChar == lastChar) {
-			if (firstChar == '\'' || firstChar == '"') {
+			if (firstChar == '\'' || firstChar == '"' || firstChar == '`') {
 				v.erase(v.length()-1, 1);
 				v.erase(0, 1);
 			}
@@ -182,7 +182,19 @@ void SetParser::generateRE_parse1v2() {
 		var_patterns.push_back(s); // add with quote
 	}
 
-
+	// regex for optimizer_switch
+	{
+		string v1 = "(?:on|off)"; // on|off
+		string v2 = "\\w+=" + v1; // "\\w+=(?:on|off)" , example: index_merge_sort_union=on
+		string v3 = v2 + "(?:," + v2 + ")*"; // "\\w+=(?:on|off)(?:,\\w+=(?:on|off))*"
+				// example index_merge=on,index_merge_union=on,index_merge_sort_union=off
+				// note: spaces are not allowed
+		// NOTE: the whole set of flags must be quoted
+		for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
+			string s = *it + v3 + *it;
+			var_patterns.push_back(s); // add with quote
+		}
+	}
 
 
 //	DO NOT REMOVE THIS COMMENTED CODE
