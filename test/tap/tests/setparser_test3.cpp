@@ -19,6 +19,7 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
     //std::map<std::string, std::vector<std::string>> result = parser.parse1();
     //std::map<std::string, std::vector<std::string>> result = parser.parse1v2();
 
+	cout << "Processing query: " << tests[i].query << endl;
 	parser->set_query(tests[i].query);
     std::map<std::string, std::vector<std::string>> result = parser->parse1v2();
 
@@ -46,6 +47,7 @@ int main(int argc, char** argv) {
 	p += arraysize(various);
 	p += arraysize(multiple);
 	p += arraysize(Set1_v2);
+	p += arraysize(syntax_errors);
 	p *= 2;
 	plan(p);
 	parser = new SetParser("", 1);
@@ -56,6 +58,7 @@ int main(int argc, char** argv) {
 	TestParse(names, arraysize(names), "names");
 	TestParse(various, arraysize(various), "various");
 	TestParse(multiple, arraysize(multiple), "multiple");
-	TestParse(multiple, arraysize(Set1_v2), "Set1_v2");
+	TestParse(Set1_v2, arraysize(Set1_v2), "Set1_v2");
+	TestParse(syntax_errors, arraysize(syntax_errors), "syntax_errors");
 	return exit_status();
 }

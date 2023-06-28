@@ -116,6 +116,9 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
 		result[key] = op;
 	}
+	if (input.size() != 0) {
+		result = {};
+	}
 	delete opt2;
 	return result;
 }
@@ -366,7 +369,14 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
 		result[key] = op;
 	}
-
+	if (input.size() != 0) {
+#ifdef PARSERDEBUG
+		if (verbosity > 0) {
+			cout << "Failed to parse: " << input << endl;
+		}
+#endif
+		result = {};
+	}
 	//delete opt2;
 	return result;
 }
