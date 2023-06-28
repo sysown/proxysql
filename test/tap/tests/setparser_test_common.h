@@ -112,6 +112,7 @@ static Test Set1_v1[] = {
 	Expected("sql_mode",  {"CONCAT(CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO'), ',NO_ENGINE_SUBSTITUTION')"}),
 	Expected("sql_auto_is_null", {"0"}),
   Expected("wait_timeout", {"3600"}) } }, // v2 is not able to parse this, because it can process only up to 4 functions
+  { "SET character_set_connection=utf8,character_set_results=utf8,character_set_client=binary", {} }, // v1 can't parse this
 };
 
 static Test Set1_v2[] = {
@@ -120,6 +121,13 @@ static Test Set1_v2[] = {
   { "SET sql_mode='TRADITIONAL' , whatever = , autocommit=1", {} }, // v1 is not able to process this
   { "SET NAMES utf8, @@SESSION.sql_mode = CONCAT(CONCAT(REPLACE(REPLACE(REPLACE(@@sql_mode, 'STRICT_TRANS_TABLES', ''), 'STRICT_ALL_TABLES', ''), 'TRADITIONAL', ''), ',NO_AUTO_VALUE_ON_ZERO'), ',NO_ENGINE_SUBSTITUTION'), @@SESSION.sql_auto_is_null = 0, @@SESSION.wait_timeout = 3600",
   {} }, // v2 is not able to parse this, because it can process only up to 4 functions
+  { "SET character_set_connection=utf8,character_set_results=utf8,character_set_client=binary",
+    {
+		Expected("character_set_connection", {"utf8"}),
+		Expected("character_set_results", {"utf8"}),
+		Expected("character_set_client", {"binary"}),
+    },
+  }
 };
 
 static Test syntax_errors[] = {
