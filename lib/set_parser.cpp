@@ -1,6 +1,4 @@
 #include "set_parser.h"
-#include "re2/re2.h"
-#include "re2/regexp.h"
 #include "gen_utils.h"
 #include <string>
 #include <vector>
@@ -31,6 +29,18 @@ SetParser::SetParser(std::string nq, int verb) {
 #else
 SetParser::SetParser(std::string nq) {
 #endif
+	parse1v2_init = false;
+	set_query(nq);
+}
+
+SetParser::~SetParser() {
+	if (parse1v2_init == true) {
+		delete parse1v2_opt2;
+		delete parse1v2_re;
+	}
+}
+
+void SetParser::set_query(const std::string& nq) {
 	int query_no_space_length = nq.length();
 	char *query_no_space=(char *)malloc(query_no_space_length+1);
 	memcpy(query_no_space,nq.c_str(),query_no_space_length);
@@ -39,6 +49,7 @@ SetParser::SetParser(std::string nq) {
 	query = std::string(query_no_space);
 	free(query_no_space);
 }
+
 
 #define QUOTES "(?:'|\"|`)?"
 #define SPACES " *"
@@ -119,14 +130,10 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 #define VAR_VALUE_P1 "(" VAR_VALUE_P1_1 VAR_VALUE_P1_2 VAR_VALUE_P1_3 VAR_VALUE_P1_4 VAR_VALUE_P1_5 VAR_VALUE_P1_6 ")"
 */
 
- 
-std::map<std::string,std::vector<std::string>> SetParser::parse1v2() {
 
-
+void SetParser::generateRE_parse1v2() {
 	vector<string> quote_symbol = {"\"", "'", "`"};
-
 	vector<string> var_patterns = {};
-
 	{
 		// this block needs to be added at the very beginning, otherwise REPLACE|IFNULL|CONCAT may be considered simple words
 		// sw0 matches:
@@ -243,14 +250,11 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1v2() {
 	
 
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Parsing query %s\n", query.c_str());
-	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-	opt2->set_case_sensitive(false);
-	opt2->set_longest_match(false);
+	parse1v2_opt2 = new re2::RE2::Options(RE2::Quiet);
+	parse1v2_opt2->set_case_sensitive(false);
+	parse1v2_opt2->set_longest_match(false);
 
-	re2::RE2 re0("^\\s*SET\\s+", *opt2);
-	re2::RE2::Replace(&query, re0, "");
 
-	std::map<std::string,std::vector<std::string>> result = {};
 
 
 	string var_1_0 = "(?:@\\w+|\\w+)"; // @name|name
@@ -272,7 +276,6 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1v2() {
 	
 #ifdef PARSERDEBUG
 	if (verbosity > 0) {
-		cout << query << endl;
 		cout << var_value << endl;
 		cout << name_value << endl;
 	}
@@ -300,12 +303,27 @@ VALGRIND_DISABLE_ERROR_REPORTING;
 		cout << pattern << endl;
 	}
 #endif
-	re2::RE2 re(pattern, *opt2);
+	//re2::RE2 re(pattern, *opt2);
+	parse1v2_pattern = pattern;
+	parse1v2_re = new re2::RE2(parse1v2_pattern, *parse1v2_opt2);
+	parse1v2_init = true;
+}
+
+std::map<std::string,std::vector<std::string>> SetParser::parse1v2() {
+
+	std::map<std::string,std::vector<std::string>> result = {};
+
+	if (parse1v2_init == false) {
+		generateRE_parse1v2();
+	}
+
+	re2::RE2 re0("^\\s*SET\\s+", *parse1v2_opt2);
+	re2::RE2::Replace(&query, re0, "");
 VALGRIND_ENABLE_ERROR_REPORTING;
 	std::string var;
 	std::string value1, value2, value3, value4, value5;
 	re2::StringPiece input(query);
-	while (re2::RE2::Consume(&input, re, &value1, &value2, &value3, &value4, &value5)) {
+	while (re2::RE2::Consume(&input, *parse1v2_re, &value1, &value2, &value3, &value4, &value5)) {
 		// FIXME: verify if we reached end of query. Did we parse everything?
 		std::vector<std::string> op;
 #ifdef DEBUG
@@ -337,7 +355,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 		result[key] = op;
 	}
 
-	delete opt2;
+	//delete opt2;
 	return result;
 }
 

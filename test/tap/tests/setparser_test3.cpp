@@ -6,6 +6,8 @@
 
 #include "setparser_test_common.h"
 
+SetParser *parser = NULL;
+
 void TestParse(const Test* tests, int ntests, const std::string& title) {
   for (int i = 0; i < ntests; i++) {
     std::map<std::string, std::vector<std::string>> data;
@@ -13,9 +15,12 @@ void TestParse(const Test* tests, int ntests, const std::string& title) {
       data[it->var] = it->values;
     }
 
-    SetParser parser(tests[i].query, 1);
+    //SetParser parser(tests[i].query, 1);
     //std::map<std::string, std::vector<std::string>> result = parser.parse1();
-    std::map<std::string, std::vector<std::string>> result = parser.parse1v2();
+    //std::map<std::string, std::vector<std::string>> result = parser.parse1v2();
+
+	parser->set_query(tests[i].query);
+    std::map<std::string, std::vector<std::string>> result = parser->parse1v2();
 
 	cout << endl;
     printMap("result", result);
@@ -43,6 +48,7 @@ int main(int argc, char** argv) {
 	p += arraysize(Set1_v2);
 	p *= 2;
 	plan(p);
+	parser = new SetParser("", 1);
 	TestParse(sql_mode, arraysize(sql_mode), "sql_mode");
 	TestParse(time_zone, arraysize(time_zone), "time_zone");
 	TestParse(session_track_gtids, arraysize(session_track_gtids), "session_track_gtids");
