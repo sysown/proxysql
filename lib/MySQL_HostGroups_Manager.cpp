@@ -7799,6 +7799,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				mydb->execute(query);
 				q = (char *)"UPDATE mysql_servers_incoming SET weight=%d WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
 				sprintf(query, q, new_reader_weight, read_HG, _server_id, domain_name, aurora_port);
+				mydb->execute(query);
 			}
 			uint64_t checksum_current = 0;
 			uint64_t checksum_incoming = 0;
