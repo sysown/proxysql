@@ -940,6 +940,19 @@ class MySQL_HostGroups_Manager {
 	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
 	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
 	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
+	/**
+	 * @brief Updates the resultset and corresponding checksum used by Monitor for AWS Aurora.
+	 * @details This is required to be called when:
+	 *   - The 'mysql_aws_aurora_hostgroups' table is regenerated (via 'commit').
+	 *   - When new servers are discovered, and created in already monitored Aurora clusters.
+	 *
+	 *   The resultset holds the servers that are present in 'mysql_servers' table, and share hostgroups with
+	 *   the **active** clusters specified in 'mysql_aws_aurora_hostgroups'. See query
+	 *   'SELECT_AWS_AURORA_SERVERS_FOR_MONITOR'.
+	 * @param lock Wether if both 'AWS_Aurora_Info_mutex' and 'MySQL_Monitor::aws_aurora_mutex' mutexes should
+	 *   be taken or not.
+	 */
+	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();

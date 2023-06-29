@@ -1614,6 +1614,11 @@ void MySQL_HostGroups_Manager::CUCFT1(SpookyHash& myhash, bool& init, const stri
 }
 
 void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& myhash, bool& init) {
+	// Always reset the current table values before recomputing
+	for (size_t i = 0; i < table_resultset_checksum.size(); i++) {
+		if (i != HGM_TABLES::MYSQL_SERVERS) { table_resultset_checksum[i] = 0; }
+	}
+
 	CUCFT1(myhash,init,"mysql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
 	CUCFT1(myhash,init,"mysql_group_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_GROUP_REPLICATION_HOSTGROUPS]);
 	CUCFT1(myhash,init,"mysql_galera_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_GALERA_HOSTGROUPS]);
@@ -2044,94 +2049,24 @@ bool MySQL_HostGroups_Manager::commit(
 
 	// Checksums are always generated - 'admin-checksum_*' deprecated
 	{
-		uint64_t hash1 = 0, hash2 = 0;
+		commit_generate_mysql_servers_table(runtime_mysql_servers);
+
 		SpookyHash myhash;
-		char buf[ProxySQL_Checksum_Value_LENGTH];
 		bool init = false;
-		{
-			mydb->execute("DELETE FROM mysql_servers");
-			generate_mysql_servers_table();
-			char *error=NULL;
-			int cols=0;
-			int affected_rows=0;
-			SQLite3_result *resultset=NULL;
-			char *query=(char *)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port";
-			mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-			if (runtime_mysql_servers == nullptr) {
-				char* error = NULL;
-				int cols = 0;
-				int affected_rows = 0;
-				SQLite3_result* resultset = NULL;
 
-				mydb->execute_statement(MYHGM_GEN_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
-
-				// Remove 'OFFLINE_HARD' servers since they are not relevant to propagate to other Cluster
-				// nodes, or relevant for checksum computation.
-				const size_t init_row_count = resultset->rows_count;
-				size_t rm_rows_count = 0;
-				const auto is_offline_server = [&rm_rows_count] (SQLite3_row* row) {
-					if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
-						rm_rows_count += 1;
-						return true;
-					} else {
-						return false;
-					}
-				};
-				resultset->rows.erase(
-					std::remove_if(resultset->rows.begin(), resultset->rows.end(), is_offline_server),
-					resultset->rows.end()
-				);
-				resultset->rows_count = init_row_count - rm_rows_count;
-
-				save_runtime_mysql_servers(resultset);
-			} else {
-				save_runtime_mysql_servers(runtime_mysql_servers);
-			}
-
-			// reset all checksum
-			table_resultset_checksum.fill(0);
-
-			if (resultset) {
-				if (resultset->rows_count) {
-					if (init == false) {
-						init = true;
-						myhash.Init(19,3);
-					}
-					uint64_t hash1_ = resultset->raw_checksum();
-
-					table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = hash1_;
-
-					myhash.Update(&hash1_, sizeof(hash1_));
-					proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", hash1_);
-				}
-				delete resultset;
-			} else {
-				proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
-			}
-		}
-
+		commit_update_checksum_from_mysql_servers(myhash, init);
 		commit_update_checksums_from_tables(myhash, init);
 
+		uint64_t hash1 = 0, hash2 = 0;
 		if (init == true) {
 			myhash.Final(&hash1, &hash2);
 		}
-		uint32_t d32[2];
-		memcpy(&d32,&hash1,sizeof(hash1));
-		sprintf(buf,"0x%0X%0X", d32[0], d32[1]);
+
+		string new_checksum { get_checksum_from_hash(hash1) };
+		proxy_info("New computed global checksum for 'mysql_servers' is '%s'\n", new_checksum.c_str());
+
 		pthread_mutex_lock(&GloVars.checksum_mutex);
-		GloVars.checksums_values.mysql_servers.set_checksum(buf);
-		GloVars.checksums_values.mysql_servers.version++;
-		//struct timespec ts;
-		//clock_gettime(CLOCK_REALTIME, &ts);
-		time_t t = time(NULL);
-		if (epoch != 0 && checksum != "" && GloVars.checksums_values.mysql_servers.checksum == checksum) {
-			GloVars.checksums_values.mysql_servers.epoch = epoch;
-		} else {
-			GloVars.checksums_values.mysql_servers.epoch = t;
-		}
-		GloVars.checksums_values.updates_cnt++;
-		GloVars.generate_global_checksum();
-		GloVars.epoch_version = t;
+		update_glovars_mysql_servers_checksum(new_checksum, checksum, epoch);
 		pthread_mutex_unlock(&GloVars.checksum_mutex);
 	}
 
@@ -7429,23 +7364,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 
 	// it is now time to build a new structure in Monitor
 	pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-	{
-		char *error=NULL;
-		int cols=0;
-		int affected_rows=0;
-		SQLite3_result *resultset=NULL;
-		char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl , max_lag_ms , check_interval_ms , check_timeout_ms , "
-					        "add_lag_ms , min_lag_ms , lag_num_checks  FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR "
-					        "hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY writer_hostgroup, hostname, port";
-		mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-		if (resultset) {
-			if (GloMyMon->AWS_Aurora_Hosts_resultset) {
-				delete GloMyMon->AWS_Aurora_Hosts_resultset;
-			}
-			GloMyMon->AWS_Aurora_Hosts_resultset=resultset;
-			GloMyMon->AWS_Aurora_Hosts_resultset_checksum=resultset->raw_checksum();
-		}
-	}
+	update_aws_aurora_hosts_monitor_resultset(false);
 	pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
 
 	pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
@@ -7879,45 +7798,57 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			free(query);
 			query = NULL;
 		} else {
+			string full_hostname { string { _server_id } + string { domain_name } };
+
 			GloAdmin->mysql_servers_wrlock();
-			mydb->execute("DELETE FROM mysql_servers_incoming");
-			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostname<>'%s%s'";
-			sprintf(query,q, _server_id, domain_name);
-			mydb->execute(query);
-
-			unsigned int max_max_connections = 1000;
-			unsigned int max_use_ssl = 0;
-			MyHGC *myhgc = MyHGC_lookup(_whid);
-			for (int j = 0; j < (int) myhgc->mysrvs->cnt(); j++) {
-				MySrvC *mysrvc = (MySrvC *) myhgc->mysrvs->servers->index(j);
-				if (mysrvc->max_connections > max_max_connections) {
-					max_max_connections = mysrvc->max_connections;
-				}
-				if (mysrvc->use_ssl > max_use_ssl) {
-					max_use_ssl = mysrvc->use_ssl;
-				}
-			}
-
-			q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight, max_connections, use_ssl) VALUES (%d, '%s%s', %d, %d, %d, %d)";
-			sprintf(query,q, _writer_hostgroup, _server_id, domain_name, aurora_port, new_reader_weight, max_max_connections, max_use_ssl);
-			mydb->execute(query);
-			if (writer_is_also_reader && read_HG>=0) {
-				q=(char *)"INSERT INTO mysql_servers_incoming (hostgroup_id, hostname, port, weight, max_connections, use_ssl) VALUES (%d, '%s%s', %d, %d, %d, %d)";
-				sprintf(query, q, read_HG, _server_id, domain_name, aurora_port, new_reader_weight, max_max_connections, max_use_ssl);
-				mydb->execute(query);
-			}
-			proxy_info("AWS Aurora: setting new auto-discovered host %s%s:%d as writer\n", _server_id, domain_name, aurora_port);
-			commit();
 			wrlock();
-			q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
-			sprintf(query,q,_whid,_rhid);
-			mydb->execute(query);
-			generate_mysql_servers_table(&_whid);
-			generate_mysql_servers_table(&_rhid);
+
+			srv_info_t srv_info { full_hostname, static_cast<uint16_t>(aurora_port), "Aurora AWS" };
+			srv_opts_t wr_srv_opts { -1, -1, -1 };
+
+			int wr_res = create_new_server_in_hg(_writer_hostgroup, srv_info, wr_srv_opts);
+			int rd_res = -1;
+
+			// WRITER can also be placed as READER, or could previously be one
+			if (writer_is_also_reader && read_HG >= 0) {
+				srv_opts_t rd_srv_opts { new_reader_weight, -1, -1 };
+				rd_res = create_new_server_in_hg(read_HG, srv_info, rd_srv_opts);
+			}
+
+			// A new server has been created, or an OFFLINE_HARD brought back as ONLINE
+			if (wr_res == 0 || rd_res == 0) {
+				proxy_info(
+					"AWS Aurora: setting new auto-discovered host %s:%d as writer\n", full_hostname.c_str(), aurora_port
+				);
+				purge_mysql_servers_table();
+
+				const char del_srvs_query_t[] { "DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)" };
+				const string del_srvs_query { cstr_format(del_srvs_query_t, _whid, _rhid).str };
+				mydb->execute(del_srvs_query.c_str());
+
+				generate_mysql_servers_table(&_whid);
+				generate_mysql_servers_table(&_rhid);
+
+				// Update the global checksums after 'mysql_servers' regeneration
+				{
+					unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
+					remove_resultset_offline_hard_servers(resultset);
+					save_runtime_mysql_servers(resultset.release());
+
+					string mysrvs_checksum { gen_global_mysql_servers_checksum() };
+					pthread_mutex_lock(&GloVars.checksum_mutex);
+					update_glovars_mysql_servers_checksum(mysrvs_checksum);
+					pthread_mutex_unlock(&GloVars.checksum_mutex);
+				}
+
+				// Because 'commit' isn't called, we are required to update 'mysql_servers_for_monitor'.
+				update_table_mysql_servers_for_monitor(false);
+				// Update AWS Aurora resultset used for monitoring
+				update_aws_aurora_hosts_monitor_resultset(true);
+			}
+
 			wrunlock();
 			GloAdmin->mysql_servers_wrunlock();
-			free(query);
-			query = NULL;
 		}
 	}
 	if (resultset) {
@@ -8029,70 +7960,46 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 		} else {
 			// we couldn't find the server
 			// autodiscovery algorithm here
-			char *full_hostname=(char *)malloc(strlen(_server_id)+strlen(domain_name)+1);
-			sprintf(full_hostname, "%s%s", _server_id, domain_name);
-			bool found = false;
+			string full_hostname { string { _server_id } + string { domain_name } };
 			GloAdmin->mysql_servers_wrlock();
-			unsigned int max_max_connections = 10;
-			unsigned int max_use_ssl = 0;
 			wrlock();
-			MyHGC *myhgc=MyHGC_lookup(_rhid);
-			{
-				for (int j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
-					MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
-					if (mysrvc->max_connections > max_max_connections) {
-						max_max_connections = mysrvc->max_connections;
-					}
-					if (mysrvc->use_ssl > max_use_ssl) {
-						max_use_ssl = mysrvc->use_ssl;
-					}
-					if (strcmp(mysrvc->address,full_hostname)==0 && mysrvc->port==aurora_port) {
-						found = true;
-						// we found the server, we just configure it online if it was offline
-						if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
-							mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
-						}
-					}
-				}
-				if (found == false) { // the server doesn't exist
-					MySrvC *mysrvc=new MySrvC(full_hostname, aurora_port, 0, new_reader_weight, MYSQL_SERVER_STATUS_ONLINE, 0, max_max_connections, 0, max_use_ssl, 0, (char *)""); // add new fields here if adding more columns in mysql_servers
-					proxy_info("Adding new discovered AWS Aurora node %s:%d with: hostgroup=%d, weight=%d, max_connections=%d\n" , full_hostname, aurora_port, _rhid , new_reader_weight, max_max_connections);
-					add(mysrvc,_rhid);
-				}
-				q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
-				query = (char *)malloc(strlen(q)+64);
-				sprintf(query,q,_whid,_rhid);
-				mydb->execute(query);
+
+			srv_info_t srv_info { full_hostname, static_cast<uint16_t>(aurora_port), "Aurora AWS" };
+			srv_opts_t srv_opts { new_reader_weight, -1, -1 };
+			int wr_res = create_new_server_in_hg(_rhid, srv_info, srv_opts);
+
+			// A new server has been created, or an OFFLINE_HARD brought back as ONLINE
+			if (wr_res == 0) {
+				purge_mysql_servers_table();
+
+				const char del_srvs_query_t[] { "DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)" };
+				const string del_srvs_query { cstr_format(del_srvs_query_t, _whid, _rhid).str };
+				mydb->execute(del_srvs_query.c_str());
+
 				generate_mysql_servers_table(&_whid);
 				generate_mysql_servers_table(&_rhid);
-				free(query);
-			}
-			// NOTE: Because 'commit' isn't called, we are required to update 'mysql_servers_for_monitor'.
-			// Also note that 'generate_mysql_servers' is previously called.
-			update_table_mysql_servers_for_monitor(false);
-			wrunlock();
-			// it is now time to build a new structure in Monitor
-			pthread_mutex_lock(&AWS_Aurora_Info_mutex);
-			pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
-			{
-				char *error=NULL;
-				int cols=0;
-				int affected_rows=0;
-				SQLite3_result *resultset=NULL;
-				char *query=(char *)"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl , max_lag_ms , check_interval_ms , check_timeout_ms, add_lag_ms, min_lag_ms, lag_num_checks FROM mysql_servers JOIN mysql_aws_aurora_hostgroups ON hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3) GROUP BY hostname, port";
-				mydb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
-				if (resultset) {
-					if (GloMyMon->AWS_Aurora_Hosts_resultset) {
-						delete GloMyMon->AWS_Aurora_Hosts_resultset;
-					}
-					GloMyMon->AWS_Aurora_Hosts_resultset=resultset;
-					GloMyMon->AWS_Aurora_Hosts_resultset_checksum=resultset->raw_checksum();
+
+				// Update the global checksums after 'mysql_servers' regeneration
+				{
+					unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
+					remove_resultset_offline_hard_servers(resultset);
+					save_runtime_mysql_servers(resultset.release());
+
+					string mysrvs_checksum { gen_global_mysql_servers_checksum() };
+					proxy_info("New computed global checksum for 'mysql_servers' is '%s'\n", mysrvs_checksum.c_str());
+					pthread_mutex_lock(&GloVars.checksum_mutex);
+					update_glovars_mysql_servers_checksum(mysrvs_checksum);
+					pthread_mutex_unlock(&GloVars.checksum_mutex);
 				}
+
+				// Because 'commit' isn't called, we are required to update 'mysql_servers_for_monitor'.
+				update_table_mysql_servers_for_monitor(false);
+				// Update AWS Aurora resultset used for monitoring
+				update_aws_aurora_hosts_monitor_resultset(true);
 			}
-			pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
-			pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+
+			wrunlock();
 			GloAdmin->mysql_servers_wrunlock();
-			free(full_hostname);
 		}
 	}
 	if (resultset) {
@@ -8100,6 +8007,42 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 		resultset=NULL;
 	}
 	free(domain_name);
+}
+
+const char SELECT_AWS_AURORA_SERVERS_FOR_MONITOR[] {
+	"SELECT writer_hostgroup, reader_hostgroup, hostname, port, MAX(use_ssl) use_ssl, max_lag_ms, check_interval_ms,"
+		" check_timeout_ms, add_lag_ms, min_lag_ms, lag_num_checks FROM mysql_servers"
+	" JOIN mysql_aws_aurora_hostgroups ON"
+		" hostgroup_id=writer_hostgroup OR hostgroup_id=reader_hostgroup WHERE active=1 AND status NOT IN (2,3)"
+	" GROUP BY writer_hostgroup, hostname, port"
+};
+
+void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lock) {
+	if (lock) {
+		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
+		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
+	}
+
+	SQLite3_result* resultset = nullptr;
+	{
+		char* error = nullptr;
+		int cols = 0;
+		int affected_rows = 0;
+		mydb->execute_statement(SELECT_AWS_AURORA_SERVERS_FOR_MONITOR, &error, &cols, &affected_rows, &resultset);
+	}
+
+	if (resultset) {
+		if (GloMyMon->AWS_Aurora_Hosts_resultset) {
+			delete GloMyMon->AWS_Aurora_Hosts_resultset;
+		}
+		GloMyMon->AWS_Aurora_Hosts_resultset=resultset;
+		GloMyMon->AWS_Aurora_Hosts_resultset_checksum=resultset->raw_checksum();
+	}
+
+	if (lock) {
+		pthread_mutex_unlock(&GloMyMon->aws_aurora_mutex);
+		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
+	}
 }
 
 MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
