@@ -92,18 +92,18 @@ jobs:
         cd proxysql/
         if [[ "${{ matrix.type }}" =~ "-tap" ]]; then
           # build proxysql
-          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make debug_clickhouse WITHGCOV=1'" docker-compose.yml
+          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) debug_clickhouse WITHGCOV=1'" docker-compose.yml
           make ${{ matrix.dist }}-dbg
           # build tap tests
-          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make build_tap_test_debug WITHGCOV=1'" docker-compose.yml
+          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug WITHGCOV=1'" docker-compose.yml
           make ${{ matrix.dist }}-dbg | tee ../build.log
         elif [[ "${{ matrix.type }}" =~ "-test" ]]; then
           TYPE=${{ matrix.type }}
           # build TYPE
-          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make ${TYPE#-}'" docker-compose.yml
+          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) ${TYPE#-}'" docker-compose.yml
           make ${{ matrix.dist }} | tee ../build.log
         else
-          make ${{ matrix.dist }}${{ matrix.type }} | tee ../build.log
+          make -j$(nproc) ${{ matrix.dist }}${{ matrix.type }} | tee ../build.log
         fi
         
     - name: Check build
