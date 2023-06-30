@@ -7404,6 +7404,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 	int i,j;
+	bool srv_st_updated = false;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		if (_whid!=(int)myhgc->hid && _rhid!=(int)myhgc->hid) continue;
@@ -7417,6 +7418,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 							proxy_warning("Shunning server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_ms);
 						}
 						mysrvc->status = MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG;
+						srv_st_updated = true;
 					}
 				} else {
 					if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
@@ -7424,6 +7426,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 							proxy_warning("Re-enabling server %s:%d from HG %u with replication lag of %f microseconds\n", address, port, myhgc->hid, current_replication_lag_ms);
 						}
 						mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+						srv_st_updated = true;
 					}
 				}
 				mysrvc->aws_aurora_current_lag_us = current_replication_lag_ms * 1000;
@@ -7460,6 +7463,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 									mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
 									proxy_warning("Re-enabling server %s:%d from HG %u because it is a writer\n", address, port, myhgc->hid);
 									ret = true;
+									srv_st_updated = true;
 								}
 				//goto __exit_aws_aurora_replication_lag_action;
 			}
@@ -7467,6 +7471,26 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 	}
 //__exit_aws_aurora_replication_lag_action:
 	wrunlock();
+
+	// By regenerating the table everytime a server status modification is performed, we can guarantee the
+	// promotion of 'SHUNNED' states to the 'mysql_servers' table. This way we ensure its preservation during
+	// other monitoring actions, e.g. 'update_aws_aurora_set_writer', 'update_aws_aurora_set_reader', etc...
+	//
+	// NOTE: Enabling this code requires discussion, since 'SHUNNED' is a temporary state, which preservation
+	// or promotion to the 'mysql_servers' table isn't guarantee in many cases. This will make an exception to
+	// this rule.
+	if (srv_st_updated) {
+		const string delete_query {
+			"DELETE FROM mysql_servers WHERE hostgroup_id IN ("
+				+ std::to_string(_whid) + " , " + std::to_string(_rhid) +
+			")"
+		};
+
+		mydb->execute(delete_query.c_str());
+		generate_mysql_servers_table(&_whid);
+		generate_mysql_servers_table(&_rhid);
+	}
+
 	GloAdmin->mysql_servers_wrunlock();
 	if (ret == true) {
 		if (reader_found_in_whg == true) {
