@@ -30,6 +30,7 @@ jobs:
       with:
         repository: 'sysown/proxysql'
 #        ref: 'v2.x'
+        ref: ${{ github.head_ref }}
         fetch-depth: 0
         path: 'proxysql'
         
