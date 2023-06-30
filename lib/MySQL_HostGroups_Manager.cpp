@@ -4871,14 +4871,16 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 
 		//if (GloAdmin && GloAdmin->checksum_variables.checksum_mysql_servers) 
 		{
+			// NOTE: We are always required to remove 'OFFLINE_HARD' servers, since we are not interested in
+			// their propagation to other cluster members.
+			unique_ptr<SQLite3_result> runtime_servers_resultset { get_admin_runtime_mysql_servers(mydb) };
+			remove_resultset_offline_hard_servers(runtime_servers_resultset);
+			save_runtime_mysql_servers(runtime_servers_resultset.release());
+
 			char* error = NULL;
 			int cols = 0;
 			int affected_rows = 0;
 			SQLite3_result* resultset = NULL;
-			mydb->execute_statement(MYHGM_GEN_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
-			save_runtime_mysql_servers(resultset); // assigning runtime_mysql_servers with updated mysql server resultset 
-			
-			resultset = NULL;
 
 			// reset mysql_server checksum
 			table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = 0;
