@@ -4239,6 +4239,7 @@ MySQL_Thread::MySQL_Thread() {
 		mysql_thread___default_variables[i] = NULL;
 	}
 	shutdown=0;
+	thr_SetParser = NULL;
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {
