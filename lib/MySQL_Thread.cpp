@@ -546,6 +546,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_processor_iterations",
 	(char *)"query_processor_regex",
 	(char *)"set_query_lock_on_hostgroup",
+	(char *)"set_parser_algorithm",
 	(char *)"reset_connection_algorithm",
 	(char *)"auto_increment_delay_multiplex",
 	(char *)"auto_increment_delay_multiplex_timeout_ms",
@@ -1140,6 +1141,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
 	variables.set_query_lock_on_hostgroup=1;
+	variables.set_parser_algorithm=1; // in 2.6.0 this must become 2
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
 	variables.auto_increment_delay_multiplex_timeout_ms=10000;
@@ -2234,6 +2236,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
+		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           2, false);
 
 		// throttle
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
@@ -2856,6 +2859,10 @@ MySQL_Thread::~MySQL_Thread() {
 		free(match_regexes);
 		match_regexes=NULL;
 	}
+	if (thr_SetParser != NULL) {
+		delete thr_SetParser;
+		thr_SetParser = NULL;
+	}
 
 }
 
@@ -2962,6 +2969,7 @@ bool MySQL_Thread::init() {
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
 	assert(i==0);
 
+	thr_SetParser = new SetParser("");
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
 //	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
@@ -4016,6 +4024,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_processor_iterations=GloMTH->get_variable_int((char *)"query_processor_iterations");
 	mysql_thread___query_processor_regex=GloMTH->get_variable_int((char *)"query_processor_regex");
 	mysql_thread___set_query_lock_on_hostgroup=GloMTH->get_variable_int((char *)"set_query_lock_on_hostgroup");
+	mysql_thread___set_parser_algorithm=GloMTH->get_variable_int((char *)"set_parser_algorithm");
 	mysql_thread___reset_connection_algorithm=GloMTH->get_variable_int((char *)"reset_connection_algorithm");
 	mysql_thread___auto_increment_delay_multiplex=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex");
 	mysql_thread___auto_increment_delay_multiplex_timeout_ms=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex_timeout_ms");
@@ -4251,6 +4260,7 @@ MySQL_Thread::MySQL_Thread() {
 		mysql_thread___default_variables[i] = NULL;
 	}
 	shutdown=0;
+	thr_SetParser = NULL;
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {

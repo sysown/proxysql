@@ -6,7 +6,6 @@
 #include "re2/re2.h"
 #include "re2/regexp.h"
 #include "mysqld_error.h"
-#include "set_parser.h"
 
 #include "MySQL_Data_Stream.h"
 #include "query_processor.h"
@@ -6022,7 +6021,15 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Parsing SET command %s\n", nq.c_str());
 				proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Parsing SET command = %s\n", nq.c_str());
 				SetParser parser(nq);
-				std::map<std::string, std::vector<std::string>> set = parser.parse1();
+				std::map<std::string, std::vector<std::string>> set = {};
+				if (mysql_thread___set_parser_algorithm == 1) { // legacy behavior
+					set = parser.parse1();
+				} else if (mysql_thread___set_parser_algorithm == 2) { // we use a single SetParser per thread
+					thread->thr_SetParser->set_query(nq); // replace the query
+					set = thread->thr_SetParser->parse1v2(); // use algorithm v2
+				} else {
+					assert(0);
+				}
 				// Flag to be set if any variable within the 'SET' statement fails to be tracked,
 				// due to being unknown or because it's an user defined variable.
 				bool failed_to_parse_var = false;

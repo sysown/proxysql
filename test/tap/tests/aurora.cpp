@@ -41,25 +41,6 @@
 
 extern SQLite3_Server *GloSQLite3Server;
 
-#define SAFE_SQLITE3_STEP(_stmt) do {\
-  do {\
-    rc=sqlite3_step(_stmt);\
-    if (rc!=SQLITE_DONE) {\
-      assert(rc==SQLITE_LOCKED);\
-      usleep(100);\
-    }\
-  } while (rc!=SQLITE_DONE);\
-} while (0)
-
-#define SAFE_SQLITE3_STEP2(_stmt) do {\
-        do {\
-                rc=sqlite3_step(_stmt);\
-                if (rc==SQLITE_LOCKED || rc==SQLITE_BUSY) {\
-                        usleep(100);\
-                }\
-        } while (rc==SQLITE_LOCKED || rc==SQLITE_BUSY);\
-} while (0)
-
 void SQLite3_Server::init_aurora_ifaces_string(std::string& s) {
 	if(!s.empty())
 		s += ";";
