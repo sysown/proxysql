@@ -13923,17 +13923,13 @@ void ProxySQL_Admin::enable_galera_testing() {
 }
 #endif // TEST_GALERA
 #ifdef TEST_AURORA
-void ProxySQL_Admin::enable_aurora_testing() {
-	proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs from 1271 to 1276\n");
+
+void ProxySQL_Admin::enable_aurora_testing_populate_mysql_servers() {
 	sqlite3_stmt *statement=NULL;
-	//sqlite3 *mydb3=admindb->get_db();
 	unsigned int num_aurora_servers = GloSQLite3Server->num_aurora_servers[0];
-	int rc;
-	mysql_servers_wrlock();
 	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 1271 AND 1276");
 	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-	rc = admindb->prepare_v2(query, &statement);
+	int rc = admindb->prepare_v2(query, &statement);
 	ASSERT_SQLITE_OK(rc, admindb);
 	for (unsigned int j=1; j<4; j++) {
 		proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs 127%d and 127%d\n" , j*2-1 , j*2);
@@ -13947,7 +13943,6 @@ void ProxySQL_Admin::enable_aurora_testing() {
 				} else {
 					if (j==3) {
 						serverid = "host.1." + std::to_string(i+11) + ".aws-test.com";
-						//serverid = "host." + std::to_string(j) + "." + std::to_string(i+11) + ".aws.3.test.com";
 					}
 				}
 			}
@@ -13963,24 +13958,35 @@ void ProxySQL_Admin::enable_aurora_testing() {
 		}
 	}
 	(*proxy_sqlite3_finalize)(statement);
+}
+
+void ProxySQL_Admin::enable_aurora_testing_populate_mysql_aurora_hostgroups() {
+#ifndef TEST_AURORA_RANDOM
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 1000, 90, 1, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 1')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 1000, 90, 0, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 2')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1275, 1276, 1, '.aws-test.com', 25, 1000, 90, 0, 2, 10, 20, 5, 'Automated Aurora Testing Cluster 3')");
+#else
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 1')");
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 120, 90, 0, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 2')");
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1275, 1276, 1, '.aws-test.com', 25, 120, 90, 0, 2, 10, 20, 5, 'Automated Aurora Testing Cluster 3')");
-	//admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1275, 1276, 1, '.aws.3.test.com', 25, 120, 90, 0, 2, 10, 20, 5, 'Automated Aurora Testing Cluster 3')");
+#endif
 	admindb->execute("UPDATE mysql_aws_aurora_hostgroups SET active=1");
-	//admindb->execute("update mysql_servers set max_replication_lag=20");
+}
+
+void ProxySQL_Admin::enable_aurora_testing() {
+	proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs from 1271 to 1276\n");
+	mysql_servers_wrlock();
+	enable_aurora_testing_populate_mysql_servers();
+	enable_aurora_testing_populate_mysql_aurora_hostgroups();
 	load_mysql_servers_to_runtime();
 	mysql_servers_wrunlock();
-	//admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_ping_interval'");
-	//admindb->execute("UPDATE global_variables SET variable_value=1500 WHERE variable_name='mysql-monitor_ping_timeout'");
-	//admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_replication_lag_interval'");
-	//admindb->execute("UPDATE global_variables SET variable_value=1500 WHERE variable_name='mysql-monitor_replication_lag_timeout'");
-	admindb->execute("UPDATE global_variables SET variable_value=200 WHERE variable_name='mysql-monitor_ping_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=1000 WHERE variable_name='mysql-monitor_ping_interval'");
 	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_ping_timeout'");
-	admindb->execute("UPDATE global_variables SET variable_value=200 WHERE variable_name='mysql-monitor_replication_lag_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=1000 WHERE variable_name='mysql-monitor_replication_lag_interval'");
 	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_replication_lag_timeout'");
 	admindb->execute("UPDATE global_variables SET variable_value='percona.heartbeat' WHERE variable_name='mysql-monitor_replication_lag_use_percona_heartbeat'");
 	load_mysql_variables_to_runtime();
+	admindb->execute("DELETE FROM mysql_users WHERE username LIKE '%aurora%'");
 	admindb->execute("INSERT INTO mysql_users (username,password,default_hostgroup) VALUES ('aurora1','pass1',1271), ('aurora2','pass2',1273), ('aurora3','pass3',1275)");
 	init_users();
 	admindb->execute("INSERT INTO mysql_query_rules (active, username, match_pattern, destination_hostgroup, apply) VALUES (1, 'aurora1', '^SELECT.*max_lag_ms', 1272, 1)");

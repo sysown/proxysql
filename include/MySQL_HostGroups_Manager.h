@@ -555,8 +555,26 @@ class MySQL_HostGroups_Manager {
 		MySQL_HostGroups_Manager* myHGM;
 	};
 
+	/**
+	 * @brief Used by 'MySQL_Monitor::read_only' to hold a mapping between servers and hostgroups.
+	 * @details The hostgroup mapping holds the MySrvC for each of the hostgroups in which the servers is
+	 *  present, distinguishing between 'READER' and 'WRITER' hostgroups.
+	 */
 	std::unordered_map<std::string, std::unique_ptr<HostGroup_Server_Mapping>> hostgroup_server_mapping;
+	/**
+	 * @brief Holds the previous computed checksum for 'mysql_servers'.
+	 * @details Used to check if the servers checksums has changed during 'commit', if a change is detected,
+	 *  the member 'hostgroup_server_mapping' is required to be regenerated.
+	 *
+	 *  This is only updated during 'read_only_action_v2', since the action itself modifies
+	 *  'hostgroup_server_mapping' in case any actions needs to be performed against the servers.
+	 */
 	uint64_t hgsm_mysql_servers_checksum = 0;
+	/**
+	 * @brief Holds the previous checksum for the 'MYSQL_REPLICATION_HOSTGROUPS'.
+	 * @details Used during 'commit' to determine if config has changed for 'MYSQL_REPLICATION_HOSTGROUPS',
+	 *   and 'hostgroup_server_mapping' should be rebuild.
+	 */
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
 
 

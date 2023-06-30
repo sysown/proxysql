@@ -1,9 +1,11 @@
 #ifndef __CLASS_SQLITE3DB_H
 #define __CLASS_SQLITE3DB_H
+#include <pthread.h>
 #include "sqlite3.h"
 #undef swap
 #undef min
 #undef max
+#include <cstdint>
 #include <vector>
 #define PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
 

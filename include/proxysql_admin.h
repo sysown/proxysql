@@ -544,6 +544,8 @@ class ProxySQL_Admin {
 
 #ifdef TEST_AURORA
 	void enable_aurora_testing();
+	void enable_aurora_testing_populate_mysql_servers();
+	void enable_aurora_testing_populate_mysql_aurora_hostgroups();
 #endif // TEST_AURORA
 
 #ifdef TEST_GALERA

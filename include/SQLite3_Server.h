@@ -71,7 +71,12 @@ class SQLite3_Server {
 	unsigned int num_aurora_servers[3];
 	unsigned int max_num_aurora_servers;
 	pthread_mutex_t aurora_mutex;
-	void populate_aws_aurora_table(MySQL_Session *sess);
+	/**
+	 * @brief Handles queries to table 'REPLICA_HOST_STATUS'.
+	 * @details This function needs to be called with lock on mutex aurora_mutex already acquired.
+	 * @param sess The session which request is to be handled.
+	 */
+	void populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg);
 	void init_aurora_ifaces_string(std::string& s);
 #endif // TEST_AURORA
 #ifdef TEST_GALERA

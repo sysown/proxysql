@@ -70,6 +70,14 @@ A single AWS_Aurora_monitor_node will have a AWS_Aurora_status_entry per check.
 
 */
 
+#ifdef TEST_AURORA
+
+#define TEST_AURORA_MONITOR_BASE_QUERY \
+	"SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU"\
+		" FROM REPLICA_HOST_STATUS ORDER BY SERVER_ID "
+
+#endif
+
 class AWS_Aurora_replica_host_status_entry {
 	public:
 	char * server_id = NULL;
