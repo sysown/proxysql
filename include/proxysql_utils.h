@@ -8,6 +8,9 @@
 #include <string>
 #include <vector>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <sys/resource.h>
 
 #include "sqlite3db.h"
 
@@ -219,6 +222,8 @@ std::string replace_str(const std::string& str, const std::string& match, const 
 std::vector<std::string> split_str(const std::string& s, char delimiter);
 
 std::string generate_multi_rows_query(int rows, int params);
+
+void close_all_non_term_fd(std::vector<int> excludeFDs);
 
 /**
  * @brief Helper function used to replace spaces and zeros by '0' char in the supplied checksum buffer.

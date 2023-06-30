@@ -45,7 +45,7 @@ int create_connections(const conn_opts_t& conn_opts, uint32_t cons_num, std::vec
 		}
 
 		if (!mysql_real_connect(proxysql, host, user, pass, NULL, port, NULL, conn_opts.client_flags)) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
+			diag("File %s, line %d, Error: %s", __FILE__, __LINE__, mysql_error(proxysql));
 			return EXIT_FAILURE;
 		} else {
 			result.push_back(proxysql);
@@ -65,7 +65,7 @@ int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, uint32_t& idle_cpu_
 	// get ProxySQL idle cpu usage
 	int idle_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_cpu_ms);
 	if (idle_err) {
-	    fprintf(stdout, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
+	    diag("File %s, line %d, Error: '%s'", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
 		return idle_err;
 	}
 
@@ -76,18 +76,20 @@ int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, uint32_t& idle_cpu_
 	vector<MYSQL*> v_admin_conns {};
 	int admin_conns_res = create_connections(admin_conns_opts, ADMIN_CONN_NUM, v_admin_conns);
 	if (admin_conns_res != EXIT_SUCCESS) {
+		diag("File %s, line %d, Exiting...", __FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
 	vector<MYSQL*> v_proxy_conns {};
 	int mysql_conns_res = create_connections(proxy_conns_opts, MYSQL_CONN_NUM, v_proxy_conns);
-	if (admin_conns_res != EXIT_SUCCESS) {
+	if (mysql_conns_res != EXIT_SUCCESS) {
+		diag("File %s, line %d, Exiting...", __FILE__, __LINE__);
 		return EXIT_FAILURE;
 	}
 
 	int final_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, final_cpu_ms);
 	if (final_err) {
-	    fprintf(stdout, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
+	    diag("File %s, line %d, Error: '%s'", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
 		return idle_err;
 	}
 
@@ -102,9 +104,10 @@ int main(int argc, char** argv) {
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
-		return -1;
+		return exit_status();
 	}
 
+	plan(3);
 	uint32_t idle_cpu_ms = 0;
 	uint32_t final_cpu_ms = 0;
 
