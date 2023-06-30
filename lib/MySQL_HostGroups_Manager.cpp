@@ -4886,8 +4886,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 			table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = 0;
 			hgsm_mysql_servers_checksum = 0;
 
-			char* query = (char*)"SELECT hostgroup_id, hostname, port, gtid_port, CASE status WHEN 0 OR 1 OR 4 THEN 0 ELSE status END status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE status<>3 ORDER BY hostgroup_id, hostname, port";
-			mydb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+			mydb->execute_statement(MYSQL_SERVERS_CHECKSUM_QUERY, &error, &cols, &affected_rows, &resultset);
 
 			if (resultset) {
 				if (resultset->rows_count) {
