@@ -108,6 +108,8 @@ jobs:
         rm -f *binlog*-t
         rm -f *mariadb*-t
         rm -f reg_test_3992_fast_forward_malformed_packet*-t
+        rm -f test_cluster_sync-t
+        rm -f test_cluster_sync_mysql_servers-t
         
         # remove always failing tests
         rm -f test_rw_binary_data-t
@@ -119,7 +121,6 @@ jobs:
         rm -f test_com_reset_connection_com_change_user-t
         rm -f test_cluster1-t
         rm -f test_server_sess_status-t
-        rm -f test_cluster_sync-t
         
         # remove occasionaly failing tests
         rm -f max_connections_ff-t

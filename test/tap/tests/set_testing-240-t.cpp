@@ -482,7 +482,9 @@ int main(int argc, char *argv[]) {
 
 	//queries = 3000;
 	//queries = testCases.size();
-	plan(queries * num_threads);
+	unsigned int p = queries * num_threads;
+	p *= 2; // number of algorithms
+	plan(p);
 
 	if (strcmp(host,"localhost")==0) {
 		local = 1;
@@ -494,16 +496,25 @@ int main(int argc, char *argv[]) {
 		uniquequeries=(int)sqrt(uniquequeries);
 	}
 
-	pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
-	if (thi==NULL)
-		return exit_status();
+	for (int algo = 1; algo <= 2; algo++ ) {
+		connect_phase_completed = 0;
+		query_phase_completed = 0;
+		std::string qu = "SET mysql-set_parser_algorithm=" + std::to_string(algo);
+		diag("Setting: %s", qu.c_str());
+		MYSQL_QUERY(proxysql_admin, qu.c_str());
+		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
+		if (thi==NULL)
+			return exit_status();
 
-	for (unsigned int i=0; i<num_threads; i++) {
-		if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
-			perror("Thread creation");
-	}
-	for (unsigned int i=0; i<num_threads; i++) {
-		pthread_join(thi[i], NULL);
+		for (unsigned int i=0; i<num_threads; i++) {
+			if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
+				perror("Thread creation");
+		}
+		for (unsigned int i=0; i<num_threads; i++) {
+			pthread_join(thi[i], NULL);
+		}
+		free(thi);
 	}
 	for (std::unordered_map<std::string,var_counter>::iterator it = vars_counters.begin(); it!=vars_counters.end(); it++) {
 		diag("Unknown variable %s:\t Count: %d , unknown: %d", it->first.c_str(), it->second.count, it->second.unknown);

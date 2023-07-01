@@ -1,6 +1,6 @@
 --- sqlite-amalgamation-3400100/sqlite3.c	2022-12-28 14:26:39.000000000 +0000
 +++ sqlite-amalgamation.patch/sqlite3.c	2023-01-10 16:48:54.793689411 +0000
-@@ -24454,6 +24454,44 @@
+@@ -24713,6 +24713,44 @@
  }
  
  /*
@@ -45,7 +45,7 @@
  **    time( TIMESTRING, MOD, MOD, ...)
  **
  ** Return HH:MM:SS
-@@ -24742,6 +24780,7 @@
+@@ -25019,6 +25019,7 @@
      PURE_DATE(time,             -1, 0, 0, timeFunc      ),
      PURE_DATE(datetime,         -1, 0, 0, datetimeFunc  ),
      PURE_DATE(strftime,         -1, 0, 0, strftimeFunc  ),
