@@ -1698,8 +1698,14 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 
 // this function was inline in process_pkt_handshake_response() , split for readibility
 int MySQL_Protocol::PPHR_1(unsigned char *pkt, unsigned int len, bool& ret, MyProt_tmp_auth_vars& vars1) { // process_pkt_handshake_response inner 1
-	if ((*myds)->switching_auth_stage == 1) (*myds)->switching_auth_stage=2;
-	if ((*myds)->switching_auth_stage == 4) (*myds)->switching_auth_stage=5;
+	if ((*myds)->switching_auth_stage == 1) {
+		// this was set in PPHR_4auth0() or PPHR_4auth1()
+		(*myds)->switching_auth_stage=2;
+	}
+	if ((*myds)->switching_auth_stage == 4) {
+		// this was set in PPHR_sha2full()
+		(*myds)->switching_auth_stage=5;
+	}
 	(*myds)->auth_in_progress = 0;
 	if (len==5) {
 		ret = false;
@@ -1965,6 +1971,7 @@ void MySQL_Protocol::PPHR_5passwordTrue(
 
 
 void MySQL_Protocol::PPHR_5passwordFalse_0(
+	// FIXME: does this work only for mysql_native_password ?
 	unsigned char *pkt, unsigned int len,
 	bool& ret,
 	MyProt_tmp_auth_vars& vars1,
@@ -2343,6 +2350,8 @@ bool MySQL_Protocol::process_pkt_handshake_response(unsigned char *pkt, unsigned
 			case AUTH_UNKNOWN_PLUGIN:
 			case AUTH_MYSQL_NATIVE_PASSWORD:
 				// for now we always switch to mysql_native_password
+				// FIXME: verify if it is correct to call this here.
+				// maybe it should only be called for AUTH_UNKNOWN_PLUGIN and not for AUTH_MYSQL_NATIVE_PASSWORD
 				bool_rc = PPHR_4auth0(pkt, len, ret, vars1);
 				if (bool_rc == false) {
 					goto __exit_process_pkt_handshake_response;
@@ -2387,9 +2396,8 @@ __do_auth:
 		vars1.password=GloMyAuth->lookup((char *)vars1.user, USERNAME_FRONTEND, &attr1._ret_use_ssl, &attr1.default_hostgroup, &attr1.default_schema, &attr1.schema_locked, &attr1.transaction_persistent, &attr1.fast_forward, &attr1.max_connections, &sha1_pass, &attr1.attributes);
 	}
 	//assert(default_hostgroup>=0);
-	if (vars1.password) {
-		PPHR_5passwordTrue(pkt, len, ret, vars1, reply, attr1);
-	}
+	//if (vars1.password) {
+	//}
 	if (vars1.password == NULL) {
 		// this is a workaround for bug #603
 		if (
@@ -2410,6 +2418,7 @@ __do_auth:
 			}
 		}
 	} else {
+		PPHR_5passwordTrue(pkt, len, ret, vars1, reply, attr1);
 		if (vars1.pass_len==0 && strlen(vars1.password)==0) {
 			ret=true;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password=''\n", (*myds), (*myds)->sess, vars1.user);

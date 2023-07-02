@@ -5371,32 +5371,29 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	bool handshake_err = true;
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , handshake_response=%d , switching_auth_stage=%d , is_encrypted=%d , client_encrypted=%d\n", this, client_myds, handshake_response_return, client_myds->switching_auth_stage, is_encrypted, client_myds->encrypted);
-	if (
-		//(handshake_response_return == false) && (client_myds->switching_auth_stage == 1)
-		(handshake_response_return == false) && (client_myds->auth_in_progress != 0)
-	) {
-		l_free(pkt->size,pkt->ptr);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Returning\n", this, client_myds);
-		return;
-	}
-
-	if (
-		(is_encrypted == false) && // the connection was encrypted
-		(handshake_response_return == false) && // the authentication didn't complete
-		(client_myds->encrypted == true) // client is asking for encryption
-	) {
-		// use SSL
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
-		client_myds->DSS=STATE_SSL_INIT;
-		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl = GloVars.get_SSL_new();
-		SSL_set_fd(client_myds->ssl, client_myds->fd);
-		SSL_set_accept_state(client_myds->ssl);
-		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
-		l_free(pkt->size,pkt->ptr);
-		proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
-		return;
+	if (handshake_response_return == false) {
+		if (client_myds->auth_in_progress != 0) {
+			l_free(pkt->size,pkt->ptr);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Returning\n", this, client_myds);
+			return;
+		}
+		if (
+			(is_encrypted == false) && // the connection was encrypted
+			(client_myds->encrypted == true) // client is asking for encryption
+		) {
+			// use SSL
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
+			client_myds->DSS=STATE_SSL_INIT;
+			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->ssl = GloVars.get_SSL_new();
+			SSL_set_fd(client_myds->ssl, client_myds->fd);
+			SSL_set_accept_state(client_myds->ssl);
+			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+			l_free(pkt->size,pkt->ptr);
+			proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+			return;
+		}
 	}
 
 	if (
