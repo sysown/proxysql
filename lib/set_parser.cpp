@@ -415,7 +415,9 @@ std::map<std::string,std::vector<std::string>> SetParser::parse2() {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
 #endif // DEBUG
 		std::string key;
-		if (value1 != "") { // session is specified
+
+		bool is_session = (value1 != "");
+		//if (value1 != "") { // session is specified
 			if (value2 != "") { // isolation level
 				key = value2;
 				std::transform(value3.begin(), value3.end(), value3.begin(), ::toupper);
@@ -425,9 +427,9 @@ std::map<std::string,std::vector<std::string>> SetParser::parse2() {
 				std::transform(value5.begin(), value5.end(), value5.begin(), ::toupper);
 				op.push_back(value5);
 			}
-		}
+		//}
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-		result[key] = op;
+		result[std::string((is_session == true) ? "SESSION:" : ":") + key] = op;
 	}
 
 	delete opt2;

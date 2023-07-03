@@ -1,6 +1,6 @@
 #include <vector>
 #include <memory>
-
+#include <sstream>
 #include "gen_utils.h"
 
 
@@ -264,4 +264,16 @@ std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset) {
 	mysql_data_seek(resultset, 0);
 
 	return sqlite_result;
+} 
+
+std::vector<std::string> split_string(const std::string& str, char delimiter) {
+	std::vector<std::string> tokens {};
+	std::string token {};
+	std::istringstream tokenStream(str);
+
+	while (std::getline(tokenStream, token, delimiter)) {
+		tokens.push_back(token);
+	}
+
+	return tokens;
 }
