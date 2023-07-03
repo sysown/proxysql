@@ -218,9 +218,9 @@ SYS_ARCH := $(shell uname -m)
 REL_ARCH := $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH := .$(SYS_ARCH)
 DEB_ARCH := _$(REL_ARCH)
-PKG_VERS := $(shell echo ${GIT_VERSION} | grep -Po '(?<=^v|^)[\d\.]+')
-RPM_VERS := -$(PKG_VERS)-1
-DEB_VERS := _$(PKG_VERS)
+REL_VERS := $(shell echo ${GIT_VERSION} | grep -Po '(?<=^v|^)[\d\.]+')
+RPM_VERS := -$(REL_VERS)-1
+DEB_VERS := _$(REL_VERS)
 
 packages: $(REL_ARCH)-packages ;
 almalinux: $(REL_ARCH)-almalinux ;
