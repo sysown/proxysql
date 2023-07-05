@@ -461,7 +461,9 @@ std::string get_checksum_from_hash(uint64_t hash) {
 void remove_sqlite3_resultset_rows(
 	unique_ptr<SQLite3_result>& resultset, const function<bool(SQLite3_row*)>& pred
 ) {
-	const auto remove_it { std::remove_if(resultset->rows.begin(), resultset->rows.end(), pred) };
+	const vector<SQLite3_row *>::iterator remove_it {
+		std::remove_if(resultset->rows.begin(), resultset->rows.end(), pred)
+	};
 	resultset->rows.erase(remove_it, resultset->rows.end());
 	resultset->rows_count = resultset->rows.size();
 }
