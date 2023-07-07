@@ -2546,9 +2546,15 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			char *sv = mybe->server_myds->myconn->mysql->server_version;
 			if (strncmp(sv,(char *)"8",1)==0) {
 				sprintf(query,q,"transaction_isolation", var_value);
-			}
-			else {
+			} else {
 				sprintf(query,q,"tx_isolation", var_value);
+			}
+		} else if (strncasecmp("tx_read_only", var_name, 12) == 0) {
+			char* sv = mybe->server_myds->myconn->mysql->server_version;
+			if (strncmp(sv, (char *)"8", 1) == 0) {
+				sprintf(query,q,"transaction_read_only", var_value);
+			} else {
+				sprintf(query,q,"tx_read_only", var_value);
 			}
 		} else if (strncasecmp("aurora_read_replica_read_committed", var_name, 34) == 0) {
 			// If aurora_read_replica_read_committed is set, isolation level is
@@ -2583,10 +2589,10 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		st=previous_status.top();
 		previous_status.pop();
 
-		if (strncasecmp("transaction isolation level", var_name, sizeof("transaction isolation level")-1) == 0) {
+		if (strcasecmp("transaction isolation level", var_name) == 0) {
 			mysql_variables.server_reset_value(this, SQL_NEXT_ISOLATION_LEVEL);
 			mysql_variables.client_reset_value(this, SQL_NEXT_ISOLATION_LEVEL);
-		} else if (strncasecmp("transaction read", var_name, sizeof("transaction read")-1) == 0) {
+		} else if (strcasecmp("transaction read", var_name) == 0) {
 			mysql_variables.server_reset_value(this, SQL_NEXT_TRANSACTION_READ);
 			mysql_variables.client_reset_value(this, SQL_NEXT_TRANSACTION_READ);
 		}
@@ -6443,6 +6449,33 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 						}
+					} else if (var == "tx_read_only") {
+						std::string value1 = *values;
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET tx_read_only value %s\n", value1.c_str());
+
+						if (
+							(value1 == "0") ||
+							(strcasecmp(value1.c_str(), "false")==0) ||
+							(strcasecmp(value1.c_str(), "off")==0)
+						) {
+							value1 = "WRITE";
+						} else if (
+							(value1 == "1") ||
+							(strcasecmp(value1.c_str(), "true")==0) ||
+							(strcasecmp(value1.c_str(), "on")==0)
+						) {
+							value1 = "ONLY";
+						} else {
+							//proxy_warning("Unknown tx_read_only value \"%s\"\n", value1.c_str());
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+						uint32_t read_only_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (mysql_variables.client_get_hash(this, SQL_TRANSACTION_READ) != read_only_int) {
+							if (!mysql_variables.client_set_value(this, SQL_TRANSACTION_READ, value1.c_str()))
+								return false;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ACCESS MODE to READ %s\n", value1.c_str());
+						}
 					} else if (std::find(mysql_variables.ignore_vars.begin(), mysql_variables.ignore_vars.end(), var) != mysql_variables.ignore_vars.end()) {
 						// this is a variable we parse but ignore
 						// see MySQL_Variables::MySQL_Variables() for a list of ignored variables
@@ -6574,7 +6607,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						enum mysql_variable_name isolation_level_val;
 						enum mysql_variable_name transaction_read_val;
 
-						if (val[0] == "SESSION") {
+						if (val[0] == "session") {
 							isolation_level_val = SQL_ISOLATION_LEVEL;
 							transaction_read_val = SQL_TRANSACTION_READ;
 						} else {

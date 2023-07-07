@@ -104,7 +104,12 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		} else if (value4 != "") {
 			// VARIABLE
-		value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
+			if (strcasecmp("transaction_isolation", value4.c_str()) == 0) {
+				value4 = "tx_isolation";
+			} else if (strcasecmp("transaction_read_only", value4.c_str()) == 0) {
+				value4 = "tx_read_only";
+			}
+			value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
 			key = value4;
 			if (value5 == "''" || value5 == "\"\"") {
 				op.push_back("");
@@ -356,6 +361,11 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		} else if (value4 != "") {
 			// VARIABLE
+			if (strcasecmp("transaction_isolation", value4.c_str()) == 0) {
+				value4 = "tx_isolation";
+			} else if (strcasecmp("transaction_read_only", value4.c_str()) == 0) {
+				value4 = "tx_read_only";
+			}
 			value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
 			key = value4;
 			if (value5 == "''" || value5 == "\"\"") {
@@ -415,21 +425,19 @@ std::map<std::string,std::vector<std::string>> SetParser::parse2() {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
 #endif // DEBUG
 		std::string key;
-
-		bool is_session = (value1 != "");
 		//if (value1 != "") { // session is specified
 			if (value2 != "") { // isolation level
-				key = value2;
+				key = value1 + ":" + value2;
 				std::transform(value3.begin(), value3.end(), value3.begin(), ::toupper);
 				op.push_back(value3);
 			} else {
-				key = value4;
+				key = value1 + ":" + value4;
 				std::transform(value5.begin(), value5.end(), value5.begin(), ::toupper);
 				op.push_back(value5);
 			}
 		//}
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-		result[std::string((is_session == true) ? "SESSION:" : ":") + key] = op;
+		result[key] = op;
 	}
 
 	delete opt2;
