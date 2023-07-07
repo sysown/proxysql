@@ -2558,14 +2558,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			// https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Reference.html#AuroraMySQL.Reference.IsolationLevels
 			// Basically, to change isolation level you must first set
 			// aurora_read_replica_read_committed , and then isolation level
-			MySQL_Connection *beconn = mybe->server_myds->myconn;
-			if (beconn->var_hash[SQL_ISOLATION_LEVEL] != 0) {
-				beconn->var_hash[SQL_ISOLATION_LEVEL] = 0;
-				if (beconn->variables[SQL_ISOLATION_LEVEL].value) {
-					free(beconn->variables[SQL_ISOLATION_LEVEL].value);
-					beconn->variables[SQL_ISOLATION_LEVEL].value = NULL;
-				}
-			}
+			mysql_variables.server_reset_value(this, SQL_ISOLATION_LEVEL);
 			sprintf(query,q,var_name, var_value);
 		} else {
 			sprintf(query,q,var_name, var_value);
