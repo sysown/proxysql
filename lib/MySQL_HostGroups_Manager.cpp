@@ -2306,12 +2306,8 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 					resultset->rows.end()
 				);
 				resultset->rows_count = init_row_count - rm_rows_count;
-
-				save_runtime_mysql_servers(resultset);
-			} else {
-				delete resultset;
-				resultset = nullptr;
 			}
+			save_runtime_mysql_servers(resultset);
 		} else {
 			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
 		}
@@ -2367,11 +2363,8 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_v2_checksum(SQLite3_result*
 				);
 				resultset->rows_count = init_row_count - rm_rows_count;
 
-				save_mysql_servers_v2(resultset);
-			} else {
-				delete resultset;
-				resultset = nullptr;
 			}
+			save_mysql_servers_v2(resultset);
 		} else {
 			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_v2", (long unsigned int)0);
 		}
