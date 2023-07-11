@@ -3759,7 +3759,7 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		string tn = "";
 		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS))) {
-			tn = "mysql_servers";
+			tn = "cluster_mysql_servers";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
 			tn = "mysql_replication_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS))) {
@@ -3787,29 +3787,10 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 					char *error=NULL;
 					int cols=0;
 					int affected_rows=0;
-					const char* query = "SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 					GloAdmin->mysql_servers_wrlock();
-					GloAdmin->admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset);
+					GloAdmin->admindb->execute_statement(MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS, &error, &cols, &affected_rows, &resultset);
 					GloAdmin->mysql_servers_wrunlock();
-					if (resultset && resultset->rows_count) {
-						const size_t init_row_count = resultset->rows_count;
-						size_t rm_rows_count = 0;
-						const auto is_offline_server = [&rm_rows_count](SQLite3_row* row) {
-							if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
-								rm_rows_count += 1;
-								return true;
-							} else {
-								return false;
-							}
-						};
-						resultset->rows.erase(
-							std::remove_if(resultset->rows.begin(), resultset->rows.end(), is_offline_server),
-							resultset->rows.end()
-						);
-
-						resultset->rows_count = init_row_count - rm_rows_count;
-					}
 				} else {
 					resultset = MyHGM->dump_table_mysql(tn);
 				}

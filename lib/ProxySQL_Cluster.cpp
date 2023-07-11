@@ -1684,64 +1684,6 @@ int ProxySQL_Cluster::fetch_and_store(MYSQL* conn, const fetch_query& f_query, M
 }
 
 /**
- * @brief Generates a hash for the resulset received for the query 'CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS'.
- * @details Remember that this query query is intercepted by 'ProxySQL_Admin' and always answered via
- *  'MySQL_HostGroups_Manager::dump_table_proxysql_servers'.
- * @param resultset The resulset resulting from the mentioned query.
- * @return A hash representing the contents of the resulset.
- */
-uint64_t mysql_servers_raw_checksum(MYSQL_RES* resultset) {
-	if (resultset == nullptr) { return 0; }
-
-	uint64_t num_rows = mysql_num_rows(resultset);
-	if (num_rows == 0) { return 0; }
-
-	MYSQL_FIELD* fields = mysql_fetch_fields(resultset);
-	uint32_t num_fields = mysql_num_fields(resultset);
-	uint32_t status_idx = 0;
-
-	for (uint32_t i = 0; i < num_fields; i++) {
-		if (strcmp(fields[i].name, "status") == 0) {
-			status_idx = i;
-		}
-	}
-
-	SpookyHash myhash {};
-	myhash.Init(19,3);
-
-	while (MYSQL_ROW row = mysql_fetch_row(resultset)) {
-		for (uint32_t i = 0; i < num_fields; i++) {
-			if (strcmp(row[status_idx], "OFFLINE_HARD") == 0) {
-				continue;
-			}
-
-			if (row[i]) {
-				if (strcmp(fields[i].name, "status") == 0) {
-					if (strcmp(row[i], "ONLINE") == 0 || strcmp(row[i], "SHUNNED") == 0) {
-						myhash.Update("0", strlen("0"));
-					} else {
-						myhash.Update("2", strlen("1"));
-					}
-				} else {
-					// computing 'strlen' is required see @details
-					myhash.Update(row[i], strlen(row[i]));
-				}
-			} else {
-				myhash.Update("", 0);
-			}
-		}
-	}
-
-	// restore the initial resulset index
-	mysql_data_seek(resultset, 0);
-
-	uint64_t res_hash = 0, hash2 = 0;
-	myhash.Final(&res_hash, &hash2);
-
-	return res_hash;
-}
-
-/**
  * @brief Generates a hash from the received resultsets from executing the following queries in the specified
  *   order:
  *   - CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS.
@@ -1761,13 +1703,7 @@ uint64_t compute_servers_tables_raw_checksum(const vector<MYSQL_RES*>& results, 
 	SpookyHash myhash {};
 
 	for (size_t i = 0; i < size; i++) {
-		uint64_t raw_hash = 0;
-
-		if (i == 0) {
-			raw_hash = mysql_servers_raw_checksum(results[i]);
-		} else {
-			raw_hash = mysql_raw_checksum(results[i]);
-		}
+		uint64_t raw_hash = mysql_raw_checksum(results[i]);
 
 		if (raw_hash != 0) {
 			if (init == false) {
@@ -1871,7 +1807,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 				}
 				
 				if (result != nullptr) {
-					const uint64_t servers_hash = mysql_servers_raw_checksum(result);
+					const uint64_t servers_hash = mysql_raw_checksum(result);
 					const string computed_checksum{ get_checksum_from_hash(servers_hash) };
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 					proxy_info("Cluster: Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
@@ -2116,7 +2052,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 					bool runtime_checksum_matches = true;
 
 					if (results[6]) {
-						const uint64_t runtime_mysql_server_hash = mysql_servers_raw_checksum(results[6]);
+						const uint64_t runtime_mysql_server_hash = mysql_raw_checksum(results[6]);
 						const std::string runtime_mysql_server_computed_checksum = get_checksum_from_hash(runtime_mysql_server_hash);
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, runtime_mysql_server_computed_checksum.c_str());
 						proxy_info("Cluster: Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, runtime_mysql_server_computed_checksum.c_str());

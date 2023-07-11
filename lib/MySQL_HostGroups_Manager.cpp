@@ -2285,28 +2285,9 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 		int cols = 0;
 		int affected_rows = 0;
 
-		mydb->execute_statement(MYHGM_GEN_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
+		mydb->execute_statement(MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
 
 		if (resultset) {
-			if (resultset->rows_count) {
-				// Remove 'OFFLINE_HARD' servers since they are not relevant to propagate to other Cluster
-				// nodes, or relevant for checksum computation.
-				const size_t init_row_count = resultset->rows_count;
-				size_t rm_rows_count = 0;
-				const auto is_offline_server = [&rm_rows_count](SQLite3_row* row) {
-					if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
-						rm_rows_count += 1;
-						return true;
-					} else {
-						return false;
-					}
-				};
-				resultset->rows.erase(
-					std::remove_if(resultset->rows.begin(), resultset->rows.end(), is_offline_server),
-					resultset->rows.end()
-				);
-				resultset->rows_count = init_row_count - rm_rows_count;
-			}
 			save_runtime_mysql_servers(resultset);
 		} else {
 			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
@@ -2316,7 +2297,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 		save_runtime_mysql_servers(runtime_mysql_servers);
 	}
 
-	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = compute_mysql_servers_raw_checksum(resultset);
+	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = resultset != nullptr ? resultset->raw_checksum() : 0;
 	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS]);
 
 	return table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
@@ -2342,28 +2323,9 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_v2_checksum(SQLite3_result*
 		int cols = 0;
 		int affected_rows = 0;
 
-		GloAdmin->admindb->execute_statement(MYHGM_GEN_ADMIN_MYSQL_SERVERS, &error, &cols, &affected_rows, &resultset);
+		GloAdmin->admindb->execute_statement(MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS, &error, &cols, &affected_rows, &resultset);
 
 		if (resultset) {
-			if (resultset->rows_count) {
-
-				const size_t init_row_count = resultset->rows_count;
-				size_t rm_rows_count = 0;
-				const auto is_offline_server = [&rm_rows_count](SQLite3_row* row) {
-					if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
-						rm_rows_count += 1;
-						return true;
-					} else {
-						return false;
-					}
-				};
-				resultset->rows.erase(
-					std::remove_if(resultset->rows.begin(), resultset->rows.end(), is_offline_server),
-					resultset->rows.end()
-				);
-				resultset->rows_count = init_row_count - rm_rows_count;
-
-			}
 			save_mysql_servers_v2(resultset);
 		} else {
 			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_v2", (long unsigned int)0);
@@ -2380,7 +2342,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_v2_checksum(SQLite3_result*
 	table_resultset_checksum[MYSQL_AWS_AURORA_HOSTGROUPS] = 0;
 	table_resultset_checksum[MYSQL_HOSTGROUP_ATTRIBUTES] = 0;
 
-	table_resultset_checksum[MYSQL_SERVERS_V2] = compute_mysql_servers_raw_checksum(resultset);
+	table_resultset_checksum[MYSQL_SERVERS_V2] = resultset != nullptr ? resultset->raw_checksum() : 0;
 	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_v2", table_resultset_checksum[MYSQL_SERVERS_V2]);
 
 	commit_update_checksums_from_tables();
@@ -2988,7 +2950,9 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	} else if (name == "mysql_hostgroup_attributes") {
 		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
 	} else if (name == "mysql_servers") {
-		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;	
+		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;
+	} else if (name == "cluster_mysql_servers") {
+		query = (char *)MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS;
 	} else {
 		assert(0);
 	}
@@ -4293,7 +4257,7 @@ SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& 
 		return this->incoming_replication_hostgroups;
 	} else if (name == "mysql_hostgroup_attributes") {
 		return this->incoming_hostgroup_attributes;
-	} else if (name == "mysql_servers") {
+	} else if (name == "cluster_mysql_servers") {
 		return this->runtime_mysql_servers;
 	} else if (name == "mysql_servers_v2") {
 		return this->incoming_mysql_servers_v2;
@@ -8265,67 +8229,4 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(MySrvC* srv)
 	proxy_warning("Removed server at address %p, hostgroup %d, address %s port %d. Setting status OFFLINE HARD and immediately dropping all free connections. Used connections will be dropped when trying to use them\n", (void*)srv, srv->myhgc->hid, srv->address, srv->port);
 	srv->status = MYSQL_SERVER_STATUS_OFFLINE_HARD;
 	srv->ConnectionsFree->drop_all_connections();
-}
-
-/**
- * @brief This function computes the checksum of the mysql_servers resultset.
-*	As the checksum is being calculated, the function replaces the status values with their respective integer values.
- *
- * @param mysql_servers resultset of mysql_servers or mysql_servers_incoming.
- */
-uint64_t MySQL_HostGroups_Manager::compute_mysql_servers_raw_checksum(const SQLite3_result* mysql_servers) {
-
-	if (!mysql_servers || mysql_servers->rows_count == 0)
-		return 0;
-
-	int status_idx = -1;
-
-	for (int i = 0; i < mysql_servers->columns; i++) {
-		if (mysql_servers->column_definition[i] && mysql_servers->column_definition[i]->name &&
-			strcmp(mysql_servers->column_definition[i]->name, "status") == 0) {
-			status_idx = i;
-			break;
-		}
-	}
-
-	if (status_idx == -1) assert(0);
-
-	SpookyHash myhash;
-	myhash.Init(19, 3);
-
-	for (const SQLite3_row* r : mysql_servers->rows) {
-
-		const char* mapped_status = "";
-		const char* status = r->fields[status_idx];
-
-		if (status) {
-			if (strcasecmp(status, "OFFLINE_HARD") == 0)
-				continue;
-
-			if (strcasecmp(status, "ONLINE") == 0 ||
-				strcasecmp(status, "SHUNNED") == 0) {
-				mapped_status = "0";
-			} else if (strcasecmp(status, "OFFLINE_SOFT") == 0) {
-				mapped_status = "2";
-			}
-		}
-
-		for (int i = 0; i < mysql_servers->columns; i++) {
-
-			if (r->fields[i]) {
-				if (i != status_idx) {
-					myhash.Update(r->fields[i], r->sizes[i]);
-				} else {
-					myhash.Update(mapped_status, strlen(mapped_status));
-				}
-			} else {
-				myhash.Update("", 0);
-			}
-		}
-	}
-
-	uint64_t res_hash = 0, hash2 = 0;	
-	myhash.Final(&res_hash, &hash2);
-
-	return res_hash;
 }
