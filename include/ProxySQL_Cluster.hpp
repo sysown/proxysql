@@ -372,10 +372,29 @@ struct variable_type {
 	};
 };
 
+/**
+ * @brief Specifies the sync algorithm to use when pulling config from another ProxySQL cluster peer.
+ */
 enum class mysql_servers_sync_algorithm {
-	runtime_mysql_servers_and_mysql_servers_v2 = 1, // sync runtime_mysql_servers and mysql_server_v2 from remote peer
-	mysql_servers_v2 = 2, // sync mysql_server_v2 from remote peer
-	auto_select = 3 // based on -M flag
+	/**
+	 * @brief Sync 'runtime_mysql_servers' and 'mysql_server_v2' from remote peer.
+	 * @details This means that both config and runtime servers info are to be synced, in other words, both
+	 *  user promoted config and runtime changes performed by ProxySQL ('Monitor') in the remote peer will
+	 *  trigger the start of syncing operations.
+	 */
+	runtime_mysql_servers_and_mysql_servers_v2 = 1,
+	/**
+	 * @brief Sync only mysql_server_v2 (config) from the remote peer.
+	 * @details Since 'runtime_mysql_servers' isn't considered for fetching, only config changes promoted by
+	 *  the user in the remote peer will by acknowledge and trigger the start of a syncing operation.
+	 */
+	mysql_servers_v2 = 2,
+	/**
+	 * @brief Dependent on whether ProxySQL has been started with the -M flag.
+	 * @details If '-M' is not present, 'runtime_mysql_servers_and_mysql_servers_v2' is selected, otherwise
+	 *  'mysql_servers_v2' is chosen.
+	 */
+	auto_select = 3
 };
 
 /**
