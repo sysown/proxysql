@@ -919,11 +919,11 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 				(own_version == 1) // we just booted
 				||
 				(v->epoch > own_epoch) // epoch is newer
-				) {
+			) {
 				if (v->diff_check >= diff_ms) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 					proxy_info("Cluster: detected a peer %s:%d with mysql_servers_v2 version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
-					
+
 					ProxySQL_Checksum_Value_2* runtime_mysql_server_checksum = &checksums_values.mysql_servers;
 
 					const bool fetch_runtime = (mysql_server_sync_algo == mysql_servers_sync_algorithm::runtime_mysql_servers_and_mysql_servers_v2);
@@ -964,9 +964,7 @@ void ProxySQL_Node_Entry::set_checksums(MYSQL_RES *_r) {
 					(own_version == 1) // we just booted
 					||
 					(v->epoch > own_epoch) // epoch is newer
-					//||
-					//(v->checksum != own_checksum) // as runtime mysql server is generated on node itself, epoch can be newer so we also check checksum
-					) {
+				) {
 					if (v->diff_check >= diff_ms) {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Detected peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
 						proxy_info("Cluster: detected a peer %s:%d with mysql_servers version %llu, epoch %llu, diff_check %u. Own version: %llu, epoch: %llu. Proceeding with remote sync\n", hostname, port, v->version, v->epoch, v->diff_check, own_version, own_epoch);
@@ -1788,7 +1786,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 				string_format("Cluster: Fetching 'MySQL Servers' from peer %s:%d completed\n", fetch_servers_done, hostname, port);
 				std::string fetch_servers_err;
 				string_format("Cluster: Fetching 'MySQL Servers' from peer %s:%d failed: \n", fetch_servers_err, hostname, port);
-				
+
 				// Create fetching query
 				fetch_query query = {
 					CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS,
@@ -1805,7 +1803,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 						result = nullptr;
 					}
 				}
-				
+
 				if (result != nullptr) {
 					const uint64_t servers_hash = mysql_raw_checksum(result);
 					const string computed_checksum{ get_checksum_from_hash(servers_hash) };

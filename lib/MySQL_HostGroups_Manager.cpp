@@ -1758,8 +1758,6 @@ bool MySQL_HostGroups_Manager::commit(
 	//mydb->execute("DELETE FROM mysql_servers");
 	//generate_mysql_servers_table();
 
-	// INSERT OR IGNORE INTO mysql_servers SELECT ... FROM mysql_servers_incoming
-	// proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, weight, status, compression, max_connections) SELECT hostgroup_id, hostname, port, weight, status, compression, max_connections FROM mysql_servers_incoming\n");
 	mydb->execute("INSERT OR IGNORE INTO mysql_servers(hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment) SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_incoming");
 
 	// SELECT FROM mysql_servers whatever is not identical in mysql_servers_incoming, or where mem_pointer=0 (where there is no pointer yet)
@@ -1971,8 +1969,6 @@ bool MySQL_HostGroups_Manager::commit(
 	if (update_version)
 		GloVars.checksums_values.mysql_servers.version++;
 
-	//struct timespec ts;
-	//clock_gettime(CLOCK_REALTIME, &ts);
 	if (peer_runtime_mysql_server.epoch != 0 && peer_runtime_mysql_server.checksum.empty() == false &&
 		GloVars.checksums_values.mysql_servers.checksum == peer_runtime_mysql_server.checksum) {
 		GloVars.checksums_values.mysql_servers.epoch = peer_runtime_mysql_server.epoch;
@@ -4901,9 +4897,6 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 		sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
 		pthread_mutex_lock(&GloVars.checksum_mutex);
 		GloVars.checksums_values.mysql_servers.set_checksum(buf);
-		//GloVars.checksums_values.mysql_servers.version++;
-		//struct timespec ts;
-		//clock_gettime(CLOCK_REALTIME, &ts);
 		time_t t = time(NULL);
 
 		GloVars.checksums_values.mysql_servers.epoch = t;
