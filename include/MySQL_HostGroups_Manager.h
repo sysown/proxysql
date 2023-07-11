@@ -800,7 +800,6 @@ class MySQL_HostGroups_Manager {
 	void wrlock();
 	void wrunlock();
 	int servers_add(SQLite3_result *resultset);
-	//void update_runtime_mysql_servers_table(SQLite3_result* runtime_mysql_servers, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server);
 	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
 		SQLite3_result* mysql_servers_v2 = nullptr, const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {},
 		bool only_commit_runtime_mysql_servers = false, bool update_version = false);
