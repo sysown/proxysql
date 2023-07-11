@@ -1884,6 +1884,11 @@ __exit_pull_mysql_servers_from_peer:
  *    fetching of different tables (mysql_servers vs mysql_servers_v2) and computing of checksum. In the previous version, 
  *    the checksum for "mysql_servers" was computed and added to the checksums of other dependent modules. In contrast, the new version 
  *    calculates the checksum for "mysql_servers_v2" and combines it with the checksums of other dependent modules.
+ *
+ *    IMPORTANT: This function performs both the fetching of config, and conditionally the 'runtime_mysql_servers', in
+ *    order to avoid extra transitory states and checksums that would result if this operation was performed in multiple
+ *    steps. When required by the sync algorithm ('mysql_servers_sync_algorithm'), these two fetches and configuration
+ *    promotion should be performed in a single 'atomic' operation.
  * 
  * @param peer_mysql_server_v2 checksum and epoch of mysql_servers_v2 from remote peer
  * @param peer_runtime_mysql_server checksum and epoch of mysql_servers from remote peer
