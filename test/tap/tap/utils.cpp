@@ -589,7 +589,7 @@ int wait_for_replication(
 	return result;
 }
 
-MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
+MARIADB_CHARSET_INFO * proxysqlTap_find_charset_collate(const char *collatename) {
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	do {
 		if (!strcasecmp(c->name, collatename)) {
