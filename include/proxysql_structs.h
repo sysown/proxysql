@@ -196,6 +196,7 @@ enum mysql_variable_name {
 	SQL_LC_MESSAGES,
 	SQL_LC_TIME_NAMES,
 	SQL_LOCK_WAIT_TIMEOUT,
+	SQL_LOG_SLOW_FILTER,
 	SQL_LONG_QUERY_TIME,
 	SQL_MAX_EXECUTION_TIME,
 	SQL_MAX_HEAP_TABLE_SIZE,
@@ -214,6 +215,7 @@ enum mysql_variable_name {
 	SQL_GENERATE_INVISIBLE_PRIMARY_KEY,
 	SQL_SQL_LOG_BIN,
 	SQL_SQL_MODE,
+	SQL_QUOTE_SHOW_CREATE,
 	SQL_REQUIRE_PRIMARY_KEY,
 	SQL_SQL_SAFE_UPDATES,
 	SQL_SQL_SELECT_LIMIT,
@@ -550,7 +552,7 @@ struct __SQP_query_parser_t {
 struct _PtrSize_t {
   unsigned int size;
   void *ptr;
-}; 
+};
 // struct for debugging module
 #ifdef DEBUG
 struct _debug_level {
@@ -601,7 +603,7 @@ struct mysql_protocol_events {
 
 // this struct define global variable entries, and how these are configured during startup
 struct _global_variable_entry_t {
-	const char *group_name;	// [group name] in proxysql.cnf 
+	const char *group_name;	// [group name] in proxysql.cnf
 	const char *key_name;	// key name
 	int dynamic;	// if dynamic > 0 , reconfigurable
 	//GOptionArg arg;	// type of variable
@@ -763,7 +765,7 @@ EXTERN global_variables glovars;
 #ifndef GLOBAL_DEFINED_OPTS_ENTRIES
 #define GLOBAL_DEFINED_OPTS_ENTRIES
 ProxySQL_GlobalVariables GloVars {};
-#endif // GLOBAL_DEFINED_OPTS_ENTRIES 
+#endif // GLOBAL_DEFINED_OPTS_ENTRIES
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
 MySQL_HostGroups_Manager *MyHGM;
@@ -814,6 +816,7 @@ __thread int mysql_thread___connect_timeout_server_max;
 __thread int mysql_thread___query_processor_iterations;
 __thread int mysql_thread___query_processor_regex;
 __thread int mysql_thread___set_query_lock_on_hostgroup;
+__thread int mysql_thread___set_parser_algorithm;
 __thread int mysql_thread___reset_connection_algorithm;
 __thread uint32_t mysql_thread___server_capabilities;
 __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -980,6 +983,7 @@ extern __thread int mysql_thread___connect_timeout_server_max;
 extern __thread int mysql_thread___query_processor_iterations;
 extern __thread int mysql_thread___query_processor_regex;
 extern __thread int mysql_thread___set_query_lock_on_hostgroup;
+extern __thread int mysql_thread___set_parser_algorithm;
 extern __thread int mysql_thread___reset_connection_algorithm;
 extern __thread uint32_t mysql_thread___server_capabilities;
 extern __thread int mysql_thread___auto_increment_delay_multiplex;
@@ -1156,6 +1160,10 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_LC_MESSAGES,                SETTING_VARIABLE, true,  false, false, false, (char *)"lc_messages",                NULL, (char *)"" , false} ,
 	{ SQL_LC_TIME_NAMES,              SETTING_VARIABLE, true,  false, false, false, (char *)"lc_time_names",              NULL, (char *)"" , false} ,
 	{ SQL_LOCK_WAIT_TIMEOUT,          SETTING_VARIABLE, false, false, true,  false, (char *)"lock_wait_timeout",          NULL, (char *)"" , false} ,
+// log_queries_not_using_indexes is not enabled because in MySQL it is *only* a global variable, while in MariaDB is a global *and* session variable .
+// We believe it is not the time to create a lot of exceptions and complex logic for conflicting backend implementations
+//	{ SQL_LOG_QUERIES_NOT_USING_INDEXES, SETTING_VARIABLE, false,  false, false, true, (char *)"log_queries_not_using_indexes", NULL, (char *)"OFF" , false} ,
+	{ SQL_LOG_SLOW_FILTER,            SETTING_VARIABLE, true,  false, false, false, (char *)"log_slow_filter",            NULL, (char *)"" , false} ,
 	{ SQL_LONG_QUERY_TIME,            SETTING_VARIABLE, false, false, true,  false, (char *)"long_query_time",            NULL, (char *)"" , false} ,
 	{ SQL_MAX_EXECUTION_TIME,         SETTING_VARIABLE, false, false, true,  false, (char *)"max_execution_time",         NULL, (char *)"" , false} ,
 	{ SQL_MAX_HEAP_TABLE_SIZE,        SETTING_VARIABLE, false, false, true,  false, (char *)"max_heap_table_size",        NULL, (char *)"18446744073709547520" , false} ,
@@ -1174,7 +1182,8 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_GENERATE_INVISIBLE_PRIMARY_KEY, SETTING_VARIABLE, false, false, false, true, (char *)"sql_generate_invisible_primary_key", NULL, (char *)"" , false} ,
 	{ SQL_SQL_LOG_BIN,                SETTING_VARIABLE, false, false, false, true,  (char *)"sql_log_bin",                NULL, (char *)"ON"  , false} ,
 	{ SQL_SQL_MODE,                   SETTING_VARIABLE, true,  false, false, false, (char *)"sql_mode" ,                  NULL, (char *)"" , false} ,
-	{ SQL_REQUIRE_PRIMARY_KEY,        SETTING_VARIABLE, false, false, false, true, (char *)"sql_require_primary_key",     NULL, (char *)"" , false} ,
+	{ SQL_QUOTE_SHOW_CREATE,          SETTING_VARIABLE, false, false, false, true,  (char *)"sql_quote_show_create",      NULL, (char *)"" , false} ,
+	{ SQL_REQUIRE_PRIMARY_KEY,        SETTING_VARIABLE, false, false, false, true,  (char *)"sql_require_primary_key",    NULL, (char *)"" , false} ,
 	{ SQL_SQL_SAFE_UPDATES,           SETTING_VARIABLE, true,  false, false, true,  (char *)"sql_safe_updates",           NULL, (char *)"OFF" , false} ,
 	{ SQL_SQL_SELECT_LIMIT,           SETTING_VARIABLE, false, false, true,  false, (char *)"sql_select_limit",           NULL, (char *)"DEFAULT" , false} ,
 	{ SQL_TIME_ZONE,                  SETTING_VARIABLE, true,  false, false, false, (char *)"time_zone",                  NULL, (char *)"SYSTEM" , false} ,

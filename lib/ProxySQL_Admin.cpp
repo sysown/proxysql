@@ -188,6 +188,7 @@ static char * load_file (const char *filename) {
 }
 */
 
+
 static int round_intv_to_time_interval(int& intv) {
 	if (intv > 300) {
 		intv = 600;
@@ -13662,6 +13663,7 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 					exit(EXIT_FAILURE);
 				}
 				if (cpid == 0) {
+					close_all_non_term_fd({});
 					char *newenviron[] = { NULL };
 					int rc;
 					rc=execve(sr->filename, newargs, newenviron);

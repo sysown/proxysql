@@ -1,0 +1,10 @@
+--- cpp-dotenv.old/include/dotenv.h	2023-06-12 10:11:58.748360147 +0000
++++ cpp-dotenv.new/include/dotenv.h	2020-08-09 16:19:56.000000000 +0000
+@@ -28,6 +28,7 @@
+         void operator=(const dotenv&) = delete;
+ 
+         static dotenv& instance();
++        bool loaded = false;
+     
+     private:
+ 

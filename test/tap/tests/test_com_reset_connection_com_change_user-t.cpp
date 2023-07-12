@@ -965,7 +965,7 @@ int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector
 	MYSQL* mysql = mysql_init(NULL);
 
 	// Use a known default charset for the connection
-	MARIADB_CHARSET_INFO* latin2_charset = proxysql_find_charset_collate("latin2_general_ci");
+	MARIADB_CHARSET_INFO* latin2_charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 	mysql->charset = latin2_charset;
 
 	if (!mysql_real_connect(mysql, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
@@ -1060,7 +1060,7 @@ int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector
 			std::string username = std::get<0>(user_configs[1]);
 			std::string password = std::get<1>(user_configs[1]);
 
-			MARIADB_CHARSET_INFO* charset = proxysql_find_charset_collate("latin2_general_ci");
+			MARIADB_CHARSET_INFO* charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 			mysql->charset = charset;
 
 			int err_code = mysql_change_user(mysql, username.c_str(), password.c_str(), NULL);
@@ -1127,7 +1127,7 @@ int main(int argc, char** argv) {
 	MYSQL* proxysql = mysql_init(NULL);
 
 	// Use a known default charset for the connection
-	MARIADB_CHARSET_INFO* latin2_charset = proxysql_find_charset_collate("latin2_general_ci");
+	MARIADB_CHARSET_INFO* latin2_charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 	proxysql->charset = latin2_charset;
 
 	if (

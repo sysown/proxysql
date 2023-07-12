@@ -41,9 +41,9 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.5.3
+export CURVER?=2.6.0
 ifneq (,$(wildcard /etc/os-release))
-	DISTRO := $(shell gawk -F= '/^NAME/{print $$2}' /etc/os-release)
+	DISTRO := $(shell awk -F= '/^NAME/{print $$2}' /etc/os-release)
 else
 	DISTRO := Unknown
 endif
@@ -69,38 +69,38 @@ GROUPCHECK := $(shell getent group proxysql)
 
 
 .PHONY: default
-default: build_deps build_lib build_src
+default: build_src
 
 .PHONY: debug
-debug: build_deps_debug build_lib_debug build_src_debug
+debug: build_src_debug
 
 .PHONY: testaurora
-testaurora: build_deps_debug build_lib_testaurora build_src_testaurora
+testaurora: build_src_testaurora
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgalera
-testgalera: build_deps_debug build_lib_testgalera build_src_testgalera
+testgalera: build_src_testgalera
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgrouprep
-testgrouprep: build_deps_debug build_lib_testgrouprep build_src_testgrouprep
+testgrouprep: build_src_testgrouprep
 
 .PHONY: testreadonly
-testreadonly: build_deps_debug build_lib_testreadonly build_src_testreadonly
+testreadonly: build_src_testreadonly
 
 .PHONY: testreplicationlag
-testreplicationlag: build_deps_debug build_lib_testreplicationlag build_src_testreplicationlag
+testreplicationlag: build_src_testreplicationlag
 
 .PHONY: testall
-testall: build_deps_debug build_lib_testall build_src_testall
+testall: build_src_testall
 
 .PHONY: clickhouse
-clickhouse: build_deps_clickhouse build_lib_clickhouse build_src_clickhouse
+clickhouse: build_src_clickhouse
 
 .PHONY: debug_clickhouse
-debug_clickhouse: build_deps_debug_clickhouse build_lib_debug_clickhouse build_src_debug_clickhouse
+debug_clickhouse: build_src_debug_clickhouse
 
 
 
@@ -113,7 +113,7 @@ build_lib: build_deps
 	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src
-build_src: build_deps build_lib
+build_src: build_lib
 	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_deps_debug
@@ -125,7 +125,7 @@ build_lib_debug: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testaurora
-build_src_testaurora: build_deps build_lib_testaurora
+build_src_testaurora: build_lib_testaurora
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testaurora
@@ -133,7 +133,7 @@ build_lib_testaurora: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testgalera
-build_src_testgalera: build_deps build_lib_testgalera
+build_src_testgalera: build_lib_testgalera
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testgalera
@@ -141,7 +141,7 @@ build_lib_testgalera: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GALERA" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testgrouprep
-build_src_testgrouprep: build_deps build_lib_testgrouprep
+build_src_testgrouprep: build_lib_testgrouprep
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GROUPREP" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testgrouprep
@@ -149,7 +149,7 @@ build_lib_testgrouprep: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_GROUPREP" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testreadonly
-build_src_testreadonly: build_deps build_lib_testreadonly
+build_src_testreadonly: build_lib_testreadonly
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_READONLY" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testreadonly
@@ -157,7 +157,7 @@ build_lib_testreadonly: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_READONLY" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testreplicationlag
-build_src_testreplicationlag: build_deps build_lib_testreplicationlag
+build_src_testreplicationlag: build_lib_testreplicationlag
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testreplicationlag
@@ -165,7 +165,7 @@ build_lib_testreplicationlag: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testall
-build_src_testall: build_deps build_lib_testall
+build_src_testall: build_lib_testall
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_testall
@@ -181,7 +181,7 @@ build_tap_test_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
 .PHONY: build_src_debug
-build_src_debug: build_deps build_lib_debug
+build_src_debug: build_lib_debug
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_deps_clickhouse
@@ -201,11 +201,11 @@ build_lib_debug_clickhouse: build_deps_debug_clickhouse
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_clickhouse
-build_src_clickhouse: build_deps_clickhouse build_lib_clickhouse
+build_src_clickhouse: build_lib_clickhouse
 	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_debug_clickhouse
-build_src_debug_clickhouse: build_deps build_lib_debug_clickhouse
+build_src_debug_clickhouse: build_lib_debug_clickhouse
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 
@@ -230,7 +230,7 @@ amd64-centos: centos6 centos6-dbg centos7 centos7-dbg centos8 centos8-clang cent
 amd64-ubuntu: ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
 .PHONY: amd64-ubuntu
 
-amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg
+amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
 .PHONY: amd64-debian
 
 amd64-fedora: fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg fedora36 fedora36-clang fedora36-dbg fedora37 fedora37-clang fedora37-dbg fedora38 fedora38-clang fedora38-dbg
@@ -251,7 +251,7 @@ arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensu
 arm64-centos: centos7-arm64 centos8-arm64
 .PHONY: arm64-centos
 
-arm64-debian: debian9-arm64 debian10-arm64 debian11-arm64
+arm64-debian: debian9-arm64 debian10-arm64 debian11-arm64 debian12-arm64
 .PHONY: arm64-debian
 
 arm64-ubuntu: ubuntu16-arm64 ubuntu18-arm64 ubuntu20-arm64 ubuntu22-arm64
@@ -467,6 +467,19 @@ debian11-arm64: binaries/proxysql_${CURVER}-debian11_arm64.deb
 
 debian11-dbg: binaries/proxysql_${CURVER}-dbg-debian11_amd64.deb
 .PHONY: debian11-dbg
+
+
+debian12: binaries/proxysql_${CURVER}-debian12_amd64.deb
+.PHONY: debian12
+
+debian12-clang: binaries/proxysql_${CURVER}-debian12-clang_amd64.deb
+.PHONY: debian12-clang
+
+debian12-arm64: binaries/proxysql_${CURVER}-debian12_arm64.deb
+.PHONY: debian12-arm64
+
+debian12-dbg: binaries/proxysql_${CURVER}-dbg-debian12_amd64.deb
+.PHONY: debian12-dbg
 
 
 opensuse15: binaries/proxysql-${CURVER}-1-opensuse15.x86_64.rpm
@@ -765,6 +778,23 @@ binaries/proxysql_${CURVER}-debian11_arm64.deb:
 
 binaries/proxysql_${CURVER}-dbg-debian11_amd64.deb:
 	docker-compose up debian11_dbg_build
+	docker-compose rm -f
+
+
+binaries/proxysql_${CURVER}-debian12_amd64.deb:
+	docker-compose up debian12_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-debian12-clang_amd64.deb:
+	docker-compose up debian12_clang_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-debian12_arm64.deb:
+	docker-compose up debian12_build
+	docker-compose rm -f
+
+binaries/proxysql_${CURVER}-dbg-debian12_amd64.deb:
+	docker-compose up debian12_dbg_build
 	docker-compose rm -f
 
 

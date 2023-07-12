@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <sys/resource.h>
 
 #ifndef ETIME
 // ETIME is not defined on FreeBSD
@@ -205,4 +208,6 @@ std::string replace_str(const std::string& str, const std::string& match, const 
 
 
 std::string generate_multi_rows_query(int rows, int params);
+
+void close_all_non_term_fd(std::vector<int> excludeFDs);
 #endif
