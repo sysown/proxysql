@@ -139,6 +139,7 @@ class ProxySQL_GlobalVariables {
 		ProxySQL_Checksum_Value mysql_variables;
 		ProxySQL_Checksum_Value ldap_variables;
 		ProxySQL_Checksum_Value proxysql_servers;
+		ProxySQL_Checksum_Value mysql_servers_v2;
 		uint64_t global_checksum;
 		unsigned long long updates_cnt;
 		unsigned long long dumped_at;

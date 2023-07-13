@@ -140,6 +140,7 @@ enum debug_module {
 	PROXY_DEBUG_QUERY_STATISTICS,
 	PROXY_DEBUG_RESTAPI,
 	PROXY_DEBUG_MONITOR,
+	PROXY_DEBUG_CLUSTER,
 	PROXY_DEBUG_UNKNOWN // this module doesn't exist. It is used only to define the last possible module
 };
 
