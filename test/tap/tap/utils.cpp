@@ -638,13 +638,17 @@ int create_mysql_user(
 	string create_user_query {};
 	string_format(t_create_user_query, create_user_query, user.c_str(), pass.c_str());
 
-	const string t_grant_all_query { "GRANT ALL ON *.* TO %s@'%%'" };
-	string grant_all_query { };
-	string_format(t_grant_all_query, grant_all_query, user.c_str());
+	const string t_grant_all_query1 { "GRANT ALL ON test.* TO %s@'%%'" };
+	const string t_grant_all_query2 { "GRANT SESSION_VARIABLES_ADMIN ON *.* TO %s@'%%'" };
+	string grant_all_query1 { };
+	string grant_all_query2 { };
+	string_format(t_grant_all_query1, grant_all_query1, user.c_str());
+	string_format(t_grant_all_query2, grant_all_query2, user.c_str());
 
 	MYSQL_QUERY(mysql_server, drop_user_query.c_str());
 	MYSQL_QUERY(mysql_server, create_user_query.c_str());
-	MYSQL_QUERY(mysql_server, grant_all_query.c_str());
+	MYSQL_QUERY(mysql_server, grant_all_query1.c_str());
+	MYSQL_QUERY(mysql_server, grant_all_query2.c_str());
 
 	return EXIT_SUCCESS;
 }
