@@ -63,6 +63,38 @@ void * work(void *arg) {
 	return NULL;
 }
 
+int run_funct_timeout(void *(*start_routine)(void *), int timeout) {
+	// we run the test on a separate thread because we have a built-in timeout
+	pthread_t thread_id;
+	if (pthread_create(&thread_id, NULL, start_routine, NULL)) {
+		fprintf(stderr, "Error calling pthread_create()");
+		return EXIT_FAILURE; 
+	}
+
+	if (timeout != 0) {
+		int tr = 0;
+		while (timeout != 0) {
+			sleep(1);
+			tr = pthread_tryjoin_np(thread_id, NULL);
+			if (tr == 0) {
+				timeout = 0;
+			} else {
+				timeout--;
+				diag("Waiting up to %d seconds", timeout);
+			}
+		}
+		if (tr =! 0) {
+			return EXIT_FAILURE;
+		}
+	} else {
+		// if timeout == 0 , the timeout is disabled
+		// This is useful during debugging, while running the TAP test in gdb
+		diag("Built-in timeout DISABLED");
+		pthread_join(thread_id, NULL);
+		return 0;
+	}
+	return 0;
+}
 int main(int, char**) {
 
 	plan(loop1 * (loop2 + 2));
@@ -85,31 +117,7 @@ int main(int, char**) {
 	mysql_close(admin);
 */
 
-	// we run the test on a separate thread because we have a built-in timeout
-	pthread_t thread_id;
-	if (pthread_create(&thread_id, NULL, work, NULL)) {
-		fprintf(stderr, "Error calling pthread_create()");
-		return EXIT_FAILURE; 
-	}
+	run_funct_timeout(work, 10);
 
-	int timeout = 10; // this is the timeout for the whole TAP test
-	if (timeout != 0) {
-		int tr = 0;
-		while (timeout != 0) {
-			sleep(1);
-			tr = pthread_tryjoin_np(thread_id, NULL);
-			if (tr == 0) {
-				timeout = 0;
-			} else {
-				timeout--;
-				diag("Waiting up to %d seconds", timeout);
-			}
-		}
-	} else {
-		// if timeout == 0 , the timeout is disabled
-		// This is useful during debugging, while running the TAP test in gdb
-		diag("Built-in timeout DISABLED");
-		pthread_join(thread_id, NULL);
-	}
 	return exit_status();
 }
