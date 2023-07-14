@@ -2779,9 +2779,12 @@ int MySQL_Connection::async_send_simple_command(short event, char *stmt, unsigne
 
 void MySQL_Connection::reset() {
 	bool old_no_multiplex_hg = get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
+	bool old_compress = get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 	status_flags=0;
 	// reconfigure STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG
 	set_status(old_no_multiplex_hg,STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
+	// reconfigure STATUS_MYSQL_CONNECTION_COMPRESSION
+	set_status(old_compress,STATUS_MYSQL_CONNECTION_COMPRESSION);
 	reusable=true;
 	options.last_set_autocommit=-1; // never sent
 
