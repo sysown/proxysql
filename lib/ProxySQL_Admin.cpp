@@ -3780,17 +3780,23 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			GloAdmin->mysql_servers_wrunlock();
 
 			if (resultset == nullptr) {
-
-				// This section of the code contains specific instructions for mysql_servers_v2, which is a virtual table 
-				// that represents the mysql_servers (admin) records. In order to generate the resultset, data will be retrieved 
-				// from mysql_server (admin) instead.
+				// 'mysql_servers_v2' is a virtual table that represents the latest 'main.mysql_servers'
+				// records promoted by the user. This section shouldn't be reached, since the initial resulset
+				// for this table ('MySQL_HostGroups_Manager::incoming_mysql_servers') is generated during
+				// initialization, and it's only updated in subsequent user config promotions. In case we
+				// reach here, an empty resultset should be replied, as it would mean that no user
+				// config has ever been promoted to runtime, and thus, this virtual table should remain empty.
 				if (tn == "mysql_servers_v2") {
+					const string query_empty_resultset {
+						string { MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS } + " LIMIT 0"
+					};
+
 					char *error=NULL;
 					int cols=0;
 					int affected_rows=0;
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
 					GloAdmin->mysql_servers_wrlock();
-					GloAdmin->admindb->execute_statement(MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS, &error, &cols, &affected_rows, &resultset);
+					GloAdmin->admindb->execute_statement(query_empty_resultset.c_str(), &error, &cols, &affected_rows, &resultset);
 					GloAdmin->mysql_servers_wrunlock();
 				} else {
 					resultset = MyHGM->dump_table_mysql(tn);
