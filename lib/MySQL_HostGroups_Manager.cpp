@@ -1449,7 +1449,7 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 	std::string s_port = std::to_string(port);
 	// TODO: Create switch here to classify error codes
 	std::string s_code = std::to_string(code);
-	std::string metric_id = s_hostgroup + ":" + address + ":" + s_port;
+	std::string metric_id = s_hostgroup + ":" + address + ":" + s_port + ":" + s_code;
 	std::map<string, string> metric_labels {
 		{ "hostgroup", s_hostgroup },
 		{ "address", address },
