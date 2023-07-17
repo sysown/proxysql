@@ -2546,9 +2546,15 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			char *sv = mybe->server_myds->myconn->mysql->server_version;
 			if (strncmp(sv,(char *)"8",1)==0) {
 				sprintf(query,q,"transaction_isolation", var_value);
-			}
-			else {
+			} else {
 				sprintf(query,q,"tx_isolation", var_value);
+			}
+		} else if (strncasecmp("tx_read_only", var_name, 12) == 0) {
+			char* sv = mybe->server_myds->myconn->mysql->server_version;
+			if (strncmp(sv, (char *)"8", 1) == 0) {
+				sprintf(query,q,"transaction_read_only", var_value);
+			} else {
+				sprintf(query,q,"tx_read_only", var_value);
 			}
 		} else if (strncasecmp("aurora_read_replica_read_committed", var_name, 34) == 0) {
 			// If aurora_read_replica_read_committed is set, isolation level is
@@ -2582,6 +2588,15 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
+
+		if (strcasecmp("transaction isolation level", var_name) == 0) {
+			mysql_variables.server_reset_value(this, SQL_NEXT_ISOLATION_LEVEL);
+			mysql_variables.client_reset_value(this, SQL_NEXT_ISOLATION_LEVEL);
+		} else if (strcasecmp("transaction read", var_name) == 0) {
+			mysql_variables.server_reset_value(this, SQL_NEXT_TRANSACTION_READ);
+			mysql_variables.client_reset_value(this, SQL_NEXT_TRANSACTION_READ);
+		}
+
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
 		if (rc==-1) {
@@ -5143,6 +5158,8 @@ handler_again:
 		case SETTING_TRANSACTION_READ:
 		case SETTING_CHARSET:
 		case SETTING_VARIABLE:
+		case SETTING_NEXT_ISOLATION_LEVEL:
+		case SETTING_NEXT_TRANSACTION_READ:
 			{
 				int rc = 0;
 				if (mysql_variables.update_variable(this, status, rc)) {
@@ -6432,6 +6449,33 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 						}
+					} else if (var == "tx_read_only") {
+						std::string value1 = *values;
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET tx_read_only value %s\n", value1.c_str());
+
+						if (
+							(value1 == "0") ||
+							(strcasecmp(value1.c_str(), "false")==0) ||
+							(strcasecmp(value1.c_str(), "off")==0)
+						) {
+							value1 = "WRITE";
+						} else if (
+							(value1 == "1") ||
+							(strcasecmp(value1.c_str(), "true")==0) ||
+							(strcasecmp(value1.c_str(), "on")==0)
+						) {
+							value1 = "ONLY";
+						} else {
+							//proxy_warning("Unknown tx_read_only value \"%s\"\n", value1.c_str());
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+						uint32_t read_only_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (mysql_variables.client_get_hash(this, SQL_TRANSACTION_READ) != read_only_int) {
+							if (!mysql_variables.client_set_value(this, SQL_TRANSACTION_READ, value1.c_str()))
+								return false;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ACCESS MODE to READ %s\n", value1.c_str());
+						}
 					} else if (std::find(mysql_variables.ignore_vars.begin(), mysql_variables.ignore_vars.end(), var) != mysql_variables.ignore_vars.end()) {
 						// this is a variable we parse but ignore
 						// see MySQL_Variables::MySQL_Variables() for a list of ignored variables
@@ -6550,27 +6594,51 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			} else if (match_regexes && match_regexes[2]->match(dig)) {
 				SetParser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse2();
+
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
-					std::string var = it->first;
-					auto values = std::begin(it->second);
-					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
-					if (var == "isolation level") {
-						std::string value1 = *values;
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SESSION TRANSACTION ISOLATION LEVEL value %s\n", value1.c_str());
-						uint32_t isolation_level_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (mysql_variables.client_get_hash(this, SQL_ISOLATION_LEVEL) != isolation_level_int) {
-							if (!mysql_variables.client_set_value(this, SQL_ISOLATION_LEVEL, value1.c_str()))
-								return false;
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
+
+					const std::vector<std::string>& val = split_string(it->first, ':');
+
+					if (val.size() == 2) {
+
+						const auto values = std::begin(it->second);
+						const std::string& var = val[1];
+
+						enum mysql_variable_name isolation_level_val;
+						enum mysql_variable_name transaction_read_val;
+
+						if (val[0] == "session") {
+							isolation_level_val = SQL_ISOLATION_LEVEL;
+							transaction_read_val = SQL_TRANSACTION_READ;
+						} else {
+							isolation_level_val = SQL_NEXT_ISOLATION_LEVEL;
+							transaction_read_val = SQL_NEXT_TRANSACTION_READ;
 						}
-					} else if (var == "read") {
-						std::string value1 = *values;
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SESSION TRANSACTION READ value %s\n", value1.c_str());
-						uint32_t transaction_read_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (mysql_variables.client_get_hash(this, SQL_TRANSACTION_READ) != transaction_read_int) {
-							if (!mysql_variables.client_set_value(this, SQL_TRANSACTION_READ, value1.c_str()))
-								return false;
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION READ to %s\n", value1.c_str());
+
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
+						if (var == "isolation level") {
+							const std::string& value1 = *values;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s TRANSACTION ISOLATION LEVEL value %s\n", val[0].c_str(), value1.c_str());
+							const uint32_t isolation_level_int = SpookyHash::Hash32(value1.c_str(), value1.length(), 10);
+							if (mysql_variables.client_get_hash(this, isolation_level_val) != isolation_level_int) {
+								if (!mysql_variables.client_set_value(this, isolation_level_val, value1.c_str()))
+									return false;
+
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
+							}
+						} else if (var == "read") {
+							const std::string& value1 = *values;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s TRANSACTION READ value %s\n", val[0].c_str(), value1.c_str());
+							const uint32_t transaction_read_int = SpookyHash::Hash32(value1.c_str(), value1.length(), 10);
+							if (mysql_variables.client_get_hash(this, transaction_read_val) != transaction_read_int) {
+								if (!mysql_variables.client_set_value(this, transaction_read_val, value1.c_str()))
+									return false;
+
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION READ to %s\n", value1.c_str());
+							}
+						} else {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
 						}
 					} else {
 						unable_to_parse_set_statement(lock_hostgroup);

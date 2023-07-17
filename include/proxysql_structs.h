@@ -221,6 +221,8 @@ enum mysql_variable_name {
 	SQL_TIME_ZONE,
 	SQL_TIMESTAMP,
 	SQL_TMP_TABLE_SIZE,
+	SQL_NEXT_ISOLATION_LEVEL,
+	SQL_NEXT_TRANSACTION_READ,
 	SQL_UNIQUE_CHECKS,
 	SQL_WSREP_OSU_METHOD,
 	SQL_NAME_LAST_HIGH_WM,
@@ -254,6 +256,8 @@ enum session_status {
 	SETTING_MULTIPLE_VARIABLES,
 	SETTING_SET_NAMES,
 	SHOW_WARNINGS,
+	SETTING_NEXT_ISOLATION_LEVEL,
+	SETTING_NEXT_TRANSACTION_READ,
 	session_status___NONE // special marker
 };
 
@@ -1188,6 +1192,8 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_TIME_ZONE,                  SETTING_VARIABLE, true,  false, false, false, (char *)"time_zone",                  NULL, (char *)"SYSTEM" , false} ,
 	{ SQL_TIMESTAMP,                  SETTING_VARIABLE, false, false, true,  false, (char *)"timestamp",                  NULL, (char *)"" , false} ,
 	{ SQL_TMP_TABLE_SIZE,             SETTING_VARIABLE, false, false, true,  false, (char *)"tmp_table_size",             NULL, (char *)"" , false} ,
+	{ SQL_NEXT_ISOLATION_LEVEL, SETTING_NEXT_ISOLATION_LEVEL, false, true,  false, false, (char *)"transaction isolation level", (char *)"next_isolation_level", (char *)"READ COMMITTED" , false} ,
+	{ SQL_NEXT_TRANSACTION_READ, SETTING_NEXT_TRANSACTION_READ, false, true,  false, false, (char *)"transaction read", (char *)"next_transaction_read", (char *)"WRITE" , false} ,
 	{ SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
 	{ SQL_WSREP_OSU_METHOD,           SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_osu_method",           NULL, (char *)"" , false} ,
 
