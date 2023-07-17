@@ -1526,7 +1526,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		if (myrc==NULL) {
 			mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, hostgroup_id, hostname, port, myerrno);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, myerrno);
 			if (myerrno < 2000) {
 				mysql_close(mysql);
 			} else {
