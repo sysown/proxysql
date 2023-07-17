@@ -7,6 +7,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <random>
 #include <signal.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -418,6 +419,50 @@ std::string generate_multi_rows_query(int rows, int params) {
 	return s;
 }
 
+string rand_str(std::size_t strSize) {
+	string dic { "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" };
+	std::random_device rd {};
+	std::mt19937 gen { rd() };
+
+	std::shuffle(dic.begin(), dic.end(), gen);
+
+	if (strSize < dic.size()) {
+		return dic.substr(0, strSize);
+	} else {
+		std::size_t req_modulus = static_cast<std::size_t>(strSize / dic.size());
+		std::size_t req_reminder = strSize % dic.size();
+		string random_str {};
+
+		for (std::size_t i = 0; i < req_modulus; i++) {
+			std::shuffle(dic.begin(), dic.end(), gen);
+			random_str.append(dic);
+		}
+
+		random_str.append(dic.substr(0, req_reminder));
+
+		return random_str;
+	}
+}
+
+std::string get_checksum_from_hash(uint64_t hash) {
+	uint32_t d32[2] = { 0 };
+	memcpy(&d32, &hash, sizeof(hash));
+
+	vector<char> s_buf(ProxySQL_Checksum_Value_LENGTH, 0);
+	sprintf(&s_buf[0],"0x%0X%0X", d32[0], d32[1]);
+	replace_checksum_zeros(&s_buf[0]);
+
+	return string { &s_buf.front() };
+}
+
+void remove_sqlite3_resultset_rows(
+	unique_ptr<SQLite3_result>& resultset, const function<bool(SQLite3_row*)>& pred
+) {
+	const auto remove_it { std::remove_if(resultset->rows.begin(), resultset->rows.end(), pred) };
+	resultset->rows.erase(remove_it, resultset->rows.end());
+	resultset->rows_count = resultset->rows.size();
+}
+
 void close_all_non_term_fd(std::vector<int> excludeFDs) {
 	DIR *d;
 	struct dirent *dir;
@@ -445,25 +490,4 @@ void close_all_non_term_fd(std::vector<int> excludeFDs) {
 			}
 		}
 	}
-}
-
-std::string get_checksum_from_hash(uint64_t hash) {
-	uint32_t d32[2] = { 0 };
-	memcpy(&d32, &hash, sizeof(hash));
-
-	vector<char> s_buf(ProxySQL_Checksum_Value_LENGTH, 0);
-	sprintf(&s_buf[0],"0x%0X%0X", d32[0], d32[1]);
-	replace_checksum_zeros(&s_buf[0]);
-
-	return string { &s_buf.front() };
-}
-
-void remove_sqlite3_resultset_rows(
-	unique_ptr<SQLite3_result>& resultset, const function<bool(SQLite3_row*)>& pred
-) {
-	const vector<SQLite3_row *>::iterator remove_it {
-		std::remove_if(resultset->rows.begin(), resultset->rows.end(), pred)
-	};
-	resultset->rows.erase(remove_it, resultset->rows.end());
-	resultset->rows_count = resultset->rows.size();
 }

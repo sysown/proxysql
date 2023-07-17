@@ -114,6 +114,22 @@ struct admin_metrics_map_idx {
 	};
 };
 
+/**
+ * @brief Holds the retrieved info from the bootstrapping server.
+ * @details Used during ProxySQL_Admin initialization.
+ */
+struct bootstrap_info_t {
+	uint32_t server_language;
+	std::string server_version;
+	MYSQL_RES* servers;
+	MYSQL_RES* users;
+	std::string mon_user;
+	std::string mon_pass;
+	bool rand_gen_user;
+
+	~bootstrap_info_t();
+};
+
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
 
@@ -371,7 +387,14 @@ class ProxySQL_Admin {
 #endif
 	int pipefd[2];
 	void print_version();
-	bool init();
+	/**
+	 * @brief Initializes the module.
+	 * @details Bootstrap info is only used for 'bootstrap mode', i.e. if 'GloVars.global.gr_bootstrap_mode'
+	 *   is detected to be 'true'.
+	 * @param bootstrap_info Info used to create default config during initialization in bootstrap mode.
+	 * @return Always true.
+	 */
+	bool init(const bootstrap_info_t& bootstrap_info);
 	void init_ldap();
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }

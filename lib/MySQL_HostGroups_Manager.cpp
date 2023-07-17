@@ -5976,6 +5976,20 @@ void MySQL_HostGroups_Manager::update_group_replication_add_autodiscovered(
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
 
 		generate_mysql_servers_table();
+
+		// Update the global checksums after 'mysql_servers' regeneration
+		{
+			unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
+			remove_resultset_offline_hard_servers(resultset);
+			save_runtime_mysql_servers(resultset.release());
+
+			string mysrvs_checksum { gen_global_mysql_servers_checksum() };
+			proxy_info("New computed global checksum for 'mysql_servers' is '%s'\n", mysrvs_checksum.c_str());
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			update_glovars_mysql_servers_checksum(mysrvs_checksum);
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
+
 		update_table_mysql_servers_for_monitor(false);
 		generate_mysql_group_replication_hostgroups_monitor_resultset();
 	}
@@ -7221,49 +7235,6 @@ bool AWS_Aurora_Info::update(int r, int _port, char *_end_addr, int maxl, int al
 		}
 	}
 	return ret;
-}
-
-/**
- * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
- *
- * @param j JSON object constructed from 'servers_defaults' field.
- * @param hid Hostgroup for which the 'servers_defaults' is defined in 'mysql_hostgroup_attributes'. Used for
- *  error logging.
- * @param key The key for the value to be extracted.
- * @param val_check A validation function, checks if the value is within a expected range.
- *
- * @return The value extracted from the supplied JSON. In case of error '-1', and error cause is logged.
- */
-template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
-T j_get_srv_default_int_val(
-	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
-) {
-	if (j.find(key) != j.end()) {
-		const json::value_t val_type = j[key].type();
-		const char* type_name = j[key].type_name();
-
-		if (val_type == json::value_t::number_integer || val_type == json::value_t::number_unsigned) {
-			T val = j[key].get<T>();
-
-			if (val_check(val)) {
-				return val;
-			} else {
-				proxy_error(
-					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
-						" Value NOT UPDATED.\n",
-					static_cast<int64_t>(val), key.c_str(), hid
-				);
-			}
-		} else {
-			proxy_error(
-				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
-					" Value NOT UPDATED.\n",
-				type_name, val_type, key.c_str(), hid
-			);
-		}
-	}
-
-	return static_cast<T>(-1);
 }
 
 /**

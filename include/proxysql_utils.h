@@ -223,7 +223,12 @@ std::vector<std::string> split_str(const std::string& s, char delimiter);
 
 std::string generate_multi_rows_query(int rows, int params);
 
-void close_all_non_term_fd(std::vector<int> excludeFDs);
+/**
+ * @brief Generates a random string of the length of the provider 'strSize' parameter.
+ * @param strSize The size of the string to be generated.
+ * @return A random string.
+ */
+std::string rand_str(std::size_t strSize);
 
 /**
  * @brief Helper function used to replace spaces and zeros by '0' char in the supplied checksum buffer.
@@ -253,4 +258,5 @@ void remove_sqlite3_resultset_rows(
 	std::unique_ptr<SQLite3_result>& resultset, const std::function<bool(SQLite3_row*)>& pred
 );
 
+void close_all_non_term_fd(std::vector<int> excludeFDs);
 #endif

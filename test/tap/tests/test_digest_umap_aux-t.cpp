@@ -174,13 +174,15 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	plan(1 + DUMMY_QUERIES.size() * 3); // always specify the number of tests that are going to be performed
+	plan(1 + DUMMY_QUERIES.size() * 5); // always specify the number of tests that are going to be performed
 
 	MYSQL *proxy_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
 	}
+
+	MYSQL_QUERY(proxy_admin, "TRUNCATE TABLE stats.stats_mysql_query_digest");
 
 	vector<const char*> admin_queries = {
 		"DELETE FROM mysql_query_rules",
@@ -198,6 +200,8 @@ int main(int argc, char** argv) {
 		mysql_close(proxy_admin);
 		return EXIT_FAILURE;
 	}
+
+	time_t init_time = time(NULL);
 
 	MYSQL_RES *res = NULL;
 	for (const auto &query : DUMMY_QUERIES) {
@@ -243,6 +247,8 @@ int main(int argc, char** argv) {
 	);
 
 	vector<digest_stats> ds_vector_after = get_digest_stats(proxy_admin);
+	time_t final_time = time(NULL);
+
 	for (int i = 0; i < DUMMY_QUERIES.size(); i++) {
 		ok(
 			ds_vector_before[i].hostgroup == ds_vector_after[i].hostgroup &&
@@ -285,7 +291,23 @@ int main(int argc, char** argv) {
 			ds_vector_before[i].last_seen, ds_vector_after[i].last_seen,
 			ds_vector_before[i].sum_time, ds_vector_after[i].sum_time
 		);
+
+		uint64_t bf_first_seen = ds_vector_before[i].first_seen;
+		ok(
+			init_time - 1 <= bf_first_seen && init_time + 1 >= bf_first_seen,
+			"'first_seen' within required time range - min: %ld, max: %ld, first_seen: %ld",
+			init_time - 1, init_time + 1, bf_first_seen
+		);
+
+		uint64_t bf_last_seen = ds_vector_before[i].last_seen;
+		ok(
+			init_time <= bf_last_seen && final_time >= bf_last_seen,
+			"'last_seen' within required time range - min: %ld, max: %ld, last_seen: %ld",
+			init_time, final_time, bf_last_seen
+		);
 	}
+
+	mysql_close(proxy_admin);
 
 	return exit_status();
 }
