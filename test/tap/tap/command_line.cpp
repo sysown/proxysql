@@ -11,7 +11,11 @@
 #include "command_line.h"
 #include "json.hpp"
 
+#include "dotenv.h"
+
 using nlohmann::json;
+using dotenv::env;
+
 
 CommandLine::CommandLine() {}
 
@@ -100,57 +104,79 @@ int CommandLine::getEnv() {
 		*field = strdup(value);
 	};
 
-	value=getenv("TAP_HOST");
-	if(!value) return -1;
-	replace_str_field(&this->host, value);
+	{
+		char temp[PATH_MAX];
+		ssize_t len = readlink("/proc/self/exe", temp, sizeof(temp));
+		std::string exe_path = (len > 0) ? std::string(temp, len) : std::string("");
+		std::string exe_name = exe_path.substr(exe_path.find_last_of('/') + 1);
+		std::string dir_path = exe_path.substr(0, exe_path.find_last_of('/'));
+		std::string dir_name = dir_path.substr(dir_path.find_last_of('/') + 1);
 
-	value=getenv("TAP_USERNAME");
-	if(!value) return -1;
-	replace_str_field(&this->username, value);
+		env.load_dotenv((dir_path + "/.env").c_str(), true);
+		bool loaded1 = env.loaded;
 
-	value=getenv("TAP_PASSWORD");
-	if(!value) return -1;
-	replace_str_field(&this->password, value);
+		env.load_dotenv((dir_path + "/" + dir_name + ".env").c_str(), true);
+		bool loaded2 = env.loaded;
 
-	value=getenv("TAP_ADMINUSERNAME");
-	if (value) {
+		env.load_dotenv((exe_path + ".env").c_str(), true);
+		bool loaded3 = env.loaded;
+
+		bool quiet = (bool) getenv("TAP_QUIET_ENVLOAD");
+		if (loaded1 && ! quiet)
+			diag("loaded: %s", (dir_path + "/.env").c_str());
+		if (loaded2 && ! quiet)
+			diag("loaded: %s", (dir_path + "/" + dir_name + ".env").c_str());
+		if (loaded3 && ! quiet)
+			diag("loaded: %s", (exe_path + ".env").c_str());
+	}
+
+	value = getenv("TAP_HOST");
+	if (value)
+		replace_str_field(&this->host, value);
+
+	value = getenv("TAP_USERNAME");
+	if (value)
+		replace_str_field(&this->username, value);
+
+	value = getenv("TAP_PASSWORD");
+	if (value)
+		replace_str_field(&this->password, value);
+
+	value = getenv("TAP_ADMINUSERNAME");
+	if (value)
 		replace_str_field(&this->admin_username, value);
-	}
 
-	value=getenv("TAP_ADMINPASSWORD");
-	if (value) {
+	value = getenv("TAP_ADMINPASSWORD");
+	if (value)
 		replace_str_field(&this->admin_password, value);
+
+	int env_port = 0;
+	value = getenv("TAP_PORT");
+	if (value) {
+		env_port = strtol(value, NULL, 10);
+		if (env_port>0 && env_port<65536)
+			port = env_port;
 	}
 
-	int env_port=0;
-	value=getenv("TAP_PORT");
-	if(value)
-		env_port=strtol(value, NULL, 10);
-	else
-		env_port=6033;
-	if(env_port>0 && env_port<65536)
-		port=env_port;
+	value = getenv("TAP_ADMINPORT");
+	if (value) {
+		env_port = strtol(value, NULL, 10);
+		if (env_port>0 && env_port<65536)
+			admin_port = env_port;
+	}
 
-	value=getenv("TAP_ADMINPORT");
-	if(value)
-		env_port=strtol(value, NULL, 10);
-	else
-		env_port=6032;
-	if(env_port>0 && env_port<65536)
-		admin_port=env_port;
+	value = getenv("TAP_WORKDIR");
+	if (value)
+		replace_str_field(&this->workdir, value);
 
-	value=getenv("TAP_WORKDIR");
-	if(!value) return -1;
-	replace_str_field(&this->workdir, value);
-
-	value=getenv("TAP_CLIENT_FLAGS");
+	value = getenv("TAP_CLIENT_FLAGS");
 	if (value) {
 		char* end = NULL;
 		uint64_t env_c_flags = strtoul(value, &end, 10);
 
 		const char* errmsg { NULL };
 
-		if (env_c_flags == 0 && value == end)  {
+		if (env_c_flags == 0 && value == end) {
 			errmsg = "Invalid string to parse";
 		} else if (env_c_flags == ULONG_MAX && errno == ERANGE) {
 			errmsg = strerror(errno);

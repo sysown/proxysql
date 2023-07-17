@@ -129,10 +129,17 @@ const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
  * @param name The 'charset name' for which to find the default collation.
  * @return The collation found, NULL if none is find.
  */
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name) {
+MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name_) {
 	const char* default_collation = mysql_thread___default_variables[SQL_COLLATION_CONNECTION];
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
 	MARIADB_CHARSET_INFO* charset_collation = nullptr;
+
+	const char *name;
+	if (strcasecmp(name_,(const char *)"utf8mb3")==0) {
+		name = (const char *)"utf8";
+	} else {
+		name = name_;
+	}
 
 	do {
 		if (!strcasecmp(c->csname, name)) {
@@ -156,8 +163,23 @@ MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name) {
 	return charset_collation;
 }
 
-MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename) {
+MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname_, const char *collatename_) {
 	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
+	char buf[64];
+	const char *csname;
+	const char *collatename;
+	if (strcasecmp(csname_,(const char *)"utf8mb3")==0) {
+		csname = (const char *)"utf8";
+	} else {
+		csname = csname_;
+	}
+	if (strncasecmp(collatename_,(const char *)"utf8mb3", 7)==0) {
+		memcpy(buf,(const char *)"utf8",4);
+		strcpy(buf+4,collatename_+7);
+		collatename = buf;
+	} else {
+		collatename = collatename_;
+	}
 	do {
 		if (!strcasecmp(c->csname, csname) && !strcasecmp(c->name, collatename)) {
 			return c;
@@ -240,6 +262,7 @@ ProxySQL_Poll::ProxySQL_Poll() {
 	len=0;
 	pending_listener_add=0;
 	pending_listener_del=0;
+	bootstrapping_listeners = true;
 	size=MIN_POLL_LEN;
 	fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
 	myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
@@ -553,6 +576,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_processor_iterations",
 	(char *)"query_processor_regex",
 	(char *)"set_query_lock_on_hostgroup",
+	(char *)"set_parser_algorithm",
 	(char *)"reset_connection_algorithm",
 	(char *)"auto_increment_delay_multiplex",
 	(char *)"auto_increment_delay_multiplex_timeout_ms",
@@ -1147,6 +1171,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
 	variables.set_query_lock_on_hostgroup=1;
+	variables.set_parser_algorithm=1; // in 2.6.0 this must become 2
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
 	variables.auto_increment_delay_multiplex_timeout_ms=10000;
@@ -2241,6 +2266,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["query_processor_regex"]           = make_tuple(&variables.query_processor_regex,            1,           2, false);
 		VariablesPointers_int["query_retries_on_failure"]        = make_tuple(&variables.query_retries_on_failure,         0,        1000, false);
 		VariablesPointers_int["set_query_lock_on_hostgroup"]     = make_tuple(&variables.set_query_lock_on_hostgroup,      0,           1, false);
+		VariablesPointers_int["set_parser_algorithm"]            = make_tuple(&variables.set_parser_algorithm,             1,           2, false);
 
 		// throttle
 		VariablesPointers_int["throttle_connections_per_sec_to_hostgroup"] = make_tuple(&variables.throttle_connections_per_sec_to_hostgroup, 1, 100*1000*1000, false);
@@ -2863,6 +2889,10 @@ MySQL_Thread::~MySQL_Thread() {
 		free(match_regexes);
 		match_regexes=NULL;
 	}
+	if (thr_SetParser != NULL) {
+		delete thr_SetParser;
+		thr_SetParser = NULL;
+	}
 
 }
 
@@ -2969,12 +2999,13 @@ bool MySQL_Thread::init() {
 	mypolls.add(POLLIN, pipefd[0], NULL, 0);
 	assert(i==0);
 
+	thr_SetParser = new SetParser("");
 	match_regexes=(Session_Regex **)malloc(sizeof(Session_Regex *)*4);
 //	match_regexes[0]=new Session_Regex((char *)"^SET (|SESSION |@@|@@session.)SQL_LOG_BIN( *)(:|)=( *)");
 	match_regexes[0] = NULL; // NOTE: historically we used match_regexes[0] for SET SQL_LOG_BIN . Not anymore
 	
 	std::stringstream ss;
-	ss << "^SET (|SESSION |@@|@@session.|@@local.)`?(" << mysql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION)`?( *)(:|)=( *)";
+	ss << "^SET (|SESSION |@@|@@session.|@@local.)`?(" << mysql_variables.variables_regexp << "SESSION_TRACK_GTIDS|TX_ISOLATION|TX_READ_ONLY|TRANSACTION_ISOLATION|TRANSACTION_READ_ONLY)`?( *)(:|)=( *)";
 	match_regexes[1]=new Session_Regex((char *)ss.str().c_str());
 
 	match_regexes[2]=new Session_Regex((char *)"^SET(?: +)(|SESSION +)TRANSACTION(?: +)(?:(?:(ISOLATION(?: +)LEVEL)(?: +)(REPEATABLE(?: +)READ|READ(?: +)COMMITTED|READ(?: +)UNCOMMITTED|SERIALIZABLE))|(?:(READ)(?: +)(WRITE|ONLY)))");
@@ -3227,18 +3258,25 @@ __run_skip_1a:
 #endif // IDLE_THREADS
 
 		pthread_mutex_unlock(&thread_mutex);
-		while ( // spin here if ...
-			(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
-			||
-			(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
-		) {
-			if (n) {
-				poll_listener_add(n);
-				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
-			}
+		if (unlikely(mypolls.bootstrapping_listeners == true)) {
+			while ( // spin here if ...
+				(n=__sync_add_and_fetch(&mypolls.pending_listener_add,0)) // there is a new listener to add
+				||
+				(GloMTH->bootstrapping_listeners == true) // MySQL_Thread_Handlers has more listeners to configure
+			) {
+				if (n) {
+					poll_listener_add(n);
+					assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_add,n,0));
+				} else {
+					if (GloMTH->bootstrapping_listeners == false) {
+						// we stop looping
+						mypolls.bootstrapping_listeners = false;
+					}
+				}
 #ifdef DEBUG
-			usleep(5+rand()%10);
+				usleep(5+rand()%10);
 #endif
+			}
 		}
 
 		proxy_debug(PROXY_DEBUG_NET, 7, "poll_timeout=%u\n", mypolls.poll_timeout);
@@ -3272,17 +3310,19 @@ __run_skip_1a:
 		}
 #endif // IDLE_THREADS
 
-		while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
-			if (static_cast<int>(n) == -1) {
-				for (unsigned int i = 0; i < mypolls.len; i++) {
-					if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
-						poll_listener_del(mypolls.myds[i]->fd);
+		if (unlikely(maintenance_loop == true)) {
+			while ((n=__sync_add_and_fetch(&mypolls.pending_listener_del,0))) {	// spin here
+				if (static_cast<int>(n) == -1) {
+					for (unsigned int i = 0; i < mypolls.len; i++) {
+						if (mypolls.myds[i] && mypolls.myds[i]->myds_type == MYDS_LISTENER) {
+							poll_listener_del(mypolls.myds[i]->fd);
+						}
 					}
+				} else {
+					poll_listener_del(n);
 				}
-			} else {
-				poll_listener_del(n);
+				assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 			}
-			assert(__sync_bool_compare_and_swap(&mypolls.pending_listener_del,n,0));
 		}
 
 		pthread_mutex_lock(&thread_mutex);
@@ -4014,6 +4054,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___query_processor_iterations=GloMTH->get_variable_int((char *)"query_processor_iterations");
 	mysql_thread___query_processor_regex=GloMTH->get_variable_int((char *)"query_processor_regex");
 	mysql_thread___set_query_lock_on_hostgroup=GloMTH->get_variable_int((char *)"set_query_lock_on_hostgroup");
+	mysql_thread___set_parser_algorithm=GloMTH->get_variable_int((char *)"set_parser_algorithm");
 	mysql_thread___reset_connection_algorithm=GloMTH->get_variable_int((char *)"reset_connection_algorithm");
 	mysql_thread___auto_increment_delay_multiplex=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex");
 	mysql_thread___auto_increment_delay_multiplex_timeout_ms=GloMTH->get_variable_int((char *)"auto_increment_delay_multiplex_timeout_ms");
@@ -4249,6 +4290,7 @@ MySQL_Thread::MySQL_Thread() {
 		mysql_thread___default_variables[i] = NULL;
 	}
 	shutdown=0;
+	thr_SetParser = NULL;
 }
 
 void MySQL_Thread::register_session_connection_handler(MySQL_Session *_sess, bool _new) {

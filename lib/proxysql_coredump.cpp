@@ -27,7 +27,8 @@ void init_coredump_struct() {
 	coredump_enabled = false;
 	coredump_generation_threshold = 0;
 	coredump_generation_interval_ms = 0;
-	proxy_coredump_reset_stats();
+	coredump_generated = 0;
+	coredump_creation_time = 0;
 }
 
 void proxy_coredump_load_filters(std::unordered_set<std::string>&& filters) {

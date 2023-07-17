@@ -29,7 +29,6 @@
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_Logger.hpp"
 #include "SQLite3_Server.h"
-
 #include "Web_Interface.hpp"
 
 #include <dirent.h>
@@ -189,6 +188,7 @@ static char * load_file (const char *filename) {
 	return buffer;
 }
 */
+
 
 static int round_intv_to_time_interval(int& intv) {
 	if (intv > 300) {
@@ -685,6 +685,7 @@ static char * admin_variables_names[]= {
 #endif /* DEBUG */
 	(char *)"coredump_generation_interval_ms",
 	(char *)"coredump_generation_threshold",
+	(char *)"ssl_keylog_file",
 	NULL
 };
 
@@ -1813,6 +1814,18 @@ bool admin_handler_command_proxysql(char *query_no_space, unsigned int query_no_
 			GloMyLogger->flush_log();
 		}
 		SPA->flush_error_log();
+		proxysql_keylog_close();
+		char* ssl_keylog_file = SPA->get_variable((char*)"ssl_keylog_file");
+		if (ssl_keylog_file != NULL) {
+			if (strlen(ssl_keylog_file) > 0) {
+				if (proxysql_keylog_open(ssl_keylog_file) == false) {
+					// re-opening file failed, setting ssl_keylog_enabled to false
+					GloVars.global.ssl_keylog_enabled = false;
+					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", ssl_keylog_file);
+				}
+			}
+			free(ssl_keylog_file);
+		}	
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return false;
 	}
@@ -5943,6 +5956,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 #endif /* DEBUG */
 	variables.coredump_generation_interval_ms = 30000;
 	variables.coredump_generation_threshold = 10;
+	variables.ssl_keylog_file = strdup("");
 	last_p_memory_metrics_ts = 0;
 	// create the scheduler
 	scheduler=new ProxySQL_External_Scheduler();
@@ -6900,6 +6914,9 @@ void ProxySQL_Admin::admin_shutdown() {
 	}
 	if (variables.telnet_stats_ifaces) {
 		free(variables.telnet_stats_ifaces);
+	}
+	if (variables.ssl_keylog_file) {
+		free(variables.ssl_keylog_file);
 	}
 };
 
@@ -8547,6 +8564,18 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.coredump_generation_threshold);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name, "ssl_keylog_file")) {
+		char* ssl_keylog_file = s_strdup(variables.ssl_keylog_file);
+		if (ssl_keylog_file != NULL && strlen(ssl_keylog_file) > 0) {
+			if ((ssl_keylog_file[0] != '/')) { // relative path 
+				char* tmp_ssl_keylog_file = (char*)malloc(strlen(GloVars.datadir) + strlen(ssl_keylog_file) + 2);
+				sprintf(tmp_ssl_keylog_file, "%s/%s", GloVars.datadir, ssl_keylog_file);
+				free(ssl_keylog_file);
+				ssl_keylog_file = tmp_ssl_keylog_file;
+			}
+		}
+		return ssl_keylog_file;
+	}
 	return NULL;
 }
 
@@ -9223,7 +9252,6 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv >= 0 && intv < INT_MAX) {
 			variables.coredump_generation_interval_ms=intv;
 			coredump_generation_interval_ms=intv;
-			proxy_coredump_reset_stats();
 			return true;
 		} else {
 			return false;
@@ -9234,11 +9262,45 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (intv > 0 && intv <= 500) {
 			variables.coredump_generation_threshold=intv;
 			coredump_generation_threshold=intv;
-			proxy_coredump_reset_stats();
 			return true;
 		} else {
 			return false;
 		}
+	}
+	if (!strcasecmp(name, "ssl_keylog_file")) {
+		if (strcmp(variables.ssl_keylog_file, value)) {
+			if (vallen == 0 || strcmp(value, "(null)") == 0) {
+				proxysql_keylog_close();
+				free(variables.ssl_keylog_file);
+				variables.ssl_keylog_file = strdup("");
+				GloVars.global.ssl_keylog_enabled = false;
+			} else {
+				char* sslkeylogfile = NULL;
+				const bool is_absolute_path = (value[0] == '/');
+				if (is_absolute_path) { // absolute path
+					sslkeylogfile = strdup(value);
+				} else { // relative path
+					sslkeylogfile = (char*)malloc(strlen(GloVars.datadir) + strlen(value) + 2);
+					sprintf(sslkeylogfile, "%s/%s", GloVars.datadir, value);
+				}
+				if (proxysql_keylog_open(sslkeylogfile) == false) {
+					free(sslkeylogfile);
+					proxy_warning("Cannot open SSLKEYLOGFILE '%s' for writing.\n", value);
+					return false;
+				}
+				free(variables.ssl_keylog_file);
+				if (is_absolute_path) {
+					variables.ssl_keylog_file = sslkeylogfile;
+					sslkeylogfile = NULL;
+				} else {
+					variables.ssl_keylog_file = strdup(value);
+				}
+				if (sslkeylogfile)
+					free(sslkeylogfile);
+				GloVars.global.ssl_keylog_enabled = true;
+			}
+		}
+		return true;
 	}
 	return false;
 }
@@ -10252,6 +10314,12 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 	max_bulk_row_idx=max_bulk_row_idx*32;
 	auto it = resultset ? digest_umap->cend() : digest_umap->cbegin();
 	int i = 0;
+
+	time_t __now;
+	time(&__now);
+	unsigned long long curtime=monotonic_time();
+	time_t seen_time;
+
 	// If the function do not receives a resultset, it gets the values directly from the digest_umap
 	while (resultset ? i != resultset->rows_count : it != digest_umap->end()) {
 		QP_query_digest_stats *qds = (QP_query_digest_stats *)(resultset ? NULL : it->second);
@@ -10271,8 +10339,14 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+5, resultset ? row->fields[3] : digest_hex_str.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_text)(statement32, (idx*14)+6, resultset ? row->fields[4] : qds->get_digest_text(digest_text_umap), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+7, resultset ? atoll(row->fields[5]) : qds->count_star); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+8, resultset ? atoll(row->fields[6]) : qds->first_seen); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+9, resultset ? atoll(row->fields[7]) : qds->last_seen); ASSERT_SQLITE_OK(rc, statsdb);
+			{
+				seen_time = qds != nullptr ? __now - curtime/1000000 + qds->first_seen/1000000 : 0;
+				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+8, resultset ? atoll(row->fields[6]) : seen_time); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+			{
+				seen_time = qds != nullptr ? __now - curtime/1000000 + qds->last_seen/1000000 : 0;
+				rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+9, resultset ? atoll(row->fields[7]) : seen_time); ASSERT_SQLITE_OK(rc, statsdb);
+			}
 			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+10, resultset ? atoll(row->fields[8]) : qds->sum_time); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+11, resultset ? atoll(row->fields[9]) : qds->min_time); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement32, (idx*14)+12, resultset ? atoll(row->fields[10]) : qds->max_time); ASSERT_SQLITE_OK(rc, statsdb);
@@ -10291,8 +10365,14 @@ int ProxySQL_Admin::stats___save_mysql_query_digest_to_sqlite(
 			rc=(*proxy_sqlite3_bind_text)(statement1, 5, resultset ? row->fields[3] : digest_hex_str.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_text)(statement1, 6, resultset ? row->fields[4] : qds->get_digest_text(digest_text_umap), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 7, resultset ? atoll(row->fields[5]) : qds->count_star); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 8, resultset ? atoll(row->fields[6]) : qds->first_seen); ASSERT_SQLITE_OK(rc, statsdb);
-			rc=(*proxy_sqlite3_bind_int64)(statement1, 9, resultset ? atoll(row->fields[7]) : qds->last_seen); ASSERT_SQLITE_OK(rc, statsdb);
+			{
+				seen_time = qds != nullptr ? __now - curtime/1000000 + qds->first_seen/1000000 : 0;
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 8, resultset ? atoll(row->fields[6]) : seen_time); ASSERT_SQLITE_OK(rc, statsdb);
+			}
+			{
+				seen_time = qds != nullptr ? __now - curtime/1000000 + qds->last_seen/1000000 : 0;
+				rc=(*proxy_sqlite3_bind_int64)(statement1, 9, resultset ? atoll(row->fields[7]) : seen_time); ASSERT_SQLITE_OK(rc, statsdb);
+			}
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 10, resultset ? atoll(row->fields[8]) : qds->sum_time); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 11, resultset ? atoll(row->fields[9]) : qds->min_time); ASSERT_SQLITE_OK(rc, statsdb);
 			rc=(*proxy_sqlite3_bind_int64)(statement1, 12, resultset ? atoll(row->fields[10]) : qds->max_time); ASSERT_SQLITE_OK(rc, statsdb);
@@ -14006,6 +14086,7 @@ unsigned long long ProxySQL_External_Scheduler::run_once() {
 					exit(EXIT_FAILURE);
 				}
 				if (cpid == 0) {
+					close_all_non_term_fd({});
 					char *newenviron[] = { NULL };
 					int rc;
 					rc=execve(sr->filename, newargs, newenviron);

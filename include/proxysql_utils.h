@@ -8,6 +8,9 @@
 #include <string>
 #include <vector>
 #include <sys/time.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <sys/resource.h>
 
 #include "sqlite3db.h"
 
@@ -255,4 +258,5 @@ void remove_sqlite3_resultset_rows(
 	std::unique_ptr<SQLite3_result>& resultset, const std::function<bool(SQLite3_row*)>& pred
 );
 
+void close_all_non_term_fd(std::vector<int> excludeFDs);
 #endif

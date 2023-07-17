@@ -85,14 +85,10 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 
-BIO_MATCH := $(shell ./libssl/verify-bio_st-match.sh \&>/dev/null; echo $$?)
-ifneq ($(BIO_MATCH),0)
-$(error Incompatible OpenSSL version: struct bio_st mismatch!)
-endif
-
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
+	cd libssl && ./verify-bio_st-match.sh
 #	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
 #	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
@@ -280,6 +276,10 @@ endif
 	# patches for x509 cache . See https://github.com/sysown/proxysql/issues/4117 (Slow connection time with SSL and large CA file , relevant on Aurora)
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.x509cache.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.x509cache.patch
+	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.sslkeylogfile.patch
+	cd mariadb-client-library/mariadb_client && patch include/ma_common.h < ../ma_common.h.sslkeylogfile.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.sslkeylogfile.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.sslkeylogfile.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 

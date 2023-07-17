@@ -94,6 +94,24 @@ bool MySQL_Variables::client_set_hash_and_value(MySQL_Session* session, int idx,
 	return true;
 }
 
+void MySQL_Variables::client_reset_value(MySQL_Session* session, int idx) {
+	if (!session || !session->client_myds || !session->client_myds->myconn) {
+		proxy_warning("Session validation failed\n");
+		return;
+	}
+
+	MySQL_Connection *client_conn = session->client_myds->myconn;
+
+	if (client_conn->var_hash[idx] != 0) {
+		client_conn->var_hash[idx] = 0;
+		if (client_conn->variables[idx].value) {
+			free(client_conn->variables[idx].value);
+			client_conn->variables[idx].value = NULL;
+		}
+		// we now regererate dynamic_variables_idx
+		client_conn->reorder_dynamic_variables_idx();
+	}
+}
 void MySQL_Variables::server_set_hash_and_value(MySQL_Session* session, int idx, const char* value, uint32_t hash) {
 	if (!session || !session->mybe || !session->mybe->server_myds || !session->mybe->server_myds->myconn || !value) {
 		proxy_warning("Session validation failed\n");
@@ -220,6 +238,25 @@ void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const ch
 	session->mybe->server_myds->myconn->variables[idx].value = strdup(value);
 	// we now regererate dynamic_variables_idx
 	session->mybe->server_myds->myconn->reorder_dynamic_variables_idx();
+}
+
+void MySQL_Variables::server_reset_value(MySQL_Session* session, int idx) {
+	assert(session);
+	assert(session->mybe);
+	assert(session->mybe->server_myds);
+	assert(session->mybe->server_myds->myconn);
+
+	MySQL_Connection *backend_conn = session->mybe->server_myds->myconn;
+	
+	if (backend_conn->var_hash[idx] != 0) {
+		backend_conn->var_hash[idx] = 0;
+		if (backend_conn->variables[idx].value) {
+			free(backend_conn->variables[idx].value);
+			backend_conn->variables[idx].value = NULL;
+		}
+		// we now regererate dynamic_variables_idx
+		backend_conn->reorder_dynamic_variables_idx();
+	}
 }
 
 const char* MySQL_Variables::server_get_value(MySQL_Session* session, int idx) const {

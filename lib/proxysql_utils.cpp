@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <sstream>
+#include <algorithm>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -243,6 +244,9 @@ int wexecvp(
 		// Duplicate file argument to avoid manual duplication
 		_argv.insert(_argv.begin(), file.c_str());
 
+		// close all files , with the exception of the pipes
+		close_all_non_term_fd({ CHILD_READ_FD, CHILD_WRITE_FD, CHILD_WRITE_ERR, PARENT_READ_FD, PARENT_READ_ERR, PARENT_WRITE_FD});
+
 		// Copy the pipe descriptors
 		int dup_read_err = dup2(CHILD_READ_FD, STDIN_FILENO);
 		int dup_write_err = dup2(CHILD_WRITE_FD, STDOUT_FILENO);
@@ -260,6 +264,7 @@ int wexecvp(
 		close(PARENT_READ_FD);
 		close(PARENT_READ_ERR);
 		close(PARENT_WRITE_FD);
+
 
 		char** args = const_cast<char**>(_argv.data());
 		child_err = execvp(file.c_str(), args);
@@ -456,4 +461,33 @@ void remove_sqlite3_resultset_rows(
 	const auto remove_it { std::remove_if(resultset->rows.begin(), resultset->rows.end(), pred) };
 	resultset->rows.erase(remove_it, resultset->rows.end());
 	resultset->rows_count = resultset->rows.size();
+}
+
+void close_all_non_term_fd(std::vector<int> excludeFDs) {
+	DIR *d;
+	struct dirent *dir;
+	d = opendir("/proc/self/fd");
+	if (d) {
+		while ((dir = readdir(d)) != NULL) {
+			if (strlen(dir->d_name) && dir->d_name[0] != '.') {
+				int fd = std::stol(std::string(dir->d_name));
+				if (fd > 2) {
+					if (std::find(excludeFDs.begin(), excludeFDs.end(), fd) == excludeFDs.end()) {
+						close(fd);
+					}
+				}
+			}
+		}
+		closedir(d);
+	} else {
+		struct rlimit nlimit;
+		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
+		if (rc == 0) {
+			for (unsigned int fd = 3; fd < nlimit.rlim_cur; fd++) {
+				if (std::find(excludeFDs.begin(), excludeFDs.end(), fd) == excludeFDs.end()) {
+					close(fd);
+				}
+			}
+		}
+	}
 }

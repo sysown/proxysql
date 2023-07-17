@@ -14,6 +14,8 @@
 
 #include "prometheus_helpers.h"
 
+#include "set_parser.h"
+
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
 #define MY_EPOLL_THREAD_MAXEVENTS 128
@@ -57,17 +59,18 @@ class ProxySQL_Poll {
 	void expand(unsigned int more);
 
 	public:
-	unsigned int poll_timeout;
-	unsigned long loops;
-	StatCounters *loop_counters;
 	unsigned int len;
 	unsigned int size;
 	struct pollfd *fds;
 	MySQL_Data_Stream **myds;
 	unsigned long long *last_recv;
 	unsigned long long *last_sent;
+	std::atomic<bool> bootstrapping_listeners;
 	volatile int pending_listener_add;
 	volatile int pending_listener_del;
+	unsigned int poll_timeout;
+	unsigned long loops;
+	StatCounters *loop_counters;
 
 	ProxySQL_Poll();
 	~ProxySQL_Poll();
@@ -213,11 +216,15 @@ class __attribute__((aligned(64))) MySQL_Thread
 		bool query_cache_stores_empty_result;
 	} variables;
 
-  pthread_mutex_t thread_mutex;
-  MySQL_Thread();
-  ~MySQL_Thread();
-  MySQL_Session * create_new_session_and_client_data_stream(int _fd);
-  bool init();
+	pthread_mutex_t thread_mutex;
+
+	// if set_parser_algorithm == 2 , a single thr_SetParser is used
+	SetParser *thr_SetParser;
+
+	MySQL_Thread();
+	~MySQL_Thread();
+	MySQL_Session * create_new_session_and_client_data_stream(int _fd);
+	bool init();
 	void run___get_multiple_idle_connections(int& num_idles);
 	void run___cleanup_mirror_queue();
   	void ProcessAllMyDS_BeforePoll();
@@ -537,6 +544,7 @@ class MySQL_Threads_Handler
 		int query_processor_iterations;
 		int query_processor_regex;
 		int set_query_lock_on_hostgroup;
+		int set_parser_algorithm;
 		int reset_connection_algorithm;
 		int auto_increment_delay_multiplex;
 		int auto_increment_delay_multiplex_timeout_ms;

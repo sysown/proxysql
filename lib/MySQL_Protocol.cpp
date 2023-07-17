@@ -2177,7 +2177,7 @@ __exit_do_auth:
 			}
 		}
 		proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL,1,"Handshake (%s auth) <user:\"%s\" pass:\"%s\" db:\"%s\" max_pkt:%u>, capabilities:%u char:%u, use_ssl:%s\n",
-			(capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, tmp_pass, db, max_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
+			(capabilities & CLIENT_SECURE_CONNECTION ? "new" : "old"), user, tmp_pass, db, (*myds)->myconn->options.max_allowed_pkt, capabilities, charset, ((*myds)->encrypted ? "yes" : "no"));
 		free(tmp_pass);
 	}
 #endif

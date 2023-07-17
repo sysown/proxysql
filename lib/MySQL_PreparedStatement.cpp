@@ -581,6 +581,10 @@ MySQL_STMT_Manager_v14::MySQL_STMT_Manager_v14() {
 }
 
 MySQL_STMT_Manager_v14::~MySQL_STMT_Manager_v14() {
+	for (auto it = map_stmt_id_to_info.begin(); it != map_stmt_id_to_info.end(); ++it) {
+		MySQL_STMT_Global_info * a = it->second;
+		delete a;
+	}
 }
 
 void MySQL_STMT_Manager_v14::ref_count_client(uint64_t _stmt_id ,int _v, bool lock) {

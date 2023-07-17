@@ -231,6 +231,7 @@ class ProxySQL_Admin {
 #endif /* DEBUG */
 		int coredump_generation_interval_ms;
 		int coredump_generation_threshold;
+		char* ssl_keylog_file;
 	} variables;
 
 	unsigned long long last_p_memory_metrics_ts;
