@@ -7904,15 +7904,16 @@ MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned 
 				mysrvc->comment = strdup(srv->comment);
 				mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
 
-				proxy_info(
-					"Found server node in Host Group Container %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
-						" hostgroup_id=%d, gtid_port=%d, weight=%ld, compression=%d, max_connections=%ld, use_ssl=%d," 
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					proxy_info(
+						"Found server node in Host Group Container %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
+						" hostgroup_id=%d, gtid_port=%d, weight=%ld, compression=%d, max_connections=%ld, use_ssl=%d,"
 						" max_replication_lag=%ld, max_latency_ms=%ld, comment=%s\n",
-					mysrvc->address, mysrvc->port, hostgroup_id, mysrvc->gtid_port, mysrvc->weight, mysrvc->compression,
-					mysrvc->max_connections, mysrvc->use_ssl, mysrvc->max_replication_lag, (mysrvc->max_latency_us/1000),
-					mysrvc->comment
-				);
-				
+						mysrvc->address, mysrvc->port, hostgroup_id, mysrvc->gtid_port, mysrvc->weight, mysrvc->compression,
+						mysrvc->max_connections, mysrvc->use_ssl, mysrvc->max_replication_lag, (mysrvc->max_latency_us / 1000),
+						mysrvc->comment
+					);
+				}
 				ret_srv = mysrvc;
 				break;
 			}
