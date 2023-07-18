@@ -10,6 +10,11 @@
 #include "utils.h"
 #include "proxysql_utils.h"
 
+#define BACKEND_SERVER_HOST	"127.0.0.1"
+#define BACKEND_SERVER_PORT 13306
+#define BACKEND_SERVER_USER	"root"
+#define BACKEND_SERVER_PASS "root"
+
 #define MYSQL_QUERY__(mysql, query) \
 	do { \
 		if (mysql_query(mysql, query)) { \
@@ -271,7 +276,7 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL* dummy_mysqldb = NULL;
 	
 	const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-		std::make_tuple(0, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
+		std::make_tuple(0, BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
 	};
 
 	const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
@@ -289,14 +294,14 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	{
-		int result = get_read_only_value("127.0.0.1", 13306, "root", "root", &read_only_val);
+		int result = get_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, &read_only_val);
 
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		ok(read_only_val == 0, "MySQL Server '127.0.0.1:13306' should function as a writer");
+		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
 
 		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'. 
 		result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
@@ -335,19 +340,19 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 		MYSQL_QUERY__(dummy_mysqldb, "BEGIN");
 		MYSQL_QUERY__(dummy_mysqldb, "DO 1");
 
-		result = set_read_only_value("127.0.0.1", 13306, "root", "root", 1);
+		result = set_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, 1);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		result = get_read_only_value("127.0.0.1", 13306, "root", "root", &read_only_val);
+		result = get_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		ok(read_only_val == 1, "MySQL Server '127.0.0.1:13306' should function as a reader");
+		ok(read_only_val == 1, "MySQL Server '%s:%d' should function as a reader", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
 
 		// Wait till read_only actions have been performed
 		usleep((wait * 1000) * 2);
@@ -365,19 +370,19 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 
 		mysql_free_result(mysql_store_result(proxy_admin));
 
-		result = set_read_only_value("127.0.0.1", 13306, "root", "root", 0);
+		result = set_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, 0);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		result = get_read_only_value("127.0.0.1", 13306, "root", "root", &read_only_val);
+		result = get_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		ok(read_only_val == 0, "MySQL Server '127.0.0.1:13306' should function as a writer");
+		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
 
 		// Wait till read_only actions have been performed
 		usleep((wait * 1000) * 2);
@@ -405,9 +410,9 @@ cleanup:
 
 	// Restoring MySQL Server read_only value
 	if (read_only_val != -1) {
-		diag("Restoring MySQL Server 127.0.0.1:13306 'read_only' value to '0'");
+		diag("Restoring MySQL Server %s:%d 'read_only' value to '0'", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
 
-		if (set_read_only_value("127.0.0.1", 13306, "root", "root", 0) != EXIT_SUCCESS) {
+		if (set_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, 0) != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Restoring read_only value failed.");
 		}
 	}
@@ -424,7 +429,7 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL* dummy_mysqldb = NULL;
 
 	const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-		std::make_tuple(1, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
+		std::make_tuple(1, BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
 	};
 
 	const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
@@ -443,13 +448,13 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	{
-		int result = get_read_only_value("127.0.0.1", 13306, "root", "root", &read_only_val);
+		int result = get_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		ok(read_only_val == 0, "MySQL Server '127.0.0.1:13306' should function as a writer");
+		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
 
 		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'. 
 		result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
@@ -518,9 +523,9 @@ cleanup:
 
 	// Restoring MySQL Server read_only value
 	if (read_only_val != -1) {
-		diag("Restoring MySQL Server 127.0.0.1:13306 'read_only' value to '0'");
+		diag("Restoring MySQL Server %s:%d 'read_only' value to '0'", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
 
-		if (set_read_only_value("127.0.0.1", 13306, "root", "root", 0) != EXIT_SUCCESS) {
+		if (set_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, 0) != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Restoring read_only value failed.");
 		}
 	}
@@ -528,38 +533,14 @@ cleanup:
 	return ret_status;
 }
 
-int main(int, char**) {
+int test_read_only_offline_hard_servers(MYSQL* proxy_admin, const CommandLine& cl, bool isolate_primary_node) {
 
-	CommandLine cl;
-	std::atomic<bool> save_proxy_stderr(false);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
-	plan(9);
-
-	MYSQL* proxy_admin = NULL;
 	std::vector<mysql_res_row> core_nodes;
 	std::string check_no_primary_query;
-	{
-		proxy_admin = mysql_init(NULL);
 
-		// Initialize connections
-		if (!proxy_admin) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
-			return EXIT_FAILURE;
-		}
-
-		// Connnect to local proxysql
-		if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
-			return EXIT_FAILURE;
-		}
-
+	if (isolate_primary_node) {
 		const std::string t_update_proxysql_servers{
-			"INSERT INTO proxysql_servers (hostname, port, weight, comment) VALUES ('%s', %d, 0, 'proxysql')"
+				"INSERT INTO proxysql_servers (hostname, port, weight, comment) VALUES ('%s', %d, 0, 'proxysql')"
 		};
 
 		std::string update_proxysql_servers;
@@ -578,7 +559,6 @@ int main(int, char**) {
 		mysql_free_result(my_res);
 
 		// 3. Wait for all Core nodes to sync (confirm primary out of core nodes)
-		
 		string_format(
 			"SELECT CASE COUNT(*) WHEN 0 THEN 1 ELSE 0 END FROM proxysql_servers WHERE hostname=='%s' AND port==%d",
 			check_no_primary_query, cl.host, cl.admin_port
@@ -593,86 +573,120 @@ int main(int, char**) {
 		MYSQL_QUERY__(proxy_admin, "DELETE FROM proxysql_servers");
 		MYSQL_QUERY__(proxy_admin, update_proxysql_servers.c_str());
 		MYSQL_QUERY__(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+	}
 
-		if (test_scenario_1(proxy_admin, cl) != EXIT_SUCCESS) {
-			goto cleanup;
-		}
+	if (test_scenario_1(proxy_admin, cl) != EXIT_SUCCESS) {
+		goto cleanup;
+	}
 
-		if (test_scenario_2(proxy_admin, cl) != EXIT_SUCCESS) {
-			goto cleanup;
-		}
+	if (test_scenario_2(proxy_admin, cl) != EXIT_SUCCESS) {			
+		goto cleanup;
 	}
 
 cleanup:
-	// In case of test failing, save the stderr output from the spawned proxysql instance
-	if (tests_failed() != 0) {
-		save_proxy_stderr.store(true);
-	}
-	
-	// Recover primary ProxySQL MySQL and ProxySQL servers
-	diag("RESTORING: Recovering primary configuration...");
+	if (isolate_primary_node) {
+		// Recover primary ProxySQL MySQL and ProxySQL servers
+		diag("RESTORING: Recovering primary configuration...");
 
-	{
-		// Recover previous MySQL servers and generate a newer checksum for primary
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS FROM DISK");
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+		{
+			// Recover previous MySQL servers and generate a newer checksum for primary
+			MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS FROM DISK");
+			MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-		// Insert primary into another Core node config and wait for replication
-		diag("RESTORING: Inserting primary back into Core nodes");
-		bool recovered_servers_st = false;
+			// Insert primary into another Core node config and wait for replication
+			diag("RESTORING: Inserting primary back into Core nodes");
+			std::string insert_query{};
+			string_format(
+				"INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('%s',%d,0,'proxysql')",
+				insert_query, cl.host, cl.admin_port
+			);
 
-		std::string insert_query {};
-		string_format(
-			"INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES ('%s',%d,0,'proxysql')",
-			insert_query, cl.host, cl.admin_port
-		);
+			for (const auto& row : core_nodes) {
+				const std::string host{ row[0] };
+				const int port = std::stol(row[1]);
+				MYSQL* c_node_admin = mysql_init(NULL);
 
-		for (const auto& row : core_nodes) {
-			const std::string host { row[0] };
-			const int port = std::stol(row[1]);
-			MYSQL* c_node_admin = mysql_init(NULL);
+				diag("RESTORING: Inserting into node '%s:%d'", host.c_str(), port);
 
-			diag("RESTORING: Inserting into node '%s:%d'", host.c_str(), port);
+				if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
+					const std::string err_msg{
+						"Connection to core node failed with '" + std::string { mysql_error(c_node_admin) } + "'. Retrying..."
+					};
+					fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, err_msg.c_str());
+					mysql_close(c_node_admin);
+					continue;
+				}
 
-			if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
-				const std::string err_msg {
-					"Connection to core node failed with '" + std::string { mysql_error(c_node_admin) } + "'. Retrying..."
-				};
-				fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, err_msg.c_str());
-				mysql_close(c_node_admin);
-				continue;
+				int my_rc = mysql_query(c_node_admin, insert_query.c_str());
+				if (my_rc == EXIT_SUCCESS) {
+					mysql_query(c_node_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+					break;
+				} else {
+					const std::string err_msg{
+						"Insert primary into node failed with: '" + std::string { mysql_error(c_node_admin) } + "'"
+					};
+					fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, err_msg.c_str());
+				}
 			}
 
-			int my_rc = mysql_query(c_node_admin, insert_query.c_str());
-			if (my_rc == EXIT_SUCCESS) {
-				mysql_query(c_node_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
-				break;
-			} else {
-				const std::string err_msg {
-					"Insert primary into node failed with: '" + std::string { mysql_error(c_node_admin) } + "'"
-				};
-				fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, err_msg.c_str());
-			}
+			// Wait for sync after primary insertion into Core node
+			std::string check_for_primary{};
+			string_format(
+				"SELECT COUNT(*) FROM proxysql_servers WHERE hostname=='%s' AND port==%d", check_no_primary_query,
+				cl.host, cl.admin_port
+			);
+
+			// Wait for the other nodes to sync ProxySQL servers to include Primary
+			int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+			if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
+
+			// Recover the old ProxySQL servers from backup in primary
+			MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers");
+			MYSQL_QUERY(proxy_admin, "INSERT INTO proxysql_servers SELECT * FROM proxysql_servers_sync_test_backup_2687");
+			MYSQL_QUERY(proxy_admin, "DROP TABLE proxysql_servers_sync_test_backup_2687");
+			MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 		}
-
-		// Wait for sync after primary insertion into Core node
-		std::string check_for_primary {};
-		string_format(
-			"SELECT COUNT(*) FROM proxysql_servers WHERE hostname=='%s' AND port==%d", check_no_primary_query,
-			cl.host, cl.admin_port
-		);
-
-		// Wait for the other nodes to sync ProxySQL servers to include Primary
-		int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
-		if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
-
-		// Recover the old ProxySQL servers from backup in primary
-		MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers");
-		MYSQL_QUERY(proxy_admin, "INSERT INTO proxysql_servers SELECT * FROM proxysql_servers_sync_test_backup_2687");
-		MYSQL_QUERY(proxy_admin, "DROP TABLE proxysql_servers_sync_test_backup_2687");
-		MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 	}
 
+	return (tests_failed() == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+
+int main(int, char**) {
+
+	CommandLine cl;
+
+	if (cl.getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		return EXIT_FAILURE;
+	}
+
+	plan(9+9);
+
+	MYSQL* proxy_admin = mysql_init(NULL);
+
+	// Initialize connections
+	if (!proxy_admin) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
+		return EXIT_FAILURE;
+	}
+
+	// Connnect to local proxysql
+	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
+		return EXIT_FAILURE;
+	}
+
+	diag(">> test_read_only_offline_hard_servers() >> Primary node included in cluster\n");
+	if (test_read_only_offline_hard_servers(proxy_admin, cl, false) != EXIT_SUCCESS) {
+		goto cleanup;
+	}
+
+	diag(">> test_read_only_offline_hard_servers() >> Primary node isolated from cluster\n");
+	if (test_read_only_offline_hard_servers(proxy_admin, cl, true) != EXIT_SUCCESS) {
+		goto cleanup;
+	}
+
+cleanup:
 	mysql_close(proxy_admin);
 
 	return exit_status();
