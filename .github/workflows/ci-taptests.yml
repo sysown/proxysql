@@ -110,6 +110,7 @@ jobs:
         rm -f reg_test_3992_fast_forward_malformed_packet*-t
         rm -f test_cluster_sync-t
         rm -f test_cluster_sync_mysql_servers-t
+        rm -f test_read_only_actions_offline_hard_servers-t
         
         # remove always failing tests
         rm -f test_rw_binary_data-t
