@@ -249,14 +249,5 @@ inline void replace_checksum_zeros(char* checksum) {
  */
 std::string get_checksum_from_hash(uint64_t hash);
 
-/**
- * @brief Remove the rows from the resultset matching the supplied predicate.
- * @param resultset The resultset which rows are to be removed.
- * @param pred Predicate that should return 'true' for the rows to be removed.
- */
-void remove_sqlite3_resultset_rows(
-	std::unique_ptr<SQLite3_result>& resultset, const std::function<bool(SQLite3_row*)>& pred
-);
-
 void close_all_non_term_fd(std::vector<int> excludeFDs);
 #endif

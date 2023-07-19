@@ -148,21 +148,37 @@ struct incoming_servers_t {
 
 // Separate structs for runtime mysql server and mysql server v2 to avoid human error
 struct runtime_mysql_servers_checksum_t {
-	std::string checksum;
+	std::string value;
 	time_t epoch;
 
 	runtime_mysql_servers_checksum_t();
-	runtime_mysql_servers_checksum_t(const std::string& checksum, time_t epoch);
+	runtime_mysql_servers_checksum_t(const std::string& value, time_t epoch);
 };
 
 struct mysql_servers_v2_checksum_t {
-	std::string checksum;
+	std::string value;
 	time_t epoch;
 
 	mysql_servers_v2_checksum_t();
-	mysql_servers_v2_checksum_t(const std::string& checksum, time_t epoch);
+	mysql_servers_v2_checksum_t(const std::string& value, time_t epoch);
 };
 //
+
+struct peer_runtime_mysql_servers_t {
+	SQLite3_result* resultset { nullptr };
+	runtime_mysql_servers_checksum_t checksum {};
+
+	peer_runtime_mysql_servers_t();
+	peer_runtime_mysql_servers_t(SQLite3_result*, const runtime_mysql_servers_checksum_t&);
+};
+
+struct peer_mysql_servers_v2_t {
+	SQLite3_result* resultset { nullptr };
+	mysql_servers_v2_checksum_t checksum {};
+
+	peer_mysql_servers_v2_t();
+	peer_mysql_servers_v2_t(SQLite3_result*, const mysql_servers_v2_checksum_t&);
+};
 
 class ProxySQL_Admin {
 	private:

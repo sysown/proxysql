@@ -850,16 +850,64 @@ class MySQL_HostGroups_Manager {
 	void wrlock();
 	void wrunlock();
 	int servers_add(SQLite3_result *resultset);
-	std::string gen_global_mysql_servers_checksum();
-	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
-		SQLite3_result* mysql_servers_v2 = nullptr, const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {},
-		bool only_commit_runtime_mysql_servers = true, bool update_version = false);
-	void commit_generate_mysql_servers_table(SQLite3_result* runtime_mysql_servers = nullptr);
-	void commit_update_checksum_from_mysql_servers(SpookyHash& myhash, bool& init);
+	/**
+	 * @brief Generates a new global checksum for module 'mysql_servers_v2' using the provided hash.
+	 * @param servers_v2_hash The 'raw_checksum' from 'MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS' or peer node.
+	 * @return Checksum computed using the provided hash, and 'mysql_servers' config tables hashes.
+	 */
+	std::string gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash);
+	bool commit(
+		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers = {},
+		const peer_mysql_servers_v2_t& peer_mysql_servers_v2 = {},
+		bool only_commit_runtime_mysql_servers = true,
+		bool update_version = false
+	);
+	/**
+	 * @brief Extracted from 'commit'. Performs the following actions:
+	 *  1. Re-generates the 'myhgm.mysql_servers' table.
+	 *  2. If supplied 'runtime_mysql_servers' is 'nullptr':
+	 *  	1. Gets the contents of the table via 'MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS'.
+	 *  	2. Save the resultset into 'this->runtime_mysql_servers'.
+	 *  3. If supplied 'runtime_mysql_servers' isn't 'nullptr':
+	 *  	1. Updates the 'this->runtime_mysql_servers' with it.
+	 *  4. Updates 'HGM_TABLES::MYSQL_SERVERS' with raw checksum from 'this->runtime_mysql_servers'.
+	 * @param runtime_mysql_servers If not 'nullptr', used to update 'this->runtime_mysql_servers'.
+	 * @return The updated 'MySQL_HostGroups_Manager::runtime_mysql_servers'.
+	 */
+	uint64_t commit_update_checksum_from_mysql_servers(SQLite3_result* runtime_mysql_servers = nullptr);
+	/**
+	 * @brief Analogous to 'commit_generate_mysql_servers_table' but for 'incoming_mysql_servers_v2'.
+	 */
+	uint64_t commit_update_checksum_from_mysql_servers_v2(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
+	/**
+	 * @brief Update all HGM_TABLES checksums and uses them to update the supplied SpookyHash.
+	 * @details Checksums are the checksums for the following tables:
+	 *  - mysql_replication_hostgroups
+	 *  - mysql_group_replication_hostgroups
+	 *  - mysql_galera_hostgroups
+	 *  - mysql_aws_aurora_hostgroups
+	 *  - mysql_hostgroup_attributes
+	 *
+	 *  These checksums are used to compute the global checksum for 'mysql_servers_v2'.
+	 * @param myhash SpookyHash to be updated with all the computed checksums.
+	 * @param init Indicates if the SpookyHash checksum is initialized.
+	 */
 	void commit_update_checksums_from_tables(SpookyHash& myhash, bool& init);
-	void commit_update_checksums_from_tables();
-	void CUCFT1(const string& TableName, const string& ColumnName, uint64_t& raw_checksum); // used by commit_update_checksums_from_tables()
-
+	/**
+	 * @brief Performs the following actions:
+	 *  1. Gets the current contents of table 'myhgm.TableName', using 'ColumnName' ordering.
+	 *  2. Computes the checksum for that resultset.
+	 *  3. Updates the supplied 'raw_checksum' and the supplied 'SpookyHash' with it.
+	 * @details Stands for 'commit_update_checksum_from_table_1'.
+	 * @param myhash Hash to be updated with the resultset checksum from the selected table.
+	 * @param init If the supplied 'SpookyHash' has already being initialized.
+	 * @param TableName The tablename from which to obtain the resultset for the 'raw_checksum' computation.
+	 * @param ColumnName A column name to use for ordering in the supplied 'TableName'.
+	 * @param raw_checksum A 'raw_checksum' to be updated with the obtained resultset.
+	 */
+	void CUCFT1(
+		SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName, uint64_t& raw_checksum
+	);
 	/**
 	 * @brief Store the resultset for the 'runtime_mysql_servers' table set that have been loaded to runtime.
 	 *  The store configuration is later used by Cluster to propagate current config.

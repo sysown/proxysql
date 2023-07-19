@@ -1590,7 +1590,9 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 	return resultset;
 }
 
-void MySQL_HostGroups_Manager::CUCFT1(const string& TableName, const string& ColumnName, uint64_t& raw_checksum) {
+void MySQL_HostGroups_Manager::CUCFT1(
+	SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName, uint64_t& raw_checksum
+) {
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -1599,8 +1601,14 @@ void MySQL_HostGroups_Manager::CUCFT1(const string& TableName, const string& Col
 	mydb->execute_statement(query.c_str(), &error , &cols , &affected_rows , &resultset);
 	if (resultset) {
 		if (resultset->rows_count) {
-			raw_checksum = resultset->raw_checksum();
-			proxy_info("Checksum for table %s is 0x%lX\n", TableName.c_str(), raw_checksum);
+			if (init == false) {
+				init = true;
+				myhash.Init(19,3);
+			}
+			uint64_t hash1_ = resultset->raw_checksum();
+			raw_checksum = hash1_;
+			myhash.Update(&hash1_, sizeof(hash1_));
+			proxy_info("Checksum for table %s is 0x%lX\n", TableName.c_str(), hash1_);
 		}
 		delete resultset;
 	} else {
@@ -1608,12 +1616,19 @@ void MySQL_HostGroups_Manager::CUCFT1(const string& TableName, const string& Col
 	}
 }
 
-void MySQL_HostGroups_Manager::commit_update_checksums_from_tables() {
-	CUCFT1("mysql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
-	CUCFT1("mysql_group_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_GROUP_REPLICATION_HOSTGROUPS]);
-	CUCFT1("mysql_galera_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_GALERA_HOSTGROUPS]);
-	CUCFT1("mysql_aws_aurora_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS]);
-	CUCFT1("mysql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES]);
+void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& myhash, bool& init) {
+	// Always reset the current table values before recomputing
+	for (size_t i = 0; i < table_resultset_checksum.size(); i++) {
+		if (i != HGM_TABLES::MYSQL_SERVERS && i != HGM_TABLES::MYSQL_SERVERS_V2) {
+			table_resultset_checksum[i] = 0;
+		}
+	}
+
+	CUCFT1(myhash,init,"mysql_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS]);
+	CUCFT1(myhash,init,"mysql_group_replication_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_GROUP_REPLICATION_HOSTGROUPS]);
+	CUCFT1(myhash,init,"mysql_galera_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_GALERA_HOSTGROUPS]);
+	CUCFT1(myhash,init,"mysql_aws_aurora_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS]);
+	CUCFT1(myhash,init,"mysql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES]);
 }
 
 /**
@@ -1689,37 +1704,9 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
 	}
 }
 
-const char MYSQL_SERVERS_CHECKSUM_QUERY[] {
-	"SELECT hostgroup_id, hostname, port, gtid_port, CASE WHEN status=0 OR status=1 OR status=4 THEN 0 ELSE status END status,"
-	" weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers"
-	" WHERE status<>3 ORDER BY hostgroup_id, hostname, port"
-};
-
-/**
- * @brief Generates a resultset which is used to compute the current 'mysql_servers' checksum.
- * @details The resultset should report all servers status as ONLINE(0), with the exception of 'OFFLINE_HARD'.
- *   Servers with this status should be excluded from the resultset.
- * @param mydb The db in which to perform the query, typically 'MySQL_HostGroups_Manager::mydb'.
- * @return An SQLite3 resultset for the query 'MYSQL_SERVERS_CHECKSUM_QUERY'.
- */
-unique_ptr<SQLite3_result> get_mysql_servers_checksum_resultset(SQLite3DB* mydb) {
-	char* error = nullptr;
-	int cols = 0;
-	int affected_rows = 0;
-	SQLite3_result* resultset = nullptr;
-
-	mydb->execute_statement(MYSQL_SERVERS_CHECKSUM_QUERY, &error, &cols, &affected_rows, &resultset);
-
-	if (error) {
-		proxy_error("Checksum generation query for 'mysql_servers' failed with error '%s'\n", error);
-		assert(0);
-	}
-
-	return unique_ptr<SQLite3_result>(resultset);
-}
-
 /**
  * @brief Generates a resultset holding the current Admin 'runtime_mysql_servers' as reported by Admin.
+ * @details Requires caller to hold the mutex 'MySQL_HostGroups_Manager::wrlock'.
  * @param mydb The db in which to perform the query, typically 'MySQL_HostGroups_Manager::mydb'.
  * @return An SQLite3 resultset for the query 'MYHGM_GEN_ADMIN_RUNTIME_SERVERS'.
  */
@@ -1729,127 +1716,166 @@ unique_ptr<SQLite3_result> get_admin_runtime_mysql_servers(SQLite3DB* mydb) {
 	int affected_rows = 0;
 	SQLite3_result* resultset = nullptr;
 
-	mydb->execute_statement(MYHGM_GEN_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
+	mydb->execute_statement(MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS, &error, &cols, &affected_rows, &resultset);
+
+	if (error) {
+		proxy_error("SQLite3 query generating 'runtime_mysql_servers' resultset failed with error '%s'\n", error);
+		assert(0);
+	}
 
 	return unique_ptr<SQLite3_result>(resultset);
 }
 
 /**
- * @brief Removes rows with 'OFFLINE_HARD' servers in the supplied resultset.
- * @details It assumes that the supplied resultset is generated via 'MYHGM_GEN_ADMIN_RUNTIME_SERVERS'.
- * @param resultset The resultset from which rows are to be removed.
+ * @brief Generates a resultset with holding the current 'mysql_servers_v2' table.
+ * @details Requires caller to hold the mutex 'ProxySQL_Admin::mysql_servers_wrlock'.
+ * @return A resulset holding 'mysql_servers_v2'.
  */
-void remove_resultset_offline_hard_servers(unique_ptr<SQLite3_result>& resultset) {
-	if (resultset->columns < 5) {
-		return;
+unique_ptr<SQLite3_result> get_mysql_servers_v2() {
+	char* error = nullptr;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = nullptr;
+
+	if (GloAdmin && GloAdmin->admindb) {
+		GloAdmin->admindb->execute_statement(
+			MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS, &error, &cols, &affected_rows, &resultset
+		);
 	}
 
-	const auto is_offline = [] (SQLite3_row* row) {
-		if (strcasecmp(row->fields[4], "OFFLINE_HARD") == 0) {
-			return true;
-		} else {
-			return false;
-		}
-	};
+	return unique_ptr<SQLite3_result>(resultset);
+}
 
-	remove_sqlite3_resultset_rows(resultset, is_offline);
+void update_glovars_checksum_with_peers(
+	ProxySQL_Checksum_Value& module_checksum,
+	const string& new_checksum,
+	const string& peer_checksum_value,
+	time_t new_epoch,
+	time_t peer_checksum_epoch,
+	bool update_version
+) {
+	module_checksum.set_checksum(const_cast<char*>(new_checksum.c_str()));
+
+	if (update_version)
+		module_checksum.version++;
+
+	bool computed_checksum_matches =
+		peer_checksum_value != "" && module_checksum.checksum == peer_checksum_value;
+
+	if (peer_checksum_epoch != 0 && computed_checksum_matches) {
+		module_checksum.epoch = peer_checksum_epoch;
+	} else {
+		module_checksum.epoch = new_epoch;
+	}
 }
 
 /**
- * @brief Updates the global 'mysql_servers' checksum.
+ * @brief Updates the global 'mysql_servers' module checksum.
  * @details If the new computed checksum matches the supplied 'cluster_checksum', the epoch used for the
- *  checksum, is the supplied epoch instead of current time. This way we ensure the preservation of the
+ *  checksum is the supplied epoch instead of current time. This way we ensure the preservation of the
  *  checksum and epoch fetched from the ProxySQL cluster peer node.
  *
- * @param new_checksum The new computed checksum by ProxySQL.
- * @param old_checksum A checksum, previously fetched from ProxySQL cluster. Should be left empty if the
- *  update isn't considering this scenario.
- * @param epoch The epoch to be preserved in case the supplied 'cluster_checksum' matches the new computed
+ *  IMPORTANT: This function also generates a new 'global_checksum'. This is because everytime
+ *  'runtime_mysql_servers' change, updating the global checksum is unconditional.
+ * @param new_checksum The new computed checksum for 'runtime_mysql_servers'.
+ * @param peer_checksum A checksum fetched from another ProxySQL cluster node, holds the checksum value
+ *  and its epoch. Should be empty if no remote checksum is being considered.
+ * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
 void update_glovars_mysql_servers_checksum(
-	const std::string& new_checksum, const std::string& cluster_checksum = "", const time_t epoch = 0
+	const string& new_checksum,
+	const runtime_mysql_servers_checksum_t& peer_checksum = {},
+	bool update_version = false
 ) {
-	GloVars.checksums_values.mysql_servers.set_checksum(const_cast<char*>(new_checksum.c_str()));
-	GloVars.checksums_values.mysql_servers.version++;
+	time_t new_epoch = time(NULL);
 
-	time_t t = time(NULL);
-	bool computed_checksum_matches {
-		cluster_checksum != "" && GloVars.checksums_values.mysql_servers.checksum == cluster_checksum
-	};
-
-	if (epoch != 0 && computed_checksum_matches) {
-		GloVars.checksums_values.mysql_servers.epoch = epoch;
-	} else {
-		GloVars.checksums_values.mysql_servers.epoch = t;
-	}
+	update_glovars_checksum_with_peers(
+		GloVars.checksums_values.mysql_servers,
+		new_checksum,
+		peer_checksum.value,
+		new_epoch,
+		peer_checksum.epoch,
+		update_version
+	);
 
 	GloVars.checksums_values.updates_cnt++;
 	GloVars.generate_global_checksum();
-	GloVars.epoch_version = t;
+	GloVars.epoch_version = new_epoch;
 }
 
-void MySQL_HostGroups_Manager::commit_generate_mysql_servers_table(SQLite3_result* runtime_mysql_servers) {
+/**
+ * @brief Updates the global 'mysql_servers_v2' module checksum.
+ * @details Unlike 'update_glovars_mysql_servers_checksum' this function doesn't generate a new
+ *  'global_checksum'. It's caller responsibility to ensure that 'global_checksum' is updated. 
+ * @param new_checksum The new computed checksum for 'mysql_servers_v2'.
+ * @param peer_checksum A checksum fetched from another ProxySQL cluster node, holds the checksum value
+ *  and its epoch. Should be empty if no remote checksum is being considered.
+ * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
+ *  checksum.
+ */
+void update_glovars_mysql_servers_v2_checksum(
+	const string& new_checksum,
+	const mysql_servers_v2_checksum_t& peer_checksum = {},
+	bool update_version = false
+) {
+	time_t new_epoch = time(NULL);
+
+	update_glovars_checksum_with_peers(
+		GloVars.checksums_values.mysql_servers_v2,
+		new_checksum,
+		peer_checksum.value,
+		new_epoch,
+		peer_checksum.epoch,
+		update_version
+	);
+}
+
+uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers(SQLite3_result* runtime_mysql_servers) {
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
 
 	if (runtime_mysql_servers == nullptr) {
 		unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
-
-		// Remove 'OFFLINE_HARD' servers since they are not relevant to propagate to other Cluster nodes, or
-		// relevant for checksum computation. If this step isn't performed, this could cause mismatching
-		// checksums between different primary nodes in a ProxySQL cluster, since OFFLINE_HARD servers
-		// preservation depends on unknown and unpredictable connections conditions.
-		remove_resultset_offline_hard_servers(resultset);
 		save_runtime_mysql_servers(resultset.release());
 	} else {
 		save_runtime_mysql_servers(runtime_mysql_servers);
 	}
+
+	uint64_t raw_checksum = this->runtime_mysql_servers ? this->runtime_mysql_servers->raw_checksum() : 0;
+	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = raw_checksum;
+
+	return raw_checksum;
 }
 
-void MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers(SpookyHash& myhash, bool& init) {
-	unique_ptr<SQLite3_result> mysrvs_checksum_resultset { get_mysql_servers_checksum_resultset(mydb) };
-
-	// Reset table checksum value before recomputing
-	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = 0;
-
-	if (mysrvs_checksum_resultset) {
-		if (mysrvs_checksum_resultset->rows_count) {
-			if (init == false) {
-				init = true;
-				myhash.Init(19,3);
-			}
-			uint64_t hash1_ = mysrvs_checksum_resultset->raw_checksum();
-			table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] = hash1_;
-
-			myhash.Update(&hash1_, sizeof(hash1_));
-			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", hash1_);
-		}
+uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers_v2(SQLite3_result* mysql_servers_v2) {
+	if (mysql_servers_v2 == nullptr) {
+		unique_ptr<SQLite3_result> resultset { get_mysql_servers_v2() };
+		save_mysql_servers_v2(resultset.release());
 	} else {
-		proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", (long unsigned int)0);
+		save_mysql_servers_v2(mysql_servers_v2);
 	}
+
+	uint64_t raw_checksum = this->incoming_mysql_servers_v2 ? this->incoming_mysql_servers_v2->raw_checksum() : 0;
+	table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS_V2] = raw_checksum;
+
+	return raw_checksum;
 }
 
-std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_checksum() {
-	SpookyHash global_hash;
+std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash) {
 	bool init = false;
+	SpookyHash global_hash {};
 
-	// Regenerate 'mysql_servers' and generate new checksum, initialize the new 'global_hash'
-	commit_update_checksum_from_mysql_servers(global_hash, init);
-
-	// Complete the hash with the rest of the unchanged modules
-	for (size_t i = 0; i < table_resultset_checksum.size(); i++) {
-		uint64_t hash_val = table_resultset_checksum[i];
-
-		if (i != HGM_TABLES::MYSQL_SERVERS && hash_val != 0) {
-			if (init == false) {
-				init = true;
-				global_hash.Init(19, 3);
-			}
-
-			global_hash.Update(&hash_val, sizeof(hash_val));
+	if (servers_v2_hash != 0) {
+		if (init == false) {
+			init = true;
+			global_hash.Init(19, 3);
 		}
+
+		global_hash.Update(&servers_v2_hash, sizeof(servers_v2_hash));
 	}
+
+	commit_update_checksums_from_tables(global_hash, init);
 
 	uint64_t hash_1 = 0, hash_2 = 0;
 	if (init) {
@@ -1861,9 +1887,10 @@ std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_checksum() {
 }
 
 bool MySQL_HostGroups_Manager::commit(
-	SQLite3_result* runtime_mysql_servers, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server,
-	SQLite3_result* mysql_servers_v2, const mysql_servers_v2_checksum_t& peer_mysql_server_v2,
-	bool only_commit_runtime_mysql_servers, bool update_version
+	const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers,
+	const peer_mysql_servers_v2_t& peer_mysql_servers_v2,
+	bool only_commit_runtime_mysql_servers,
+	bool update_version
 ) {
 	// if only_commit_runtime_mysql_servers is true, mysql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_mysql_servers) {
@@ -2077,9 +2104,10 @@ bool MySQL_HostGroups_Manager::commit(
 		has_gtid_port = false;
 	}
 	if (resultset) { delete resultset; resultset=NULL; }
+	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
+	mydb->execute("DELETE FROM mysql_servers_incoming");
 
-	uint64_t mysql_servers_v2_checksum = 0;
-
+	string global_checksum_v2 {};
 	if (only_commit_runtime_mysql_servers == false) {
 		// replication
 		if (incoming_replication_hostgroups) { // this IF is extremely important, otherwise replication hostgroups may disappear
@@ -2116,57 +2144,30 @@ bool MySQL_HostGroups_Manager::commit(
 			generate_mysql_hostgroup_attributes_table();
 		}
 
-		mysql_servers_v2_checksum = get_mysql_servers_v2_checksum(mysql_servers_v2);
-	}
+		uint64_t new_hash = commit_update_checksum_from_mysql_servers_v2(peer_mysql_servers_v2.resultset);
 
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_incoming\n");
-	mydb->execute("DELETE FROM mysql_servers_incoming");
-	
-	// regenerating mysql_servers records
-	mydb->execute("DELETE FROM mysql_servers");
-	generate_mysql_servers_table();
-
-	const auto mysql_servers_checksum = get_mysql_servers_checksum(runtime_mysql_servers);
-
-	char buf[80];
-	uint32_t d32[2];
-	const time_t t = time(NULL);
-
-	memcpy(&d32, &mysql_servers_checksum, sizeof(mysql_servers_checksum));
-	sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
-	pthread_mutex_lock(&GloVars.checksum_mutex);
-	GloVars.checksums_values.mysql_servers.set_checksum(buf);
-
-	if (update_version)
-		GloVars.checksums_values.mysql_servers.version++;
-
-	if (peer_runtime_mysql_server.epoch != 0 && peer_runtime_mysql_server.checksum.empty() == false &&
-		GloVars.checksums_values.mysql_servers.checksum == peer_runtime_mysql_server.checksum) {
-		GloVars.checksums_values.mysql_servers.epoch = peer_runtime_mysql_server.epoch;
-	} else {
-		GloVars.checksums_values.mysql_servers.epoch = t;
-	}
-	
-	if (only_commit_runtime_mysql_servers == false) {
-		memcpy(&d32, &mysql_servers_v2_checksum, sizeof(mysql_servers_v2_checksum));
-		sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
-		GloVars.checksums_values.mysql_servers_v2.set_checksum(buf);
-
-		if (update_version)
-			GloVars.checksums_values.mysql_servers_v2.version++;
-
-		if (peer_mysql_server_v2.epoch != 0 && peer_mysql_server_v2.checksum.empty() == false &&
-			GloVars.checksums_values.mysql_servers_v2.checksum == peer_mysql_server_v2.checksum) {
-			GloVars.checksums_values.mysql_servers_v2.epoch = peer_mysql_server_v2.epoch;
-		} else {
-			GloVars.checksums_values.mysql_servers_v2.epoch = t;
+		{
+			const string new_checksum { get_checksum_from_hash(new_hash) };
+			proxy_info("Checksum for table %s is %s\n", "mysql_servers_v2", new_checksum.c_str());
 		}
+
+		global_checksum_v2 = gen_global_mysql_servers_v2_checksum(new_hash);
+		proxy_info("New computed global checksum for 'mysql_servers_v2' is '%s'\n", global_checksum_v2.c_str());
 	}
 
-	GloVars.checksums_values.updates_cnt++;
-	GloVars.generate_global_checksum();
-	GloVars.epoch_version = t;
-	pthread_mutex_unlock(&GloVars.checksum_mutex);
+	// Update 'mysql_servers' and global checksums
+	{
+		uint64_t new_hash = commit_update_checksum_from_mysql_servers(peer_runtime_mysql_servers.resultset);
+		const string new_checksum { get_checksum_from_hash(new_hash) };
+		proxy_info("Checksum for table %s is %s\n", "mysql_servers", new_checksum.c_str());
+
+		pthread_mutex_lock(&GloVars.checksum_mutex);
+		if (only_commit_runtime_mysql_servers == false) {
+			update_glovars_mysql_servers_v2_checksum(global_checksum_v2, peer_mysql_servers_v2.checksum, true);
+		}
+		update_glovars_mysql_servers_checksum(new_checksum, peer_runtime_mysql_servers.checksum, update_version);
+		pthread_mutex_unlock(&GloVars.checksum_mutex);
+	}
 
 	// fill Hostgroup_Manager_Mapping with latest records
 	update_hostgroup_manager_mappings();
@@ -2239,121 +2240,6 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS]);
 
 	return table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
-}
-
-/** 
- * @brief Computes checksum for the admin mysql_server resultset and generates an accumulated checksum by including the following modules: 
- *    MYSQL_REPLICATION_HOSTGROUPS, MYSQL_GROUP_REPLICATION_HOSTGROUPS, MYSQL_GALERA_HOSTGROUPS, and MYSQL_HOSTGROUP_ATTRIBUTES.
- *
- * @details The 'incoming_mysql_servers_v2' includes the same records as 'main.mysql_servers'. If this set of records is empty, then the
- *    records are retrieved from 'main.mysql_servers'.
- *
- * @param incoming_mysql_servers_v2 resultset of admin mysql_servers or can be a nullptr.
- */
-uint64_t MySQL_HostGroups_Manager::get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2) {
-
-	//Note: GloVars.checksum_mutex needs to be locked
-	SQLite3_result* resultset = nullptr;
-	
-	if (incoming_mysql_servers_v2 == nullptr) 
-	{
-		char* error = nullptr;
-		int cols = 0;
-		int affected_rows = 0;
-
-		GloAdmin->admindb->execute_statement(MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS, &error, &cols, &affected_rows, &resultset);
-
-		if (resultset) {
-			save_mysql_servers_v2(resultset);
-		} else {
-			proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_v2", (long unsigned int)0);
-		}
-	} else {
-		resultset = incoming_mysql_servers_v2;
-		save_mysql_servers_v2(incoming_mysql_servers_v2);
-	}
-
-	// reset checksum excluding MYSQL_SERVERS_V2
-	table_resultset_checksum[MYSQL_REPLICATION_HOSTGROUPS] = 0;
-	table_resultset_checksum[MYSQL_GROUP_REPLICATION_HOSTGROUPS] = 0;
-	table_resultset_checksum[MYSQL_GALERA_HOSTGROUPS] = 0;
-	table_resultset_checksum[MYSQL_AWS_AURORA_HOSTGROUPS] = 0;
-	table_resultset_checksum[MYSQL_HOSTGROUP_ATTRIBUTES] = 0;
-
-	table_resultset_checksum[MYSQL_SERVERS_V2] = resultset != nullptr ? resultset->raw_checksum() : 0;
-	proxy_info("Checksum for table %s is 0x%lX\n", "mysql_servers_v2", table_resultset_checksum[MYSQL_SERVERS_V2]);
-
-	commit_update_checksums_from_tables();
-
-	uint64_t hash1 = 0, hash2 = 0;
-	SpookyHash myhash;
-	bool init = false;
-
-	hash1 = table_resultset_checksum[MYSQL_SERVERS_V2];
-	if (hash1) {
-		if (init == false) {
-			init = true;
-			myhash.Init(19, 3);
-		}
-
-		myhash.Update(&hash1, sizeof(hash1));
-	}
-
-	hash1 = table_resultset_checksum[MYSQL_REPLICATION_HOSTGROUPS];
-	if (hash1) {
-		if (init == false) {
-			init = true;
-			myhash.Init(19, 3);
-		}
-
-		myhash.Update(&hash1, sizeof(hash1));
-	}
-
-	hash1 = table_resultset_checksum[MYSQL_GROUP_REPLICATION_HOSTGROUPS];
-	if (hash1) {
-		if (init == false) {
-			init = true;
-			myhash.Init(19, 3);
-		}
-
-		myhash.Update(&hash1, sizeof(hash1));
-	}
-
-	hash1 = table_resultset_checksum[MYSQL_GALERA_HOSTGROUPS];
-	if (hash1) {
-		if (init == false) {
-			init = true;
-			myhash.Init(19, 3);
-		}
-
-		myhash.Update(&hash1, sizeof(hash1));
-	}
-
-	hash1 = table_resultset_checksum[MYSQL_AWS_AURORA_HOSTGROUPS];
-	if (hash1) {
-		if (init == false) {
-			init = true;
-			myhash.Init(19, 3);
-		}
-
-		myhash.Update(&hash1, sizeof(hash1));
-	}
-
-	hash1 = table_resultset_checksum[MYSQL_HOSTGROUP_ATTRIBUTES];
-	if (hash1) {
-		if (init == false) {
-			init = true;
-			myhash.Init(19, 3);
-		}
-
-		myhash.Update(&hash1, sizeof(hash1));
-	}
-
-	if (init == true) {
-		myhash.Final(&hash1, &hash2);
-	}
-
-	return hash1;
 }
 
 bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
@@ -5070,23 +4956,23 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 		mydb->execute("DELETE FROM mysql_servers");
 		generate_mysql_servers_table();
 
-		const auto mysql_servers_checksum = get_mysql_servers_checksum();
-		hgsm_mysql_servers_checksum = mysql_servers_checksum;
+		// Update the global checksums after 'mysql_servers' regeneration
+		{
+			unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
+			uint64_t raw_checksum = resultset ? resultset->raw_checksum() : 0;
 
-		char buf[ProxySQL_Checksum_Value_LENGTH];
-		uint32_t d32[2];
-		memcpy(&d32, &mysql_servers_checksum, sizeof(mysql_servers_checksum));
-		sprintf(buf, "0x%0X%0X", d32[0], d32[1]);
-		pthread_mutex_lock(&GloVars.checksum_mutex);
-		GloVars.checksums_values.mysql_servers.set_checksum(buf);
-		time_t t = time(NULL);
+			// This is required to be updated to avoid extra rebuilding member 'hostgroup_server_mapping'
+			// during 'commit'. For extra details see 'hgsm_mysql_servers_checksum' @details.
+			hgsm_mysql_servers_checksum = raw_checksum;
 
-		GloVars.checksums_values.mysql_servers.epoch = t;
+			string mysrvs_checksum { get_checksum_from_hash(raw_checksum) };
+			save_runtime_mysql_servers(resultset.release());
+			proxy_info("Checksum for table %s is %s\n", "mysql_servers", mysrvs_checksum.c_str());
 
-		GloVars.checksums_values.updates_cnt++;
-		GloVars.generate_global_checksum();
-		GloVars.epoch_version = t;
-		pthread_mutex_unlock(&GloVars.checksum_mutex);
+			pthread_mutex_lock(&GloVars.checksum_mutex);
+			update_glovars_mysql_servers_checksum(mysrvs_checksum);
+			pthread_mutex_unlock(&GloVars.checksum_mutex);
+		}
 	}
 	wrunlock();
 	unsigned long long curtime2 = monotonic_time();
@@ -5980,11 +5866,10 @@ void MySQL_HostGroups_Manager::update_group_replication_add_autodiscovered(
 		// Update the global checksums after 'mysql_servers' regeneration
 		{
 			unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
-			remove_resultset_offline_hard_servers(resultset);
+			string mysrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
 			save_runtime_mysql_servers(resultset.release());
+			proxy_info("Checksum for table %s is %s\n", "mysql_servers", mysrvs_checksum.c_str());
 
-			string mysrvs_checksum { gen_global_mysql_servers_checksum() };
-			proxy_info("New computed global checksum for 'mysql_servers' is '%s'\n", mysrvs_checksum.c_str());
 			pthread_mutex_lock(&GloVars.checksum_mutex);
 			update_glovars_mysql_servers_checksum(mysrvs_checksum);
 			pthread_mutex_unlock(&GloVars.checksum_mutex);
@@ -7955,10 +7840,10 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				// Update the global checksums after 'mysql_servers' regeneration
 				{
 					unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
-					remove_resultset_offline_hard_servers(resultset);
+					string mysrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
 					save_runtime_mysql_servers(resultset.release());
+					proxy_info("Checksum for table %s is %s\n", "mysql_servers", mysrvs_checksum.c_str());
 
-					string mysrvs_checksum { gen_global_mysql_servers_checksum() };
 					pthread_mutex_lock(&GloVars.checksum_mutex);
 					update_glovars_mysql_servers_checksum(mysrvs_checksum);
 					pthread_mutex_unlock(&GloVars.checksum_mutex);
@@ -8105,11 +7990,10 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 				// Update the global checksums after 'mysql_servers' regeneration
 				{
 					unique_ptr<SQLite3_result> resultset { get_admin_runtime_mysql_servers(mydb) };
-					remove_resultset_offline_hard_servers(resultset);
+					string mysrvs_checksum { get_checksum_from_hash(resultset ? resultset->raw_checksum() : 0) };
 					save_runtime_mysql_servers(resultset.release());
+					proxy_info("Checksum for table %s is %s\n", "mysql_servers", mysrvs_checksum.c_str());
 
-					string mysrvs_checksum { gen_global_mysql_servers_checksum() };
-					proxy_info("New computed global checksum for 'mysql_servers' is '%s'\n", mysrvs_checksum.c_str());
 					pthread_mutex_lock(&GloVars.checksum_mutex);
 					update_glovars_mysql_servers_checksum(mysrvs_checksum);
 					pthread_mutex_unlock(&GloVars.checksum_mutex);

@@ -1097,12 +1097,12 @@ incoming_servers_t::incoming_servers_t(
 runtime_mysql_servers_checksum_t::runtime_mysql_servers_checksum_t() : epoch(0) {}
 
 runtime_mysql_servers_checksum_t::runtime_mysql_servers_checksum_t(const std::string& checksum, time_t epoch) : 
-	checksum(checksum), epoch(epoch) {}
+	value(checksum), epoch(epoch) {}
 
 mysql_servers_v2_checksum_t::mysql_servers_v2_checksum_t() : epoch(0) {}
 
 mysql_servers_v2_checksum_t::mysql_servers_v2_checksum_t(const std::string& checksum, time_t epoch) :
-	checksum(checksum), epoch(epoch) {}
+	value(checksum), epoch(epoch) {}
 
 bootstrap_info_t::~bootstrap_info_t() {
 	if (servers != nullptr) {
@@ -1112,6 +1112,20 @@ bootstrap_info_t::~bootstrap_info_t() {
 		mysql_free_result(users);
 	}
 }
+
+peer_runtime_mysql_servers_t::peer_runtime_mysql_servers_t() : resultset(nullptr), checksum() {}
+
+peer_runtime_mysql_servers_t::peer_runtime_mysql_servers_t(
+	SQLite3_result* resultset, const runtime_mysql_servers_checksum_t& checksum
+) : resultset(resultset), checksum(checksum)
+{}
+
+peer_mysql_servers_v2_t::peer_mysql_servers_v2_t() : resultset(nullptr), checksum() {}
+
+peer_mysql_servers_v2_t::peer_mysql_servers_v2_t(
+	SQLite3_result* resultset, const mysql_servers_v2_checksum_t& checksum
+) : resultset(resultset), checksum(checksum)
+{}
 
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
 	int r = 0;
@@ -13082,7 +13096,11 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	}
 
 	// commit all the changes
-	MyHGM->commit(runtime_mysql_servers, peer_runtime_mysql_server, incoming_mysql_servers_v2, peer_mysql_server_v2, false, true);
+	MyHGM->commit(
+		{ runtime_mysql_servers, peer_runtime_mysql_server },
+		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
+		false, true
+	);
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
