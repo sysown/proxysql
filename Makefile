@@ -41,7 +41,7 @@ DEBUG=${ALL_DEBUG}
 #export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.5.4
+export CURVER?=2.6.0
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell awk -F= '/^NAME/{print $$2}' /etc/os-release)
 else
