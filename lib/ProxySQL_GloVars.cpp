@@ -89,6 +89,7 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	checksums_values.admin_variables.in_shutdown = true;
 	checksums_values.mysql_query_rules.in_shutdown = true;
 	checksums_values.mysql_servers.in_shutdown = true;
+	checksums_values.mysql_servers_v2.in_shutdown = true;
 	checksums_values.mysql_users.in_shutdown = true;
 	checksums_values.mysql_variables.in_shutdown = true;
 	checksums_values.ldap_variables.in_shutdown = true;
