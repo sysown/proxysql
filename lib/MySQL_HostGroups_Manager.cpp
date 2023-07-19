@@ -7610,26 +7610,8 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		free(error);
 		error=NULL;
 	}
-	//free(query);
 
 	if (resultset) {
-/*
-		// let's get info about this cluster
-		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
-		std::map<int , AWS_Aurora_Info *>::iterator it2;
-		it2 = AWS_Aurora_Info_Map.find(_writer_hostgroup);
-		AWS_Aurora_Info *info=NULL;
-		if (it2!=AWS_Aurora_Info_Map.end()) {
-			info=it2->second;
-			writer_is_also_reader=info->writer_is_also_reader;
-			new_reader_weight = info->new_reader_weight;
-			read_HG = info->reader_hostgroup;
-			//need_converge=info->need_converge;
-			//info->need_converge=false;
-			//max_writers = info->max_writers;
-		}
-		pthread_mutex_unlock(&AWS_Aurora_Info_mutex);
-*/
 		if (resultset->rows_count) {
 			for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 				SQLite3_row *r=*it;
@@ -7644,41 +7626,17 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				}
 			}
 		}
-/*
-		if (need_converge == false) {
-			SQLite3_result *resultset2=NULL;
-			q = (char *)"SELECT COUNT(*) FROM mysql_servers WHERE hostgroup_id=%d AND status=0";
-			query=(char *)malloc(strlen(q)+32);
-			sprintf(query,q,_writer_hostgroup);
-			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
-			if (resultset2) {
-				if (resultset2->rows_count) {
-					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
-						SQLite3_row *r=*it;
-						int nwriters = atoi(r->fields[0]);
-						if (nwriters > max_writers) {
-							proxy_warning("Galera: too many writers in HG %d. Max=%d, current=%d\n", _writer_hostgroup, max_writers, nwriters);
-							need_converge = true;
-						}
-					}
-				}
-				delete resultset2;
+
+		if (found_writer) { // maybe no-op
+			if (
+				(writer_is_also_reader==0 && found_reader==false)
+				||
+				(writer_is_also_reader > 0 && found_reader==true)
+			) { // either both true or both false
+				delete resultset;
+				resultset=NULL;
 			}
-			free(query);
 		}
-*/
-//		if (need_converge==false) {
-			if (found_writer) { // maybe no-op
-				if (
-					(writer_is_also_reader==0 && found_reader==false)
-					||
-					(writer_is_also_reader > 0 && found_reader==true)
-				) { // either both true or both false
-					delete resultset;
-					resultset=NULL;
-				}
-			}
-//		}
 	}
 
 	if (resultset) {
@@ -7686,8 +7644,6 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 		// This should be the case most of the time,
 		// because the calling function knows if an action is required.
 		if (resultset->rows_count) {
-			//need_converge=false;
-
 			GloAdmin->mysql_servers_wrlock();
 			mydb->execute("DELETE FROM mysql_servers_incoming");
 			q=(char *)"INSERT INTO mysql_servers_incoming SELECT hostgroup_id, hostname, port, gtid_port, weight, status, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers WHERE hostgroup_id=%d";
@@ -7697,17 +7653,12 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port);
 			mydb->execute(query);
 			q=(char *)"UPDATE OR IGNORE mysql_servers_incoming SET hostgroup_id=%d WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+1024); // increased this buffer as it is used for other queries too
 			sprintf(query, q, _writer_hostgroup, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
-			//free(query);
 			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id<>%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
 			sprintf(query, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
-			//free(query);
 			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
 			sprintf(query, q, _server_id, domain_name, aurora_port, _writer_hostgroup);
 			mydb->execute(query);
 
@@ -7719,7 +7670,6 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 			sprintf(query,q,_rhid, new_reader_weight, _whid);
 			mydb->execute(query);
 
-			//free(query);
 			if (writer_is_also_reader && read_HG>=0) {
 				q=(char *)"INSERT OR IGNORE INTO mysql_servers_incoming (hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment) SELECT %d,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM mysql_servers_incoming WHERE hostgroup_id=%d AND hostname='%s%s' AND port=%d";
 				sprintf(query, q, read_HG, _writer_hostgroup, _server_id, domain_name, aurora_port);
@@ -7772,30 +7722,11 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				mydb->execute(query);
 				commit();
 				wrlock();
-/*
-				SQLite3_result *resultset2=NULL;
-				q=(char *)"SELECT writer_hostgroup, reader_hostgroup FROM mysql_aws_aurora_hostgroups WHERE writer_hostgroup=%d";
-				sprintf(query,q,_writer_hostgroup);
-				mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
-				if (resultset2) {
-					if (resultset2->rows_count) {
-						for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
-							SQLite3_row *r=*it;
-							int writer_hostgroup=atoi(r->fields[0]);
-							int reader_hostgroup=atoi(r->fields[1]);
-*/
-							q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
-							sprintf(query,q,_whid,_rhid);
-							mydb->execute(query);
-							generate_mysql_servers_table(&_whid);
-							generate_mysql_servers_table(&_rhid);
-/*
-						}
-					}
-					delete resultset2;
-					resultset2=NULL;
-				}
-*/
+				q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
+				sprintf(query,q,_whid,_rhid);
+				mydb->execute(query);
+				generate_mysql_servers_table(&_whid);
+				generate_mysql_servers_table(&_rhid);
 				wrunlock();
 			} else {
 				if (GloMTH->variables.hostgroup_manager_verbose > 1) {
@@ -7916,52 +7847,23 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 			query=(char *)malloc(strlen(q)+strlen(_server_id)+strlen(domain_name)+512);
 			sprintf(query, q, _rhid, _server_id, domain_name, aurora_port, _whid);
 			mydb->execute(query);
-			//free(query);
 			// Reader could previously be also a reader, in which case previous operation 'UPDATE OR IGNORE'
 			// did nothing. If server is still in the 'writer_hostgroup', we should remove it.
 			q=(char *)"DELETE FROM mysql_servers_incoming WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
 			sprintf(query, q, _server_id, domain_name, aurora_port, _whid);
 			mydb->execute(query);
-			//free(query);
 			q=(char *)"UPDATE mysql_servers_incoming SET status=0 WHERE hostname='%s%s' AND port=%d AND hostgroup_id=%d";
 			sprintf(query, q, _server_id, domain_name, aurora_port, _rhid);
 			mydb->execute(query);
-			//free(query);
-			//converge_galera_config(_writer_hostgroup);
 			commit();
 			wrlock();
-/*
-			SQLite3_result *resultset2=NULL;
-			q=(char *)"SELECT writer_hostgroup, reader_hostgroup FROM mysql_galera_hostgroups WHERE writer_hostgroup=%d";
-			//query=(char *)malloc(strlen(q)+strlen(_hostname)+64);
-			sprintf(query,q,_writer_hostgroup);
-			mydb->execute_statement(query, &error, &cols , &affected_rows , &resultset2);
-			if (resultset2) {
-				if (resultset2->rows_count) {
-					for (std::vector<SQLite3_row *>::iterator it = resultset2->rows.begin() ; it != resultset2->rows.end(); ++it) {
-						SQLite3_row *r=*it;
-						int writer_hostgroup=atoi(r->fields[0]);
-						int backup_writer_hostgroup=atoi(r->fields[1]);
-						int reader_hostgroup=atoi(r->fields[2]);
-						int offline_hostgroup=atoi(r->fields[3]);
-*/
-						q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
-						sprintf(query,q,_whid,_rhid);
-						mydb->execute(query);
-						generate_mysql_servers_table(&_whid);
-						generate_mysql_servers_table(&_rhid);
-/*
-						generate_mysql_servers_table(&writer_hostgroup);
-						generate_mysql_servers_table(&backup_writer_hostgroup);
-						generate_mysql_servers_table(&reader_hostgroup);
-						generate_mysql_servers_table(&offline_hostgroup);
-					}
-				}
-				delete resultset2;
-				resultset2=NULL;
-			}
-*/
+
+			q=(char *)"DELETE FROM mysql_servers WHERE hostgroup_id IN (%d , %d)";
+			sprintf(query,q,_whid,_rhid);
+			mydb->execute(query);
+			generate_mysql_servers_table(&_whid);
+			generate_mysql_servers_table(&_rhid);
+
 			wrunlock();
 			GloAdmin->mysql_servers_wrunlock();
 			free(query);
