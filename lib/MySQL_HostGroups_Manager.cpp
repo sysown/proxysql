@@ -7805,7 +7805,7 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type
 
 	for (const auto& src_node : src_nodes) {
 
-		for (auto& dest_node : dest_nodes) {
+		for (const auto& dest_node : dest_nodes) {
 
 			if (src_node.reader_hostgroup_id == dest_node.reader_hostgroup_id &&
 				src_node.writer_hostgroup_id == dest_node.writer_hostgroup_id) {
@@ -7825,7 +7825,6 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type
 
 	if (dest_nodes.capacity() < (dest_nodes.size() + append.size()))
 		dest_nodes.reserve(dest_nodes.size() + append.size());
-	//dest_nodes.insert(dest_nodes.end(), append.begin(), append.end());
 
 	for (auto& node : append) {
 
@@ -7883,23 +7882,58 @@ unsigned int MySQL_HostGroups_Manager::HostGroup_Server_Mapping::get_hostgroup_i
 
 MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned int hostgroup_id, const MySrvC* srv) {
 
-	MyHGC* hostgroup_container = myHGM->MyHGC_lookup(hostgroup_id);
+	MyHGC* myhgc = myHGM->MyHGC_lookup(hostgroup_id);
 
-	if (!hostgroup_container)
+	if (!myhgc)
 		return NULL;
 
-	if (GloMTH->variables.hostgroup_manager_verbose) {
-		proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%d, status=%d\n", hostgroup_id, srv->address, srv->port, srv->gtid_port, srv->weight, srv->status);
+	MySrvC* ret_srv = NULL;
+	
+	for (uint32_t j = 0; j < myhgc->mysrvs->cnt(); j++) {
+		MySrvC* mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
+		if (strcmp(mysrvc->address, srv->address) == 0 && mysrvc->port == srv->port) {
+			if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				
+				mysrvc->gtid_port = srv->gtid_port;
+				mysrvc->weight = srv->weight;
+				mysrvc->compression = srv->compression;
+				mysrvc->max_connections = srv->max_connections;
+				mysrvc->max_replication_lag = srv->max_replication_lag;
+				mysrvc->use_ssl = srv->use_ssl;
+				mysrvc->max_latency_us = srv->max_latency_us;
+				mysrvc->comment = strdup(srv->comment);
+				mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					proxy_info(
+						"Found server node in Host Group Container %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
+						" hostgroup_id=%d, gtid_port=%d, weight=%ld, compression=%d, max_connections=%ld, use_ssl=%d,"
+						" max_replication_lag=%ld, max_latency_ms=%ld, comment=%s\n",
+						mysrvc->address, mysrvc->port, hostgroup_id, mysrvc->gtid_port, mysrvc->weight, mysrvc->compression,
+						mysrvc->max_connections, mysrvc->use_ssl, mysrvc->max_replication_lag, (mysrvc->max_latency_us / 1000),
+						mysrvc->comment
+					);
+				}
+				ret_srv = mysrvc;
+				break;
+			}
+		}
+	}
+	
+	if (!ret_srv) {
+		if (GloMTH->variables.hostgroup_manager_verbose) {
+			proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%d, status=%d\n", hostgroup_id, srv->address, srv->port, srv->gtid_port, srv->weight, srv->status);
+		}
+
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, srv->status, srv, hostgroup_id);
+
+		ret_srv = new MySrvC(srv->address, srv->port, srv->gtid_port, srv->weight, srv->status, srv->compression,
+			srv->max_connections, srv->max_replication_lag, srv->use_ssl, (srv->max_latency_us / 1000), srv->comment);
+
+		myhgc->mysrvs->add(ret_srv);
 	}
 
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, srv->status, srv, hostgroup_id);
-
-	MySrvC* new_srv = new MySrvC(srv->address, srv->port, srv->gtid_port, srv->weight, srv->status, srv->compression,
-		srv->max_connections, srv->max_replication_lag, srv->use_ssl, (srv->max_latency_us/1000), srv->comment);
-
-	hostgroup_container->mysrvs->add(new_srv);
-
-	return new_srv;
+	return ret_srv;
 }
 
 void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(MySrvC* srv) {
