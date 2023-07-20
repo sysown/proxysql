@@ -387,8 +387,21 @@ class Query_Processor {
 	 * @return Old 'fast_routing_resultset' that has been replaced. Required to be freed by caller.
 	 */
 	SQLite3_result* load_fast_routing(const fast_routing_hashmap_t& fast_routing_hashmap);
+	/**
+	 * @brief Searches for a matching rule in the supplied map, returning the destination hostgroup.
+	 * @details This functions takes a pointer to the hashmap pointer. This is because it performs a
+	 *  conditional internal locking of member 'rwlock'. Since the original pointer value could be modified
+	 *  after the function call, we must perform the resource acquisition (dereference) after we have
+	 *  acquired the internal locking.
+	 * @param khStrInt The map to be used for performing the search. See @details.
+	 * @param u Username, used for the search as part of the map key.
+	 * @param s Schemaname, used for the search as part of the map key.
+	 * @param flagIN FlagIn, used for the search as part of the map key.
+	 * @param lock Whether or not the member lock 'rwlock' should be taken for the search.
+	 * @return If a matching rule is found, the target destination hostgroup, -1 otherwise.
+	 */
 	int search_rules_fast_routing_dest_hg(
-		khash_t(khStrInt)*& _rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
+		khash_t(khStrInt)** __rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
 	);
 	SQLite3_result * get_current_query_rules_fast_routing();
 	SQLite3_result * get_current_query_rules_fast_routing_inner();

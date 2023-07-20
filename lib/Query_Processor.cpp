@@ -981,7 +981,7 @@ SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 }
 
 int Query_Processor::search_rules_fast_routing_dest_hg(
-	khash_t(khStrInt)*& _rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
+	khash_t(khStrInt)** __rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
 ) {
 	int dest_hg = -1;
 	const size_t u_len = strlen(u);
@@ -998,6 +998,7 @@ int Query_Processor::search_rules_fast_routing_dest_hg(
 	if (lock) {
 		pthread_rwlock_rdlock(&this->rwlock);
 	}
+	khash_t(khStrInt)* _rules_fast_routing = *__rules_fast_routing;
 	khiter_t k = kh_get(khStrInt, _rules_fast_routing, keybuf_ptr);
 	if (k == kh_end(_rules_fast_routing)) {
 		khiter_t k2 = kh_get(khStrInt, _rules_fast_routing, keybuf_ptr + u_len);
@@ -2133,10 +2134,12 @@ __exit_process_mysql_query:
 
 		if (_thr_SQP_rules_fast_routing != nullptr) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching thread-local 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			dst_hg = search_rules_fast_routing_dest_hg(_thr_SQP_rules_fast_routing, u, s, flagIN, false);
+			dst_hg = search_rules_fast_routing_dest_hg(&_thr_SQP_rules_fast_routing, u, s, flagIN, false);
 		} else if (rules_fast_routing != nullptr) {
 			proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 7, "Searching global 'rules_fast_routing' hashmap with: user='%s', schema='%s', and flagIN='%d'\n", u, s, flagIN);
-			dst_hg = search_rules_fast_routing_dest_hg(rules_fast_routing, u, s, flagIN, true);
+			// NOTE: A pointer to the member 'this->rules_fast_routing' is required, since the value of the
+			// member could have changed before the function acquires the internal lock. See function doc.
+			dst_hg = search_rules_fast_routing_dest_hg(&this->rules_fast_routing, u, s, flagIN, true);
 		}
 
 		if (dst_hg != -1) {
@@ -3263,7 +3266,7 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing_dual(
 	khash_t(khStrInt)* rules_fast_routing = _rules_fast_routing ? _rules_fast_routing : this->rules_fast_routing;
 
 	if (rules_fast_routing) {
-		ret = search_rules_fast_routing_dest_hg(rules_fast_routing, username, schemaname, flagIN, lock);
+		ret = search_rules_fast_routing_dest_hg(&rules_fast_routing, username, schemaname, flagIN, lock);
 	}
 
 	return ret;
