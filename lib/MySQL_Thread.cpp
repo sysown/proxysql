@@ -4521,6 +4521,12 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 		pta[1]=buf;
 		result->add_row(pta);
 	}
+	{	// Queries backend SET statement
+		pta[0]=(char *)"Com_backend_set_stmt";
+		sprintf(buf,"%llu",MyHGM->status.backend_set_stmt);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
 	{	// Queries frontend INIT DB
 		pta[0]=(char *)"Com_frontend_init_db";
 		sprintf(buf,"%llu",MyHGM->status.frontend_init_db);
@@ -4536,6 +4542,18 @@ SQLite3_result * MySQL_Threads_Handler::SQL3_GlobalStatus(bool _memory) {
 	{	// Queries frontend USE DB
 		pta[0]=(char *)"Com_frontend_use_db";
 		sprintf(buf,"%llu",MyHGM->status.frontend_use_db);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries frontend SET statement
+		pta[0]=(char *)"Com_frontend_set_stmt";
+		sprintf(buf,"%llu",MyHGM->status.frontend_set_stmt);
+		pta[1]=buf;
+		result->add_row(pta);
+	}
+	{	// Queries frontend failed SET statement
+		pta[0]=(char *)"Com_frontend_failed_set_stmt";
+		sprintf(buf,"%llu",MyHGM->status.frontend_failed_set_stmt);
 		pta[1]=buf;
 		result->add_row(pta);
 	}

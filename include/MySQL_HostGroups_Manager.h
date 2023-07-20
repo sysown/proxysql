@@ -338,9 +338,12 @@ struct p_hg_counter {
 		com_backend_init_db,
 		// TODO: https://github.com/sysown/proxysql/issues/2690
 		com_backend_set_names,
+		com_backend_set_stmt,
 		com_frontend_init_db,
 		com_frontend_set_names,
 		com_frontend_use_db,
+		com_frontend_set_stmt,
+		com_frontend_failed_set_stmt,
 		com_commit_cnt,
 		com_commit_cnt_filtered,
 		selects_for_update__autocommit0,
@@ -680,9 +683,12 @@ class MySQL_HostGroups_Manager {
 		unsigned long long backend_change_user;
 		unsigned long long backend_init_db;
 		unsigned long long backend_set_names;
+		unsigned long long backend_set_stmt;
 		unsigned long long frontend_init_db;
 		unsigned long long frontend_set_names;
 		unsigned long long frontend_use_db;
+		unsigned long long frontend_set_stmt;
+		unsigned long long frontend_failed_set_stmt;
 		unsigned long long access_denied_wrong_password;
 		unsigned long long access_denied_max_connections;
 		unsigned long long access_denied_max_user_connections;
