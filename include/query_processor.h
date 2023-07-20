@@ -388,7 +388,7 @@ class Query_Processor {
 	 */
 	SQLite3_result* load_fast_routing(const fast_routing_hashmap_t& fast_routing_hashmap);
 	int search_rules_fast_routing_dest_hg(
-		khash_t(khStrInt)* _rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
+		khash_t(khStrInt)*& _rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
 	);
 	SQLite3_result * get_current_query_rules_fast_routing();
 	SQLite3_result * get_current_query_rules_fast_routing_inner();

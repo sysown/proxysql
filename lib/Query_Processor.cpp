@@ -981,7 +981,7 @@ SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 }
 
 int Query_Processor::search_rules_fast_routing_dest_hg(
-	khash_t(khStrInt)* _rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
+	khash_t(khStrInt)*& _rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
 ) {
 	int dest_hg = -1;
 	const size_t u_len = strlen(u);
