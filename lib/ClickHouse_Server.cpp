@@ -1363,7 +1363,8 @@ static void *child_mysql(void *arg) {
 		myds->revents=fds[0].revents;
 		int rb = 0;
 		rb = myds->read_from_net();
-		if (myds->net_failure) goto __exit_child_mysql;
+		if (myds->net_failure)
+			goto __exit_child_mysql;
 		myds->read_pkts();
 		if (myds->encrypted == true) {
 			// PMC-10004
@@ -1375,13 +1376,17 @@ static void *child_mysql(void *arg) {
 			// We finally removed the chunk size as it seems that any size is possible.
 			while (rb > 0) {
 				rb = myds->read_from_net();
-				if (myds->net_failure) goto __exit_child_mysql;
+				if (myds->net_failure)
+					goto __exit_child_mysql;
 				myds->read_pkts();
 			}
 		}
 		sess->to_process=1;
 		int rc=sess->handler();
-		if (rc==-1) goto __exit_child_mysql;
+		if (rc==-1)
+			goto __exit_child_mysql;
+		if (sess->healthy==0)
+			goto __exit_child_mysql;
 	}
 
 __exit_child_mysql:
