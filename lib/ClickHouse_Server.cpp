@@ -62,6 +62,36 @@
 
 using namespace clickhouse;
 
+std::string dec128_to_pchar(Int128 value, size_t scale) {
+// code borrowed from https://github.com/bderleta/php-clickhouse/blob/master/conversions.h
+	   bool sign = (value < 0);
+	   char buffer48[48];
+	   char* s = &buffer48[47];
+	   size_t w = 0;
+	   *(--s) = 0;
+	   if (sign)
+			   value = -value;
+	   while (value) {
+			   Int128 v = value;
+			   v %= 10;
+			   char c = (char)v;
+			   *(--s) = c + '0';
+			   if ((++w) == scale)
+					   *(--s) = '.';
+			   value /= 10;
+	   }
+	   while (w < scale) {
+			   *(--s) = '0';
+			   if ((++w) == scale)
+					   *(--s) = '.';
+	   }
+	   if (w == scale)
+			   *(--s) = '0';
+	   if (sign)
+			   *(--s) = '-';
+	   return std::string(s);
+}
+
 __thread MySQL_Session * clickhouse_thread___mysql_sess;
 
 inline void ClickHouse_to_MySQL(const Block& block) {
@@ -99,7 +129,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 #endif // CXX17
 			}
 
-			if (cc >= clickhouse::Type::Code::Int8 && cc <= clickhouse::Type::Code::Float64) {
+			if (cc >= clickhouse::Type::Code::Int8 && cc <= clickhouse::Type::Code::Decimal128) {
 				bool _unsigned = false;
 				uint16_t flags = is_null | 128;
 
@@ -149,6 +179,14 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 					case clickhouse::Type::Code::Float64:
 						type = MYSQL_TYPE_DOUBLE;
 						size = 22;
+						decimals = 31;
+						break;
+					case clickhouse::Type::Code::Decimal:
+					case clickhouse::Type::Code::Decimal32:
+					case clickhouse::Type::Code::Decimal64:
+					case clickhouse::Type::Code::Decimal128:
+						type = MYSQL_TYPE_NEWDECIMAL;
+						size = 32;
 						decimals = 31;
 						break;
 					default:
@@ -236,6 +274,15 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 					break;
 				case clickhouse::Type::Code::Float64:
 					s=std::to_string(block[i]->As<ColumnFloat64>()->At(r));
+					break;
+				case clickhouse::Type::Code::Decimal:
+				case clickhouse::Type::Code::Decimal32:
+				case clickhouse::Type::Code::Decimal64:
+				case clickhouse::Type::Code::Decimal128:
+					{
+						size_t scale = block[i]->Type()->As<DecimalType>()->GetScale();
+						s = dec128_to_pchar(block[i]->As<ColumnDecimal>()->At(r), scale);
+					}
 					break;
 				case clickhouse::Type::Code::Enum8:
 					s=block[i]->As<ColumnEnum8>()->NameAt(r);;

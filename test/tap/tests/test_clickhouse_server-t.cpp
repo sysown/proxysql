@@ -253,6 +253,8 @@ std::vector<query_spec> queries_set1 {
 	std::make_tuple<std::string, int>("SELECT NULL AS a", 0, 1),
 	std::make_tuple<std::string, int>("SELECT NULL+2 AS a, 'hello', NULL+1, 'world', NULL AS b", 0, 1),
 	std::make_tuple<std::string, int>("SELECT CONCAT('AAA',NULL)", 0, 1),
+	std::make_tuple<std::string, int>("SELECT CAST(-1234.1234, 'Decimal32(3)')", 0, 1),
+	std::make_tuple<std::string, int>("SELECT CAST(1000.0, 'Decimal128(3)')", 0, 1),
 	std::make_tuple<std::string, int>("DROP TABLE IF EXISTS table1", 0, -1),
 	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 0, -1),
 	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 1148, -1), // the second time it must fails
