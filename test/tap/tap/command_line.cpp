@@ -26,10 +26,28 @@ CommandLine::~CommandLine() {
 		free(username);
 	if (password)
 		free(password);
+
+	if (root_host)
+		free(root_host);
+	if (root_username)
+		free(root_username);
+	if (root_password)
+		free(root_password);
+
+	if (admin_host)
+		free(admin_host);
 	if (admin_username)
 		free(admin_username);
 	if (admin_password)
 		free(admin_password);
+
+	if (mysql_host)
+		free(mysql_host);
+	if (mysql_username)
+		free(mysql_username);
+	if (mysql_password)
+		free(mysql_password);
+
 	if (workdir)
 		free(workdir);
 }
@@ -105,6 +123,7 @@ int CommandLine::getEnv() {
 	};
 
 	{
+		// load environment
 		char temp[PATH_MAX];
 		ssize_t len = readlink("/proc/self/exe", temp, sizeof(temp));
 		std::string exe_path = (len > 0) ? std::string(temp, len) : std::string("");
@@ -130,40 +149,95 @@ int CommandLine::getEnv() {
 			diag("loaded: %s", (exe_path + ".env").c_str());
 	}
 
-	value = getenv("TAP_HOST");
-	if (value)
-		replace_str_field(&this->host, value);
-
-	value = getenv("TAP_USERNAME");
-	if (value)
-		replace_str_field(&this->username, value);
-
-	value = getenv("TAP_PASSWORD");
-	if (value)
-		replace_str_field(&this->password, value);
-
-	value = getenv("TAP_ADMINUSERNAME");
-	if (value)
-		replace_str_field(&this->admin_username, value);
-
-	value = getenv("TAP_ADMINPASSWORD");
-	if (value)
-		replace_str_field(&this->admin_password, value);
-
 	int env_port = 0;
-	value = getenv("TAP_PORT");
-	if (value) {
-		env_port = strtol(value, NULL, 10);
-		if (env_port>0 && env_port<65536)
-			port = env_port;
+	{
+		// unprivileged test connection
+		value = getenv("TAP_HOST");
+		if (value)
+			replace_str_field(&this->host, value);
+
+		value = getenv("TAP_PORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				port = env_port;
+		}
+
+		value = getenv("TAP_USERNAME");
+		if (value)
+			replace_str_field(&this->username, value);
+
+		value = getenv("TAP_PASSWORD");
+		if (value)
+			replace_str_field(&this->password, value);
 	}
 
-	value = getenv("TAP_ADMINPORT");
-	if (value) {
-		env_port = strtol(value, NULL, 10);
-		if (env_port>0 && env_port<65536)
-			admin_port = env_port;
+	{
+		// privileged test connection
+		value = getenv("TAP_ROOTHOST");
+		if (value)
+			replace_str_field(&this->root_host, value);
+
+		value = getenv("TAP_ROOTPORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				root_port = env_port;
+		}
+
+		value = getenv("TAP_ROOTUSERNAME");
+		if (value)
+			replace_str_field(&this->root_username, value);
+
+		value = getenv("TAP_ROOTPASSWORD");
+		if (value)
+			replace_str_field(&this->root_password, value);
 	}
+
+	{
+		// proxysql admin connection
+		value = getenv("TAP_ADMINHOST");
+		if (value)
+			replace_str_field(&this->admin_host, value);
+
+		value = getenv("TAP_ADMINPORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				admin_port = env_port;
+		}
+
+		value = getenv("TAP_ADMINUSERNAME");
+		if (value)
+			replace_str_field(&this->admin_username, value);
+
+		value = getenv("TAP_ADMINPASSWORD");
+		if (value)
+			replace_str_field(&this->admin_password, value);
+	}
+
+	{
+		// mysql admin connection
+		value = getenv("TAP_MYSQLHOST");
+		if (value)
+			replace_str_field(&this->mysql_host, value);
+
+		value = getenv("TAP_MYSQLPORT");
+		if (value) {
+			env_port = strtol(value, NULL, 10);
+			if (env_port > 0 && env_port < 65536)
+				mysql_port = env_port;
+		}
+
+		value = getenv("TAP_MYSQLUSERNAME");
+		if (value)
+			replace_str_field(&this->mysql_username, value);
+
+		value = getenv("TAP_MYSQLPASSWORD");
+		if (value)
+			replace_str_field(&this->mysql_password, value);
+	}
+
 
 	value = getenv("TAP_WORKDIR");
 	if (value)
