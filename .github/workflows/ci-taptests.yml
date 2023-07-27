@@ -74,9 +74,9 @@ jobs:
         # apply patches
         for PATCH in $(cd jenkins-build-scripts/test-scripts/patches; find . -type f); do
           if [[ $PATCH =~ \.patch ]]; then
-            patch proxysql/test/tap/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH}
+            patch proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
           elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
-            cp jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/test/tap/${PATCH#./}
+            cp jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
           fi
         done
         # patch multi port listening
