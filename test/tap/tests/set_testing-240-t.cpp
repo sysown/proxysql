@@ -32,6 +32,7 @@
 #include "command_line.h"
 
 
+CommandLine cl;
 
 int queries_per_connections=10;
 //unsigned int num_threads=1;
@@ -113,7 +114,8 @@ void * my_conn_thread(void *arg) {
 		if (mysql==NULL) {
 			exit(EXIT_FAILURE);
 		}
-		MYSQL *rc=mysql_real_connect(mysql, host, username, password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
+//		MYSQL *rc=mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
+		MYSQL *rc=mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, (local ? 0 : ( cl.root_port + rand()%multiport ) ), NULL, 0);
 		if (rc==NULL) {
 			if (silent==0) {
 				fprintf(stderr,"%s\n", mysql_error(mysql));
@@ -428,7 +430,6 @@ void * my_conn_thread(void *arg) {
 
 
 int main(int argc, char *argv[]) {
-	CommandLine cl;
 
 	if(cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
@@ -450,7 +451,9 @@ int main(int argc, char *argv[]) {
 	username = cl.username;
 	password = cl.password;
 	host = cl.host;
+//	host = "127.0.0.1";
 	port = cl.port;
+//	port = 6033;
 
 	diag("Loading test cases from file. This will take some time...");
 	if (!readTestCasesJSON(fileName2)) {
@@ -460,7 +463,7 @@ int main(int argc, char *argv[]) {
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
-	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+	if (!mysql_real_connect(proxysql_admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
@@ -471,8 +474,10 @@ int main(int argc, char *argv[]) {
 
 	diag("Creating new hostgroup 101: DELETE FROM mysql_servers WHERE hostgroup_id = 101");
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
-	diag("Creating new hostgroup 101: INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1,11,21,31)");
-	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1,11,21,31)");
+//	diag("Creating new hostgroup 101: INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (21)");
+	diag("Creating new hostgroup 101: INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1501)");
+//	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (21)");
+	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1501)");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	diag("Changing read traffic to hostgroup 101: UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
 	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
@@ -480,9 +485,7 @@ int main(int argc, char *argv[]) {
 
 	//queries = 3000;
 	//queries = testCases.size();
-	unsigned int p = queries * num_threads;
-	p *= 2; // number of algorithms
-	plan(p);
+	plan(queries * num_threads);
 
 	if (strcmp(host,"localhost")==0) {
 		local = 1;
@@ -494,25 +497,16 @@ int main(int argc, char *argv[]) {
 		uniquequeries=(int)sqrt(uniquequeries);
 	}
 
-	for (int algo = 1; algo <= 2; algo++ ) {
-		connect_phase_completed = 0;
-		query_phase_completed = 0;
-		std::string qu = "SET mysql-set_parser_algorithm=" + std::to_string(algo);
-		diag("Setting: %s", qu.c_str());
-		MYSQL_QUERY(proxysql_admin, qu.c_str());
-		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-		pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
-		if (thi==NULL)
-			return exit_status();
+	pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
+	if (thi==NULL)
+		return exit_status();
 
-		for (unsigned int i=0; i<num_threads; i++) {
-			if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
-				perror("Thread creation");
-		}
-		for (unsigned int i=0; i<num_threads; i++) {
-			pthread_join(thi[i], NULL);
-		}
-		free(thi);
+	for (unsigned int i=0; i<num_threads; i++) {
+		if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
+			perror("Thread creation");
+	}
+	for (unsigned int i=0; i<num_threads; i++) {
+		pthread_join(thi[i], NULL);
 	}
 	for (std::unordered_map<std::string,var_counter>::iterator it = vars_counters.begin(); it!=vars_counters.end(); it++) {
 		diag("Unknown variable %s:\t Count: %d , unknown: %d", it->first.c_str(), it->second.count, it->second.unknown);

@@ -10,10 +10,10 @@
 #include "utils.h"
 #include "proxysql_utils.h"
 
-#define BACKEND_SERVER_HOST	"127.0.0.1"
-#define BACKEND_SERVER_PORT 13306
-#define BACKEND_SERVER_USER	"root"
-#define BACKEND_SERVER_PASS "root"
+//#define BACKEND_SERVER_HOST	"127.0.0.1"
+//#define BACKEND_SERVER_PORT 13306
+//#define BACKEND_SERVER_USER	"root"
+//#define BACKEND_SERVER_PASS "root"
 
 #define MYSQL_QUERY__(mysql, query) \
 	do { \
@@ -276,7 +276,7 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL* dummy_mysqldb = NULL;
 	
 	const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-		std::make_tuple(0, BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
+		std::make_tuple(0, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
 	};
 
 	const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
@@ -294,14 +294,14 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	{
-		int result = get_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, &read_only_val);
+		int result = get_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, &read_only_val);
 
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
+		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", cl.mysql_host, cl.mysql_port);
 
 		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'. 
 		result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
@@ -327,7 +327,7 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 		const uint64_t wait = monitor_read_only_interval + monitor_read_only_timeout;
 		usleep((wait * 1000) * 2);
 
-		dummy_mysqldb = create_new_connection(cl.host, cl.username, cl.password, cl.port);
+		dummy_mysqldb = create_new_connection(cl.root_host, cl.root_username, cl.root_password, cl.root_port);
 
 		ok(dummy_mysqldb != NULL, "Connection created successfully");
 
@@ -340,19 +340,19 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 		MYSQL_QUERY__(dummy_mysqldb, "BEGIN");
 		MYSQL_QUERY__(dummy_mysqldb, "DO 1");
 
-		result = set_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, 1);
+		result = set_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, 1);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		result = get_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, &read_only_val);
+		result = get_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		ok(read_only_val == 1, "MySQL Server '%s:%d' should function as a reader", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
+		ok(read_only_val == 1, "MySQL Server '%s:%d' should function as a reader", cl.mysql_host, cl.mysql_port);
 
 		// Wait till read_only actions have been performed
 		usleep((wait * 1000) * 2);
@@ -370,19 +370,19 @@ int test_scenario_1(MYSQL* proxy_admin, const CommandLine& cl) {
 
 		mysql_free_result(mysql_store_result(proxy_admin));
 
-		result = set_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, 0);
+		result = set_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, 0);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		result = get_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, &read_only_val);
+		result = get_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
+		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", cl.mysql_host, cl.mysql_port);
 
 		// Wait till read_only actions have been performed
 		usleep((wait * 1000) * 2);
@@ -410,9 +410,9 @@ cleanup:
 
 	// Restoring MySQL Server read_only value
 	if (read_only_val != -1) {
-		diag("Restoring MySQL Server %s:%d 'read_only' value to '0'", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
+		diag("Restoring MySQL Server %s:%d 'read_only' value to '0'", cl.mysql_host, cl.mysql_port);
 
-		if (set_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, 0) != EXIT_SUCCESS) {
+		if (set_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, 0) != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Restoring read_only value failed.");
 		}
 	}
@@ -429,7 +429,7 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL* dummy_mysqldb = NULL;
 
 	const std::vector<mysql_server_tuple> insert_mysql_servers_values {
-		std::make_tuple(1, BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
+		std::make_tuple(1, cl.mysql_host, cl.mysql_port, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "") // this server has read_only value 0 (writer)
 	};
 
 	const std::vector<replication_hostgroups_tuple> insert_replication_hostgroups_values {
@@ -448,13 +448,13 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 	MYSQL_QUERY__(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	{
-		int result = get_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, &read_only_val);
+		int result = get_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, &read_only_val);
 		if (result != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Fetching read_only value from mysql server failed.");
 			goto cleanup;
 		}
 
-		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
+		ok(read_only_val == 0, "MySQL Server '%s:%d' should function as a writer", cl.mysql_host, cl.mysql_port);
 
 		// Inserting new records into 'mysql_servers' and 'mysql_replication_hostgroups'. 
 		result = insert_mysql_servers_records(proxy_admin, insert_mysql_servers_values, insert_replication_hostgroups_values);
@@ -480,7 +480,7 @@ int test_scenario_2(MYSQL* proxy_admin, const CommandLine& cl) {
 		const uint64_t wait = monitor_read_only_interval + monitor_read_only_timeout;
 		usleep((wait * 1000) * 2);
 
-		dummy_mysqldb = create_new_connection(cl.host, cl.username, cl.password, cl.port);
+		dummy_mysqldb = create_new_connection(cl.root_host, cl.root_username, cl.root_password, cl.root_port);
 
 		ok(dummy_mysqldb != NULL, "Connection created successfully");
 
@@ -523,9 +523,9 @@ cleanup:
 
 	// Restoring MySQL Server read_only value
 	if (read_only_val != -1) {
-		diag("Restoring MySQL Server %s:%d 'read_only' value to '0'", BACKEND_SERVER_HOST, BACKEND_SERVER_PORT);
+		diag("Restoring MySQL Server %s:%d 'read_only' value to '0'", cl.mysql_host, cl.mysql_port);
 
-		if (set_read_only_value(BACKEND_SERVER_HOST, BACKEND_SERVER_PORT, BACKEND_SERVER_USER, BACKEND_SERVER_PASS, 0) != EXIT_SUCCESS) {
+		if (set_read_only_value(cl.mysql_host, cl.mysql_port, cl.mysql_username, cl.mysql_password, 0) != EXIT_SUCCESS) {
 			fprintf(stderr, "File %s, line %d, Error: `%s`\n", __FILE__, __LINE__, "Restoring read_only value failed.");
 		}
 	}

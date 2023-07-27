@@ -224,27 +224,13 @@ int main(int argc, char** argv) {
 	MYSQL* mysql_server = mysql_init(NULL);
 
 	// Creating the new connections
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username,
-			cl.admin_password, NULL, cl.admin_port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
-	if (
-		!mysql_real_connect(
-			mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(mysql_server)
-		);
+//	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+	if (!mysql_real_connect(mysql_server, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
 	}
 
@@ -256,8 +242,7 @@ int main(int argc, char** argv) {
 			return make_tuple(std::get<0>(u_attr), std::get<1>(u_attr), std::get<2>(u_attr));
 		}
 	);
-	int c_users_res =
-		create_extra_users(proxysql_admin, mysql_server, users_configs);
+	int c_users_res = create_extra_users(proxysql_admin, mysql_server, users_configs);
 	if (c_users_res) { return c_users_res; }
 
 	// Load ProxySQL users to runtime

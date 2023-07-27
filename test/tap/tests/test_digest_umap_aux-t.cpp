@@ -68,7 +68,7 @@ public:
 
 vector<digest_stats> get_digest_stats(MYSQL* proxy_admin) {
 	const char* get_digest_stats_query =
-		"SELECT * FROM stats_mysql_query_digest WHERE username='root' AND "
+		"SELECT * FROM stats_mysql_query_digest WHERE username='testuser' AND "
 		"digest_text IN ('SELECT ?', 'SELECT ? UNION SELECT ?', 'SELECT ? UNION SELECT ? UNION SELECT ?') "
 		"ORDER BY hostgroup, schemaname, username, client_address, digest";
 	diag("Running: %s", get_digest_stats_query);
@@ -110,6 +110,7 @@ void run_dummy_queries() {
 	MYSQL* proxy_mysql = mysql_init(NULL);
 
 	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		slowest_query = -1.0;
 		return;
@@ -196,6 +197,7 @@ int main(int argc, char** argv) {
 
 	MYSQL *proxy_mysql = mysql_init(NULL);
 	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		mysql_close(proxy_admin);
 		return EXIT_FAILURE;

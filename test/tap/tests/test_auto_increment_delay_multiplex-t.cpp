@@ -942,7 +942,8 @@ int main(int argc, char** argv) {
 	MYSQL* proxy_mysql = mysql_init(NULL);
 	MYSQL* proxy_admin = mysql_init(NULL);
 
-	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
 	}
@@ -967,7 +968,8 @@ int main(int argc, char** argv) {
 		proxy_mysql = mysql_init(NULL);
 		proxy_admin = mysql_init(NULL);
 
-		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		}

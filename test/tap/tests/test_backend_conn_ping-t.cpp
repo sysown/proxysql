@@ -89,7 +89,7 @@ int change_mysql_cfg(
 		return EXIT_FAILURE;
 	}
 
-	if (!mysql_real_connect(my_conn, host.c_str(), cl.username, cl.password, NULL, std::stol(port.c_str()), NULL, 0)) {
+	if (!mysql_real_connect(my_conn, host.c_str(), cl.mysql_username, cl.mysql_password, NULL, std::stol(port.c_str()), NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
 		res = EXIT_FAILURE;
 	}
@@ -234,7 +234,8 @@ int check_backend_conns(
 		for (const auto& svr_addr : svrs_addrs) {
 			MYSQL* mysql = mysql_init(NULL);
 
-			if (!mysql_real_connect(mysql, svr_addr.first.c_str(), cl.username, cl.password, NULL, svr_addr.second, NULL, 0)) {
+//			if (!mysql_real_connect(mysql, svr_addr.first.c_str(), cl.username, cl.password, NULL, svr_addr.second, NULL, 0)) {
+			if (!mysql_real_connect(mysql, svr_addr.first.c_str(), cl.mysql_username, cl.mysql_password, NULL, svr_addr.second, NULL, 0)) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 				res = EXIT_FAILURE;
 				goto cleanup;
@@ -516,9 +517,17 @@ int main(int, char**) {
 	}
 
 	test_params_t test_params { b_0, b, its, delay_s };
+	vector<svr_addr> s_server_test;
+	vector<svr_addr> m_server_test;
 
-	vector<svr_addr> s_server_test { { "127.0.0.1", 13306 } };
-	vector<svr_addr> m_server_test { { "127.0.0.1", 13306 }, { "127.0.0.1", 13307 }, { "127.0.0.1", 13308 } };
+	const string docker_mode = getenv("DOCKER_MODE");
+	if (docker_mode.find("dns") == docker_mode.size() - 3) {
+		s_server_test.assign({ { "mysql1.infra-mysql57", 3306 } });
+		m_server_test.assign({ { "mysql1.infra-mysql57", 3306 }, { "mysql2.infra-mysql57", 3306 }, { "mysql3.infra-mysql57", 3306 } });
+	} else {
+		s_server_test.assign({ { "127.0.0.1", 13306 } });
+		m_server_test.assign({ { "127.0.0.1", 13306 }, { "127.0.0.1", 13307 }, { "127.0.0.1", 13308 } });
+	}
 
 	diag("Performing 'check_backend_conns()' for servers: '%s'", nlohmann::json(s_server_test).dump().c_str());
 	int s_server_rc = check_backend_conns(cl, test_params, 0, s_server_test);
@@ -556,13 +565,6 @@ int main(int, char**) {
 	diag("Restoring previous 'MySQL' servers infra config...");
 
 	{
-		// do some cleanup
-		string query = "SET mysql-free_connections_pct=5";
-		diag("%s", query.c_str());
-		MYSQL_QUERY(proxy_admin, query.c_str());
-		MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
-	}
-	{
 		for (const auto& server_old_config : servers_old_configs) {
 			const mysql_res_row& res_row = server_old_config.first;
 			const srv_cfg& old_srv_config = server_old_config.second;
@@ -575,7 +577,6 @@ int main(int, char**) {
 		}
 	}
 
-	sleep(2); // wait for the cleanup to happen
 	mysql_close(proxy_admin);
 
 	return exit_status();

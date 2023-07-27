@@ -47,7 +47,9 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, 13306, NULL, 0)) {
+	diag("Connecting to '%s@%s:%d'", cl.mysql_username, cl.mysql_host, cl.mysql_port);
+//	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, 13306, NULL, 0)) {
+	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}

@@ -403,7 +403,8 @@ int main(int argc, char** argv) {
 
 		set_clickhouse_port(proxysql_admin,8000);
 		test_crash(host_port.first.c_str(), host_port.second);
-		set_clickhouse_port(proxysql_admin,19000);
+//		set_clickhouse_port(proxysql_admin,19000);
+		set_clickhouse_port(proxysql_admin,9000);
 
 		MYSQL* proxysql_clickhouse = mysql_init(NULL);
 
@@ -497,8 +498,7 @@ int main(int argc, char** argv) {
 		// NOTE: Wait for ProxySQL to reconfigure, changing Clickhous interface.
 		// Trying to perform a connection immediately after changing the
 		// interface could lead to 'EADDRINUSE' in ProxySQL side.
-		// UPDATE: Timeout increased to '5' seconds to avoid previously described issue.
-		sleep(5);
+		sleep(1);
 
 		// Connect to the new interface
 		std::pair<std::string, int> new_host_port {};
