@@ -385,7 +385,7 @@ int wait_target_backend_conns(MYSQL* admin, uint32_t tg_backend_conns, uint32_t 
 			break;
 		} else {
 			waited += 1;
-			diag("tg_backend_conns: %d, cur_conn_num: %ld , not matching after %lu checks", tg_backend_conns, cur_conn_num, waited);
+			diag("tg_backend_conns: %d, cur_conn_num: %ld , not matching after %u checks", tg_backend_conns, cur_conn_num, waited);
 			sleep(1);
 		}
 	}

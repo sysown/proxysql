@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
 		);
 		ok(
 			ds_vector_after[i].count_star - ds_vector_before[i].count_star == num_dummy_queries_executed,
-			"Query `%s` should be executed %lld times. Act:'%lld'",
+			"Query `%s` should be executed %d times. Act:'%lld'",
 			ds_vector_after[i].digest_text.c_str(), num_dummy_queries_executed,
 			ds_vector_after[i].count_star - ds_vector_before[i].count_star
 		);

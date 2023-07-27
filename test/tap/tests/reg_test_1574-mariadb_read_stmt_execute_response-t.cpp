@@ -115,9 +115,9 @@ int main(int argc, char** argv) {
 
 		int field_count = mysql_stmt_field_count(stmt);
 		if (i % 2 == 0) {
-			ok(field_count == 3, "Field count should be '3' in case of 'i % 2' being '0'");
+			ok(field_count == 3, "Field count should be '3' in case of 'i %% 2' being '0'");
 		} else {
-			ok(field_count == 1, "Field count should be '1' in case of 'i % 2' being '1'");
+			ok(field_count == 1, "Field count should be '1' in case of 'i %% 2' being '1'");
 		}
 
 		if (mysql_stmt_close(stmt))
