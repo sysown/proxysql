@@ -67,19 +67,19 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	if (mysql_query(mysql, "drop database if exists t1")) {
+	if (mysql_query(mysql, "drop database if exists test")) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n",
 				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
-	if (mysql_query(mysql, "create database t1 charset utf8")) {
+	if (mysql_query(mysql, "create database test charset utf8")) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n",
 				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
 	}
 
-	if (mysql_query(mysql, "use t1")) {
+	if (mysql_query(mysql, "use test")) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n",
 				__FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();

@@ -56,8 +56,8 @@ echo ":: ProxySQL connection completed".PHP_EOL;
 
 echo ":: Starting schema and table creation...".PHP_EOL;
 if ($port !== 6090) {
-	$proxy->query("CREATE DATABASE IF NOT EXISTS test_clickhouse_types_php");
-	$proxy->query("USE test_clickhouse_types_php");
+	$proxy->query("CREATE DATABASE IF NOT EXISTS test");
+	$proxy->query("USE test");
 	$proxy->query("DROP TABLE IF EXISTS types_table");
 
 	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 TINYINT, col2 SMALLINT, col3 INT, col4 BIGINT, col5 FLOAT, col6 DOUBLE)");
@@ -80,8 +80,8 @@ if ($port !== 6090) {
 	echo ":: Finished operations on MySQL conn".PHP_EOL;
 	exit(0);
 } else {
-	$proxy->query("CREATE DATABASE IF NOT EXISTS test_clickhouse_types_php");
-	$proxy->query("USE test_clickhouse_types_php");
+	$proxy->query("CREATE DATABASE IF NOT EXISTS test");
+	$proxy->query("USE test");
 	$proxy->query("DROP TABLE IF EXISTS types_table");
 	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 UInt8, col2 Int16, col3 Int32, col4 Int64, col5 Nullable(Float32), col6 Float64) ENGINE=MergeTree(EventDate, (EventDate), 8192)");
 }
@@ -266,7 +266,7 @@ foreach ($exp_rows as $exp_row) {
 	$exit_code |= !($types_match & $vals_match);
 }
 
-$proxy->query("DROP DATABASE IF EXISTS test_clickhouse_types_php");
+$proxy->query("DROP DATABASE IF EXISTS test");
 $result->free();
 
 exit($exit_code);

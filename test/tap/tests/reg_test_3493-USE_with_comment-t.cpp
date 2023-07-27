@@ -6,7 +6,7 @@
  *   test performs the following actions:
  *
  *   1. Open a MYSQL connection to ProxySQL.
- *   2. Drops and creates multiple databases called 'reg_test_3493_use_comment-N'.
+ *   2. Drops and creates multiple databases called 'test_use_comment-N'.
  *   3. Performs a 'USE' statement in the connection.
  *   3. Checks the currently selected database in **a new backend database connection** by means of the
  *      connection annotation "create_new_connection=1". This way it's ensured that ProxySQL is properly keeping
@@ -176,21 +176,21 @@ int main(int argc, char** argv) {
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 
-	db_query.push_back(std::make_tuple("reg_test_3493_use_comment", "/*+ placeholder_comment */ USE reg_test_3493_use_comment", false));
-	db_query.push_back(std::make_tuple("`reg_test_3493_use_comment-a1`", "USE /*+ placeholder_comment */ `reg_test_3493_use_comment-a1`", true));
-	db_query.push_back(std::make_tuple("reg_test_3493_use_comment_1", "  USE /*+ placeholder_comment */   `reg_test_3493_use_comment_1`", false));
-	db_query.push_back(std::make_tuple("reg_test_3493_use_comment_2", "USE/*+ placeholder_comment */ `reg_test_3493_use_comment_2`", false));
-	db_query.push_back(std::make_tuple("reg_test_3493_use_comment_3", "USE /*+ placeholder_comment */`reg_test_3493_use_comment_3`", true));
-	db_query.push_back(std::make_tuple("reg_test_3493_use_comment_4", "  USE /*+ placeholder_comment */   reg_test_3493_use_comment_4", false));
-	db_query.push_back(std::make_tuple("reg_test_3493_use_comment_5", "USE/*+ placeholder_comment */ reg_test_3493_use_comment_5", false));
-	db_query.push_back(std::make_tuple("reg_test_3493_use_comment_6", "USE /*+ placeholder_comment */reg_test_3493_use_comment_6", true));
-	db_query.push_back(std::make_tuple("`reg_test_3493_use_comment-1`", "  USE /*+ placeholder_comment */   `reg_test_3493_use_comment-1`", false));
-	db_query.push_back(std::make_tuple("`reg_test_3493_use_comment-2`", "USE/*+ placeholder_comment */ `reg_test_3493_use_comment-2`", false));
-	db_query.push_back(std::make_tuple("`reg_test_3493_use_comment-3`", "USE /*+ placeholder_comment */`reg_test_3493_use_comment-3`", true));
-	db_query.push_back(std::make_tuple("`reg_test_3493_use_comment-4`", "/*+ placeholder_comment */USE          `reg_test_3493_use_comment-4`", false));
-	db_query.push_back(std::make_tuple("`reg_test_3493_use_comment-5`", "USE/*+ placeholder_comment */`reg_test_3493_use_comment-5`", false));
-	db_query.push_back(std::make_tuple("`reg_test_3493_use_comment-6`", "/* comment */USE`reg_test_3493_use_comment-6`", false));
-	db_query.push_back(std::make_tuple("`reg_test_3493_use_comment-7`", "USE`reg_test_3493_use_comment-7`", false));
+	db_query.push_back(std::make_tuple("test_use_comment", "/*+ placeholder_comment */ USE test_use_comment", false));
+	db_query.push_back(std::make_tuple("`test_use_comment-a1`", "USE /*+ placeholder_comment */ `test_use_comment-a1`", true));
+	db_query.push_back(std::make_tuple("test_use_comment_1", "  USE /*+ placeholder_comment */   `test_use_comment_1`", false));
+	db_query.push_back(std::make_tuple("test_use_comment_2", "USE/*+ placeholder_comment */ `test_use_comment_2`", false));
+	db_query.push_back(std::make_tuple("test_use_comment_3", "USE /*+ placeholder_comment */`test_use_comment_3`", true));
+	db_query.push_back(std::make_tuple("test_use_comment_4", "  USE /*+ placeholder_comment */   test_use_comment_4", false));
+	db_query.push_back(std::make_tuple("test_use_comment_5", "USE/*+ placeholder_comment */ test_use_comment_5", false));
+	db_query.push_back(std::make_tuple("test_use_comment_6", "USE /*+ placeholder_comment */test_use_comment_6", true));
+	db_query.push_back(std::make_tuple("`test_use_comment-1`", "  USE /*+ placeholder_comment */   `test_use_comment-1`", false));
+	db_query.push_back(std::make_tuple("`test_use_comment-2`", "USE/*+ placeholder_comment */ `test_use_comment-2`", false));
+	db_query.push_back(std::make_tuple("`test_use_comment-3`", "USE /*+ placeholder_comment */`test_use_comment-3`", true));
+	db_query.push_back(std::make_tuple("`test_use_comment-4`", "/*+ placeholder_comment */USE          `test_use_comment-4`", false));
+	db_query.push_back(std::make_tuple("`test_use_comment-5`", "USE/*+ placeholder_comment */`test_use_comment-5`", false));
+	db_query.push_back(std::make_tuple("`test_use_comment-6`", "/* comment */USE`test_use_comment-6`", false));
+	db_query.push_back(std::make_tuple("`test_use_comment-7`", "USE`test_use_comment-7`", false));
 
 	plan(db_query.size() * 2);
 
