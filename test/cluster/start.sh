@@ -1,4 +1,5 @@
-#/bin/bash
+#!/usr/bin/env bash
+
 echo "Starting the core nodes"
 ../../src/proxysql -D $PWD/node01 -c confs/proxysql01.cfg
 ../../src/proxysql -D $PWD/node02 -c confs/proxysql02.cfg
