@@ -209,6 +209,20 @@ class MySQL_Connection {
 	void process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes);
 
 	void async_free_result();
+	/**
+	 * @brief Returns if the connection is **for sure**, known to be in an active transaction.
+	 * @details The function considers two things:
+	 *   1. If 'server_status' is flagged with 'SERVER_STATUS_IN_TRANS'.
+	 *   2. If the connection has 'autcommit=0' and 'autocommit_false_is_transaction' is set.
+	 * @return True if the connection is known to be in a transaction, or equivalent state.
+	 */
+	bool IsKnownActiveTransaction();
+	/**
+	 * @brief Returns if the connection is in a **potential transaction**.
+	 * @details This function is a more strict version of 'IsKnownActiveTransaction', which also considers
+	 *  connections which holds 'unknown_transaction_status' as potentially active transactions.
+	 * @return True if the connection is in potentially in an active transaction.
+	 */
 	bool IsActiveTransaction(); /* {
 		bool ret=false;
 			if (mysql) {
