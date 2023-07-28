@@ -223,16 +223,7 @@ class MySQL_Connection {
 	 *  connections which holds 'unknown_transaction_status' as potentially active transactions.
 	 * @return True if the connection is in potentially in an active transaction.
 	 */
-	bool IsActiveTransaction(); /* {
-		bool ret=false;
-			if (mysql) {
-				ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
-				if (ret == false && (mysql)->net.last_errno) {
-					ret = true;
-				}
-			}
-		return ret;
-	} */
+	bool IsActiveTransaction();
 	bool IsServerOffline();
 	bool IsAutoCommit();
 	bool AutocommitFalse_AndSavepoint();
