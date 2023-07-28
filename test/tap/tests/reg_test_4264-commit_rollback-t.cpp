@@ -1158,6 +1158,8 @@ int prepare_tables_and_config(MYSQL* admin, MYSQL* proxy) {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
+	plan(313);
+
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
