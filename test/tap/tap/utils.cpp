@@ -16,14 +16,20 @@
 #include "utils.h"
 
 #include <unistd.h>
+#include <utility>
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <iostream>
 
 #include "proxysql_utils.h"
 
+using std::pair;
+using std::map;
 using std::string;
 using std::vector;
+
+using std::to_string;
+using nlohmann::json;
 
 std::size_t count_matches(const string& str, const string& substr) {
 	std::size_t result = 0;
@@ -1256,3 +1262,314 @@ cleanup:
 
 	return res;
 }
+
+json fetch_internal_session(MYSQL* proxy) {
+	int rc = mysql_query_t(proxy, "PROXYSQL INTERNAL SESSION");
+
+	if (rc ) {
+		return json {};
+	} else {
+		MYSQL_RES* myres = mysql_store_result(proxy);
+		MYSQL_ROW row = mysql_fetch_row(myres);
+		json j_session = json::parse(row[0]);
+		mysql_free_result(myres);
+
+		return j_session;
+	}
+}
+
+struct cols_table_info_t {
+	vector<string> names;
+	vector<size_t> widths;
+};
+
+std::string dump_as_table(MYSQL_RES* result, const cols_table_info_t& cols_info) {
+	if (!result) { return {}; }
+
+	const vector<string>& cols_names { cols_info.names };
+	const vector<size_t>& cols_widths { cols_info.widths };
+
+	uint32_t num_fields = mysql_num_fields(result);
+	std::string table_str { "+" };
+
+	for (size_t width : cols_widths) {
+		table_str += std::string(width + 2, '-') + "+";
+	}
+	table_str += "\n";
+
+	table_str += "|";
+	for (size_t col = 0; col < num_fields; col++) {
+		table_str += " " + cols_names[col] + std::string(cols_widths[col] - cols_names[col].size(), ' ') + " |";
+	}
+	table_str += "\n";
+
+	table_str += "+";
+	for (size_t width : cols_widths) {
+		table_str += std::string(width + 2, '-') + "+";
+	}
+	table_str += "\n";
+
+	while (MYSQL_ROW row = mysql_fetch_row(result)) {
+		table_str += "|";
+		for (size_t col = 0; col < num_fields; col++) {
+			std::string value = row[col] ? row[col] : "";
+			table_str += " " + value + std::string(cols_widths[col] - value.size(), ' ') + " |";
+		}
+		table_str += "\n";
+	}
+
+	table_str += "+";
+	for (size_t width : cols_widths) {
+		table_str += std::string(width + 2, '-') + "+";
+	}
+	table_str += "\n";
+
+	mysql_data_seek(result, 0);
+
+	return table_str;
+}
+
+std::string dump_as_table(MYSQL_RES* result) {
+	if (!result) { return {}; }
+
+	uint32_t num_fields = mysql_num_fields(result);
+	MYSQL_FIELD* fields = mysql_fetch_fields(result);
+
+	vector<string> columns {};
+	for (uint32_t i = 0; i < num_fields; ++i) {
+		columns.push_back(fields[i].name);
+	}
+
+	vector<size_t> cols_widths(num_fields, 0);
+
+	for (int col = 0; col < num_fields; ++col) {
+		cols_widths[col] = std::max(cols_widths[col], columns[col].size());
+	}
+
+	while (MYSQL_ROW row = mysql_fetch_row(result)) {
+		for (uint32_t col = 0; col < num_fields; col++) {
+			if (row[col]) {
+				cols_widths[col] = std::max(cols_widths[col], strlen(row[col]));
+			}
+		}
+	}
+
+	mysql_data_seek(result, 0);
+	std::string res { dump_as_table(result, {columns, cols_widths}) };
+
+	return res;
+}
+
+pair<int,vector<mysql_row_t>> exec_dql_query(MYSQL* conn, const string& query, bool dump_res) {
+	if (mysql_query(conn, query.c_str())) {
+		diag("Failed to executed query `%s`", query.c_str());
+		return { EXIT_FAILURE, {} };
+	}
+
+	MYSQL_RES* my_stats_res = mysql_store_result(conn);
+	if (my_stats_res == nullptr) {
+		diag("Failed to retrieve a resultset, expected DQL query");
+
+		return { EXIT_FAILURE, {} };
+	} else {
+		if (dump_res) {
+			fprintf(stderr, "%s", dump_as_table(my_stats_res).c_str());
+		}
+
+		vector<mysql_row_t> my_rows { extract_mysql_rows(my_stats_res) };
+		mysql_free_result(my_stats_res);
+
+		return { EXIT_SUCCESS, my_rows };
+	}
+}
+
+string join(string delim, const vector<string>& words) {
+	return std::accumulate(
+		words.begin(), words.end(), string {},
+		[&delim] (const string& s1, const string& s2) {
+			if (s1.empty()) {
+				return s2;
+			} else {
+				return s1 + delim + s2;
+			}
+		}
+	);
+}
+
+string gen_conn_stats_query(const vector<uint32_t>& hgs) {
+	const auto _to_string = [] (uint32_t n) -> string { return to_string(n); };
+
+	vector<string> hgs_str {};
+	std::transform(hgs.begin(), hgs.end(), std::back_inserter(hgs_str), _to_string);
+
+	const string CONN_STATS_HGS { join(",", hgs_str) };
+	const string CONN_STATS_QUERY_T {
+		"SELECT hostgroup,ConnUsed,ConnFree,ConnOk,ConnERR,MaxConnUsed,Queries"
+			" FROM stats.stats_mysql_connection_pool"
+	};
+
+	if (hgs.empty()) {
+		return CONN_STATS_QUERY_T;
+	} else {
+		return CONN_STATS_QUERY_T + " WHERE hostgroup IN (" + CONN_STATS_HGS +  ")";
+	}
+}
+
+int dump_conn_stats(MYSQL* admin, const vector<uint32_t> hgs) {
+	const string query { gen_conn_stats_query(hgs) };
+	MYSQL_QUERY(admin, query.c_str());
+
+	MYSQL_RES* myres = mysql_store_result(admin);
+	const string table { dump_as_table(myres) };
+	mysql_free_result(myres);
+	fprintf(stderr, "%s", table.c_str());
+
+	return EXIT_SUCCESS;
+}
+
+pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const vector<uint32_t> hgs) {
+	const string stats_query { gen_conn_stats_query(hgs) };
+	const pair<int,vector<mysql_row_t>> conn_pool_stats { exec_dql_query(admin, stats_query, true) };
+
+	if (conn_pool_stats.first || conn_pool_stats.second.size() != hgs.size()) {
+		if (conn_pool_stats.first) {
+			diag("Failed to extract stats from 'CONNPOOL'");
+		}
+		if (conn_pool_stats.second.size() != hgs.size()) {
+			diag("Expected '%ld' row in 'CONNPOOL' stats resultset", hgs.size());
+		}
+		return { EXIT_FAILURE, {} };
+	}
+
+	if (conn_pool_stats.first) {
+		return { conn_pool_stats.first, {} };
+	} else {
+		map<uint32_t,mysql_row_t> res_map {};
+
+		for (const mysql_row_t& row : conn_pool_stats.second) {
+			const string& column = row[POOL_STATS_IDX::HOSTGROUP];
+			const uint32_t hg = std::stol(row[POOL_STATS_IDX::HOSTGROUP]);
+
+			res_map.insert({ hg, row });
+		}
+
+		return { EXIT_SUCCESS, res_map };
+	}
+}
+
+int wait_for_cond(MYSQL* mysql, const std::string& query, uint32_t timeout) {
+	int result = EXIT_FAILURE;
+
+	auto start = std::chrono::system_clock::now();
+	std::chrono::duration<double> elapsed {};
+
+	while (elapsed.count() < timeout && result == EXIT_FAILURE) {
+		int rc = mysql_query(mysql, query.c_str());
+		fprintf(
+			stderr, "# %s: Waiting for condition '%s' in ('%s':%d)\n",
+			get_formatted_time().c_str(), query.c_str(), mysql->host, mysql->port
+		);
+
+		if (rc == EXIT_SUCCESS) {
+			MYSQL_RES* myres = mysql_store_result(mysql);
+			if (myres) {
+				uint32_t field_num = mysql_num_fields(myres);
+				uint32_t row_num = mysql_num_rows(myres);
+
+				if (field_num == 1 && row_num == 1) {
+					MYSQL_ROW row = mysql_fetch_row(myres);
+
+					if (row && strcasecmp("TRUE", row[0]) == 0) {
+						result = EXIT_SUCCESS;
+					}
+				}
+
+				mysql_free_result(myres);
+
+				if (result == EXIT_SUCCESS) {
+					break;
+				}
+			}
+		} else {
+			diag("Condition query failed with error: ('%d','%s')", mysql_errno(mysql), mysql_error(mysql));
+			result = EXIT_FAILURE;
+			break;
+		}
+
+		usleep(500 * 1000);
+
+		auto it_end = std::chrono::system_clock::now();
+		elapsed = it_end - start;
+	}
+
+	return result;
+}
+
+void check_conn_count(MYSQL* admin, const string& conn_type, uint32_t conn_num, int32_t hg) {
+	const string hg_s { to_string(hg) };
+	const string conn_num_s { to_string(conn_num) };
+	string select_conns_in_hg {};
+
+	if (hg == -1) {
+		select_conns_in_hg = "SELECT SUM(" + conn_type + ") FROM stats_mysql_connection_pool";
+	} else {
+		select_conns_in_hg = "SELECT " + conn_type + " FROM stats_mysql_connection_pool WHERE hostgroup=" + hg_s;
+	}
+
+	const string check_used_conns {
+		"SELECT IIF((" + select_conns_in_hg + ")=" + conn_num_s + ",'TRUE','FALSE')"
+	};
+
+	int to = wait_for_cond(admin, check_used_conns, 3);
+	ok(to == EXIT_SUCCESS, "Conns should met the required condition");
+
+	if (to != EXIT_SUCCESS) {
+		dump_conn_stats(admin, {});
+	}
+};
+
+void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg) {
+	const string queries_s { to_string(queries) };
+	const string hg_s { to_string(hg) };
+
+	const string select_hg_queries {
+		"SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg)
+	};
+	const string check_queries {
+		"SELECT IIF((" + select_hg_queries + ")=" + queries_s + ",'TRUE','FALSE')"
+	};
+
+	int to = wait_for_cond(admin, check_queries, 3);
+	ok(to == EXIT_SUCCESS, "Queries counted on hg '%d' should be '%d'", hg, queries);
+
+	if (to != EXIT_SUCCESS) {
+		dump_conn_stats(admin, {});
+	}
+};
+
+void check_query_count(MYSQL* admin, vector<uint32_t> queries, uint32_t hg) {
+	const string queries_s {
+		std::accumulate(queries.begin(), queries.end(), std::string(),
+			[](const std::string& str, const uint32_t& n) -> std::string {
+				return str + (str.length() > 0 ? "," : "") + std::to_string(n);
+			}
+		)
+	};
+	const string hg_s { to_string(hg) };
+
+	const string select_hg_queries {
+		"SELECT Queries FROM stats_mysql_connection_pool WHERE hostgroup=" + to_string(hg)
+	};
+	const string check_queries {
+		"SELECT IIF((" + select_hg_queries + ") IN (" + queries_s + "),'TRUE','FALSE')"
+	};
+
+	int to = wait_for_cond(admin, check_queries, 3);
+	ok(to == EXIT_SUCCESS, "Queries counted on hg '%d' should be in '%s'", hg, queries_s.c_str());
+
+	if (to != EXIT_SUCCESS) {
+		dump_conn_stats(admin, {});
+	} else {
+		dump_conn_stats(admin, { hg });
+	}
+};
