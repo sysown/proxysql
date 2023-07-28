@@ -23,24 +23,6 @@
 using std::string;
 using namespace nlohmann;
 
-
-/**
- * @brief Helper function to convert a 'MYSQL_RES' into a
- *   nlohmann::json.
- *
- * @param result The 'MYSQL_RES*' to be converted into JSON.
- * @param j 'nlohmann::json' output parameter holding the
- *   converted 'MYSQL_RES' supplied.
- */
-void parse_result_json_column(MYSQL_RES *result, json& j) {
-	if(!result) return;
-	MYSQL_ROW row;
-
-	while ((row = mysql_fetch_row(result))) {
-		j = json::parse(row[0]);
-	}
-}
-
 /**
  * @brief Valid variations of 'SET wait_timeout' supported
  *  by ProxySQL to be ignored.
@@ -96,12 +78,7 @@ int main(int argc, char** argv) {
 		int query_err = mysql_query(proxysql_mysql, set_wait_timeout.c_str());
 		ok (query_err == 0, "Query '%s' should be properly executed.", set_wait_timeout.c_str());
 
-		MYSQL_QUERY(proxysql_mysql, "PROXYSQL INTERNAL SESSION");
-		json j_status {};
-		MYSQL_RES* int_session_res = mysql_store_result(proxysql_mysql);
-		parse_result_json_column(int_session_res, j_status);
-		mysql_free_result(int_session_res);
-
+		json j_status = fetch_internal_session(proxysql_mysql);
 		bool found_backends = j_status.contains("backends");
 		ok(found_backends == false, "No backends should be found for the current connection.");
 	}
