@@ -193,14 +193,14 @@ int add_more_rows_test_sbtest1(int num_rows, MYSQL *mysql, bool sqlite) {
 int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 	MYSQL_QUERY(mysql, "CREATE DATABASE IF NOT EXISTS test");
 	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS test.sbtest1");
-	MYSQL_QUERY(mysql, "CREATE TABLE if not exists test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
+	MYSQL_QUERY(mysql, "CREATE TABLE IF NOT EXISTS test.sbtest1 (`id` int(10) unsigned NOT NULL AUTO_INCREMENT, `k` int(10) unsigned NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '',  PRIMARY KEY (`id`), KEY `k_1` (`k`))");
 
 	return add_more_rows_test_sbtest1(num_rows, mysql);
 }
 
 int create_table_test_sqlite_sbtest1(int num_rows, MYSQL *mysql) {
 	MYSQL_QUERY(mysql, "DROP TABLE IF EXISTS sbtest1");
-	MYSQL_QUERY(mysql, "CREATE TABLE if not exists sbtest1 (id INTEGER PRIMARY KEY AUTOINCREMENT, `k` int(10) NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '')");
+	MYSQL_QUERY(mysql, "CREATE TABLE IF NOT EXISTS sbtest1 (id INTEGER PRIMARY KEY AUTOINCREMENT, `k` int(10) NOT NULL DEFAULT '0', `c` char(120) NOT NULL DEFAULT '', `pad` char(60) NOT NULL DEFAULT '')");
 	MYSQL_QUERY(mysql, "CREATE INDEX IF NOT EXISTS idx_sbtest1_k1 ON sbtest1 (k)");
 
 	return add_more_rows_test_sbtest1(num_rows, mysql, true);
