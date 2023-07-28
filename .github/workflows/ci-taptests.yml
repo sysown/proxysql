@@ -78,7 +78,7 @@ jobs:
           elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
             cp jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
           fi
-        #done
+        done
         # patch multi port listening
         cd proxysql/
         sed -i '61 s/"0.0.0.0:6032"/ current.c_str()/' test/tap/tests/admin-listen_on_unix-t.cpp
