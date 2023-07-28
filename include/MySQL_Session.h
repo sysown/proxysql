@@ -127,6 +127,16 @@ class MySQL_Session
 
 	void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
+	/**
+	 * @brief Handles 'COMMIT|ROLLBACK' commands.
+	 * @details Forwarding the packet is required when there are active transactions. Since we are limited to
+	 *  forwarding just one 'COMMIT|ROLLBACK', we work under the assumption that we only have one active
+	 *  transaction. If more transactions are simultaneously open for the session, more 'COMMIT|ROLLBACK'.
+	 *  commands are required to be issued by the client, so they could be forwarded to the corresponding
+	 *  backend connections.
+	 * @param The received packet to be handled.
+	 * @return 'true' if the packet is intercepted and never forwarded to the client, 'false' otherwise.
+	 */
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
 	/**
@@ -329,6 +339,18 @@ class MySQL_Session
 	unsigned int NumActiveTransactions(bool check_savpoint=false);
 	bool HasOfflineBackends();
 	bool SetEventInOfflineBackends();
+	/**
+	 * @brief Finds one active transaction in the current backend connections.
+	 * @details Since only one connection is returned, if the session holds multiple backend connections with
+	 *  potential transactions, the priority is:
+	 *   1. Connections flagged with 'SERVER_STATUS_IN_TRANS', or 'autocommit=0' in combination with
+	 *      'autocommit_false_is_transaction'.
+	 *   2. Connections with 'autocommit=0' holding a 'SAVEPOINT'.
+	 *   3. Connections with 'unknown transaction status', e.g: connections with errors.
+	 * @param check_savepoint Used to also check for connections holding savepoints. See MySQL bug
+	 *  https://bugs.mysql.com/bug.php?id=107875.
+	 * @returns The hostgroup in which the connection was found, -1 in case no connection is found.
+	 */
 	int FindOneActiveTransaction(bool check_savepoint=false);
 	unsigned long long IdleTime();
 
