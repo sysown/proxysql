@@ -403,8 +403,8 @@ int main(int argc, char** argv) {
 
 		set_clickhouse_port(proxysql_admin,8000);
 		test_crash(host_port.first.c_str(), host_port.second);
-//		set_clickhouse_port(proxysql_admin,19000);
-		set_clickhouse_port(proxysql_admin,9000);
+		set_clickhouse_port(proxysql_admin,19000);
+//		set_clickhouse_port(proxysql_admin,9000);
 
 		MYSQL* proxysql_clickhouse = mysql_init(NULL);
 

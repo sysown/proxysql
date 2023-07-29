@@ -114,8 +114,8 @@ void * my_conn_thread(void *arg) {
 		if (mysql==NULL) {
 			exit(EXIT_FAILURE);
 		}
-//		MYSQL *rc=mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
-		MYSQL *rc=mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, (local ? 0 : ( cl.root_port + rand()%multiport ) ), NULL, 0);
+		MYSQL *rc=mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
+//		MYSQL *rc=mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, schema, (local ? 0 : ( cl.mysql_port + rand()%multiport ) ), NULL, 0);
 		if (rc==NULL) {
 			if (silent==0) {
 				fprintf(stderr,"%s\n", mysql_error(mysql));
