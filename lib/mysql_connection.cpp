@@ -2385,6 +2385,16 @@ bool MySQL_Connection::AutocommitFalse_AndSavepoint() {
 	return ret;
 }
 
+bool MySQL_Connection::IsKnownActiveTransaction() {
+	bool in_trx = mysql ? mysql->server_status & SERVER_STATUS_IN_TRANS : false;
+
+	if (in_trx == false) {
+		in_trx = mysql_thread___autocommit_false_is_transaction && (IsAutoCommit() == false);
+	}
+
+	return in_trx;
+}
+
 bool MySQL_Connection::IsActiveTransaction() {
 	bool ret=false;
 	if (mysql) {
