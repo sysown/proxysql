@@ -45,15 +45,7 @@ void parse_result_json_column(MYSQL_RES *result, json& j) {
 int get_session_schemaname(MYSQL* proxysql, std::string& schemaname) {
 	int res = EXIT_FAILURE;
 
-	json j_status;
-	int query_res = mysql_query(proxysql, "PROXYSQL INTERNAL SESSION");
-	if (query_res) {
-		return query_res;
-	}
-
-	MYSQL_RES* tr_res = mysql_store_result(proxysql);
-	parse_result_json_column(tr_res, j_status);
-	mysql_free_result(tr_res);
+	json j_status = fetch_internal_session(proxysql);
 
 	try {
 		schemaname = j_status["client"]["userinfo"]["schemaname"];

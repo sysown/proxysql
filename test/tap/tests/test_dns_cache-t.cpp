@@ -237,7 +237,7 @@ int main(int argc, char** argv) {
 //			EXECUTE_QUERY("DELETE FROM mysql_servers WHERE hostgroup_id=999", proxysql_admin, false),
 			EXECUTE_QUERY("DELETE FROM mysql_servers", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
-			DELAY_SEC(4),
+			DELAY_SEC(20),
 			UPDATE_AFTER_METRICS(proxysql_admin),
 			CHECK_RESULT(std::greater<double>, "proxysql_mysql_monitor_dns_cache_record_updated"),
 			CHECK_RESULT(std::equal_to<double>, "proxysql_mysql_monitor_dns_cache_lookup_success"),

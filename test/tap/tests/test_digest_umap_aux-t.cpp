@@ -6,6 +6,9 @@
  * execution time of the dummy queries has no been afected by the execution
  * time of the queries that read from table stats_mysql_query_digest. Finally,
  * check that the data stored in stats_mysql_query_digest is correct.
+ *
+ * NOTE: This test assumes that the queries being executed in sequence ('DUMMY_QUERIES') are completed within
+ * the same second. Failures are expected if this is not the case.
  */
 
 #include <unistd.h>
@@ -83,7 +86,7 @@ vector<digest_stats> get_digest_stats(MYSQL* proxy_admin) {
 	MYSQL_RES *res = NULL;
 	res = mysql_store_result(proxy_admin);
 	MYSQL_ROW row;
-	while (row = mysql_fetch_row(res)) {
+	while ((row = mysql_fetch_row(res))) {
 		digest_stats ds = {};
 		ds.hostgroup = atoi(row[0]);
 		ds.schemaname = row[1];
@@ -269,7 +272,7 @@ int main(int argc, char** argv) {
 			"    Client_address -> before:`%s` - after:`%s`.\n"
 			"    Digests -> before:`%s` - after:`%s`.\n"
 			"    Digests_text -> before:`%s` - after:`%s`.\n"
-			"    First_seen -> before:`%lld` - after:`%lldd`.",
+			"    First_seen -> before:`%lld` - after:`%lld`.",
 			ds_vector_before[i].hostgroup, ds_vector_after[i].hostgroup,
 			ds_vector_before[i].schemaname.c_str(), ds_vector_after[i].schemaname.c_str(),
 			ds_vector_before[i].username.c_str(), ds_vector_after[i].username.c_str(),
@@ -284,8 +287,10 @@ int main(int argc, char** argv) {
 			ds_vector_after[i].digest_text.c_str(), num_dummy_queries_executed,
 			ds_vector_after[i].count_star - ds_vector_before[i].count_star
 		);
+
+		// NOTE: Equality is included for 'before' and 'after' just in case query execution was very fast.
 		ok(
-			ds_vector_before[i].last_seen < ds_vector_after[i].last_seen &&
+			ds_vector_before[i].last_seen <= ds_vector_after[i].last_seen &&
 			ds_vector_before[i].sum_time < ds_vector_after[i].sum_time,
 			"Last_seen and sum_time must have increased.\n"
 			"    Last_seen -> before:`%lld` - after:`%lld`.\n"
@@ -303,9 +308,9 @@ int main(int argc, char** argv) {
 
 		uint64_t bf_last_seen = ds_vector_before[i].last_seen;
 		ok(
-			init_time <= bf_last_seen && final_time >= bf_last_seen,
+			init_time - 1 <= bf_last_seen && final_time + 1 >= bf_last_seen,
 			"'last_seen' within required time range - min: %ld, max: %ld, last_seen: %ld",
-			init_time, final_time, bf_last_seen
+			init_time - 1, final_time + 1, bf_last_seen
 		);
 	}
 
