@@ -210,4 +210,39 @@ std::string replace_str(const std::string& str, const std::string& match, const 
 std::string generate_multi_rows_query(int rows, int params);
 
 void close_all_non_term_fd(std::vector<int> excludeFDs);
+
+/**
+ * @brief Suggested implementation of 'mismatch_' from ['cppreference'](https://en.cppreference.com/w/cpp/algorithm/mismatch).
+ *
+ * @param first1 begin of the first range of the elements.
+ * @param last1 end of the first range of the elements.
+ * @param first2 begin of the second range of the elements.
+ * @param last2 end of the second range of the elements.
+ * @param p binary predicate which returns `true` if the elements should be treated as equal.
+ *
+ * @return std::pair with iterators to the first two non-equal elements.
+ */
+template<class InputIt1, class InputIt2, class BinaryPredicate>
+std::pair<InputIt1, InputIt2> mismatch_(
+	InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last2, BinaryPredicate p
+) {
+    while (first1 != last1 && first2 != last2 && p(*first1, *first2)) {
+        ++first1, ++first2;
+    }
+    return std::make_pair(first1, first2);
+}
+
+/**
+ * @brief Returns a sorted copy in ascending order of the supplied version numbers.
+ * @details Expected version numbers formats are: ['N', 'N.N', 'N.N.N', ...]
+ */
+std::vector<std::string> sort_versions(std::vector<std::string> versions);
+
+/**
+ * @brief Returns the expected error for query 'SELECT $$'.
+ * @param version The 'server_version' for which the error should match.
+ * @return A pair of the shape '{err_code,err_msg}'.
+ */
+std::pair<int,const char*> get_dollar_quote_error(const char* version);
+
 #endif
