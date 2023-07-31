@@ -11,7 +11,7 @@
  #if defined(_WIN32) && !defined(_OPENSSL_Applink) && defined(HAVE_OPENSSL_APPLINK_C)
  #include <openssl/applink.c>
  #endif
-@@ -73,6 +79,81 @@
+@@ -73,6 +79,84 @@
  extern my_bool ma_tls_initialized;
  extern unsigned int mariadb_deinitialize_ssl;
  
@@ -42,10 +42,13 @@
 +        sprintf((char*)&(file_sha1[i*2]), "%02x", temp[i]);
 +      }
 +      munmap(fb,statbuf.st_size);
++      close(fd);
 +    } else {
++      close(fd);
 +      return 0;
 +    }
 +  } else {
++    close(fd);
 +    return 0;
 +  }
 +
@@ -93,7 +96,7 @@
  #define MAX_SSL_ERR_LEN 100
  char tls_library_version[TLS_VERSION_LENGTH];
  
-@@ -456,7 +537,7 @@
+@@ -456,7 +540,7 @@
    char *pw= (mysql->options.extension) ?
              mysql->options.extension->tls_pw : NULL;
    SSL_CTX *ctx= SSL_get_SSL_CTX(ssl);
@@ -102,7 +105,7 @@
    
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
-@@ -467,16 +548,32 @@
+@@ -467,16 +551,32 @@
     }
  
    /* ca_file and ca_path */
@@ -139,7 +142,7 @@
    if (keyfile && !certfile)
      certfile= keyfile;
    if (certfile && !keyfile)
-@@ -566,6 +663,8 @@
+@@ -566,6 +666,8 @@
    SSL_CTX_sess_set_remove_cb(ctx, ma_tls_remove_session_cb);
  #endif
  
