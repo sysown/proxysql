@@ -518,4 +518,18 @@ enum SQ3_RES_T {
  */
 sq3_res_t sqlite3_execute_stmt(sqlite3* db, const std::string& query);
 
+/**
+ * @brief If found returns the element index, -1 otherwise.
+ */
+template <typename T>
+int64_t get_elem_idx(const T& e, const std::vector<T>& v) {
+	const auto& it = std::find(v.begin(), v.end(), e);
+
+	if (it == v.end()) {
+		return -1;
+	} else {
+		return it - v.begin();
+	}
+}
+
 #endif // #define UTILS_H
