@@ -1286,10 +1286,22 @@ __run_query:
 				myds->DSS=STATE_QUERY_SENT_DS;
 				std::stringstream buffer;
 				buffer << e.what();
-    			myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)buffer.str().c_str());
+				PtrSizeArray * PSarrayOUT = sess->client_myds->PSarrayOUT;
+				while (PSarrayOUT->len) { // free PSarrayOUT , for example it could store column definitions
+					PtrSize_t pkt;
+					PSarrayOUT->remove_index_fast(0,&pkt);
+					l_free(pkt.size, pkt.ptr);
+				}
+				myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)buffer.str().c_str());
 				myds->DSS=STATE_SLEEP;
 				std::cerr << "Exception in query for ClickHouse: " << e.what() << std::endl;
-				sess->set_unhealthy();
+				if (strncmp((char *)"DB::Exception: Illegal type",buffer.str().c_str(),strlen("DB::Exception: Illegal type")) == 0) {
+					sess->set_unhealthy();
+				} else if (strncmp((char *)"DB::Exception",buffer.str().c_str(),strlen("DB::Exception")) == 0) {
+					// do nothing
+				} else {
+					sess->set_unhealthy();
+				}
 			}
 		}
 		l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
@@ -1432,8 +1444,10 @@ static void *child_mysql(void *arg) {
 		int rc=sess->handler();
 		if (rc==-1)
 			goto __exit_child_mysql;
-		if (sess->healthy==0)
+		if (sess->healthy==0) {
+			proxy_error("Closing clickhouse connection because unhealthy\n");
 			goto __exit_child_mysql;
+		}
 	}
 
 __exit_child_mysql:
