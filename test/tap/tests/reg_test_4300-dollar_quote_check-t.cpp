@@ -25,7 +25,7 @@
 using std::vector;
 using std::string;
 
-const vector<string> versions { "5.6", "5.7", "8.0", "8.1.0", "8.1", "8.2" };
+const vector<string> versions { "5.6", "5.7", "8.0", "8.1.0", "8.1", "8.1.4" };
 
 int test_supports_dollar_quote(MYSQL* conn, int v_idx, int v8_1_0_idx) {
 	int rc = mysql_query_t(conn, "SELECT $$");

@@ -433,29 +433,6 @@ void close_all_non_term_fd(std::vector<int> excludeFDs) {
 	}
 }
 
-vector<string> sort_versions(vector<string> versions) {
-	std::sort(
-		versions.begin(), versions.end(),
-		[](const string& v1, const string& v2) {
-			const auto result =
-				mismatch_(
-					v1.cbegin(), v1.cend(), v2.cbegin(), v2.cend(),
-					[](const unsigned char lhs, const unsigned char rhs) {
-						return tolower(lhs) == tolower(rhs);
-					}
-				);
-
-			const bool not_equal = result.second != v2.cend();
-			const bool fst_shorter = result.first == v1.cend();
-			const bool fst_lesser = std::tolower(*result.first) < std::tolower(*result.second);
-
-			return not_equal && (fst_shorter || fst_lesser);
-		}
-	);
-
-	return versions;
-}
-
 std::pair<int,const char*> get_dollar_quote_error(const char* version) {
 	const char* ER_PARSE_MSG {
 		"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server"
@@ -465,9 +442,7 @@ std::pair<int,const char*> get_dollar_quote_error(const char* version) {
 	if (strcasecmp(version,"8.1.0") == 0) {
 		return { ER_PARSE_ERROR, ER_PARSE_MSG };
 	} else {
-		const vector<string> sorted { sort_versions({"8.1.0", version}) };
-
-		if (sorted[0] == "8.1.0") {
+		if (strncasecmp(version, "8.1", 3) == 0) {
 			// SQLSTATE: 42000
 			return { ER_PARSE_ERROR, ER_PARSE_MSG };
 		} else {
