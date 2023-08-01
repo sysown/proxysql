@@ -6631,11 +6631,15 @@ void DNS_Cache::remove(const std::string& hostname) {
 }
 
 void DNS_Cache::clear() {
+	size_t records_removed = 0;
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
+	records_removed = records.size();
 	records.clear();
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);
+	if (records_removed)
+		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, records_removed);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache was cleared.\n");
 }
 
