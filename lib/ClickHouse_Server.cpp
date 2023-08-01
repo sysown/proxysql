@@ -129,7 +129,11 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 #endif // CXX17
 			}
 
-			if (cc >= clickhouse::Type::Code::Int8 && cc <= clickhouse::Type::Code::Decimal128) {
+			if (
+				(cc >= clickhouse::Type::Code::Int8 && cc <= clickhouse::Type::Code::Float64)
+				||
+				(cc >= clickhouse::Type::Code::Decimal && cc <= clickhouse::Type::Code::Decimal128)
+			) {
 				bool _unsigned = false;
 				uint16_t flags = is_null | 128;
 

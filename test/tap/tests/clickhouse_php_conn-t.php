@@ -7,7 +7,7 @@
  * ProxySQL and that it receives the correct types for the supported types. The test operations are:
  *
  * 1. Create a connection to ClickHouse through ProxySQL using PHP connector.
- * 2. Creates a table holding the supported types: [EventDate,DateTime,TINTYINT(Int8),SMALLINT(Int16),INT(Int32),BIGINT(Int64),FLOAT(Float32),DOUBLE(Float64)]
+ * 2. Creates a table holding the supported types: [EventDate,DateTime,TINTYINT(Int8),SMALLINT(Int16),INT(Int32),BIGINT(Int64),FLOAT(Float32),DOUBLE(Float64),DECIMAL(Decimal64)]
  * 3. Insert data in the table through: INSERT * SELECT.
  * 4. Query the table data checking:
  *   4.1 - The types correctly matches the expected ones (not mangled into 'string').
@@ -60,13 +60,13 @@ if ($port !== 6090) {
 	$proxy->query("USE test_clickhouse_types_php");
 	$proxy->query("DROP TABLE IF EXISTS types_table");
 
-	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 TINYINT, col2 SMALLINT, col3 INT, col4 BIGINT, col5 FLOAT, col6 DOUBLE)");
+	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 TINYINT, col2 SMALLINT, col3 INT, col4 BIGINT, col5 FLOAT, col6 DOUBLE, col7 Decimal)");
 
 	echo ":: Inserting data directly to MySQL".PHP_EOL;
-	$proxy->query("INSERT INTO types_table SELECT NOW(),NOW(),127,-32768,2147483647,9223372036854775807,340282346638528859811704183484516925440.0,340282346638528859811704183484516925440.0");
+	$proxy->query("INSERT INTO types_table SELECT NOW(),NOW(),127,-32768,2147483647,9223372036854775801,340282346638528859811704183484516925440.0,340282346638528859811704183484516925440.0, 300.0");
 
 	echo ":: Fetching inserted data".PHP_EOL;
-	$result = $proxy->query("SELECT EventDate,DateTime,col1,col2,col3,col4,col5,round(col6,0) FROM types_table");
+	$result = $proxy->query("SELECT EventDate,DateTime,col1,col2,col3,col4,col5,round(col6,0),col7 FROM types_table");
 	while ($row = mysqli_fetch_row($result)) {
 		echo "  * ROW: [";
 
@@ -83,7 +83,7 @@ if ($port !== 6090) {
 	$proxy->query("CREATE DATABASE IF NOT EXISTS test_clickhouse_types_php");
 	$proxy->query("USE test_clickhouse_types_php");
 	$proxy->query("DROP TABLE IF EXISTS types_table");
-	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 UInt8, col2 Int16, col3 Int32, col4 Int64, col5 Nullable(Float32), col6 Float64) ENGINE=MergeTree(EventDate, (EventDate), 8192)");
+	$proxy->query("CREATE TABLE IF NOT EXISTS types_table (EventDate DATE, DateTime DATETIME, col1 UInt8, col2 Int16, col3 Int32, col4 Int64, col5 Nullable(Float32), col6 Float64, col7 Decimal64(3)) ENGINE=MergeTree(EventDate, (EventDate), 8192)");
 }
 
 $shortName = exec('date +%Z');
@@ -99,22 +99,22 @@ echo ":: Schema and table creation completed".PHP_EOL;
 
 $exp_rows = [
 	[
-		"insert" => "INSERT INTO types_table SELECT '{$cur_date}','{$cur_datetime}',127,-32768,2147483647,9223372036854775807,340282346638528859811704183484516925440,340282346638528859811704183484516925440.0",
-		"select" => "SELECT EventDate,DateTime,col1,col2,col3,col4,col5,round(col6,0) FROM types_table",
-		"types" => [10, 12, 1, 2, 3, 8, 4, 5],
-		"vals" => [$cur_date, $cur_datetime, 127,  -32768, 2147483647, 9223372036854775807, 340282346638528859811704183484516925440, 340282346638528859811704183484516925440.0]
+		"insert" => "INSERT INTO types_table SELECT '{$cur_date}','{$cur_datetime}',127,-32768,2147483647,9223372036854775802,340282346638528859811704183484516925440,340282346638528859811704183484516925440.0, 300.1",
+		"select" => "SELECT EventDate,DateTime,col1,col2,col3,col4,col5,round(col6,0),col7 FROM types_table",
+		"types" => [10, 12, 1, 2, 3, 8, 4, 5, 246],
+		"vals" => [$cur_date, $cur_datetime, 127,  -32768, 2147483647, 9223372036854775802, 340282346638528859811704183484516925440, 340282346638528859811704183484516925440.0, '300.100']
 	],
 	[
-		"insert" => "INSERT INTO types_table SELECT '{$cur_date}','{$cur_datetime}',127,-32768,2147483647,9223372036854775807,1.2,340282346638528859811704183484516925440.0",
-		"select" => "SELECT EventDate,DateTime,col1,col2,col3,col4,ROUND(col5,20),round(col6,0) FROM types_table",
-		"types" => [10, 12, 1, 2, 3, 8, 4, 5],
-		"vals" => [$cur_date, $cur_datetime, 127,  -32768, 2147483647, 9223372036854775807, 1.2, 340282346638528859811704183484516925440.0]
+		"insert" => "INSERT INTO types_table SELECT '{$cur_date}','{$cur_datetime}',127,-32768,2147483647,9223372036854775803,1.2,340282346638528859811704183484516925440.0, 300.2",
+		"select" => "SELECT EventDate,DateTime,col1,col2,col3,col4,ROUND(col5,20),round(col6,0),col7 FROM types_table",
+		"types" => [10, 12, 1, 2, 3, 8, 4, 5, 246],
+		"vals" => [$cur_date, $cur_datetime, 127,  -32768, 2147483647, 9223372036854775803, 1.2, 340282346638528859811704183484516925440.0, '300.200']
 	],
 	[
-		"insert" => "INSERT INTO types_table SELECT '{$cur_date}','{$cur_datetime}',127,-32768,2147483647,9223372036854775807,NULL,340282346638528859811704183484516925440.0",
-		"select" => "SELECT EventDate,DateTime,col1,col2,col3,col4,col5,round(col6,0) FROM types_table",
-		"types" => [10, 12, 1, 2, 3, 8, 4, 5],
-		"vals" => [$cur_date, $cur_datetime, 127,  -32768, 2147483647, 9223372036854775807, NULL, 340282346638528859811704183484516925440.0]
+		"insert" => "INSERT INTO types_table SELECT '{$cur_date}','{$cur_datetime}',127,-32768,2147483647,9223372036854775804,NULL,340282346638528859811704183484516925440.0, 300.3",
+		"select" => "SELECT EventDate,DateTime,col1,col2,col3,col4,col5,round(col6,0),col7 FROM types_table",
+		"types" => [10, 12, 1, 2, 3, 8, 4, 5, 246],
+		"vals" => [$cur_date, $cur_datetime, 127,  -32768, 2147483647, 9223372036854775804, NULL, 340282346638528859811704183484516925440.0, '300.300']
 	]
 ];
 
