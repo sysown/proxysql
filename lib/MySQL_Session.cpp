@@ -917,9 +917,16 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	// in this part of the code (as at release 2.4.3) where we call
 	// NumActiveTransactions() with the check_savepoint flag .
 	// This to try to handle MySQL bug https://bugs.mysql.com/bug.php?id=107875
-	unsigned int nTrx=NumActiveTransactions(true);
-	if (nTrx) {
+	//
+	// Since we are limited to forwarding just one 'COMMIT|ROLLBACK', we work under the assumption that we
+	// only have one active transaction. Under this premise, we should execute this command under that
+	// specific connection, for that, we update 'current_hostgroup' with the first active transaction we are
+	// able to find. If more transactions are simultaneously open for the session, more 'COMMIT|ROLLBACK'
+	// commands are required to be issued by the client to continue ending transactions.
+	unsigned int hg = FindOneActiveTransaction(true);
+	if (hg != -1) {
 		// there is an active transaction, we must forward the request
+		current_hostgroup = hg;
 		return false;
 	} else {
 		// there is no active transaction, we will just reply OK
@@ -7513,8 +7520,10 @@ int MySQL_Session::FindOneActiveTransaction(bool check_savepoint) {
 		_mybe=(MySQL_Backend *)mybes->index(i);
 		if (_mybe->server_myds) {
 			if (_mybe->server_myds->myconn) {
-				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
+				if (_mybe->server_myds->myconn->IsKnownActiveTransaction()) {
 					return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+				} else if (_mybe->server_myds->myconn->IsActiveTransaction()) {
+					ret = (int)_mybe->server_myds->myconn->parent->myhgc->hid;
 				} else {
 					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
 					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to

@@ -14,6 +14,7 @@
 #include "sqlite3db.h"
 
 #include "command_line.h"
+#include "json.hpp"
 
 inline std::string get_formatted_time() {
 	time_t __timer;
@@ -460,6 +461,11 @@ int extract_sqlite3_host_port(MYSQL* admin, std::pair<std::string, int>& host_po
 std::vector<std::string> split(const std::string& s, char delim);
 
 /**
+ * @brief Joins the supplied list of words using the supplied delim.
+ */
+std::string join(std::string delim, const std::vector<std::string>& words);
+
+/**
  * @brief Gets the supplied environmental variable as a std::string.
  * @param var The variable to value to extract.
  * @return The variable value if present, an empty string if not found.
@@ -531,5 +537,73 @@ int64_t get_elem_idx(const T& e, const std::vector<T>& v) {
 		return it - v.begin();
 	}
 }
+
+/**
+ * @brief Returns a 'JSON' object holding 'PROXYSQL INTERNAL SESSION' contents.
+ * @param proxy And already openned connection to ProxySQL.
+ */
+nlohmann::json fetch_internal_session(MYSQL* proxy);
+
+/**
+ * @brief Returns a string table representation of the supplied resultset.
+ */
+std::string dump_as_table(MYSQL_RES* result);
+
+using mysql_row_t = std::vector<std::string>;
+
+/**
+ * @brief Executes a DQL query and returns the contents of its resultset.
+ * @param conn An already opened MYSQL connection.
+ * @param query The DQL query to be executed.
+ * @param dump_res Wether or not to dump the resultset contents as a table to 'stderr'.
+ * @return A pair with the shape {err_code, contents}.
+ */
+std::pair<int,std::vector<mysql_row_t>> exec_dql_query(MYSQL* conn, const std::string& query, bool dump_res=false);
+
+struct POOL_STATS_IDX {
+	enum {
+		HOSTGROUP,
+		CONN_USED,
+		CONN_FREE,
+		CONN_OK,
+		CONN_ERR,
+		MAX_CONN_USED,
+		QUERIES,
+	};
+};
+
+/**
+ * @brief Dumps a resultset with fields from the supplied hgs from 'stats_mysql_connection_pool'.
+ * @details The fetched fields are 'hostgroup,ConnUsed,ConnFree,ConnOk,ConnERR,MaxConnUsed,Queries'.
+ */
+int dump_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
+
+using pool_state_t = std::map<uint32_t,mysql_row_t>;
+
+/**
+ * @brief Fetches several fields from table 'stats_mysql_connection_pool' for supplied hostgroups.
+ * @details The fetched fields are 'hostgroup,ConnUsed,ConnFree,ConnOk,ConnERR,MaxConnUsed,Queries'.
+ * @param admin An already opened connection to Admin.
+ * @param hgs The hostgroups from which to fetch several fields.
+ * @return A pair of the shape {err_code, pool_state_t}.
+ */
+std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
+/**
+ * @brief Waits until the condition specified by the 'query' holds, or 'timeout' is reached.
+ * @details Several details about the function impl:
+ *   - Sleeps of 500ms are performed between each check.
+ *   - The time and check being performed is always logged ahead.
+ *   - If query execution fails, reason is logged, wait aborted and EXIT_FAILURE returned.
+ * @param mysql And already opened conn to ProxySQL in which the query is to be executed.
+ * @param query Query with the condition check, it's expected to return 'TRUE' when the check succeeds.
+ * @param timeout A timeout specified in seconds.
+ * @return EXIT_SUCCESS if the checks holds before the timeout, EXIT_FAILURE otherwise.
+ */
+int wait_for_cond(MYSQL* mysql, const std::string& query, uint32_t timeout);
+
+// Helpers using 'wait_for_cond' on 'stats_mysql_connection'
+void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
+void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
+void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
 
 #endif // #define UTILS_H
