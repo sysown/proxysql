@@ -436,7 +436,7 @@ void close_all_non_term_fd(std::vector<int> excludeFDs) {
 std::pair<int,const char*> get_dollar_quote_error(const char* version) {
 	const char* ER_PARSE_MSG {
 		"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server"
-			" version for the right syntax to use near '$$' at line 1'"
+			" version for the right syntax to use near '$$' at line 1"
 	};
 
 	if (strcasecmp(version,"8.1.0") == 0) {
