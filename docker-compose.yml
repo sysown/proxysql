@@ -75,6 +75,7 @@ services:
     image: proxysql/packaging:build-clang-centos8
     environment:
       - PKG_RELEASE=centos8-clang
+      - PROXYSQL_BUILD_TYPE=
 
   centos8_dbg_build:
     extends:
@@ -168,6 +169,7 @@ services:
     image: proxysql/packaging:build-clang-fedora34
     environment:
       - PKG_RELEASE=fedora34-clang
+      - PROXYSQL_BUILD_TYPE=
 
   fedora34_dbg_build:
     image: proxysql/packaging:build-fedora34
@@ -342,6 +344,7 @@ services:
     image: proxysql/packaging:build-clang-debian11
     environment:
       - PKG_RELEASE=debian11-clang
+      - PROXYSQL_BUILD_TYPE=
 
   debian11_dbg_build:
     extends:
@@ -457,6 +460,7 @@ services:
     image: proxysql/packaging:build-clang-ubuntu20
     environment:
       - PKG_RELEASE=ubuntu20-clang
+      - PROXYSQL_BUILD_TYPE=
 
   ubuntu20_dbg_build:
     extends:
@@ -515,6 +519,7 @@ services:
     image: proxysql/packaging:build-clang-opensuse15
     environment:
       - PKG_RELEASE=opensuse15-clang
+      - PROXYSQL_BUILD_TYPE=
 
   opensuse15_dbg_build:
     extends:
@@ -545,6 +550,7 @@ services:
     image: proxysql/packaging:build-clang-almalinux8
     environment:
       - PKG_RELEASE=almalinux8-clang
+      - PROXYSQL_BUILD_TYPE=
 
   almalinux8_dbg_build:
     extends:
