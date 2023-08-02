@@ -18,19 +18,19 @@
 #define	ETIME	ETIMEDOUT
 #endif
 
-#ifdef CXX17
+//#ifdef CXX17
 template<class...> struct conjunction : std::true_type { };
 template<class B1> struct std::conjunction<B1> : B1 { };
 template<class B1, class... Bn>
 struct std::conjunction<B1, Bn...> 
     : std::conditional<bool(B1::value), std::conjunction<Bn...>, B1>::type {};
-#else
-template<class...> struct conjunction : std::true_type { };
-template<class B1> struct conjunction<B1> : B1 { };
-template<class B1, class... Bn>
-struct conjunction<B1, Bn...> 
-    : std::conditional<bool(B1::value), conjunction<Bn...>, B1>::type {};
-#endif // CXX17
+//#else
+//template<class...> struct conjunction : std::true_type { };
+//template<class B1> struct conjunction<B1> : B1 { };
+//template<class B1, class... Bn>
+//struct conjunction<B1, Bn...> 
+//    : std::conditional<bool(B1::value), conjunction<Bn...>, B1>::type {};
+//#endif // CXX17
 /**
  * @brief Stores the result of formatting the first parameter with the provided
  *  arguments, into the std::string reference provided in the second parameter.
@@ -43,11 +43,11 @@ struct conjunction<B1, Bn...>
  */
 template<
 	typename... Args,
-#ifdef CXX17
+//#ifdef CXX17
 	typename std::enable_if<std::conjunction<std::is_trivial<Args>...>::value,int>::type = 0
-#else
-	typename std::enable_if<conjunction<std::is_trivial<Args>...>::value,int>::type = 0
-#endif // CXX17
+//#else
+//	typename std::enable_if<conjunction<std::is_trivial<Args>...>::value,int>::type = 0
+//#endif // CXX17
 >
 int string_format(const std::string& str, std::string& result, Args... args) {
 	int size = snprintf(nullptr, 0, str.c_str(), args...);

@@ -98,30 +98,31 @@ endif
 
 
 # determine good compiler version for stdc++17
-IS_CXX17 := 0
-ifeq ($(CXX),clang++)
-	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
-	IS_CXX17 := 1
-endif
-else
-	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
-	IS_CXX17 := 1
-endif
-endif
+#IS_CXX17 := 0
+#ifeq ($(CXX),clang++)
+#	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
+#	IS_CXX17 := 1
+#endif
+#else
+#	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
+#	IS_CXX17 := 1
+#endif
+#endif
 
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
-PSQLCH=
-ifeq ($(PROXYSQLCLICKHOUSE),1)
-	PSQLCH=-DPROXYSQLCLICKHOUSE
-ifeq ($(IS_CXX17),1)
-	PSQLCH=-DPROXYSQLCLICKHOUSE -std=c++17 -DCXX17
-endif
-endif
+PSQLCH=-DPROXYSQLCLICKHOUSE
+#PSQLCH=
+#ifeq ($(PROXYSQLCLICKHOUSE),1)
+#	PSQLCH=-DPROXYSQLCLICKHOUSE
+#ifeq ($(IS_CXX17),1)
+#	PSQLCH=-DPROXYSQLCLICKHOUSE -std=c++17 -DCXX17
+#endif
+#endif
 
 
 WITHGCOVVAR := $(shell echo $(WITHGCOV))
@@ -145,7 +146,7 @@ ifeq ($(TEST_WITHASANVAR),1)
 WASAN+= -DTEST_WITHASAN
 endif
 
-MYCXXFLAGS=-std=c++11
+MYCXXFLAGS=-std=c++17
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS+= -fuse-ld=lld
 endif

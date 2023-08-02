@@ -122,11 +122,7 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 				is_null = 0;
 			} else {
 				auto s_t = bi.Column()->As<ColumnNullable>();
-#ifdef CXX17
 				cc = s_t->Nested()->GetType().GetCode();
-#else
-				cc = s_t->Type()->GetNestedType()->GetCode();
-#endif // CXX17
 			}
 
 			if (
