@@ -39,20 +39,20 @@ endif
 
 
 # determine good compiler version for stdc++17
-IS_CXX17 := 0
-ifeq ($(CXX),clang++)
-	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
-	IS_CXX17 := 1
-endif
-else
-	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
-	IS_CXX17 := 1
-endif
-endif
+#IS_CXX17 := 0
+#ifeq ($(CXX),clang++)
+#	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
+#	IS_CXX17 := 1
+#endif
+#else
+#	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
+#	IS_CXX17 := 1
+#endif
+#endif
 
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
@@ -191,17 +191,17 @@ lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-ifeq ($(IS_CXX17), 1)
-	echo ">>> Clickhouse CXX17"
+#ifeq ($(IS_CXX17), 1)
+#	echo ">>> Clickhouse CXX17"
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
-else
-	echo ">>> Clickhouse CXX11"
-	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
-	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
-	cd clickhouse-cpp && sed -i -e 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
-endif
+#else
+#	echo ">>> Clickhouse CXX11"
+#	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
+#	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
+#	cd clickhouse-cpp && sed -i -e 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
+#endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
