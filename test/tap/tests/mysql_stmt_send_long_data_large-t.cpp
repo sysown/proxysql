@@ -256,8 +256,8 @@ int main(int argc, char** argv) {
 						diag("Expected:  id=%d, k=%d, c=%s, pad=%s", idx, k, p2.c_str(), p3.c_str());
 						diag("Retrieved: id=%d, k=%d, c=%s, pad=%s", id, k_i, str_data_c, str_data_pad);
 					} else {
-						diag("Expected:  id=%d, k=%d, c=<OMITTED,length=%llu>, pad=%s", idx, k, p2.length(), p3.c_str());
-						diag("Retrieved: id=%d, k=%d, c=<OMITTED,length=%llu>, pad=%s", id, k_i, strlen(str_data_c), str_data_pad);
+						diag("Expected:  id=%d, k=%d, c=<OMITTED,length=%lu>, pad=%s", idx, k, p2.length(), p3.c_str());
+						diag("Retrieved: id=%d, k=%d, c=<OMITTED,length=%lu>, pad=%s", id, k_i, strlen(str_data_c), str_data_pad);
 					}
 					int dm = 0;
 					if (idx==id && k == k_i && strcmp(p2.c_str(),str_data_c)==0 && strcmp(p3.c_str(),str_data_pad)==0) {

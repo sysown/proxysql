@@ -210,7 +210,8 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL* proxy = mysql_init(NULL);
-	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	}
@@ -227,7 +228,7 @@ int main(int argc, char** argv) {
 	mysql_close(proxy);
 
 	diag("Prepare ProxySQL servers with 'compression=0' for first test");
-	MYSQL_QUERY_P(admin, "UPDATE mysql_servers SET compression=0 WHERE port=13306");
+	MYSQL_QUERY_P(admin, (std::string("UPDATE mysql_servers SET compression=0 WHERE port=") + std::to_string(cl.mysql_port)).c_str());
 	MYSQL_QUERY_P(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	diag("TEST: Check compressed split packets through ProxySQL with backend conns with 'compression=0'");
@@ -238,7 +239,7 @@ int main(int argc, char** argv) {
 	}
 
 	diag("Prepare ProxySQL servers with 'compression=1' for second test");
-	MYSQL_QUERY_P(admin, "UPDATE mysql_servers SET compression=1 WHERE port=13306");
+	MYSQL_QUERY_P(admin, (std::string("UPDATE mysql_servers SET compression=1 WHERE port=") + std::to_string(cl.mysql_port)).c_str());
 	MYSQL_QUERY_P(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	diag("TEST: Check compressed split packets through ProxySQL with backend conns with 'compression=1'");

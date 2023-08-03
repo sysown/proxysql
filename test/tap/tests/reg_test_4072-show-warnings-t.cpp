@@ -50,9 +50,9 @@ int main(int argc, char** argv) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 		return exit_status();
 	}
-	MYSQL_QUERY(proxysql, "DROP DATABASE IF EXISTS testdb");
-	MYSQL_QUERY(proxysql, "CREATE DATABASE testdb");
-	MYSQL_QUERY(proxysql, "CREATE TABLE testdb.`tmp` ( " \
+	MYSQL_QUERY(proxysql, "DROP DATABASE IF EXISTS test");
+	MYSQL_QUERY(proxysql, "CREATE DATABASE test");
+	MYSQL_QUERY(proxysql, "CREATE TABLE test.`tmp` ( " \
 		"`id` bigint(20) NOT NULL AUTO_INCREMENT, " \
 		"`text1` varchar(200) COLLATE utf8_bin NOT NULL, " \
 		"`text2` varchar(200) COLLATE utf8_bin NOT NULL, " \
@@ -61,15 +61,15 @@ int main(int argc, char** argv) {
 		") ENGINE = InnoDB");
 
 	diag("Inserting rows...");
-	MYSQL_QUERY(proxysql, "INSERT INTO testdb.tmp(text1, text2, time) values('dummy text1', 'dummy text2', now())");
+	MYSQL_QUERY(proxysql, "INSERT INTO test.tmp(text1, text2, time) values('dummy text1', 'dummy text2', now())");
 
 	for (int i = 0; i < 7; i++) {
-		MYSQL_QUERY(proxysql, "INSERT INTO testdb.tmp(text1, text2, time) SELECT text1, text2, time FROM testdb.tmp");
+		MYSQL_QUERY(proxysql, "INSERT INTO test.tmp(text1, text2, time) SELECT text1, text2, time FROM test.tmp");
 	}
 
 	std::this_thread::sleep_for(std::chrono::seconds(2));
 
-	MYSQL_QUERY(proxysql, "SELECT COUNT(*) FROM testdb.tmp a JOIN testdb.tmp b JOIN testdb.tmp c");
+	MYSQL_QUERY(proxysql, "SELECT COUNT(*) FROM test.tmp a JOIN test.tmp b JOIN test.tmp c");
 
 	auto mysql_result = mysql_use_result(proxysql);
 
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
 
 	diag("Done... Total rows to fetch:'%lu'", add_row_count);
 	diag("Fetching all rows...");
-	MYSQL_QUERY(proxysql, "SELECT a.* FROM testdb.tmp a JOIN testdb.tmp b JOIN testdb.tmp c WHERE 1/0 OR 1=1");
+	MYSQL_QUERY(proxysql, "SELECT a.* FROM test.tmp a JOIN test.tmp b JOIN test.tmp c WHERE 1/0 OR 1=1");
 
 	mysql_result = mysql_use_result(proxysql);
 		
