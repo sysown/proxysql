@@ -579,7 +579,7 @@ services:
     image: proxysql/packaging:build-clang-almalinux9
     environment:
       - PKG_RELEASE=almalinux9-clang
-      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_TYPE=
 
   almalinux9_dbg_build:
     extends:
