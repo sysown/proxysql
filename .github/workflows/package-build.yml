@@ -46,7 +46,7 @@ jobs:
         username: ${{ secrets.REPO_USER }}
         key: ${{ secrets.REPO_PRIVATE_KEY }}
         script: |
-          ls -1 ${{ secrets.REPO_TARGET }} | sort -rV | tail +11 | xargs -n1 rm -rf
+          ls -1 ${{ secrets.REPO_TARGET }} | sort -rV | tail +6 | xargs -n1 rm -rf
     
   build:
     runs-on: ubuntu-22.04
