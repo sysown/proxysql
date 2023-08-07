@@ -221,3 +221,176 @@ graph TD
     END[End]
 end
 ```
+
+
+## Alternative Flowchart (Detailed and broken down)
+
+### Connection Phase
+
+Each thread connects to only one remote peer ProxySQL Cluster node, and it sends queries and performs checks only to that remote peer.
+
+```mermaid
+graph TD
+subgraph ProxySQL_Cluster_Monitor_thread[Connection phase]
+        direction TB
+        A[BEGIN] -- "ProxySQL_Cluster_Monitor_thread <br> ProxySQL_Node_Address -> host, port" --> B
+        B[Connect to remote peer using host and port] --> C
+        C["Send `SELECT @@version`"] -- "resultset contains remote peer ProxySQL version" --> D
+        D{Remote peer ProxySQL version
+        ==
+        Local PROXYSQL_VERSION?}
+        D -- "No" --> CLOSE_CONNECTION
+        D -- "Yes <br> Register yourself with a remote peer" --> E
+        E["Send
+        `PROXYSQL CLUSTER_NODE_UUID ProxySQL_GlobalVariables::uuid ProxySQL_Cluster::admin_mysql_ifaces`"] --> F 
+        F{ProxySQL_GlobalVariables::shutdown == 0} 
+        F -- "No" --> CLOSE_CONNECTION[Close Connection]
+        F -- "Yes <br> Fetch Global Checksum from remote peer" --> G
+        G[BEGIN Main Actions]
+        G --> G2
+        G2[BEGIN Update Statuses]
+        DELAY[Sleep cluster_check_interval_ms]
+        G2 --> DELAY
+        DELAY --> F
+        CLOSE_CONNECTION --> END
+        end
+```
+
+### Update Statuses
+```mermaid
+graph TD
+subgraph Update_Statuses[Update Statuses]
+    BEGIN[BEGIN Update Statuses] --> AAA
+    AAA{"Local
+    cluster_check_status_frequency_count
+    >=
+    cluster_check_status_frequency?"}
+    AAA -- "No" --> BBB
+    AAA -- Yes --> DDD 
+    BBB[Set cluster_check_status_frequency_count += 1] --> END
+    DDD[Set cluster_check_status_frequency_count = 0] --> EEE
+    EEE[Send `SELECT * FROM stats_mysql_global ORDER BY Variable_Name`] 
+    FFF[Update local metrices with values from resultset] --> END
+    EEE -- "resultset contains Client_Connections_connected, Client_Connections_created, ProxySQL_Uptime, Questions, Servers_table_version of remote peer <br> ProxySQL_Cluster_Nodes::Update_Node_Metrics <br> ProxySQL_Node_Entry::set_metrics" --> 
+    FFF
+end
+```
+
+### Main Actions
+```mermaid
+graph TD
+subgraph MA2[Main Actions]
+    direction TB
+    BEGIN[Begin Main Action]
+        BEGIN --> G
+        G["Send `SELECT GLOBAL_CHECKSUM()`"] -- "resultset contains global checksum of remote peer <br> ProxySQL_Cluster::Update_Global_Checksum" --> I
+        I{"Last known remote peer global checksum
+        ==
+        Current remote peer global checksum
+        ?"} 
+        I -- "Yes" --> PCNSCNR
+        I -- "No" --> J
+
+
+        J["Use the received remote global checksum value to
+        update the local copy of the global checksum of the remote peer"] -- "returns update_checksum = true <br> ProxySQL_Cluster_Monitor_thread <br/><br/> If remote global checksum has changed it means
+        that one or more module configuration had been changed <br/><br/> Fetching all the modules checksum, version and epoch from remote peer" --> K
+        K["Send `SELECT * FROM runtime_checksums_values ORDER BY name`"] -- "resultset contains module name, checksum, version and epoch <br> ProxySQL_Cluster_Nodes::Update_Node_Checksums <br> ProxySQL_Node_Entry::set_checksums" --> PCNSCWR
+        subgraph CUNC[ProxySQL_Cluster_Nodes::Update_Node_Checksums and ProxySQL_Node_Entry::set_checksums]
+        direction LR
+        PCNSCNR[set_checksums without resultset]
+        PCNSCWR[set_checksums with resultset]
+        M1[Refresh cluster_<i>*module_name*</i>_diffs_before_sync variables]
+        M2[Refresh cluster_<i>*module_name*</i>_diffs_before_sync variables]
+        PCNSCNR --> M1
+        PCNSCWR --> M2
+        N2["For for all modules
+        (admin_variables , mysql_query_rules, mysql_servers,
+        mysql_users , mysql_variables , proxysql_servers , ldap_variables)
+    
+
+        Update local metadata of the remote peer with module version,
+            epoch and last_updated values with the values received by the peer"]
+        P{"Last known remote module checksum
+            ==
+            Current remote module checksum?"}
+            P -- "Yes" --> Q
+            P -- "No" --> S
+            Q[Set local module diff_check += 1] --> T
+            S["Update:
+            local module checksum with remote peer checksum value,
+            last_changed to current time
+            and diff_check = 1"] --> T
+            T{"Own module checksum
+            ==
+            Current module checksum
+            ?"} 
+            T -- "Yes" --> U
+            T -- "No" --> CN1BEGIN
+            U[Set local module diff_check = 0] --> CN1BEGIN
+        M2 --> N2
+        N2 --> P
+
+
+YY["For for all modules
+        (admin_variables , mysql_query_rules, mysql_servers,
+        mysql_users , mysql_variables , proxysql_servers , ldap_variables)
+    
+    Set local module last_updated = current time"] --> XX
+M1 --> YY
+XX{"Last known remote module checksum
+==
+Own module version?"} 
+XX -- "Yes" --> WW
+WW[Set local module diff_check = 0] --> CN1BEGIN
+XX -- "No" --> VV
+VV{local module diff_check > 0?}
+VV -- "Yes" --> VV2
+VV2[Set local module diff_check += 1] --> CN1BEGIN
+
+        end
+end
+subgraph  CNFS["Check need for sync"]
+CN1BEGIN[Check need for sync]
+CN1BEGIN2["For for all modules
+        (admin_variables , mysql_query_rules, mysql_servers,
+        mysql_users , mysql_variables , proxysql_servers , ldap_variables)"]
+CN1END[END]
+CN1BEGIN --> CN1BEGIN2
+V{"cluster_<i>*module_name*</i>_diffs_before_sync
+ variables != 0?"} 
+V -- "Yes" --> W
+V -- "No" --> CN1END
+W{Remote module version > 1?} 
+W -- "Yes" --> X
+W -- "No" --> X2
+X{"Own module version == 1
+||
+Local module epoch > Own module epoch?"} 
+X -- "Yes" --> Y
+X -- "No" --> X1
+X1{"Same epoch
+&&
+diff_check > 0"}
+ERR1["Every 10 diff, print an error message"]
+X2{"diff_check > 0"}
+ERR2["Every 10 diff, print an error message"]
+X1 -- No --> CN1END
+X1 -- Yes --> ERR1
+X2 -- No --> CN1END
+X2 -- Yes --> ERR2
+ERR1 --> CN1END
+ERR2 --> CN1END
+Y{"Local module diff_check >=
+cluster_<i>*module_name*</i>_diffs_before_sync?"}
+Y -- "No" --> X1
+PGVFP["Call pull_<i>module_name</i>_from_peer
+to pull the specific module
+from the remote peer"]
+Y -- "Yes" --> PGVFP
+PGVFP --> CN1END
+CN1BEGIN2 --> V
+end
+```
+
+### TODO: describe pull_MODULE_NAME_from_peer()
