@@ -26,8 +26,9 @@ The `ProxySQL_GlobalVariables` class contains checksum, epoch, and version of in
 The `ProxySQL_Checksum_Value` class is used to store checksum values for modules. It includes member variables such as version and epoch to keep track of the version and epoch of the checksum value.
 
 
-# Initializing Monitoring Threads
-Each node within the ProxySQL cluster monitors core nodes to identify any updates in module configuration. This is achieved by dedicating a separate thread for each core node, for continuous monitoring for changes.
+# Initializing Cluster Monitoring Threads
+Each node within the ProxySQL cluster monitors core nodes to identify any updates in module configuration. This is achieved by dedicating a separate thread for each core node, for continuous monitoring for changes.  
+Note that this is not a thread from MySQL Monitor, but from Cluster.  
 
 ## Load ProxySQL Servers
 When the ProxySQL instance is started or the `LOAD PROXYSQL SERVERS TO RUNTIME` command is executed, the latest `proxysql_servers` table records are fetched from the database. This result set is passed to the ProxySQL Cluster's `load_servers_list` method.
