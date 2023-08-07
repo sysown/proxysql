@@ -923,7 +923,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	// specific connection, for that, we update 'current_hostgroup' with the first active transaction we are
 	// able to find. If more transactions are simultaneously open for the session, more 'COMMIT|ROLLBACK'
 	// commands are required to be issued by the client to continue ending transactions.
-	unsigned int hg = FindOneActiveTransaction(true);
+	int hg = FindOneActiveTransaction(true);
 	if (hg != -1) {
 		// there is an active transaction, we must forward the request
 		current_hostgroup = hg;
@@ -4739,8 +4739,8 @@ int MySQL_Session::handler() {
 	bool wrong_pass=false;
 	if (to_process==0) return 0; // this should be redundant if the called does the same check
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
-	PtrSize_t pkt;
-	pktH=&pkt;
+	pktH = new PtrSize_t();
+	PtrSize_t pkt = *pktH;
 	//unsigned int j;
 	//unsigned char c;
 

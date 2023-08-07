@@ -3572,7 +3572,6 @@ gr_node_info_t gr_update_hosts_map(
 	// NOTE: This isn't specified in the initializer list due to current standard limitations
 	gr_node_info_t node_info {};
 	node_info.srv_st = gr_srv_st;
-	MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
 
 	// Consider 'time_now' to be 'now - fetch_duration'
 	unsigned long long time_now=realtime_time();
