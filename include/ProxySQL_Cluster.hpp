@@ -173,6 +173,9 @@ class ProxySQL_Node_Entry {
 	void set_comment(char *a); // note, this is strdup()
 	void set_metrics(MYSQL_RES *_r, unsigned long long _response_time);
 	void set_checksums(MYSQL_RES *_r);
+	void set_checksums_inner1(MYSQL_ROW& row, const char *module_name,
+    ProxySQL_Checksum_Value_2 *checksum, ProxySQL_Checksum_Value *global_checksum,
+    unsigned int diff_before_sync, time_t now);
 	char *get_hostname() { // note, NO strdup()
 		return hostname;
 	}
@@ -282,15 +285,8 @@ class ProxySQL_Cluster_Nodes {
 	SQLite3_result * dump_table_proxysql_servers();
 	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
-	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address);
-	void get_peer_to_sync_runtime_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
-	void get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port, char** peer_mysql_servers_v2_checksum, 
-		char** peer_runtime_mysql_servers_checksum, char** ip_address);
-	void get_peer_to_sync_mysql_users(char **host, uint16_t *port, char** ip_address);
-	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address);
-	void get_peer_to_sync_admin_variables(char **host, uint16_t* port, char** ip_address);
-	void get_peer_to_sync_ldap_variables(char **host, uint16_t *port, char** ip_address);
-	void get_peer_to_sync_proxysql_servers(char **host, uint16_t *port, char ** ip_address);
+	void get_peer_to_sync_GENERIC(const string& module_name, char **host, uint16_t *port, char** ip_address,
+		char **peer_runtime_mysql_servers_checksum = NULL, char** peer_mysql_servers_v2_checksum = NULL);
 };
 
 struct p_cluster_counter {
