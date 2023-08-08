@@ -589,6 +589,8 @@ MySQL_Session::MySQL_Session() {
 	mirrorPkt.size=0;
 	set_status(session_status___NONE);
 
+	pktH = NULL;
+
 	idle_since = 0;
 	transaction_started_at = 0;
 
@@ -729,6 +731,9 @@ MySQL_Session::~MySQL_Session() {
 	if (proxysql_node_address) {
 		delete proxysql_node_address;
 		proxysql_node_address = NULL;
+	}
+	if (pktH) {
+		delete pktH;
 	}
 }
 
