@@ -1,4 +1,4 @@
-name: Package-Build
+name: CI-Package-Build
 
 on:
   push:
