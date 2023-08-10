@@ -107,10 +107,10 @@ jobs:
         GH-Action Package-Build on PR merge into v2.x
         
         Updated : **$(date '+%Y-%m-%d %H:%M:%S %Z')**
-
+        
         Status : **Build in progress**
         EOF
-        fi      
+        fi
     
     - name: Build package
       run: |
@@ -142,7 +142,7 @@ jobs:
 #      if: always()
 #      uses: actions/upload-artifact@v3
 #      with:
-#        name: binaries-${{ env.GIT_VERSION }}
+#        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-${{ matrix.dist }}
 #        path: |
 #          ./binaries/
 #          !./**/.gitignore
@@ -166,5 +166,5 @@ jobs:
         
         [![Package-Build](https://github.com/${{ github.repository }}/actions/workflows/package-build.yml/badge.svg)](https://github.com/${{ github.repository }}/actions/workflows/package-build.yml)
         
-        
+        EOF
         
