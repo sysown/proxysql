@@ -198,7 +198,7 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ci-selftests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
         path: |
           proxysql/ci_gcov_logs/
           proxysql/ci_infra_logs/
