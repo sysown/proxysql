@@ -15,6 +15,7 @@ on:
 #  schedule:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   builds:
@@ -226,7 +227,7 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ci-selftests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/ci_gcov_logs/
           proxysql/ci_infra_logs/
