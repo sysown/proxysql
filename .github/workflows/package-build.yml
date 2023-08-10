@@ -1,11 +1,11 @@
 name: Package-Build
 
 on:
-  push:
-    branches: [ "v2.x" ]
-    paths-ignore:
-    - '.github/**'
-    - '**.md'
+#  push:
+#    branches: [ "v2.x" ]
+#    paths-ignore:
+#    - '.github/**'
+#    - '**.md'
 #  pull_request:
 #    branches: [ "v2.x" ]
 #    paths-ignore:
@@ -14,6 +14,7 @@ on:
 #  schedule:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
