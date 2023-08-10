@@ -20,7 +20,7 @@ concurrency:
 #  cancel-in-progress: true
 
 jobs:
-  call-script:
+  ci-package-build:
     uses: sysown/proxysql/.github/workflows/ci-package-build.yml@GH-Actions
     secrets: inherit
     
