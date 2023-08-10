@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci-3p-mysql-connector-j:
+  run:
     uses: sysown/proxysql/.github/workflows/ci-3p-mysql-connector-j.yml@GH-Actions
     secrets: inherit
     
