@@ -2,23 +2,24 @@
 name: CI-taptests
 
 on:
-  push:
-    branches: [ "v2.x" ]
-    paths-ignore:
-    - '.github/**'
-    - '**.md'
-  pull_request:
-    branches: [ "v2.x" ]
-    paths-ignore:
-    - '.github/**'
-    - '**.md'
+#  push:
+#    branches: [ "v2.x" ]
+#    paths-ignore:
+#    - '.github/**'
+#    - '**.md'
+#  pull_request:
+#    branches: [ "v2.x" ]
+#    paths-ignore:
+#    - '.github/**'
+#    - '**.md'
 #  schedule:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
+  workflow_call:
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name }}
-  cancel-in-progress: true
+#concurrency:
+#  group: ${{ github.workflow }}-${{ github.ref_name }}
+#  cancel-in-progress: true
 
 jobs:
   build:
@@ -26,7 +27,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-    
+
     - name: Install dependencies
       run: |
         sudo apt-get update -y
@@ -48,7 +49,7 @@ jobs:
         sudo apt-get update -y
         sudo apt-cache policy libmysqlclient-dev
         sudo apt-get install -y --allow-downgrades libmysqlclient-dev=5.7*
-        
+
     - name: Checkout proxysql
       uses: actions/checkout@v3
       with:
@@ -56,13 +57,13 @@ jobs:
 #        ref: 'v2.x'
         fetch-depth: 0
         path: 'proxysql'
-        
+
     - name: Set GIT_VERSION
       run: |
         cd proxysql/
         git fetch --tags --force
         echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
-        
+
     - name: Checkout jenkins_build_scripts
       uses: actions/checkout@v3
       with:
@@ -72,7 +73,7 @@ jobs:
         path: 'jenkins-build-scripts'
         token: ${{ secrets.GH_TOKEN }}
         submodules: 'false'
-        
+
     - name: Patch TAP-tests
       run: |
         # apply patches
@@ -87,7 +88,7 @@ jobs:
         cd proxysql/
         sed -i '61 s/"0.0.0.0:6032"/ current.c_str()/' test/tap/tests/admin-listen_on_unix-t.cpp
         sed -i 's/:6035/:6036/' test/tap/tests/test_sqlite3_server-t.cpp
-        
+
     - name: Build
       run: |
         cd proxysql/
@@ -96,12 +97,12 @@ jobs:
         #sed -i 's|-I/usr/include/mysql |-I/usr/include/mysql -I$(CURL_IDIR) |' test/tap/tests/Makefile
         
         # build proxysql
-        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make debug_clickhouse WITHGCOV=1'" docker-compose.yml
+        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) debug_clickhouse WITHGCOV=1'" docker-compose.yml
         #cat docker-compose.yml
         make ubuntu22-dbg
         
         # build tap tests
-        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make build_tap_test_debug WITHGCOV=1'" docker-compose.yml
+        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug WITHGCOV=1'" docker-compose.yml
         #cat docker-compose.yml
         make ubuntu22-dbg
         
@@ -145,7 +146,7 @@ jobs:
       if: ${{ always() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ci-taptests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
         path: |
           proxysql/src/
           proxysql/test/
@@ -207,7 +208,7 @@ jobs:
     - name: Download build
       uses: actions/download-artifact@v3
       with:
-        name: ci-taptests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
         path: proxysql
         
     - name: Fix build
@@ -309,7 +310,7 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ci-selftests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/ci_gcov_logs/
           proxysql/ci_infra_logs/
