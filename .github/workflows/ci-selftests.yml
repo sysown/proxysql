@@ -21,6 +21,6 @@ concurrency:
 
 jobs:
   run:
-    uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-selftests.yml@GH-Actions
     secrets: inherit
     
