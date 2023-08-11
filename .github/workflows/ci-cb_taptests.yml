@@ -18,6 +18,6 @@ on:
 
 jobs:
   run:
-    uses: sysown/proxysql/.github/workflows/ci-basictests.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-cb_taptests.yml@GH-Actions
     secrets: inherit
     
