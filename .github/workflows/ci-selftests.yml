@@ -20,67 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-n-test:
-    runs-on: ubuntu-22.04
+  run:
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
+    secrets: inherit
     
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-        repository: 'sysown/proxysql'
-#        ref: 'v2.x'
-        fetch-depth: 0
-
-    - name: Set GIT_VERSION
-      run: |
-        git fetch --tags --force
-        echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
-    - name: Build
-      run: |
-        make ubuntu22-dbg
-        
-    - name: Self-tests
-      run: |
-        ulimit -c unlimited
-        set +e
-        set -o pipefail
-        set -x
-        cd src && (./proxysql -f --initial --clickhouse --idle-threads -D . &>proxysql.log &)
-        sleep 30
-        mysql -V -vvv
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SELECT version();" 2>&1 | grep -v 'Using a password'
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SET mysql-verbose_query_error=true;" 2>&1 | grep -v 'Using a password'
-        
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL COREDUMP;" 2>&1 | grep -v 'Using a password'
-        (ls -l ./core* && file ./core* && rm ./core*) || exit 1
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL COMPRESSEDCOREDUMP;" 2>&1 | grep -v 'Using a password'
-        (ls -l ./core* && file ./core* && rm ./core*) || exit 1
-        
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv 2>&1 << EOF | grep -v 'Using a password'
-        SELECT COUNT(*) FROM stats_mysql_query_digest;
-        SELECT COUNT(*) FROM stats_mysql_query_digest_reset;
-        SELECT schemaname, COUNT(*) FROM stats_mysql_query_digest GROUP BY schemaname;
-        SELECT schemaname, COUNT(*) FROM stats_mysql_query_digest_reset GROUP BY schemaname;
-        TRUNCATE TABLE stats.stats_mysql_query_digest_reset;
-        TRUNCATE TABLE stats.stats_mysql_query_digest;
-        PROXYSQLTEST 1 1000;
-        PROXYSQLTEST 2 1000;
-        PROXYSQLTEST 3 1000;
-        PROXYSQLTEST 4 1000;
-        PROXYSQLTEST 5 1000;
-        PROXYSQLTEST 6 1000;
-        EOF
-        RC=$?
-        
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL SHUTDOWN SLOW;" 2>&1 | grep -v 'Using a password'
-        sleep 30
-        echo 'DONE'
-        exit $RC
-    - name: Archive artifacts
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@v3
-      with:
-        name: ci-selftests-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
-        path: |
-          ./src/
-          
