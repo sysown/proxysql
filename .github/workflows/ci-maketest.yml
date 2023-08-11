@@ -19,49 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  builds:
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        targets: [ 'testaurora','testgalera','testgrouprep','testreadonly','testreplicationlag','testall' ]
-    steps:
-         
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-        repository: 'sysown/proxysql'
-#        ref: 'v2.x'
-        ref: ${{ github.head_ref }}
-        fetch-depth: 0
-        path: 'proxysql'
-        
-#    - name: hot-fixes
-#      run: |
-#        sed -i 's/-I$(CURL_IDIR) -I$(IDIR)/-I$(CURL_IDIR) -I${SQLITE3_DIR} -I$(IDIR)/' proxysql/test/tap/tests/Makefile
-        
-    - name: Make-test
-      run: |
-        cd proxysql/
-        #git fetch --tags --force
-        GIT_VERSION=$(git describe --long --abbrev=7)
-        echo "GIT_VERSION=${GIT_VERSION}"
-        echo "GIT_VERSION=${GIT_VERSION}" >> $GITHUB_ENV
-        
-        echo "TARGET: ${{ matrix.target }}"
-        sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make cleanall && make -j$(nproc) ${{ matrix.target }}'" docker-compose.yml
-        make ubuntu22-dbg | tee ../build.log
-        
-    - name: Check build
-      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
-      run: |
-        grep 'exited with code 0' build.log
-        
-    - name: Archive artifacts
-      if: ${{ failure() }}
-      uses: actions/upload-artifact@v3
-      with:
-        name: ${{ env.GITHUB_WORKFLOW }}-${{ matrix.target }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
-        path: |
-          ./build-*.log
-          
+  run:
+    uses: sysown/proxysql/.github/workflows/ci-maketest.yml@GH-Actions
+    secrets: inherit
+    
