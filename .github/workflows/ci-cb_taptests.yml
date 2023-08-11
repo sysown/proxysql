@@ -16,6 +16,10 @@ on:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   run:
     uses: sysown/proxysql/.github/workflows/ci-cb_taptests.yml@GH-Actions
