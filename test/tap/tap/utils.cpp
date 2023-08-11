@@ -710,12 +710,12 @@ string tap_curtime() {
 	return s;
 }
 
-int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage) {
+int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usage) {
 	// check if proxysql process is consuming higher cpu than it should
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
-		return -1;
+		return EXIT_FAILURE;
 	}
 
 	// recover admin variables
@@ -724,19 +724,25 @@ int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_u
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
 	// sleep during the required interval + safe threshold
-	sleep(intv + 2);
+	sleep(2 * intv + 2);
 
-	MYSQL_QUERY(proxysql_admin, "SELECT * FROM system_cpu ORDER BY timestamp DESC LIMIT 1");
+	MYSQL_QUERY(proxysql_admin, "SELECT * FROM system_cpu ORDER BY timestamp DESC LIMIT 2");
 	MYSQL_RES* admin_res = mysql_store_result(proxysql_admin);
 	MYSQL_ROW row = mysql_fetch_row(admin_res);
 
-	double s_clk = (1.0 / sysconf(_SC_CLK_TCK)) * 1000;
-	int utime_ms = atoi(row[1]) * s_clk;
-	int stime_ms = atoi(row[2]) * s_clk;
-	int t_ms = utime_ms + stime_ms;
+	double s_clk = (1000.0 / sysconf(_SC_CLK_TCK));
 
-	// return the cpu usage
-	cpu_usage = t_ms;
+	int final_utime_s = atoi(row[1]) * s_clk;
+	int final_stime_s = atoi(row[2]) * s_clk;
+	int final_t_s = final_utime_s + final_stime_s;
+
+	row = mysql_fetch_row(admin_res);
+
+	int init_utime_s = atoi(row[1]) * s_clk;
+	int init_stime_s = atoi(row[2]) * s_clk;
+	int init_t_s = init_utime_s + init_stime_s;
+
+	cpu_usage = 100.0 * ((final_t_s - init_t_s) / (static_cast<double>(intv) * 1000));
 
 	// free the result
 	mysql_free_result(admin_res);
@@ -747,7 +753,7 @@ int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_u
 
 	mysql_close(proxysql_admin);
 
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 MYSQL* wait_for_proxysql(const conn_opts_t& opts, int timeout) {
