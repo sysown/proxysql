@@ -59,9 +59,9 @@ int create_connections(const conn_opts_t& conn_opts, uint32_t cons_num, std::vec
 const uint32_t ADMIN_CONN_NUM = 100;
 const uint32_t MYSQL_CONN_NUM = 100;
 const uint32_t REPORT_INTV_SEC = 5;
-const double MAX_ALLOWED_CPU_USAGE = 3.0;
+const double MAX_ALLOWED_CPU_USAGE = 10.0;
 
-int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, uint32_t& idle_cpu_ms, uint32_t& final_cpu_ms) {
+int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& idle_cpu_ms, double& final_cpu_ms) {
 	// get ProxySQL idle cpu usage
 	int idle_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_cpu_ms);
 	if (idle_err) {
@@ -107,9 +107,10 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	plan(3);
-	uint32_t idle_cpu_ms = 0;
-	uint32_t final_cpu_ms = 0;
+	plan(6);
+
+	double idle_cpu_ms = 0;
+	double final_cpu_ms = 0;
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
@@ -122,42 +123,51 @@ int main(int argc, char** argv) {
 	mysql_close(proxysql_admin);
 
 	diag("Testing regular connections...");
-	int cpu_usage_res = get_idle_conns_cpu_usage(cl, 0, idle_cpu_ms, final_cpu_ms);
-	if (cpu_usage_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
-
-	// compute the '%' of CPU used during the last interval
-	uint32_t cpu_usage_ms = final_cpu_ms - idle_cpu_ms;
-	double cpu_usage_pct = cpu_usage_ms / (REPORT_INTV_SEC * 1000.0);
+	int ret_cpu_usage = get_idle_conns_cpu_usage(cl, 0, idle_cpu_ms, final_cpu_ms);
+	if (ret_cpu_usage != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	ok(
-		cpu_usage_pct < MAX_ALLOWED_CPU_USAGE, "ProxySQL CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)", 
-		MAX_ALLOWED_CPU_USAGE, cpu_usage_pct
+		idle_cpu_ms < MAX_ALLOWED_CPU_USAGE,
+		"ProxySQL 'no clients' CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)",
+		MAX_ALLOWED_CPU_USAGE, idle_cpu_ms
+	);
+
+	ok(
+		final_cpu_ms < MAX_ALLOWED_CPU_USAGE,
+		"ProxySQL 'clients' CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)",
+		MAX_ALLOWED_CPU_USAGE, final_cpu_ms
 	);
 
 	diag("Testing SSL connections...");
-	cpu_usage_res = get_idle_conns_cpu_usage(cl, CLIENT_SSL, idle_cpu_ms, final_cpu_ms);
-	if (cpu_usage_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
-
-	// compute the '%' of CPU used during the last interval
-	cpu_usage_ms = final_cpu_ms - idle_cpu_ms;
-	cpu_usage_pct = cpu_usage_ms / (REPORT_INTV_SEC * 1000.0);
+	ret_cpu_usage = get_idle_conns_cpu_usage(cl, CLIENT_SSL, idle_cpu_ms, final_cpu_ms);
+	if (ret_cpu_usage != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	ok(
-		cpu_usage_pct < MAX_ALLOWED_CPU_USAGE, "ProxySQL CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)", 
-		MAX_ALLOWED_CPU_USAGE, cpu_usage_pct
+		idle_cpu_ms < MAX_ALLOWED_CPU_USAGE,
+		"ProxySQL 'no clients' CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)",
+		MAX_ALLOWED_CPU_USAGE, idle_cpu_ms
+	);
+
+	ok(
+		final_cpu_ms < MAX_ALLOWED_CPU_USAGE,
+		"ProxySQL 'SSL clients' CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)",
+		MAX_ALLOWED_CPU_USAGE, final_cpu_ms
 	);
 
 	diag("Testing SSL and compressed connections...");
-	cpu_usage_res = get_idle_conns_cpu_usage(cl, CLIENT_SSL|CLIENT_COMPRESS, idle_cpu_ms, final_cpu_ms);
-	if (cpu_usage_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
-
-	// compute the '%' of CPU used during the last interval
-	cpu_usage_ms = final_cpu_ms - idle_cpu_ms;
-	cpu_usage_pct = cpu_usage_ms / (REPORT_INTV_SEC * 1000.0);
+	ret_cpu_usage = get_idle_conns_cpu_usage(cl, CLIENT_SSL|CLIENT_COMPRESS, idle_cpu_ms, final_cpu_ms);
+	if (ret_cpu_usage != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	ok(
-		cpu_usage_pct < MAX_ALLOWED_CPU_USAGE, "ProxySQL CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)", 
-		MAX_ALLOWED_CPU_USAGE, cpu_usage_pct
+		idle_cpu_ms < MAX_ALLOWED_CPU_USAGE,
+		"ProxySQL 'no clients' CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)",
+		MAX_ALLOWED_CPU_USAGE, idle_cpu_ms
+	);
+
+	ok(
+		final_cpu_ms < MAX_ALLOWED_CPU_USAGE,
+		"ProxySQL 'SSL|COMPRESS clients' CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)",
+		MAX_ALLOWED_CPU_USAGE, final_cpu_ms
 	);
 
 	return exit_status();
