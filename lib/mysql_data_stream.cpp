@@ -667,9 +667,10 @@ int MySQL_Data_Stream::read_from_net() {
 				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- SSL_get_error() is SSL_ERROR_SYSCALL, errno: %d\n", sess, this, errno);
 			} else {
 				if (r==0) { // we couldn't read any data
-					if (revents==1) {
-						// revents returns 1 , but recv() returns 0 , so there is no data.
-						// Therefore the socket is already closed
+					if ((revents & POLLIN) || ((revents & POLLIN) && (revents & POLLHUP))) {
+						// If revents is holding either POLLIN, or POLLIN and POLLHUP, but 'recv()' returns 0,
+						// reading no data, the socket has been already closed by the peer. Second part of the
+						// check is obviously redundant, but is left for clarity on the cases being covered.
 						proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p, Datastream=%p -- shutdown soft\n", sess, this);
 						shut_soft();
 					}
