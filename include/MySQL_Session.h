@@ -248,7 +248,6 @@ class MySQL_Session
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()
-//	PtrSize_t *pktH;
 
 	uint32_t thread_session_id;
 	unsigned long long last_insert_id;
