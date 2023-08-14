@@ -7,7 +7,6 @@ on:
     - '.github/**'
     - '**.md'
   pull_request:
-    # The branches below must be a subset of the branches above
     branches: [ v2.x ]
     paths-ignore:
     - '.github/**'
