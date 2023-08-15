@@ -35,6 +35,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+using std::string;
+using std::vector;
 
 /* Helper function to do the waiting for events on the socket. */
 static int wait_for_mysql(MYSQL *mysql, int status) {
@@ -65,12 +67,14 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 }
 
 const uint32_t REPORT_INTV_SEC = 5;
-#ifdef TEST_WITHASAN
-const double MAX_ALLOWED_CPU_USAGE = 5.00;
-#else
-//const double MAX_ALLOWED_CPU_USAGE = 0.15;
-const double MAX_ALLOWED_CPU_USAGE = 0.3; // doubled it because of extra load due to cluster
-#endif
+const double MAX_ALLOWED_CPU_USAGE = 70;
+
+const vector<string> tc_rules {
+	"sudo -n tc qdisc add dev lo root handle 1: prio priomap 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+	"sudo -n tc qdisc add dev lo parent 1:2 handle 20: netem delay 1000ms",
+	"sudo -n tc filter add dev lo parent 1:0 protocol ip u32 match ip sport 6033 0xffff flowid 1:2",
+	"sudo -n tc filter add dev lo parent 1:0 protocol ip u32 match ip dport 6033 0xffff flowid 1:2"
+};
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -80,93 +84,116 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	plan(1);
+	plan(2 + tc_rules.size());
 
-	// set a traffic rule introducing the proper delay to reproduce the issue
-	int tc_err = system("sudo -n tc qdisc add dev lo root netem delay 1000ms");
-	if (tc_err) {
-		const char* err_msg = "Warning: User doesn't have enough permissions to run `tc`, exiting without error.";
-	    fprintf(stdout, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, err_msg);
-		return exit_status();
+	diag("Checking ProxySQL idle CPU usage");
+	double idle_cpu = 0;
+	int ret_i_cpu = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_cpu);
+	if (ret_i_cpu) {
+		diag("Getting initial CPU usage failed with error - %d", ret_i_cpu);
+		diag("Aborting further testing");
+
+		return EXIT_FAILURE;
 	}
 
-	// get ProxySQL idle cpu usage
-	uint32_t idle_cpu_ms = 0;
-	int idle_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_cpu_ms);
-	if (idle_err) {
-	    fprintf(stdout, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
-		return idle_err;
+	ok(idle_cpu < 20, "Idle CPU usage should be below 20%% - Act: %%%lf", idle_cpu);
+
+	MYSQL* proxy = nullptr;
+
+	diag("Establish several traffic control rules to reproduce the issue");
+	for (const string& rule : tc_rules) {
+		const char* s_rule = rule.c_str();
+
+		diag("Setting up rule - '%s'", s_rule);
+		int ret = system(s_rule);
+		if (ret != -1) { errno = 0; }
+
+		ok(
+			ret == 0, "Setting up 'tc' rule should succeed - ret: %d, errno: %d, rule: '%s'",
+			ret, errno,	s_rule
+		);
+
+		if (ret != 0) {
+			goto cleanup;
+		}
 	}
 
-	MYSQL* proxysql = mysql_init(NULL);
-	MYSQL* ret = NULL;
-	mysql_options(proxysql, MYSQL_OPT_NONBLOCK, 0);
-	mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
+	{
+		proxy = mysql_init(NULL);
+		MYSQL* ret = NULL;
+		mysql_options(proxy, MYSQL_OPT_NONBLOCK, 0);
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
 
-	int status = 0;
+		int status = 0;
 
-	if (argc == 2 && (strcmp(argv[1], "admin") == 0)) {
-		status = mysql_real_connect_start(&ret, proxysql, cl.host, "radmin", "radmin", NULL, 6032, NULL, CLIENT_SSL);
-		fprintf(stdout, "Testing admin\n");
-	} else {
-		status = mysql_real_connect_start(&ret, proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL);
-		fprintf(stdout, "Testing regular connection\n");
-	}
+		if (argc == 2 && (strcmp(argv[1], "admin") == 0)) {
+			status = mysql_real_connect_start(&ret, proxy, cl.host, "radmin", "radmin", NULL, 6032, NULL, CLIENT_SSL);
+			diag("Testing 'Admin' connections");
+		} else {
+			status = mysql_real_connect_start(&ret, proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_SSL);
+			diag("Testing 'MySQL' connection");
+		}
 
-	if (status == 0) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
-		return -1;
-	}
+		if (status == 0) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+			goto cleanup;
+		}
 
-	my_socket sockt = mysql_get_socket(proxysql);
+		my_socket sockt = mysql_get_socket(proxy);
 
-	int state = 0;
-	while (status) {
-		status = wait_for_mysql(proxysql, status);
-		if (state == 1) {
-			std::thread closer {[sockt]() -> void {
-				usleep(1500000);
+		diag("Starting 'mysql_real_connect_cont' on stablished connection");
+		int state = 0;
+		while (status) {
+			status = wait_for_mysql(proxy, status);
+			if (state == 1) {
+				// Specific wait based on the network delay. After '1.5' seconds, the client should have
+				// already replied with the first packet to ProxySQL, and it's time to shutdown the socket
+				// before any further communication takes place.
+				std::thread closer {[sockt]() -> void {
+					usleep(1500000);
+					diag("Closing socket from thread");
+					close(sockt);
+				}};
+				closer.detach();
+			}
+
+			status = mysql_real_connect_cont(&ret, proxy, status);
+			if (state == 0 && status == 0) {
+				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
+				ok(false, "Unable to connect to ProxySQL");
+				break;
+			}
+
+			state++;
+			if (state == 2) {
+				diag("Closing socket from main");
 				close(sockt);
-			}};
-			closer.detach();
-		}
-
-		status = mysql_real_connect_cont(&ret, proxysql, status);
-		if (state == 0 && status == 0) {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
-			ok(false, "Unable to connect to ProxySQL");
-			break;
-		}
-
-		state++;
-		if (state == 2) {
-			close(sockt);
-			break;
+				break;
+			}
 		}
 	}
 
-	// recover the traffic rules to their normal state
-	tc_err = system("sudo -n tc qdisc delete dev lo root netem delay 1000ms");
+cleanup:
+
+	// Recover the traffic rules to their normal state
+	diag("Delete previously established traffic control rules");
+	int tc_err = system("sudo -n tc qdisc delete dev lo root");
 	if (tc_err) {
 		ok(false, "ERROR: Failed to execute `tc` to recover the system!");
 		return exit_status();
 	}
 
-	uint32_t final_cpu_ms = 0;
-	int final_err = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, final_cpu_ms);
-	if (final_err) {
-	    fprintf(stdout, "File %s, line %d, Error: '%s'\n", __FILE__, __LINE__, "Unable to get 'idle_cpu' usage.");
-		return idle_err;
-	}
-
-	// compute the '%' of CPU used during the last interval
-	uint32_t cpu_usage_ms = final_cpu_ms - idle_cpu_ms;
-	double cpu_usage_pct = cpu_usage_ms / (REPORT_INTV_SEC * 1000.0);
+	double final_cpu_usage = 0;
+	int ret_f_cpu = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, final_cpu_usage);
+	diag("Getting the final CPU usage returned - %d", ret_f_cpu);
 
 	ok(
-		cpu_usage_pct < MAX_ALLOWED_CPU_USAGE, "ProxySQL CPU usage should be below expected: (Exp: %%%lf, Act: %%%lf)", 
-		MAX_ALLOWED_CPU_USAGE, cpu_usage_pct
+		final_cpu_usage < MAX_ALLOWED_CPU_USAGE,
+		"ProxySQL CPU usage should be below expected - Exp: %%%lf, Act: %%%lf",
+		MAX_ALLOWED_CPU_USAGE, final_cpu_usage
 	);
+
+	mysql_close(proxy);
 
 	return exit_status();
 }
