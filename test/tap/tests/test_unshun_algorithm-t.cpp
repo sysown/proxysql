@@ -349,13 +349,13 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 		int shunn_err = shunn_all_servers(proxysql_admin);
 		if (shunn_err) { return EXIT_FAILURE; }
-		diag(""); // empty line
+		diag(" "); // empty line
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
 			wakup_target_server(proxysql_mysql, i);
 
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "ONLINE", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'ONLINE'");
-			diag(""); // empty line
+			diag(" "); // empty line
 			if (tests_failed()) {
 				return exit_status();
 			}
@@ -373,7 +373,7 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 		for (uint32_t i = 0; i < SERVERS_COUNT; i++) {
 			wakup_target_server(proxysql_mysql, i);
 		}
-		diag(""); // empty line
+		diag(" "); // empty line
 
 		MYSQL_QUERY(proxysql_admin, "SET mysql-unshun_algorithm=1");
 		diag("%s: Line:%d running admin query: SET mysql-unshun_algorithm=1", tap_curtime().c_str(), __LINE__);
@@ -384,7 +384,7 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 
 			bool unexp_row_value = server_status_checker(proxysql_admin, "ONLINE", "SHUNNED", i);
 			ok(unexp_row_value == false, "Server from first hg was set 'ONLINE' while others remained 'SHUNNED'");
-			diag(""); // empty line
+			diag(" "); // empty line
 			if (tests_failed()) {
 				return exit_status();
 			}

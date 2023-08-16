@@ -1372,6 +1372,22 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		l_free(pkt->size,pkt->ptr);
 		return true;
 	}
+	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
+	if ((pkt->size == strlen("SELECT $$") + 5) && strncasecmp("SELECT $$", (char*)pkt->ptr + 5, pkt->size - 5) == 0) {
+		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
+
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, err_info.first, (char *)"HY000", err_info.second, true);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+
+		if (mirror==false) {
+			RequestEnd(NULL);
+		}
+		l_free(pkt->size,pkt->ptr);
+
+		return true;
+	}
 	if (locked_on_hostgroup >= 0 && (strncasecmp((char *)"SET ",(char *)pkt->ptr+5,4)==0)) {
 		// this is a circuit breaker, we will send everything to the backend
 		//

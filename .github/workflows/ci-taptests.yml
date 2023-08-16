@@ -16,6 +16,10 @@ on:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -72,13 +76,13 @@ jobs:
     - name: Patch TAP-tests
       run: |
         # apply patches
-        for PATCH in $(cd jenkins-build-scripts/test-scripts/patches; find . -type f); do
-          if [[ $PATCH =~ \.patch ]]; then
-            patch proxysql/test/tap/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
-          elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
-            cp jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/test/tap/${PATCH#./} || true
-          fi
-        done
+        #for PATCH in $(cd jenkins-build-scripts/test-scripts/patches; find . -type f); do
+        #  if [[ $PATCH =~ \.patch$ ]]; then
+        #    patch proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
+        #  elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
+        #    cp jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
+        #  fi
+        #done
         # patch multi port listening
         cd proxysql/
         sed -i '61 s/"0.0.0.0:6032"/ current.c_str()/' test/tap/tests/admin-listen_on_unix-t.cpp

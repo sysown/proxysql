@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
 
 	MYSQL_QUERY(mysqladmin, "delete from mysql_query_rules");
 	{
-		char * query_in = "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, comment, apply) values (100, 1, 0, \"^SELECT.*FOR UPDATE$\", 0, \"CASELESS\", 0, \"\"\"hello\"\" 'world'\", 1)";
+		const char * query_in = "insert into mysql_query_rules (rule_id, active, flagIN, match_digest, negate_match_pattern, re_modifiers, destination_hostgroup, comment, apply) values (100, 1, 0, \"^SELECT.*FOR UPDATE$\", 0, \"CASELESS\", 0, \"\"\"hello\"\" 'world'\", 1)";
 		char query_out[1024];
 		mysql_real_escape_string(mysqladmin, query_out, query_in, strlen(query_in));
 		diag("Running query: %s", query_out);
@@ -137,7 +137,7 @@ int main(int argc, char** argv) {
 	}
 
 	while (!mysql_stmt_fetch(stmt))	{
-		ok(strcmp((char*)bind[0].buffer, "aaaaaa") == 0, "Read value that was updated. Expected [aaaaaa]. Actual [%s]", bind[0].buffer);
+		ok(strcmp((char*)bind[0].buffer, "aaaaaa") == 0, "Read value that was updated. Expected [aaaaaa]. Actual [%s]", (char*)bind[0].buffer);
 	}
 
 	if (mysql_stmt_close(stmt))

@@ -15,6 +15,10 @@ on:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   builds:
     runs-on: ubuntu-22.04
@@ -27,22 +31,14 @@ jobs:
         include:
           - dist: 'centos6'
             type: ''
-          - dist: 'ubuntu22'
-            type: '-tap'
-#          - dist: 'ubuntu22'
-#            type: '-testaurora'
-#          - dist: 'ubuntu22'
-#            type: '-testgalera'
-#          - dist: 'ubuntu22'
-#            type: '-testgrouprep'
-#          - dist: 'ubuntu22'
-#            type: '-testreadonly'
-#          - dist: 'ubuntu22'
-#            type: '-testreplicationlag'
-#          - dist: 'ubuntu22'
-#            type: '-testall'
+          - dist: 'centos7'
+            type: ''
           - dist: 'fedora37'
             type: '-clang'
+          - dist: 'ubuntu20'
+            type: '-clang'
+          - dist: 'ubuntu22'
+            type: '-tap'
     steps:
     
     - name: Cache build

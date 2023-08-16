@@ -240,7 +240,7 @@ std::string tap_curtime();
  *  'ms' in the specified interval.
  * @return 0 if success, -1 in case of error.
  */
-int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage);
+int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usage);
 
 /**
  * @brief Helper struct holding connection options for helper functions creating MySQL connections.
@@ -523,6 +523,20 @@ enum SQ3_RES_T {
  *  In case of failure, ERR field will be populated and others will remain empty.
  */
 sq3_res_t sqlite3_execute_stmt(sqlite3* db, const std::string& query);
+
+/**
+ * @brief If found returns the element index, -1 otherwise.
+ */
+template <typename T>
+int64_t get_elem_idx(const T& e, const std::vector<T>& v) {
+	const auto& it = std::find(v.begin(), v.end(), e);
+
+	if (it == v.end()) {
+		return -1;
+	} else {
+		return it - v.begin();
+	}
+}
 
 /**
  * @brief Returns a 'JSON' object holding 'PROXYSQL INTERNAL SESSION' contents.

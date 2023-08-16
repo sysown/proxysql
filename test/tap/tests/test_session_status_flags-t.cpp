@@ -173,7 +173,7 @@ int prepare_stmt_queries(const CommandLine& cl, const vector<query_t>& p_queries
 	MYSQL* proxy_mysql = mysql_init(NULL);
 
 	diag("%s: Openning INITIAL connection...", tap_curtime().c_str());
-	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
 	}
@@ -511,7 +511,7 @@ int exec_simple_conn_tests(
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
 
-		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		}
@@ -542,7 +542,7 @@ int text_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>&
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
 
-		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		}
@@ -601,7 +601,7 @@ int _wait_for_replication(
 
 		while (elapsed.count() < timeout && queries < retries) {
 			MYSQL* proxy = mysql_init(NULL);
-			if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+			if (!mysql_real_connect(proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 				return EXIT_FAILURE;
 			}
@@ -654,7 +654,7 @@ int stmt_exec_simple_conn_tests(const CommandLine& cl, const vector<test_def_t>&
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
 
-		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		}
@@ -963,7 +963,7 @@ const vector<query_t> test_compression_queries {
 int test_client_conn_compression_st(const CommandLine& cl) {
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 
-	if (!mysql_real_connect(proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_COMPRESS)) {
+	if (!mysql_real_connect(proxysql_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, CLIENT_COMPRESS)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
 	}

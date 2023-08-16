@@ -253,6 +253,8 @@ std::vector<query_spec> queries_set1 {
 	std::make_tuple<std::string, int>("SELECT NULL AS a", 0, 1),
 	std::make_tuple<std::string, int>("SELECT NULL+2 AS a, 'hello', NULL+1, 'world', NULL AS b", 0, 1),
 	std::make_tuple<std::string, int>("SELECT CONCAT('AAA',NULL)", 0, 1),
+	std::make_tuple<std::string, int>("SELECT CAST(-1234.1234, 'Decimal32(3)')", 0, 1),
+	std::make_tuple<std::string, int>("SELECT CAST(1000.0, 'Decimal128(3)')", 0, 1),
 	std::make_tuple<std::string, int>("DROP TABLE IF EXISTS table1", 0, -1),
 	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 0, -1),
 	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 1148, -1), // the second time it must fails
@@ -404,6 +406,7 @@ int main(int argc, char** argv) {
 		set_clickhouse_port(proxysql_admin,8000);
 		test_crash(host_port.first.c_str(), host_port.second);
 		set_clickhouse_port(proxysql_admin,19000);
+//		set_clickhouse_port(proxysql_admin,9000);
 
 		MYSQL* proxysql_clickhouse = mysql_init(NULL);
 
@@ -497,8 +500,7 @@ int main(int argc, char** argv) {
 		// NOTE: Wait for ProxySQL to reconfigure, changing Clickhous interface.
 		// Trying to perform a connection immediately after changing the
 		// interface could lead to 'EADDRINUSE' in ProxySQL side.
-		// UPDATE: Timeout increased to '5' seconds to avoid previously described issue.
-		sleep(5);
+		sleep(1);
 
 		// Connect to the new interface
 		std::pair<std::string, int> new_host_port {};

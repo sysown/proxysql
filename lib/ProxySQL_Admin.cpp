@@ -4561,6 +4561,14 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __run_query;
 	}
 
+	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
+	if (!strncasecmp("SELECT $$", query_no_space, strlen("SELECT $$"))) {
+		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
+		SPA->send_MySQL_ERR(&sess->client_myds->myprot, const_cast<char*>(err_info.second), err_info.first);
+		run_query=false;
+		goto __run_query;
+	}
+
 	if (query_no_space_length==SELECT_VERSION_COMMENT_LEN) {
 		if (!strncasecmp(SELECT_VERSION_COMMENT, query_no_space, query_no_space_length)) {
 			l_free(query_length,query);
@@ -11166,14 +11174,14 @@ void ProxySQL_Admin::send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows) 
 	myds->DSS=STATE_SLEEP;
 }
 
-void ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg) {
+void ProxySQL_Admin::send_MySQL_ERR(MySQL_Protocol *myprot, char *msg, uint32_t code) {
 	assert(myprot);
 	MySQL_Data_Stream *myds=myprot->get_myds();
 	myds->DSS=STATE_QUERY_SENT_DS;
 	char *a = (char *)"ProxySQL Admin Error: ";
 	char *new_msg = (char *)malloc(strlen(msg)+strlen(a)+1);
 	sprintf(new_msg, "%s%s", a, msg);
-	myprot->generate_pkt_ERR(true,NULL,NULL,1,1045,(char *)"28000",new_msg);
+	myprot->generate_pkt_ERR(true,NULL,NULL,1,code,(char *)"28000",new_msg);
 	free(new_msg);
 	myds->DSS=STATE_SLEEP;
 }
