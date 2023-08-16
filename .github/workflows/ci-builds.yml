@@ -79,7 +79,6 @@ jobs:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}
         path: |
           proxysql/src/
-          proxysql/lib/
           proxysql/test/
           proxysql/tap-matrix.*
           
