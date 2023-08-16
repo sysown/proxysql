@@ -18,15 +18,6 @@
 using std::string;
 using namespace nlohmann;
 
-void parse_result_json_column(MYSQL_RES *result, json& j) {
-	if(!result) return;
-	MYSQL_ROW row;
-
-	while ((row = mysql_fetch_row(result))) {
-		j = json::parse(row[0]);
-	}
-}
-
 std::vector<std::string> select_queries {
 	"select @@session.autocommit,         @@session.big_tables, @@autocommit,@@bulk_insert_buffer_size,     @@character_set_database,@@transaction_isolation,    @@version,@@session.transaction_isolation",
 	"select  @@autocommit, @@sql_mode,        @@big_tables,    @@autocommit,@@bulk_insert_buffer_size,     @@character_set_database,@@session.transaction_isolation,    @@version,@@transaction_isolation",
@@ -53,11 +44,7 @@ int check_multiplexing_disabled(const CommandLine& cl, const std::string query, 
 	MYSQL_RES* dummy_res = mysql_store_result(proxysql_mysql);
 	mysql_free_result(dummy_res);
 
-	MYSQL_QUERY(proxysql_mysql, "PROXYSQL INTERNAL SESSION");
-	json j_status {};
-	MYSQL_RES* int_session_res = mysql_store_result(proxysql_mysql);
-	parse_result_json_column(int_session_res, j_status);
-	mysql_free_result(int_session_res);
+	json j_status = fetch_internal_session(proxysql_mysql);
 
 	if (j_status.contains("backends")) {
 		for (auto& backend : j_status["backends"]) {
