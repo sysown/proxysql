@@ -1,4 +1,4 @@
-@@ -526,12 +526,19 @@
+@@ -529,12 +529,19 @@
    memset(buf, 0, size);
    if (userdata)
      strncpy(buf, (char *)userdata, size);
@@ -18,7 +18,7 @@
    char *certfile= mysql->options.ssl_cert,
         *keyfile= mysql->options.ssl_key;
    char *pw= (mysql->options.extension) ?
-@@ -653,12 +660,13 @@
+@@ -656,12 +663,13 @@
    if (!(ctx= SSL_CTX_new(SSLv23_client_method())))
  #endif
      goto error;
