@@ -18,6 +18,17 @@
 #define N_ITERATION_2  2
 #define N_ITERATION_3  3
 
+MARIADB_CHARSET_INFO * proxysqlTap_find_charset_collate(const char *collatename) {
+	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
+	do {
+		if (!strcasecmp(c->name, collatename)) {
+			return c;
+		}
+		++c;
+	} while (c[0].nr != 0);
+	return NULL;
+}
+
 /**
  * @brief Creates a different MYSQL connection for each supplied collation. Logs in case of a
  *  failure creating a connection.

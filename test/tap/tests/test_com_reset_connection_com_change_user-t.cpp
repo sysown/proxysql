@@ -40,6 +40,17 @@ const std::vector<std::string> tracked_variables {
 	"wsrep_sync_wait"
 };
 
+MARIADB_CHARSET_INFO * proxysqlTap_find_charset_collate(const char *collatename) {
+	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
+	do {
+		if (!strcasecmp(c->name, collatename)) {
+			return c;
+		}
+		++c;
+	} while (c[0].nr != 0);
+	return NULL;
+}
+
 void variable_rows_to_json(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
