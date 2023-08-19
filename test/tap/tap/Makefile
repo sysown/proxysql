@@ -38,13 +38,13 @@ OPT=-O2
 debug: OPT = -O0 -DDEBUG -ggdb
 debug: libtap.a libtap.so
 
-command_line.o: command_line.cpp
+command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	g++ -fPIC -c command_line.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
-utils.o: utils.cpp
+utils.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	g++ -fPIC -c utils.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
-tap.o: tap.cpp
+tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	g++ -fPIC -c tap.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
 libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
