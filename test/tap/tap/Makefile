@@ -50,7 +50,7 @@ tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
 
-libtap.so: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o command_line.o utils.o cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
+libtap.so: libtap.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
 	gcc -shared -o libtap.so -Wl,--whole-archive libtap.a ../../../deps/curl/curl/lib/.libs/libcurl.a ../../../deps/libssl/openssl/libcrypto.a ../../../deps/libssl/openssl/libssl.a -Wl,--no-whole-archive
 
 libssl.so.3:
