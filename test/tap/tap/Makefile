@@ -25,7 +25,7 @@ LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 INCLUDEDIRS=-I$(IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR} -I$(DOTENV_IDIR)
 
 .PHONY: all
-all: libtap.a libtap.so
+all: libtap.a libtap.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
 
 .PHONY: clean
 clean:
@@ -52,6 +52,15 @@ libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o 
 
 libtap.so: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o command_line.o utils.o cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
 	gcc -shared -o libtap.so -Wl,--whole-archive libtap.a ../../../deps/curl/curl/lib/.libs/libcurl.a ../../../deps/libssl/openssl/libcrypto.a ../../../deps/libssl/openssl/libssl.a -Wl,--no-whole-archive
+
+libssl.so.3:
+	ln -s $(DEPS_PATH)/libssl/openssl/libssl.so.3
+
+libcrypto.so.3:
+	ln -s $(DEPS_PATH)/libssl/openssl/libcrypto.so.3
+
+libcpp_dotenv.so: cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
+	ln -s ./cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so .
 
 cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
