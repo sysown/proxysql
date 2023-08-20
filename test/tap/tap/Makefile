@@ -36,7 +36,7 @@ clean:
 OPT=-O2
 
 debug: OPT = -O0 -DDEBUG -ggdb
-debug: libtap.a libtap.so
+debug: libtap.a libtap.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
 
 command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	g++ -fPIC -c command_line.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
