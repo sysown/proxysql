@@ -38,27 +38,27 @@ OPT=-O2
 debug: OPT = -O0 -DDEBUG -ggdb
 debug: libtap.a libtap.so
 
-command_line.o: command_line.cpp
+command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	g++ -fPIC -c command_line.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
-utils.o: utils.cpp
+utils.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	g++ -fPIC -c utils.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
-tap.o: tap.cpp
+tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	g++ -fPIC -c tap.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
 libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o $$(find $(DOTENV_DIR)/ -name '*.o')
+	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
 
 libtap.so: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o command_line.o utils.o cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
-	g++ -shared -o libtap.so tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
+	gcc -shared -o libtap.so -Wl,--whole-archive libtap.a ../../../deps/curl/curl/lib/.libs/libcurl.a ../../../deps/libssl/openssl/libcrypto.a ../../../deps/libssl/openssl/libssl.a -Wl,--no-whole-archive
 
 cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
 	cd cpp-dotenv/static && tar -zxf ../cpp-dotenv-*.tar.gz
 	cd cpp-dotenv/static/cpp-dotenv && patch src/dotenv.cpp < ../../dotenv.cpp.patch
 	cd cpp-dotenv/static/cpp-dotenv && patch include/dotenv.h < ../../dotenv.h.patch
-	cd cpp-dotenv/static/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Debug
+	cd cpp-dotenv/static/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Debug
 	cd cpp-dotenv/static/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
 
 cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so:

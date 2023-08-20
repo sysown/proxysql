@@ -26,10 +26,9 @@ LIBCONFIG_PATH=$(DEPS_PATH)/libconfig/libconfig
 LIBCONFIG_IDIR=$(LIBCONFIG_PATH)/lib
 LIBCONFIG_LDIR=-L$(LIBCONFIG_PATH)/lib/.libs
 
-# Disabling CURL , we will use the OS one
-#CURL_DIR=$(DEPS_PATH)/curl/curl
-#CURL_IDIR=$(CURL_DIR)/include
-#CURL_LDIR=$(CURL_DIR)/lib/.libs
+CURL_DIR=$(DEPS_PATH)/curl/curl
+CURL_IDIR=$(CURL_DIR)/include
+CURL_LDIR=$(CURL_DIR)/lib/.libs
 
 DAEMONPATH=$(DEPS_PATH)/libdaemon/libdaemon
 DAEMONPATH_IDIR=$(DAEMONPATH)
@@ -72,7 +71,8 @@ TAP_LIBDIR=../tap
 
 DOTENV_DYN_DIR=../tap/cpp-dotenv/dynamic/cpp-dotenv
 DOTENV_DYN_IDIR=$(DOTENV_DYN_DIR)/include
-DOTENV_DYN_LDIR=$(DOTENV_DYN_DIR)
+#DOTENV_DYN_LDIR=$(DOTENV_DYN_DIR)
+DOTENV_DYN_LDIR=$(TAP_LIBDIR)
 
 LIBPROXYSQLAR=$(LDIR)/libproxysql.a
 
@@ -82,8 +82,8 @@ EXECUTABLE=proxysql
 
 OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o ../../../src/obj/proxy_tls.o
 
-INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR) -I$(DOTENV_DYN_IDIR)
-LDIRS=-L$(TAP_LIBDIR) -L$(DOTENV_DYN_LDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
+INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR) -I$(DOTENV_DYN_IDIR)
+LDIRS=-L$(TAP_LIBDIR) -L$(DOTENV_DYN_LDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR)
 
 UNAME_S := $(shell uname -s)
 
@@ -91,7 +91,8 @@ ifeq ($(UNAME_S),Linux)
 	LDIRS+= -L$(COREDUMPER_LDIR)
 endif
 
-MYLIBS=-Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -lcurl -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
+#MYLIBS=-Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 MYLIBSJEMALLOC=-Wl,-Bstatic -ljemalloc
 STATIC_LIBS= $(CITYHASH_LDIR)/libcityhash.a
 #STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a $(CITYHASH_LDIR)/libcityhash.a
@@ -209,7 +210,7 @@ reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cp
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
 	$(CXX) -DLIBMYSQL_HELPER -DDEBUG reg_test_3504-change_user_helper.cpp -I/usr/include/mysql -I$(SQLITE3_DIR) -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"
 
-CUSTOMARGS=-DGITVERSION=\"$(GIT_VERSION)\" -I$(SQLITE3_DIR) -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -Wl,-Bstatic -ltap -lcurl -Wl,-Bdynamic -lpthread -std=c++11 -ldl
+CUSTOMARGS=-DGITVERSION=\"$(GIT_VERSION)\" -I$(SQLITE3_DIR) -I$(IDIR) -I$(CURL_IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -L$(CURL_LDIR) -Wl,-Bstatic -lcurl -Wl,-Bdynamic -ltap -lcpp_dotenv -lpthread -std=c++11 -lz -ldl
 
 test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp
 	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o test_clickhouse_server_libmysql-t
