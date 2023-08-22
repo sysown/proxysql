@@ -51,10 +51,13 @@ jobs:
       run: |
         cd proxysql/
         if [[ "${{ matrix.type }}" =~ "-tap" ]]; then
+          # prebuild dependencies without debug
+          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
+          make ${{ matrix.dist }} | tee ../build-deps.log
           # build tap tests
           sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug'" docker-compose.yml
-          make ${{ matrix.dist }}-dbg | tee ../build.log
+          make ${{ matrix.dist }}-dbg | tee ../build-tap.log
           echo "[ "$(find test/tap/tests/ -type f -name '*-t' -executable -printf "'%f', ")" ]" > tap-matrix.json
           find test/tap/tests/ -type f -name '*-t' -executable -printf "%f\n" > tap-matrix.txt
         elif [[ "${{ matrix.type }}" =~ "-test" ]]; then
@@ -69,7 +72,7 @@ jobs:
     - name: Check build
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
-        grep 'exited with code 0' build.log || exit 1
+        grep 'exited with code 0' build*.log || exit 1
 
     - name: Cache save
       id: cache-save
