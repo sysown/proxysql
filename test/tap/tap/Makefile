@@ -36,15 +36,15 @@ clean:
 OPT=-O2
 
 debug: OPT = -O0 -DDEBUG -ggdb
-debug: libtap.a libtap.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
+debug: libtap.a libtap.so
 
-command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
 	g++ -fPIC -c command_line.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
-utils.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+utils.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
 	g++ -fPIC -c utils.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
-tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
+tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
 	g++ -fPIC -c tap.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
 
 libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
@@ -53,14 +53,17 @@ libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o 
 libtap.so: libtap.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
 	gcc -shared -o libtap.so -Wl,--whole-archive libtap.a ../../../deps/curl/curl/lib/.libs/libcurl.a ../../../deps/libssl/openssl/libcrypto.a ../../../deps/libssl/openssl/libssl.a -Wl,--no-whole-archive
 
-libssl.so.3:
-	ln -s $(DEPS_PATH)/libssl/openssl/libssl.so.3
+libssl.so.3: $(DEPS_PATH)/libssl/openssl/libssl.so.3
+	cp -a $(DEPS_PATH)/libssl/openssl/libssl.so* .
 
-libcrypto.so.3:
-	ln -s $(DEPS_PATH)/libssl/openssl/libcrypto.so.3
+libcrypto.so.3: $(DEPS_PATH)/libssl/openssl/libcrypto.so.3
+	cp -a $(DEPS_PATH)/libssl/openssl/libcrypto.so* .
 
 libcpp_dotenv.so: cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
-	ln -s ./cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so .
+	cp -a $< .
+
+libcurl.so: $(DEPS_PATH)/curl/curl/lib/.libs/libcurl.so
+	cp -a $(DEPS_PATH)/curl/curl/lib/.libs/libcurl.so* .
 
 cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv/static && rm -rf cpp-dotenv-*/ || true
