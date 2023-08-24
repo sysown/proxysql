@@ -202,3 +202,5 @@ jobs:
           proxysql/ci_gcov_logs/
           proxysql/ci_infra_logs/
           proxysql/ci_tests_logs/
+          proxysql/test/
+          
