@@ -171,8 +171,7 @@ jobs:
         
         source ./env.sh
         env | sort
-        ldconfig -v
-        sudo -E ./test-scripts/bin/proxysql-tester.py
+        sudo -E -- ldconfig -v ${{ github.workspace }}/test/tap/tap; ./test-scripts/bin/proxysql-tester.py
         RC=$?
         
         exit $RC
