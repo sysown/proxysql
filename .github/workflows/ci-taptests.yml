@@ -171,6 +171,7 @@ jobs:
         
         source ./env.sh
         env | sort
+        ldconfig -v
         sudo -E ./test-scripts/bin/proxysql-tester.py
         RC=$?
         
