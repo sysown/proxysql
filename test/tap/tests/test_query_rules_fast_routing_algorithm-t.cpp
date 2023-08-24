@@ -246,7 +246,7 @@ int test_fast_routing_algorithm(
 	if (c_err) { return EXIT_FAILURE; }
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-	usleep(100*1000);
+	usleep(1000*1000);
 
 	// Seek end of file for error log
 	errlog.seekg(0, std::ios::end);
@@ -289,7 +289,7 @@ int test_fast_routing_algorithm(
 	MYSQL_QUERY_T(admin, ("SET mysql-query_rules_fast_routing_algorithm=" + std::to_string(new_algo)).c_str());
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	usleep(100*1000);
+	usleep(1000*1000);
 
 	// Seek end of file for error log
 	errlog.seekg(0, std::ios::end);
