@@ -59,7 +59,7 @@ int create_connections(const conn_opts_t& conn_opts, uint32_t cons_num, std::vec
 const uint32_t ADMIN_CONN_NUM = 100;
 const uint32_t MYSQL_CONN_NUM = 100;
 const uint32_t REPORT_INTV_SEC = 5;
-const double MAX_ALLOWED_CPU_USAGE = 12.0;
+const double MAX_ALLOWED_CPU_USAGE = 11.0;
 
 int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& idle_cpu_ms, double& final_cpu_ms) {
 	// get ProxySQL idle cpu usage
