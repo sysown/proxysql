@@ -171,7 +171,9 @@ jobs:
         
         source ./env.sh
         env | sort
-        sudo -E -- export LD_LIBRARY_PATH=${{ github.workspace }}/test/tap/tap; ./test-scripts/bin/proxysql-tester.py
+        #sudo -E -- export LD_LIBRARY_PATH=${{ github.workspace }}/test/tap/tap; ./test-scripts/bin/proxysql-tester.py
+        cp -v ${{ github.workspace }}/test/tap/tap/*.so ${{ github.workspace }}/test/tap/tests
+        ./test-scripts/bin/proxysql-tester.py
         RC=$?
         
         exit $RC
