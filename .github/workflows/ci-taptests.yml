@@ -172,7 +172,7 @@ jobs:
         source ./env.sh
         #env | sort
         #sudo -E -- export LD_LIBRARY_PATH=${{ github.workspace }}/test/tap/tap; ./test-scripts/bin/proxysql-tester.py
-        find ${{ github.workspace }}/test/tap/tap/ -L -name '*.so' -print -exec cp -v {} ${{ github.workspace }}/test/tap/tests \;
+        find -L ${{ github.workspace }}/test/tap/tap/ -name '*.so' -print -exec cp -v {} ${{ github.workspace }}/test/tap/tests \;
         ./test-scripts/bin/proxysql-tester.py
         RC=$?
         
