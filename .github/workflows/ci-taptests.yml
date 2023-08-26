@@ -169,8 +169,8 @@ jobs:
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
 
-        echo "${{ github.workspace }}/jenkins/scripts/test-scripts/deps/" > /etc/ld.so.conf.d/proxysql_tap_tests.conf
-        echo "${{ github.workspace }}/proxysql/tap/tap/" >> /etc/ld.so.conf.d/proxysql_tap_tests.conf
+        echo "${{ github.workspace }}/jenkins-build-scripts/test-scripts/deps/" > /etc/ld.so.conf.d/proxysql_tap_tests.conf
+        echo "${{ github.workspace }}/proxysql/test/tap/tap/" >> /etc/ld.so.conf.d/proxysql_tap_tests.conf
         ldconfig -v
         
         source ./env.sh
