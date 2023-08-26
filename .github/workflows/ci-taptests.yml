@@ -171,7 +171,8 @@ jobs:
 
         echo "${{ github.workspace }}/jenkins-build-scripts/test-scripts/deps/" > /etc/ld.so.conf.d/proxysql_tap_tests.conf
         echo "${{ github.workspace }}/proxysql/test/tap/tap/" >> /etc/ld.so.conf.d/proxysql_tap_tests.conf
-        ldconfig -v
+        sudo chown root:root /etc/ld.so.conf.d/proxysql_tap_tests.conf
+        sudo ldconfig -v
         
         source ./env.sh
         #env | sort
