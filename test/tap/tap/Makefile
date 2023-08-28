@@ -60,7 +60,8 @@ libcrypto.so.3: $(DEPS_PATH)/libssl/openssl/libcrypto.so.3
 	cp -a $(DEPS_PATH)/libssl/openssl/libcrypto.so* .
 
 libcpp_dotenv.so: cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
-	cp -a $< .
+#	cp -a $< .
+	find cpp-dotenv/dynamic/cpp-dotenv/ -name '*.so' -exec cp -a {} . \;
 
 libcurl.so: $(DEPS_PATH)/curl/curl/lib/.libs/libcurl.so
 	cp -a $(DEPS_PATH)/curl/curl/lib/.libs/libcurl.so* .
