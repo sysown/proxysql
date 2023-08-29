@@ -297,7 +297,6 @@ int check_backend_conns(
 					" AND schema='backend_conn_ping_test'"
 					" AND srv_port IN (" + srv_ports + ")"
 			};
-
 			q_res = get_query_result(admin, proxy_query, act_proxy_free_conn_count);
 			if (q_res != EXIT_SUCCESS) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "get_query_result() failed");
