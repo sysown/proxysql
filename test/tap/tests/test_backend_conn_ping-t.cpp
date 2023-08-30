@@ -316,7 +316,16 @@ int check_backend_conns(
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "get_query_result() failed");
 				break;
 			}
-
+			{
+				string query = "SELECT hostgroup , srv_host , srv_port , status , ConnUsed , ConnFree , ConnOK , ConnERR FROM stats_mysql_connection_pool";
+				diag("Line:%d : Running: %s", __LINE__ , query.c_str());
+				MYSQL_QUERY(admin, query.c_str());
+				MYSQL_RES* result = mysql_store_result(admin);
+				while (MYSQL_ROW row = mysql_fetch_row(result)) {
+					diag("%s , %s , %s , %s , %s , %s , %s , %s", row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7]);
+				}
+				mysql_free_result(result);
+			}
 			const string proxy_used_query {
 				"SELECT ConnUsed from stats_mysql_connection_pool WHERE hostgroup=" + std::to_string(hg)
 			};
