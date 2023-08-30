@@ -271,17 +271,17 @@ int check_backend_conns(
 			// Reset the previous value
 			act_mysql_conn_count = 0;
 
-			const string mysql_query {
+			const string mysql_query_string {
 				"SELECT count(*) FROM information_schema.processlist WHERE"
 					" USER=\"" + string { cl.username } + "\""
 					//" USER=\"" + string { cl.username } + "\" and DB=\"backend_conn_ping_test\""
 					//" COMMAND=\"Sleep\" and USER=\"" + string { cl.username } + "\" and DB=\"backend_conn_ping_test\""
 			};
-			diag("Line:%d : Running: %s", __LINE__ , mysql_query.c_str());
+			diag("Line:%d : Running: %s", __LINE__ , mysql_query_string.c_str());
 			for (MYSQL* mysql : svrs_conns) {
 				uint64_t tmp_mysql_conn_count = 0;
 
-				int q_res = get_query_result(mysql, mysql_query, tmp_mysql_conn_count);
+				int q_res = get_query_result(mysql, mysql_query_string, tmp_mysql_conn_count);
 				if (q_res != EXIT_SUCCESS) {
 					fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "get_query_result() failed");
 					break;
