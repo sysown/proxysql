@@ -254,7 +254,7 @@ int check_backend_conns(
 		uint64_t act_proxy_used_conn_count = 0;
 
 		uint32_t total_wait_time = 40;
-		uint32_t intv = 5;
+		uint32_t intv = 10;
 		uint32_t total_checks = total_wait_time / intv;
 
 		for (uint32_t check_num = 0; check_num < total_checks; check_num++) {
