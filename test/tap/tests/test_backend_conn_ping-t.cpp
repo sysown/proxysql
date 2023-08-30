@@ -273,7 +273,8 @@ int check_backend_conns(
 
 			const string mysql_query {
 				"SELECT count(*) FROM information_schema.processlist WHERE"
-					" USER=\"" + string { cl.username } + "\" and DB=\"backend_conn_ping_test\""
+					" USER=\"" + string { cl.username } + "\""
+					//" USER=\"" + string { cl.username } + "\" and DB=\"backend_conn_ping_test\""
 					//" COMMAND=\"Sleep\" and USER=\"" + string { cl.username } + "\" and DB=\"backend_conn_ping_test\""
 			};
 			diag("Line:%d : Running: %s", __LINE__ , mysql_query.c_str());
@@ -327,13 +328,18 @@ int check_backend_conns(
 				check_num, exp_conn_count, act_mysql_conn_count, act_proxy_free_conn_count, act_proxy_used_conn_count
 			);
 
+			diag("check_num = %u", check_num);
+			diag("exp_conn_count = %lu", exp_conn_count);
+			diag("act_mysql_conn_count = %lu", act_mysql_conn_count);
+			diag("act_proxy_free_conn_count = %lu", act_proxy_free_conn_count);
+			diag("act_proxy_used_conn_count = %lu", act_proxy_used_conn_count);
+
 			if (
 				act_mysql_conn_count >= exp_conn_count ||
 				(act_proxy_free_conn_count + act_proxy_used_conn_count + SESSIONS_FOR_CONNECTIONS_HANDLER) >= exp_conn_count
 			) {
 				break;
 			}
-
 			if (intv) {
 				diag("Line:%d : Sleeping %d" , __LINE__ , intv);
 				sleep(intv);
