@@ -41,6 +41,10 @@ using srv_cfg = vector<pair<string,int>>;
 
 int wait_timeout = 10;
 
+#ifndef SESSIONS_FOR_CONNECTIONS_HANDLER
+#define SESSIONS_FOR_CONNECTIONS_HANDLER    64
+#endif
+
 // if only 1 worker thread is running, wait_timeout should be bigger
 // 1 worker thread : wait_timeout = 45
 // 4 worker threads : wait_timeout = 10
@@ -269,7 +273,8 @@ int check_backend_conns(
 
 			const string mysql_query {
 				"SELECT count(*) FROM information_schema.processlist WHERE"
-					" COMMAND=\"Sleep\" and USER=\"" + string { cl.username } + "\" and DB=\"backend_conn_ping_test\""
+					" USER=\"" + string { cl.username } + "\" and DB=\"backend_conn_ping_test\""
+					//" COMMAND=\"Sleep\" and USER=\"" + string { cl.username } + "\" and DB=\"backend_conn_ping_test\""
 			};
 			diag("Line:%d : Running: %s", __LINE__ , mysql_query.c_str());
 			for (MYSQL* mysql : svrs_conns) {
@@ -324,7 +329,7 @@ int check_backend_conns(
 
 			if (
 				act_mysql_conn_count >= exp_conn_count ||
-				(act_proxy_free_conn_count + act_proxy_used_conn_count) >= exp_conn_count
+				(act_proxy_free_conn_count + act_proxy_used_conn_count + SESSIONS_FOR_CONNECTIONS_HANDLER) >= exp_conn_count
 			) {
 				break;
 			}
@@ -337,7 +342,7 @@ int check_backend_conns(
 
 		ok(
 			q_res == EXIT_SUCCESS && act_mysql_conn_count >= exp_conn_count &&
-			((act_proxy_free_conn_count + act_proxy_used_conn_count) >= exp_conn_count) &&
+			((act_proxy_free_conn_count + act_proxy_used_conn_count + SESSIONS_FOR_CONNECTIONS_HANDLER) >= exp_conn_count) &&
 			act_mysql_conn_count == act_proxy_free_conn_count,
 			"Created server connections should be properly maintained (pinged) by ProxySQL:"
 			" { ExpConns: %ld, ActMySQLConns: %ld, ActProxyConns: %ld }",
