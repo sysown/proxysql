@@ -204,13 +204,13 @@ setparser_test3-t: setparser_test3
 setparser_test3: setparser_test3.cpp $(TAP_LIBDIR)/libtap.a $(LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
 	g++ -DDEBUG -DPARSERDEBUG setparser_test3.cpp $(LDIR)/set_parser.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) $(WASAN) $(LIBCOREDUMPERAR) -o setparser_test3 -DGITVERSION=\"$(GIT_VERSION)\"
 
-reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp
+CUSTOMARGS=-DGITVERSION=\"$(GIT_VERSION)\" -I$(SQLITE3_DIR) -I$(IDIR) -I$(CURL_IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -L$(CURL_LDIR) -Wl,-Bstatic -lcurl -Wl,-Bdynamic -ltap -lcpp_dotenv -lpthread -std=c++11 -lz -ldl
+
+reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp $(TAP_LIBDIR)/libtap.so
 	$(CXX) -DDEBUG reg_test_3504-change_user_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -std=c++11 $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"
 
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
-	$(CXX) -DLIBMYSQL_HELPER -DDEBUG reg_test_3504-change_user_helper.cpp -I/usr/include/mysql -I$(SQLITE3_DIR) -I$(IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -lpthread -ldl -std=c++11 -ltap -lmysqlclient -o reg_test_3504-change_user_libmysql_helper -DGITVERSION=\"$(GIT_VERSION)\"
-
-CUSTOMARGS=-DGITVERSION=\"$(GIT_VERSION)\" -I$(SQLITE3_DIR) -I$(IDIR) -I$(CURL_IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -L$(CURL_LDIR) -Wl,-Bstatic -lcurl -Wl,-Bdynamic -ltap -lcpp_dotenv -lpthread -std=c++11 -lz -ldl
+	$(CXX) -DLIBMYSQL_HELPER reg_test_3504-change_user_helper.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o reg_test_3504-change_user_libmysql_helper
 
 test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp
 	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o test_clickhouse_server_libmysql-t
