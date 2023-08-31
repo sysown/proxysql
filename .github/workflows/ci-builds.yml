@@ -5,7 +5,7 @@ on:
   workflow_call:
 
 concurrency:
-  group: ci_builds-${{ github.ref_name }}
+  group: ci_builds-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
