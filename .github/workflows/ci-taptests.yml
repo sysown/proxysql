@@ -137,6 +137,7 @@ jobs:
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
+        
         ./cluster_start.bash
         sleep 10
         
@@ -147,7 +148,7 @@ jobs:
 
         (./proxysql --clickhouse-server --sqlite3-server --idle-threads -f -c "$DOCKER_SCRIPT_PATH/conf/proxysql/proxysql.cnf" -D $REGULAR_INFRA_DATADIR &> $REGULAR_INFRA_DATADIR/proxysql.log) &
         sleep 10
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();"
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" | grep -v "Using a password"
         
         cd ${{ github.workspace }}/jenkins-build-scripts
         ./cluster_init.bash
@@ -170,19 +171,10 @@ jobs:
 
     - name: TAP-tests
       run: |
-        set +e
-        cd ${{ github.workspace }}/proxysql/test/tap/tests
-        ./reg_test_3504-change_user_libmysql_helper
-        
+        set +e        
         cd ${{ github.workspace }}/jenkins-build-scripts
-        
-        #sudo sh -c 'echo "${{ github.workspace }}/jenkins-build-scripts/test-scripts/deps/" > /etc/ld.so.conf.d/proxysql_tap_tests.conf'
-        #sudo sh -c 'echo "${{ github.workspace }}/proxysql/test/tap/tap/" >> /etc/ld.so.conf.d/proxysql_tap_tests.conf'
-        #sudo chown root:root /etc/ld.so.conf.d/proxysql_tap_tests.conf
-        #sudo ldconfig -v
-        
         source ./env.sh
-        #env | sort
+        
         sudo -E ./test-scripts/bin/proxysql-tester.py
         RC=$?
         
@@ -194,17 +186,21 @@ jobs:
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
+        
         mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
         sleep 10
         killall proxysql
-
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
+        ./docker-compose-destroy.bash
+        
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
         sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
         ./docker-compose-destroy.bash
         
         sudo chmod -R 777 ${{ github.workspace }}/*
         echo "${{ matrix.testgroup }}" | tr -d '*|' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
-        
+
     - name: Archive artifacts
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
