@@ -33,11 +33,9 @@ jobs:
       id: cache-check
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
         lookup-only: true
         path: |
-          proxysql/src/
-          proxysql/test/
           proxysql/tap-matrix.*
 
     - name: Checkout repository
@@ -76,16 +74,34 @@ jobs:
     - name: Check build
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
-        grep 'exited with code 0' build*.log || exit 1
+        for LOG in build*.log ; do
+          grep 'exited with code 0' ${LOG} || exit 1
+        done
 
-    - name: Cache save
-      id: cache-save
+    - name: Cache save src
+      id: cache-save-src
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
       uses: actions/cache/save@v3
       with:
-        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}
+        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_src
         path: |
           proxysql/src/
+
+    - name: Cache save test
+      id: cache-save-test
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
+      uses: actions/cache/save@v3
+      with:
+        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_test
+        path: |
           proxysql/test/
+
+    - name: Cache save matrix
+      id: cache-save-matrix
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
+      uses: actions/cache/save@v3
+      with:
+        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_matrix
+        path: |
           proxysql/tap-matrix.*
           
