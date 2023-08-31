@@ -73,7 +73,7 @@ jobs:
     - name: Configure test/env.sh
       run: |
         cd proxysql
-        mkdir proxysql/test
+        mkdir test
         # select tests
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=1" >> test/env.sh
