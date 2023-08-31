@@ -53,9 +53,9 @@ jobs:
         # apply patches
         for PATCH in $(cd jenkins-build-scripts/test-scripts/patches; find . -type f); do
           if [[ $PATCH =~ \.patch ]]; then
-            patch proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
+            patch --verbose proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
           elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
-            cp jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
+            cp -v jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
           fi
         done
 
