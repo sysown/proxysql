@@ -100,7 +100,7 @@ jobs:
         #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
         echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
         #echo 'export' >> test/env.sh
-        cat test/env.sh
+        #cat test/env.sh
 
     - name: Run proxysql
       run: |
