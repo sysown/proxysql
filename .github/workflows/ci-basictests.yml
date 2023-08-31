@@ -131,7 +131,6 @@ jobs:
         source ./env.sh
         
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
-        #docker-compose up -d
         ./docker-compose-init.bash
         
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
@@ -149,12 +148,27 @@ jobs:
         RC=$?
         
         exit $RC
-        
-    - name: Fix premissions
+
+    - name: Cleanup
       if: ${{ always() }}
       run: |
-        sudo chmod -R 777 ${{ github.workspace }}/*
+        set +e
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
+        sleep 10
+        killall proxysql
         
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
+        ./docker-compose-destroy.bash
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
+        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
+        ./docker-compose-destroy.bash
+        
+        sudo chmod -R 777 ${{ github.workspace }}/*
+        echo "${{ matrix.testgroup }}" | tr -d '*|' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
+
     - name: Archive artifacts
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
