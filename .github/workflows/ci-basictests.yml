@@ -1,26 +1,11 @@
 name: CI-basictests
 
 on:
-#  push:
-#    branches: [ "v2.x" ]
-#    paths-ignore:
-#    - '.github/**'
-#    - '**.md'
-#  pull_request:
-#    branches: [ "v2.x" ]
-#    paths-ignore:
-#    - '.github/**'
-#    - '**.md'
-#  schedule:
-#    - cron: '15 13 * * 3'
   workflow_dispatch:
   workflow_call:
 
-#concurrency:
-#  group: ${{ github.workflow }}-${{ github.ref_name }}
-#  cancel-in-progress: true
-
 jobs:
+
   tests:
     runs-on: ubuntu-22.04
     steps:
@@ -88,6 +73,7 @@ jobs:
     - name: Configure test/env.sh
       run: |
         cd proxysql
+        mkdir proxysql/test
         # select tests
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=1" >> test/env.sh
