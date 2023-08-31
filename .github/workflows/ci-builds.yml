@@ -47,6 +47,12 @@ jobs:
         fetch-depth: 0
         path: 'proxysql'
 
+#    - name: Set GIT_VERSION
+#      run: |
+#        cd proxysql/
+#        git fetch --tags --force
+#        echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
+
     - name: Patch TAP-tests
       if: ${{ false }}
       run: |
