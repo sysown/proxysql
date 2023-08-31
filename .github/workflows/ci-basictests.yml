@@ -103,11 +103,6 @@ jobs:
         #sed -i "s/TEST_PY_TAP_INCL=.*/TEST_PY_TAP_INCL=\"${{ matrix.testgroup }}\"/" env.sh
         #sed -i "s|TEST_PY_TAP_EXCL=.*|TEST_PY_TAP_EXCL=\"\"|" env.sh
 
-    - name: Docker-hoster
-      run: |
-        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
-        docker-compose up -d
-
     - name: Run proxysql
       run: |
         set -x
