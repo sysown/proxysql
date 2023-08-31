@@ -131,11 +131,6 @@ jobs:
         echo 'export' >> test/env.sh
         cat test/env.sh
 
-    - name: Docker-hoster
-      run: |
-        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
-        docker-compose up -d
-
     - name: Run proxysql
       run: |
         set -x
@@ -162,10 +157,14 @@ jobs:
       run: |
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
-        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
         
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
+        ./docker-compose-init.bash
+
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
         sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
         ./docker-compose-init.bash
+        
         docker ps -a
         cat /etc/hosts
 
