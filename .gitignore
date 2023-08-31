@@ -112,6 +112,8 @@ heaptrack.*
 
 #tap tests
 test/tap/tap/cpp-dotenv/cpp-dotenv-*
+test/tap/tap/cpp-dotenv/static/cpp-dotenv-*
+test/tap/tap/cpp-dotenv/dynamic/cpp-dotenv-*
 *-t
 test/tap/tests/galera_1_timeout_count
 test/tap/tests/galera_2_timeout_no_count

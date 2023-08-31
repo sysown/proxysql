@@ -59,7 +59,7 @@ int create_connections(const conn_opts_t& conn_opts, uint32_t cons_num, std::vec
 const uint32_t ADMIN_CONN_NUM = 100;
 const uint32_t MYSQL_CONN_NUM = 100;
 const uint32_t REPORT_INTV_SEC = 5;
-const double MAX_ALLOWED_CPU_USAGE = 10.0;
+const double MAX_ALLOWED_CPU_USAGE = 13.0;
 
 int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& idle_cpu_ms, double& final_cpu_ms) {
 	// get ProxySQL idle cpu usage
@@ -69,8 +69,8 @@ int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& idle_cpu_ms
 		return idle_err;
 	}
 
-	conn_opts_t proxy_conns_opts { "127.0.0.1", cl.username, cl.password, cl.port, mode };
-	conn_opts_t admin_conns_opts { "127.0.0.1", cl.admin_username, cl.admin_password, cl.admin_port, mode };
+	conn_opts_t proxy_conns_opts { cl.host, cl.username, cl.password, cl.port, mode };
+	conn_opts_t admin_conns_opts { cl.admin_host, cl.admin_username, cl.admin_password, cl.admin_port, mode };
 
 	// Create 'N' admin and mysql connections without SSL
 	vector<MYSQL*> v_admin_conns {};

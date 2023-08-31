@@ -84,7 +84,7 @@ int main(int argc, char** argv) {
 
 	{
 //		const char *q = "SELECT DISTINCT hostgroup_id FROM runtime_mysql_servers WHERE status='ONLINE' AND hostgroup_id IN (0,1,10,11,20,30,31,50,60,1710,1711)";
-		const char *q = "SELECT DISTINCT hostgroup_id FROM runtime_mysql_servers WHERE status='ONLINE'";
+		const char *q = "SELECT DISTINCT hostgroup_id FROM runtime_mysql_servers WHERE status='ONLINE' AND comment LIKE '%mysql%'";
 		diag("Running query: %s", q);
 		MYSQL_QUERY(mysqladmin, q);
 		res = mysql_store_result(mysqladmin);
