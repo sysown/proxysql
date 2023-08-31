@@ -5,7 +5,6 @@ on:
   workflow_call:
 
 jobs:
-
   select:
     runs-on: ubuntu-22.04
     outputs:
