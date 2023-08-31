@@ -45,7 +45,7 @@ jobs:
         
         echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
 
-  test:
+  tests:
     runs-on: ubuntu-22.04
     needs: [ "select" ]
     strategy:
