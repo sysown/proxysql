@@ -13,14 +13,12 @@ jobs:
     steps:
     
     - name: Cache restore
-      id: cache
+      id: cache-matrix
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
         fail-on-cache-miss: true
         path: |
-          proxysql/src/
-          proxysql/test/
           proxysql/tap-matrix.*
 
     - name: Set matrix
@@ -81,16 +79,23 @@ jobs:
         sudo apt-cache policy libmysqlclient-dev
         sudo apt-get install -y --allow-downgrades libmysqlclient-dev=5.7*
 
-    - name: Cache restore
-      id: cache
+    - name: Cache restore src
+      id: cache-src
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_src
         fail-on-cache-miss: true
         path: |
           proxysql/src/
+
+    - name: Cache restore src
+      id: cache-test
+      uses: actions/cache/restore@v3
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_test
+        fail-on-cache-miss: true
+        path: |
           proxysql/test/
-          proxysql/tap-matrix.*
 
     - name: Checkout jenkins_build_scripts
       uses: actions/checkout@v3
@@ -205,10 +210,11 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
           proxysql/ci_gcov_logs/
           proxysql/ci_infra_logs/
           proxysql/ci_tests_logs/
+          proxysql/src/
           proxysql/test/
           
