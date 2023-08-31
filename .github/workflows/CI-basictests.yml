@@ -20,7 +20,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cache:
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
+    secrets: inherit
+
   run:
+    needs: [ "cache" ]
     uses: sysown/proxysql/.github/workflows/ci-basictests.yml@GH-Actions
     secrets: inherit
     
