@@ -109,6 +109,7 @@ jobs:
     - name: Configure env.sh
       run: |
         cd jenkins-build-scripts
+        
         # configure paths
         sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
         sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
@@ -116,6 +117,8 @@ jobs:
     - name: Configure test/env.sh
       run: |
         cd proxysql
+        #mkdir test
+        
         # select tests
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=0" >> test/env.sh
@@ -127,12 +130,13 @@ jobs:
         echo 'export TEST_PY_TAP_INCL="${{ matrix.testgroup }}"' >> test/env.sh
         #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
         echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
-        echo 'export' >> test/env.sh
-        cat test/env.sh
+        echo 'export WITHGCOV=0' >> test/env.sh
+        #echo 'export' >> test/env.sh
+        #cat test/env.sh
 
     - name: Run proxysql
       run: |
-        set -x
+        #set -x
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
@@ -147,7 +151,7 @@ jobs:
 
         (./proxysql --clickhouse-server --sqlite3-server --idle-threads -f -c "$DOCKER_SCRIPT_PATH/conf/proxysql/proxysql.cnf" -D $REGULAR_INFRA_DATADIR &> $REGULAR_INFRA_DATADIR/proxysql.log) &
         sleep 10
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" | grep -v "Using a password"
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v "Using a password"
         
         cd ${{ github.workspace }}/jenkins-build-scripts
         ./cluster_init.bash
