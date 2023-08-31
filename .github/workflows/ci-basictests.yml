@@ -21,7 +21,7 @@ on:
 #  cancel-in-progress: true
 
 jobs:
-  build-n-test:
+  tests:
     runs-on: ubuntu-22.04
     steps:
     
