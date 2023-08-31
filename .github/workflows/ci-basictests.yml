@@ -90,7 +90,7 @@ jobs:
 
     - name: Run proxysql
       run: |
-        set -x
+        #set -x
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
@@ -104,7 +104,7 @@ jobs:
 
         (./proxysql --clickhouse-server --sqlite3-server --idle-threads -f -c "$DOCKER_SCRIPT_PATH/conf/proxysql/proxysql.cnf" -D $REGULAR_INFRA_DATADIR &> $REGULAR_INFRA_DATADIR/proxysql.log) &
         sleep 10
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" | grep -v "Using a password"
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v "Using a password"
         
         cd ${{ github.workspace }}/jenkins-build-scripts
         ./cluster_init.bash
@@ -128,7 +128,7 @@ jobs:
         cd ${{ github.workspace }}/jenkins-build-scripts
         
         source ./env.sh
-        env | sort
+        #env | sort
         sudo -E ./test-scripts/bin/proxysql-tester.py
         RC=$?
         
