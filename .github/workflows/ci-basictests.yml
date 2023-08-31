@@ -58,22 +58,12 @@ jobs:
         # configure paths
         sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
         sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
-        
-        ## select tests
-        #sed -i "s|TEST_PY_INTERNAL=.*|TEST_PY_INTERNAL=0|" env.sh
-        #sed -i "s|TEST_PY_BENCHMARK=.*|TEST_PY_BENCHMARK=1|" env.sh
-        #sed -i "s|TEST_PY_CHUSER=.*|TEST_PY_CHUSER=1|" env.sh
-        #sed -i "s|TEST_PY_STATS=.*|TEST_PY_STATS=0|" env.sh
-        #sed -i "s|TEST_PY_TAP=.*|TEST_PY_TAP=0|" env.sh
-        #sed -i "s|TEST_PY_TAPINT=.*|TEST_PY_TAPINT=0|" env.sh
-        #sed -i "s|TEST_PY_FAILOVER=.*|TEST_PY_FAILOVER=1|" env.sh
-        ##sed -i "s/TEST_PY_TAP_INCL=.*/TEST_PY_TAP_INCL=\"${{ matrix.testgroup }}\"/" env.sh
-        ##sed -i "s|TEST_PY_TAP_EXCL=.*|TEST_PY_TAP_EXCL=\"\"|" env.sh
 
     - name: Configure test/env.sh
       run: |
         cd proxysql
         mkdir test
+        
         # select tests
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=1" >> test/env.sh
@@ -85,6 +75,7 @@ jobs:
         #echo 'export TEST_PY_TAP_INCL="${{ matrix.testgroup }}"' >> test/env.sh
         #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
         echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
+        echo 'export WITHGCOV=0' >> test/env.sh
         #echo 'export' >> test/env.sh
         #cat test/env.sh
 
@@ -94,6 +85,7 @@ jobs:
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
+        
         ./cluster_start.bash
         sleep 10
         
@@ -126,9 +118,8 @@ jobs:
       run: |
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
-        
         source ./env.sh
-        #env | sort
+        
         sudo -E ./test-scripts/bin/proxysql-tester.py
         RC=$?
         
@@ -140,6 +131,7 @@ jobs:
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
+        
         mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
         sleep 10
         killall proxysql
