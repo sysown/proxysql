@@ -45,7 +45,7 @@ jobs:
         set +e
         set -o pipefail
         ulimit -c unlimited
-        cd ${{ github.workspace }}/proxysql
+        cd ${{ github.workspace }}/proxysql/src
 
         mysql -V -vvv
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SELECT version();" 2>&1 | grep -v 'Using a password'
