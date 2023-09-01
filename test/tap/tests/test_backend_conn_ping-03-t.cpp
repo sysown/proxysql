@@ -1,1 +1,0 @@
-test_backend_conn_ping-t.cpp
