@@ -18,10 +18,10 @@ jobs:
         path: |
           proxysql/src/
 
-    - name: Configure
-      run: |
-        cd ${{ github.workspace }}/proxysql
-        mkdir test
+#    - name: Configure
+#      run: |
+#        cd ${{ github.workspace }}/proxysql
+#        mkdir test
 
     - name: Run proxysql
       run: |
@@ -72,10 +72,19 @@ jobs:
         EOF
         RC=$?
         
-        mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "PROXYSQL SHUTDOWN SLOW;" 2>&1 | grep -v 'Using a password'
-        sleep 30
         echo 'DONE'
         exit $RC
+
+    - name: Cleanup
+      if: ${{ always() }}
+      run: |
+        set +e
+        
+        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
+        sleep 10
+        killall proxysql
+        
+        sudo chmod -R 777 ${{ github.workspace }}/*
 
     - name: Archive artifacts
       if: ${{ failure() }}
