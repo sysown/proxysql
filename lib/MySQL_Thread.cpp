@@ -1219,7 +1219,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.session_debug=true;
 #endif /*debug */
 	variables.query_digests_grouping_limit = 3;
-	variables.query_digests_groups_grouping_limit= 0;
+	variables.query_digests_groups_grouping_limit= 10; // changed in 2.6.0 , was 0
 	variables.enable_client_deprecate_eof=true;
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
