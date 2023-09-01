@@ -9,34 +9,44 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+    - name: Cache restore src
+      id: cache-src
+      uses: actions/cache/restore@v3
       with:
-        repository: 'sysown/proxysql'
-#        ref: 'v2.x'
-        fetch-depth: 0
-        path: 'proxysql'
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_src
+        fail-on-cache-miss: true
+        path: |
+          proxysql/src/
 
-    - name: Set GIT_VERSION
+    - name: Configure
       run: |
         cd ${{ github.workspace }}/proxysql
-        git fetch --tags --force
-        echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
+        mkdir test
 
-    - name: Build
+    - name: Run proxysql
       run: |
+        #set -x
+        set +e
+        ulimit -c unlimited
+        
         cd ${{ github.workspace }}/proxysql
-        make ubuntu22-dbg
+        mkdir -p ci_infra_logs/regular_infra/proxysql
+        cd src
+        mkdir coverage_reports
+
+        #(./proxysql --clickhouse-server --sqlite3-server --idle-threads -f -c "$DOCKER_SCRIPT_PATH/conf/proxysql/proxysql.cnf" -D $REGULAR_INFRA_DATADIR &> $REGULAR_INFRA_DATADIR/proxysql.log) &
+        (./proxysql -f --initial --clickhouse --idle-threads -D . &>proxysql.log &)
+        sleep 10
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v 'Using a password'
 
     - name: Self-tests
       run: |
-        cd ${{ github.workspace }}/proxysql
-        ulimit -c unlimited
+        #set -x
         set +e
         set -o pipefail
-        set -x
-        cd src && (./proxysql -f --initial --clickhouse --idle-threads -D . &>proxysql.log &)
-        sleep 30
+        ulimit -c unlimited
+        cd ${{ github.workspace }}/proxysql
+
         mysql -V -vvv
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SELECT version();" 2>&1 | grep -v 'Using a password'
         mysql -uadmin -padmin -h127.0.0.1 -P6032 -vvv -e "SET mysql-verbose_query_error=true;" 2>&1 | grep -v 'Using a password'
