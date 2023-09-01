@@ -49,7 +49,7 @@ jobs:
 
 #    - name: Set GIT_VERSION
 #      run: |
-#        cd proxysql/
+#        cd ${{ github.workspace }}/proxysql/
 #        git fetch --tags --force
 #        echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
 
