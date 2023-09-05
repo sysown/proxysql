@@ -167,8 +167,8 @@ jobs:
 
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
         sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
-        sed -i "/LOAD MYSQL SERVERS TO RUNTIME;/i UPDATE mysql_servers SET use_ssl=1 WHERE comment LIKE '%${INFRA}';" conf/proxysql/infra-config.sql
-        sed -i "/LOAD MYSQL USERS TO RUNTIME;/i UPDATE mysql_users SET use_ssl=1 WHERE comment LIKE '%${INFRA}';" conf/proxysql/infra-config.sql
+        sed -i "/LOAD MYSQL SERVERS TO RUNTIME;/i UPDATE mysql_servers SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
+        sed -i "/LOAD MYSQL USERS TO RUNTIME;/i UPDATE mysql_users SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
         cat conf/proxysql/infra-config.sql
         ./docker-compose-init.bash
         
