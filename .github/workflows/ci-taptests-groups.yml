@@ -23,12 +23,12 @@ jobs:
     - name: Set matrix
       id: set-matrix
       run: |
-        echo "[ " > proxysql/tap-matrix.json
-        echo "'multiple_prepared_statements-t', " >> proxysql/tap-matrix.json
-        echo "'test_sqlite3_.*-t', " >> proxysql/tap-matrix.json
-        echo "'test_ssl_.*-t', " >> proxysql/tap-matrix.json
-        echo "'set_testing.*-t', " >> proxysql/tap-matrix.json
-        echo " ]" >> proxysql/tap-matrix.json
+        echo -n "[ " > proxysql/tap-matrix.json
+        echo -n "'multiple_prepared_statements-t', " >> proxysql/tap-matrix.json
+        echo -n "'test_sqlite3_.*-t', " >> proxysql/tap-matrix.json
+        echo -n "'test_ssl_.*-t', " >> proxysql/tap-matrix.json
+        echo -n "'set_testing.*-t', " >> proxysql/tap-matrix.json
+        echo -n " ]" >> proxysql/tap-matrix.json
         
         echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
 
