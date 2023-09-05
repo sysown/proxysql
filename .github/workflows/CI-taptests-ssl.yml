@@ -1,4 +1,4 @@
-name: CI-taptests
+name: CI-taptests-ssl
 
 on:
   push:
