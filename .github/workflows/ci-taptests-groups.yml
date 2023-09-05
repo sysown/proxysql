@@ -1,0 +1,206 @@
+name: CI-taptests-groups
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  select:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    
+    - name: Cache restore
+      id: cache-matrix
+      uses: actions/cache/restore@v3
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
+        fail-on-cache-miss: true
+        path: |
+          proxysql/tap-matrix.*
+
+    - name: Set matrix
+      id: set-matrix
+      run: |
+        echo "[ " > proxysql/tap-matrix.json
+        echo "'multiple_prepared_statements-t', " >> proxysql/tap-matrix.json
+        echo "'test_sqlite3_.*-t', " >> proxysql/tap-matrix.json
+        echo "'test_ssl_.*-t', " >> proxysql/tap-matrix.json
+        echo "'set_testing.*-t', " >> proxysql/tap-matrix.json
+        echo " ]" >> proxysql/tap-matrix.json
+        
+        echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
+
+  tests:
+    runs-on: ubuntu-22.04
+    needs: [ "select" ]
+    strategy:
+      fail-fast: false
+      matrix:
+#        testgroup: [ '.*admin.*-t|.*basic.*-t|.*charset.*-t|.*firewall.*-t|.*kill.*-t|.*max.*-t', 'multiple.*-t', '.*mysql.*-t', '.*prepare.*-t', 'reg_test.*-t', 'save.*-t', '.*set.*-t', '.*sqlite.*-t', '.*ssl.*-t', 'test_.*-t' ]
+#        testgroup: [ '' ]
+#        testgroup: [ 'kill_connection3-t', 'reg_test_3847_admin_lock-t', 'set_testing-240-t', 'max_connections_ff-t', 'test_server_sess_status-t' ]
+        testgroup: ${{ fromJson(needs.select.outputs.matrix) }}
+    steps:
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y python3-pymysql python3-structlog sysbench mycli
+        sudo pip3 install fastcov
+        
+        wget https://github.com/openark/orchestrator/releases/download/v3.2.6/orchestrator-client_3.2.6_amd64.deb
+        sudo dpkg -i orchestrator-client_3.2.6_amd64.deb
+        
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 467B942D3A79BD29
+        wget https://repo.mysql.com/mysql-apt-config_0.8.24-1_all.deb
+        sudo dpkg -i mysql-apt-config_0.8.24-1_all.deb
+        sudo apt-get update -y
+        sudo apt-cache policy mysql-shell
+        sudo apt-get install -y mysql-shell
+
+        sudo sed -i 's/8.0/5.7/' /etc/apt/sources.list.d/mysql.list
+        sudo sed -i 's/jammy/bionic/' /etc/apt/sources.list.d/mysql.list
+        sudo apt-get update -y
+        sudo apt-cache policy libmysqlclient-dev
+        sudo apt-get install -y --allow-downgrades libmysqlclient-dev=5.7*
+
+    - name: Cache restore src
+      id: cache-src
+      uses: actions/cache/restore@v3
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_src
+        fail-on-cache-miss: true
+        path: |
+          proxysql/src/
+
+    - name: Cache restore test
+      id: cache-test
+      uses: actions/cache/restore@v3
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_test
+        fail-on-cache-miss: true
+        path: |
+          proxysql/test/
+
+    - name: Checkout jenkins_build_scripts
+      uses: actions/checkout@v3
+      with:
+        repository: 'proxysql/jenkins-build-scripts'
+        ref: 'kubernetes'
+#        fetch-depth: 0
+        path: 'jenkins-build-scripts'
+        token: ${{ secrets.GH_TOKEN }}
+        submodules: 'false'
+
+    - name: Configure env.sh
+      run: |
+        cd jenkins-build-scripts
+        
+        # configure paths
+        sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
+        sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
+
+    - name: Configure test/env.sh
+      run: |
+        cd proxysql
+        #mkdir test
+        
+        # select tests
+        echo "export TEST_PY_INTERNAL=0" >> test/env.sh
+        echo "export TEST_PY_BENCHMARK=0" >> test/env.sh
+        echo "export TEST_PY_CHUSER=0" >> test/env.sh
+        echo "export TEST_PY_STATS=0" >> test/env.sh
+        echo "export TEST_PY_TAP=1" >> test/env.sh
+        echo "export TEST_PY_TAPINT=0" >> test/env.sh
+        echo "export TEST_PY_FAILOVER=0" >> test/env.sh
+        echo 'export TEST_PY_TAP_INCL="${{ matrix.testgroup }}"' >> test/env.sh
+        #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
+        echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
+        echo 'export WITHGCOV=0' >> test/env.sh
+        #echo 'export' >> test/env.sh
+        #cat test/env.sh
+
+    - name: Run proxysql
+      run: |
+        #set -x
+        set +e
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        
+        ./cluster_start.bash
+        sleep 10
+        
+        cd ${{ github.workspace }}/proxysql
+        mkdir -p ci_infra_logs/regular_infra/proxysql
+        cd src
+        mkdir coverage_reports
+
+        (./proxysql --clickhouse-server --sqlite3-server --idle-threads -f -c "$DOCKER_SCRIPT_PATH/conf/proxysql/proxysql.cnf" -D $REGULAR_INFRA_DATADIR &> $REGULAR_INFRA_DATADIR/proxysql.log) &
+        sleep 10
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v "Using a password"
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        ./cluster_init.bash
+        sleep 10        
+
+    - name: Infra
+      run: |
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
+        ./docker-compose-init.bash
+
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
+        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
+        ./docker-compose-init.bash
+        
+        docker ps -a
+        cat /etc/hosts
+
+    - name: TAP-tests
+      run: |
+        set +e        
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        
+        sudo -E ./test-scripts/bin/proxysql-tester.py
+        RC=$?
+        
+        exit $RC
+
+    - name: Cleanup
+      if: ${{ always() }}
+      run: |
+        set +e
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        
+        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
+        sleep 10
+        killall proxysql
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
+        ./docker-compose-destroy.bash
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
+        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
+        ./docker-compose-destroy.bash
+        
+        sudo chmod -R 777 ${{ github.workspace }}/*
+        echo "${{ matrix.testgroup }}" | tr -d '*|' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
+
+    - name: Archive artifacts
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        path: |
+          proxysql/ci_gcov_logs/
+          proxysql/ci_infra_logs/
+          proxysql/ci_tests_logs/
+          proxysql/src/
+          proxysql/test/
+          
