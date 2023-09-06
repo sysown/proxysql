@@ -83,7 +83,7 @@ jobs:
       id: cache-src
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap_src
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap-ssl_src
         fail-on-cache-miss: true
         path: |
           proxysql/src/
@@ -92,7 +92,7 @@ jobs:
       id: cache-test
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap_test
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap-ssl_test
         fail-on-cache-miss: true
         path: |
           proxysql/test/
