@@ -81,6 +81,7 @@ jobs:
           for TAPCPP in test/tap/tests/*.cpp ; do
             echo ">>> $TAPCPP"
             sed -i "/mysql_real_connect(/s/NULL, 0)/NULL, CLIENT_SSL)/" $TAPCPP
+            grep -n "mysql_real_connect(" $TAPCPP
           done
           # build tap tests
           sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
