@@ -1075,7 +1075,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.free_connections_pct=10;
 	variables.connect_retries_delay=1;
 	variables.monitor_enabled=true;
-	variables.monitor_history=600000;
+	variables.monitor_history=7200000; // changed in 2.6.0 : was 600000
 	variables.monitor_connect_interval=120000;
 	variables.monitor_connect_timeout=600;
 	variables.monitor_ping_interval=8000;
@@ -1114,8 +1114,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.automatic_detect_sqli=false;
 	variables.firewall_whitelist_enabled=false;
 	variables.firewall_whitelist_errormsg = strdup((char *)"Firewall blocked this query");
-	variables.use_tcp_keepalive=false;
-	variables.tcp_keepalive_time=0;
+	variables.use_tcp_keepalive=true; // changed in 2.6.0 , was false
+	variables.tcp_keepalive_time=120; // changed in 2.6.0 , was 0
 	variables.throttle_connections_per_sec_to_hostgroup=1000000;
 	variables.max_transaction_idle_time=4*3600*1000;
 	variables.max_transaction_time=4*3600*1000;
@@ -1141,7 +1141,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
 	variables.set_query_lock_on_hostgroup=1;
-	variables.set_parser_algorithm=1; // in 2.6.0 this must become 2
+	// FIXME: this must become 2 in 2.6.0
+	variables.set_parser_algorithm=1; // before 2.6.0 this was 1 , must become 2
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
 	variables.auto_increment_delay_multiplex_timeout_ms=10000;
@@ -1161,7 +1162,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
-	variables.server_version=strdup((char *)"5.5.30");
+	variables.server_version=strdup((char *)"8.0.11"); // changed in 2.6.0 , was 5.5.30
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
 	variables.eventslog_default_log=0;
@@ -1174,7 +1175,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
-	variables.have_ssl = false; // disable by default for performance reason
+	variables.have_ssl = true; // changed in 2.6.0 , was false by default for performance reason
 	variables.commands_stats=true;
 	variables.multiplexing=true;
 	variables.log_unhealthy_connections=true;
@@ -1218,7 +1219,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.session_debug=true;
 #endif /*debug */
 	variables.query_digests_grouping_limit = 3;
-	variables.query_digests_groups_grouping_limit= 0;
+	variables.query_digests_groups_grouping_limit= 10; // changed in 2.6.0 , was 0
 	variables.enable_client_deprecate_eof=true;
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
