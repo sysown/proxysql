@@ -77,7 +77,9 @@ jobs:
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
           make ${{ matrix.dist }} | tee ../build-deps.log
           # set CLIENT_SSL
+          echo ">>> set CLIENT_SSL"
           for TAPCPP in test/tap/tests/*.cpp ; do
+            echo ">>> $TAPCPP"
             sed -i "/mysql_real_connect(/s/NULL, 0)/NULL, CLIENT_SSL)/" $TAPCPP
           done
           # build tap tests
