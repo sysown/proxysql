@@ -69,6 +69,7 @@ jobs:
         
         # set CLIENT_SSL
         if [[ "${{ matrix.type }}" =~ "-tap-ssl" ]]; then
+          cd proxysql/
           echo ">>> set CLIENT_SSL"
           for TAPCPP in test/tap/tests/*.cpp ; do
             echo ">>> $TAPCPP"
