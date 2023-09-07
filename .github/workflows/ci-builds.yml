@@ -74,7 +74,7 @@ jobs:
           for TAPCPP in test/tap/tests/*.cpp ; do
             echo ">>> $TAPCPP"
             perl -i -p0e 's/mysql_real_connect\(\s*\n*\s*^\{(.*)\n\s*(.*)\n\s*/mysql_real_connect($1$2/g' $TAPCPP
-            perl -i -p0e 's/mysql_real_connect\(\s*\n*\s*(.*)\n\s*(.*)\n\s*/mysql_real_connect($1$2/g' $TAPCPP
+            #perl -i -p0e 's/mysql_real_connect\(\s*\n*\s*(.*)\n\s*(.*)\n\s*/mysql_real_connect($1$2/g' $TAPCPP
             sed -i "/mysql_real_connect(/s/NULL, 0)/NULL, CLIENT_SSL)/" $TAPCPP
             grep -nh "mysql_real_connect(" $TAPCPP || true
           done
