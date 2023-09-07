@@ -66,6 +66,18 @@ jobs:
             cp -v jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
           fi
         done
+        
+        # set CLIENT_SSL
+        if [[ "${{ matrix.type }}" =~ "-tap-ssl" ]]; then
+          echo ">>> set CLIENT_SSL"
+          for TAPCPP in test/tap/tests/*.cpp ; do
+            echo ">>> $TAPCPP"
+            perl -i -p0e 's/mysql_real_connect\(\s*\n*\s*^\{(.*)\n\s*(.*)\n\s*/mysql_real_connect($1$2/g' $TAPCPP
+            perl -i -p0e 's/mysql_real_connect\(\s*\n*\s*^(.*)\n\s*(.*)\n\s*/mysql_real_connect($1$2/g' $TAPCPP
+            sed -i "/mysql_real_connect(/s/NULL, 0)/NULL, CLIENT_SSL)/" $TAPCPP
+            grep -nh "mysql_real_connect(" $TAPCPP || true
+          done
+        fi
 
     - name: Build
       id: build
@@ -76,13 +88,6 @@ jobs:
           # prebuild dependencies without debug
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
           make ${{ matrix.dist }} | tee ../build-deps.log
-          # set CLIENT_SSL
-          echo ">>> set CLIENT_SSL"
-          for TAPCPP in test/tap/tests/*.cpp ; do
-            echo ">>> $TAPCPP"
-            sed -i "/mysql_real_connect(/s/NULL, 0)/NULL, CLIENT_SSL)/" $TAPCPP
-            grep -nh "mysql_real_connect(" $TAPCPP || true
-          done
           # build tap tests
           sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug'" docker-compose.yml
