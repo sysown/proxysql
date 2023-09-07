@@ -56,16 +56,16 @@ jobs:
 #        echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
 
     - name: Patch TAP-tests
-      if: ${{ false }}
+      if: ${{ matrix.type == '-tap-ssl' }}
       run: |
         # apply patches
-        for PATCH in $(cd jenkins-build-scripts/test-scripts/patches; find . -type f); do
-          if [[ $PATCH =~ \.patch ]]; then
-            patch --verbose proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
-          elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
-            cp -v jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
-          fi
-        done
+        #for PATCH in $(cd jenkins-build-scripts/test-scripts/patches; find . -type f); do
+        #  if [[ $PATCH =~ \.patch ]]; then
+        #    patch --verbose proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
+        #  elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
+        #    cp -v jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
+        #  fi
+        #done
         
         # set CLIENT_SSL
         if [[ "${{ matrix.type }}" =~ "-tap-ssl" ]]; then
