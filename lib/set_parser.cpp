@@ -176,11 +176,11 @@ void SetParser::generateRE_parse1v2() {
 
 	string vp = "NULL"; // NULL
 	var_patterns.push_back(vp);
-	vp = "\\w+"; // single word
-	var_patterns.push_back(vp);
-	vp = "\\w+"; // single word
-	var_patterns.push_back(vp);
-	vp = "\\w+(?:-\\w+)+"; // multiple words separated by dash, WITHOUT any spaces between words . Used for transaction isolation
+	//vp = "\\w+"; // single word
+	//var_patterns.push_back(vp);
+	//vp = "(?:\\w|\\d)+"; // single word with letters and digits , for example utf8mb4 and latin1
+	//var_patterns.push_back(vp);
+	vp = "(?:\\w|\\d)+(?:-|\\w|\\d+)*"; // multiple words (letters and digits) separated by dash, WITHOUT any spaces between words . Used ialso for transaction isolation
 	var_patterns.push_back(vp);
 	for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
 		string s = *it + vp + *it;
