@@ -56,7 +56,7 @@ jobs:
 #        echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
 
     - name: Patch TAP-tests
-      if: ${{ matrix.type == '-tap-ssl' }}
+      if: ${{ steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap-ssl' }}
       run: |
         # apply patches
         #for PATCH in $(cd jenkins-build-scripts/test-scripts/patches; find . -type f); do
