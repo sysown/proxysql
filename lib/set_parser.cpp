@@ -79,6 +79,8 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1() {
 
 	re2::RE2 re0("^\\s*SET\\s+", *opt2);
 	re2::RE2::Replace(&query, re0, "");
+	re2::RE2 re1("(\\s|;)+$", *opt2); // remove trailing spaces and semicolon
+	re2::RE2::Replace(&query, re1, "");
 
 	std::map<std::string,std::vector<std::string>> result;
 
@@ -359,6 +361,9 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1v2() {
 
 	re2::RE2 re0("^\\s*SET\\s+", *parse1v2_opt2);
 	re2::RE2::Replace(&query, re0, "");
+	re2::RE2 re1("(\\s|;)+$", *parse1v2_opt2); // remove trailing spaces and semicolon
+	re2::RE2::Replace(&query, re1, "");
+
 VALGRIND_ENABLE_ERROR_REPORTING;
 	std::string var;
 	std::string value1, value2, value3, value4, value5;
