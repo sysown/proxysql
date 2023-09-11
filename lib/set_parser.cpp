@@ -178,14 +178,30 @@ void SetParser::generateRE_parse1v2() {
 	var_patterns.push_back(vp);
 	//vp = "\\w+"; // single word
 	//var_patterns.push_back(vp);
-	//vp = "(?:\\w|\\d)+"; // single word with letters and digits , for example utf8mb4 and latin1
+	{
+		string vp0 = "(?:\\w|\\d)+"; // single word with letters and digits , for example utf8mb4 and latin1
 	//var_patterns.push_back(vp);
-	vp = "(?:\\w|\\d)+(?:-|\\w|\\d+)*"; // multiple words (letters and digits) separated by dash, WITHOUT any spaces between words . Used ialso for transaction isolation
-	var_patterns.push_back(vp);
-	for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
-		string s = *it + vp + *it;
-		var_patterns.push_back(s); // add with quote
+/*
+		string vp1 = "(?:" + vp0 + "(?:," + vp0 + ")*)"; // multiple words (letters and digits) separated by commas WITHOUT any spaces between words . Used also for sql_mode , example: ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO
+		//var_patterns.push_back(vp1); // do NOT add without quote
+		for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
+			string s = *it + vp1 + *it;
+			var_patterns.push_back(s); // add with quote
+		}
+*/
+		string vp2 = "(?:" + vp0 + "(?:-" + vp0 + ")*)"; // multiple words (letters and digits) separated by dash, WITHOUT any spaces between words . Used also for transaction isolation
+		var_patterns.push_back(vp2);
+		for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
+			string s = *it + vp2 + *it;
+			var_patterns.push_back(s); // add with quote
+		}
 	}
+	//vp = "(?:\\w|\\d)+(?:-|\\w|\\d+)*"; // multiple words (letters and digits) separated by dash, WITHOUT any spaces between words . Used ialso for transaction isolation
+	//var_patterns.push_back(vp);
+//	for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
+//		string s = *it + vp + *it;
+//		var_patterns.push_back(s); // add with quote
+//	}
 
 	vp = "\\w+(?:,\\w+)+"; // multiple words separated by commas, WITHOUT any spaces between words
 	// NOTE: we do not use multiple words without quotes
@@ -365,6 +381,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		} else if (value4 != "") {
 			// VARIABLE
+			remove_quotes(value4);
 			if (strcasecmp("transaction_isolation", value4.c_str()) == 0) {
 				value4 = "tx_isolation";
 			} else if (strcasecmp("transaction_read_only", value4.c_str()) == 0) {
