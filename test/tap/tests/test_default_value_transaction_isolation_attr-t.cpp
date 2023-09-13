@@ -236,18 +236,8 @@ int main(int argc, char** argv) {
 	for (const auto& user_attribute : user_attributes) {
 		// Create the new connection to verify
 		MYSQL* proxysql_mysql = mysql_init(NULL);
-		if (
-			!mysql_real_connect(
-				proxysql_mysql,
-				cl.host,
-				std::get<0>(user_attribute).c_str(),
-				std::get<1>(user_attribute).c_str(),
-				NULL, cl.port, NULL, 0)
-		) {
-			fprintf(
-				stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-				mysql_error(proxysql_mysql)
-			);
+		if (!mysql_real_connect( proxysql_mysql, cl.host, std::get<0>(user_attribute).c_str(), std::get<1>(user_attribute).c_str(), NULL, cl.port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 			return EXIT_FAILURE;
 		}
 

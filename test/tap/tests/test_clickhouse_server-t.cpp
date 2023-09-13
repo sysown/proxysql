@@ -73,12 +73,7 @@ int test_crash(const char *host, int port) {
 		MYSQL * proxysql_clickhouse = mysql_init(NULL);
 		diag("Line: %d . Create connection %d in test_cash()", __LINE__ , i);
 		// Correctly connect to Clickhouse server
-		if (
-			!mysql_real_connect(
-				proxysql_clickhouse, host, credentials[2].first.c_str(), credentials[2].second.c_str(),
-				NULL, port, NULL, 0
-			)
-		) {
+		if (!mysql_real_connect(proxysql_clickhouse, host, credentials[2].first.c_str(), credentials[2].second.c_str(), NULL, port, NULL, 0)) {
 			diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_clickhouse));
 			return exit_status();
 		}
@@ -385,16 +380,8 @@ int main(int argc, char** argv) {
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
 	// Connect to ProxySQL Admin and check current clickhouse configuration
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username, cl.admin_password,
-			NULL, cl.admin_port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
 
@@ -428,12 +415,7 @@ int main(int argc, char** argv) {
 		// Connect with invalid username
 		std::string inv_user_err {};
 		bool failed_to_connect = false;
-		if (
-			!mysql_real_connect(
-				proxysql_clickhouse, host_port.first.c_str(), "foobar_user", cl.password,
-				NULL, host_port.second, NULL, 0
-			)
-		) {
+		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), "foobar_user", cl.password, NULL, host_port.second, NULL, 0)) {
 			inv_user_err = mysql_error(proxysql_clickhouse);
 			failed_to_connect = true;
 		}
@@ -451,12 +433,7 @@ int main(int argc, char** argv) {
 		// Connect with invalid password
 		std::string inv_pass_err {};
 		failed_to_connect = false;
-		if (
-			!mysql_real_connect(
-				proxysql_clickhouse, host_port.first.c_str(), credentials[0].first.c_str(), "foobar_pass",
-				NULL, host_port.second, NULL, 0
-			)
-		) {
+		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), credentials[0].first.c_str(), "foobar_pass", NULL, host_port.second, NULL, 0)) {
 			inv_pass_err = mysql_error(proxysql_clickhouse);
 			failed_to_connect = true;
 		}
@@ -472,16 +449,8 @@ int main(int argc, char** argv) {
 		proxysql_clickhouse = mysql_init(NULL);
 
 		// Correctly connect to Clickhouse server
-		if (
-			!mysql_real_connect(
-				proxysql_clickhouse, host_port.first.c_str(), credentials[0].first.c_str(), credentials[0].second.c_str(),
-				NULL, host_port.second, NULL, 0
-			)
-		) {
-			fprintf(
-				stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-				mysql_error(proxysql_clickhouse)
-			);
+		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), credentials[0].first.c_str(), credentials[0].second.c_str(), NULL, host_port.second, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_clickhouse));
 			goto cleanup;
 		}
 
@@ -528,12 +497,7 @@ int main(int argc, char** argv) {
 		// Connect with invalid username
 		bool success_to_connect = true;
 		std::string new_intf_conn_err {};
-		if (
-			!mysql_real_connect(
-				proxysql_clickhouse, new_host_port.first.c_str(), credentials[1].first.c_str(), credentials[1].second.c_str(),
-				NULL, new_host_port.second, NULL, 0
-			)
-		) {
+		if (!mysql_real_connect(proxysql_clickhouse, new_host_port.first.c_str(), credentials[1].first.c_str(), credentials[1].second.c_str(), NULL, new_host_port.second, NULL, 0)) {
 			new_intf_conn_err = mysql_error(proxysql_clickhouse);
 			success_to_connect = false;
 		}

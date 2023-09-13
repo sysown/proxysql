@@ -89,7 +89,7 @@ void * my_conn_thread(void *arg) {
 			i++;
 			std::string u = "sbtest" + std::to_string(i);
 			std::string p = "sbtest" + std::to_string(i);
-			rc = mysql_real_connect(mysql, host, u.c_str(), p.c_str(), schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);	
+			rc = mysql_real_connect(mysql, host, u.c_str(), p.c_str(), schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
 		}
 		if (rc==NULL) {
 			if (silent==0) {
@@ -318,8 +318,7 @@ int main(int argc, char *argv[]) {
 		return exit_status();
 
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	}
 /*

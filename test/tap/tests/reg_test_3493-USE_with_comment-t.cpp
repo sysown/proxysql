@@ -186,15 +186,8 @@ int main(int argc, char** argv) {
 
 	plan(db_query.size() * 2);
 
-	if (
-		!mysql_real_connect(
-			proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_mysql)
-		);
+	if (!mysql_real_connect( proxysql_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
 	}
 

@@ -154,12 +154,7 @@ int main(int argc, char** argv) {
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
-	if (
-		!mysql_real_connect(
-			proxysql_admin, "127.0.0.1", cl.admin_username, cl.admin_password,
-			"information_schema", cl.admin_port, NULL, 0
-		)
-	) {
+	if (!mysql_real_connect(proxysql_admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}

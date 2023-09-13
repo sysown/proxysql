@@ -112,10 +112,7 @@ int main(int argc, char** argv) {
 		return EXIT_FAILURE;
 	}
 
-	if (
-		!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL,
-			CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS)
-	) {
+	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
 	}

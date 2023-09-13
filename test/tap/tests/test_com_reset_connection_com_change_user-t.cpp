@@ -448,11 +448,7 @@ int test_simple_reset_admin(MYSQL*, const CommandLine& cl, const std::vector<use
 	MYSQL* admin = mysql_init(NULL);
 	int res = EXIT_FAILURE;
 
-	if (
-		!mysql_real_connect(
-			admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0
-		)
-	) {
+	if (!mysql_real_connect(admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
@@ -1142,21 +1138,13 @@ int main(int argc, char** argv) {
 	MARIADB_CHARSET_INFO* latin2_charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 	proxysql->charset = latin2_charset;
 
-	if (
-		!mysql_real_connect(
-			proxysql, "127.0.0.1", cl.username, cl.password, "information_schema", cl.port, NULL, 0
-		)
-	) {
+	if (!mysql_real_connect(proxysql, "127.0.0.1", cl.username, cl.password, "information_schema", cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 		return EXIT_FAILURE;
 	}
 
 	MYSQL* admin = mysql_init(NULL);
-	if (
-		!mysql_real_connect(
-			admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0
-		)
-	) {
+	if (!mysql_real_connect(admin, "127.0.0.1", cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	}
