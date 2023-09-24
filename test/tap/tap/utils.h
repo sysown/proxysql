@@ -643,4 +643,13 @@ void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_
 void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
 void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
 
+/**
+ * @brief fetches and converts env var value to int if possible otherwise uses default
+ * @details helper function for fetching int from env
+ * @param envname - name for the env variable
+ * @param envdefault - default int to use
+ * @return int value or int default
+ */
+int get_env_int(const char * envname, int envdefault);
+
 #endif // #define UTILS_H

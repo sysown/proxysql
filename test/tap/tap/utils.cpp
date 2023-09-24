@@ -1713,3 +1713,15 @@ void check_query_count(MYSQL* admin, vector<uint32_t> queries, uint32_t hg) {
 		dump_conn_stats(admin, { hg });
 	}
 };
+
+int get_env_int(const char* envname, int envdefault) {
+
+	const char * envval = std::getenv(envname);
+	int res = envdefault;
+
+	if (envval != NULL)
+		res = strtol(envval, NULL, 0);
+//	diag("%s: %s='%s' >>> %d", __FUNCTION__, envname, envval, res);
+
+	return res;
+};

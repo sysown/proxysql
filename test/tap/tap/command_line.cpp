@@ -17,7 +17,12 @@ using nlohmann::json;
 using dotenv::env;
 
 
-CommandLine::CommandLine() {}
+CommandLine::CommandLine() {
+	if (getEnv()) {
+		diag("Failed to get the required environmental variables.");
+		exit(-1);
+	}
+}
 
 CommandLine::~CommandLine() {
 	if (host)
@@ -149,7 +154,7 @@ int CommandLine::getEnv() {
 			diag("loaded: %s", (exe_path + ".env").c_str());
 	}
 
-	int env_port = 0;
+	int env_int = 0;
 	{
 		// unprivileged test connection
 		value = getenv("TAP_HOST");
@@ -158,9 +163,9 @@ int CommandLine::getEnv() {
 
 		value = getenv("TAP_PORT");
 		if (value) {
-			env_port = strtol(value, NULL, 10);
-			if (env_port > 0 && env_port < 65536)
-				port = env_port;
+			env_int = strtol(value, NULL, 10);
+			if (env_int > 0 && env_int < 65536)
+				port = env_int;
 		}
 
 		value = getenv("TAP_USERNAME");
@@ -180,9 +185,9 @@ int CommandLine::getEnv() {
 
 		value = getenv("TAP_ROOTPORT");
 		if (value) {
-			env_port = strtol(value, NULL, 10);
-			if (env_port > 0 && env_port < 65536)
-				root_port = env_port;
+			env_int = strtol(value, NULL, 10);
+			if (env_int > 0 && env_int < 65536)
+				root_port = env_int;
 		}
 
 		value = getenv("TAP_ROOTUSERNAME");
@@ -202,9 +207,9 @@ int CommandLine::getEnv() {
 
 		value = getenv("TAP_ADMINPORT");
 		if (value) {
-			env_port = strtol(value, NULL, 10);
-			if (env_port > 0 && env_port < 65536)
-				admin_port = env_port;
+			env_int = strtol(value, NULL, 10);
+			if (env_int > 0 && env_int < 65536)
+				admin_port = env_int;
 		}
 
 		value = getenv("TAP_ADMINUSERNAME");
@@ -224,9 +229,9 @@ int CommandLine::getEnv() {
 
 		value = getenv("TAP_MYSQLPORT");
 		if (value) {
-			env_port = strtol(value, NULL, 10);
-			if (env_port > 0 && env_port < 65536)
-				mysql_port = env_port;
+			env_int = strtol(value, NULL, 10);
+			if (env_int > 0 && env_int < 65536)
+				mysql_port = env_int;
 		}
 
 		value = getenv("TAP_MYSQLUSERNAME");
@@ -238,29 +243,37 @@ int CommandLine::getEnv() {
 			replace_str_field(&this->mysql_password, value);
 	}
 
+	{
+		// various
+		value = getenv("TAP_WORKDIR");
+		if (value)
+			replace_str_field(&this->workdir, value);
 
-	value = getenv("TAP_WORKDIR");
-	if (value)
-		replace_str_field(&this->workdir, value);
-
-	value = getenv("TAP_CLIENT_FLAGS");
-	if (value) {
-		char* end = NULL;
-		uint64_t env_c_flags = strtoul(value, &end, 10);
-
-		const char* errmsg { NULL };
-
-		if (env_c_flags == 0 && value == end) {
-			errmsg = "Invalid string to parse";
-		} else if (env_c_flags == ULONG_MAX && errno == ERANGE) {
-			errmsg = strerror(errno);
+		value = getenv("TAP_USE_SSL");
+		if (value) {
+			env_int = strtol(value, NULL, 0);
+			use_ssl = (bool) env_int;
 		}
 
-		if (errmsg) {
-			fprintf(stderr, "Failed to parse env variable 'CLIENT_FLAGS' with error: '%s'\n", strerror(errno));
-			return -1;
-		} else {
-			this->client_flags = env_c_flags;
+		value = getenv("TAP_CLIENT_FLAGS");
+		if (value) {
+			char* end = NULL;
+			uint64_t env_c_flags = strtoul(value, &end, 10);
+
+			const char* errmsg { NULL };
+
+			if (env_c_flags == 0 && value == end) {
+				errmsg = "Invalid string to parse";
+			} else if (env_c_flags == ULONG_MAX && errno == ERANGE) {
+				errmsg = strerror(errno);
+			}
+
+			if (errmsg) {
+				fprintf(stderr, "Failed to parse env variable 'CLIENT_FLAGS' with error: '%s'\n", strerror(errno));
+				return -1;
+			} else {
+				this->client_flags = env_c_flags;
+			}
 		}
 	}
 
