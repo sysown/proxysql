@@ -114,7 +114,7 @@ int setup_replication(int server_id, bool frontend_ssl, bool backend_ssl, std::v
 	admin_queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
 
 	MYSQL * mysql = mysql_init(NULL);
-	diag("Connecting: cl.root_username='%s' cl.use_ssl=%d", cl.root_username, cl.use_ssl);
+	diag("Connecting: cl.root_username='%s' frontend_ssl=%d", cl.root_username,frontend_ssl);
 	if (frontend_ssl)
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {

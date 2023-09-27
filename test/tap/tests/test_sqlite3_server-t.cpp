@@ -341,7 +341,7 @@ int main(int argc, char** argv) {
 
 	// plan as many tests as queries
 	plan(
-		2+2+2 + // connect
+		2+2+2+2 + // connect
 		2 /* Fail to connect with wrong username and password */ + successful_queries.size()
 		+ unsuccessful_queries.size() + admin_queries.size() + sqlite_intf_queries.size()
 		+ 2 /* Check port is properly taken by ProxySQL without error after each change */

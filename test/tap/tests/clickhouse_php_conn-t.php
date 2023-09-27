@@ -37,7 +37,7 @@ $admin_port = $admin_port == false ? 6032 : $admin_port;
 echo ":: Creating ProxySQL Admin connection...".PHP_EOL;
 $proxy_admin = new mysqli("127.0.0.1", $admin_user, $admin_pass, "", $admin_port);
 if ($proxy_admin->connect_errno) {
-    die("PorxySQL connect failed: " . $proxy->connect_error);
+    die("ProxySQL connect failed: " . $proxy->connect_error);
 }
 echo ":: ProxySQL ProxySQL Admin connection completed".PHP_EOL;
 
@@ -49,7 +49,7 @@ echo ":: Finished creating users".PHP_EOL;
 echo ":: Creating ProxySQL connection...".PHP_EOL;
 $proxy = new mysqli("127.0.0.1", $username, $password, "", $port);
 if ($proxy->connect_errno) {
-    die("PorxySQL connect failed: " . $proxy->connect_error);
+    die("ProxySQL connect failed: " . $proxy->connect_error);
 }
 echo ":: ProxySQL connection completed".PHP_EOL;
 

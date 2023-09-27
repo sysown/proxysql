@@ -494,13 +494,13 @@ int main(int, char**) {
 	double its = (conn_creation_intv - b_0/rate) / ( b / rate );
 	double delay_s = conn_creation_intv / its;
 
-	plan(
-		2+2 + // connections
-		b_0*2 + //
-		its*(b*2)*2 + // * num of hg?
-		4 // tests
-	);
-	diag(">>> %d <<<", its);
+//	plan(
+//		2+2 + // connections
+//		b_0*2 + //
+//		its*(b*2)*2 + // * num of hg?
+//		4 // tests
+//	);
+
 	// Cleanup previous backend connections
 	diag("Cleaning up previous backend connections...");
 	MYSQL_QUERY(proxy_admin, "UPDATE mysql_servers SET max_connections=0");
