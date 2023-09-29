@@ -72,14 +72,15 @@ jobs:
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
         cd proxysql/
+        mkdir ci_build_log
         if [[ "${{ matrix.type }}" =~ "-tap" ]]; then
           # prebuild dependencies without debug
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
-          make ${{ matrix.dist }} | tee ../build-deps.log
+          make ${{ matrix.dist }} | tee ci_build_log/build-deps.log
           # build tap tests
           sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_tap_test_debug'" docker-compose.yml
-          make ${{ matrix.dist }}-dbg | tee ../build-tap.log
+          make ${{ matrix.dist }}-dbg | tee ci_build_log/build-tap.log
           
           for TESTS in test/tap/tests*; do
             echo "[ "$(find -L $TESTS -type f -name '*-t' -executable -printf "'%f', ")" ]" > tap-matrix-${TESTS##*/}.json
@@ -94,7 +95,7 @@ jobs:
           TYPE=${{ matrix.type }}
           # build TYPE
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) ${TYPE#-}'" docker-compose.yml
-          make ${{ matrix.dist }} | tee ../build.log
+          make ${{ matrix.dist }} | tee ci_build_log/build.log
         else
           make ${{ matrix.dist }}${{ matrix.type }} | tee ../build.log
         fi
@@ -102,7 +103,7 @@ jobs:
     - name: Check build
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
       run: |
-        for LOG in build*.log ; do
+        for LOG in proxysql/ci_build_log/build*.log ; do
           grep 'exited with code 0' ${LOG} || exit 1
         done
 
@@ -132,4 +133,13 @@ jobs:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_matrix
         path: |
           proxysql/tap-matrix*
+
+    - name: Archive artifacts
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ci-builds-${{ github.sha }}-run#${{ github.run_number }}
+        path: |
+          proxysql/ci_*_logs/
+          proxysql/src/
           
