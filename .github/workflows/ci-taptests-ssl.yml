@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   workflow_call:
 
+env:
+  GROUP: tests_group_ssl-matrix
+
 jobs:
   select:
     runs-on: ubuntu-22.04
@@ -18,31 +21,13 @@ jobs:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
         fail-on-cache-miss: true
         path: |
-          proxysql/tap-matrix.*
+          proxysql/tap-matrix*
 
     - name: Set matrix
       id: set-matrix
       run: |
-        sed -i "s/'clickhouse_php_conn-t', //" proxysql/tap-matrix.json
-        sed -i "s/'reg_test_3603-stmt_metadata-t', //" proxysql/tap-matrix.json
-        sed -i "s/'reg_test_3992_fast_forward_malformed_packet-mysqlsh-t', //" proxysql/tap-matrix.json
-        sed -i "s/'reg_test_3992_fast_forward_malformed_packet-pymysql-t', //" proxysql/tap-matrix.json
-        sed -i "s/'reg_test_3992_fast_forward_malformed_packet-t', //" proxysql/tap-matrix.json
-        sed -i "s/'reg_test_fast_forward_split_packet-t', //" proxysql/tap-matrix.json
-        sed -i "s/'set_testing-240-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_binlog_reader-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_clickhouse_server-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_clickhouse_server_libmysql-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_cluster1-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_cluster_sync-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_com_reset_connection_com_change_user-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_log_last_insert_id-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_read_only_actions_offline_hard_servers-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_rw_binary_data-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_server_sess_status-t', //" proxysql/tap-matrix.json
-        sed -i "s/'test_session_status_flags-t', //" proxysql/tap-matrix.json
-        
-        echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
+        cat ${{ github.workspace }}/proxysql/tap-matrix-$GROUP.json
+        echo "matrix=$(cat ${{ github.workspace }}/proxysql/tap-matrix-$GROUP.json)" >> $GITHUB_OUTPUT
 
   tests:
     runs-on: ubuntu-22.04
@@ -51,8 +36,9 @@ jobs:
       fail-fast: false
       matrix:
         usessl: [ 'none', 'client', 'server', 'both' ]
-        testgroup: [ '.*admin.*-t|.*basic.*-t|.*charset.*-t|.*firewall.*-t|.*kill.*-t|.*max.*-t', 'multiple.*-t', '.*mysql.*-t', '.*prepare.*-t', 'reg_test.*-t', 'save.*-t', '.*set.*-t', '.*sqlite.*-t', '.*ssl.*-t', 'test_.*-t' ]
-#        testgroup: [ '' ]
+#        usessl: [ 'none', 'client' ]
+#        testgroup: [ '.*admin.*-t|.*basic.*-t|.*charset.*-t|.*firewall.*-t|.*kill.*-t|.*max.*-t', 'multiple.*-t', '.*mysql.*-t', '.*prepare.*-t', 'reg_test.*-t', 'save.*-t', '.*set.*-t', '.*sqlite.*-t', '.*ssl.*-t', 'test_.*-t' ]
+        testgroup: [ '' ]
 #        testgroup: [ 'kill_connection3-t', 'reg_test_3847_admin_lock-t', 'set_testing-240-t', 'max_connections_ff-t', 'test_server_sess_status-t' ]
 #        testgroup: ${{ fromJson(needs.select.outputs.matrix) }}
     steps:
@@ -83,7 +69,7 @@ jobs:
       id: cache-src
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap-ssl_src
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_src
         fail-on-cache-miss: true
         path: |
           proxysql/src/
@@ -92,10 +78,19 @@ jobs:
       id: cache-test
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap-ssl_test
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_test
         fail-on-cache-miss: true
         path: |
           proxysql/test/
+
+    - name: Cache restore tap-matrix
+      id: cache-matrix
+      uses: actions/cache/restore@v3
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
+        fail-on-cache-miss: true
+        path: |
+          proxysql/tap-matrix*
 
     - name: Checkout jenkins_build_scripts
       uses: actions/checkout@v3
@@ -118,9 +113,9 @@ jobs:
     - name: Configure proxysql/test
       run: |
         cd proxysql
-        #mkdir test
         
         # select tests
+        echo "export TAP_WORKDIR=\$WORKSPACE/test/tap/$GROUP" >> test/env.sh
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=0" >> test/env.sh
         echo "export TEST_PY_CHUSER=0" >> test/env.sh
@@ -129,31 +124,44 @@ jobs:
         echo "export TEST_PY_TAPINT=0" >> test/env.sh
         echo "export TEST_PY_FAILOVER=0" >> test/env.sh
         echo 'export TEST_PY_TAP_INCL="${{ matrix.testgroup }}"' >> test/env.sh
-        #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
+        #echo 'export TEST_PY_TAP_INCL=""' >> test/env.sh
+        #echo 'export TEST_PY_TAP_EXCL="mysql-test_ssl_CA-t test_backend_conn_ping-t test_binlog_fast_forward-t test_binlog_reader-t test_clickhouse_server-t test_cluster1-t test_cluster_sync-t test_read_only_actions_offline_hard_servers-t test_sqlite3_server-t test_unsupported_queries-t"' >> test/env.sh
+        echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
         echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
         echo 'export WITHGCOV=0' >> test/env.sh
         #echo 'export' >> test/env.sh
-        #cat test/env.sh
+        echo "============================="
+        cat test/env.sh
         
         # remove incompatible tests
-        rm -f test/tap/tests/clickhouse_php_conn-t
-        rm -f test/tap/tests/reg_test_3603-stmt_metadata-t
-        rm -f test/tap/tests/reg_test_3992_fast_forward_malformed_packet-mysqlsh-t
-        rm -f test/tap/tests/reg_test_3992_fast_forward_malformed_packet-pymysql-t
-        rm -f test/tap/tests/reg_test_3992_fast_forward_malformed_packet-t
-        rm -f test/tap/tests/reg_test_fast_forward_split_packet-t
-        rm -f test/tap/tests/set_testing-240-t
-        rm -f test/tap/tests/test_binlog_reader-t
-        rm -f test/tap/tests/test_clickhouse_server-t
-        rm -f test/tap/tests/test_clickhouse_server_libmysql-t
-        rm -f test/tap/tests/test_cluster1-t
-        rm -f test/tap/tests/test_cluster_sync-t
-        rm -f test/tap/tests/test_com_reset_connection_com_change_user-t
-        rm -f test/tap/tests/test_log_last_insert_id-t
-        rm -f test/tap/tests/test_read_only_actions_offline_hard_servers-t
-        rm -f test/tap/tests/test_rw_binary_data-t
-        rm -f test/tap/tests/test_server_sess_status-t
-        rm -f test/tap/tests/test_session_status_flags-t
+        set +e
+        cd ${{ github.workspace }}/proxysql/test/tap/$GROUP
+        rm -f clickhouse_php_conn-t
+        rm -f mysql-test_ssl_CA-t
+        rm -f reg_test_3603-stmt_metadata-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-mysqlsh-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-pymysql-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-t
+        rm -f reg_test_fast_forward_split_packet-t
+        rm -f set_testing-240-t
+        rm -f test_binlog_reader-t
+        rm -f test_binlog_reader_uses_previous_hostgroup-t
+        rm -f test_binlog_fast_forward-t
+        rm -f test_clickhouse_server-t
+        rm -f test_clickhouse_server_libmysql-t
+        rm -f test_cluster1-t
+        rm -f test_cluster_sync-t
+        rm -f test_com_reset_connection_com_change_user-t
+        rm -f test_log_last_insert_id-t
+        rm -f test_read_only_actions_offline_hard_servers-t
+        rm -f test_rw_binary_data-t
+        rm -f test_server_sess_status-t
+        rm -f test_session_status_flags-t
+
+        # fixes
+        cd ${{ github.workspace }}/proxysql/test/tap/tests
+        
+        true
 
     - name: Run proxysql
       run: |
@@ -190,11 +198,18 @@ jobs:
         sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
         if [[ ${{ matrix.usessl }} = server || ${{ matrix.usessl }} = both ]]; then 
           sed -i "/LOAD MYSQL SERVERS TO RUNTIME;/i UPDATE mysql_servers SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
+          echo "export TAP_USE_SSL=0" >> ${{ github.workspace }}/proxysql/test/tap/tests/.env
+          echo "export TAP_USE_SSL=0" >> ${{ github.workspace }}/proxysql/test/tap/$GROUP/.env
         fi
         if [[ ${{ matrix.usessl }} = client || ${{ matrix.usessl }} = both ]]; then 
           sed -i "/LOAD MYSQL USERS TO RUNTIME;/i UPDATE mysql_users SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
+          echo "export TAP_USE_SSL=1" >> ${{ github.workspace }}/proxysql/test/tap/tests/.env
+          echo "export TAP_USE_SSL=1" >> ${{ github.workspace }}/proxysql/test/tap/$GROUP/.env
         fi
-        cat conf/proxysql/infra-config.sql
+        #cat conf/proxysql/infra-config.sql
+        echo ">>> ${{ github.workspace }}/proxysql/test/tap/$GROUP/.env <<<"
+        echo ">>> TAP_USE_SSL=$TAP_USE_SSL <<<"
+        cat ${{ github.workspace }}/proxysql/test/tap/$GROUP/.env || true
         ./docker-compose-init.bash
         
         docker ps -a
@@ -238,9 +253,7 @@ jobs:
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
-          proxysql/ci_gcov_logs/
-          proxysql/ci_infra_logs/
-          proxysql/ci_tests_logs/
+          proxysql/ci_*_logs/
           proxysql/src/
           proxysql/test/
           
