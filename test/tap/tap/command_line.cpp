@@ -130,11 +130,27 @@ int CommandLine::getEnv() {
 	{
 		// load environment
 		char temp[PATH_MAX];
-		ssize_t len = readlink("/proc/self/exe", temp, sizeof(temp));
+//		ssize_t len = readlink("/proc/self/exe", temp, sizeof(temp));
+		{
+			FILE* fp = fopen("/proc/self/cmdline", "r");		// Linux
+			if (!fp)
+				fp = fopen("/proc/curproc/cmdline", "r");		// FreeBSD, needs procfs mounted
+			assert(fp);											// MacOS ?
+			fgets(temp, PATH_MAX, fp);
+			fclose(fp);
+		}
+//		diag(">>> cmdline = %s <<<", temp);
+		ssize_t len = strlen(realpath(temp, temp));
+//		diag(">>> realpath() = %s <<<", temp);
 		std::string exe_path = (len > 0) ? std::string(temp, len) : std::string("");
 		std::string exe_name = exe_path.substr(exe_path.find_last_of('/') + 1);
 		std::string dir_path = exe_path.substr(0, exe_path.find_last_of('/'));
 		std::string dir_name = dir_path.substr(dir_path.find_last_of('/') + 1);
+
+//		diag(">>> exe_path = %s <<<", exe_path.c_str());
+//		diag(">>> exe_name = %s <<<", exe_name.c_str());
+//		diag(">>> dir_path = %s <<<", dir_path.c_str());
+//		diag(">>> dir_name = %s <<<", dir_name.c_str());
 
 		env.load_dotenv((dir_path + "/.env").c_str(), true);
 		bool loaded1 = env.loaded;
