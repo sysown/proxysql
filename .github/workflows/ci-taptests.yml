@@ -5,7 +5,7 @@ on:
   workflow_call:
 
 env:
-  GROUP: tests
+  TAPGROUP: tests
 
 jobs:
   select:
@@ -45,7 +45,7 @@ jobs:
         sed -i "s/'test_server_sess_status-t', //" proxysql/tap-matrix.json
         sed -i "s/'test_session_status_flags-t', //" proxysql/tap-matrix.json
         
-        echo "matrix=$(cat proxysql/tap-matrix-$GROUP.json)" >> $GITHUB_OUTPUT
+        echo "matrix=$(cat proxysql/tap-matrix-$TAPGROUP.json)" >> $GITHUB_OUTPUT
 
   tests:
     runs-on: ubuntu-22.04
@@ -123,7 +123,7 @@ jobs:
         #mkdir test
         
         # select tests
-        echo "export TAP_WORKDIR=\$WORKSPACE/test/tap/$GROUP" >> test/env.sh
+        echo "export TAP_WORKDIR=\$WORKSPACE/test/tap/$TAPGROUP" >> test/env.sh
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=0" >> test/env.sh
         echo "export TEST_PY_CHUSER=0" >> test/env.sh
