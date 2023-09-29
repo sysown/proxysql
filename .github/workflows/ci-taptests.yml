@@ -4,6 +4,9 @@ on:
   workflow_dispatch:
   workflow_call:
 
+env:
+  GROUP: tests
+
 jobs:
   select:
     runs-on: ubuntu-22.04
@@ -18,7 +21,7 @@ jobs:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
         fail-on-cache-miss: true
         path: |
-          proxysql/tap-matrix.*
+          proxysql/tap-matrix*
 
     - name: Set matrix
       id: set-matrix
@@ -42,7 +45,7 @@ jobs:
         sed -i "s/'test_server_sess_status-t', //" proxysql/tap-matrix.json
         sed -i "s/'test_session_status_flags-t', //" proxysql/tap-matrix.json
         
-        echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
+        echo "matrix=$(cat proxysql/tap-matrix-$GROUP.json)" >> $GITHUB_OUTPUT
 
   tests:
     runs-on: ubuntu-22.04
@@ -50,10 +53,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-#        testgroup: [ '.*admin.*-t|.*basic.*-t|.*charset.*-t|.*firewall.*-t|.*kill.*-t|.*max.*-t', 'multiple.*-t', '.*mysql.*-t', '.*prepare.*-t', 'reg_test.*-t', 'save.*-t', '.*set.*-t', '.*sqlite.*-t', '.*ssl.*-t', 'test_.*-t' ]
-#        testgroup: [ '' ]
-#        testgroup: [ 'kill_connection3-t', 'reg_test_3847_admin_lock-t', 'set_testing-240-t', 'max_connections_ff-t', 'test_server_sess_status-t' ]
-        testgroup: ${{ fromJson(needs.select.outputs.matrix) }}
+#        taptests: [ '.*admin.*-t|.*basic.*-t|.*charset.*-t|.*firewall.*-t|.*kill.*-t|.*max.*-t', 'multiple.*-t', '.*mysql.*-t', '.*prepare.*-t', 'reg_test.*-t', 'save.*-t', '.*set.*-t', '.*sqlite.*-t', '.*ssl.*-t', 'test_.*-t' ]
+#        taptests: [ '' ]
+#        taptests: [ 'kill_connection3-t', 'reg_test_3847_admin_lock-t', 'set_testing-240-t', 'max_connections_ff-t', 'test_server_sess_status-t' ]
+        taptests: ${{ fromJson(needs.select.outputs.matrix) }}
     steps:
 
     - name: Install dependencies
@@ -120,6 +123,7 @@ jobs:
         #mkdir test
         
         # select tests
+        echo "export TAP_WORKDIR=\$WORKSPACE/test/tap/$GROUP" >> test/env.sh
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=0" >> test/env.sh
         echo "export TEST_PY_CHUSER=0" >> test/env.sh
@@ -127,7 +131,7 @@ jobs:
         echo "export TEST_PY_TAP=1" >> test/env.sh
         echo "export TEST_PY_TAPINT=0" >> test/env.sh
         echo "export TEST_PY_FAILOVER=0" >> test/env.sh
-        echo 'export TEST_PY_TAP_INCL="${{ matrix.testgroup }}"' >> test/env.sh
+        echo 'export TEST_PY_TAP_INCL="${{ matrix.taptests }}"' >> test/env.sh
         #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
         echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
         echo 'export WITHGCOV=0' >> test/env.sh
@@ -202,17 +206,15 @@ jobs:
         ./docker-compose-destroy.bash
         
         sudo chmod -R 777 ${{ github.workspace }}/*
-        echo "${{ matrix.testgroup }}" | tr -d '*|' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
+        echo "${{ matrix.taptests }}" | tr -d '*|' | xargs -0 printf 'taptests=%s' >> $GITHUB_ENV
 
     - name: Archive artifacts
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}-${{ env.taptests }}
         path: |
-          proxysql/ci_gcov_logs/
-          proxysql/ci_infra_logs/
-          proxysql/ci_tests_logs/
+          proxysql/ci_*_logs/
           proxysql/src/
           proxysql/test/
           
