@@ -92,5 +92,6 @@ jobs:
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}
         path: |
+          proxysql/ci_*_logs/
           proxysql/src/
           
