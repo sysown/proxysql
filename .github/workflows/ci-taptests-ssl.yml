@@ -163,12 +163,36 @@ jobs:
         
         true
 
+    - name: Configure USE_SSL
+      run: |
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
+        
+        if [[ ${{ matrix.usessl }} = server || ${{ matrix.usessl }} = both ]]; then 
+          sed -i "/LOAD MYSQL SERVERS TO RUNTIME;/i UPDATE mysql_servers SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
+          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/tests/.env | true
+          echo "export TAP_USE_SSL=0" >> ${{ github.workspace }}/proxysql/test/tap/tests/.env
+          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env | true
+          echo "export TAP_USE_SSL=0" >> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
+        fi
+        if [[ ${{ matrix.usessl }} = client || ${{ matrix.usessl }} = both ]]; then 
+          sed -i "/LOAD MYSQL USERS TO RUNTIME;/i UPDATE mysql_users SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
+          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/tests/.env | true
+          echo "export TAP_USE_SSL=1" >> ${{ github.workspace }}/proxysql/test/tap/tests/.env
+          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env | true
+          echo "export TAP_USE_SSL=1" >> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
+        fi
+        cat conf/proxysql/infra-config.sql
+        echo ">>> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env <<<"
+        echo ">>> TAP_USE_SSL=$TAP_USE_SSL <<<"
+        cat ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env || true
+
     - name: Run proxysql
       run: |
         #set -x
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
         source ./env.sh
+        env | sort
         
         ./cluster_start.bash
         sleep 10
@@ -195,21 +219,6 @@ jobs:
         ./docker-compose-init.bash
 
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
-        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
-        if [[ ${{ matrix.usessl }} = server || ${{ matrix.usessl }} = both ]]; then 
-          sed -i "/LOAD MYSQL SERVERS TO RUNTIME;/i UPDATE mysql_servers SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
-          echo "export TAP_USE_SSL=0" >> ${{ github.workspace }}/proxysql/test/tap/tests/.env
-          echo "export TAP_USE_SSL=0" >> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
-        fi
-        if [[ ${{ matrix.usessl }} = client || ${{ matrix.usessl }} = both ]]; then 
-          sed -i "/LOAD MYSQL USERS TO RUNTIME;/i UPDATE mysql_users SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
-          echo "export TAP_USE_SSL=1" >> ${{ github.workspace }}/proxysql/test/tap/tests/.env
-          echo "export TAP_USE_SSL=1" >> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
-        fi
-        #cat conf/proxysql/infra-config.sql
-        echo ">>> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env <<<"
-        echo ">>> TAP_USE_SSL=$TAP_USE_SSL <<<"
-        cat ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env || true
         ./docker-compose-init.bash
         
         docker ps -a
