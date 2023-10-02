@@ -97,7 +97,7 @@ jobs:
           sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) ${TYPE#-}'" docker-compose.yml
           make ${{ matrix.dist }} | tee ci_build_log/build.log
         else
-          make ${{ matrix.dist }}${{ matrix.type }} | tee ../build.log
+          make ${{ matrix.dist }}${{ matrix.type }} | tee ci_build_log/build.log
         fi
 
     - name: Check build
