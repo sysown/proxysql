@@ -5265,7 +5265,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
-	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+	query1=(char *)"INSERT OR IGNORE INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
 	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
@@ -8014,7 +8014,7 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 void MySQL_Monitor::monitor_galera_async() {
 
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
-
+	std::set<std::string> checked_servers;
 	pthread_mutex_lock(&galera_mutex);
 	assert(Galera_Hosts_resultset);
 	mmsds.reserve(Galera_Hosts_resultset->rows_count);
@@ -8022,6 +8022,11 @@ void MySQL_Monitor::monitor_galera_async() {
 
 	for (std::vector<SQLite3_row*>::iterator it = Galera_Hosts_resultset->rows.begin(); it != Galera_Hosts_resultset->rows.end(); ++it) {
 		const SQLite3_row* r = *it;
+		// r->fields[0] = writer_hostgroup, r->fields[1] = hostname, r->fields[2] = port
+		auto ret = checked_servers.insert(std::string(r->fields[0]) + ":" + std::string(r->fields[1]) + ":" + std::string(r->fields[2]));
+		if (ret.second == false) // duplicate server entry
+			continue;
+
 		bool rc_ping = server_responds_to_ping(r->fields[1], atoi(r->fields[2]));
 		if (rc_ping) { // only if server is responding to pings
 
