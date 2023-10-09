@@ -41,6 +41,7 @@ class CommandLine {
 	// various
 	char* workdir = strdup("./");
 	bool use_ssl = 0;
+	bool compression = 0;
 	uint64_t client_flags = 0;
 
 	int getEnv();

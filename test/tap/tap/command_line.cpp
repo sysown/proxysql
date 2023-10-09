@@ -130,19 +130,29 @@ int CommandLine::getEnv() {
 	{
 		// load environment
 		char temp[PATH_MAX];
+		ssize_t len = 0;
 //		ssize_t len = readlink("/proc/self/exe", temp, sizeof(temp));
 		{
 			FILE* fp = fopen("/proc/self/cmdline", "r");		// Linux
 			if (!fp)
 				fp = fopen("/proc/curproc/cmdline", "r");		// FreeBSD, needs procfs mounted
 			assert(fp);											// MacOS ?
-			fgets(temp, PATH_MAX, fp);
+			len = strlen(fgets(temp, PATH_MAX, fp));
+			assert(len);
 			fclose(fp);
 		}
-//		diag(">>> cmdline = %s <<<", temp);
-		ssize_t len = strlen(realpath(temp, temp));
-//		diag(">>> realpath() = %s <<<", temp);
-		std::string exe_path = (len > 0) ? std::string(temp, len) : std::string("");
+		std::string cmd_line = std::string(temp, len);
+		std::string cmd_path = cmd_line.substr(0, cmd_line.find_last_of('/'));
+		if (cmd_line.find('/') == std::string::npos)
+			cmd_path = ".";
+		std::string cmd_name = cmd_line.substr(cmd_line.find_last_of('/')+1);
+
+//		diag(">>> cmd_line = %s <<<", cmd_line.c_str());
+//		diag(">>> cmd_path = %s <<<", cmd_path.c_str());
+//		diag(">>> cmd_name = %s <<<", cmd_name.c_str());
+
+		len = strlen(realpath(cmd_path.c_str(), temp));
+		std::string exe_path = (len > 0) ? std::string(temp, len) + "/" + cmd_name : std::string("");
 		std::string exe_name = exe_path.substr(exe_path.find_last_of('/') + 1);
 		std::string dir_path = exe_path.substr(0, exe_path.find_last_of('/'));
 		std::string dir_name = dir_path.substr(dir_path.find_last_of('/') + 1);
@@ -269,6 +279,12 @@ int CommandLine::getEnv() {
 		if (value) {
 			env_int = strtol(value, NULL, 0);
 			use_ssl = (bool) env_int;
+		}
+
+		value = getenv("TAP_COMPRESSION");
+		if (value) {
+			env_int = strtol(value, NULL, 0);
+			compression = (bool) env_int;
 		}
 
 		value = getenv("TAP_CLIENT_FLAGS");
