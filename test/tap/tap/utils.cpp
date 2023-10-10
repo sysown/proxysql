@@ -1725,3 +1725,31 @@ int get_env_int(const char* envname, int envdefault) {
 
 	return res;
 };
+
+int get_env_bool(const char* envname, bool envdefault) {
+
+	const char * envval = std::getenv(envname);
+	int res = envdefault;
+
+	if (envval != NULL) {
+		if (strcasecmp(envval, "true") == 0) {
+			res = 1;
+		} else if (strcasecmp(envval, "false") == 0) {
+			res = 0;
+		} else if (strcasecmp(envval, "yes") == 0) {
+			res = 1;
+		} else if (strcasecmp(envval, "no") == 0) {
+			res = 0;
+		} else if (strcasecmp(envval, "on") == 0) {
+			res = 1;
+		} else if (strcasecmp(envval, "off") == 0) {
+			res = 0;
+		} else {
+			res = strtol(envval, NULL, 0);
+		}
+	}
+
+//	diag("%s: %s='%s' >>> %d", __FUNCTION__, envname, envval, res);
+
+	return (bool) res;
+};

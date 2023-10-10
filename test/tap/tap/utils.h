@@ -651,5 +651,6 @@ void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg)
  * @return int value or int default
  */
 int get_env_int(const char * envname, int envdefault);
+bool get_env_bool(const char * envname, bool envdefault);
 
 #endif // #define UTILS_H

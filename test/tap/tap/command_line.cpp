@@ -9,6 +9,7 @@
 
 #include "tap.h"
 #include "command_line.h"
+#include "utils.h"
 #include "json.hpp"
 
 #include "dotenv.h"
@@ -187,12 +188,15 @@ int CommandLine::getEnv() {
 		if (value)
 			replace_str_field(&this->host, value);
 
-		value = getenv("TAP_PORT");
-		if (value) {
-			env_int = strtol(value, NULL, 10);
-			if (env_int > 0 && env_int < 65536)
-				port = env_int;
-		}
+//		value = getenv("TAP_PORT");
+//		if (value) {
+//			env_int = strtol(value, NULL, 10);
+//			if (env_int > 0 && env_int < 65536)
+//				port = env_int;
+//		}
+		env_int = get_env_int("TAP_PORT", 0);
+		if (env_int > 0 && env_int < 65536)
+			port = env_int;
 
 		value = getenv("TAP_USERNAME");
 		if (value)
@@ -209,12 +213,15 @@ int CommandLine::getEnv() {
 		if (value)
 			replace_str_field(&this->root_host, value);
 
-		value = getenv("TAP_ROOTPORT");
-		if (value) {
-			env_int = strtol(value, NULL, 10);
-			if (env_int > 0 && env_int < 65536)
-				root_port = env_int;
-		}
+//		value = getenv("TAP_ROOTPORT");
+//		if (value) {
+//			env_int = strtol(value, NULL, 10);
+//			if (env_int > 0 && env_int < 65536)
+//				root_port = env_int;
+//		}
+		env_int = get_env_int("TAP_ROOTPORT", 0);
+		if (env_int > 0 && env_int < 65536)
+			root_port = env_int;
 
 		value = getenv("TAP_ROOTUSERNAME");
 		if (value)
@@ -231,12 +238,15 @@ int CommandLine::getEnv() {
 		if (value)
 			replace_str_field(&this->admin_host, value);
 
-		value = getenv("TAP_ADMINPORT");
-		if (value) {
-			env_int = strtol(value, NULL, 10);
-			if (env_int > 0 && env_int < 65536)
-				admin_port = env_int;
-		}
+//		value = getenv("TAP_ADMINPORT");
+//		if (value) {
+//			env_int = strtol(value, NULL, 10);
+//			if (env_int > 0 && env_int < 65536)
+//				admin_port = env_int;
+//		}
+		env_int = get_env_int("TAP_ADMINPORT", 0);
+		if (env_int > 0 && env_int < 65536)
+			admin_port = env_int;
 
 		value = getenv("TAP_ADMINUSERNAME");
 		if (value)
@@ -253,12 +263,15 @@ int CommandLine::getEnv() {
 		if (value)
 			replace_str_field(&this->mysql_host, value);
 
-		value = getenv("TAP_MYSQLPORT");
-		if (value) {
-			env_int = strtol(value, NULL, 10);
-			if (env_int > 0 && env_int < 65536)
-				mysql_port = env_int;
-		}
+//		value = getenv("TAP_MYSQLPORT");
+//		if (value) {
+//			env_int = strtol(value, NULL, 10);
+//			if (env_int > 0 && env_int < 65536)
+//				mysql_port = env_int;
+//		}
+		env_int = get_env_int("TAP_MYSQLPORT", 0);
+		if (env_int > 0 && env_int < 65536)
+			mysql_port = env_int;
 
 		value = getenv("TAP_MYSQLUSERNAME");
 		if (value)
@@ -275,17 +288,19 @@ int CommandLine::getEnv() {
 		if (value)
 			replace_str_field(&this->workdir, value);
 
-		value = getenv("TAP_USE_SSL");
-		if (value) {
-			env_int = strtol(value, NULL, 0);
-			use_ssl = (bool) env_int;
-		}
+//		value = getenv("TAP_USE_SSL");
+//		if (value) {
+//			env_int = strtol(value, NULL, 0);
+//			use_ssl = (bool) env_int;
+//		}
+		use_ssl = get_env_bool("TAP_USE_SSL", 0);
 
-		value = getenv("TAP_COMPRESSION");
-		if (value) {
-			env_int = strtol(value, NULL, 0);
-			compression = (bool) env_int;
-		}
+//		value = getenv("TAP_COMPRESSION");
+//		if (value) {
+//			env_int = strtol(value, NULL, 0);
+//			compression = (bool) env_int;
+//		}
+		compression = get_env_bool("TAP_COMPRESSION", 0);
 
 		value = getenv("TAP_CLIENT_FLAGS");
 		if (value) {
