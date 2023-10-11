@@ -35,8 +35,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        usessl: [ 'none', 'client', 'server', 'both' ]
-#        usessl: [ 'none', 'client' ]
+#        usessl: [ 'none', 'client', 'server', 'both' ]
+#        usessl: [ 'none' ]
+        compress: [ 'none', 'client', 'server', 'both' ]
+#        compress: [ 'client' ]
 #        taptests: [ '.*admin.*-t|.*basic.*-t|.*charset.*-t|.*firewall.*-t|.*kill.*-t|.*max.*-t', 'multiple.*-t', '.*mysql.*-t', '.*prepare.*-t', 'reg_test.*-t', 'save.*-t', '.*set.*-t', '.*sqlite.*-t', '.*ssl.*-t', 'test_.*-t' ]
         taptests: [ '' ]
 #        taptests: [ 'kill_connection3-t', 'reg_test_3847_admin_lock-t', 'set_testing-240-t', 'max_connections_ff-t', 'test_server_sess_status-t' ]
@@ -163,24 +165,33 @@ jobs:
         
         true
 
-    - name: Configure USE_SSL
+    - name: Configure USE_SSL, COMPRESSION
       run: |
         cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
+        touch ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
         
         if [[ ${{ matrix.usessl }} = server || ${{ matrix.usessl }} = both ]]; then 
           sed -i "/LOAD MYSQL SERVERS TO RUNTIME;/i UPDATE mysql_servers SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
-          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/tests/.env | true
-          echo "export TAP_USE_SSL=0" >> ${{ github.workspace }}/proxysql/test/tap/tests/.env
-          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env | true
+          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
           echo "export TAP_USE_SSL=0" >> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
         fi
         if [[ ${{ matrix.usessl }} = client || ${{ matrix.usessl }} = both ]]; then 
           sed -i "/LOAD MYSQL USERS TO RUNTIME;/i UPDATE mysql_users SET use_ssl=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
-          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/tests/.env | true
-          echo "export TAP_USE_SSL=1" >> ${{ github.workspace }}/proxysql/test/tap/tests/.env
-          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env | true
+          sed -i "/export TAP_USE_SSL=/d" ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
           echo "export TAP_USE_SSL=1" >> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
         fi
+
+        if [[ ${{ matrix.compress }} = server || ${{ matrix.compress }} = both ]]; then 
+          sed -i "/LOAD MYSQL SERVERS TO RUNTIME;/i UPDATE mysql_servers SET compression=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
+          sed -i "/export TAP_COMPRESSION=/d" ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
+          echo "export TAP_COMPRESSION=0" >> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
+        fi
+        if [[ ${{ matrix.compress }} = client || ${{ matrix.compress }} = both ]]; then 
+          #sed -i "/LOAD MYSQL USERS TO RUNTIME;/i UPDATE mysql_users SET compression=1 WHERE comment LIKE '%\${INFRA}';" conf/proxysql/infra-config.sql
+          sed -i "/export TAP_COMPRESSION=/d" ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
+          echo "export TAP_COMPRESSION=1" >> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env
+        fi
+
         cat conf/proxysql/infra-config.sql
         echo ">>> ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP/.env <<<"
         echo ">>> TAP_USE_SSL=$TAP_USE_SSL <<<"
