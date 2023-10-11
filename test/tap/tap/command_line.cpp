@@ -172,13 +172,28 @@ int CommandLine::getEnv() {
 		env.load_dotenv((exe_path + ".env").c_str(), true);
 		bool loaded3 = env.loaded;
 
-		bool quiet = (bool) getenv("TAP_QUIET_ENVLOAD");
-		if (loaded1 && ! quiet)
+		bool verbose = get_env_bool("TAP_VERBOSE_ENVLOAD", 0);
+		if (loaded1 && verbose) {
 			diag("loaded: %s", (dir_path + "/.env").c_str());
-		if (loaded2 && ! quiet)
+			FILE* fp = fopen((dir_path + "/.env").c_str(), "r");
+			while (fgets(temp, PATH_MAX, fp))
+				printf("# %s", temp);
+			fclose(fp);
+		}
+		if (loaded2 && verbose) {
 			diag("loaded: %s", (dir_path + "/" + dir_name + ".env").c_str());
-		if (loaded3 && ! quiet)
+			FILE* fp = fopen((dir_path + "/" + dir_name + ".env").c_str(), "r");
+			while (fgets(temp, PATH_MAX, fp))
+				printf("# %s", temp);
+			fclose(fp);
+		}
+		if (loaded3 && verbose) {
 			diag("loaded: %s", (exe_path + ".env").c_str());
+			FILE* fp = fopen((exe_path + ".env").c_str(), "r");
+			while (fgets(temp, PATH_MAX, fp))
+				printf("# %s", temp);
+			fclose(fp);
+		}
 	}
 
 	int env_int = 0;

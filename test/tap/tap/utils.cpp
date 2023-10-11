@@ -1726,7 +1726,7 @@ int get_env_int(const char* envname, int envdefault) {
 	return res;
 };
 
-int get_env_bool(const char* envname, bool envdefault) {
+bool get_env_bool(const char* envname, bool envdefault) {
 
 	const char * envval = std::getenv(envname);
 	int res = envdefault;
