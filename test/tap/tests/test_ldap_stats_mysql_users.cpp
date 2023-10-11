@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
 				diag("Creating connection for user '%s'", LDAP_USER.c_str());
 
 				MYSQL* conn = mysql_init(NULL);
-				diag("Connecting: username='%s' cl.use_ssl=%d", LDAP_USER.c_str(), cl.use_ssl);
+				diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", LDAP_USER.c_str(), cl.use_ssl, cl.compression);
 				if (cl.use_ssl)
 					mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
 				if (cl.compression)

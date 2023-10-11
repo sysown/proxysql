@@ -94,7 +94,7 @@ void * my_conn_thread(void *arg) {
 			int i = (rand()%multi_users) + 1;
 			std::string u = "sbtest" + std::to_string(i);
 			std::string p = "sbtest" + std::to_string(i);
-			diag("Connecting: username='%s' cl.use_ssl=%d", u.c_str(), cl.use_ssl);
+			diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", u.c_str(), cl.use_ssl, cl.compression);
 			rc = mysql_real_connect(mysql, cl.host, u.c_str(), p.c_str(), schema, cl.port + rand()%multiport, NULL, 0);
 		}
 		if (rc == NULL) {

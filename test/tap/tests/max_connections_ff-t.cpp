@@ -229,7 +229,7 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 	// Create a new ff connection and check that a query expires after 'connection'
 	{
 		MYSQL* proxy_ff = mysql_init(NULL);
-		diag("Connecting: username='%s' cl.use_ssl=%d", username.c_str(), cl.use_ssl);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", username.c_str(), cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxy_ff, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)
@@ -387,7 +387,7 @@ int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int ma
 		diag("Creating new 'fast_forward' connection using user '%s'", username.c_str());
 
 		MYSQL* proxy_ff = mysql_init(NULL);
-		diag("Connecting: username='%s' cl.use_ssl=%d", username.c_str(), cl.use_ssl);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", username.c_str(), cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxy_ff, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)

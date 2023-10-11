@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL* mysql_server = mysql_init(NULL);
-	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
+	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d cl.compression=%d", cl.mysql_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql_server, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)
@@ -247,7 +247,7 @@ int main(int argc, char** argv) {
 	for (const auto& user_attribute : user_attributes) {
 		// Create the new connection to verify
 		MYSQL* proxysql_mysql = mysql_init(NULL);
-		diag("Connecting: username='%s' cl.use_ssl=%d", std::get<0>(user_attribute).c_str(), cl.use_ssl);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", std::get<0>(user_attribute).c_str(), cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)

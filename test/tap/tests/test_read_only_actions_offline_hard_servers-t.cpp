@@ -34,7 +34,7 @@ using replication_hostgroups_tuple = std::tuple<int,int,std::string>;
 MYSQL* create_new_connection(const char* host, const char* username, const char* password, int port) {
 
 	MYSQL* mysql = mysql_init(NULL);
-	diag("Connecting: username='%s' cl.use_ssl=%d", username, cl.use_ssl);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)

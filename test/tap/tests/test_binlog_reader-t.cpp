@@ -128,7 +128,7 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 	// Check connections only performing select doesn't contribute to GITD count
 
 	MYSQL* select_conn = mysql_init(NULL);
-	diag("Connecting: username='%s' cl.use_ssl=%d", "sbtest8", cl.use_ssl);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", "sbtest8", cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(select_conn, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)
@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
-	diag("Connecting: username='%s' cl.use_ssl=%d", "sbtest8", cl.use_ssl);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", "sbtest8", cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)

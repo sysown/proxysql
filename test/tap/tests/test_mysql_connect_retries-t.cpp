@@ -168,7 +168,7 @@ int check_connect_retries(MYSQL* admin, uint32_t retries, uint32_t hg, uint32_t 
 	diag("Starting a '%s' connection with user 'sbtest10' and issuing query", conn_type.c_str());
 
 	MYSQL* proxy = mysql_init(NULL);
-	diag("Connecting: username='%s' cl.use_ssl=%d", user.c_str(), cl.use_ssl);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", user.c_str(), cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)
@@ -323,7 +323,7 @@ int check_connect_error_consistency(MYSQL* admin, uint32_t hg, bool ff, uint32_t
 	usleep(1500 * 1000);
 
 	MYSQL* proxy = mysql_init(NULL);
-	diag("Connecting: username='%s' cl.use_ssl=%d", user.c_str(), cl.use_ssl);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", user.c_str(), cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)
@@ -390,7 +390,7 @@ int check_connect_timeout_precedence(MYSQL* admin, uint32_t hg, bool ff) {
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	MYSQL* proxy = mysql_init(NULL);
-	diag("Connecting: username='%s' cl.use_ssl=%d", user.c_str(), cl.use_ssl);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", user.c_str(), cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)

@@ -258,7 +258,7 @@ int check_backend_conns(const CommandLine& cl, const test_params_t& test_params,
 		for (const auto& svr_addr : svrs_addrs) {
 
 			MYSQL* mysql = mysql_init(NULL);
-			diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
+			diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d cl.compression=%d", cl.mysql_username, cl.use_ssl, cl.compression);
 			if (cl.use_ssl)
 				mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 			if (cl.compression)

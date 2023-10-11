@@ -75,7 +75,7 @@ int test_crash(const char *host, int port) {
 
 		MYSQL * proxysql_clickhouse = mysql_init(NULL);
 		diag("Line: %d . Create connection %d in test_crash()", __LINE__ , i);
-		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[2].first.c_str(), cl.use_ssl);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", credentials[2].first.c_str(), cl.use_ssl, cl.compression);
 		// Correctly connect to Clickhouse server
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
@@ -431,7 +431,7 @@ int main(int argc, char** argv) {
 		// Connect with invalid username
 		std::string inv_user_err {};
 		bool failed_to_connect = false;
-		diag("Connecting: username='%s' cl.use_ssl=%d", "foobar_user", cl.use_ssl);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", "foobar_user", cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)
@@ -454,7 +454,7 @@ int main(int argc, char** argv) {
 		// Connect with invalid password
 		std::string inv_pass_err {};
 		failed_to_connect = false;
-		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[0].first.c_str(), cl.use_ssl);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", credentials[0].first.c_str(), cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)
@@ -475,7 +475,7 @@ int main(int argc, char** argv) {
 		proxysql_clickhouse = mysql_init(NULL);
 
 		// Correctly connect to Clickhouse server
-		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[0].first.c_str(), cl.use_ssl);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", credentials[0].first.c_str(), cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)
@@ -532,7 +532,7 @@ int main(int argc, char** argv) {
 		// Connect with invalid username
 		bool success_to_connect = true;
 		std::string new_intf_conn_err {};
-		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[1].first.c_str(), cl.use_ssl);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", credentials[1].first.c_str(), cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)

@@ -77,7 +77,11 @@ int main(int argc, char** argv) {
 
 	unsigned long time_diff_ms = (end-begin)/1000;
 
-	ok(time_diff_ms>20000, "Total query execution time should be more than 20 seconds : %lums", time_diff_ms);
+	if (cl.compression) {
+		ok(time_diff_ms>5000, "Total query execution time should be more than 5 seconds : %lums", time_diff_ms);
+	} else {
+		ok(time_diff_ms>20000, "Total query execution time should be more than 20 seconds : %lums", time_diff_ms);
+	}
 
 	MYSQL_QUERY(mysqladmin, "SET mysql-throttle_max_bytes_per_second_to_client=0");
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");

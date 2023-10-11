@@ -983,7 +983,7 @@ int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector
 	// Use a known default charset for the connection
 	MARIADB_CHARSET_INFO* latin2_charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 	mysql->charset = latin2_charset;
-	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
+	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d cl.compression=%d", cl.mysql_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)
@@ -1203,7 +1203,7 @@ int main(int argc, char** argv) {
 	};
 
 	MYSQL* mysql_server = mysql_init(NULL);
-	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
+	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d cl.compression=%d", cl.mysql_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql_server, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)
