@@ -1,4 +1,4 @@
-name: CI-taptests-ssl
+name: CI-taptests-ssl-compress
 
 on:
   workflow_dispatch:
