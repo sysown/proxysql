@@ -32,7 +32,7 @@ private:
 		const string req_path { req.get_path() };
 		const string select_query {
 			"SELECT * FROM runtime_restapi_routes WHERE uri='" + req_uri + "' and"
-				" method='" + req.get_method() + "' and active=1"
+				" method='" + (string) req.get_method() + "' and active=1"
 		};
 
 		std::unique_ptr<SQLite3_result> resultset {
@@ -41,10 +41,10 @@ private:
 
 		if (!resultset) {
 			proxy_error(
-				"Cannot query script for given method [%s] and uri [%s]\n", req.get_method().c_str(), req_uri.c_str()
+				"Cannot query script for given method [%s] and uri [%s]\n", ((string) req.get_method()).c_str(), req_uri.c_str()
 			);
 			const string not_found_err_msg {
-				"The script for method [" + req.get_method() + "] and route [" + req.get_path() + "] was not found."
+				"The script for method [" + (string) req.get_method() + "] and route [" + (string) req.get_path() + "] was not found."
 			};
 			json j_err_resp {};
 
@@ -63,13 +63,13 @@ private:
 			return response;
 		} else if (resultset && resultset->rows_count != 1) {
 			const string not_found_err_msg {
-				"The script for method [" + req.get_method() + "] and route [" + req_path + "] was not found."
+				"The script for method [" + (string) req.get_method() + "] and route [" + (string) req_path + "] was not found."
 					" Rows count returned [" + std::to_string(resultset->rows_count) + "]"
 			};
 			json j_err_resp { { "error", not_found_err_msg } };
 
 			proxy_error(
-				"Script for method [%s] and uri [%s] was not found\n", req.get_method().c_str(), req_uri.c_str()
+				"Script for method [%s] and uri [%s] was not found\n", ((string) req.get_method()).c_str(), ((string) req_uri).c_str()
 			);
 			auto response =
 				std::shared_ptr<http_response>(new string_response(j_err_resp.dump(), http::http_utils::http_bad_request));
@@ -85,7 +85,7 @@ private:
 	}
 
     const std::shared_ptr<http_response> process_request(const http_request& req, const std::string& _params) {
-		std::string params = req.get_content();
+		std::string params = (string) req.get_content();
 		const string req_path { req.get_path() };
 
 		if (params.empty())
@@ -271,9 +271,9 @@ private:
     }
 
 public:
-	const std::shared_ptr<http_response> render(const http_request& req) {
-		proxy_info("Render generic request with method %s for uri %s\n", req.get_method().c_str(), req.get_path().c_str());
-		json j_err_resp {{ "error", "HTTP method " + req.get_method() + " is not implemented" }};
+	std::shared_ptr<http_response> render(const http_request& req) {
+		proxy_info("Render generic request with method %s for uri %s\n", ((string) req.get_method()).c_str(), ((string) req.get_path()).c_str());
+		json j_err_resp {{ "error", "HTTP method " + (string) req.get_method() + " is not implemented" }};
         auto response = std::shared_ptr<http_response>(new string_response(j_err_resp.dump()));
         response->with_header("Content-Type", "application/json");
         response->with_header("Access-Control-Allow-Origin", "*");
@@ -281,7 +281,7 @@ public:
         return response;
     }
 
-	const std::shared_ptr<http_response> render_GET(const http_request& req) {
+	std::shared_ptr<http_response> render_GET(const http_request& req) {
 		const auto args = req.get_args();
 
 		// Explicit object creation, otherwise 'array' is initialized
@@ -293,7 +293,7 @@ public:
 		const string s_params { input_params.dump() };
 
 #ifdef DEBUG
-		const char* req_path { req.get_path().c_str() };
+		const char* req_path { ((string) req.get_path()).c_str() };
 		const char* p_params { s_params.c_str() };
 		proxy_debug(PROXY_DEBUG_RESTAPI, 1, "Processing GET - req: '%s', params: `%s`\n", req_path, p_params);
 #endif
@@ -301,11 +301,11 @@ public:
 		return process_request(req, s_params);
 	}
 
-	const std::shared_ptr<http_response> render_POST(const http_request& req) {
-		std::string params=req.get_content();
+	std::shared_ptr<http_response> render_POST(const http_request& req) {
+		std::string params = (std::string) req.get_content();
 
 #ifdef DEBUG
-		const char* req_path { req.get_path().c_str() };
+		const char* req_path { ((string) req.get_path()).c_str() };
 		const char* p_params { params.c_str() };
 		proxy_debug(PROXY_DEBUG_RESTAPI, 1, "Processing POST - req: '%s', params: `%s`\n", req_path, p_params);
 #endif
@@ -323,7 +323,7 @@ public:
 		_get_fn(get_fn)
 	{}
 
-	const std::shared_ptr<http_response> render_GET(const http_request& req) override {
+	std::shared_ptr<http_response> render_GET(const http_request& req) override {
 		return this->_get_fn(req);
 	}
 };
