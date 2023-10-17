@@ -163,8 +163,8 @@ ifeq ($(CENTOSVER),6)
 	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
 else
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.75 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
+	cd libmicrohttpd && ln -s libmicrohttpd-0.9.77 libmicrohttpd
+	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.77.tar.gz
 #	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
