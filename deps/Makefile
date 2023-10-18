@@ -38,21 +38,14 @@ endif
 endif
 
 
-# determine good compiler version for stdc++17
-#IS_CXX17 := 0
-#ifeq ($(CXX),clang++)
-#	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-#	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-#ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
-#	IS_CXX17 := 1
-#endif
-#else
-#	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-#	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-#ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
-#	IS_CXX17 := 1
-#endif
-#endif
+# determine compiler support for c++11/17
+export CPLUSPLUS=$(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifeq ($(CPLUSPLUS),)
+	export CPLUSPLUS=$(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifeq ($(CPLUSPLUS),)
+	$(error Compiler must support at least c++11)
+endif
+endif
 
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
@@ -191,7 +184,7 @@ lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-#ifeq ($(IS_CXX17), 1)
+#ifeq ($(CPLUSPLUS),201703L)
 #	echo ">>> Clickhouse CXX17"
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync

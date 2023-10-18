@@ -42,14 +42,22 @@ DEBUG=${ALL_DEBUG}
 #export EXTRALINK
 export MAKE
 export CURVER?=2.6.0
-export CPLUSPLUS=$(shell ${CC} -dM -E -x c++  /dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
-$(warning __cplusplus=${CPLUSPLUS})
 
+
+# determine compiler support for c++11/17
+export CPLUSPLUS=$(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifeq ($(CPLUSPLUS),)
+	export CPLUSPLUS=$(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifeq ($(CPLUSPLUS),)
+	$(error Compiler must support at least c++11)
+endif
+endif
+
+DISTRO := Unknown
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell awk -F= '/^NAME/{print $$2}' /etc/os-release)
-else
-	DISTRO := Unknown
 endif
+
 
 NPROCS := 1
 OS := $(shell uname -s)
@@ -59,14 +67,14 @@ endif
 ifeq ($(OS),Darwin)
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
-
 export MAKEOPT=-j ${NPROCS}
 
+
+SYSTEMD := 0
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
-	SYSTEMD=1
-else
-	SYSTEMD=0
+	SYSTEMD := 1
 endif
+
 USERCHECK := $(shell getent passwd proxysql)
 GROUPCHECK := $(shell getent group proxysql)
 
