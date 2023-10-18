@@ -118,9 +118,6 @@ PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 PSQLCH=
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH=-DPROXYSQLCLICKHOUSE
-ifeq ($(IS_CXX17),1)
-	PSQLCH=-DPROXYSQLCLICKHOUSE -std=c++17 -DCXX17
-endif
 endif
 
 
@@ -145,7 +142,10 @@ ifeq ($(TEST_WITHASANVAR),1)
 WASAN+= -DTEST_WITHASAN
 endif
 
-MYCXXFLAGS=-std=c++11
+MYCXXFLAGS=-std=c++11 -DCXX11
+ifeq ($(IS_CXX17),1)
+	MYCXXFLAGS=-std=c++17 -DCXX17
+endif
 ifeq ($(CXX),clang++)
 	MYCXXFLAGS+= -fuse-ld=lld
 endif

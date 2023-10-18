@@ -42,6 +42,9 @@ DEBUG=${ALL_DEBUG}
 #export EXTRALINK
 export MAKE
 export CURVER?=2.6.0
+export CPLUSPLUS=$(shell ${CC} -dM -E -x c++  /dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+$(warning __cplusplus=${CPLUSPLUS})
+
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell awk -F= '/^NAME/{print $$2}' /etc/os-release)
 else

@@ -123,23 +123,25 @@ PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
 PSQLCH=
 ifeq ($(PROXYSQLCLICKHOUSE),1)
 	PSQLCH=-DPROXYSQLCLICKHOUSE
-ifeq ($(IS_CXX17),1)
-	PSQLCH=-DPROXYSQLCLICKHOUSE -std=c++17 -DCXX17
-endif
 endif
 
 
 # 'libhttpserver': Add 'ENABLE_EPOLL' by default for all platforms except
 # for 'Darwin'. This is required when compiling 'libhttpserver' for avoiding
 # internal use of 'SELECT' in favor of 'EPOLL'. See #3591.
+ENABLE_EPOLL=-DENABLE_EPOLL
 ifeq ($(UNAME_S),Darwin)
 ENABLE_EPOLL=
-else
-ENABLE_EPOLL=-DENABLE_EPOLL
 endif
 
 MYCFLAGS=$(IDIRS) $(OPTZ) $(DEBUG) -Wall -DGITVERSION=\"$(GIT_VERSION)\" $(NOJEM) $(WGCOV) $(WASAN)
-MYCXXFLAGS=-std=c++11 $(MYCFLAGS) $(PSQLCH) $(ENABLE_EPOLL)
+
+MYCXXFLAGS=-std=c++11 -DCXX11
+ifeq ($(IS_CXX17),1)
+	MYCXXFLAGS=-std=c++17 -DCXX17
+endif
+MYCXXFLAGS+= $(MYCFLAGS) $(PSQLCH) $(ENABLE_EPOLL)
+
 
 default: libproxysql.a
 .PHONY: default
