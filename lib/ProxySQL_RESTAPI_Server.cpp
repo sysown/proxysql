@@ -271,17 +271,25 @@ private:
     }
 
 public:
+#if __cplusplus >= 201703L
 	std::shared_ptr<http_response> render(const http_request& req) {
+#else
+	const std::shared_ptr<http_response> render(const http_request& req) {
+#endif
 		proxy_info("Render generic request with method %s for uri %s\n", ((string) req.get_method()).c_str(), ((string) req.get_path()).c_str());
 		json j_err_resp {{ "error", "HTTP method " + (string) req.get_method() + " is not implemented" }};
-        auto response = std::shared_ptr<http_response>(new string_response(j_err_resp.dump()));
-        response->with_header("Content-Type", "application/json");
-        response->with_header("Access-Control-Allow-Origin", "*");
+		auto response = std::shared_ptr<http_response>(new string_response(j_err_resp.dump()));
+		response->with_header("Content-Type", "application/json");
+		response->with_header("Access-Control-Allow-Origin", "*");
 
-        return response;
-    }
+		return response;
+	}
 
+#if __cplusplus >= 201703L
 	std::shared_ptr<http_response> render_GET(const http_request& req) {
+#else
+	const std::shared_ptr<http_response> render_GET(const http_request& req) {
+#endif
 		const auto args = req.get_args();
 
 		// Explicit object creation, otherwise 'array' is initialized
@@ -301,7 +309,11 @@ public:
 		return process_request(req, s_params);
 	}
 
+#if __cplusplus >= 201703L
 	std::shared_ptr<http_response> render_POST(const http_request& req) {
+#else
+	const std::shared_ptr<http_response> render_POST(const http_request& req) {
+#endif
 		std::string params = (std::string) req.get_content();
 
 #ifdef DEBUG
@@ -323,7 +335,11 @@ public:
 		_get_fn(get_fn)
 	{}
 
+#if __cplusplus >= 201703L
 	std::shared_ptr<http_response> render_GET(const http_request& req) override {
+#else
+	const std::shared_ptr<http_response> render_GET(const http_request& req) override {
+#endif
 		return this->_get_fn(req);
 	}
 };

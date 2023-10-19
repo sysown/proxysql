@@ -1,0 +1,127 @@
+commit 28afed88f70420ee256e627d065d21a00d9d7977
+Author: Miro Stauder <miro@proxysql.com>
+Date:   Mon Jan 9 12:05:26 2023 +0000
+
+    noexcept.patch
+
+diff --git a/src/httpserver/basic_auth_fail_response.hpp b/src/httpserver/basic_auth_fail_response.hpp
+index a28fa3d..24bb132 100644
+--- a/src/httpserver/basic_auth_fail_response.hpp
++++ b/src/httpserver/basic_auth_fail_response.hpp
+@@ -52,7 +52,7 @@ class basic_auth_fail_response : public string_response
+         }
+ 
+         basic_auth_fail_response(const basic_auth_fail_response& other) = default;
+-        basic_auth_fail_response(basic_auth_fail_response&& other) noexcept = default;
++        basic_auth_fail_response(basic_auth_fail_response&& other) = default;
+         basic_auth_fail_response& operator=(const basic_auth_fail_response& b) = default;
+         basic_auth_fail_response& operator=(basic_auth_fail_response&& b) = default;
+ 
+diff --git a/src/httpserver/create_webserver.hpp b/src/httpserver/create_webserver.hpp
+index 39cb3ec..f43c8f5 100644
+--- a/src/httpserver/create_webserver.hpp
++++ b/src/httpserver/create_webserver.hpp
+@@ -48,7 +48,7 @@ class create_webserver
+     public:
+         create_webserver() = default;
+         create_webserver(const create_webserver& b) = default;
+-        create_webserver(create_webserver&& b) noexcept = default;
++        create_webserver(create_webserver&& b) = default;
+         create_webserver& operator=(const create_webserver& b) = default;
+         create_webserver& operator=(create_webserver&& b) = default;
+ 
+diff --git a/src/httpserver/deferred_response.hpp b/src/httpserver/deferred_response.hpp
+index 9e4601e..a8ba748 100644
+--- a/src/httpserver/deferred_response.hpp
++++ b/src/httpserver/deferred_response.hpp
+@@ -61,7 +61,7 @@ class deferred_response : public string_response
+         }
+ 
+         deferred_response(const deferred_response& other) = default;
+-        deferred_response(deferred_response&& other) noexcept = default;
++        deferred_response(deferred_response&& other) = default;
+         deferred_response& operator=(const deferred_response& b) = default;
+         deferred_response& operator=(deferred_response&& b) = default;
+ 
+diff --git a/src/httpserver/digest_auth_fail_response.hpp b/src/httpserver/digest_auth_fail_response.hpp
+index 50abcee..18cf19c 100644
+--- a/src/httpserver/digest_auth_fail_response.hpp
++++ b/src/httpserver/digest_auth_fail_response.hpp
+@@ -56,7 +56,7 @@ class digest_auth_fail_response : public string_response
+         }
+ 
+         digest_auth_fail_response(const digest_auth_fail_response& other) = default;
+-        digest_auth_fail_response(digest_auth_fail_response&& other) noexcept = default;
++        digest_auth_fail_response(digest_auth_fail_response&& other) = default;
+         digest_auth_fail_response& operator=(const digest_auth_fail_response& b) = default;
+         digest_auth_fail_response& operator=(digest_auth_fail_response&& b) = default;
+ 
+diff --git a/src/httpserver/file_response.hpp b/src/httpserver/file_response.hpp
+index 0c9386f..2e10f6c 100644
+--- a/src/httpserver/file_response.hpp
++++ b/src/httpserver/file_response.hpp
+@@ -50,7 +50,7 @@ class file_response : public http_response
+         }
+ 
+         file_response(const file_response& other) = default;
+-        file_response(file_response&& other) noexcept = default;
++        file_response(file_response&& other) = default;
+ 
+         file_response& operator=(const file_response& b) = default;
+         file_response& operator=(file_response&& b) = default;
+diff --git a/src/httpserver/http_request.hpp b/src/httpserver/http_request.hpp
+index 6aacbfe..0b83fa2 100644
+--- a/src/httpserver/http_request.hpp
++++ b/src/httpserver/http_request.hpp
+@@ -227,7 +227,7 @@ class http_request
+          * @param b http_request b to copy attributes from.
+         **/
+         http_request(const http_request& b) = default;
+-        http_request(http_request&& b) noexcept = default;
++        http_request(http_request&& b) = default;
+ 
+         http_request& operator=(const http_request& b) = default;
+         http_request& operator=(http_request&& b) = default;
+diff --git a/src/httpserver/http_resource.hpp b/src/httpserver/http_resource.hpp
+index 04f67cb..59829e8 100644
+--- a/src/httpserver/http_resource.hpp
++++ b/src/httpserver/http_resource.hpp
+@@ -211,7 +211,7 @@ class http_resource
+          * Copy constructor
+         **/
+         http_resource(const http_resource& b) = default;
+-        http_resource(http_resource&& b) noexcept = default;
++        http_resource(http_resource&& b) = default;
+         http_resource& operator=(const http_resource& b) = default;
+         http_resource& operator=(http_resource&& b) = default;
+ 
+diff --git a/src/httpserver/http_response.hpp b/src/httpserver/http_response.hpp
+index 1f3f097..3564f37 100644
+--- a/src/httpserver/http_response.hpp
++++ b/src/httpserver/http_response.hpp
+@@ -55,10 +55,10 @@ class http_response
+          * @param b The http_response object to copy attributes value from.
+         **/
+         http_response(const http_response& b) = default;
+-        http_response(http_response&& b) noexcept = default;
++        http_response(http_response&& b) = default;
+ 
+         http_response& operator=(const http_response& b) = default;
+-        http_response& operator=(http_response&& b) noexcept = default;
++        http_response& operator=(http_response&& b) = default;
+ 
+         virtual ~http_response() = default;
+ 
+diff --git a/src/httpserver/string_response.hpp b/src/httpserver/string_response.hpp
+index 43e7580..2043890 100644
+--- a/src/httpserver/string_response.hpp
++++ b/src/httpserver/string_response.hpp
+@@ -51,7 +51,7 @@ class string_response : public http_response
+         }
+ 
+         string_response(const string_response& other) = default;
+-        string_response(string_response&& other) noexcept = default;
++        string_response(string_response&& other) = default;
+ 
+         string_response& operator=(const string_response& b) = default;
+         string_response& operator=(string_response&& b) = default;
