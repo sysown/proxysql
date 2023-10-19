@@ -158,15 +158,8 @@ curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
-	cd libmicrohttpd && rm -f libmicrohttpd || true
-ifeq ($(CENTOSVER),6)
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
-else
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.77 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.77.tar.gz
+	cd libmicrohttpd && tar -zxf libmicrohttpd-*.tar.gz
 #	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
-endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
@@ -368,7 +361,6 @@ cleanall:
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-* || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
-	cd libmicrohttpd && rm -f libmicrohttpd || true
 	cd curl && rm -rf curl-*/ || true
 	cd libev && rm -rf libev-*/ || true
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
