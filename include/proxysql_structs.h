@@ -869,6 +869,7 @@ __thread int mysql_thread___client_host_error_counts;
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
 __thread int mysql_thread___query_cache_soft_ttl_pct;
+__thread int mysql_thread___query_cache_with_warnings_support;
 
 /* variables used for SSL , from proxy to server (p2s) */
 __thread char * mysql_thread___ssl_p2s_ca;
@@ -1036,6 +1037,7 @@ extern __thread int mysql_thread___client_host_error_counts;
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
 extern __thread int mysql_thread___query_cache_soft_ttl_pct;
+extern __thread int mysql_thread___query_cache_with_warnings_support;
 
 /* variables used for SSL , from proxy to server (p2s) */
 extern __thread char * mysql_thread___ssl_p2s_ca;

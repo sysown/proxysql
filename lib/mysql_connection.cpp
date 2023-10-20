@@ -2448,7 +2448,10 @@ bool MySQL_Connection::MultiplexDisabled(bool check_delay_token) {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG|STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION | STATUS_MYSQL_CONNECTION_USER_VARIABLE | STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT |
+		STATUS_MYSQL_CONNECTION_LOCK_TABLES | STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE | STATUS_MYSQL_CONNECTION_GET_LOCK | STATUS_MYSQL_CONNECTION_NO_MULTIPLEX |
+		STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0 | STATUS_MYSQL_CONNECTION_FOUND_ROWS | STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG |
+		STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT | STATUS_MYSQL_CONNECTION_HAS_WARNINGS) ) {
 		ret=true;
 	}
 	if (check_delay_token && auto_increment_delay_token) return true;
@@ -2566,6 +2569,34 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 						set_status(false, STATUS_MYSQL_CONNECTION_NO_MULTIPLEX);
 					}
 				}
+			}
+		}
+	}
+	// checking warnings and disabling multiplexing will be effective only when the mysql-query_digests is enabled
+	if (myds->sess->CurrentQuery.QueryParserArgs.digest_text) {
+		if (get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS) == false) {
+			if (mysql_warning_count(this->mysql) > 0) {
+				if (myds && myds->sess) {
+					// 'warning_in_hg' will be used if the next query is 'SHOW WARNINGS' or
+					// 'SHOW COUNT(*) WARNINGS'
+					myds->sess->warning_in_hg = myds->sess->current_hostgroup;
+					// enabling multiplexing
+					set_status(true, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+				}
+			}
+		} else { // reset warning_in_hg 
+			const char* dig = myds->sess->CurrentQuery.QueryParserArgs.digest_text;
+			const size_t dig_len = strlen(dig);
+			// disable multiplexing and reset the 'warning_in_hg' flag only when the current executed query is not 
+			// 'SHOW WARNINGS' or 'SHOW COUNT(*) WARNINGS', as these queries do not clear the warning message list
+			// on backend.
+			if (!((dig_len == 22 && strncasecmp(dig, "SHOW COUNT(*) WARNINGS", 22) == 0) ||
+				(dig_len == 13 && strncasecmp(dig, "SHOW WARNINGS", 13) == 0))) {
+				if (myds && myds->sess) {
+					myds->sess->warning_in_hg = -1;
+				}
+				// disabling multiplexing
+				set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 			}
 		}
 	}

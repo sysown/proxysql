@@ -274,6 +274,7 @@ class MySQL_Session
 	int to_process;
 	int pending_connect;
 	enum proxysql_session_type session_type;
+	int warning_in_hg;
 
 	// bool
 	bool autocommit;
@@ -379,6 +380,7 @@ class MySQL_Session
 	bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
+	void reset_warning_hostgroup_flag_and_release_connection();
 	friend void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
 

@@ -728,8 +728,34 @@ bool Query_Cache::set(uint64_t user_hash, const unsigned char *kp, uint32_t kl, 
 		if (hdr.pkt_length < 9 && *payload == 0xfe) {
 			if (deprecate_eof_active) {
 				entry->ok_pkt_offset = it - vp;
+
+				// Reset the warning flags to zero before storing resultset in the cache
+				// Reason: When a warning flag is set, it may prompt the client to invoke "SHOW WARNINGS" or "SHOW COUNT(*) FROM WARNINGS". 
+				// However, when retrieving data from the cache, it's possible that there are no warnings present
+				// that might be associated with previous interactions.
+				unsigned char* payload_temp = payload+1;
+
+				// skip affected_rows
+				payload_temp += mysql_decode_length(payload_temp, nullptr);
+				
+				// skip last_insert_id
+				payload_temp += mysql_decode_length(payload_temp, nullptr);
+
+				// skip stats_flags
+				payload_temp += sizeof(uint16_t);
+
+				uint16_t warnings = 0;
+				memcpy(payload_temp, &warnings, sizeof(uint16_t));
+
 			} else {
 				entry->row_eof_pkt_offset = it - vp;
+
+				// Reset the warning flags to zero before storing resultset in the cache
+				// Reason: When a warning flag is set, it may prompt the client to invoke "SHOW WARNINGS" or "SHOW COUNT(*) FROM WARNINGS".  
+				// However, when retrieving data from the cache, it's possible that there are no warnings present
+				// that might be associated with previous interactions.
+				uint16_t warnings = 0;
+				memcpy((payload + 1), &warnings, sizeof(uint16_t));
 			}
 			break;
 		} else {

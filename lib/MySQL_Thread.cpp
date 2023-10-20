@@ -553,6 +553,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"long_query_time",
 	(char *)"query_cache_size_MB",
 	(char *)"query_cache_soft_ttl_pct",
+	(char *)"query_cache_with_warnings_support",
 	(char *)"ping_interval_server_msec",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -1149,6 +1150,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.query_cache_soft_ttl_pct=0;
+	variables.query_cache_with_warnings_support=0;
 	variables.init_connect=NULL;
 	variables.ldap_user_variable=NULL;
 	variables.add_ldap_user_comment=NULL;
@@ -2285,6 +2287,8 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["max_transaction_time"]      = make_tuple(&variables.max_transaction_time,      1000,  20*24*3600*1000, false);
 		VariablesPointers_int["query_cache_size_mb"]       = make_tuple(&variables.query_cache_size_MB,          0,       1024*10240, false);
 		VariablesPointers_int["query_cache_soft_ttl_pct"]  = make_tuple(&variables.query_cache_soft_ttl_pct,     0,              100, false);
+		VariablesPointers_int["query_cache_with_warnings_support"] = make_tuple(&variables.query_cache_with_warnings_support,	 0,				   1, false);
+
 #ifdef IDLE_THREADS
 		VariablesPointers_int["session_idle_ms"]           = make_tuple(&variables.session_idle_ms,              1,        3600*1000, false);
 #endif // IDLE_THREADS
@@ -4033,6 +4037,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");
 	mysql_thread___query_cache_soft_ttl_pct=GloMTH->get_variable_int((char *)"query_cache_soft_ttl_pct");
+	mysql_thread___query_cache_with_warnings_support =GloMTH->get_variable_int((char*)"query_cache_with_warnings_support");
 	mysql_thread___ping_interval_server_msec=GloMTH->get_variable_int((char *)"ping_interval_server_msec");
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___shun_on_failures=GloMTH->get_variable_int((char *)"shun_on_failures");

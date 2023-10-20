@@ -588,6 +588,7 @@ MySQL_Session::MySQL_Session() {
 	mirrorPkt.ptr=NULL;
 	mirrorPkt.size=0;
 	set_status(session_status___NONE);
+	warning_in_hg = -1;
 
 	idle_since = 0;
 	transaction_started_at = 0;
@@ -640,6 +641,7 @@ void MySQL_Session::reset() {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
 	autocommit_on_hostgroup=-1;
+	warning_in_hg = -1;
 	current_hostgroup=-1;
 	default_hostgroup=-1;
 	locked_on_hostgroup=-1;
@@ -923,7 +925,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	// specific connection, for that, we update 'current_hostgroup' with the first active transaction we are
 	// able to find. If more transactions are simultaneously open for the session, more 'COMMIT|ROLLBACK'
 	// commands are required to be issued by the client to continue ending transactions.
-	unsigned int hg = FindOneActiveTransaction(true);
+	int hg = FindOneActiveTransaction(true);
 	if (hg != -1) {
 		// there is an active transaction, we must forward the request
 		current_hostgroup = hg;
@@ -1124,6 +1126,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
 	j["active_transactions"] = active_transactions;
 	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
+	j["warning_in_hg"] = warning_in_hg;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
@@ -1246,6 +1249,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["status"]["no_multiplex_HG"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 				j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
+				j["backends"][i]["conn"]["status"]["has_warnings"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
 				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
@@ -1538,19 +1542,41 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			return true;
 		}
 	}
-	if ( (pkt->size == 18) && (strncasecmp((char *)"SHOW WARNINGS",(char *)pkt->ptr+5,13)==0) ) {
-		SQLite3_result * resultset=new SQLite3_result(3);
-		resultset->add_column_definition(SQLITE_TEXT,"Level");
-		resultset->add_column_definition(SQLITE_TEXT,"Code");
-		resultset->add_column_definition(SQLITE_TEXT,"Message");
+	// if query digest is disabled, warnings in ProxySQL are also deactivated, 
+	// resulting in an empty response being sent to the client.
+	if ((pkt->size == 18) && (strncasecmp((char*)"SHOW WARNINGS", (char*)pkt->ptr + 5, 13) == 0) &&
+		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
+		SQLite3_result* resultset = new SQLite3_result(3);
+		resultset->add_column_definition(SQLITE_TEXT, "Level");
+		resultset->add_column_definition(SQLITE_TEXT, "Code");
+		resultset->add_column_definition(SQLITE_TEXT, "Message");
 		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
-		if (mirror==false) {
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		if (mirror == false) {
 			RequestEnd(NULL);
 		}
-		l_free(pkt->size,pkt->ptr);
+		l_free(pkt->size, pkt->ptr);
+		return true;
+	}
+	// if query digest is disabled, warnings in ProxySQL are also deactivated, 
+	// resulting in zero warning count sent to the client.
+	if ((pkt->size == 27) && (strncasecmp((char*)"SHOW COUNT(*) WARNINGS", (char*)pkt->ptr + 5, 22) == 0) &&
+		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
+		SQLite3_result* resultset = new SQLite3_result(1);
+		resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
+		char* pta[1];
+		pta[0] = (char*)"0";
+		resultset->add_row(pta);
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+		delete resultset;
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		if (mirror == false) {
+			RequestEnd(NULL);
+		}
+		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
 	// 'LOAD DATA LOCAL INFILE' is unsupported. We report an specific error to inform clients about this fact. For more context see #833.
@@ -5985,26 +6011,83 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	if (pkt->size > (unsigned int) mysql_thread___max_allowed_packet) {
 		handler_WCD_SS_MCQ_qpo_LargePacket(pkt);
+		reset_warning_hostgroup_flag_and_release_connection();
 		return true;
 	}
 
 	if (qpo->OK_msg) {
 		handler_WCD_SS_MCQ_qpo_OK_msg(pkt);
+		reset_warning_hostgroup_flag_and_release_connection();
 		return true;
 	}
 
 	if (qpo->error_msg) {
 		handler_WCD_SS_MCQ_qpo_error_msg(pkt);
+		reset_warning_hostgroup_flag_and_release_connection();
 		return true;
 	}
 
 	if (prepared) {	// for prepared statement we exit here
+		reset_warning_hostgroup_flag_and_release_connection();
 		goto __exit_set_destination_hostgroup;
 	}
 
 	// handle here #509, #815 and #816
 	if (CurrentQuery.QueryParserArgs.digest_text) {
 		char *dig=CurrentQuery.QueryParserArgs.digest_text;
+		const size_t dig_len=strlen(dig);
+		if ((dig_len == 13) && (strncasecmp(dig, "SHOW WARNINGS", 13) == 0)) {
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig);
+			if (warning_in_hg > -1) {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
+				current_hostgroup = warning_in_hg;
+				//warning_in_hg = -1;
+				return false;
+			} else {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
+				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(3));
+				resultset->add_column_definition(SQLITE_TEXT, "Level");
+				resultset->add_column_definition(SQLITE_TEXT, "Code");
+				resultset->add_column_definition(SQLITE_TEXT, "Message");
+				SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				if (mirror == false) {
+					RequestEnd(NULL);
+				}
+				l_free(pkt->size, pkt->ptr);
+				return true;
+			}
+		} 
+
+		if ((dig_len == 22) && (strncasecmp(dig, "SHOW COUNT(*) WARNINGS", 22) == 0)) {
+			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig);
+			if (warning_in_hg > -1) {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
+				current_hostgroup = warning_in_hg;
+				//warning_in_hg = -1;
+				return false;
+			}
+			else {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
+				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
+				resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
+				char* pta[1];
+				pta[0] = (char*)"0";
+				resultset->add_row(pta);
+				SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				if (mirror == false) {
+					RequestEnd(NULL);
+				}
+				l_free(pkt->size, pkt->ptr);
+				return true;
+			}
+		}
+
+		reset_warning_hostgroup_flag_and_release_connection();
+
 		unsigned int nTrx=NumActiveTransactions();
 		if ((locked_on_hostgroup == -1) && (strncasecmp(dig,(char *)"SET ",4)==0)) {
 			// this code is executed only if locked_on_hostgroup is not set yet
@@ -7288,7 +7371,9 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
 			if (qpo && qpo->cache_ttl>0 && com_field_list==false) { // the resultset should be cached
-				if (mysql_errno(mysql)==0) { // no errors
+				if (mysql_errno(mysql)==0 &&
+					(mysql_warning_count(mysql)==0 || 
+					 mysql_thread___query_cache_with_warnings_support==1)) { // no errors
 					if (
 						(qpo->cache_empty_result==1)
 						|| (
@@ -8068,4 +8153,21 @@ void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 	}
 	s = j_res.dump();
 	delete resultset;
+}
+
+void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection()
+{
+	if (warning_in_hg > -1) {
+		// if we've reached this point, it means that warning was found in the previous query, but the
+		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and 
+		// return connection back to the connection pool.
+		MySQL_Backend* _mybe = NULL;
+		_mybe = find_backend(warning_in_hg);
+		MySQL_Data_Stream* myds = _mybe->server_myds;
+		myds->myconn->set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+		if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
+			myds->return_MySQL_Connection_To_Pool();
+		}
+		warning_in_hg = -1;
+	}
 }
