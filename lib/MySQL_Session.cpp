@@ -6067,8 +6067,7 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				current_hostgroup = warning_in_hg;
 				//warning_in_hg = -1;
 				return false;
-			}
-			else {
+			} else {
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
 				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
 				resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
