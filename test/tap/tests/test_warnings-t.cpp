@@ -89,6 +89,7 @@ int execute_query(MYSQL* proxysql, const QueryInfo& query_info) {
 	if (query_info.is_select) {
 		MYSQL_CLEAR_RESULT(proxysql);
 	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	return EXIT_SUCCESS;
 }
 
