@@ -192,7 +192,8 @@ const std::vector<TestInfo> insert_test = {
 const std::vector<TestInfo> query_cache_test = {
 												   { ConnectionType::kAdmin, {"SET mysql-query_cache_with_warnings_support=0", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"LOAD MYSQL VARIABLES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
-												   { ConnectionType::kAdmin, {"INSERT INTO mysql_query_rules (rule_id,active,match_digest,cache_ttl,apply) VALUES (500,1,'SELECT ?/?',60000,1)", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												   { ConnectionType::kAdmin, {"DELETE FROM mysql_query_rules", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												   { ConnectionType::kAdmin, {"INSERT INTO mysql_query_rules (rule_id,active,match_digest,cache_ttl,apply) VALUES (1,1,'SELECT ?/?',60000,1)", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"LOAD MYSQL QUERY RULES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"PROXYSQL FLUSH QUERY CACHE", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
@@ -204,7 +205,7 @@ const std::vector<TestInfo> query_cache_test = {
 												   { ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
 												   // resultset will be retrived from cache, with warning count zero
 												   { ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) },
-												   { ConnectionType::kAdmin, {"DELETE FROM mysql_query_rules WHERE rule_id = 500 AND match_digest = 'SELECT ?/?'", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												   { ConnectionType::kAdmin, {"DELETE FROM mysql_query_rules", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"LOAD MYSQL QUERY RULES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"PROXYSQL FLUSH QUERY CACHE", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) }
 };
