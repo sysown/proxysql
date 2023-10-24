@@ -17,14 +17,16 @@
 #include <string>
 #include <stdio.h>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysql/mysqld_error.h"
 
-#include <proxysql_utils.h>
+#include "proxysql_utils.h"
 
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+
+#include "MySQL_Protocol.h"
 
 using std::vector;
 using std::string;

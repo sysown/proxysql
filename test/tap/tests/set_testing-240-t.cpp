@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <mysql.h>
+#include "mysql.h"
 #include <string.h>
 #include <string>
 #include <time.h>

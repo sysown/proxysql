@@ -3,19 +3,22 @@
 #include <vector>
 #include <string>
 #include <stdio.h>
+#include <stdlib.h>
 #include <iostream>
 #include <random>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysql/mysqld_error.h"
 
-#include <proxysql_utils.h>
+#include "proxysql_utils.h"
 
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
 
 #include "json.hpp"
+
+#include "MySQL_Protocol.h"
 
 using std::vector;
 using std::string;

@@ -56,7 +56,7 @@
 #include <poll.h>
 #include <sys/epoll.h>
 
-#include <mysql.h>
+#include "mysql.h"
 #include <thread>
 
 #include "tap.h"

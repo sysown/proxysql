@@ -24,6 +24,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+#include "MySQL_Protocol.h"
+
 using nlohmann::json;
 
 /**

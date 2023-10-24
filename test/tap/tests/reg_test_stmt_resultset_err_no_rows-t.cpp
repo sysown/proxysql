@@ -16,8 +16,8 @@
 #include <utility>
 #include <vector>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysql/mysqld_error.h"
 
 #include "proxysql_utils.h"
 #include "tap.h"
