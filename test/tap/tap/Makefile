@@ -1,28 +1,31 @@
-DEPS_PATH=../../../deps
+#!/bin/make -f
 
-JSON_IDIR=$(DEPS_PATH)/json
 
-MARIADB_PATH=$(DEPS_PATH)/mariadb-client-library/mariadb_client
-MARIADB_IDIR=$(MARIADB_PATH)/include
-MARIADB_LDIR=$(MARIADB_PATH)/libmariadb
+DEPS_PATH := ../../../deps
 
-CURL_DIR=$(DEPS_PATH)/curl/curl
-CURL_IDIR=$(CURL_DIR)/include
-CURL_LDIR=$(CURL_DIR)/lib/.libs
+JSON_IDIR := $(DEPS_PATH)/json
 
-SQLITE3_DIR=$(DEPS_PATH)/sqlite3/sqlite3
-SQLITE3_IDIR=$(SQLITE3_DIR)
-SQLITE3_LDIR=$(SQLITE3_DIR)
+MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
+MARIADB_IDIR := $(MARIADB_PATH)/include
+MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
 
-DOTENV_DIR=./cpp-dotenv/static/cpp-dotenv
-DOTENV_IDIR=$(DOTENV_DIR)/include
-DOTENV_LDIR=$(DOTENV_DIR)
+CURL_PATH := $(DEPS_PATH)/curl/curl
+CURL_IDIR := $(CURL_PATH)/include
+CURL_LDIR := $(CURL_PATH)/lib/.libs
 
-IDIR=../../../include
-LDIR=../../../lib
+SQLITE3_PATH := $(DEPS_PATH)/sqlite3/sqlite3
+SQLITE3_IDIR := $(SQLITE3_PATH)
+SQLITE3_LDIR := $(SQLITE3_PATH)
 
-LIBPROXYSQLAR=$(LDIR)/libproxysql.a
-INCLUDEDIRS=-I$(IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR} -I$(DOTENV_IDIR)
+DOTENV_PATH := ./cpp-dotenv/static/cpp-dotenv
+DOTENV_IDIR := $(DOTENV_PATH)/include
+DOTENV_LDIR := $(DOTENV_PATH)
+
+IDIR := ../../../include
+LDIR := ../../../lib
+
+LIBPROXYSQLAR := $(LDIR)/libproxysql.a
+INCLUDEDIRS := -I$(IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR} -I$(DOTENV_IDIR)
 
 .PHONY: all
 all: libtap.a libtap.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
@@ -35,7 +38,7 @@ clean:
 
 OPT=-O2
 
-debug: OPT = -O0 -DDEBUG -ggdb
+debug: OPT := -O0 -DDEBUG -ggdb
 debug: libtap.a libtap.so
 
 command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
