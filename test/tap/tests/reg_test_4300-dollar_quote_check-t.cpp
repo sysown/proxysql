@@ -15,8 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysql/mysqld_error.h"
 
 #include "tap.h"
 #include "utils.h"

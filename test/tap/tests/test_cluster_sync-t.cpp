@@ -46,9 +46,9 @@
 
 #include <libconfig.h>
 
-#include <proxysql_utils.h>
+#include "proxysql_utils.h"
 
-#include <mysql.h>
+#include "mysql.h"
 
 #include "tap.h"
 #include "command_line.h"
