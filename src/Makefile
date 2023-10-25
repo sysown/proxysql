@@ -6,13 +6,17 @@ ifndef GIT_VERSION
 	$(error GIT_VERSION is not set)
 endif
 
-DEPS_PATH := ../deps
-
 CENTOSVER := Unknown
 ifneq (,$(wildcard /etc/system-release))
 	CENTOSVER := $(shell rpm --eval %rhel)
 endif
 
+
+PROXYSQL_PATH := ..
+PROXYSQL_IDIR := $(PROXYSQL_PATH)/include
+PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
+
+DEPS_PATH := $(PROXYSQL_PATH)/deps
 
 MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR := $(MARIADB_PATH)/include
@@ -27,8 +31,8 @@ JEMALLOC_IDIR := $(JEMALLOC_PATH)/include/jemalloc
 JEMALLOC_LDIR := $(JEMALLOC_PATH)/lib
 
 LIBCONFIG_PATH := $(DEPS_PATH)/libconfig/libconfig
-LIBCONFIG_IDIR=-I$(LIBCONFIG_PATH)/lib
-LIBCONFIG_LDIR=-L$(LIBCONFIG_PATH)/lib/.libs
+LIBCONFIG_IDIR := $(LIBCONFIG_PATH)/lib
+LIBCONFIG_LDIR := $(LIBCONFIG_PATH)/lib/.libs
 
 PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
@@ -86,10 +90,8 @@ EV_IDIR := $(EV_PATH)
 EV_LDIR := $(EV_PATH)/.libs
 
 
-IDIR := ../include
-LDIR := ../lib
-IDIRS := -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) $(LIBCONFIG_IDIR) -I$(LIBDAEMON_IDIR) -I$(RE2_IDIR) -L$(PCRE_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR)  -I$(SQLITE3_IDIR) -I$(CLICKHOUSE_CPP_IDIR) -I$(CLICKHOUSE_CPP_CDIR) -I$(0)
-LDIRS := -L$(LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) $(LIBCONFIG_LDIR) -L$(LIBDAEMON_LDIR) -L$(RE2_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
+IDIRS := -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(MARIADB_IDIR) -I$(LIBCONFIG_IDIR) -I$(LIBDAEMON_IDIR) -I$(RE2_IDIR) -L$(PCRE_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(LIBINJECTION_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(SSL_IDIR) -I$(PROMETHEUS_IDIR)  -I$(SQLITE3_IDIR) -I$(CLICKHOUSE_CPP_IDIR) -I$(CLICKHOUSE_CPP_CDIR) -I$(0)
+LDIRS := -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(MARIADB_LDIR) -L$(LIBCONFIG_LDIR) -L$(LIBDAEMON_LDIR) -L$(RE2_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
 
 UNAME_S := $(shell uname -s)
@@ -120,12 +122,12 @@ endif
 
 WGCOV :=
 ifeq ($(WITHGCOV),1)
-	WGCOV := -DWITHGCOV --coverage
+	WGCOV := -DWITHGCOV -lgcov --coverage
 endif
 
 WASAN :=
 ifeq ($(WITHASAN),1)
-	WASAN := -fsanitize=address
+	WASAN := -WITHASAN -fsanitize=address
 	# Force the disable of JEMALLOC, since ASAN isn't compatible.
 	export NOJEMALLOC = 1
 endif
@@ -139,14 +141,6 @@ ifeq ($(CXX),clang++)
 endif
 MYCXXFLAGS += $(IDIRS) $(OPTZ) $(DEBUG) $(PSQLCH) -DGITVERSION=\"$(GIT_VERSION)\" $(WGCOV) $(WASAN)
 
-ifeq ($(WITHGCOV),1)
-	LDFLAGS += -lgcov --coverage
-endif
-
-ifeq ($(WITHASAN),1)
-	LDFLAGS += -fsanitize=address
-endif
-
 
 STATICMYLIBS := -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lssl -lcrypto -lev
 ifneq ($(NOJEMALLOC),1)
@@ -155,8 +149,8 @@ endif
 ifeq ($(UNAME_S),Linux)
 	STATICMYLIBS += -lcoredumper
 endif
-MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
 
+MYLIBS := -Wl,--export-dynamic $(STATICMYLIBS) -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lprometheus-cpp-pull -lprometheus-cpp-core -luuid $(EXTRALINK)
 ifeq ($(UNAME_S),Darwin)
 	MYLIBS :=-lre2 -lmariadbclient -lpthread -lm -lz -liconv -lgnutls -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 else
@@ -174,12 +168,25 @@ ifeq ($(CENTOSVER),6)
 	MYLIBS += -lgcrypt
 endif
 
-LIBPROXYSQLAR := $(LDIR)/libproxysql.a
+LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 ifeq ($(UNAME_S),Darwin)
-	LIBPROXYSQLAR := $(LDIR)/libproxysql.a ../deps/jemalloc/jemalloc/lib/libjemalloc.a ../deps/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/pcre/pcre/.libs/libpcre.a ../deps/pcre/pcre/.libs/libpcrecpp.a  ../deps/libdaemon/libdaemon/libdaemon/.libs/libdaemon.a  ../deps/libconfig/libconfig/lib/.libs/libconfig++.a ../deps/libconfig/libconfig/lib/.libs/libconfig.a ../deps/curl/curl/lib/.libs/libcurl.a ../deps/sqlite3/sqlite3/sqlite3.o ../deps/libinjection/libinjection/src/libinjection.a  ../deps/libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a ../deps/libev/libev/.libs/libev.a
+	LIBPROXYSQLAR += $(JEMALLOC_LDIR)/libjemalloc.a
+	LIBPROXYSQLAR += $(MICROHTTPD_LDIR)/libmicrohttpd.a
+	LIBPROXYSQLAR += $(LIBHTTPSERVER_LDIR)/libhttpserver.a
+	LIBPROXYSQLAR += $(PCRE_LDIR)/libpcre.a
+	LIBPROXYSQLAR += $(PCRE_LDIR)/libpcrecpp.a
+	LIBPROXYSQLAR += $(LIBDAEMON_LDIR)/libdaemon.a
+	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig++.a
+	LIBPROXYSQLAR += $(LIBCONFIG_LDIR)/libconfig.a
+	LIBPROXYSQLAR += $(CURL_LDIR)/libcurl.a
+	LIBPROXYSQLAR += $(SQLITE3_LDIR)/sqlite3.o
+	LIBPROXYSQLAR += $(LIBINJECTION_LDIR)/libinjection.a
+	LIBPROXYSQLAR += $(EV_LDIR)/libev.a
 endif
+LIBPROXYSQLAR += $(SSL_LDIR)/libssl.a
+LIBPROXYSQLAR += $(SSL_LDIR)/libcrypto.a
+LIBPROXYSQLAR += $(CITYHASH_LDIR)/libcityhash.a
 
-LIBPROXYSQLAR += $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a $(CITYHASH_LDIR)/libcityhash.a
 ODIR := obj
 
 EXECUTABLE := proxysql
@@ -192,9 +199,9 @@ $(ODIR)/%.o: %.cpp
 
 $(EXECUTABLE): $(ODIR) $(OBJ) $(LIBPROXYSQLAR)
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib-static.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
+	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(CLICKHOUSE_CPP_LDIR)/libclickhouse-cpp-lib-static.a $(LZ4_LDIR)/liblz4.a $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 else
-	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(LDFLAGS) $(MYLIBS)
+	$(CXX) -o $@ $(OBJ) $(LIBPROXYSQLAR) $(MYCXXFLAGS) $(CXXFLAGS) $(LDIRS) $(LIBS) $(MYLIBS)
 endif
 ifeq ($(UNAME_S),Darwin)
 	shasum $(EXECUTABLE) > $(EXECUTABLE).sha1
@@ -206,7 +213,10 @@ $(ODIR):
 	mkdir $(ODIR)
 
 $(LIBPROXYSQLAR):
-	cd $(LDIR) && ${MAKE}
+	cd $(PROXYSQL_LDIR) && ${MAKE}
+
+
+### main targets
 
 default: $(EXECUTABLE)
 

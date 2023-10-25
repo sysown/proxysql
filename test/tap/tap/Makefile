@@ -1,9 +1,20 @@
 #!/bin/make -f
 
 
-DEPS_PATH := ../../../deps
+GIT_VERSION ?= $(shell git describe --long --abbrev=7)
+ifndef GIT_VERSION
+	$(error GIT_VERSION is not set)
+endif
 
-JSON_IDIR := $(DEPS_PATH)/json
+
+PROXYSQL_PATH := ../../..
+PROXYSQL_IDIR := $(PROXYSQL_PATH)/include
+PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
+
+DEPS_PATH := $(PROXYSQL_PATH)/deps
+
+JSON_PATH := $(DEPS_PATH)/json
+JSON_IDIR := $(JSON_PATH)
 
 MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR := $(MARIADB_PATH)/include
@@ -21,34 +32,47 @@ DOTENV_PATH := ./cpp-dotenv/static/cpp-dotenv
 DOTENV_IDIR := $(DOTENV_PATH)/include
 DOTENV_LDIR := $(DOTENV_PATH)
 
-IDIR := ../../../include
-LDIR := ../../../lib
 
-LIBPROXYSQLAR := $(LDIR)/libproxysql.a
-INCLUDEDIRS := -I$(IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR} -I$(DOTENV_IDIR)
+LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
+
+IDIRS := -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(MARIADB_IDIR) -I${CURL_IDIR} -I${SQLITE3_IDIR} -I$(DOTENV_IDIR)
+
+### detect compiler support for c++11/17
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201703L)
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201103L)
+$(error Compiler must support at least c++11)
+endif
+endif
+STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
+
+WASAN :=
+ifeq ($(WITHASAN),1)
+	WASAN := -fsanitize=address
+endif
+
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed
+
+
+.PHONY: default
+default: all
 
 .PHONY: all
 all: libtap.a libtap.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
 
-.PHONY: clean
-clean:
-	rm -f *.o libtap.a libtap.so || true
-	find cpp-dotenv/dynamic -name '*.o' -or -name '*.a' -delete || true
-	find cpp-dotenv/static -name '*.o' -or -name '*.a' -delete || true
-
-OPT=-O2
-
-debug: OPT := -O0 -DDEBUG -ggdb
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WASAN)
 debug: libtap.a libtap.so
 
+
 command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c command_line.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
+	g++ -fPIC -c command_line.cpp $(IDIRS) $(OPT)
 
 utils.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c utils.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
+	g++ -fPIC -c utils.cpp $(IDIRS) $(OPT)
 
 tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c tap.cpp -std=c++11 $(INCLUDEDIRS) $(OPT)
+	g++ -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
 libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
@@ -83,3 +107,10 @@ cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so:
 	cd cpp-dotenv/dynamic/cpp-dotenv && patch include/dotenv.h < ../../dotenv.h.patch
 	cd cpp-dotenv/dynamic/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Debug
 	cd cpp-dotenv/dynamic/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
+
+
+.PHONY: clean
+clean:
+	rm -f *.o libtap.a libtap.so || true
+	find cpp-dotenv/dynamic -name '*.o' -or -name '*.a' -delete || true
+	find cpp-dotenv/static -name '*.o' -or -name '*.a' -delete || true
