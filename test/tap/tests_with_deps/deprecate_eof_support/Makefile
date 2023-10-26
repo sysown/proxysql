@@ -28,6 +28,13 @@ PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
 
 DEPS_PATH := $(PROXYSQL_PATH)/deps
 
+MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
+MARIADB_IDIR := $(MARIADB_PATH)/include
+MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
+
+TAP_PATH := ../../tap
+TAP_IDIR := $(TAP_PATH)
+TAP_LDIR := $(TAP_PATH)
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
@@ -51,14 +58,11 @@ endif
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WGCOV)
 
-TAP_PATH := ../../tap
-TAP_IDIR := $(TAP_PATH)
-TAP_LDIR := $(TAP_PATH)
-
 IDIRS := -I$(PROXYSQL_PATH)/include
 IDIRS += -I$(DEPS_PATH)/sqlite3/sqlite3
 IDIRS += -I$(DEPS_PATH)/json
-IDIRS += -I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/core/include -I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/pull/include
+IDIRS += -I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/core/include
+IDIRS += -I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/pull/include
 IDIRS += -I$(DEPS_PATH)/libconfig/libconfig/lib
 IDIRS += -I$(DEPS_PATH)/jemalloc/jemalloc/include/jemalloc
 IDIRS += -I$(DEPS_PATH)/libhttpserver/libhttpserver/src
@@ -89,36 +93,27 @@ $(MARIADB_TEST_DEP)/libmariadb/libmariadbclient.a:
 build_deps: $(TESTS_DEPS)
 
 
-.PHONY: clean
-clean:
-	rm -f *-t
-	rm -f fwd_eof_query
-	rm -f fwd_eof_ok_query
-	rm -f *.a *.o
-	cd $(MARIADB_BASE_FOLDER) && ${MAKE} clean
-
-
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
 
 
 COMMONARGS := $(OPT) -I$(TAP_IDIR) -L$(TAP_LDIR) -ltap -lcpp_dotenv -Wl,--no-as-needed -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadb $(COMMONARGS) -o $@
+	$(CXX) $^ $(IDIRS) $(COMMONARGS) -o $@
 
-eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp ok_packet_mixed_queries-t $(TESTS_DEPS)
-	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadb $(COMMONARGS) -o $@
+eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
+	$(CXX) -DNON_EOF_SUPPORT $^ $(IDIRS) $(COMMONARGS) -o $@
 
 fwd_eof_query: fwd_eof_query.cpp $(TESTS_DEPS)
-	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadb $(COMMONARGS) -o $@
+	$(CXX) -DNON_EOF_SUPPORT $^ $(IDIRS) $(COMMONARGS) -o $@
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
-fwd_eof_ok_query: fwd_eof_query.cpp fwd_eof_query $(TAP_LDIR)/libtap.so
-	$(CXX) $<  $(IDIRS) -I/usr/include/mysql/ -lmysqlclient -I$(IDIR) -L/usr/lib/x86_64-linux-gnu/ $(COMMONARGS) -o $@
+fwd_eof_ok_query: fwd_eof_query.cpp $(TAP_LDIR)/libtap.so
+	$(CXX) $^ $(IDIRS) -I$(MARIADB_IDIR) -I/usr/include/mysql/ -lmysqlclient -L/usr/lib/x86_64-linux-gnu/ $(COMMONARGS) -o $@
 # NOTE end
 
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp $(TESTS_DEPS)
-	$(CXX) $^ $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadb -L$(PROXYSQL_LDIR) -lproxysql $(COMMONARGS) -o $@
+	$(CXX) $^ $(IDIRS) -L$(PROXYSQL_LDIR) -lproxysql $(COMMONARGS) -o $@
 
 eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp $(TESTS_DEPS)
 	$(CXX) $^ $(IDIRS) $(COMMONARGS) -o $@
@@ -127,14 +122,23 @@ eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp $(TESTS_DEPS)
 	$(CXX) $^ $(IDIRS) $(COMMONARGS) -o $@
 
 eof_conn_options_check-t: eof_conn_options_check-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadb $(COMMONARGS) -o $@
+	$(CXX) $^ $(IDIRS) $(COMMONARGS) -o $@
 
 eof_fast_forward-t: eof_fast_forward-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadb $(COMMONARGS) -o $@
+	$(CXX) $^ $(IDIRS)  $(COMMONARGS) -o $@
 
 
 $(TAP_LIBDIR)/libtap.a:
 	cd ../../tap && CC=${CC} CXX=${CXX} ${MAKE} 
+
+
+.PHONY: clean
+clean:
+	rm -f *-t
+	rm -f fwd_eof_query
+	rm -f fwd_eof_ok_query
+	rm -f *.a *.o
+	cd $(MARIADB_BASE_FOLDER) && ${MAKE} clean
 
 
 else
