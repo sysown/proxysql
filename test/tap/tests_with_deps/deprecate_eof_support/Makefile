@@ -99,33 +99,33 @@ tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
 COMMONARGS := $(OPT) -I$(TAP_IDIR) -L$(TAP_LDIR) -ltap -lcpp_dotenv -Wl,--no-as-needed -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) $^ $(IDIRS) $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(COMMONARGS) -o $@
 
 eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) -DNON_EOF_SUPPORT $^ $(IDIRS) $(COMMONARGS) -o $@
+	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
 
 fwd_eof_query: fwd_eof_query.cpp $(TESTS_DEPS)
-	$(CXX) -DNON_EOF_SUPPORT $^ $(IDIRS) $(COMMONARGS) -o $@
+	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
 fwd_eof_ok_query: fwd_eof_query.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $^ $(IDIRS) -I$(MARIADB_IDIR) -I/usr/include/mysql/ -lmysqlclient -L/usr/lib/x86_64-linux-gnu/ $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) -I$(MARIADB_IDIR) -I/usr/include/mysql/ -lmysqlclient -L/usr/lib/x86_64-linux-gnu/ $(COMMONARGS) -o $@
 # NOTE end
 
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp $(TESTS_DEPS)
-	$(CXX) $^ $(IDIRS) -L$(PROXYSQL_LDIR) -lproxysql $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient -L$(PROXYSQL_LDIR) -lproxysql $(COMMONARGS) -o $@
 
 eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp $(TESTS_DEPS)
-	$(CXX) $^ $(IDIRS) $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
 
 eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) $^ $(IDIRS) $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
 
 eof_conn_options_check-t: eof_conn_options_check-t.cpp $(TESTS_DEPS)
-	$(CXX) $^ $(IDIRS) $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
 
 eof_fast_forward-t: eof_fast_forward-t.cpp $(TESTS_DEPS)
-	$(CXX) $^ $(IDIRS)  $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
 
 
 $(TAP_LIBDIR)/libtap.a:

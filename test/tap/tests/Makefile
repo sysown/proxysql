@@ -254,16 +254,16 @@ reg_test_mariadb_stmt_store_result_libmysql-t: reg_test_mariadb_stmt_store_resul
 	$(CXX) -DLIBMYSQL_HELPER $< -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o $@
 
 reg_test_mariadb_stmt_store_result_async-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DASYNC_API $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -ltap $(STATIC_LIBS) -o $@
+	$(CXX) -DASYNC_API $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 prepare_statement_err3024_libmysql-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DLIBMYSQL_HELPER $< -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o $@
 
 prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DASYNC_API $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -ltap $(STATIC_LIBS) -o $@
+	$(CXX) -DASYNC_API $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $^ $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll -lpthread -ldl -ltap $(STATIC_LIBS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll $(STATIC_LIBS) -o $@
 
 
 ### clean targets
