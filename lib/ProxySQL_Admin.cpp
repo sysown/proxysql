@@ -910,6 +910,18 @@ admin_metrics_map = std::make_tuple(
 			"This is the number of global prepared statements for which proxysql has metadata.",
 			metric_tags {}
 		),
+		std::make_tuple(
+			p_admin_gauge::prepare_stmt_metadata_memory_bytes,
+			"prepare_stmt_metadata_memory_bytes",
+			"Memory used to store meta data related to prepare statements.",
+			metric_tags{}
+		),
+		std::make_tuple(
+			p_admin_gauge::prepare_stmt_backend_memory_bytes,
+			"prepare_stmt_backend_memory_bytes",
+			"Memory used by backend server related to prepare statements.",
+			metric_tags{}
+		),
 		std::make_tuple (
 			p_admin_gauge::fds_in_use,
 			"proxysql_fds_in_use",
@@ -8979,6 +8991,13 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 		__sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads, 0);
 	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_cluster_threads]->Set(stack_memory_cluster_threads);
 
+	// proxysql_prepare_statement_memory metric
+	uint64_t prepare_stmt_metadata_mem_used;
+	uint64_t prepare_stmt_backend_mem_used;
+	GloMyStmt->get_memory_usage(prepare_stmt_metadata_mem_used, prepare_stmt_backend_mem_used);
+	this->metrics.p_gauge_array[p_admin_gauge::prepare_stmt_metadata_memory_bytes]->Set(prepare_stmt_metadata_mem_used);
+	this->metrics.p_gauge_array[p_admin_gauge::prepare_stmt_backend_memory_bytes]->Set(prepare_stmt_backend_mem_used);
+
 	// Update opened file descriptors
 	int32_t cur_fds = get_open_fds();
 	if (cur_fds != -1) {
@@ -9090,6 +9109,23 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			sprintf(bu,"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+		}
+		if (GloMyStmt) {
+			uint64_t prep_stmt_metadata_mem_usage;
+			uint64_t prep_stmt_backend_mem_usage;
+			GloMyStmt->get_memory_usage(prep_stmt_metadata_mem_usage, prep_stmt_backend_mem_usage);
+			vn = (char*)"prepare_statement_metadata_memory";
+			sprintf(bu, "%llu", prep_stmt_metadata_mem_usage);
+			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query, a, vn, bu);
+			statsdb->execute(query);
+			free(query);
+			vn = (char*)"prepare_statement_backend_memory";
+			sprintf(bu, "%llu", prep_stmt_backend_mem_usage);
+			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
