@@ -297,6 +297,7 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
+	rm -f pkgroot || true
 
 .PHONY: cleanall
 cleanall:
@@ -307,6 +308,7 @@ cleanall:
 	rm -f binaries/*deb || true
 	rm -f binaries/*rpm || true
 	rm -f binaries/*id-hash || true
+	rm -rf pkgroot || true
 
 .PHONY: cleanbuild
 cleanbuild:

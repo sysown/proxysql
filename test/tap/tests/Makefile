@@ -82,10 +82,20 @@ TAP_PATH := ../tap
 TAP_IDIR := ../tap
 TAP_LDIR := ../tap
 
-DOTENV_DYN_DIR := ../tap/cpp-dotenv/dynamic/cpp-dotenv
-DOTENV_DYN_IDIR := $(DOTENV_DYN_DIR)/include
-#DOTENV_DYN_LDIR := $(DOTENV_DYN_DIR)
+DOTENV_DYN_PATH := $(TAP_LDIR)/cpp-dotenv/dynamic/cpp-dotenv
+DOTENV_DYN_IDIR := $(DOTENV_DYN_PATH)/include
+#DOTENV_DYN_LDIR := $(DOTENV_DYN_PATH)
 DOTENV_DYN_LDIR := $(TAP_LDIR)
+
+TEST_DEPS_PATH := $(PROXYSQL_PATH)/test/deps
+
+TEST_MARIADB_PATH := $(TEST_DEPS_PATH)/mariadb-connector-c/mariadb-connector-c
+TEST_MARIADB_IDIR := $(TEST_MARIADB_PATH)/include
+TEST_MARIADB_LDIR := $(TEST_MARIADB_PATH)/libmariadb
+
+TEST_MYSQL_PATH := $(TEST_DEPS_PATH)/mysql-connector-c/mysql-connector-c
+TEST_MYSQL_IDIR := $(TEST_MYSQL_PATH)/include
+TEST_MYSQL_LDIR := $(TEST_MYSQL_PATH)/libmysql
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
@@ -139,7 +149,7 @@ ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address -DTEST_WITHASAN
 endif
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WGCOV) -DGITVERSION=\"$(GIT_VERSION)\"
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) -DGITVERSION=\"$(GIT_VERSION)\"
 
 
 ### main targets
@@ -150,7 +160,7 @@ default: all
 .PHONY: all
 all: tests
 
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 debug: tests
 
 tests: tests-cpp tests-php tests-py \
@@ -242,22 +252,22 @@ reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cp
 	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER $< -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o $@
+	$(CXX) -DLIBMYSQL_HELPER $< -I$(TEST_MYSQL_IDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
 
 test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER $< -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o $@
+	$(CXX) -DLIBMYSQL_HELPER $< -I$(TEST_MYSQL_IDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
 
 reg_test_stmt_resultset_err_no_rows_libmysql-t: reg_test_stmt_resultset_err_no_rows-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER $< -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o $@
+	$(CXX) -DLIBMYSQL_HELPER $< -I$(TEST_MYSQL_IDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
 
 reg_test_mariadb_stmt_store_result_libmysql-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER $< -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o $@
+	$(CXX) -DLIBMYSQL_HELPER $< -I$(TEST_MYSQL_IDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
 
 reg_test_mariadb_stmt_store_result_async-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DASYNC_API $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 prepare_statement_err3024_libmysql-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) -DLIBMYSQL_HELPER $< -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o $@
+	$(CXX) -DLIBMYSQL_HELPER $< -I$(TEST_MYSQL_IDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(CUSTOMARGS) -o $@
 
 prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LDIR)/libtap.so
 	$(CXX) -DASYNC_API $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
@@ -268,6 +278,10 @@ test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LDIR)
 
 ### clean targets
 
+.SILENT: clean
 .PHONY: clean
 clean:
-	rm -f *-t galera_1_timeout_count galera_2_timeout_no_count aurora generate_set_session_csv set_testing-240.csv clickhouse_php_conn-t reg_test_3992_fast_forward_malformed_packet-pymysql-t || true
+	rm -f *-t || true
+	rm -f galera_1_timeout_count galera_2_timeout_no_count aurora || true
+	rm -f generate_set_session_csv set_testing-240.csv || true
+	rm -f *.gcda *.gcno || true

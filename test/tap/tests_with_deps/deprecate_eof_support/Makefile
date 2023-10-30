@@ -1,22 +1,6 @@
 #!/bin/make -f
 
 
-TEST_DEPS_PATH ?= /var/lib/jenkins/scripts/test-scripts/deps
-
-MARIADB_BASE_FOLDER := $(TEST_DEPS_PATH)/mariadb-client-library-3.1.9/
-MARIADB_TEST_DEP := $(TEST_DEPS_PATH)/mariadb-client-library-3.1.9/mariadb-connector-c
-
-BASE_DIR_EXIST := $(shell if [ -d $(MARIADB_BASE_FOLDER) ]; then echo 1; else echo 0; fi)
-DEP_FOLDER_EMPTY := $(shell if [ -f $(MARIADB_TEST_DEP)/CMakeLists.txt ]; then echo 1; else echo 0; fi)
-
-
-ifeq ($(BASE_DIR_EXIST),1)
-
-ifeq ($(DEP_FOLDER_EMPTY),0)
-$(error "Dependency folder '$(MARIADB_TEST_DEP)' is empty. Make sure folder is initialized.")
-endif
-
-
 GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
 	$(error GIT_VERSION is not set)
@@ -35,6 +19,16 @@ MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
 TAP_PATH := ../../tap
 TAP_IDIR := $(TAP_PATH)
 TAP_LDIR := $(TAP_PATH)
+
+TEST_DEPS_PATH := $(PROXYSQL_PATH)/test/deps
+
+TEST_MARIADB_PATH := $(TEST_DEPS_PATH)/mariadb-connector-c/mariadb-connector-c
+TEST_MARIADB_IDIR := $(TEST_MARIADB_PATH)/include
+TEST_MARIADB_LDIR := $(TEST_MARIADB_PATH)/libmariadb
+
+TEST_MYSQL_PATH := $(TEST_DEPS_PATH)/mysql-connector-c/mysql-connector-c
+TEST_MYSQL_IDIR := $(TEST_MYSQL_PATH)/include
+TEST_MYSQL_LDIR := $(TEST_MYSQL_PATH)/libmysql
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
@@ -56,7 +50,7 @@ ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address
 endif
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WGCOV)
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV)
 
 IDIRS := -I$(PROXYSQL_PATH)/include
 IDIRS += -I$(DEPS_PATH)/sqlite3/sqlite3
@@ -69,91 +63,85 @@ IDIRS += -I$(DEPS_PATH)/libhttpserver/libhttpserver/src
 IDIRS += -I$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src/include/
 IDIRS += -I$(DEPS_PATH)/re2/re2
 IDIRS += -I$(DEPS_PATH)/libev/libev
-IDIRS += -I$(MARIADB_TEST_DEP)/include
+IDIRS += -I$(DEPS_PATH)/curl/curl/include
 
-TESTS_DEPS := $(TAP_LDIR)/libtap.so $(MARIADB_TEST_DEP)/libmariadb/libmariadbclient.a
 
+### main targets
 
 .PHONY: default
 default: all
 
 .PHONY: all
-all: build_deps tests
+all: build_test_deps tests
 
 .PHONY: debug
 debug: DEBUG := -DDEBUG
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
-debug: build_deps tests
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
+debug: build_test_deps tests
 
 
-$(MARIADB_TEST_DEP)/libmariadb/libmariadbclient.a:
-	cd $(MARIADB_BASE_FOLDER) && CC=${CC} CXX=${CXX} ${MAKE} mariadb_client
+### test deps targets
 
-.PHONY: build_deps
-build_deps: $(TESTS_DEPS)
+build_test_deps: $(TAP_LDIR)/libtap.so $(TEST_MARIADB_LDIR)/libmariadbclient.a $(TEST_MYSQL_LDIR)/libmysqlclient.a
 
+$(TAP_LDIR)/libtap.so:
+	cd $(TAP_PATH) && CC=${CC} CXX=${CXX} ${MAKE} 
+
+$(TEST_MARIADB_LDIR)/libmariadbclient.a:
+	cd $(TEST_DEPS_PATH) && CC=${CC} CXX=${CXX} ${MAKE} mariadb_client
+
+$(TEST_MYSQL_LDIR)/libmysqlclient.a:
+	cd $(TEST_DEPS_PATH) && CC=${CC} CXX=${CXX} ${MAKE} mysql_client
+
+
+### test and helper targets
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
 
+COMMONARGS := $(OPT) -I$(TAP_IDIR) -L$(TAP_LDIR) -ltap -lcpp_dotenv -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
-COMMONARGS := $(OPT) -I$(TAP_IDIR) -L$(TAP_LDIR) -ltap -lcpp_dotenv -Wl,--no-as-needed -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
+ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp build_test_deps
+	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) $(COMMONARGS) -o $@
+eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp build_test_deps
+	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
-
-fwd_eof_query: fwd_eof_query.cpp $(TESTS_DEPS)
-	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
+fwd_eof_query: fwd_eof_query.cpp build_test_deps
+	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
-fwd_eof_ok_query: fwd_eof_query.cpp $(TAP_LDIR)/libtap.so
-	$(CXX) $< $(IDIRS) -I$(MARIADB_IDIR) -I/usr/include/mysql/ -lmysqlclient -L/usr/lib/x86_64-linux-gnu/ $(COMMONARGS) -o $@
+fwd_eof_ok_query: fwd_eof_query.cpp build_test_deps
+	$(CXX) $< $(IDIRS) -I$(MARIADB_IDIR) -I$(TEST_MYSQL_IDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(COMMONARGS) -o $@
 # NOTE end
 
-deprecate_eof_cache-t: deprecate_eof_cache-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient -L$(PROXYSQL_LDIR) -lproxysql $(COMMONARGS) -o $@
+deprecate_eof_cache-t: deprecate_eof_cache-t.cpp build_test_deps
+	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient -L$(PROXYSQL_LDIR) -lproxysql $(COMMONARGS) -o $@
 
-eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
+eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp build_test_deps
+	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
+eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp build_test_deps
+	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-eof_conn_options_check-t: eof_conn_options_check-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
+eof_conn_options_check-t: eof_conn_options_check-t.cpp build_test_deps
+	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-eof_fast_forward-t: eof_fast_forward-t.cpp $(TESTS_DEPS)
-	$(CXX) $< $(IDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -lmariadbclient $(COMMONARGS) -o $@
-
-
-$(TAP_LIBDIR)/libtap.a:
-	cd ../../tap && CC=${CC} CXX=${CXX} ${MAKE} 
+eof_fast_forward-t: eof_fast_forward-t.cpp build_test_deps
+	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 
+### clean targets
+
+.SILENT: cleanall
+.PHONY: cleanall
+cleanall: clean
+	cd $(TEST_DEPS_PATH) && ${MAKE} cleanall
+
+.SILENT: clean
 .PHONY: clean
 clean:
-	rm -f *-t
-	rm -f fwd_eof_query
-	rm -f fwd_eof_ok_query
-	rm -f *.a *.o
-	cd $(MARIADB_BASE_FOLDER) && ${MAKE} clean
-
-
-else
-.PHONY: all
-all:
-$(warning The required deps were not found. Tests 'deprecate_eof_support' wont be build)
-
-.PHONY: debug
-debug:
-$(warning The required deps were not found. Tests 'deprecate_eof_support' wont be build)
-
-.PHONY: clean
-clean:
-	rm -f *-t
-	rm -f fwd_eof_query
-	rm -f fwd_eof_ok_query
-	rm -f *.a *.o
-endif
+	rm -f *-t || true
+	rm -f fwd_eof_query || true
+	rm -f fwd_eof_ok_query || true
+	rm -f *.a *.o || true
+	rm -f *.gcda *.gcno || true

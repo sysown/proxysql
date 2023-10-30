@@ -1,0 +1,11 @@
+--- cmake/ConnectorName.cmake	2020-10-29 22:16:20.000000000 +0000
++++ cmake/ConnectorName.cmake	2022-11-06 08:31:22.615513943 +0000
+@@ -22,7 +22,7 @@
+     SET(MACHINE_NAME "x64")
+   ELSE()
+     SET(MACHINE_NAME "32")
+-  END()
++  ENDIF()
+ ENDIF()
+ 
+ SET(product_name "mysql-connector-c-${CPACK_PACKAGE_VERSION}-${PLATFORM_NAME}${CONCAT_SIGN}${MACHINE_NAME}")
