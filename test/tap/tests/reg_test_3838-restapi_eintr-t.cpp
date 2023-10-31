@@ -23,7 +23,7 @@
 #include "curl/curl.h"
 
 #include "mysql.h"
-#include "mysql/mysqld_error.h"
+#include "mysqld_error.h"
 
 #include "json.hpp"
 #include "tap.h"

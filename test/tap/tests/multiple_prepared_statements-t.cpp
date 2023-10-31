@@ -22,7 +22,7 @@ It stresses how proxysql managers prepared statements, specifically:
 #include <unistd.h>
 
 #include "mysql.h"
-#include "mysql/mysqld_error.h"
+#include "mysqld_error.h"
 
 #include "command_line.h"
 #include "proxysql_utils.h"
