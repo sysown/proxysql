@@ -28,7 +28,7 @@ DELETE FROM history_mysql_status_variables;
 #include <vector>
 
 #include "mysql.h"
-#include "mysql/mysqld_error.h"
+#include "mysqld_error.h"
 
 #include "tap.h"
 #include "command_line.h"

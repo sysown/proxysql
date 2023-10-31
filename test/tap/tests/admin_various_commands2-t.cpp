@@ -7,7 +7,7 @@
 #include <tuple>
 
 #include "mysql.h"
-#include "mysql/mysqld_error.h"
+#include "mysqld_error.h"
 
 #include "tap.h"
 #include "command_line.h"

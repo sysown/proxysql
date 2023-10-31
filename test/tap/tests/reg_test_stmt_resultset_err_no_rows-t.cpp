@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "mysql.h"
-#include "mysql/mysqld_error.h"
+#include "mysqld_error.h"
 
 #include "proxysql_utils.h"
 #include "tap.h"
@@ -140,9 +140,9 @@ int main(int argc, char** argv) {
 		bind.buffer_type = MYSQL_TYPE_STRING;
 		bind.buffer = (char *)&data_c2;
 		bind.buffer_length = STRING_SIZE;
-		bind.is_null = &is_null[0];
+		bind.is_null = (my_bool *)&is_null[0];
 		bind.length = &length[0];
-		bind.error = &error[0];
+		bind.error = (my_bool *)&error[0];
 
 		if (mysql_stmt_bind_result(stmt, &bind)) {
 			diag("mysql_stmt_bind_result at line %d failed: %s", __LINE__, mysql_stmt_error(stmt));
