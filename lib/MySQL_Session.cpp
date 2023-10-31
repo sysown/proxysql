@@ -1250,6 +1250,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
 				j["backends"][i]["conn"]["status"]["has_warnings"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+				j["backends"][i]["conn"]["warning_count"] = _myconn->warning_count;
 				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
 				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
@@ -6062,27 +6063,28 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 		if ((dig_len == 22) && (strncasecmp(dig, "SHOW COUNT(*) WARNINGS", 22) == 0)) {
 			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig);
+			std::string warning_count = "0";
 			if (warning_in_hg > -1) {
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
-				current_hostgroup = warning_in_hg;
-				//warning_in_hg = -1;
-				return false;
+				current_hostgroup = warning_in_hg;	
+				assert(mybe && mybe->server_myds && mybe->server_myds->myconn && mybe->server_myds->myconn->mysql);
+				warning_count = std::to_string(mybe->server_myds->myconn->warning_count);
 			} else {
 				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
-				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
-				resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
-				char* pta[1];
-				pta[0] = (char*)"0";
-				resultset->add_row(pta);
-				SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
-				client_myds->DSS = STATE_SLEEP;
-				status = WAITING_CLIENT_DATA;
-				if (mirror == false) {
-					RequestEnd(NULL);
-				}
-				l_free(pkt->size, pkt->ptr);
-				return true;
 			}
+			std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
+			resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
+			char* pta[1];
+			pta[0] = (char*)warning_count.c_str();
+			resultset->add_row(pta);
+			SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+			client_myds->DSS = STATE_SLEEP;
+			status = WAITING_CLIENT_DATA;
+			if (mirror == false) {
+				RequestEnd(NULL);
+			}
+			l_free(pkt->size, pkt->ptr);
+			return true;
 		}
 
 		reset_warning_hostgroup_flag_and_release_connection();
@@ -8163,6 +8165,7 @@ void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection()
 		MySQL_Backend* _mybe = NULL;
 		_mybe = find_backend(warning_in_hg);
 		MySQL_Data_Stream* myds = _mybe->server_myds;
+		myds->myconn->warning_count = 0;
 		myds->myconn->set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 		if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
 			myds->return_MySQL_Connection_To_Pool();

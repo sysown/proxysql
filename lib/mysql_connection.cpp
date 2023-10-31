@@ -434,6 +434,7 @@ MySQL_Connection::MySQL_Connection() {
 	query.stmt_meta=NULL;
 	query.stmt_result=NULL;
 	largest_query_length=0;
+	warning_count=0;
 	multiplex_delayed=false;
 	MyRS=NULL;
 	MyRS_reuse=NULL;
@@ -2575,11 +2576,12 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	// checking warnings and disabling multiplexing will be effective only when the mysql-query_digests is enabled
 	if (myds->sess->CurrentQuery.QueryParserArgs.digest_text) {
 		if (get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS) == false) {
-			if (mysql_warning_count(this->mysql) > 0) {
+			if (this->mysql && mysql_warning_count(this->mysql) > 0) {
 				if (myds && myds->sess) {
 					// 'warning_in_hg' will be used if the next query is 'SHOW WARNINGS' or
 					// 'SHOW COUNT(*) WARNINGS'
 					myds->sess->warning_in_hg = myds->sess->current_hostgroup;
+					warning_count = mysql_warning_count(this->mysql);
 					// enabling multiplexing
 					set_status(true, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 				}
@@ -2595,6 +2597,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 				if (myds && myds->sess) {
 					myds->sess->warning_in_hg = -1;
 				}
+				warning_count = 0;
 				// disabling multiplexing
 				set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 			}
@@ -2828,7 +2831,7 @@ void MySQL_Connection::reset() {
 	set_status(old_compress,STATUS_MYSQL_CONNECTION_COMPRESSION);
 	reusable=true;
 	options.last_set_autocommit=-1; // never sent
-
+	warning_count=0;
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();

@@ -129,6 +129,7 @@ class MySQL_Connection {
 	} statuses;
 
 	unsigned long largest_query_length;
+	unsigned int warning_count;
 	/**
 	 * @brief This represents the internal knowledge of ProxySQL about the connection. It keeps track of those
 	 *  states which *are not reflected* into 'server_status', but are relevant for connection handling.

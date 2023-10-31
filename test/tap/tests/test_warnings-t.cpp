@@ -31,11 +31,7 @@ using MESSAGE = std::string;
 		} \
 	} while(0)
 
-#define MYSQL_CLEAR_RESULT(mysql) do { MYSQL_RES* mysql_result = mysql_use_result(mysql); \
-									 while (MYSQL_ROW row = mysql_fetch_row(mysql_result)) {} \
-									 mysql_free_result(mysql_result); \
-								  } while(0)
-
+#define MYSQL_CLEAR_RESULT(mysql)	 mysql_free_result(mysql_store_result(mysql));
 
 enum MultiplexStatus {
 	kNotApplicable = 0,
@@ -150,15 +146,17 @@ int check_proxysql_internal_session(MYSQL* proxysql, int exp_status) {
 			if (backend != nullptr && backend.contains("conn")) {
 				found_backend = true;
 	
-				if (backend["conn"]["MultiplexDisabled"]) {
+				if (backend["conn"]["MultiplexDisabled"] == true) {
 					status |= MultiplexStatus::kMultiplexingEnabled;
 				}
 
-				if (backend["conn"]["status"]["has_warnings"] && j_status["warning_in_hg"] != -1) {
+				if (backend["conn"]["status"]["has_warnings"] == true && 
+					backend["conn"]["warning_count"] > 0 &&
+					j_status["warning_in_hg"] != -1) {
 					status |= MultiplexStatus::kHasWarnings;
 				}
 
-				if (backend["conn"]["status"]["user_variable"]) {
+				if (backend["conn"]["status"]["user_variable"] == true) {
 					status |= MultiplexStatus::kUserVariables;
 				}
 			}
@@ -233,8 +231,6 @@ const std::vector<TestInfo> multiplexing_test = {
 													{ ConnectionType::kMySQL, {"SELECT 1", true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kUserVariables) }
 };
 
-
-
 #define IS_BIT_MASK_SET(variable,flag) ((variable & static_cast<int>(flag)) == static_cast<int>(flag))
 
 int main(int argc, char** argv) {
@@ -246,7 +242,12 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	plan(9+13+4+23+9+10);
+	plan((7+2) +   // select test: 7 warning checks, 2 multiplex status checks
+		 (9+4) +   // insert test: 9 warning checks, 4 multiplex status checks
+		 (3+1) +   // query digest test: 3 warning checks, 1 multiplex status checks
+		 (18+5) + // query cache test: 18 warning checks, 5 multiplex status checks
+		 (7+2) +   // warning log test: 7 warning checks, 2 multiplex status checks
+		 (7+3));   // multiplexing test: 7 warning checks, 3 multiplex status checks
 
 	// Initialize Admin connection
 	MYSQL* proxysql_admin = mysql_init(NULL);
