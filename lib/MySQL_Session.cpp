@@ -923,7 +923,7 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	// specific connection, for that, we update 'current_hostgroup' with the first active transaction we are
 	// able to find. If more transactions are simultaneously open for the session, more 'COMMIT|ROLLBACK'
 	// commands are required to be issued by the client to continue ending transactions.
-	unsigned int hg = FindOneActiveTransaction(true);
+	int hg = FindOneActiveTransaction(true);
 	if (hg != -1) {
 		// there is an active transaction, we must forward the request
 		current_hostgroup = hg;
@@ -1584,7 +1584,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 }
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session() {
-	if (pktH->size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
+	if (pkt.size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
 		// check if there are too many mirror sessions in queue
 		if (thread->mirror_queue_mysql_sessions->len >= (unsigned int)mysql_thread___mirror_max_queue_length) {
 			return;
@@ -1633,9 +1633,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				newsess->default_schema=strdup(default_schema);
 			}
 		}
-		newsess->mirrorPkt.size=pktH->size;
+		newsess->mirrorPkt.size=pkt.size;
 		newsess->mirrorPkt.ptr=l_alloc(newsess->mirrorPkt.size);
-		memcpy(newsess->mirrorPkt.ptr,pktH->ptr,pktH->size);
+		memcpy(newsess->mirrorPkt.ptr,pkt.ptr,pkt.size);
 
 		if (thread->mirror_queue_mysql_sessions->len==0) {
 			// there are no sessions in the queue, we try to execute immediately
@@ -4739,8 +4739,6 @@ int MySQL_Session::handler() {
 	bool wrong_pass=false;
 	if (to_process==0) return 0; // this should be redundant if the called does the same check
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
-	PtrSize_t pkt;
-	pktH=&pkt;
 	//unsigned int j;
 	//unsigned char c;
 

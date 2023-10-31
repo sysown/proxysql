@@ -1163,7 +1163,6 @@ unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	digest_umap.swap(digest_umap_aux);
 	digest_text_umap.swap(digest_text_umap_aux);
 	pthread_rwlock_unlock(&digest_rwlock);
-	int num_rows = 0;
 	unsigned long long curtime1=monotonic_time();
 	size_t map1_size = digest_umap_aux.size();
 	size_t map2_size = digest_text_umap_aux.size();
