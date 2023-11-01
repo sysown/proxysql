@@ -1,7 +1,7 @@
-[![CI-selftests](https://github.com/sysown/proxysql/actions/workflows/ci-selftests.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/ci-selftests.yml)
-[![CI-repltests](https://github.com/sysown/proxysql/actions/workflows/ci-repltests.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/ci-repltests.yml)
-[![CodeQL](https://github.com/sysown/proxysql/actions/workflows/codeql.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/codeql.yml)
-[![Package-Build](https://github.com/sysown/proxysql/actions/workflows/package-build.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/package-build.yml)
+[![CI-selftests](https://github.com/sysown/proxysql/actions/workflows/CI-selftests.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/CI-selftests.yml)
+[![CI-repltests](https://github.com/sysown/proxysql/actions/workflows/CI-repltests.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/CI-repltests.yml)
+[![CodeQL](https://github.com/sysown/proxysql/actions/workflows/CI-codeql.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/CI-codeql.yml)
+[![Package-Build](https://github.com/sysown/proxysql/actions/workflows/CI-package-build.yml/badge.svg)](https://github.com/sysown/proxysql/actions/workflows/-CI-package-build.yml)
 
 <a><img src="https://i0.wp.com/proxysql.com/wp-content/uploads/2020/04/ProxySQL-Colour-Logo.png?fit=800%2C278&ssl=1" alt="ProxySQL"></a>
 
