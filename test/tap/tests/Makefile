@@ -158,10 +158,10 @@ OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) -D
 default: all
 
 .PHONY: all
-all: tests
+all: build_test_deps tests
 
 debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
-debug: tests
+debug: build_test_deps tests
 
 tests: tests-cpp tests-php tests-py \
 	setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper \
@@ -175,6 +175,20 @@ tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
 testgalera: galera_1_timeout_count galera_2_timeout_no_count
 testaurora: aurora
+
+
+### test deps targets
+
+build_test_deps: $(TAP_LDIR)/libtap.so $(TEST_MARIADB_LDIR)/libmariadbclient.a $(TEST_MYSQL_LDIR)/libmysqlclient.a
+
+$(TAP_LDIR)/libtap.so:
+	cd $(TAP_PATH) && CC=${CC} CXX=${CXX} ${MAKE} 
+
+$(TEST_MARIADB_LDIR)/libmariadbclient.a:
+	cd $(TEST_DEPS_PATH) && CC=${CC} CXX=${CXX} ${MAKE} mariadb_client
+
+$(TEST_MYSQL_LDIR)/libmysqlclient.a:
+	cd $(TEST_DEPS_PATH) && CC=${CC} CXX=${CXX} ${MAKE} mysql_client
 
 
 ### helper targets
