@@ -2893,8 +2893,12 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		int nb = fcntl(_fd, F_SETFL, prevflags | O_NONBLOCK);
 		if (nb == -1) {
 			proxy_error("For FD %d fcntl() returned -1 , previous flags %d , errno %d\n", _fd, prevflags, errno);
-			if (shutdown == 0)
-				assert (nb != -1);
+			// previously we were asserting here. But it is possible that this->shutdown is still 0 during the
+			// shutdown itself:
+			// - the current thread is processing connections
+			// - the signal handler thread is still setting shutdown = 0
+			//if (shutdown == 0)
+			//	assert (nb != -1);
 		}
 	}
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
