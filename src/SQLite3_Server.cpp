@@ -1091,7 +1091,7 @@ static void * sqlite3server_main_loop(void *arg)
 					if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 )
 						perror("Thread creation");
 				} else {
-					proxy_error("accept() error:\n", strerror(errno));
+					proxy_error("accept() error: %s\n", strerror(errno));
 				}
 			}
 			fds[i].revents=0;
