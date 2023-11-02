@@ -594,11 +594,13 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_2 "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_2
+#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_6_0 "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE runtime_mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
+//#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_6_0
 
-#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_2
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE runtime_mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_6_0
 
 // Cluster solution
 
@@ -12326,7 +12328,7 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		StrQuery = "INSERT INTO ";
 		if (_runtime)
 			StrQuery += "runtime_";
-		StrQuery += "mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		StrQuery += "mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
 		ASSERT_SQLITE_OK(rc, admindb);
 		//proxy_info("New mysql_aws_aurora_hostgroups table\n");
@@ -12336,13 +12338,14 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_int64)(statement, 2, atol(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb); // max_num_online_servers
 			rc=(*proxy_sqlite3_bind_int64)(statement, 3, atol(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb); // autocommit
 			rc=(*proxy_sqlite3_bind_int64)(statement, 4, atol(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb); // free_connections_pct
-			rc=(*proxy_sqlite3_bind_text)(statement,  5, r->fields[4],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // variable_name
+			rc=(*proxy_sqlite3_bind_text)(statement,  5, r->fields[4],      -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // variable_name
 			rc=(*proxy_sqlite3_bind_int64)(statement, 6, atol(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb); // multiplex
 			rc=(*proxy_sqlite3_bind_int64)(statement, 7, atol(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb); // connection_warming
 			rc=(*proxy_sqlite3_bind_int64)(statement, 8, atol(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb); // throttle_connections_per_sec
-			rc=(*proxy_sqlite3_bind_text)(statement,  9, r->fields[8],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ignore_session_variables
-			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // servers_defaults
-			rc=(*proxy_sqlite3_bind_text)(statement, 11, r->fields[10],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+			rc=(*proxy_sqlite3_bind_text)(statement,  9, r->fields[8],      -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ignore_session_variables
+			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],		-1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostgroup_settings
+			rc=(*proxy_sqlite3_bind_text)(statement,  11, r->fields[10],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // servers_defaults
+			rc=(*proxy_sqlite3_bind_text)(statement,  12, r->fields[11],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
@@ -13387,6 +13390,28 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 				" hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex,"
 				" connection_warming, throttle_connections_per_sec, ignore_session_variables, comment"
 			" FROM mysql_hostgroup_attributes_v250"
+		);
+	}
+	rci = configdb->check_table_structure((char*)"mysql_hostgroup_attributes", (char*)ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_2);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version pre-v2.6.0 of mysql_hostgroup_attributes\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_hostgroup_attributes in progress\n");
+		// drop mysql_hostgroup_attributes table with suffix _v252
+		configdb->execute("DROP TABLE IF EXISTS mysql_hostgroup_attributes_v252");
+		// rename current table to add suffix _v252
+		configdb->execute("ALTER TABLE mysql_hostgroup_attributes RENAME TO mysql_hostgroup_attributes_v252");
+		// create new table
+		configdb->build_table((char*)"mysql_hostgroup_attributes", (char*)ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES, false);
+		// copy fields from old table
+		configdb->execute(
+			"INSERT INTO mysql_hostgroup_attributes ("
+			" hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex,"
+			" connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment"
+			") SELECT"
+			" hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex,"
+			" connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment"
+			" FROM mysql_hostgroup_attributes_v252"
 		);
 	}
 	configdb->execute("PRAGMA foreign_keys = ON");
