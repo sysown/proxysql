@@ -2990,7 +2990,7 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 	return length;
 }
 
-void MySQL_ResultSet::add_eof() {
+void MySQL_ResultSet::add_eof(bool handle_warnings_enabled) {
 	if (myprot) {
 		unsigned int nTrx=myds->sess->NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -3003,11 +3003,11 @@ void MySQL_ResultSet::add_eof() {
 		//resultset_size+=pkt.size;
 		
 		// warnings count will only be sent to the client if mysql-query_digests is enabled
-		const bool warnings_enabled = myds->sess->CurrentQuery.QueryParserArgs.digest_text != nullptr;
+
 		if (deprecate_eof_active) {
 			PtrSize_t pkt;
 			buffer_to_PSarrayOut();
-			myprot->generate_pkt_OK(false, &pkt.ptr, &pkt.size, sid, 0, 0, setStatus, (warnings_enabled ? mysql->warning_count : 0), NULL, true);
+			myprot->generate_pkt_OK(false, &pkt.ptr, &pkt.size, sid, 0, 0, setStatus, (handle_warnings_enabled ? mysql->warning_count : 0), NULL, true);
 			PSarrayOUT.add(pkt.ptr, pkt.size);
 			resultset_size += pkt.size;
 		}
@@ -3017,7 +3017,7 @@ void MySQL_ResultSet::add_eof() {
 			// note that EOF is added on a packet on its own, instead of using a buffer,
 			// so that can be removed using remove_last_eof()
 			buffer_to_PSarrayOut();
-			myprot->generate_pkt_EOF(false, NULL, NULL, sid, (warnings_enabled ? mysql->warning_count : 0), setStatus, this);
+			myprot->generate_pkt_EOF(false, NULL, NULL, sid, (handle_warnings_enabled ? mysql->warning_count : 0), setStatus, this);
 			resultset_size += 9;
 			buffer_to_PSarrayOut();
 		}

@@ -1635,7 +1635,8 @@ handler_again:
 						}
 					}
 					// we reach here if there was no error
-					MyRS->add_eof();
+					MyRS->add_eof(myds->sess->CurrentQuery.QueryParserArgs.digest_text != nullptr &&
+						myds->myconn->parent->myhgc->handle_warnings_enabled());
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
 			}
@@ -2576,7 +2577,8 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 	// checking warnings and disabling multiplexing will be effective only when the mysql-query_digests is enabled
 	if (myds->sess->CurrentQuery.QueryParserArgs.digest_text) {
 		if (get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS) == false) {
-			if (this->mysql && mysql_warning_count(this->mysql) > 0) {
+			const bool handle_warnings_enabled = parent->myhgc->handle_warnings_enabled();
+			if (handle_warnings_enabled && this->mysql && mysql_warning_count(this->mysql) > 0) {
 				if (myds && myds->sess) {
 					// 'warning_in_hg' will be used if the next query is 'SHOW WARNINGS' or
 					// 'SHOW COUNT(*) WARNINGS'

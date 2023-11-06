@@ -7372,7 +7372,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 			if (qpo && qpo->cache_ttl>0 && com_field_list==false) { // the resultset should be cached
 				if (mysql_errno(mysql)==0 &&
 					(mysql_warning_count(mysql)==0 || 
-					 mysql_thread___query_cache_with_warnings_support==1)) { // no errors
+					 mysql_thread___query_cache_handle_warnings==1)) { // no errors
 					if (
 						(qpo->cache_empty_result==1)
 						|| (
