@@ -2008,6 +2008,8 @@ int main(int, char**) {
 			std::make_tuple("mysql-auto_increment_delay_multiplex"                         , "6"                          ),
 			std::make_tuple("mysql-long_query_time"                                        , "1001"                       ), // here
 			std::make_tuple("mysql-query_cache_size_MB"                                    , "256"                        ),
+			std::make_tuple("mysql-query_cache_handle_warnings"                            , "1"                          ),
+			std::make_tuple("mysql-handle_warnings"                                        , "1"                          ),
 			std::make_tuple("mysql-poll_timeout_on_failure"                                , "100"                        ),
 			std::make_tuple("mysql-keep_multiplexing_variables"                            , "tx_isolation,version"       ),
 			std::make_tuple("mysql-kill_backend_connection_when_disconnect"                , "true"                       ),
