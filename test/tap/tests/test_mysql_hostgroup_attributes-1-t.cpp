@@ -79,12 +79,12 @@ int main(int argc, char** argv) {
 				"(20,3,-1,40,'SET sql_mode=\"\"',1,0,124,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','{\"weight\": 100, \"max_connections\": 1000}','servers defaults')"
 		},
 		{
-			"0x1A6E38CBB2E44672",
+			"0xF33858C81FDA7372",
 			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','','',''),"
 				"(18,2,-1,20,'SET sql_mode=\"\"',0,0,100,'','','','hello world'),"
 				"(17,0,0,30,'SET long_query_time=0',1,0,123,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','','filtering variables'),"
 				"(20,3,-1,40,'SET sql_mode=\"\"',1,0,124,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','{\"weight\": 100, \"max_connections\": 1000}','servers defaults'),"
-				"(21,2,-1,50,'SET sql_mode=\"\"',1,0,125,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','{}','{\"weight\": 100, \"max_connections\": 1000}','hostgroup settings')"
+				"(21,2,-1,50,'SET sql_mode=\"\"',1,0,125,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','{\"handle_warnings\": 1}','{\"weight\": 100, \"max_connections\": 1000}','hostgroup settings')"
 		}
 	};
 
