@@ -4598,9 +4598,9 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 	switch (status) {
 		case PROCESSING_QUERY:
 			if (myconn) {
-				MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myds);
+				MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->warning_count, myds);
 			} else {
-				MySQL_Result_to_MySQL_wire(NULL, NULL, myds);
+				MySQL_Result_to_MySQL_wire(NULL, NULL, 0, myds);
 			}
 			break;
 		case PROCESSING_STMT_PREPARE:
@@ -5076,7 +5076,7 @@ handler_again:
 
 					switch (status) {
 						case PROCESSING_QUERY:
-							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->myds);
+							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->warning_count, myconn->myds);
 							break;
 						case PROCESSING_STMT_PREPARE:
 							{
@@ -5165,7 +5165,7 @@ handler_again:
 								break;
 							// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
 							case 2:
-								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->myds);
+								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->warning_count, myconn->myds);
 								  if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
 										if (myconn->MyRS_reuse) {
 											delete myconn->MyRS_reuse;
@@ -7355,7 +7355,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	}
 }
 
-void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds) {
+void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds) {
         if (mysql == NULL) {
                 // error
                 client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
@@ -7413,7 +7413,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
 			setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 			setStatus = setStatus & ~SERVER_STATUS_CURSOR_EXISTS; // Do not send cursor #1128
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus, mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus, warning_count, mysql->info);
 			//client_myds->pkt_sid++;
 		} else {
 			// error

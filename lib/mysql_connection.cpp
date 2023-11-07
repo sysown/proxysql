@@ -2018,6 +2018,12 @@ int MySQL_Connection::async_query(short event, char *stmt, unsigned long length,
 		if (mysql_errno(mysql)) {
 			return -1;
 		} else {
+			if (myds && myds->sess && myds->sess->CurrentQuery.QueryParserArgs.digest_text) {
+				const bool handle_warnings_enabled = parent->myhgc->handle_warnings_enabled();
+				if (handle_warnings_enabled && this->mysql && mysql_warning_count(this->mysql) > 0) {
+					warning_count = mysql_warning_count(this->mysql);
+				}
+			}
 			return 0;
 		}
 	}
@@ -2579,14 +2585,12 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		if (get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS) == false) {
 			const bool handle_warnings_enabled = parent->myhgc->handle_warnings_enabled();
 			if (handle_warnings_enabled && this->mysql && mysql_warning_count(this->mysql) > 0) {
-				if (myds && myds->sess) {
-					// 'warning_in_hg' will be used if the next query is 'SHOW WARNINGS' or
-					// 'SHOW COUNT(*) WARNINGS'
-					myds->sess->warning_in_hg = myds->sess->current_hostgroup;
-					warning_count = mysql_warning_count(this->mysql);
-					// enabling multiplexing
-					set_status(true, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
-				}
+				// 'warning_in_hg' will be used if the next query is 'SHOW WARNINGS' or
+				// 'SHOW COUNT(*) WARNINGS'
+				myds->sess->warning_in_hg = myds->sess->current_hostgroup;
+				//warning_count = mysql_warning_count(this->mysql);
+				// enabling multiplexing
+				set_status(true, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 			}
 		} else { // reset warning_in_hg 
 			const char* dig = myds->sess->CurrentQuery.QueryParserArgs.digest_text;
@@ -2596,9 +2600,7 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			// on backend.
 			if (!((dig_len == 22 && strncasecmp(dig, "SHOW COUNT(*) WARNINGS", 22) == 0) ||
 				(dig_len == 13 && strncasecmp(dig, "SHOW WARNINGS", 13) == 0))) {
-				if (myds && myds->sess) {
-					myds->sess->warning_in_hg = -1;
-				}
+				myds->sess->warning_in_hg = -1;
 				warning_count = 0;
 				// disabling multiplexing
 				set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);

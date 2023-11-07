@@ -172,9 +172,46 @@ int check_proxysql_internal_session(MYSQL* proxysql, int exp_status) {
 	return EXIT_SUCCESS;
 }
 
+const std::vector<TestInfo> mysql_variable_test = {
+												{ ConnectionType::kAdmin, {"DELETE FROM mysql_query_rules", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"LOAD MYSQL QUERY RULES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"SET mysql-handle_warnings=0", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"LOAD MYSQL VARIABLES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) },
+												{ ConnectionType::kMySQL, {"DO 1/0", false}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) }, 
+												{ ConnectionType::kAdmin, {"SET mysql-handle_warnings=1", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"LOAD MYSQL VARIABLES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
+											    { ConnectionType::kMySQL, {"SELECT 1"  , true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) },
+												{ ConnectionType::kMySQL, {"DO 1/0", false}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
+												{ ConnectionType::kMySQL, {"DO 1", false}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) }
+};
+
+const std::vector<TestInfo> hostgroup_attributes_test = {
+												{ ConnectionType::kAdmin, {"SET mysql-handle_warnings=1", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"LOAD MYSQL VARIABLES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"DELETE FROM mysql_hostgroup_attributes", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"INSERT INTO mysql_hostgroup_attributes (hostgroup_id, hostgroup_settings) VALUES (0, '{\"handle_warnings\":0}')", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"LOAD MYSQL SERVERS TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												// Hostgroup attributes take precedence and should override the global variable value for the specified hostgroup.
+												{ ConnectionType::kMySQL, {"DO 1/0", false}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled)},
+												{ ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled)},
+												{ ConnectionType::kMySQL, {"DO 1", false}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) },
+												{ ConnectionType::kMySQL, {"SELECT 1", true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) },
+												{ ConnectionType::kAdmin, {"SET mysql-handle_warnings=0", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"LOAD MYSQL VARIABLES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"DELETE FROM mysql_hostgroup_attributes", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"INSERT INTO mysql_hostgroup_attributes (hostgroup_id, hostgroup_settings) VALUES (0, '{\"handle_warnings\":1}')", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kAdmin, {"LOAD MYSQL SERVERS TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												{ ConnectionType::kMySQL, {"DO 1/0", false}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
+												{ ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) } // intentional 
+};
+
 const std::vector<TestInfo> select_test = {
 											  { ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
-											  { ConnectionType::kMySQL, {"SELECT 1"  , true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) }
+											  { ConnectionType::kMySQL, {"SELECT 1"  , true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) },
+											  { ConnectionType::kMySQL, {"DO 1/0", false}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
+											  { ConnectionType::kMySQL, {"DO 1"  , false}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) }
 };
 
 const std::vector<TestInfo> insert_test = {
@@ -188,7 +225,7 @@ const std::vector<TestInfo> insert_test = {
 };
 
 const std::vector<TestInfo> query_cache_test = {
-												   { ConnectionType::kAdmin, {"SET mysql-query_cache_with_warnings_support=0", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												   { ConnectionType::kAdmin, {"SET mysql-query_cache_handle_warnings=0", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"LOAD MYSQL VARIABLES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"DELETE FROM mysql_query_rules", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"INSERT INTO mysql_query_rules (rule_id,active,match_digest,cache_ttl,apply) VALUES (1,1,'SELECT ?/?',60000,1)", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
@@ -198,7 +235,7 @@ const std::vector<TestInfo> query_cache_test = {
 												   // this entry should not be saved in cache
 												   { ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
 												   { ConnectionType::kMySQL, {"SELECT 1", true}, {WarningCheckType::kAll, 0}, (MultiplexStatus::kMultiplexingDisabled) },
-												   { ConnectionType::kAdmin, {"SET mysql-query_cache_with_warnings_support=1", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
+												   { ConnectionType::kAdmin, {"SET mysql-query_cache_handle_warnings=1", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kAdmin, {"LOAD MYSQL VARIABLES TO RUNTIME", false}, {WarningCheckType::kNotApplicable}, (MultiplexStatus::kNotApplicable) },
 												   { ConnectionType::kMySQL, {"SELECT 1/0", true}, {WarningCheckType::kAll, 1, {1365}}, (MultiplexStatus::kMultiplexingEnabled | MultiplexStatus::kHasWarnings) },
 												   // resultset will be retrived from cache, with warning count zero
@@ -242,12 +279,14 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	plan((7+2) +   // select test: 7 warning checks, 2 multiplex status checks
-		 (9+4) +   // insert test: 9 warning checks, 4 multiplex status checks
-		 (3+1) +   // query digest test: 3 warning checks, 1 multiplex status checks
-		 (18+5) + // query cache test: 18 warning checks, 5 multiplex status checks
-		 (7+2) +   // warning log test: 7 warning checks, 2 multiplex status checks
-		 (7+3));   // multiplexing test: 7 warning checks, 3 multiplex status checks
+	plan((20 + 6) +  // mysql variable test: 20 warning checks, 6 multiplex status checks
+		 (20 + 6) +  // hostgroup attributes test: 20 warning checks, 6 multiplex status checks
+		 (14 + 4) +  // select test: 14 warning checks, 4 multiplex status checks
+		 (9 + 4) +   // insert test: 9 warning checks, 4 multiplex status checks
+		 (3 + 1) +   // query digest test: 3 warning checks, 1 multiplex status checks
+		 (18 + 5) +  // query cache test: 18 warning checks, 5 multiplex status checks
+		 (7 + 2) +   // warning log test: 7 warning checks, 2 multiplex status checks
+		 (7 + 3));   // multiplexing test: 7 warning checks, 3 multiplex status checks
 
 	// Initialize Admin connection
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -274,25 +313,31 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 	
-	std::vector<std::pair<const char*, std::vector<TestInfo>>> all_tests(6);
+	std::vector<std::pair<const char*, std::vector<TestInfo>>> all_tests(8);
 
-	all_tests[0].first = "SELECT";
-	all_tests[0].second.insert(all_tests[0].second.end(), select_test.begin(), select_test.end());
+	all_tests[0].first = "MYSQL VARIABLE (mysql-handle_warnings)";
+	all_tests[0].second.insert(all_tests[0].second.end(), mysql_variable_test.begin(), mysql_variable_test.end());
+	
+	all_tests[1].first = "HOSTGROUP ATTRIBUTES (handle_warnings)";
+	all_tests[1].second.insert(all_tests[1].second.end(), hostgroup_attributes_test.begin(), hostgroup_attributes_test.end());
+	
+	all_tests[2].first = "SELECT";
+	all_tests[2].second.insert(all_tests[2].second.end(), select_test.begin(), select_test.end());
 
-	all_tests[1].first = "INSERT";
-	all_tests[1].second.insert(all_tests[1].second.end(), insert_test.begin(), insert_test.end());
+	all_tests[3].first = "INSERT";
+	all_tests[3].second.insert(all_tests[3].second.end(), insert_test.begin(), insert_test.end());
 
-	all_tests[2].first = "QUERY_DIGEST";
-	all_tests[2].second.insert(all_tests[2].second.end(), query_digest_test.begin(), query_digest_test.end());
+	all_tests[4].first = "QUERY_DIGEST";
+	all_tests[4].second.insert(all_tests[4].second.end(), query_digest_test.begin(), query_digest_test.end());
 
-	all_tests[3].first = "QUERY_CACHE";
-	all_tests[3].second.insert(all_tests[3].second.end(), query_cache_test.begin(), query_cache_test.end());
+	all_tests[5].first = "QUERY_CACHE";
+	all_tests[5].second.insert(all_tests[5].second.end(), query_cache_test.begin(), query_cache_test.end());
 
-	all_tests[4].first = "WARNING_LOGS";
-	all_tests[4].second.insert(all_tests[4].second.end(), warning_log_test.begin(), warning_log_test.end());
+	all_tests[6].first = "WARNING_LOGS";
+	all_tests[6].second.insert(all_tests[6].second.end(), warning_log_test.begin(), warning_log_test.end());
 
-	all_tests[5].first = "MULTIPLEXING";
-	all_tests[5].second.insert(all_tests[5].second.end(), multiplexing_test.begin(), multiplexing_test.end());
+	all_tests[7].first = "MULTIPLEXING";
+	all_tests[7].second.insert(all_tests[7].second.end(), multiplexing_test.begin(), multiplexing_test.end());
 
 	for (const auto& test : all_tests) {
 		diag("Executing [%s] test...", test.first);
