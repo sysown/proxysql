@@ -10,6 +10,37 @@
  *   - 'mysql_variables'.
  *   - 'admin_variables'.
  *
+ *  Check modules checksums sync:
+ *  -----------------------
+ *  Test also ensures that modules checksums are properly sync, and that the sync operation can be controlled
+ *  via '%_diffs_before_sync' variablies. For this:
+ *
+ *  1. Insert both nodes in 'proxysql_servers', this test will use two-way sync checks.
+ *  2. Disable the 'save_to_disk%' functionality for the 'admin_variables'.
+ *  3. Initial sync check, enable and check checksum sync for all modules.
+ *  4. Sync is disabled for a node, checksum sync is verified in all but the disabled module, the disabled
+ *     module is verified NOT to sync.
+ *  5. The previous operation is repeated, but instead of using '%_diffs_before_sync', module sync is disabled
+ *     via deprecated 'checksum_%' variables.
+ *     + Module 'proxysql_servers' is the exception, since it lacks of checksum variable.
+ *
+ *  Each sync ENABLE check consists in:
+ *
+ *  - Check that checksum is detected and fetched by the peer node (only checksum itself).
+ *  - Check that once checksum is detected and fetched, it takes '%_diffs_before_sync' before the actual sync
+ *    is performed, error log is used to verify this.
+ *  - Finally check the config sync, the new checksum should match the previously detected.
+ *    + Module 'admin_variables' may be the exception, since 'LOAD TO RUNTIME' generates a new checksum.
+ *
+ *  Each sync DISABLE check consists in:
+ *
+ *  - Check that checksum is detected and fetched by the peer node (only checksum itself).
+ *  - Check that sync isn't going to take place, due to '%_diffs_before_sync' being '0' (via error log).
+ *  - Check that diff check should be increasing 'stats_proxysql_servers_checksums'.
+ *  - Check that config shouldn't be fetched, current checksum should be the previuos fetch, not the new
+ *    detected one.
+ *    + Module 'admin_variables' may be the exception, since 'LOAD TO RUNTIME' generates a new checksum.
+ *
  *  Test Cluster Isolation:
  *  ----------------------
  *  For guaranteeing that this test doesn't invalidate the configuration of a running ProxySQL cluster and
@@ -124,7 +155,7 @@ int sync_checker(MYSQL* r_proxy_admin, const vector<string>& queries, uint32_t s
 // GLOBAL TEST PARAMETERS
 const uint32_t SYNC_TIMEOUT = 10;
 const uint32_t CONNECT_TIMEOUT = 10;
-const uint32_t R_PORT = 96062;
+const uint32_t R_PORT = 16062;
 
 int setup_config_file(const CommandLine& cl) {
 	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
@@ -398,9 +429,10 @@ int check_mysql_servers_sync(
 }
 
 struct sync_payload_t {
-	function<int(const CommandLine&,MYSQL*)> update_module_val;
+	function<int(const conn_opts_t&,MYSQL*)> update_module_val;
 	string module;
 	string sync_variable;
+	string checksum_variable;
 };
 
 int64_t fetch_single_int_res(MYSQL* admin) {
@@ -423,7 +455,7 @@ int64_t fetch_single_int_res(MYSQL* admin) {
 	return val;
 }
 
-int update_variable_val(const CommandLine& cl, MYSQL* admin, const string& type, const string& var_name) {
+int update_variable_val(const conn_opts_t&, MYSQL* admin, const string& type, const string& var_name) {
 	cfmt_t select_query {
 		cstr_format("SELECT variable_value FROM global_variables WHERE variable_name='%s'", var_name.c_str())
 	};
@@ -446,31 +478,30 @@ int update_variable_val(const CommandLine& cl, MYSQL* admin, const string& type,
 	return EXIT_SUCCESS;
 }
 
-int update_mysql_servers(const CommandLine& cl, MYSQL* admin) {
+int update_mysql_servers(const conn_opts_t&, MYSQL* admin) {
 	const char select_max_conns_t[] {
-		"SELECT max_connections FROM mysql_servers WHERE hostgroup_id="
-			"(SELECT default_hostgroup FROM mysql_users WHERE username='%s')"
+		"SELECT max_connections FROM mysql_servers ORDER BY hostgroup_id ASC LIMIT 1"
 	};
 	const char update_max_conns_t[] {
 		"UPDATE mysql_servers SET max_connections=%ld WHERE hostgroup_id="
-			"(SELECT default_hostgroup FROM mysql_users WHERE username='%s')"
+			"(SELECT hostgroup_id FROM mysql_servers ORDER BY hostgroup_id ASC LIMIT 1)"
 	};
 
-	cfmt_t select_max_conns { cstr_format(select_max_conns_t, cl.username) };
+	cfmt_t select_max_conns { cstr_format(select_max_conns_t) };
 	MYSQL_QUERY_T(admin, select_max_conns.str.c_str());
 	int64_t cur_val = fetch_single_int_res(admin);
 	if (cur_val == -1) {
 		return EXIT_FAILURE;
 	}
 
-	cfmt_t update_query { cstr_format(update_max_conns_t, cur_val + 1, cl.username) };
+	cfmt_t update_query { cstr_format(update_max_conns_t, cur_val + 1) };
 	MYSQL_QUERY_T(admin, update_query.str.c_str());
 	MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	return EXIT_SUCCESS;
 }
 
-int update_mysql_query_rules(const CommandLine& cl, MYSQL* admin) {
+int update_mysql_query_rules(const conn_opts_t&, MYSQL* admin) {
 	const char update_mysql_query_rules[] {
 		"INSERT INTO mysql_query_rules (active) VALUES (1)"
 	};
@@ -485,13 +516,14 @@ int update_mysql_query_rules(const CommandLine& cl, MYSQL* admin) {
  * @brief Assumes that 'proxysql_servers' holds at least the one entry required for this test.
  * @details It's assumed that primary ProxySQL is part of a Cluster.
  */
-int update_proxysql_servers(const CommandLine& cl, MYSQL* admin) {
+int update_proxysql_servers(const conn_opts_t& conn_opts, MYSQL* admin) {
 	const char update_proxysql_servers_t[] {
 		"UPDATE proxysql_servers SET comment='%s' WHERE hostname='%s' and port=%d"
 	};
 
+	const string cur_time { std::to_string(time(NULL)) };
 	cfmt_t update_servers {
-		cstr_format(update_proxysql_servers_t, std::to_string(time(NULL)).c_str(), cl.host, cl.admin_port)
+		cstr_format(update_proxysql_servers_t, cur_time.c_str(), conn_opts.host.c_str(), conn_opts.port)
 	};
 	MYSQL_QUERY_T(admin, update_servers.str.c_str());
 	MYSQL_QUERY_T(admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
@@ -504,30 +536,35 @@ const vector<sync_payload_t> module_sync_payloads {
 		update_mysql_servers,
 		"mysql_servers",
 		"admin-cluster_mysql_servers_diffs_before_sync",
+		"admin-checksum_mysql_servers",
 	},
 	{
 		update_mysql_query_rules,
 		"mysql_query_rules",
 		"admin-cluster_mysql_query_rules_diffs_before_sync",
+		"admin-checksum_mysql_query_rules",
 	},
 	{
 		update_proxysql_servers,
 		"proxysql_servers",
 		"admin-cluster_proxysql_servers_diffs_before_sync",
+		"admin-checksum_proxysql_servers",
 	},
 	{
-		[] (const CommandLine& cl, MYSQL* admin) -> int {
+		[] (const conn_opts_t& cl, MYSQL* admin) -> int {
 			return update_variable_val(cl, admin, "mysql", "mysql-ping_timeout_server");
 		},
 		"mysql_variables",
-		"admin-cluster_mysql_variables_diffs_before_sync"
+		"admin-cluster_mysql_variables_diffs_before_sync",
+		"admin-checksum_mysql_variables",
 	},
 	{
-		[] (const CommandLine& cl, MYSQL* admin) -> int {
+		[] (const conn_opts_t& cl, MYSQL* admin) -> int {
 			return update_variable_val(cl, admin, "admin", "admin-refresh_interval");
 		},
 		"admin_variables",
-		"admin-cluster_admin_variables_diffs_before_sync"
+		"admin-cluster_admin_variables_diffs_before_sync",
+		"admin-checksum_admin_variables",
 	},
 	// TODO: LDAP pluging currently not loaded for this test
 	// {
@@ -586,13 +623,15 @@ int wait_for_node_sync(MYSQL* admin, const vector<string> queries, uint32_t time
 	return not_synced;
 };
 
-string fetch_remote_checksum(MYSQL* admin, const CommandLine& cl, const string& module) {
+string fetch_remote_checksum(MYSQL* admin, const conn_opts_t& conn_ops, const string& module) {
 	const char select_core_module_checksum_t[] {
 		"SELECT checksum FROM stats_proxysql_servers_checksums WHERE hostname='%s' AND port='%d' AND name='%s'"
 	};
 
-	cfmt_t select_checksum { cstr_format(select_core_module_checksum_t, cl.host, cl.admin_port, module.c_str()) };
-	if (mysql_query(admin, select_checksum.str.c_str())) {
+	cfmt_t select_checksum {
+		cstr_format(select_core_module_checksum_t, conn_ops.host.c_str(), conn_ops.port, module.c_str())
+	};
+	if (mysql_query_t(admin, select_checksum.str.c_str())) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return {};
 	}
@@ -640,8 +679,15 @@ string fetch_runtime_checksum(MYSQL* admin, const string& module) {
 	return checksum;
 };
 
+const int def_mod_diffs_sync = 2;
+
 int check_module_checksums_sync(
-	MYSQL* admin, MYSQL* r_admin, const CommandLine& cl, const sync_payload_t& module_sync, int diffs_sync
+	MYSQL* admin,
+	MYSQL* r_admin,
+	const conn_opts_t& conn_opts,
+	const sync_payload_t& module_sync,
+	int diffs_sync,
+	const string& logfile_path
 ) {
 	const char new_remote_checksum_query_t[] {
 		"SELECT count(*) FROM stats_proxysql_servers_checksums WHERE "
@@ -662,7 +708,7 @@ int check_module_checksums_sync(
 			"hostname='%s' AND port='%d' AND name='%s'"
 	};
 	cfmt_t wait_remote_checksums_init {
-		cstr_format(wait_remote_checksums_init_t, cl.host, cl.admin_port, module.c_str())
+		cstr_format(wait_remote_checksums_init_t, conn_opts.host.c_str(), conn_opts.port, module.c_str())
 	};
 
 	int checksum_present = wait_for_node_sync( r_admin, { wait_remote_checksums_init.str }, CHECKSUM_SYNC_TIMEOUT);
@@ -671,21 +717,20 @@ int check_module_checksums_sync(
 		return EXIT_FAILURE;
 	}
 
-	string cur_remote_checksum { fetch_remote_checksum(r_admin, cl, module) };
+	string cur_remote_checksum { fetch_remote_checksum(r_admin, conn_opts, module) };
 	if (cur_remote_checksum.empty()) {
-		diag("Failed to fetch current fetch for module '%s'", module.c_str());
+		diag("Failed to fetch current checksum for module '%s'", module.c_str());
 		return EXIT_FAILURE;
 	}
 
 	// Open the error log and fetch the final position
-	const string r_stderr { string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt" };
-	fstream s_logfile {};
+	fstream logfile_fs {};
 
-	int of_err = open_file_and_seek_end(r_stderr, s_logfile);
+	int of_err = open_file_and_seek_end(logfile_path, logfile_fs);
 	if (of_err != EXIT_SUCCESS) { return of_err; }
 
 	// Perform update operation
-	int upd_res = module_sync.update_module_val(cl, admin);
+	int upd_res = module_sync.update_module_val(conn_opts, admin);
 	if (upd_res) {
 		diag("Failed to perform the update operation for module '%s'", module.c_str());
 		return EXIT_FAILURE;
@@ -693,12 +738,18 @@ int check_module_checksums_sync(
 
 	// Wait for new checksum to be detected
 	cfmt_t new_remote_checksum_query {
-		cstr_format(new_remote_checksum_query_t, cl.host, cl.admin_port, module.c_str(), cur_remote_checksum.c_str())
+		cstr_format(
+			new_remote_checksum_query_t,
+			conn_opts.host.c_str(),
+			conn_opts.port,
+			module.c_str(),
+			cur_remote_checksum.c_str()
+		)
 	};
 	int sync_res = wait_for_node_sync(r_admin, { new_remote_checksum_query.str }, CHECKSUM_SYNC_TIMEOUT);
 
 	// Fetch the new remote checksum after the synchronization
-	string new_remote_checksum { fetch_remote_checksum(r_admin, cl, module) };
+	string new_remote_checksum { fetch_remote_checksum(r_admin, conn_opts, module) };
 	if (new_remote_checksum.empty()) {
 		diag("Failed to fetch current fetch for module '%s'", module.c_str());
 		return EXIT_FAILURE;
@@ -713,8 +764,9 @@ int check_module_checksums_sync(
 	// Get the current diff_check for the new detected checksum
 	cfmt_t select_diff_check {
 		cstr_format(
-			"SELECT diff_check FROM stats_proxysql_servers_checksums WHERE name='%s' AND hostname='%s' AND port=%d AND checksum='%s'",
-			module.c_str(), cl.host, cl.admin_port, new_remote_checksum.c_str()
+			"SELECT diff_check FROM stats_proxysql_servers_checksums WHERE"
+				" name='%s' AND hostname='%s' AND port=%d AND checksum='%s'",
+			module.c_str(), conn_opts.host.c_str(), conn_opts.port, new_remote_checksum.c_str()
 		)
 	};
 	MYSQL_QUERY_T(r_admin, select_diff_check.str.c_str());
@@ -744,12 +796,13 @@ int check_module_checksums_sync(
 		string runtime_checksum { fetch_runtime_checksum(r_admin, module.c_str()) };
 
 		if (diffs_sync) {
+			usleep(10 * 1000);
 			// Check that error log has a new two new entries matching the exp 'diff_checks'
 			const string diff_check_regex {
 				"Cluster: detected a peer .* with " + module + " version \\d+, epoch \\d+, diff_check \\d+."
 			};
-			vector<line_match_t> new_matching_lines { get_matching_lines(s_logfile, diff_check_regex) };
-			diag("Regex used find loglines: `%s`", diff_check_regex.c_str());
+			vector<line_match_t> new_matching_lines { get_matching_lines(logfile_fs, diff_check_regex) };
+			diag("regex used in `%s` to find loglines: `%s`", basename(logfile_path.c_str()), diff_check_regex.c_str());
 
 			for (const line_match_t& line_match : new_matching_lines) {
 				diag(
@@ -771,13 +824,14 @@ int check_module_checksums_sync(
 				new_remote_checksum.c_str(), runtime_checksum.c_str()
 			);
 		} else {
+			usleep(10 * 1000);
 			const string no_syncing_regex {
 				"Cluster: detected a new checksum for " + module + " from peer .*:\\d+, version \\d+, epoch \\d+, checksum .*."
 					" Not syncing due to '" + module_sync.sync_variable + "=0'"
 			};
 
-			vector<line_match_t> new_matching_lines { get_matching_lines(s_logfile, no_syncing_regex) };
-			diag("Regex used find loglines: `%s`", no_syncing_regex.c_str());
+			vector<line_match_t> new_matching_lines { get_matching_lines(logfile_fs, no_syncing_regex) };
+			diag("regex used in `%s` to find loglines: `%s`", basename(logfile_path.c_str()), no_syncing_regex.c_str());
 
 			for (const line_match_t& line_match : new_matching_lines) {
 				diag(
@@ -811,7 +865,8 @@ int check_module_checksums_sync(
 
 			diag("Enabling sync for module '%s'", module.c_str());
 
-			// TODO: Re-enable the module and check that sync takes place
+			// NOTE: Redundant, but left as DOC since this should be the value
+			MYSQL_QUERY_T(r_admin, ("SET " + module_sync.checksum_variable + "=true").c_str());
 			MYSQL_QUERY_T(r_admin, string {"SET " + module_sync.sync_variable + "=" + std::to_string(3)}.c_str());
 			MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
@@ -843,11 +898,42 @@ int check_module_checksums_sync(
 	return EXIT_SUCCESS;
 }
 
-int check_modules_checksums_sync(MYSQL* admin, MYSQL* r_admin, const CommandLine& cl) {
-	const int module_diffs_sync = 2;
+int check_all_modules_sync(
+	MYSQL* admin,
+	MYSQL* r_admin,
+	const conn_opts_t& conn_opts,
+	size_t dis_module,
+	const string& main_stderr,
+	const string& remote_stderr
+) {
+	for (size_t j = 0; j < module_sync_payloads.size(); j++) {
+		const sync_payload_t& sync_payload = module_sync_payloads[j];
+		const int diffs_sync = j == dis_module ? 0 : def_mod_diffs_sync;
+
+		int check_sync = check_module_checksums_sync(admin, r_admin, conn_opts, sync_payload, diffs_sync, remote_stderr);
+		if (check_sync) {
+			if (diffs_sync) {
+				diag("Enabled sync test failed for module '%s'. Aborting further testing.", sync_payload.module.c_str());
+			} else {
+				diag("Disabled sync test failed for module '%s'. Aborting further testing.", sync_payload.module.c_str());
+			}
+			return EXIT_FAILURE;
+		}
+	}
+
+	return EXIT_SUCCESS;
+}
+
+using std::pair;
+
+int check_modules_checksums_sync(
+	pair<conn_opts_t,MYSQL*> m_conn_opts, pair<conn_opts_t,MYSQL*> r_conn_opts, const CommandLine& cl
+) {
+	MYSQL* admin = m_conn_opts.second;
+	MYSQL* r_admin = r_conn_opts.second;
 
 	for (const sync_payload_t& sync_payload : module_sync_payloads) {
-		const string set_query { "SET " + sync_payload.sync_variable + "=" + std::to_string(module_diffs_sync) };
+		const string set_query { "SET " + sync_payload.sync_variable + "=" + std::to_string(def_mod_diffs_sync) };
 		MYSQL_QUERY_T(r_admin, set_query.c_str());
 	}
 	MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
@@ -855,20 +941,37 @@ int check_modules_checksums_sync(MYSQL* admin, MYSQL* r_admin, const CommandLine
 	printf("\n");
 	diag("Start test with sync Enabled for all modules");
 
+	const string main_stderr { get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
+	const string remote_stderr { string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt" };
+
 	for (const sync_payload_t& sync_payload : module_sync_payloads) {
-		int check_sync = check_module_checksums_sync(admin, r_admin, cl, sync_payload, module_diffs_sync);
+		diag("Checking 'REMOTE' ProxySQL sync for module '%s'", sync_payload.module.c_str());
+		int check_sync = check_module_checksums_sync(
+			admin, r_admin, m_conn_opts.first, sync_payload, def_mod_diffs_sync, remote_stderr
+		);
+		if (check_sync) {
+			diag("Enabled sync test failed for module '%s'. Aborting further testing.", sync_payload.module.c_str());
+			return EXIT_FAILURE;
+		}
+
+		diag("Checking 'MAIN' ProxySQL sync for module '%s'", sync_payload.module.c_str());
+		check_sync = check_module_checksums_sync(
+			r_admin, admin, r_conn_opts.first, sync_payload, def_mod_diffs_sync, main_stderr
+		);
 		if (check_sync) {
 			diag("Enabled sync test failed for module '%s'. Aborting further testing.", sync_payload.module.c_str());
 			return EXIT_FAILURE;
 		}
 	}
 
+	const string def_syncs { std::to_string(def_mod_diffs_sync) };
+
 	for (size_t dis_module = 0; dis_module < module_sync_payloads.size(); dis_module++) {
 		printf("\n");
-		diag("Start test with sync Disabled for module '%s'", module_sync_payloads[dis_module].module.c_str());
+		diag("Start test with sync DISABLED for module '%s'", module_sync_payloads[dis_module].module.c_str());
 
 		for (const sync_payload_t& sync_payload : module_sync_payloads) {
-			const string set_query { "SET " + sync_payload.sync_variable + "=" + std::to_string(module_diffs_sync) };
+			const string set_query { "SET " + sync_payload.sync_variable + "=" + def_syncs };
 			MYSQL_QUERY_T(r_admin, set_query.c_str());
 		}
 		MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
@@ -877,19 +980,76 @@ int check_modules_checksums_sync(MYSQL* admin, MYSQL* r_admin, const CommandLine
 		MYSQL_QUERY_T(r_admin, string {"SET " + module_sync_var + "=0"}.c_str());
 		MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 
-		for (size_t j = 0; j < module_sync_payloads.size(); j++) {
-			const sync_payload_t& sync_payload = module_sync_payloads[j];
-			const int diffs_sync = j == dis_module ? 0 : module_diffs_sync;
+		// Check that ALL modules sync, but 'dis_module' in both ways - Main-To-Remote and Remote-To-Main
+		check_all_modules_sync(admin, r_admin, m_conn_opts.first, dis_module, main_stderr, remote_stderr);
 
-			int check_sync = check_module_checksums_sync(admin, r_admin, cl, sync_payload, diffs_sync);
-			if (check_sync) {
-				if (diffs_sync) {
-					diag("Enabled sync test failed for module '%s'. Aborting further testing.", sync_payload.module.c_str());
-				} else {
-					diag("Disabled sync test failed for module '%s'. Aborting further testing.", sync_payload.module.c_str());
-				}
-				return EXIT_FAILURE;
+		// Enable back the module
+		const string enable_query {
+			"SET " + module_sync_payloads[dis_module].sync_variable + "=" + std::to_string(def_mod_diffs_sync)
+		};
+		MYSQL_QUERY_T(r_admin, enable_query.c_str());
+		MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
+		// If module is 'admin_variables' - we need to enable both modules, so both instances can cross-sync;
+		// enabling the pulling, wont propagate the sync between the instances, we need to force it.
+		if (module_sync_payloads[dis_module].module == "admin_variables") {
+			MYSQL_QUERY_T(admin, enable_query.c_str());
+			MYSQL_QUERY_T(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+		}
+
+		// If the module is 'admin_variables' - we need to wait not to create the same epoch in both checksums;
+		// the one we have just created when 'LOAD TO RUNTIME', and the one 'check_module_checksums_sync' will
+		// create when issuing the modifying query.
+		if (module_sync_payloads[dis_module].module == "admin_variables") {
+			usleep(1200 * 1000);
+		}
+
+		// Check that the module syncs again in both ways
+		check_module_checksums_sync(
+			admin, r_admin, m_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, remote_stderr
+		);
+		check_module_checksums_sync(
+			r_admin, admin, r_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, main_stderr
+		);
+
+		if (module_sync_payloads[dis_module].module != "proxysql_servers") {
+			// Disable the module using checksums
+			const string disable_checksum_query {
+				"SET " + module_sync_payloads[dis_module].checksum_variable + "=false"
+			};
+			MYSQL_QUERY_T(r_admin, disable_checksum_query.c_str());
+			MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
+			// Check that ALL modules sync, but 'dis_module' in both ways - Main-To-Remote and Remote-To-Main
+			check_all_modules_sync(admin, r_admin, m_conn_opts.first, dis_module, main_stderr, remote_stderr);
+
+			// Enable back the module
+			MYSQL_QUERY_T(r_admin, ("SET " + module_sync_payloads[dis_module].checksum_variable + "=true").c_str());
+			MYSQL_QUERY_T(r_admin, ("SET " + module_sync_payloads[dis_module].sync_variable + "=" + def_syncs).c_str());
+			MYSQL_QUERY_T(r_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
+			// If module is 'admin_variables' - we need to enable both modules, so both instances can cross-sync;
+			// enabling the pulling, wont propagate the sync between the instances, we need to force it.
+			if (module_sync_payloads[dis_module].module == "admin_variables") {
+				MYSQL_QUERY_T(admin, ("SET " + module_sync_payloads[dis_module].checksum_variable + "=true").c_str());
+				MYSQL_QUERY_T(admin, ("SET " + module_sync_payloads[dis_module].sync_variable + "=" + def_syncs).c_str());
+				MYSQL_QUERY_T(admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 			}
+
+			// If the module is 'admin_variables' - we need to wait not to create the same epoch in both checksums;
+			// the one we have just created when 'LOAD TO RUNTIME', and the one 'check_module_checksums_sync' will
+			// create when issuing the modifying query.
+			if (module_sync_payloads[dis_module].module == "admin_variables") {
+				usleep(1200 * 1000);
+			}
+
+			// Check that the module syncs again in both ways
+			check_module_checksums_sync(
+				admin, r_admin, m_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, remote_stderr
+			);
+			check_module_checksums_sync(
+				r_admin, admin, r_conn_opts.first, module_sync_payloads[dis_module], def_mod_diffs_sync, main_stderr
+			);
 		}
 	}
 
@@ -906,14 +1066,17 @@ int main(int, char**) {
 		return EXIT_FAILURE;
 	}
 
-	const size_t num_payloads = module_sync_payloads.size();
+	const size_t num_pls = module_sync_payloads.size();
+
+	const size_t all_mod_sync_checks = ((5+(3*(num_pls-1)))*(num_pls-1))*2 + (5+(3*(num_pls-1)));
+	const size_t mod_sync_checks = ((3*4*(num_pls-1)) + 3*2);
+	const size_t init_mod_sync_checks = (3*2*num_pls);
+
 	plan(
 		// Sync tests by values
 		15 +
-		// All modules enabled sync checksum tests
-		num_payloads * 3 +
 		// Module with disabled sync checksum tests
-		(num_payloads + ((num_payloads-1) * 3)) * 5
+		init_mod_sync_checks + all_mod_sync_checks + mod_sync_checks
 	);
 
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
@@ -950,6 +1113,7 @@ int main(int, char**) {
 
 	// 2. Remove primary from Core nodes
 	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==6032");
+	MYSQL_QUERY(proxy_admin, "DELETE FROM proxysql_servers WHERE hostname=='127.0.0.1' AND PORT==16062");
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 	MYSQL_QUERY(proxy_admin, "SELECT hostname,port FROM proxysql_servers");
 	MYSQL_RES* my_res = mysql_store_result(proxy_admin);
@@ -1009,7 +1173,7 @@ int main(int, char**) {
 	conn_opts.host = cl.host;
 	conn_opts.user = "radmin";
 	conn_opts.pass = "radmin";
-	conn_opts.port = 96062;
+	conn_opts.port = R_PORT;
 
 	MYSQL* r_proxy_admin = wait_for_proxysql(conn_opts, CONNECT_TIMEOUT);
 
@@ -2269,9 +2433,43 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS FROM DISK");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
+	// Add remote ProxySQL to 'proxysql_servers' for mutual sync checks
+	{
+		const string upd_proxy_srvs {
+			"INSERT INTO proxysql_servers (hostname,port,weight,comment) VALUES"
+				" ('" + conn_opts.host + "'," + std::to_string(conn_opts.port) + ",0,'remote_proxysql')"
+		};
+		MYSQL_QUERY_T(proxy_admin, upd_proxy_srvs.c_str());
+		MYSQL_QUERY_T(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+
+		MYSQL_QUERY_T(proxy_admin, "SET admin-cluster_ldap_variables_save_to_disk=false");
+		MYSQL_QUERY_T(proxy_admin, "SET admin-cluster_mysql_query_rules_save_to_disk=false");
+		MYSQL_QUERY_T(proxy_admin, "SET admin-cluster_mysql_servers_save_to_disk=false");
+		MYSQL_QUERY_T(proxy_admin, "SET admin-cluster_mysql_users_save_to_disk=false");
+		MYSQL_QUERY_T(proxy_admin, "SET admin-cluster_mysql_variables_save_to_disk=false");
+		MYSQL_QUERY_T(proxy_admin, "SET admin-cluster_admin_variables_save_to_disk=false");
+		MYSQL_QUERY_T(proxy_admin, "SET admin-cluster_proxysql_servers_save_to_disk=false");
+		MYSQL_QUERY_T(proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
+		MYSQL_QUERY_T(r_proxy_admin, "SET admin-cluster_ldap_variables_save_to_disk=false");
+		MYSQL_QUERY_T(r_proxy_admin, "SET admin-cluster_mysql_query_rules_save_to_disk=false");
+		MYSQL_QUERY_T(r_proxy_admin, "SET admin-cluster_mysql_servers_save_to_disk=false");
+		MYSQL_QUERY_T(r_proxy_admin, "SET admin-cluster_mysql_users_save_to_disk=false");
+		MYSQL_QUERY_T(r_proxy_admin, "SET admin-cluster_mysql_variables_save_to_disk=false");
+		MYSQL_QUERY_T(r_proxy_admin, "SET admin-cluster_admin_variables_save_to_disk=false");
+		MYSQL_QUERY_T(r_proxy_admin, "SET admin-cluster_proxysql_servers_save_to_disk=false");
+		MYSQL_QUERY_T(r_proxy_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+
+		// Wait for sync to take place
+		sleep(2);
+	}
+
 	// Check sync disable via 'admin-cluster_*_sync' variables
 	{
-		int checksum_sync_res = check_modules_checksums_sync(proxy_admin, r_proxy_admin, cl);
+		conn_opts_t m_conn_opts { cl.host, cl.admin_username, cl.admin_password, cl.admin_port};
+		int checksum_sync_res = check_modules_checksums_sync(
+			{ m_conn_opts, proxy_admin }, { conn_opts, r_proxy_admin }, cl
+		);
 		if (checksum_sync_res != EXIT_SUCCESS) {
 			goto cleanup;
 		}
