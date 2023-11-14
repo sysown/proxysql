@@ -164,7 +164,7 @@ jobs:
         
         Status : **Build is finished**
         
-        [![Package-Build](https://github.com/${{ github.repository }}/actions/workflows/package-build.yml/badge.svg)](https://github.com/${{ github.repository }}/actions/workflows/package-build.yml)
+        [![Package-Build](https://github.com/${{ github.repository }}/actions/workflows/ci-package-build.yml/badge.svg)](https://github.com/${{ github.repository }}/actions/workflows/ci-package-build.yml)
         
         EOF
         
