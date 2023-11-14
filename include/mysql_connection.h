@@ -54,6 +54,8 @@ class MySQL_Connection_userinfo {
 
 class MySQL_Connection {
 	private:
+	void update_warning_count_from_connection();
+	void update_warning_count_from_statement();
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
 	public:

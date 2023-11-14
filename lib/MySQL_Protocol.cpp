@@ -2990,7 +2990,7 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 	return length;
 }
 
-void MySQL_ResultSet::add_eof(bool handle_warnings_enabled) {
+void MySQL_ResultSet::add_eof() {
 	if (myprot) {
 		unsigned int nTrx=myds->sess->NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -3002,12 +3002,16 @@ void MySQL_ResultSet::add_eof(bool handle_warnings_enabled) {
 		//sid++;
 		//resultset_size+=pkt.size;
 		
-		// warnings count will only be sent to the client if mysql-query_digests is enabled
-
+		// Note: warnings count will only be sent to the client if mysql-query_digests is enabled
+		const MySQL_Backend* _mybe = myds->sess->mybe;
+		const MySQL_Data_Stream* _server_myds = (_mybe && _mybe->server_myds) ? _mybe->server_myds : nullptr;
+		const MySQL_Connection* _myconn = (_server_myds && _server_myds->myds_type == MYDS_BACKEND && _server_myds->myconn) ?
+			_server_myds->myconn : nullptr;
+		const unsigned int warning_count = (_myconn) ? _myconn->warning_count : 0;
 		if (deprecate_eof_active) {
 			PtrSize_t pkt;
 			buffer_to_PSarrayOut();
-			myprot->generate_pkt_OK(false, &pkt.ptr, &pkt.size, sid, 0, 0, setStatus, (handle_warnings_enabled ? mysql->warning_count : 0), NULL, true);
+			myprot->generate_pkt_OK(false, &pkt.ptr, &pkt.size, sid, 0, 0, setStatus, warning_count, NULL, true);
 			PSarrayOUT.add(pkt.ptr, pkt.size);
 			resultset_size += pkt.size;
 		}
@@ -3017,7 +3021,7 @@ void MySQL_ResultSet::add_eof(bool handle_warnings_enabled) {
 			// note that EOF is added on a packet on its own, instead of using a buffer,
 			// so that can be removed using remove_last_eof()
 			buffer_to_PSarrayOut();
-			myprot->generate_pkt_EOF(false, NULL, NULL, sid, (handle_warnings_enabled ? mysql->warning_count : 0), setStatus, this);
+			myprot->generate_pkt_EOF(false, NULL, NULL, sid, warning_count, setStatus, this);
 			resultset_size += 9;
 			buffer_to_PSarrayOut();
 		}

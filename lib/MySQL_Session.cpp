@@ -3288,7 +3288,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				(begint.tv_sec*1000000000+begint.tv_nsec);
 		}
 		assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
-		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
+		// setting 'prepared' to prevent fetching results from the cache if the digest matches
+		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, true);
 		if (rc_break==true) {
 			return;
 		}
@@ -6031,23 +6032,53 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		goto __exit_set_destination_hostgroup;
 	}
 
-	// handle here #509, #815 and #816
+	// handle warnings
 	if (CurrentQuery.QueryParserArgs.digest_text) {
-		char *dig=CurrentQuery.QueryParserArgs.digest_text;
-		const size_t dig_len=strlen(dig);
-		if ((dig_len == 13) && (strncasecmp(dig, "SHOW WARNINGS", 13) == 0)) {
-			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig);
-			if (warning_in_hg > -1) {
-				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
-				current_hostgroup = warning_in_hg;
-				//warning_in_hg = -1;
-				return false;
-			} else {
-				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
-				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(3));
-				resultset->add_column_definition(SQLITE_TEXT, "Level");
-				resultset->add_column_definition(SQLITE_TEXT, "Code");
-				resultset->add_column_definition(SQLITE_TEXT, "Message");
+		const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
+		const size_t dig_len = strlen(dig_text);
+
+		if (dig_len > 0) {
+			if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig_text);
+				if (warning_in_hg > -1) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
+					current_hostgroup = warning_in_hg;
+					//warning_in_hg = -1;
+					return false;
+				} else {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
+					std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(3));
+					resultset->add_column_definition(SQLITE_TEXT, "Level");
+					resultset->add_column_definition(SQLITE_TEXT, "Code");
+					resultset->add_column_definition(SQLITE_TEXT, "Message");
+					SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+					client_myds->DSS = STATE_SLEEP;
+					status = WAITING_CLIENT_DATA;
+					if (mirror == false) {
+						RequestEnd(NULL);
+					}
+					l_free(pkt->size, pkt->ptr);
+					return true;
+				}
+			}
+
+			if ((dig_len == 22) && (strncasecmp(dig_text, "SHOW COUNT(*) WARNINGS", 22) == 0)) {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig_text);
+				std::string warning_count = "0";
+				if (warning_in_hg > -1) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
+					current_hostgroup = warning_in_hg;
+					assert(mybe && mybe->server_myds && mybe->server_myds->myconn && mybe->server_myds->myconn->mysql);
+					warning_count = std::to_string(mybe->server_myds->myconn->warning_count);
+				}
+				else {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
+				}
+				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
+				resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
+				char* pta[1];
+				pta[0] = (char*)warning_count.c_str();
+				resultset->add_row(pta);
 				SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
 				client_myds->DSS = STATE_SLEEP;
 				status = WAITING_CLIENT_DATA;
@@ -6057,36 +6088,14 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				l_free(pkt->size, pkt->ptr);
 				return true;
 			}
-		} 
-
-		if ((dig_len == 22) && (strncasecmp(dig, "SHOW COUNT(*) WARNINGS", 22) == 0)) {
-			proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig);
-			std::string warning_count = "0";
-			if (warning_in_hg > -1) {
-				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
-				current_hostgroup = warning_in_hg;	
-				assert(mybe && mybe->server_myds && mybe->server_myds->myconn && mybe->server_myds->myconn->mysql);
-				warning_count = std::to_string(mybe->server_myds->myconn->warning_count);
-			} else {
-				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
-			}
-			std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
-			resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
-			char* pta[1];
-			pta[0] = (char*)warning_count.c_str();
-			resultset->add_row(pta);
-			SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
-			client_myds->DSS = STATE_SLEEP;
-			status = WAITING_CLIENT_DATA;
-			if (mirror == false) {
-				RequestEnd(NULL);
-			}
-			l_free(pkt->size, pkt->ptr);
-			return true;
 		}
+	}
 
-		reset_warning_hostgroup_flag_and_release_connection();
+	reset_warning_hostgroup_flag_and_release_connection();
 
+	// handle here #509, #815 and #816
+	if (CurrentQuery.QueryParserArgs.digest_text) {
+		char *dig=CurrentQuery.QueryParserArgs.digest_text;
 		unsigned int nTrx=NumActiveTransactions();
 		if ((locked_on_hostgroup == -1) && (strncasecmp(dig,(char *)"SET ",4)==0)) {
 			// this code is executed only if locked_on_hostgroup is not set yet
@@ -7343,7 +7352,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
 			setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 			setStatus = setStatus & ~SERVER_STATUS_CURSOR_EXISTS; // Do not send cursor #1128
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus , mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus , myconn ? myconn->warning_count : 0,mysql->info);
 			client_myds->pkt_sid++;
 		} else {
 			// error
