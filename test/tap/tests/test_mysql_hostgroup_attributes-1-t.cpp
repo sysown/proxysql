@@ -61,23 +61,31 @@ int main(int argc, char** argv) {
 	std::unordered_map<std::string,std::string> queries_and_checksums = {
 		{
 			"0x666CFBEEDB76EE9C",
-			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','','')"
+			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','','','')"
 		},
 		{
 			"0xE2FC2A5FEE8D18DC",
-			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','',''),(18,2,-1,20,'SET sql_mode=\"\"',0,0,100,'','','hello world')",
+			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','','',''),(18,2,-1,20,'SET sql_mode=\"\"',0,0,100,'','','','hello world')",
 		},
 		{
 			"0xFACE1C64FF1C373E",
-			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','',''),(18,2,-1,20,'SET sql_mode=\"\"',0,0,100,'','','hello world'),(17,0,0,30,'SET long_query_time=0',1,0,123,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','filtering variables')"
+			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','','',''),(18,2,-1,20,'SET sql_mode=\"\"',0,0,100,'','','','hello world'),(17,0,0,30,'SET long_query_time=0',1,0,123,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','','filtering variables')"
 		},
 		{
 			"0x161B2F2BB35BA05E",
-			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','',''),"
-				"(18,2,-1,20,'SET sql_mode=\"\"',0,0,100,'','','hello world'),"
-				"(17,0,0,30,'SET long_query_time=0',1,0,123,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','filtering variables'),"
-				"(20,3,-1,40,'SET sql_mode=\"\"',1,0,124,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','{\"weight\": 100, \"max_connections\": 1000}','servers defaults')"
+			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','','',''),"
+				"(18,2,-1,20,'SET sql_mode=\"\"',0,0,100,'','','','hello world'),"
+				"(17,0,0,30,'SET long_query_time=0',1,0,123,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','','filtering variables'),"
+				"(20,3,-1,40,'SET sql_mode=\"\"',1,0,124,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','{\"weight\": 100, \"max_connections\": 1000}','servers defaults')"
 		},
+		{
+			"0x1A6E38CBB2E44672",
+			"INSERT INTO mysql_hostgroup_attributes VALUES (19,1,1,10,'',1,1,10000,'','','',''),"
+				"(18,2,-1,20,'SET sql_mode=\"\"',0,0,100,'','','','hello world'),"
+				"(17,0,0,30,'SET long_query_time=0',1,0,123,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','','filtering variables'),"
+				"(20,3,-1,40,'SET sql_mode=\"\"',1,0,124,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','','{\"weight\": 100, \"max_connections\": 1000}','servers defaults'),"
+				"(21,2,-1,50,'SET sql_mode=\"\"',1,0,125,'{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}','{}','{\"weight\": 100, \"max_connections\": 1000}','hostgroup settings')"
+		}
 	};
 
 	plan(queries_and_checksums.size()*4);

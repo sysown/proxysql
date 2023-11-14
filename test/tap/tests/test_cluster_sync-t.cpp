@@ -1074,7 +1074,7 @@ int main(int, char**) {
 
 	plan(
 		// Sync tests by values
-		15 +
+		16 +
 		// Module with disabled sync checksum tests
 		init_mod_sync_checks + all_mod_sync_checks + mod_sync_checks
 	);
@@ -1216,6 +1216,133 @@ int main(int, char**) {
 
 		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values_3);
 	}
+
+	{
+		std::string print_master_hostgroup_attributes = "";
+		string_format(t_debug_query, print_master_hostgroup_attributes, cl.admin_username, cl.admin_password, cl.host, cl.admin_port, "SELECT * FROM runtime_mysql_hostgroup_attributes");
+		std::string print_replica_hostgroup_attributes = "";
+		string_format(t_debug_query, print_replica_hostgroup_attributes, "radmin", "radmin", cl.host, R_PORT, "SELECT * FROM runtime_mysql_hostgroup_attributes");
+
+		// Configure 'runtime_mysql_hostgroup_attributes' and check sync
+		const char* t_insert_mysql_hostgroup_attributes =
+			"INSERT INTO mysql_hostgroup_attributes ( "
+			"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, "
+			"multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, "
+			"hostgroup_settings, servers_defaults ) "
+			"VALUES (%d, %d, %d, %d, '%s', %d, %d, %d, '%s', '%s', '%s')";
+		std::vector<std::tuple<int, int, int, int, const char*, int, int, int, const char*, const char*, const char*>> insert_hostgroup_attributes_values {
+			std::make_tuple(18, 2, -1, 20, "SET sql_mode = \"\"", 0, 0, 100, "", "", ""),
+			std::make_tuple(19, 2, -1, 20, "SET sql_mode = \"\"", 0, 0, 100, "{}", "{}", "{}"),
+			std::make_tuple(20, 0,  0, 30, "SET long_query_time = 0", 1, 0, 123, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "", ""),
+			std::make_tuple(21, 2, -1, 50, "SET sql_mode = \"\"", 1, 0, 125, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "{}", ""),
+			std::make_tuple(22, 3, -1, 40, "SET sql_mode = \"\"", 1, 0, 124, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "", "{\"weight\": 100, \"max_connections\": 1000}")
+		};
+		std::vector<std::string> insert_mysql_hostgroup_attributes_queries{};
+
+		for (auto const& values : insert_hostgroup_attributes_values) {
+			std::string insert_mysql_hostgroup_attributes_query = "";
+			string_format(
+				t_insert_mysql_hostgroup_attributes,
+				insert_mysql_hostgroup_attributes_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values),
+				std::get<4>(values),
+				std::get<5>(values),
+				std::get<6>(values),
+				std::get<7>(values),
+				std::get<8>(values),
+				std::get<9>(values),
+				std::get<10>(values)
+			);
+			insert_mysql_hostgroup_attributes_queries.push_back(insert_mysql_hostgroup_attributes_query);
+		}
+
+		const char* t_select_hostgroup_attributes_inserted_entries =
+			"SELECT COUNT(*) FROM mysql_hostgroup_attributes WHERE "
+			"hostgroup_id=%d AND max_num_online_servers=%d AND autocommit=%d AND free_connections_pct=%d AND init_connect='%s' AND "
+			"multiplex=%d AND connection_warming=%d AND throttle_connections_per_sec=%d AND ignore_session_variables='%s' AND "
+			"hostgroup_settings='%s' AND servers_defaults='%s'";
+		std::vector<std::string> select_mysql_hostgroup_attributes_queries{};
+
+		for (auto const& values : insert_hostgroup_attributes_values) {
+			std::string select_hostgroup_attributes_query = "";
+			string_format(
+				t_select_hostgroup_attributes_inserted_entries,
+				select_hostgroup_attributes_query,
+				std::get<0>(values),
+				std::get<1>(values),
+				std::get<2>(values),
+				std::get<3>(values),
+				std::get<4>(values),
+				std::get<5>(values),
+				std::get<6>(values),
+				std::get<7>(values),
+				std::get<8>(values),
+				std::get<9>(values),
+				std::get<10>(values)
+			);
+			select_mysql_hostgroup_attributes_queries.push_back(select_hostgroup_attributes_query);
+		}
+
+		// SETUP CONFIG
+
+		// Backup current table
+		MYSQL_QUERY__(proxy_admin, "CREATE TABLE mysql_hostgroup_attributes_sync_test_2687 AS SELECT * FROM mysql_hostgroup_attributes");
+		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_hostgroup_attributes");
+
+		// Insert the new hostgroup attributes values
+		for (const auto& query : insert_mysql_hostgroup_attributes_queries) {
+			MYSQL_QUERY__(proxy_admin, query.c_str());
+		}
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+		std::cout << "MASTER TABLE BEFORE SYNC:" << std::endl;
+		system(print_master_hostgroup_attributes.c_str());
+
+		// SYNCH CHECK
+
+		// Sleep until timeout waiting for synchronization
+		uint waited = 0;
+		bool not_synced_query = false;
+		while (waited < SYNC_TIMEOUT) {
+			not_synced_query = false;
+			// Check that all the entries have been synced
+			for (const auto& query : select_mysql_hostgroup_attributes_queries) {
+				MYSQL_QUERY__(r_proxy_admin, query.c_str());
+				MYSQL_RES* hostgroup_attributes_res = mysql_store_result(r_proxy_admin);
+				MYSQL_ROW row = mysql_fetch_row(hostgroup_attributes_res);
+				int row_value = atoi(row[0]);
+				mysql_free_result(hostgroup_attributes_res);
+
+				if (row_value == 0) {
+					not_synced_query = true;
+					break;
+				}
+			}
+
+			if (not_synced_query) {
+				waited += 1;
+				sleep(1);
+			}
+			else {
+				break;
+			}
+		}
+
+		std::cout << "REPLICA TABLE AFTER SYNC:" << std::endl;
+		system(print_replica_hostgroup_attributes.c_str());
+		ok(not_synced_query == false, "'mysql_hostgroup_attributes' should be synced.");
+
+		// TEARDOWN CONFIG
+		MYSQL_QUERY__(proxy_admin, "DELETE FROM mysql_hostgroup_attributes");
+		MYSQL_QUERY__(proxy_admin, "INSERT INTO mysql_hostgroup_attributes SELECT * FROM mysql_hostgroup_attributes_sync_test_2687");
+		MYSQL_QUERY__(proxy_admin, "DROP TABLE mysql_hostgroup_attributes_sync_test_2687");
+		MYSQL_QUERY__(proxy_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	}
+
+	sleep(2);
 
 	{
 		std::string print_master_galera_hostgroups = "";

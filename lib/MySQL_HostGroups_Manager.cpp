@@ -2591,7 +2591,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	} else if (name == "mysql_replication_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
 	} else if (name == "mysql_hostgroup_attributes") {
-		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
+		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
 	} else if (name == "mysql_servers") {
 		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;	
 	} else {
@@ -6929,6 +6929,34 @@ T j_get_srv_default_int_val(
 }
 
 /**
+ * @brief Initializes the supplied 'MyHGC' with the specified 'hostgroup_settings'.
+ * @details Input verification is performed in the supplied 'hostgroup_settings'. It's expected to be a valid
+ *  JSON.
+ *
+ *  In case input verification fails for a field, supplied 'MyHGC' is NOT updated for that field. An error
+ *  message is logged specifying the source of the error.
+ *
+ * @param hostgroup_settings String containing a JSON defined in 'mysql_hostgroup_attributes'.
+ * @param myhgc The 'MyHGC' of the target hostgroup of the supplied 'hostgroup_settings'.
+ */
+void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc) {
+	const uint32_t hid = myhgc->hid;
+
+	if (hostgroup_settings[0] != '\0') {
+		try {
+			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
+			// fields to be populated
+		}
+		catch (const json::exception& e) {
+			proxy_error(
+				"JSON parsing for 'mysql_hostgroup_attributes.hostgroup_settings' for hostgroup %d failed with exception `%s`.\n",
+				hid, e.what()
+			);
+		}
+	}
+}
+
+/**
  * @brief Initializes the supplied 'MyHGC' with the specified 'servers_defaults'.
  * @details Input verification is performed in the supplied 'server_defaults'. It's expected to be a valid
  *  JSON that may contain the following fields:
@@ -6982,8 +7010,8 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	const char * query=(const char *)"INSERT INTO mysql_hostgroup_attributes ( "
 		"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 		"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
-		"ignore_session_variables, servers_defaults, comment) VALUES "
-		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
 	rc = mydb->prepare_v2(query, &statement);
@@ -7019,12 +7047,13 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		int connection_warming           = atoi(r->fields[6]);
 		int throttle_connections_per_sec = atoi(r->fields[7]);
 		char * ignore_session_variables  = r->fields[8];
-		char * servers_defaults          = r->fields[9];
-		char * comment                   = r->fields[10];
-		proxy_info("Loading MySQL Hostgroup Attributes info for (%d,%d,%d,%d,\"%s\",%d,%d,%d,\"%s\",'%s',\"%s\")\n",
+		char * hostgroup_settings		 = r->fields[9];
+		char * servers_defaults          = r->fields[10];
+		char * comment                   = r->fields[11];
+		proxy_info("Loading MySQL Hostgroup Attributes info for (%d,%d,%d,%d,\"%s\",%d,%d,%d,\"%s\",\"%s\",\"%s\",\"%s\")\n",
 			hid, max_num_online_servers, autocommit, free_connections_pct,
 			init_connect, multiplex, connection_warming, throttle_connections_per_sec,
-			ignore_session_variables, servers_defaults, comment
+			ignore_session_variables, hostgroup_settings, servers_defaults, comment
 		);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 1, hid);                          ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 2, max_num_online_servers);       ASSERT_SQLITE_OK(rc, mydb);
@@ -7035,8 +7064,9 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		rc=(*proxy_sqlite3_bind_int64)(statement, 7, connection_warming);           ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 8, throttle_connections_per_sec); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_text)(statement,  9, ignore_session_variables,  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 10, servers_defaults,          -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 11, comment,                   -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 10, hostgroup_settings,		-1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 11, servers_defaults,          -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 12, comment,                   -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -7072,6 +7102,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 				// TODO: assign the variables
 			}
 		}
+		init_myhgc_hostgroup_settings(hostgroup_settings, myhgc);
 		init_myhgc_servers_defaults(servers_defaults, myhgc);
 	}
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
