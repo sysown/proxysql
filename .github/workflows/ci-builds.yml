@@ -6,7 +6,6 @@ on:
 
 concurrency:
   group: ci_builds-${{ github.sha }}
-#  cancel-in-progress: false
 
 jobs:
   builds:
