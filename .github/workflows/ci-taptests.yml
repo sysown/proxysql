@@ -208,13 +208,29 @@ jobs:
         sudo chmod -R 777 ${{ github.workspace }}/*
         echo "${{ matrix.taptests }}" | tr -d '*|' | xargs -0 printf 'taptests=%s' >> $GITHUB_ENV
 
-    - name: Archive artifacts
+    - name: Archive artifacts logs
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}-${{ env.taptests }}
+        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.taptests }}
         path: |
           proxysql/ci_*_logs/
+
+    - name: Archive artifacts bins
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.taptests }}
+        path: |
           proxysql/src/
+          proxysql/libs/
+          proxysql/deps/
+
+    - name: Archive artifacts tests
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.taptests }}
+        path: |
           proxysql/test/
           
