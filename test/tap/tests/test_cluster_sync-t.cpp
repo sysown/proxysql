@@ -1070,7 +1070,7 @@ int main(int, char**) {
 			std::make_tuple(18, 2, -1, 20, "SET sql_mode = \"\"", 0, 0, 100, "", "", ""),
 			std::make_tuple(19, 2, -1, 20, "SET sql_mode = \"\"", 0, 0, 100, "{}", "{}", "{}"),
 			std::make_tuple(20, 0,  0, 30, "SET long_query_time = 0", 1, 0, 123, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "", ""),
-			std::make_tuple(21, 2, -1, 50, "SET sql_mode = \"\"", 1, 0, 125, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "{}", ""),
+			std::make_tuple(21, 2, -1, 50, "SET sql_mode = \"\"", 1, 0, 125, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "{\"handle_warnings\":1}", ""),
 			std::make_tuple(22, 3, -1, 40, "SET sql_mode = \"\"", 1, 0, 124, "{\"session_variables\":[\"tmp_table_size\",\"join_buffer_size\"]}", "", "{\"weight\": 100, \"max_connections\": 1000}")
 		};
 		std::vector<std::string> insert_mysql_hostgroup_attributes_queries{};

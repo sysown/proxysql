@@ -554,11 +554,13 @@ void MySQL_Connection::update_warning_count_from_connection() {
 	// 'mysql_thread_query_digest' is set to false, fetching that statement from the cache may still contain the digest text.
 	// To prevent this, we will check the digest text in conjunction with 'mysql_thread_query_digest' to verify whether it 
 	// is enabled or disabled.
-	if (myds && myds->sess && (myds->sess->CurrentQuery.QueryParserArgs.digest_text ||
-		(myds->sess->CurrentQuery.stmt_info && myds->sess->CurrentQuery.stmt_info->digest_text && 
-		mysql_thread___query_digests == true))) { 
-		const bool handle_warnings_enabled = parent->myhgc->handle_warnings_enabled();
-		if (handle_warnings_enabled && mysql_errno(mysql) == 0 && mysql_warning_count(mysql) > 0) {
+	if (myds && myds->sess && myds->sess->CurrentQuery.QueryParserArgs.digest_text) { 
+		const char* dig_text = myds->sess->CurrentQuery.QueryParserArgs.digest_text;
+		const size_t dig_len = strlen(dig_text);
+		// SHOW WARNINGS doesn't have any impact warning count,
+		// so we are replication same behaviour here
+		if (parent->myhgc->handle_warnings_enabled() && 
+			(dig_len != 13 || strncasecmp(dig_text, "SHOW WARNINGS", 13) != 0)) {
 			warning_count = mysql_warning_count(mysql);
 		}
 	}
@@ -571,8 +573,7 @@ void MySQL_Connection::update_warning_count_from_statement() {
 	// is enabled or disabled.
 	if (myds && myds->sess && myds->sess->CurrentQuery.stmt_info && myds->sess->CurrentQuery.stmt_info->digest_text &&
 		mysql_thread___query_digests == true) {
-		const bool handle_warnings_enabled = parent->myhgc->handle_warnings_enabled();
-		if (handle_warnings_enabled && mysql_stmt_warning_count(query.stmt) > 0) {
+		if (parent->myhgc->handle_warnings_enabled()) {
 			warning_count = mysql_stmt_warning_count(query.stmt);
 		}
 	}
@@ -1382,7 +1383,7 @@ handler_again:
 				if (query.stmt_result==NULL) {
 					NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
 				} else {
-					update_warning_count_from_connection(); //update_warning_count_from_statement();
+					update_warning_count_from_statement();
 					if (myds->sess->mirror==false) {
 						if (MyRS_reuse == NULL) {
 							MyRS = new MySQL_ResultSet();
@@ -1497,7 +1498,7 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_SUCCESSFUL);
 			}
 */
-			update_warning_count_from_connection(); //update_warning_count_from_statement();
+			update_warning_count_from_statement();
 			break;
 //		case ASYNC_STMT_EXECUTE_SUCCESSFUL:
 //			break;
@@ -2615,7 +2616,6 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			// 'warning_in_hg' will be used if the next query is 'SHOW WARNINGS' or
 			// 'SHOW COUNT(*) WARNINGS'
 			myds->sess->warning_in_hg = myds->sess->current_hostgroup;
-			//warning_count = mysql_warning_count(this->mysql);
 			// enabling multiplexing
 			set_status(true, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 		}

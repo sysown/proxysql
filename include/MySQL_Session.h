@@ -24,6 +24,12 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
+enum ps_type : uint8_t {
+	ps_type_not_set = 0x0,
+	ps_type_prepare_stmt = 0x1,
+	ps_type_execute_stmt = 0x2
+};
+
 std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
 // these structs will be used for various regex hardcoded
@@ -121,7 +127,7 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
