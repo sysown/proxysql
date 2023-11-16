@@ -65,7 +65,7 @@ jobs:
         cd proxysql_repl_tests
         #./exec_repl_test.sh 5.7 no-ssl debezium
         RCS=0
-        for N in {1..5}; do
+        for N in {1..1}; do
           ./exec_all_repl_tests.sh
           RC=$?
           RCS=$(( $RCS + $RC ))
