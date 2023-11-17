@@ -113,7 +113,7 @@ jobs:
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
         path: |
-          proxysql/bin/
+          proxysql/binaries/
 
     - name: Cache save src
       id: cache-save-src
