@@ -222,6 +222,7 @@ jobs:
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.taptests }}
         path: |
+          proxysql/binaries/
           proxysql/src/
           proxysql/libs/
           proxysql/deps/
