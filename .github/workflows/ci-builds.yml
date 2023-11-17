@@ -106,6 +106,15 @@ jobs:
           grep 'exited with code 0' ${LOG} || exit 1
         done
 
+    - name: Cache save bin
+      id: cache-save-bin
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
+      uses: actions/cache/save@v3
+      with:
+        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
+        path: |
+          proxysql/bin/
+
     - name: Cache save src
       id: cache-save-src
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
