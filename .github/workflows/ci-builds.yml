@@ -26,10 +26,12 @@ jobs:
             type: '-clang'
           - dist: 'ubuntu22'
             type: '-tap'
-    
+
     steps:
 
     - name: Concurency Lock
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         # check random times for lock to avoid race condition
         sleep 3
@@ -163,6 +165,8 @@ jobs:
           proxysql/tap-matrix*
 
     - name: Concurency Unlock
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         # delete lock
         gh variable -R sysown/proxysql delete CI_BUILDS_${{ github.sha }}
