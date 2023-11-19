@@ -10,27 +10,10 @@ on:
 permissions: write-all
 
 jobs:
-  builds:
+
+  lock:
     runs-on: ubuntu-22.04
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - dist: 'centos6'
-            type: ''
-          - dist: 'centos7'
-            type: ''
-          - dist: 'fedora37'
-            type: '-clang'
-          - dist: 'ubuntu20'
-            type: '-clang'
-          - dist: 'ubuntu22'
-            type: '-tap'
-
     steps:
-
     - name: Concurency Lock
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
@@ -57,6 +40,28 @@ jobs:
           echo "Setting lock 'CI_BUILDS_${{ github.sha }}'"
           gh variable -R sysown/proxysql set CI_BUILDS_${{ github.sha }} -b 'locked'
         fi
+
+  builds:
+    runs-on: ubuntu-22.04
+    needs: [ lock ]
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dist: 'centos6'
+            type: ''
+          - dist: 'centos7'
+            type: ''
+          - dist: 'fedora37'
+            type: '-clang'
+          - dist: 'ubuntu20'
+            type: '-clang'
+          - dist: 'ubuntu22'
+            type: '-tap'
+
+    steps:
 
     - name: Cache check
       id: cache-check
@@ -171,14 +176,6 @@ jobs:
         path: |
           proxysql/tap-matrix*
 
-    - name: Concurency Unlock
-      env:
-        GH_TOKEN: ${{ secrets.gh_token }}
-      run: |
-        # delete lock
-        echo "Releasing lock 'CI_BUILDS_${{ github.sha }}'"
-        gh variable -R sysown/proxysql delete CI_BUILDS_${{ github.sha }} || true
-
     - name: Archive artifacts
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
@@ -186,4 +183,16 @@ jobs:
         name: ci-builds-${{ github.sha }}-run#${{ github.run_number }}
         path: |
           proxysql/
+
+  unlock:
+    runs-on: ubuntu-22.04
+    needs: [ builds ]
+    steps:
+    - name: Concurency Unlock
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
+      run: |
+        # delete lock
+        echo "Releasing lock 'CI_BUILDS_${{ github.sha }}'"
+        gh variable -R sysown/proxysql delete CI_BUILDS_${{ github.sha }} || true
 
