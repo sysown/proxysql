@@ -36,7 +36,6 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         gh auth status
-        # gh api --method POST https://api.github.com/repos/sysown/proxysql/actions/variables -f name='CI_BUILDS_${{ github.sha }}' -f value='locked' -f visibility='all'
         
         # check random times for lock to avoid race condition
         sleep 3
@@ -174,7 +173,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         # delete lock
-        gh variable -R sysown/proxysql delete CI_BUILDS_${{ github.sha }}
+        gh variable -R sysown/proxysql delete CI_BUILDS_${{ github.sha }} || true
 
     - name: Archive artifacts
       if: ${{ failure() }}
