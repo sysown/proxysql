@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
   workflow_call:
 
-concurrency:
-  group: ci_builds-${{ github.sha }}
+#concurrency:
+#  group: ci_builds-${{ github.sha }}
 
 jobs:
   builds:
@@ -28,6 +28,26 @@ jobs:
             type: '-tap'
     
     steps:
+
+    - name: Concurency Lock
+      run: |
+        # check random times for lock to avoid race condition
+        sleep 3
+        while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
+          if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
+            break
+          fi
+          sleep 1
+        done
+
+        # wait for unlock otherwise lock
+        if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
+          while [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; do
+            sleep 5
+          done
+        else
+          gh variable -R sysown/proxysql set CI_BUILDS_${{ github.sha }} -b 'locked'
+        fi
 
     - name: Cache check
       id: cache-check
@@ -141,6 +161,11 @@ jobs:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_matrix
         path: |
           proxysql/tap-matrix*
+
+    - name: Concurency Unlock
+      run: |
+        # delete lock
+        gh variable -R sysown/proxysql delete CI_BUILDS_${{ github.sha }}
 
     - name: Archive artifacts
       if: ${{ failure() }}
