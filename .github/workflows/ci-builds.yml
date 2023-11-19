@@ -35,6 +35,8 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         gh auth status
+        ${{ vars.CI_BUILDS_${{ github.sha }} = locked }}
+        
         # check random times for lock to avoid race condition
         sleep 3
         while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
