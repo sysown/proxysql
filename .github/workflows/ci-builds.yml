@@ -7,10 +7,11 @@ on:
 #concurrency:
 #  group: ci_builds-${{ github.sha }}
 
+permissions: write-all
+
 jobs:
   builds:
     runs-on: ubuntu-22.04
-    permissions: write-all
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     strategy:
