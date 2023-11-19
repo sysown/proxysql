@@ -40,6 +40,7 @@ jobs:
         # check random times for lock to avoid race condition
         sleep 3
         while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
+          echo "Checking lock 'CI_BUILDS_${{ github.sha }}' ..."
           if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
             break
           fi
@@ -49,9 +50,11 @@ jobs:
         # wait for unlock otherwise lock
         if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
           while [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; do
+            echo "Wating for unlock 'CI_BUILDS_${{ github.sha }}' ..."
             sleep 5
           done
         else
+          echo "Setting lock 'CI_BUILDS_${{ github.sha }}'"
           gh variable -R sysown/proxysql set CI_BUILDS_${{ github.sha }} -b 'locked'
         fi
 
@@ -173,6 +176,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         # delete lock
+        echo "Releasing lock 'CI_BUILDS_${{ github.sha }}'"
         gh variable -R sysown/proxysql delete CI_BUILDS_${{ github.sha }} || true
 
     - name: Archive artifacts
