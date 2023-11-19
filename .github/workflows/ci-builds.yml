@@ -35,7 +35,8 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         gh auth status
-        ${{ vars.CI_BUILDS = locked }}
+        gh api --method POST https://api.github.com/repos/sysown/proxysql/actions/variables -f name='CI_BUILDS_${{ github.sha }}' -f value='locked' -f visibility='all'
+        # ${{ vars.CI_BUILDS = locked }}
         
         # check random times for lock to avoid race condition
         sleep 3
