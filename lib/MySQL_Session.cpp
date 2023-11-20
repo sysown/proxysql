@@ -8168,13 +8168,16 @@ void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection()
 		// if we've reached this point, it means that warning was found in the previous query, but the
 		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and 
 		// return connection back to the connection pool.
-		MySQL_Backend* _mybe = NULL;
-		_mybe = find_backend(warning_in_hg);
-		MySQL_Data_Stream* myds = _mybe->server_myds;
-		myds->myconn->warning_count = 0;
-		myds->myconn->set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
-		if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
-			myds->return_MySQL_Connection_To_Pool();
+		MySQL_Backend* _mybe = find_backend(warning_in_hg);
+		if (_mybe) {
+			MySQL_Data_Stream* myds = _mybe->server_myds;
+			if (myds && myds->myconn) {
+				myds->myconn->warning_count = 0;
+				myds->myconn->set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
+					myds->return_MySQL_Connection_To_Pool();
+				}
+			}
 		}
 		warning_in_hg = -1;
 	}

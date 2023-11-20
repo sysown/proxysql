@@ -1565,6 +1565,12 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			} else {
 				// since 'add_eof' utilizes 'warning_count,' we are setting the 'warning_count' here
+
+				// Note: There is a possibility of obtaining inaccurate warning_count and server_status at this point
+				// if the backend server has CLIENT_DEPRECATE_EOF enabled, and the client does not support CLIENT_DEPRECATE_EOF,
+				// especially when the query generates a warning. This information will be included in the intermediate EOF packet. 
+				// Correct information becomes available only after fetching all rows,
+				// and the warning_count and status flag details are extracted from the final OK packet.
 				update_warning_count_from_connection();
 				if (myds->sess->mirror==false) {
 					if (MyRS_reuse == NULL) {
@@ -1671,7 +1677,8 @@ handler_again:
 					// since 'add_eof' utilizes 'warning_count,' we are setting the 'warning_count' here
 					update_warning_count_from_connection();
 					// we reach here if there was no error
-					MyRS->add_eof();
+					// exclude warning_count from the OK/EOF packet for the ‘SHOW WARNINGS’ statement
+					MyRS->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
 			}
@@ -2615,7 +2622,8 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		if (warning_count > 0) {
 			// 'warning_in_hg' will be used if the next query is 'SHOW WARNINGS' or
 			// 'SHOW COUNT(*) WARNINGS'
-			myds->sess->warning_in_hg = myds->sess->current_hostgroup;
+			if (myds && myds->sess)
+				myds->sess->warning_in_hg = myds->sess->current_hostgroup;
 			// enabling multiplexing
 			set_status(true, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 		}
@@ -2627,7 +2635,8 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 		// on backend.
 		if (!((dig_len == 22 && strncasecmp(dig, "SHOW COUNT(*) WARNINGS", 22) == 0) ||
 			(dig_len == 13 && strncasecmp(dig, "SHOW WARNINGS", 13) == 0))) {
-			myds->sess->warning_in_hg = -1;
+			if (myds && myds->sess)
+				myds->sess->warning_in_hg = -1;
 			warning_count = 0;
 			// disabling multiplexing
 			set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
