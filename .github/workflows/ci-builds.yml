@@ -13,10 +13,12 @@ jobs:
 
   lock:
     runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.gh_token }}
+
     steps:
-    - name: Concurency Lock
-      env:
-        GH_TOKEN: ${{ secrets.gh_token }}
+
+    - name: Concurency probe
       run: |
         #LOCK=CI_BUILDS_$(echo ${{ github.sha }} | awk '{print toupper($0)}')
         # probe random times for lock to avoid race condition
@@ -29,11 +31,14 @@ jobs:
           sleep 1
         done
 
+    - name: Concurency lock
+      run: |
         # wait for unlock otherwise lock
         if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
           PROBE=$(gh variable -R sysown/proxysql list | grep -i ${LOCK})
           while [[ -z ${PROBE} ]]; do
             echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+            PROBE=$(gh variable -R sysown/proxysql list | grep -i ${LOCK})
             sleep 5
           done
         else
@@ -187,10 +192,12 @@ jobs:
   unlock:
     runs-on: ubuntu-22.04
     needs: [ builds ]
+    env:
+      GH_TOKEN: ${{ secrets.gh_token }}
+
     steps:
-    - name: Concurency Unlock
-      env:
-        GH_TOKEN: ${{ secrets.gh_token }}
+    
+    - name: Concurency unlock
       run: |
         # delete lock
         echo "Releasing lock '${LOCK}'"
