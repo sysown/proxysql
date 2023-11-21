@@ -1,20 +1,14 @@
 name: CI-3p-mysql-connector-j
 
 on:
-#  push:
-#    branches: [ "v2.x" ]
-#    paths-ignore:
-#    - '.github/**'
-#    - '**.md'
-#  pull_request_target:
-#    branches: [ "v2.x" ]
-#    paths-ignore:
-#    - '.github/**'
-#    - '**.md'
-#  schedule:
-#    - cron: '15 13 * * 3'
   workflow_dispatch:
   workflow_call:
+
+env:
+  TESTNAME: mysql-connector-j
+  TESTDIST: debian11
+  INFRADB:  mysql57
+  BASELINE: 81
 
 jobs:
   build-n-test:
@@ -30,13 +24,17 @@ jobs:
         path: 'proxysql_3p_testing'
         token: ${{ secrets.GH_TOKEN }}
         sparse-checkout: |
-          proxysql
           test_mysql-connector-j
-        
-#    - name: Docker-hoster
-#      run: |
-#        cd jenkins-build-scripts/infra-docker-hoster
-#        docker-compose up -d
+          proxysql
+
+    - name: Cache restore bin
+      id: cache-src
+      uses: actions/cache/restore@v3
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_bin
+        fail-on-cache-miss: true
+        path: |
+          proxysql_3p_testing/proxysql/binaries/
         
     - name: Prepare
       run: |
@@ -65,7 +63,7 @@ jobs:
       run: |
         cd proxysql_3p_testing/test_mysql-connector-j
         FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
-        if [[ ${FAILS} -gt 81 ]]; then
+        if [[ ${FAILS} -gt ${BASELINE} ]]; then
           echo "Baseline FAIL: FAILS = ${FAILS}"
           exit 1
         else
@@ -73,7 +71,7 @@ jobs:
           exit 0
         fi
     
-    - name: Archive artifacts
+    - name: Archive artifacts logs
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
