@@ -31,13 +31,14 @@ jobs:
 
         # wait for unlock otherwise lock
         if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
-          while [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; do
-            echo "Wating for unlock '${LOCK^^}' ..."
+          PROBE=$(gh variable -R sysown/proxysql list | grep -i ${LOCK})
+          while [[ -z ${PROBE} ]]; do
+            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
             sleep 5
           done
         else
           echo "Setting lock '${LOCK^^}'"
-          gh variable -R sysown/proxysql set ${LOCK} -b 'locked'
+          gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
         fi
 
   builds:
