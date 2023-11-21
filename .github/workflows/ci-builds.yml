@@ -18,8 +18,14 @@ jobs:
         # probe random times for lock to avoid race condition
         sleep 3
         while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
+          echo "================================================================="
+          gh variable -R sysown/proxysql list
+          echo "================================================================="
           echo "Probing lock 'CI_BUILDS_${{ github.sha }}' ..."
           if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
+            echo "================================================================="
+            gh variable -R sysown/proxysql list
+            echo "================================================================="
             break
           fi
           sleep 1
@@ -28,13 +34,22 @@ jobs:
         # wait for unlock otherwise lock
         if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
           while [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; do
+            echo "================================================================="
+            gh variable -R sysown/proxysql list
+            echo "================================================================="
             echo "Wating for unlock 'CI_BUILDS_${{ github.sha }}' ..."
             sleep 5
           done
         else
+          echo "================================================================="
+          gh variable -R sysown/proxysql list
+          echo "================================================================="
           echo "Setting lock 'CI_BUILDS_${{ github.sha }}'"
           gh variable -R sysown/proxysql set CI_BUILDS_${{ github.sha }} -b 'locked'
         fi
+        echo "================================================================="
+        gh variable -R sysown/proxysql list
+        echo "================================================================="
 
   builds:
     runs-on: ubuntu-22.04
