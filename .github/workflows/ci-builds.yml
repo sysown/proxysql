@@ -22,7 +22,7 @@ jobs:
           gh variable -R sysown/proxysql list
           echo "================================================================="
           echo "Probing lock 'CI_BUILDS_${{ github.sha }}' ..."
-          if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
+          if [[ $(gh variable -R sysown/proxysql list | grep -i CI_BUILDS_${{ github.sha }}) ]]; then
             echo "================================================================="
             gh variable -R sysown/proxysql list
             echo "================================================================="
@@ -32,8 +32,8 @@ jobs:
         done
 
         # wait for unlock otherwise lock
-        if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
-          while [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; do
+        if [[ $(gh variable -R sysown/proxysql list | grep -i CI_BUILDS_${{ github.sha }}) ]]; then
+          while [[ $(gh variable -R sysown/proxysql list | grep -i CI_BUILDS_${{ github.sha }}) ]]; do
             echo "================================================================="
             gh variable -R sysown/proxysql list
             echo "================================================================="
