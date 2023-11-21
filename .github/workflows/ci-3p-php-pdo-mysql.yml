@@ -1,0 +1,82 @@
+name: CI-3p-php-pdo-mysql
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  TESTNAME: php-pdo-mysql
+  TESTDIST: debian11
+  INFRADB:  mysql57
+  BASELINE: 80
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+        
+    - name: Checkout proxysql_3p_testing
+      uses: actions/checkout@v3
+      with:
+        repository: 'proxysql/proxysql_3p_testing'
+        ref: 'main'
+        fetch-depth: 1
+        path: 'proxysql_3p_testing'
+        token: ${{ secrets.GH_TOKEN }}
+        sparse-checkout: |
+          test_php-pdo-mysql
+          proxysql
+        
+    - name: Cache restore bin
+      id: cache-src
+      uses: actions/cache/restore@v3
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_bin
+        fail-on-cache-miss: true
+        path: |
+          proxysql_3p_testing/proxysql/binaries/
+
+    - name: Prepare
+      run: |
+        set +e
+        
+        cd proxysql_3p_testing/
+        git sparse-checkout list
+        ./setup.sh
+        
+        # extend timout
+        cd test_php-pdo-mysql
+        sed -i 's/timeout -v -s1 800 //' run-tests.bash
+        
+    - name: Test php-pdo-mysql
+      run: |
+        set +e
+        
+        cd proxysql_3p_testing/test_php-pdo-mysql
+        ./run-tests.bash
+        RC=$?
+        
+        #sudo chmod -R 777 ${{ github.workspace }}/*
+        exit $RC
+        
+    - name: Check baseline
+      run: |
+        cd proxysql_3p_testing/test_php-pdo-mysql
+        FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
+        if [[ ${FAILS} -gt 81 ]]; then
+          echo "Baseline FAIL: FAILS = ${FAILS}"
+          exit 1
+        else
+          echo "Baseline PASS: FAILS = ${FAILS}"
+          exit 0
+        fi
+    
+    - name: Archive artifacts logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        path: |
+          proxysql_3p_testing/test_php-pdo-mysql/logs
+          
+          
