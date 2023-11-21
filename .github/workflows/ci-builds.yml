@@ -6,6 +6,9 @@ on:
 
 permissions: write-all
 
+env:
+  LOCK: CI_BUILDS_${{ github.sha }}
+
 jobs:
 
   lock:
@@ -15,41 +18,27 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
+        #LOCK=CI_BUILDS_$(echo ${{ github.sha }} | awk '{print toupper($0)}')
         # probe random times for lock to avoid race condition
         sleep 3
         while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
-          echo "================================================================="
-          gh variable -R sysown/proxysql list
-          echo "================================================================="
-          echo "Probing lock 'CI_BUILDS_${{ github.sha }}' ..."
-          if [[ $(gh variable -R sysown/proxysql list | grep -i CI_BUILDS_${{ github.sha }}) ]]; then
-            echo "================================================================="
-            gh variable -R sysown/proxysql list
-            echo "================================================================="
+          echo "Probing lock '${LOCK}' ..."
+          if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
             break
           fi
           sleep 1
         done
 
         # wait for unlock otherwise lock
-        if [[ $(gh variable -R sysown/proxysql list | grep -i CI_BUILDS_${{ github.sha }}) ]]; then
-          while [[ $(gh variable -R sysown/proxysql list | grep -i CI_BUILDS_${{ github.sha }}) ]]; do
-            echo "================================================================="
-            gh variable -R sysown/proxysql list
-            echo "================================================================="
-            echo "Wating for unlock 'CI_BUILDS_${{ github.sha }}' ..."
+        if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
+          while [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; do
+            echo "Wating for unlock '${LOCK}' ..."
             sleep 5
           done
         else
-          echo "================================================================="
-          gh variable -R sysown/proxysql list
-          echo "================================================================="
-          echo "Setting lock 'CI_BUILDS_${{ github.sha }}'"
-          gh variable -R sysown/proxysql set CI_BUILDS_${{ github.sha }} -b 'locked'
+          echo "Setting lock '${LOCK}'"
+          gh variable -R sysown/proxysql set ${LOCK} -b 'locked'
         fi
-        echo "================================================================="
-        gh variable -R sysown/proxysql list
-        echo "================================================================="
 
   builds:
     runs-on: ubuntu-22.04
@@ -203,6 +192,6 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         # delete lock
-        echo "Releasing lock 'CI_BUILDS_${{ github.sha }}'"
-        gh variable -R sysown/proxysql delete CI_BUILDS_${{ github.sha }} || true
+        echo "Releasing lock '${LOCK}'"
+        gh variable -R sysown/proxysql delete ${LOCK} || true
 
