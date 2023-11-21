@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   workflow_call:
 
-#concurrency:
-#  group: ci_builds-${{ github.sha }}
-
 permissions: write-all
 
 jobs:
@@ -18,12 +15,10 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
-        gh auth status
-        
-        # check random times for lock to avoid race condition
+        # probe random times for lock to avoid race condition
         sleep 3
         while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
-          echo "Checking lock 'CI_BUILDS_${{ github.sha }}' ..."
+          echo "Probing lock 'CI_BUILDS_${{ github.sha }}' ..."
           if [[ $(gh variable -R sysown/proxysql list | grep CI_BUILDS_${{ github.sha }}) ]]; then
             break
           fi
