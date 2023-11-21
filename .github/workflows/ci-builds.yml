@@ -25,7 +25,9 @@ jobs:
         sleep 3
         while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
           echo "Probing lock '${LOCK^^}' ..."
-          if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
+          PROBE=$(gh variable -R sysown/proxysql list | grep -i ${LOCK})
+          if [[ -z ${PROBE} ]]; then
+            echo "Already locked '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
             break
           fi
           sleep 1
