@@ -115,10 +115,10 @@ void * my_conn_thread(void *arg) {
 			exit(EXIT_FAILURE);
 		}
 		int port = local ? 0 : ( cl.port + rand()%multiport );
-		MYSQL *rc=mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, schema, port, NULL, 0);
+		MYSQL *rc=mysql_real_connect(mysql, cl.host, cl.username, cl.password, schema, port, NULL, 0);
 		if (rc==NULL) {
 			if (silent==0) {
-				fprintf(stderr,"Error while connecting on %s:%d : %s\n", cl.mysql_host , port , mysql_error(mysql));
+				fprintf(stderr,"Error while connecting on %s:%d : %s\n", cl.host , port , mysql_error(mysql));
 			}
 			return NULL;
 		}
