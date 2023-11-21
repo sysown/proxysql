@@ -32,7 +32,7 @@ jobs:
         sed -i "s/'reg_test_3992_fast_forward_malformed_packet-pymysql-t', //" proxysql/tap-matrix-$TAPGROUP.json
         sed -i "s/'reg_test_3992_fast_forward_malformed_packet-t', //" proxysql/tap-matrix-$TAPGROUP.json
         sed -i "s/'reg_test_fast_forward_split_packet-t', //" proxysql/tap-matrix-$TAPGROUP.json
-        sed -i "s/'set_testing-240-t', //" proxysql/tap-matrix-$TAPGROUP.json
+        #sed -i "s/'set_testing-240-t', //" proxysql/tap-matrix-$TAPGROUP.json
         sed -i "s/'test_binlog_reader-t', //" proxysql/tap-matrix-$TAPGROUP.json
         sed -i "s/'test_clickhouse_server-t', //" proxysql/tap-matrix-$TAPGROUP.json
         sed -i "s/'test_clickhouse_server_libmysql-t', //" proxysql/tap-matrix-$TAPGROUP.json
