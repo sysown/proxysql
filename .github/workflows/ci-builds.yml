@@ -38,8 +38,8 @@ jobs:
           PROBE=$(gh variable -R sysown/proxysql list | grep -i ${LOCK})
           while [[ -z ${PROBE} ]]; do
             echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-            PROBE=$(gh variable -R sysown/proxysql list | grep -i ${LOCK})
             sleep 5
+            PROBE=$(gh variable -R sysown/proxysql list | grep -i ${LOCK})
           done
         else
           echo "Setting lock '${LOCK^^}'"
