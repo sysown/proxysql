@@ -22,7 +22,7 @@ jobs:
         # probe random times for lock to avoid race condition
         sleep 3
         while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
-          echo "Probing lock '${LOCK}' ..."
+          echo "Probing lock '${LOCK^^}' ..."
           if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
             break
           fi
@@ -32,11 +32,11 @@ jobs:
         # wait for unlock otherwise lock
         if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
           while [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; do
-            echo "Wating for unlock '${LOCK}' ..."
+            echo "Wating for unlock '${LOCK^^}' ..."
             sleep 5
           done
         else
-          echo "Setting lock '${LOCK}'"
+          echo "Setting lock '${LOCK^^}'"
           gh variable -R sysown/proxysql set ${LOCK} -b 'locked'
         fi
 
