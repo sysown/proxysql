@@ -474,7 +474,7 @@ int main(int argc, char *argv[]) {
 
 	diag("Creating new hostgroup 101: DELETE FROM mysql_servers WHERE hostgroup_id = 101");
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
-	const std::string insert = "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id LIKE '%1'";
+	const std::string insert = "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id = '1'";
 	diag("Creating new hostgroup 101: %s" , insert.c_str());
 	MYSQL_QUERY(proxysql_admin, insert.c_str());
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
