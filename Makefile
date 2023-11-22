@@ -38,7 +38,7 @@ DEBUG := ${ALL_DEBUG}
 #export DEBUG
 #export EXTRALINK
 export MAKE
-export CURVER ?= 2.6.0
+export CURVER=${CURVER:-2.6.0}
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
@@ -65,7 +65,7 @@ endif
 ifeq ($(OS),Darwin)
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
-export MAKEOPT = -j ${NPROCS}
+export MAKEOPT="-j ${NPROCS}"
 
 ### systemd
 SYSTEMD := 0
