@@ -54,7 +54,7 @@ TESTS_DEPS=$(TAP_LIBDIR)/libtap.a $(MARIADB_TEST_DEP)/libmariadb/libmariadbclien
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
 
-COMMONARGS1=$(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -ltap -lcpp_dotenv -Wl,--no-as-needed -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\" -DDEBUG -I$(JSON_IDIR)
+COMMONARGS1=$(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -ltap -lcpp_dotenv -Wl,--no-as-needed -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\" -DDEBUG -I$(JSON_IDIR) -lssl -lcrypto
 COMMONARGS=$(COMMONARGS1) $(MYLIBS)
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
@@ -71,7 +71,7 @@ fwd_eof_query: fwd_eof_query.cpp $(TESTS_DEPS)
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
 fwd_eof_ok_query: fwd_eof_query.cpp $(TAP_LIBDIR)/libtap.a
-	LD_LIBRARY_PATH=$(LLP) $(CXX) $< -I/usr/include/mysql/ -I$(IDIR) -L/usr/lib/x86_64-linux-gnu/ -lmysqlclient $(COMMONARGS1) -o $@
+	LD_LIBRARY_PATH=$(LLP) $(CXX) $< -I/usr/include/mysql/ -I$(IDIR) -lmysqlclient $(COMMONARGS1) -o $@
 
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp $(TESTS_DEPS)
 	LD_LIBRARY_PATH=$(LLP) $(CXX) $^ $(INCLUDEDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -L$(PROXYLDIR) -lproxysql $(COMMONARGS) -o $@
