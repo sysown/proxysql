@@ -243,14 +243,14 @@ setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap.so $(RE2_PATH)/util/test.c
 
 setparser_test2-t: setparser_test2
 	rm setparser_test2-t || true
-	ln -s setparser_test2 setparser_test2-t
+	ln -fs setparser_test2 setparser_test2-t
 
 setparser_test2: setparser_test2.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
 	g++ $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(WASAN) $(LIBCOREDUMPERAR) -o $@
 
 setparser_test3-t: setparser_test3
 	rm setparser_test3-t || true
-	ln -s setparser_test3 setparser_test3-t
+	ln -fs setparser_test3 setparser_test3-t
 
 setparser_test3: setparser_test3.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
 	g++ -DPARSERDEBUG $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(WASAN) $(LIBCOREDUMPERAR) -o $@

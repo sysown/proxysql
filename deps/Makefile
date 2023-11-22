@@ -78,7 +78,7 @@ libssl/openssl/libssl.a:
 #	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
-	cd libssl/openssl && ln -s . lib # curl wants this path
+	cd libssl/openssl && ln -fsT . lib # curl wants this path
 
 libssl: libssl/openssl/libssl.a
 
@@ -135,10 +135,10 @@ libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
 	cd libmicrohttpd && rm -f libmicrohttpd || true
 ifeq ($(CENTOSVER),6)
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
+	cd libmicrohttpd && ln -fsT libmicrohttpd-0.9.55 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
 else
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.75 libmicrohttpd
+	cd libmicrohttpd && ln -fsT libmicrohttpd-0.9.75 libmicrohttpd
 	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
 #	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
 endif
@@ -166,7 +166,7 @@ lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
+	cd clickhouse-cpp && ln -fsT clickhouse-cpp-2.3.0 clickhouse-cpp
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
