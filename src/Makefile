@@ -117,7 +117,7 @@ STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPL
 
 PSQLCH :=
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-	PSQLCH=-DPROXYSQLCLICKHOUSE
+	PSQLCH := -DPROXYSQLCLICKHOUSE
 endif
 
 WGCOV :=
@@ -129,7 +129,7 @@ WASAN :=
 ifeq ($(WITHASAN),1)
 	WASAN := -WITHASAN -fsanitize=address
 	# Force the disable of JEMALLOC, since ASAN isn't compatible.
-	export NOJEMALLOC = 1
+	export NOJEMALLOC=1
 endif
 ifeq ($(TEST_WITHASAN),1)
 	WASAN += -DTEST_WITHASAN
