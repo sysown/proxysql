@@ -21,6 +21,7 @@ jobs:
     - name: Concurency probe
       run: |
         set -x
+        set -e
         #LOCK=CI_BUILDS_$(echo ${{ github.sha }} | awk '{print toupper($0)}')
         # probe random times for lock to avoid race condition
         sleep 3
