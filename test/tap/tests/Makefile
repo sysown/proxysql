@@ -83,7 +83,7 @@ EXECUTABLE=proxysql
 OBJ=../../../src/obj/proxysql_global.o ../../../src/obj/main.o ../../../src/obj/proxy_tls.o
 
 INCLUDEDIRS=-I../tap -I$(RE2_PATH) -I$(IDIR) -I$(JEMALLOC_IDIR) -I$(SQLITE3_DIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(DAEMONPATH_IDIR) -I$(MARIADB_IDIR) -I$(SSL_IDIR) -I$(JSON_IDIR) -I$(LIBCONFIG_IDIR) -I$(PROMETHEUS_IDIR) -I$(EV_IDIR) -I$(DOTENV_DYN_IDIR)
-LDIRS=-L$(TAP_LIBDIR) -L$(DOTENV_DYN_LDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR)
+LDIRS=-L$(TAP_LIBDIR) -L$(SSL_LDIR) -L$(DOTENV_DYN_LDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PATH)/obj -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR)
 
 UNAME_S := $(shell uname -s)
 
@@ -210,22 +210,22 @@ reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cp
 	$(CXX) -DDEBUG reg_test_3504-change_user_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -std=c++11 $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"
 
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
-	$(CXX) -DLIBMYSQL_HELPER reg_test_3504-change_user_helper.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o reg_test_3504-change_user_libmysql_helper
+	$(CXX) -DLIBMYSQL_HELPER reg_test_3504-change_user_helper.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o reg_test_3504-change_user_libmysql_helper
 
 test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp
-	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o test_clickhouse_server_libmysql-t
+	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o test_clickhouse_server_libmysql-t
 
 reg_test_stmt_resultset_err_no_rows_libmysql-t: reg_test_stmt_resultset_err_no_rows-t.cpp
-	$(CXX) -DLIBMYSQL_HELPER reg_test_stmt_resultset_err_no_rows-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o reg_test_stmt_resultset_err_no_rows_libmysql-t
+	$(CXX) -DLIBMYSQL_HELPER reg_test_stmt_resultset_err_no_rows-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o reg_test_stmt_resultset_err_no_rows_libmysql-t
 
 reg_test_mariadb_stmt_store_result_libmysql-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.a
-	$(CXX) -DLIBMYSQL_HELPER reg_test_mariadb_stmt_store_result-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o reg_test_mariadb_stmt_store_result_libmysql-t
+	$(CXX) -DLIBMYSQL_HELPER reg_test_mariadb_stmt_store_result-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o reg_test_mariadb_stmt_store_result_libmysql-t
 
 reg_test_mariadb_stmt_store_result_async-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) -DASYNC_API reg_test_mariadb_stmt_store_result-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_mariadb_stmt_store_result_async-t
 
 prepare_statement_err3024_libmysql-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.a
-	$(CXX) -DLIBMYSQL_HELPER prepare_statement_err3024-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o prepare_statement_err3024_libmysql-t
+	$(CXX) -DLIBMYSQL_HELPER prepare_statement_err3024-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o prepare_statement_err3024_libmysql-t
 
 prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.a
 	$(CXX) -DASYNC_API prepare_statement_err3024-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o prepare_statement_err3024_async-t -DGITVERSION=\"$(GIT_VERSION)\"
