@@ -70,7 +70,9 @@ jobs:
           exit 1
         else
           echo "Baseline PASS: FAILS = ${FAILS}"
-          gh variable -R sysown/proxysql set BASELINE_3P_MYSQL_CONNECTOR_J -b '${FAILS}'
+          if [[ ${{ github.ref_name }} == v2.x ]]; then
+            gh variable -R sysown/proxysql set BASELINE_3P_MYSQL_CONNECTOR_J -b '${FAILS}'
+          fi
           exit 0
         fi
     
