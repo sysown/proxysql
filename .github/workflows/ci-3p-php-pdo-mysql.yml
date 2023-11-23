@@ -65,7 +65,7 @@ jobs:
       run: |
         cd proxysql_3p_testing/test_php-pdo-mysql
         FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
-        if [[ ${FAILS} -gt 81 ]]; then
+        if [[ ${FAILS} -gt ${BASELINE} ]]; then
           echo "Baseline FAIL: FAILS = ${FAILS}"
           exit 1
         else
