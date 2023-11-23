@@ -8,7 +8,7 @@ env:
   TESTNAME: mysql-connector-j
   TESTDIST: debian11
   INFRADB:  mysql57
-  BASELINE: 81
+  BASELINE: ${{ vars.BASELINE_3P_MYSQL_CONNECTOR_J }}
 
 jobs:
   build-n-test:
@@ -68,6 +68,7 @@ jobs:
           exit 1
         else
           echo "Baseline PASS: FAILS = ${FAILS}"
+          gh variable -R sysown/proxysql set BASELINE_3P_MYSQL_CONNECTOR_J -b '${FAILS}'
           exit 0
         fi
     
