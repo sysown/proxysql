@@ -114,13 +114,13 @@ void * my_conn_thread(void *arg) {
 		if (mysql==NULL) {
 			exit(EXIT_FAILURE);
 		}
-		MYSQL *rc=mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
-//		MYSQL *rc=mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, schema, (local ? 0 : ( cl.mysql_port + rand()%multiport ) ), NULL, 0);
+		int port = local ? 0 : ( cl.port + rand()%multiport );
+		MYSQL *rc=mysql_real_connect(mysql, cl.host, cl.username, cl.password, schema, port, NULL, 0);
 		if (rc==NULL) {
 			if (silent==0) {
-				fprintf(stderr,"%s\n", mysql_error(mysql));
+				fprintf(stderr,"Error while connecting on %s:%d : %s\n", cl.host , port , mysql_error(mysql));
 			}
-			exit(EXIT_FAILURE);
+			return NULL;
 		}
 		mysqlconns[i]=mysql;
 		set_sql_mode[i]=false;
@@ -474,10 +474,9 @@ int main(int argc, char *argv[]) {
 
 	diag("Creating new hostgroup 101: DELETE FROM mysql_servers WHERE hostgroup_id = 101");
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
-//	diag("Creating new hostgroup 101: INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (21)");
-	diag("Creating new hostgroup 101: INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1501)");
-//	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (21)");
-	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1501)");
+	const std::string insert = "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id = '1'";
+	diag("Creating new hostgroup 101: %s" , insert.c_str());
+	MYSQL_QUERY(proxysql_admin, insert.c_str());
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 	diag("Changing read traffic to hostgroup 101: UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
 	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
@@ -485,7 +484,9 @@ int main(int argc, char *argv[]) {
 
 	//queries = 3000;
 	//queries = testCases.size();
-	plan(queries * num_threads);
+	unsigned int p = queries * num_threads;
+	p *= 2; // number of algorithms
+	plan(p);
 
 	if (strcmp(host,"localhost")==0) {
 		local = 1;
@@ -497,16 +498,25 @@ int main(int argc, char *argv[]) {
 		uniquequeries=(int)sqrt(uniquequeries);
 	}
 
-	pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
-	if (thi==NULL)
-		return exit_status();
+	for (int algo = 1; algo <= 2; algo++ ) {
+		connect_phase_completed = 0;
+		query_phase_completed = 0;
+		std::string qu = "SET mysql-set_parser_algorithm=" + std::to_string(algo);
+		diag("Setting: %s", qu.c_str());
+		MYSQL_QUERY(proxysql_admin, qu.c_str());
+		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+		pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
+		if (thi==NULL)
+			return exit_status();
 
-	for (unsigned int i=0; i<num_threads; i++) {
-		if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
-			perror("Thread creation");
-	}
-	for (unsigned int i=0; i<num_threads; i++) {
-		pthread_join(thi[i], NULL);
+		for (unsigned int i=0; i<num_threads; i++) {
+			if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
+				perror("Thread creation");
+		}
+		for (unsigned int i=0; i<num_threads; i++) {
+			pthread_join(thi[i], NULL);
+		}
+		free(thi);
 	}
 	for (std::unordered_map<std::string,var_counter>::iterator it = vars_counters.begin(); it!=vars_counters.end(); it++) {
 		diag("Unknown variable %s:\t Count: %d , unknown: %d", it->first.c_str(), it->second.count, it->second.unknown);
