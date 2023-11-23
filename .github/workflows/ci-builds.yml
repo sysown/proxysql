@@ -20,12 +20,10 @@ jobs:
 
     - name: Concurency probe
       run: |
-        #LOCK=CI_BUILDS_$(echo ${{ github.sha }} | awk '{print toupper($0)}')
         # probe random times for lock to avoid race condition
-        sleep 3
-        while [[ $(( $RANDOM % 10 )) -ne 0 ]]; do
+        while [[ $(( $RANDOM % 60 )) -ne 0 ]]; do
           echo "Probing lock '${LOCK^^}' ..."
-          #PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK})"
+          #PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK}) || echo ''"
           #if [[ -z ${PROBE} ]]; then
             #echo "Already locked '${LOCK^^}' by '$(echo ${PROBE} | awk \"{ print $2 }\")'"
           if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
@@ -39,16 +37,16 @@ jobs:
       run: |
         # wait for unlock otherwise lock
         if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
-          #PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK})"
+          #PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK}) || echo ''"
           #while [[ -z ${PROBE} ]]; do
             #echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk \"{ print $2 }\")'"
           while [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; do
             echo "Wating for unlock '${LOCK^^}'"
             sleep 5
-            #PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK})"
+            #PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK}) || echo ''"
           done
         else
-          echo "Setting lock '${LOCK^^}'"
+          echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
           gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
         fi
 
