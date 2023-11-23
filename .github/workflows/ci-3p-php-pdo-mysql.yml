@@ -8,7 +8,7 @@ env:
   TESTNAME: php-pdo-mysql
   TESTDIST: debian11
   INFRADB:  mysql57
-  BASELINE: ${{ BASELINE_3P_PHP_PDO_MYSQL }}
+  BASELINE: ${{ vars.BASELINE_3P_PHP_PDO_MYSQL }}
 
 jobs:
   test:
