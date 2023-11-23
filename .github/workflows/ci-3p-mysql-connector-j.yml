@@ -11,7 +11,7 @@ env:
   BASELINE: ${{ vars.BASELINE_3P_MYSQL_CONNECTOR_J }}
 
 jobs:
-  build-n-test:
+  test:
     runs-on: ubuntu-22.04
     steps:
         
