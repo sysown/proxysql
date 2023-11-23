@@ -60,6 +60,8 @@ jobs:
         exit $RC
         
     - name: Check baseline
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_mysql-connector-j
         FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
