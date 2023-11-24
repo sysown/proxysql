@@ -231,4 +231,4 @@ prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)
 	$(CXX) -DASYNC_API prepare_statement_err3024-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o prepare_statement_err3024_async-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LIBDIR)/libtap.a
-	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -std=c++11 -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll -lpthread -ldl -ltap $(STATIC_LIBS) -o $@
+	$(CXX) test_wexecvp_syscall_failures-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -std=c++11 -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll -lpthread -ldl -ltap $(STATIC_LIBS) -o $@
