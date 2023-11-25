@@ -35,9 +35,8 @@ mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a:
 	cd mysql-connector-c && rm -rf mysql-*/ || true
 	cd mysql-connector-c && tar -zxf mysql-boost-5.7.*.tar.gz
 	cd mysql-connector-c && ln -fsT $$(ls -1d mysql-5.7.*/) mysql-connector-c
-#	cd mysql-connector-c/mysql-connector-c && patch -p0 < ../CMakeLists.txt.patch
-#	cd mysql-connector-c/mysql-connector-c && patch -p0 < ../install_macros.cmake.patch
-	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(DEPS_PATH)/libssl/openssl
+	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O0 -ggdb -DNDEBUG -fPIC" -DOPENSSL_ROOT_DIR=$(DEPS_PATH)/libssl/openssl
+#	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS_DEBUG="-O0 -ggdb -fPIC" -DOPENSSL_ROOT_DIR=$(DEPS_PATH)/libssl/openssl
 	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mysqlclient mysql
 	cd mysql-connector-c/mysql-connector-c && cp archive_output_directory/libmysqlclient.a libmysql/
 
