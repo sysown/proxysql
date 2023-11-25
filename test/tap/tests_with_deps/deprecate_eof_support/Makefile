@@ -28,6 +28,7 @@ TEST_MARIADB_LDIR := $(TEST_MARIADB_PATH)/libmariadb
 
 TEST_MYSQL_PATH := $(TEST_DEPS_PATH)/mysql-connector-c/mysql-connector-c
 TEST_MYSQL_IDIR := $(TEST_MYSQL_PATH)/include
+TEST_MYSQL_EDIR := $(TEST_MYSQL_PATH)/libbinlogevents/export
 TEST_MYSQL_LDIR := $(TEST_MYSQL_PATH)/libmysql
 
 ### detect compiler support for c++11/17
@@ -72,16 +73,17 @@ IDIRS += -I$(DEPS_PATH)/curl/curl/include
 default: all
 
 .PHONY: all
-all: build_test_deps tests
+all: tests
 
 .PHONY: debug
 debug: DEBUG := -DDEBUG
 debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
-debug: build_test_deps tests
+debug: tests
 
 
 ### test deps targets
 
+#.PHONY: build_test_deps
 build_test_deps: $(TAP_LDIR)/libtap.so $(TEST_MARIADB_LDIR)/libmariadbclient.a $(TEST_MYSQL_LDIR)/libmysqlclient.a
 
 $(TAP_LDIR)/libtap.so:
@@ -96,37 +98,38 @@ $(TEST_MYSQL_LDIR)/libmysqlclient.a:
 
 ### test and helper targets
 
+tests: build_test_deps
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
 
 COMMONARGS := $(OPT) -I$(TAP_IDIR) -L$(TAP_LDIR) -ltap -lcpp_dotenv -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
-ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp build_test_deps
+ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
 	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp build_test_deps
+eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
 	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-fwd_eof_query: fwd_eof_query.cpp build_test_deps
+fwd_eof_query: fwd_eof_query.cpp
 	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
-fwd_eof_ok_query: fwd_eof_query.cpp build_test_deps
-	$(CXX) $< $(IDIRS) -I$(MARIADB_IDIR) -I$(TEST_MYSQL_IDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(COMMONARGS) -o $@
+fwd_eof_ok_query: fwd_eof_query.cpp
+	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(COMMONARGS) -o $@
 # NOTE end
 
-deprecate_eof_cache-t: deprecate_eof_cache-t.cpp build_test_deps
+deprecate_eof_cache-t: deprecate_eof_cache-t.cpp
 	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient -L$(PROXYSQL_LDIR) -lproxysql $(COMMONARGS) -o $@
 
-eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp build_test_deps
+eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp
 	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp build_test_deps
+eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp
 	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-eof_conn_options_check-t: eof_conn_options_check-t.cpp build_test_deps
+eof_conn_options_check-t: eof_conn_options_check-t.cpp
 	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
-eof_fast_forward-t: eof_fast_forward-t.cpp build_test_deps
+eof_fast_forward-t: eof_fast_forward-t.cpp
 	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 

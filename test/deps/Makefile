@@ -1,10 +1,11 @@
 #!/bin/make -f
 
 
-targets := mariadb_client mysql_client
-
 .PHONY: default
-default: $(targets)
+default: all
+
+.PHONY: all
+all: mariadb_client mysql_client
 
 
 ### test deps targets
@@ -20,13 +21,25 @@ mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a:
 mariadb_client: mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbclient.a
 
 
+#mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a:
+#	cd mysql-connector-c && rm -rf mysql-connector-c-*-src/ || true
+#	cd mysql-connector-c && tar -zxf mysql-connector-c-*-src.tar.gz
+#	cd mysql-connector-c/mysql-connector-c && patch -p0 < ../CMakeLists.txt.patch
+#	cd mysql-connector-c/mysql-connector-c && patch -p0 < ../install_macros.cmake.patch
+#	cd mysql-connector-c/mysql-connector-c && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(DEPS_PATH)/libssl/openssl
+#	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mysqlclient mysql
+
 mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a:
-	cd mysql-connector-c && rm -rf mysql-connector-c-*-src/ || true
-	cd mysql-connector-c && tar -zxf mysql-connector-c-*-src.tar.gz
-	cd mysql-connector-c/mysql-connector-c && patch -p0 < ../CMakeLists.txt.patch
-	cd mysql-connector-c/mysql-connector-c && patch -p0 < ../install_macros.cmake.patch
-	cd mysql-connector-c/mysql-connector-c && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(DEPS_PATH)/libssl/openssl
-	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mysqlclient
+	cd mysql-connector-c && curl -C - -O -s https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz || true
+	cd mysql-connector-c && wget -nc -q https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz || true
+	cd mysql-connector-c && rm -rf mysql-*/ || true
+	cd mysql-connector-c && tar -zxf mysql-boost-5.7.*.tar.gz
+	cd mysql-connector-c && ln -fsT $$(ls -1d mysql-5.7.*/) mysql-connector-c
+#	cd mysql-connector-c/mysql-connector-c && patch -p0 < ../CMakeLists.txt.patch
+#	cd mysql-connector-c/mysql-connector-c && patch -p0 < ../install_macros.cmake.patch
+	cd mysql-connector-c/mysql-connector-c && cmake . -DWITH_BOOST=./boost -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(DEPS_PATH)/libssl/openssl
+	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mysqlclient mysql
+	cd mysql-connector-c/mysql-connector-c && cp archive_output_directory/libmysqlclient.a libmysql/
 
 mysql_client: mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a
 
@@ -37,12 +50,12 @@ mysql_client: mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a
 .PHONY: cleanall
 cleanall:
 	cd mariadb-connector-c && rm -rf mariadb-connector-c-*/ || true
-	cd mysql-connector-c && rm -rf mysql-connector-c-*-src/ || true
+	cd mysql-connector-c && rm -rf mysql-5.7.*/ || true
 
 .SILENT: clean
 .PHONY: clean
 clean:
 	cd mariadb-connector-c/mariadb-connector-c && $(MAKE) clean || true
-	cd mariadb-connector-c/mariadb-connector-c && rm -f CMakeCache.txt
+	cd mariadb-connector-c/mariadb-connector-c && rm -f CMakeCache.txt || true
 	cd mysql-connector-c/mysql-connector-c && $(MAKE) clean || true
-	cd mysql-connector-c/mysql-connector-c && rm -f CMakeCache.txt
+	cd mysql-connector-c/mysql-connector-c && rm -f CMakeCache.txt || true
