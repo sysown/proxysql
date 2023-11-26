@@ -1,6 +1,10 @@
 #!/bin/make -f
 
 
+PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd )
+DEPS_PATH := $(PROXYSQL_PATH)/deps
+
+
 .PHONY: default
 default: all
 

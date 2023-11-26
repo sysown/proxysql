@@ -7,7 +7,7 @@ ifndef GIT_VERSION
 endif
 
 
-PROXYSQL_PATH := ../../..
+PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 PROXYSQL_IDIR := $(PROXYSQL_PATH)/include
 PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
 
@@ -159,18 +159,28 @@ OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) -D
 default: all
 
 .PHONY: all
-all: build_test_deps tests
+all: tests
 
 debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
-debug: build_test_deps tests
+debug: tests
 
-tests: tests-cpp tests-php tests-py \
-	setparser_test reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper \
+tests: build_test_deps
+tests: tests-cpp \
+	tests-php \
+	tests-py \
+	setparser_test \
+	reg_test_3504-change_user_libmariadb_helper \
+	reg_test_3504-change_user_libmysql_helper \
 	setparser_test2 setparser_test2-t \
 	setparser_test3 setparser_test3-t \
-	set_testing-240.csv test_clickhouse_server_libmysql-t reg_test_stmt_resultset_err_no_rows_libmysql-t \
-	prepare_statement_err3024_libmysql-t prepare_statement_err3024_async-t reg_test_mariadb_stmt_store_result_libmysql-t \
+	set_testing-240.csv \
+	test_clickhouse_server_libmysql-t \
+	reg_test_stmt_resultset_err_no_rows_libmysql-t \
+	prepare_statement_err3024_libmysql-t \
+	prepare_statement_err3024_async-t \
+	reg_test_mariadb_stmt_store_result_libmysql-t \
 	reg_test_mariadb_stmt_store_result_async-t
+
 tests-cpp: $(patsubst %.cpp,%,$(wildcard *-t.cpp))
 tests-php: $(patsubst %,php-%,$(wildcard *-t.php))
 tests-py: $(patsubst %,py-%,$(wildcard *-t.py))
