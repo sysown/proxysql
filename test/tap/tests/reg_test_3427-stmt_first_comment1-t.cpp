@@ -168,7 +168,6 @@ int main(int argc, char** argv) {
 
 			if (mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()))) {
 				diag("mysql_stmt_prepare at line %d failed: %s", __LINE__ , mysql_error(proxysql_mysql));
-				mysql_close(proxysql_mysql);
 				res = EXIT_FAILURE;
 				goto exit;
 			} else {

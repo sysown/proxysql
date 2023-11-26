@@ -39,6 +39,7 @@ int queries_per_connections=10;
 //unsigned int num_threads=5;
 unsigned int num_threads=20;
 int count=20;
+int total_conn_having_client_deprecate_eof_support = (count * 0.2); // 20% of connections will have CLIENT_DEPRECATE_EOF flag enabled
 char *username=NULL;
 char *password=NULL;
 char *host=(char *)"localhost";
@@ -113,6 +114,10 @@ void * my_conn_thread(void *arg) {
 		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, nextcs.c_str());
 		if (mysql==NULL) {
 			exit(EXIT_FAILURE);
+		}
+		if (i < total_conn_having_client_deprecate_eof_support) {
+			// enable 'CLIENT_DEPRECATE_EOF' support
+			mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
 		}
 		MYSQL *rc=mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
 //		MYSQL *rc=mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, schema, (local ? 0 : ( cl.mysql_port + rand()%multiport ) ), NULL, 0);
