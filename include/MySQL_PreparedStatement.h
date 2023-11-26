@@ -60,6 +60,7 @@ class MySQL_STMT_Global_info {
 	uint16_t warning_count;
 	MYSQL_FIELD **fields;
 	char* first_comment;
+	uint64_t total_mem_usage;
 //	struct {
 //		int cache_ttl;
 //		int timeout;
@@ -70,6 +71,7 @@ class MySQL_STMT_Global_info {
 	MySQL_STMT_Global_info(uint64_t id, char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, uint64_t _h);
 	void update_metadata(MYSQL_STMT *stmt);
 	~MySQL_STMT_Global_info();
+	void calculate_mem_usage();
 };
 
 
@@ -264,6 +266,7 @@ class MySQL_STMT_Manager_v14 {
 	MySQL_STMT_Global_info * add_prepared_statement(char *u, char *s, char *q, unsigned int ql, char *fc, MYSQL_STMT *stmt, bool lock=true);
 	void get_metrics(uint64_t *c_unique, uint64_t *c_total, uint64_t *stmt_max_stmt_id, uint64_t *cached, uint64_t *s_unique, uint64_t *s_total);
 	SQLite3_result * get_prepared_statements_global_infos();
+	void get_memory_usage(uint64_t& prep_stmt_metadata_mem_usage, uint64_t& prep_stmt_backend_mem_usage);
 };
 
 #endif /* CLASS_MYSQL_PREPARED_STATEMENT_H */

@@ -4354,6 +4354,7 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 			stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
 			stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
 			stmt_info->MyComQueryCmd=CurrentQuery.MyComQueryCmd; // copy MyComQueryCmd
+			stmt_info->calculate_mem_usage();
 		}
 	}
 	global_stmtid=stmt_info->statement_id;

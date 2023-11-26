@@ -1,4 +1,4 @@
-name: CI-basictests
+name: CI-3p-php-pdo-mysql
 
 on:
   push:
@@ -14,13 +14,10 @@ on:
 #  schedule:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
-#  workflow_run:
-#    workflows: ["CI-builds"]
-#    types: 
-#      - completed
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
+
 
 jobs:
   cache:
@@ -29,6 +26,6 @@ jobs:
 
   run:
     needs: [ "cache" ]
-    uses: sysown/proxysql/.github/workflows/ci-basictests.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-3p-php-pdo-mysql.yml@GH-Actions
     secrets: inherit
     

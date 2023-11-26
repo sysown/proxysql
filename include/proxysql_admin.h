@@ -79,6 +79,8 @@ struct p_admin_gauge {
 		stack_memory_mysql_threads,
 		stack_memory_admin_threads,
 		stack_memory_cluster_threads,
+		prepare_stmt_metadata_memory_bytes,
+		prepare_stmt_backend_memory_bytes,
 		// stmt metrics
 		stmt_client_active_total,
 		stmt_client_active_unique,
