@@ -91,7 +91,7 @@ ifeq ($(UNAME_S),Linux)
 	LDIRS+= -L$(COREDUMPER_LDIR)
 endif
 
-MYLIBS=-Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
+MYLIBS=-Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -lcurl -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 #MYLIBS=-Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 MYLIBSJEMALLOC=-Wl,-Bstatic -ljemalloc
 STATIC_LIBS= $(CITYHASH_LDIR)/libcityhash.a
@@ -157,78 +157,78 @@ py-%:
 	$(CXX) -std=c++11 $< $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(STATIC_LIBS) -o $@
 #	$(CXX) -std=c++11 $< $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl $(STATIC_LIBS) $(TAP_LIBDIR)/libtap.a -o $@
 
-galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.a
+galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LIBDIR)/libtap.so
 	g++ -DTEST_GALERA -DDEBUG galera_1_timeout_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o galera_1_timeout_count -DGITVERSION=\"$(GIT_VERSION)\"
 
-galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.a
+galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LIBDIR)/libtap.so
 	g++ -DTEST_GALERA -DDEBUG galera_2_timeout_no_count.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o galera_2_timeout_no_count -DGITVERSION=\"$(GIT_VERSION)\"
 
 generate_set_session_csv: generate_set_session_csv.cpp
 	g++ -o generate_set_session_csv generate_set_session_csv.cpp -O0 -ggdb
 
-aurora: aurora.cpp $(TAP_LIBDIR)/libtap.a
+aurora: aurora.cpp $(TAP_LIBDIR)/libtap.so
 	g++ -DTEST_AURORA -DDEBUG aurora.cpp ../tap/SQLite3_Server.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o aurora -DGITVERSION=\"$(GIT_VERSION)\"
 
-test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.a
+test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LIBDIR)/libtap.so
 	g++ test_tokenizer-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -o test_tokenizer-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LIBDIR)/libtap.a
+test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LIBDIR)/libtap.so
 	g++ test_mysql_query_digests_stages-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -o test_mysql_query_digests_stages-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-sqlite3-t: sqlite3-t.cpp $(TAP_LIBDIR)/libtap.a
+sqlite3-t: sqlite3-t.cpp $(TAP_LIBDIR)/libtap.so
 	g++ sqlite3-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) $(LIBCOREDUMPERAR) -o sqlite3-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LIBDIR)/libtap.a
+test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LIBDIR)/libtap.so
 	g++ test_gtid_forwarding-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -o test_gtid_forwarding-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $(TAP_LIBDIR)/libtap.a
+test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $(TAP_LIBDIR)/libtap.so
 	g++ test_admin_prometheus_metrics_dump-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) -o test_admin_prometheus_metrics_dump-t -DGITVERSION=\"$(GIT_VERSION)\"
 
 create_connection_annotation: test_connection_annotation-t.cpp
 	g++ -DTEST_AURORA -DDEBUG test_connection_annotation-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o test_connection_annotation-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.a $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
+setparser_test: setparser_test.cpp $(TAP_LIBDIR)/libtap.so $(RE2_PATH)/util/test.cc $(LDIR)/set_parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
 	g++ -DDEBUG setparser_test.cpp $(RE2_PATH)/util/test.cc $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) $(WASAN) $(LIBCOREDUMPERAR) -o setparser_test -DGITVERSION=\"$(GIT_VERSION)\"
 
 setparser_test2-t: setparser_test2
 	rm setparser_test2-t || true
 	ln -s setparser_test2 setparser_test2-t
 
-setparser_test2: setparser_test2.cpp $(TAP_LIBDIR)/libtap.a $(LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
+setparser_test2: setparser_test2.cpp $(TAP_LIBDIR)/libtap.so $(LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
 	g++ -DDEBUG setparser_test2.cpp $(LDIR)/set_parser.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) $(WASAN) $(LIBCOREDUMPERAR) -o setparser_test2 -DGITVERSION=\"$(GIT_VERSION)\"
 
 setparser_test3-t: setparser_test3
 	rm setparser_test3-t || true
 	ln -s setparser_test3 setparser_test3-t
 
-setparser_test3: setparser_test3.cpp $(TAP_LIBDIR)/libtap.a $(LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
+setparser_test3: setparser_test3.cpp $(TAP_LIBDIR)/libtap.so $(LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
 	g++ -DDEBUG -DPARSERDEBUG setparser_test3.cpp $(LDIR)/set_parser.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 $(MYLIBS) $(WASAN) $(LIBCOREDUMPERAR) -o setparser_test3 -DGITVERSION=\"$(GIT_VERSION)\"
 
-CUSTOMARGS=-DGITVERSION=\"$(GIT_VERSION)\" -I$(SQLITE3_DIR) -I$(IDIR) -I$(CURL_IDIR) -I$(JSON_IDIR) -I../tap -L$(TAP_LIBDIR) -L$(CURL_LDIR) -Wl,-Bstatic -lcurl -Wl,-Bdynamic -ltap -lcpp_dotenv -lpthread -std=c++11 -lz -ldl
+CUSTOMARGS=-DGITVERSION=\"$(GIT_VERSION)\" -I$(SQLITE3_DIR) -I$(IDIR) -I$(CURL_IDIR) -I$(JSON_IDIR) -I$(SSL_IDIR) -I../tap -L$(TAP_LIBDIR) -L$(CURL_LDIR) -L$(SSL_LDIR) -Wl,-Bdynamic -ltap -lcurl -lcpp_dotenv -lssl -lcrypto -lpthread -std=c++11 -lz -ldl
 
 reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp $(TAP_LIBDIR)/libtap.so
 	$(CXX) -DDEBUG reg_test_3504-change_user_helper.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -std=c++11 $(STATIC_LIBS) -o reg_test_3504-change_user_libmariadb_helper -DGITVERSION=\"$(GIT_VERSION)\"
 
 reg_test_3504-change_user_libmysql_helper: reg_test_3504-change_user_helper.cpp
-	$(CXX) -DLIBMYSQL_HELPER reg_test_3504-change_user_helper.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o reg_test_3504-change_user_libmysql_helper
+	$(CXX) -DLIBMYSQL_HELPER reg_test_3504-change_user_helper.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o reg_test_3504-change_user_libmysql_helper
 
 test_clickhouse_server_libmysql-t: test_clickhouse_server-t.cpp
-	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o test_clickhouse_server_libmysql-t
+	$(CXX) -DLIBMYSQL_HELPER -DDEBUG test_clickhouse_server-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o test_clickhouse_server_libmysql-t
 
 reg_test_stmt_resultset_err_no_rows_libmysql-t: reg_test_stmt_resultset_err_no_rows-t.cpp
-	$(CXX) -DLIBMYSQL_HELPER reg_test_stmt_resultset_err_no_rows-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o reg_test_stmt_resultset_err_no_rows_libmysql-t
+	$(CXX) -DLIBMYSQL_HELPER reg_test_stmt_resultset_err_no_rows-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o reg_test_stmt_resultset_err_no_rows_libmysql-t
 
-reg_test_mariadb_stmt_store_result_libmysql-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.a
-	$(CXX) -DLIBMYSQL_HELPER reg_test_mariadb_stmt_store_result-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o reg_test_mariadb_stmt_store_result_libmysql-t
+reg_test_mariadb_stmt_store_result_libmysql-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.so
+	$(CXX) -DLIBMYSQL_HELPER reg_test_mariadb_stmt_store_result-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o reg_test_mariadb_stmt_store_result_libmysql-t
 
-reg_test_mariadb_stmt_store_result_async-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.a
+reg_test_mariadb_stmt_store_result_async-t: reg_test_mariadb_stmt_store_result-t.cpp $(TAP_LIBDIR)/libtap.so
 	$(CXX) -DASYNC_API reg_test_mariadb_stmt_store_result-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o reg_test_mariadb_stmt_store_result_async-t
 
-prepare_statement_err3024_libmysql-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.a
-	$(CXX) -DLIBMYSQL_HELPER prepare_statement_err3024-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -Wl,-Bdynamic -lssl -lcrypto -lmysqlclient -o prepare_statement_err3024_libmysql-t
+prepare_statement_err3024_libmysql-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.so
+	$(CXX) -DLIBMYSQL_HELPER prepare_statement_err3024-t.cpp -I/usr/include/mysql $(CUSTOMARGS) -lmysqlclient -o prepare_statement_err3024_libmysql-t
 
-prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.a
+prepare_statement_err3024_async-t: prepare_statement_err3024-t.cpp $(TAP_LIBDIR)/libtap.so
 	$(CXX) -DASYNC_API prepare_statement_err3024-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl -std=c++11 -ltap $(STATIC_LIBS) -o prepare_statement_err3024_async-t -DGITVERSION=\"$(GIT_VERSION)\"
 
-test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LIBDIR)/libtap.a
-	$(CXX) $^ $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -std=c++11 -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll -lpthread -ldl -ltap $(STATIC_LIBS) -o $@
+test_wexecvp_syscall_failures-t: test_wexecvp_syscall_failures-t.cpp $(TAP_LIBDIR)/libtap.so
+	$(CXX) test_wexecvp_syscall_failures-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) $(MYLIBS) -std=c++11 -Wl,--wrap=pipe,--wrap=fcntl,--wrap=read,--wrap=poll -lpthread -ldl -ltap $(STATIC_LIBS) -o $@
