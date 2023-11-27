@@ -30,6 +30,7 @@ all: libtap.a libtap.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
 .PHONY: clean
 clean:
 	rm -f *.o libtap.a libtap.so || true
+	find . -name '*.so' -type f -delete || true
 	find cpp-dotenv/dynamic -name '*.o' -or -name '*.a' -delete || true
 	find cpp-dotenv/static -name '*.o' -or -name '*.a' -delete || true
 
@@ -51,7 +52,7 @@ libtap.a: tap.cpp tap.h command_line.cpp command_line.h utils.cpp utils.h tap.o 
 	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
 
 libtap.so: libtap.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
-	gcc -shared -o libtap.so -Wl,--whole-archive libtap.a ../../../deps/curl/curl/lib/.libs/libcurl.a -Wl,--no-whole-archive
+	gcc -shared -o libtap.so -Wl,--whole-archive libtap.a -Wl,--no-whole-archive
 
 libssl.so.3: $(DEPS_PATH)/libssl/openssl/libssl.so.3
 	cp -a $(DEPS_PATH)/libssl/openssl/libssl.so* .
