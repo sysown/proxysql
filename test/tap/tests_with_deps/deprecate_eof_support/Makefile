@@ -54,7 +54,7 @@ TESTS_DEPS=$(TAP_LIBDIR)/libtap.a $(MARIADB_TEST_DEP)/libmariadb/libmariadbclien
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
 
-COMMONARGS1=$(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -ltap -lcpp_dotenv -Wl,--no-as-needed -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\" -DDEBUG -I$(JSON_IDIR) -lssl -lcrypto
+COMMONARGS1=$(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -Wl,--no-as-needed -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\" -DDEBUG -I$(JSON_IDIR)
 COMMONARGS=$(COMMONARGS1) $(MYLIBS)
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
