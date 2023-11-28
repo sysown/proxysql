@@ -82,6 +82,29 @@ class var_counter {
 	}
 };
 
+// Generate string containing randomly chosen characters between
+// ';' and ' ', with length between 1 and 8
+std::string generate_random_noise() {
+	// Seed the random number generator with the current time
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+	static const char characters[] = { ';', ' ' };
+	static const int numCharacters = sizeof(characters) / sizeof(char);
+
+	// max lengh of string is 8
+	const int length = std::rand() % 8 + 1;
+
+	std::string randomString;
+	randomString.reserve(length);
+
+	for (int i = 0; i < length; ++i) {
+		char randomChar = characters[std::rand() % numCharacters];
+		randomString.push_back(randomChar);
+	}
+
+	return randomString;
+}
+
 //std::unordered_map<std::string,int> unknown_var_counters;
 
 std::unordered_map<std::string,var_counter> vars_counters;
@@ -160,6 +183,7 @@ void * my_conn_thread(void *arg) {
 		diag("Thread_id: %lu, random number: %d . Query/ies: %s", mysql->thread_id, r2, testCases[r2].command.c_str());
 		std::vector<std::string> commands = split(testCases[r2].command.c_str(), ';');
 		for (auto c : commands) {
+			c += generate_random_noise();
 			if (mysql_query(mysql, c.c_str())) {
 				if (silent==0) {
 					fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", c.c_str(), mysql_errno(mysql), mysql_error(mysql));
