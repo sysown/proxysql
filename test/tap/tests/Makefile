@@ -155,6 +155,7 @@ OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) -D
 
 ### main targets
 
+.DEFAULT: default
 .PHONY: default
 default: all
 
@@ -164,7 +165,7 @@ all: tests
 debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 debug: tests
 
-tests: build_test_deps
+#tests: build_test_deps
 tests: tests-cpp \
 	tests-php \
 	tests-py \
@@ -190,7 +191,7 @@ testaurora: aurora
 
 ### test deps targets
 
-build_test_deps: $(TAP_LDIR)/libtap.so $(TEST_MARIADB_LDIR)/libmariadbclient.a $(TEST_MYSQL_LDIR)/libmysqlclient.a
+#build_test_deps: $(TAP_LDIR)/libtap.so $(TEST_MARIADB_LDIR)/libmariadbclient.a $(TEST_MYSQL_LDIR)/libmysqlclient.a
 
 $(TAP_LDIR)/libtap.so:
 	cd $(TAP_PATH) && CC=${CC} CXX=${CXX} ${MAKE} 

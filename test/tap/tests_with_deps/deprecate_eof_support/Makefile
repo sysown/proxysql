@@ -7,7 +7,8 @@ ifndef GIT_VERSION
 endif
 
 
-PROXYSQL_PATH := ../../../..
+PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
+PROXYSQL_IDIR := $(PROXYSQL_PATH)/include
 PROXYSQL_LDIR := $(PROXYSQL_PATH)/lib
 
 DEPS_PATH := $(PROXYSQL_PATH)/deps
@@ -16,7 +17,7 @@ MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR := $(MARIADB_PATH)/include
 MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
 
-TAP_PATH := ../../tap
+TAP_PATH := $(PROXYSQL_PATH)/test/tap/tap
 TAP_IDIR := $(TAP_PATH)
 TAP_LDIR := $(TAP_PATH)
 
@@ -51,9 +52,9 @@ ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address
 endif
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV)
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WGCOV)
 
-IDIRS := -I$(PROXYSQL_PATH)/include
+IDIRS := -I$(PROXYSQL_IDIR)
 IDIRS += -I$(DEPS_PATH)/sqlite3/sqlite3
 IDIRS += -I$(DEPS_PATH)/json
 IDIRS += -I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/core/include
@@ -69,6 +70,7 @@ IDIRS += -I$(DEPS_PATH)/curl/curl/include
 
 ### main targets
 
+.DEFAULT: default
 .PHONY: default
 default: all
 
@@ -77,14 +79,14 @@ all: tests
 
 .PHONY: debug
 debug: DEBUG := -DDEBUG
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: tests
 
 
 ### test deps targets
 
 #.PHONY: build_test_deps
-build_test_deps: $(TAP_LDIR)/libtap.so $(TEST_MARIADB_LDIR)/libmariadbclient.a $(TEST_MYSQL_LDIR)/libmysqlclient.a
+#build_test_deps: $(TAP_LDIR)/libtap.so $(TEST_MARIADB_LDIR)/libmariadbclient.a $(TEST_MYSQL_LDIR)/libmysqlclient.a
 
 $(TAP_LDIR)/libtap.so:
 	cd $(TAP_PATH) && CC=${CC} CXX=${CXX} ${MAKE} 
@@ -98,8 +100,8 @@ $(TEST_MYSQL_LDIR)/libmysqlclient.a:
 
 ### test and helper targets
 
-tests: build_test_deps
-tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
+#tests: build_test_deps
+tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) ok_packet_mixed_queries-t fwd_eof_query fwd_eof_ok_query
 
 COMMONARGS := $(OPT) -I$(TAP_IDIR) -L$(TAP_LDIR) -ltap -lcpp_dotenv -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 

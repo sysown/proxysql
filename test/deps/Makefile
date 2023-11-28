@@ -1,10 +1,11 @@
 #!/bin/make -f
 
 
-PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd )
+PROXYSQL_PATH := $(shell while [ ! -f ./src/proxysql_global.cpp ]; do cd ..; done; pwd)
 DEPS_PATH := $(PROXYSQL_PATH)/deps
 
 
+.DEFAULT: default
 .PHONY: default
 default: all
 
@@ -49,16 +50,16 @@ mysql_client: mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a
 
 ### clean targets
 
-.SILENT: cleanall
 .PHONY: cleanall
+.SILENT: cleanall
 cleanall:
 	cd mariadb-connector-c && rm -rf mariadb-connector-c-*/ || true
 	cd mysql-connector-c && rm -rf mysql-5.7.*/ || true
 
-.SILENT: clean
 .PHONY: clean
+.SILENT: clean
 clean:
-	cd mariadb-connector-c/mariadb-connector-c && $(MAKE) clean || true
+	cd mariadb-connector-c/mariadb-connector-c && $(MAKE) --no-print-directory clean || true
 	cd mariadb-connector-c/mariadb-connector-c && rm -f CMakeCache.txt || true
-	cd mysql-connector-c/mysql-connector-c && $(MAKE) clean || true
+	cd mysql-connector-c/mysql-connector-c && $(MAKE) --no-print-directory clean || true
 	cd mysql-connector-c/mysql-connector-c && rm -f CMakeCache.txt || true

@@ -1,15 +1,15 @@
 #!/bin/make -f
 
 
-UNAME_S := $(shell uname -s)
-UNAME_MS := $(word 2, $(shell uname -ms))
+SYS_KERN := $(shell uname -s)
+SYS_ARCH := $(shell uname -m)
 
 CENTOSVER := Unknown
 ifneq (,$(wildcard /etc/system-release))
 	CENTOSVER := $(shell rpm --eval %rhel)
 endif
 
-IS_ARM := $(if $(findstring aarch64, $(arch)),true,false)
+IS_ARM := $(if $(findstring aarch64, $(SYS_ARCH)),true,false)
 IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
 
 # to compile libmariadb_client with support for valgrind enabled, run:
@@ -39,7 +39,7 @@ STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPL
 
 
 targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
-ifeq ($(UNAME_S),Linux)
+ifeq ($(SYS_KERN),Linux)
 	targets += coredumper
 endif
 ifeq ($(PROXYSQLCLICKHOUSE),1)
@@ -60,7 +60,7 @@ ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
 	cd libinjection/libinjection && patch -p1 < ../libinjection_sqli.c.patch
 endif
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(SYS_KERN),Darwin)
 	sed -i '' 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
 else
 	sed -i -e 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
@@ -91,7 +91,7 @@ libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmi
 	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
 	cd libhttpserver/libhttpserver && sed -i -e 's/<microhttpd.h>/"microhttpd.h"/' src/httpserver/http_utils.hpp
-ifeq ($(UNAME_S),FreeBSD)
+ifeq ($(SYS_KERN),FreeBSD)
 	cd libhttpserver/libhttpserver && sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
@@ -123,7 +123,7 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && tar -zxf curl-*.tar.gz
 #	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
 	cd curl/curl && autoreconf -fi
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(SYS_KERN),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
 	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=yes && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl CC=${CC} CXX=${CXX} ${MAKE}
@@ -284,7 +284,7 @@ re2/re2/obj/libre2.a:
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
 	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(SYS_KERN),Darwin)
 	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 #	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 else

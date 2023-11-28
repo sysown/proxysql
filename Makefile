@@ -31,14 +31,15 @@ O2 := -O2
 O1 := -O1
 O3 := -O3 -mtune=native
 
-EXTRALINK := #-pg
-ALL_DEBUG := -ggdb -DDEBUG
-NO_DEBUG :=
-DEBUG := ${ALL_DEBUG}
+#EXTRALINK := #-pg
+ALL_DEBUG := $(O0) -ggdb -DDEBUG
+NO_DEBUG := $(O2) -ggdb
+DEBUG := $(ALL_DEBUG)
+CURVER ?= 2.6.0
 #export DEBUG
 #export EXTRALINK
 export MAKE
-export CURVER=${CURVER:-2.6.0}
+export CURVER
 
 ### detect compiler support for c++11/17
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
@@ -65,7 +66,7 @@ endif
 ifeq ($(OS),Darwin)
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
-export MAKEOPT="-j ${NPROCS}"
+export MAKEOPT := -j${NPROCS}
 
 ### systemd
 SYSTEMD := 0
@@ -80,6 +81,7 @@ GROUPCHECK := $(shell getent group proxysql)
 
 ### main targets
 
+.DEFAULT: default
 .PHONY: default
 default: build_src
 
@@ -185,11 +187,13 @@ build_src_testall: build_lib_testall
 build_lib_testall: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_tap_test
 build_tap_test: build_tap_tests
 .PHONY: build_tap_tests
 build_tap_tests: build_src_clickhouse
 	cd test/tap && OPTZ="${O0} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_tap_test_debug
 build_tap_test_debug: build_tap_tests_debug
 .PHONY: build_tap_tests_debug
 build_tap_tests_debug: build_src_debug_clickhouse
@@ -230,6 +234,8 @@ build_src_debug_clickhouse: build_lib_debug_clickhouse
 
 ### packaging targets
 
+SYS_KERN := $(shell uname -s)
+#SYS_DIST := $(shell source /etc/os-release &>/dev/null; if [ -z ${NAME} ]; then head -1 /etc/redhat-release; else echo ${NAME}; fi | awk '{ print $1 })
 SYS_ARCH := $(shell uname -m)
 REL_ARCH := $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH := .$(SYS_ARCH)
