@@ -9,7 +9,7 @@ on:
 #  cancel-in-progress: true
 
 jobs:
-  build-n-test:
+  test:
     runs-on: ubuntu-22.04
     steps:
 
@@ -17,14 +17,6 @@ jobs:
       run: |
         sudo apt-get update -y
         sudo apt-get install -y sysbench gettext
-
-#    - name: Checkout proxysql
-#      uses: actions/checkout@v3
-#      with:
-#        repository: 'sysown/proxysql'
-##        ref: 'v2.x'
-#        fetch-depth: 0
-#        path: 'proxysql'
 
     - name: Cache restore src
       id: cache-src
@@ -43,17 +35,6 @@ jobs:
         fetch-depth: 0
         path: 'jenkins-build-scripts'
         token: ${{ secrets.GH_TOKEN }}
-
-#    - name: Set GIT_VERSION
-#      run: |
-#        cd proxysql/
-#        git fetch --tags --force
-#        echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
-
-#    - name: Build
-#      run: |
-#        cd proxysql/
-#        make ubuntu22-dbg
 
     - name: Docker-hoster
       run: |
