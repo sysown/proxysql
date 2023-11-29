@@ -20,6 +20,7 @@ jobs:
 
     - name: Concurency probe
       run: |
+        set -x
         # probe random times for lock to avoid race condition
         while [[ $(( $RANDOM % 60 )) -ne 0 ]]; do
           echo "Probing lock '${LOCK^^}' ..."
