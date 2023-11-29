@@ -206,7 +206,7 @@ jobs:
           echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
           exit -1
         else
-          echo "Releasing lock '${LOCK}'"
+          echo "Releasing lock '${LOCK}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
           gh variable -R sysown/proxysql delete ${LOCK} || true
         fi
 
