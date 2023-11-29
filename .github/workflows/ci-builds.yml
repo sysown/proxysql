@@ -20,25 +20,22 @@ jobs:
 
     - name: Concurency locking
       run: |
-        # probe random times for lock to avoid race condition
-        #while [[ $(( $RANDOM % 30 )) -ne 0 && -z ${PROBE} ]]; do
-        #  echo "Probing lock '${LOCK^^}' ..."
-        #  sleep 0.3
-        #  PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        #done
-
         # lock fast
         echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
         gh variable -R sysown/proxysql list | grep -i ${LOCK} || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
 
         # wait for unlock
-        sleep $(( 5 + $RANDOM % 10 ))
+        sleep 5
         PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        while [[ ! ( -z ${PROBE} || ${PROBE} =~ ${{ github.workflow }} ) ]]; do
-          echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
-          sleep $(( 5 + $RANDOM % 10 ))
-          PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        done
+        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
+          while [[ ! -z ${PROBE} ) ]]; do
+            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
+            sleep 15
+            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+          done
+        else
+          echo "Aquired lock '${LOCK^^}' by '${{ github.workflow }}'"
+        fi
 
   builds:
     runs-on: ubuntu-22.04
@@ -195,13 +192,13 @@ jobs:
       run: |
         # delete lock
         PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        if [[ ! -z ${PROBE} ]]; then
-          if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-            echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-            exit -1
-          else
-            echo "Releasing lock '${LOCK}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-            gh variable -R sysown/proxysql delete ${LOCK} || true
-          fi
+        if [[ ${PROBE} =~ ${{ github.workflow }} ]]; then
+          echo "Releasing lock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+          gh variable -R sysown/proxysql delete ${LOCK} || true
+        elif [[ ! -z ${PROBE} ]]; then
+          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+          exit -1
+        else
+          echo "Not locked '${LOCK^^}'"
         fi
 
