@@ -202,11 +202,13 @@ jobs:
       run: |
         # delete lock
         PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        if [[ ! -z ${PROBE} && ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-          exit -1
-        else
-          echo "Releasing lock '${LOCK}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-          gh variable -R sysown/proxysql delete ${LOCK} || true
+        if [[ ! -z ${PROBE} ]]; then
+          if [[ ${PROBE} =~ ${{ github.workflow }} ]]; then
+            echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+            exit -1
+          else
+            echo "Releasing lock '${LOCK}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+            gh variable -R sysown/proxysql delete ${LOCK} || true
+          fi
         fi
 
