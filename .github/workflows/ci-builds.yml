@@ -18,33 +18,28 @@ jobs:
 
     steps:
 
-    - name: Concurency probe
+    - name: Concurency locking
       run: |
         # probe random times for lock to avoid race condition
         while [[ $(( $RANDOM % 60 )) -ne 0 ]]; do
           echo "Probing lock '${LOCK^^}' ..."
           PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
           if [[ ! -z ${PROBE} ]]; then
-            echo "Already locked '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
             break
           fi
           sleep 1
         done
 
-    - name: Concurency lock
-      run: |
-        # wait for unlock otherwise lock
-        if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
+        # wait for unlock
+        while [[ ! -z ${PROBE} ]]; do
+          echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
+          sleep $(( 5 + $RANDOM % 10 ))
           PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-          while [[ ! -z ${PROBE} ]]; do
-            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk \"{ print $2 }\")'"
-            sleep $(( 5 + $RANDOM % 10 ))
-            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-          done
-        else
-          echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-          gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
-        fi
+        done
+
+        # lock now
+        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
+        gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
 
   builds:
     runs-on: ubuntu-22.04
