@@ -28,7 +28,7 @@ jobs:
         sleep 5
         PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
         if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-          while [[ ! -z ${PROBE} ) ]]; do
+          while [[ ! -z ${PROBE} ]]; do
             echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
             sleep 15
             PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
