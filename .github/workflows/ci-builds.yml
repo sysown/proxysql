@@ -27,7 +27,7 @@ jobs:
           #if [[ -z ${PROBE} ]]; then
             #echo "Already locked '${LOCK^^}' by '$(echo ${PROBE} | awk \"{ print $2 }\")'"
           if [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; then
-            echo "Already locked '${LOCK^^}' by '$(gh variable -R sysown/proxysql list | grep -i ${LOCK} | awk \\"{ print $2 }\\")'"
+            echo "Already locked '${LOCK^^}' by '$(gh variable -R sysown/proxysql list | grep -i ${LOCK} | awk \'{ print $2 }\')'"
             break
           fi
           sleep 1
@@ -41,7 +41,7 @@ jobs:
           #while [[ -z ${PROBE} ]]; do
             #echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk \"{ print $2 }\")'"
           while [[ $(gh variable -R sysown/proxysql list | grep -i ${LOCK}) ]]; do
-            echo "Wating for unlock '${LOCK^^}' by '$(gh variable -R sysown/proxysql list | grep -i ${LOCK} | awk \\"{ print $2 }\\")'"
+            echo "Wating for unlock '${LOCK^^}' by '$(gh variable -R sysown/proxysql list | grep -i ${LOCK} | awk \'{ print $2 }\')'"
             sleep $(( 5 + $RANDOM % 10 ))
             #PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK}) || echo ''"
           done
