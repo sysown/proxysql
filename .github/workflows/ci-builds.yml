@@ -18,7 +18,7 @@ jobs:
 
     steps:
 
-    - name: Concurency check
+    - name: Concurency locking
       run: |
         # probe random times for lock to avoid race condition
         #while [[ $(( $RANDOM % 30 )) -ne 0 && -z ${PROBE} ]]; do
@@ -27,36 +27,18 @@ jobs:
         #  PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
         #done
 
+        # lock fast
+        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
+        gh variable -R sysown/proxysql list | grep -i ${LOCK} || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
+
         # wait for unlock
-        sleep $(( $RANDOM % 10 ))
+        sleep $(( 5 + $RANDOM % 10 ))
         PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        while [[ ! -z ${PROBE} ]]; do
+        while [[ ! ( -z ${PROBE} || ${PROBE} =~ ${{ github.workflow }} ) ]]; do
           echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
           sleep $(( 5 + $RANDOM % 10 ))
           PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
         done
-
-    - name: Cache check
-      id: cache-check
-      uses: actions/cache/restore@v3
-      with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
-        lookup-only: true
-        path: |
-          proxysql/tap-matrix*
-
-    - name: Concurency lock
-      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
-      run: |
-        # set lock
-        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-        gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
-        sleep 1
-        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-          exit -1
-        fi
 
   builds:
     runs-on: ubuntu-22.04
