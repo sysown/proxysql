@@ -27,22 +27,24 @@ jobs:
         #  PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
         #done
 
-        # wait for unlock
+        # wait for unlock, otherwise lock
+        sleep $(( $RANDOM % 10 ))
         PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        while [[ ! -z ${PROBE} ]]; do
-          echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
-          sleep $(( 5 + $RANDOM % 10 ))
+        if [[ ! -z ${PROBE} ]]; then
+          while [[ ! -z ${PROBE} ]]; do
+            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
+            sleep $(( 5 + $RANDOM % 10 ))
+            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+          done
+        else
+          echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
+          gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
+          sleep 1
           PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        done
-
-        # lock now
-        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-        gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
-        sleep 1
-        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-          exit -1
+          if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
+            echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+            exit -1
+          fi
         fi
 
   builds:
@@ -200,7 +202,7 @@ jobs:
       run: |
         # delete lock
         PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
+        if [[ ! -z ${PROBE} && ! ${PROBE} =~ ${{ github.workflow }} ]]; then
           echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
           exit -1
         else
