@@ -9,7 +9,7 @@ on:
 #  cancel-in-progress: true
 
 jobs:
-  test:
+  tests:
     runs-on: ubuntu-22.04
     steps:
     
