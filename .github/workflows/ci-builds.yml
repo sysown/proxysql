@@ -21,13 +21,13 @@ jobs:
     - name: Concurency locking
       run: |
         # probe random times for lock to avoid race condition
-        while [[ $(( $RANDOM % 60 )) -ne 0 ]]; do
+        while [[ $(( $RANDOM % 60 )) -ne 0 and -z ${PROBE} ]]; do
           echo "Probing lock '${LOCK^^}' ..."
-          PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-          if [[ ! -z ${PROBE} ]]; then
-            break
-          fi
           sleep 1
+          PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+          #if [[ ! -z ${PROBE} ]]; then
+          #  break
+          #fi
         done
 
         # wait for unlock
