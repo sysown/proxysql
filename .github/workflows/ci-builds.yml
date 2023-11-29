@@ -18,7 +18,7 @@ jobs:
 
     steps:
 
-    - name: Concurency locking
+    - name: Concurency check
       run: |
         # probe random times for lock to avoid race condition
         #while [[ $(( $RANDOM % 30 )) -ne 0 && -z ${PROBE} ]]; do
@@ -27,24 +27,35 @@ jobs:
         #  PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
         #done
 
-        # wait for unlock, otherwise lock
+        # wait for unlock
         sleep $(( $RANDOM % 10 ))
         PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        if [[ ! -z ${PROBE} ]]; then
-          while [[ ! -z ${PROBE} ]]; do
-            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
-            sleep $(( 5 + $RANDOM % 10 ))
-            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-          done
-        else
-          echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-          gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
-          sleep 1
+        while [[ ! -z ${PROBE} ]]; do
+          echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
+          sleep $(( 5 + $RANDOM % 10 ))
           PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-          if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-            echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-            exit -1
-          fi
+        done
+
+    - name: Cache check
+      id: cache-check
+      uses: actions/cache/restore@v3
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
+        lookup-only: true
+        path: |
+          proxysql/tap-matrix*
+
+    - name: Concurency lock
+      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+      run: |
+        # set lock
+        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
+        gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
+        sleep 1
+        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
+          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+          exit -1
         fi
 
   builds:
