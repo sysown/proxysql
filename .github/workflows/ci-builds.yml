@@ -22,7 +22,7 @@ jobs:
       run: |
         # lock fast
         echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-        gh variable -R sysown/proxysql list | grep -i ${LOCK} || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}'
+        gh variable -R sysown/proxysql list | grep -i ${LOCK} >/dev/null || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}' >/dev/null
 
         # wait for unlock
         sleep 5
