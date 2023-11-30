@@ -116,6 +116,7 @@ libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmi
 #endif
 	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
+	cd libhttpserver/libhttpserver && patch -p0 < ../expose_raw_url.patch
 	cd libhttpserver/libhttpserver && patch -p0 < ../replace_static_global_strings.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
