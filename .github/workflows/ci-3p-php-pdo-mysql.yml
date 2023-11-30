@@ -71,7 +71,7 @@ jobs:
         else
           echo "Baseline PASS: FAILS = ${FAILS}"
           if [[ ${{ github.ref_name }} == v2.x ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_PHP_PDO_MYSQL -b '${FAILS}'
+            gh variable -R sysown/proxysql set BASELINE_3P_PHP_PDO_MYSQL -b "${FAILS}"
           fi
           exit 0
         fi
