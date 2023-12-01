@@ -32,6 +32,12 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 #define CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA 0x00200000
 #endif
 
+static std::unordered_map<std::string, std::string> users_mappings = {
+	{"sbtest" , "root"},
+	{"user1fe" , "user1be"},
+	{"user2fe" , "user2be"},
+};
+
 extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
 MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
 
@@ -2222,6 +2228,25 @@ __exit_do_auth:
 			userinfo->username=strdup((const char *)user);
 		userinfo->password=strdup((const char *)password);
 		if (db) userinfo->set_schemaname(db,strlen(db));
+		auto it = users_mappings.find(userinfo->username);
+		if (it != users_mappings.end()) {
+			ret = false; // by default we assume that the mapping will fail
+			string backend_username = it->second;
+			free(userinfo->username);
+			userinfo->username = strdup(backend_username.c_str());
+			password=GloMyAuth->lookup((char *)backend_username.c_str(), USERNAME_BACKEND, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+			if (password != NULL) {
+				if (password[0]!='*') { // clear text password
+					free(userinfo->password);
+					userinfo->password  = strdup((const char *)password);
+					ret = true; // the mapping succeded
+				} else {
+					proxy_error("The password for backend user %s (associated to frontend user %s) is not in clear text", backend_username.c_str(), user);
+				}
+			} else {
+				proxy_error("Unable to find the password for backend user %s (associated to frontend user %s)", backend_username.c_str(), user);
+			}
+		}
 	} else {
 		// we always duplicate username and password, or crashes happen
 		if (!userinfo->username) // if set already, ignore
