@@ -64,16 +64,28 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_php-pdo-mysql
+        echo "============================================================================="
+        echo "github.ref_name = ${{ github.ref_name }}"
+        echo "vars.BASELINE_3P_PHP_PDO_MYSQL = ${{ vars.BASELINE_3P_PHP_PDO_MYSQL }}"
+        echo "BASELINE = ${BASELINE}"
+        echo "============================================================================="
+        echo ls -l logs/*run-tests.log
+        echo "============================================================================="
+        cat logs/*run-tests.log
+        echo "============================================================================="
         FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
+        if [[ -z ${FAILS} ]]; then
+          echo "Baseline WARN: no results found"
+          exit 0
+        fi
         if [[ ${FAILS} -gt ${BASELINE} ]]; then
           echo "Baseline FAIL: FAILS = ${FAILS}"
           exit 1
         else
           echo "Baseline PASS: FAILS = ${FAILS}"
           if [[ ${{ github.ref_name }} == v2.x ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_PHP_PDO_MYSQL -b "${FAILS}"
+            gh variable -R sysown/proxysql set BASELINE_3P_PHP_PDO_MYSQL -b "${FAILS:-10000}"
           fi
-          exit 0
         fi
     
     - name: Archive artifacts logs
