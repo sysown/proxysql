@@ -64,7 +64,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_php-pdo-mysql
-        FAILS=$(cat logs/*run-tests.log | grep 'Tests failed    :' | awk '{ print $3 }')
+        FAILS=$(cat logs/*run-tests.log | grep 'Tests failed    :' | awk '{ print $4 }')
         if [[ -z ${FAILS} ]]; then
           echo "Baseline WARN: no results found"
           exit 0
