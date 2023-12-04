@@ -64,16 +64,7 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_php-pdo-mysql
-        echo "============================================================================="
-        echo "github.ref_name = ${{ github.ref_name }}"
-        echo "vars.BASELINE_3P_PHP_PDO_MYSQL = ${{ vars.BASELINE_3P_PHP_PDO_MYSQL }}"
-        echo "BASELINE = ${BASELINE}"
-        echo "============================================================================="
-        echo ls -l logs/*run-tests.log
-        echo "============================================================================="
-        cat logs/*run-tests.log
-        echo "============================================================================="
-        FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
+        FAILS=$(cat logs/*run-tests.log | grep 'Tests failed    :' | awk '{ print $3 }')
         if [[ -z ${FAILS} ]]; then
           echo "Baseline WARN: no results found"
           exit 0
