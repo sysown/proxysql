@@ -50,6 +50,8 @@ jobs:
             type: ''
           - dist: 'centos7'
             type: ''
+          - dist: 'debian11'
+            type: ''
           - dist: 'fedora37'
             type: '-clang'
           - dist: 'ubuntu20'
@@ -138,7 +140,7 @@ jobs:
 
     - name: Cache save bin
       id: cache-save-bin
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v3
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
