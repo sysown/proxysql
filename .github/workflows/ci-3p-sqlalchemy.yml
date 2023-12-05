@@ -40,6 +40,8 @@ jobs:
         set +e
         
         cd proxysql_3p_testing/
+        ls -al ./proxysql
+        mkdir -p ./proxysql/binaries/
         mv ../proxysql/binaries/* ./proxysql/binaries/
         git sparse-checkout list
         ./setup.sh
