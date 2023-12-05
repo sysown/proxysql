@@ -1,9 +1,9 @@
 #ifndef __CLASS_PROXYSQL_ADMIN_H
 #define __CLASS_PROXYSQL_ADMIN_H
 
-#include <prometheus/exposer.h>
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
+#include "prometheus/exposer.h"
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 
 #include "query_processor.h"
 #include "proxy_defines.h"

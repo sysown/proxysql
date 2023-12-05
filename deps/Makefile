@@ -1,72 +1,57 @@
 #!/bin/make -f
 
 
-UNAME_S := $(shell uname -s)
-UNAME_MS := $(word 2, $(shell uname -ms))
+SYS_KERN := $(shell uname -s)
+SYS_ARCH := $(shell uname -m)
 
+CENTOSVER := Unknown
 ifneq (,$(wildcard /etc/system-release))
 	CENTOSVER := $(shell rpm --eval %rhel)
-else
-	CENTOSVER := Unknown
 endif
 
-IS_ARM = $(if $(findstring aarch64, $(arch)),true,false)
-IS_CENTOS = $(if $(findstring Unknown, $(CENTOSVER)),false,true)
+IS_ARM := $(if $(findstring aarch64, $(SYS_ARCH)),true,false)
+IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
-#
-USEVALGRIND := $(shell echo $(USEVALGRIND))
 
-PROXYDEBUG := $(shell echo $(PROXYDEBUG))
 ifeq ($(PROXYDEBUG),1)
-MYCFLAGS=-O0
-MYJEOPT=--enable-xmalloc --enable-prof --enable-fill --enable-debug
-
-ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
-	MYJEOPT+=--with-lg-page=16
-endif
-
+	MYCFLAGS := -O0
+	MYJEOPT := --enable-xmalloc --enable-prof --enable-fill --enable-debug
 else
-MYCFLAGS=-O2
-MYJEOPT=--enable-xmalloc --enable-prof
-
+	MYCFLAGS := -O2
+	MYJEOPT := --enable-xmalloc --enable-prof
+endif
 ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
-	MYJEOPT+=--with-lg-page=16
+	MYJEOPT += --with-lg-page=16
 endif
 
+
+### detect compiler support for c++11/17
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201703L)
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201103L)
+$(error Compiler must support at least c++11)
 endif
+endif
+STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
-# determine good compiler version for stdc++17
-#IS_CXX17 := 0
-#ifeq ($(CXX),clang++)
-#	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-#	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-#ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
-#	IS_CXX17 := 1
-#endif
-#else
-#	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-#	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-#ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
-#	IS_CXX17 := 1
-#endif
-#endif
-
-
-PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
-tmpdefault=libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
-ifeq ($(UNAME_S),Linux)
-  tmpdefault+= coredumper
+targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+ifeq ($(SYS_KERN),Linux)
+	targets += coredumper
 endif
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-  tmpdefault+= clickhouse-cpp
+	targets += clickhouse-cpp
 endif
-default: $(tmpdefault)
+
+
+default: $(targets)
 .PHONY: default
 
 
+### deps targets
 
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
@@ -75,7 +60,7 @@ ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
 	cd libinjection/libinjection && patch -p1 < ../libinjection_sqli.c.patch
 endif
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(SYS_KERN),Darwin)
 	sed -i '' 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
 else
 	sed -i -e 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
@@ -93,31 +78,21 @@ libssl/openssl/libssl.a:
 #	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
-	cd libssl/openssl && ln -s . lib # curl wants this path
+	cd libssl/openssl && ln -fsT . lib # curl wants this path
 
 libssl: libssl/openssl/libssl.a
 
 
-MIN_VERSION := 4.9.0
-GCC_VERSION := $(shell gcc -dumpversion)
-SORTED_VERSIONS := $(shell echo -e "$(GCC_VERSION)\n$(MIN_VERSION)" | sort -V)
-
-REQUIRE_PATCH = false
-ifeq ($(MIN_VERSION),$(lastword $(SORTED_VERSIONS)))
-	REQUIRE_PATCH = true
-endif
-
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
 	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
-#ifeq ($(REQUIRE_PATCH), true)
 	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../re2_regex.patch
-#endif
 	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
-ifeq ($(UNAME_S),FreeBSD)
-	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
+	cd libhttpserver/libhttpserver && sed -i -e 's/<microhttpd.h>/"microhttpd.h"/' src/httpserver/http_utils.hpp
+ifeq ($(SYS_KERN),FreeBSD)
+	cd libhttpserver/libhttpserver && sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
 	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false
@@ -148,7 +123,7 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && tar -zxf curl-*.tar.gz
 #	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
 	cd curl/curl && autoreconf -fi
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(SYS_KERN),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
 	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=yes && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl CC=${CC} CXX=${CXX} ${MAKE}
@@ -184,17 +159,9 @@ lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-#ifeq ($(IS_CXX17), 1)
-#	echo ">>> Clickhouse CXX17"
-	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
+	cd clickhouse-cpp && ln -fsT clickhouse-cpp-2.3.0 clickhouse-cpp
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
-#else
-#	echo ">>> Clickhouse CXX11"
-#	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
-#	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
-#	cd clickhouse-cpp && sed -i -e 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
-#endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -222,8 +189,6 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
-
-WITHASAN := $(shell echo $(WITHASAN))
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
@@ -319,11 +284,11 @@ re2/re2/obj/libre2.a:
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
 	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
-ifeq ($(UNAME_S),Darwin)
-	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -std=c++11 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
+ifeq ($(SYS_KERN),Darwin)
+	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 #	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 else
-	cd re2/re2 && sed -i -e 's/-O3 -g/-O3 -g -std=c++11 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
+	cd re2/re2 && sed -i -e 's/-O3 -g/-O3 -g ${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 #	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 endif
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
@@ -341,6 +306,7 @@ pcre/pcre/.libs/libpcre.a:
 pcre: pcre/pcre/.libs/libpcre.a
 
 
+### clean targets
 
 cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true

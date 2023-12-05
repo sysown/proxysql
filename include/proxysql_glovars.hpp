@@ -5,7 +5,7 @@
 #define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
 
 #include <memory>
-#include <prometheus/registry.h>
+#include "prometheus/registry.h"
 
 #include "configfile.hpp"
 #include "proxy_defines.h"

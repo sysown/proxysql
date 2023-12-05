@@ -19,13 +19,15 @@
 #include <stdio.h>
 
 #include "mysql.h"
-#include "mysql/mysqld_error.h"
+#include "mysqld_error.h"
 
-#include <proxysql_utils.h>
+#include "proxysql_utils.h"
 
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
+
+#include "MySQL_Protocol.h"
 
 using std::pair;
 using std::string;

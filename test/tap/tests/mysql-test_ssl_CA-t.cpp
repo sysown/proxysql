@@ -5,7 +5,7 @@
 
 #include <string>
 #include <sstream>
-#include <mysql.h>
+#include "mysql.h"
 #include <dirent.h>
 
 #include "tap.h"

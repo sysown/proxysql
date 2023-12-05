@@ -48,8 +48,8 @@
 #include <fstream>
 
 #include <libconfig.h>
-#include <proxysql_utils.h>
-#include <mysql.h>
+#include "proxysql_utils.h"
+#include "mysql.h"
 
 #include "json.hpp"
 #include "tap.h"

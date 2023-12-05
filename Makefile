@@ -9,11 +9,9 @@
 ### export GIT_VERSION=2.x-dev
 ### ```
 
-ifndef GIT_VERSION
-GIT_VERSION := $(shell git describe --long --abbrev=7)
+GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
 $(error GIT_VERSION is not set)
-endif
 endif
 
 ### NOTES:
@@ -28,26 +26,38 @@ endif
 ###
 ### ** to use on-demand coredump generation feature, compile code without ASAN option (WITHASAN=0).
 
-O0=-O0
-O2=-O2
-O1=-O1
-O3=-O3 -mtune=native
-#OPTZ=$(O2)
-EXTRALINK=#-pg
-ALL_DEBUG=-ggdb -DDEBUG
-NO_DEBUG=
-DEBUG=${ALL_DEBUG}
+O0 := -O0
+O2 := -O2
+O1 := -O1
+O3 := -O3 -mtune=native
+
+#EXTRALINK := #-pg
+ALL_DEBUG := $(O0) -ggdb -DDEBUG
+NO_DEBUG := $(O2) -ggdb
+DEBUG := $(ALL_DEBUG)
+CURVER ?= 2.6.0
 #export DEBUG
-#export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.6.0
+export CURVER
+
+### detect compiler support for c++11/17
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201703L)
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201103L)
+$(error Compiler must support at least c++11)
+endif
+endif
+STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
+
+### detect distro
+DISTRO := Unknown
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell awk -F= '/^NAME/{print $$2}' /etc/os-release)
-else
-	DISTRO := Unknown
 endif
 
+### multiprocessing
 NPROCS := 1
 OS := $(shell uname -s)
 ifeq ($(OS),Linux)
@@ -56,20 +66,22 @@ endif
 ifeq ($(OS),Darwin)
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
+export MAKEOPT := -j${NPROCS}
 
-export MAKEOPT=-j ${NPROCS}
-
+### systemd
+SYSTEMD := 0
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
-	SYSTEMD=1
-else
-	SYSTEMD=0
+	SYSTEMD := 1
 endif
+
+### check user/group
 USERCHECK := $(shell getent passwd proxysql)
 GROUPCHECK := $(shell getent group proxysql)
 
 
 ### main targets
 
+.DEFAULT: default
 .PHONY: default
 default: build_src
 
@@ -121,7 +133,7 @@ build_src: build_lib
 
 .PHONY: build_deps_debug
 build_deps_debug:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug
 build_lib_debug: build_deps_debug
@@ -176,11 +188,15 @@ build_lib_testall: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_tap_test
-build_tap_test: build_src
-	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+build_tap_test: build_tap_tests
+.PHONY: build_tap_tests
+build_tap_tests: build_src_clickhouse
+	cd test/tap && OPTZ="${O0} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_tap_test_debug
-build_tap_test_debug: build_src_debug
+build_tap_test_debug: build_tap_tests_debug
+.PHONY: build_tap_tests_debug
+build_tap_tests_debug: build_src_debug_clickhouse
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
 .PHONY: build_src_debug
@@ -193,7 +209,11 @@ build_deps_clickhouse:
 
 .PHONY: build_deps_debug_clickhouse
 build_deps_debug_clickhouse:
+ifeq ($(findstring build_tap_test,$(MAKECMDGOALS)),)
 	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+else
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+endif
 
 .PHONY: build_lib_clickhouse
 build_lib_clickhouse: build_deps_clickhouse
@@ -214,6 +234,8 @@ build_src_debug_clickhouse: build_lib_debug_clickhouse
 
 ### packaging targets
 
+SYS_KERN := $(shell uname -s)
+#SYS_DIST := $(shell source /etc/os-release &>/dev/null; if [ -z ${NAME} ]; then head -1 /etc/redhat-release; else echo ${NAME}; fi | awk '{ print $1 })
 SYS_ARCH := $(shell uname -m)
 REL_ARCH := $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH := .$(SYS_ARCH)
@@ -281,6 +303,8 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
+	cd test/deps && ${MAKE} clean
+	rm -f pkgroot || true
 
 .PHONY: cleanall
 cleanall:
@@ -288,9 +312,11 @@ cleanall:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
+	cd test/deps && ${MAKE} cleanall
 	rm -f binaries/*deb || true
 	rm -f binaries/*rpm || true
 	rm -f binaries/*id-hash || true
+	rm -rf pkgroot || true
 
 .PHONY: cleanbuild
 cleanbuild:
@@ -331,7 +357,7 @@ ifeq ($(DISTRO),"Debian GNU/Linux")
 		update-rc.d proxysql defaults
 else
 ifeq ($(DISTRO),"Unknown")
-		$(warning Not sure how to install proxysql service on this OS)
+$(warning Not sure how to install proxysql service on this OS)
 endif
 endif
 endif
@@ -368,7 +394,7 @@ ifeq ($(DISTRO),"Debian GNU/Linux")
 		update-rc.d proxysql remove
 else
 ifeq ($(DISTRO),"Unknown")
-		$(warning Not sure how to uninstall proxysql service on this OS)
+$(warning Not sure how to uninstall proxysql service on this OS)
 endif
 endif
 endif

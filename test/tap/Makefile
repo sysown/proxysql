@@ -1,20 +1,39 @@
+#!/bin/make -f
+
+
+.DEFAULT: all
 .PHONY: all
-all: tap tests tests_with_deps
+all: tap test_deps
+	${MAKE} tests
+	${MAKE} tests_with_deps
 
-.PHONY: clean
-clean:
-	cd tap && ${MAKE} clean
-	cd tests && ${MAKE} clean
-	cd tests_with_deps && ${MAKE} clean
+.PHONY: debug
+debug: tap test_deps
+	${MAKE} tests
+	${MAKE} tests_with_deps
 
-debug: tap tests tests_with_deps
+
+.PHONY: test_deps
+test_deps:
+	cd ../deps && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tap
-tap: 
-	cd tap && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+tap:
+	cd tap && CC=${CC} CXX=${CXX} ${MAKE}
 
-tests: tap
-	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+.PHONY: tests
+tests:
+	cd tests && CC=${CC} CXX=${CXX} ${MAKE}
 
-tests_with_deps: tap tests
-	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+.PHONY: tests_with_deps
+tests_with_deps:
+	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE}
+
+
+.PHONY: clean
+.SILENT: clean
+clean:
+	cd ../deps && ${MAKE} -s clean
+	cd tap && ${MAKE} -s clean
+	cd tests && ${MAKE} -s clean
+	cd tests_with_deps && ${MAKE} -s clean
