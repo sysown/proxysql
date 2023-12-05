@@ -30,16 +30,17 @@ jobs:
     - name: Cache restore bin
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap_bin
+        key: CI-builds_${{ github.sha }}_debian11_bin
         fail-on-cache-miss: true
         path: |
-          proxysql_3p_testing/proxysql/binaries/
+          proxysql/binaries/
         
     - name: Prepare
       run: |
         set +e
         
         cd proxysql_3p_testing/
+        mv ../proxysql/binaries/* ./proxysql/binaries/
         git sparse-checkout list
         ./setup.sh
         
