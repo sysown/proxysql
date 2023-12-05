@@ -28,7 +28,6 @@ jobs:
           proxysql
 
     - name: Cache restore bin
-      id: cache-src
       uses: actions/cache/restore@v3
       with:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_bin
