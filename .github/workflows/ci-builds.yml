@@ -65,10 +65,10 @@ jobs:
       id: cache-check
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
+        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
         lookup-only: true
         path: |
-          proxysql/tap-matrix*
+          proxysql/binaries/
 
     - name: Checkout repository
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
@@ -78,12 +78,6 @@ jobs:
 #        ref: 'v2.x'
         fetch-depth: 0
         path: 'proxysql'
-
-#    - name: Set GIT_VERSION
-#      run: |
-#        cd ${{ github.workspace }}/proxysql/
-#        git fetch --tags --force
-#        echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
 
     - name: Patch TAP-tests
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
