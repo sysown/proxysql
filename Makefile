@@ -232,7 +232,7 @@ ubuntu: $(REL_ARCH)-ubuntu ;
 
 amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg
-amd64-centos: centos6 centos6-dbg centos7 centos7-dbg centos8 centos8-clang centos8-dbg
+amd64-centos: centos6 centos6-dbg centos7 centos7-dbg centos8 centos8-clang centos8-dbg centos9 centos9-clang centos9-dbg
 amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
 amd64-fedora: fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg fedora36 fedora36-clang fedora36-dbg fedora37 fedora37-clang fedora37-dbg fedora38 fedora38-clang fedora38-dbg fedora39 fedora39-clang fedora39-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
