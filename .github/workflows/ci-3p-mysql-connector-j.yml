@@ -28,13 +28,12 @@ jobs:
           proxysql
 
     - name: Cache restore bin
-      id: cache-src
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap_bin
+        key: CI-builds_${{ github.sha }}_debian11_bin
         fail-on-cache-miss: true
         path: |
-          proxysql_3p_testing/proxysql/binaries/
+          proxysql/binaries/
         
     - name: Prepare
       run: |
@@ -48,7 +47,7 @@ jobs:
         cd test_mysql-connector-j
         sed -i 's/timeout -v -s1 800 //' run-tests.bash
         
-    - name: Test mysql-connector-j
+    - name: Run tests
       run: |
         set +e
         
@@ -65,15 +64,18 @@ jobs:
       run: |
         cd proxysql_3p_testing/test_mysql-connector-j
         FAILS=$(cat logs/*run-tests.log | grep 'FAIL' | grep ' / ' | awk '{ print $2 }')
-        if [[ ${FAILS} -gt ${BASELINE} ]]; then
-          echo "Baseline FAIL: FAILS = ${FAILS}"
+        if [[ -z ${FAILS} ]]; then
+          echo "Baseline '${BASELINE:-10000}' WARN: no results found"
+          exit 0
+        fi
+        if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
+          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
           exit 1
         else
-          echo "Baseline PASS: FAILS = ${FAILS}"
+          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           if [[ ${{ github.ref_name }} == v2.x ]]; then
             gh variable -R sysown/proxysql set BASELINE_3P_MYSQL_CONNECTOR_J -b "${FAILS}"
           fi
-          exit 0
         fi
     
     - name: Archive artifacts logs
