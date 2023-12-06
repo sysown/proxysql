@@ -63,3 +63,4 @@ clean:
 	cd mariadb-connector-c/mariadb-connector-c && rm -f CMakeCache.txt || true
 	cd mysql-connector-c/mysql-connector-c && $(MAKE) --no-print-directory clean || true
 	cd mysql-connector-c/mysql-connector-c && rm -f CMakeCache.txt || true
+	cd mysql-connector-c/mysql-connector-c && rm -f libmysql/libmysqlclient.a || true
