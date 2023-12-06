@@ -133,7 +133,7 @@ build_src: build_lib
 
 .PHONY: build_deps_debug
 build_deps_debug:
-	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_lib_debug
 build_lib_debug: build_deps_debug
@@ -357,7 +357,7 @@ ifeq ($(DISTRO),"Debian GNU/Linux")
 		update-rc.d proxysql defaults
 else
 ifeq ($(DISTRO),"Unknown")
-$(warning Not sure how to install proxysql service on this OS)
+	$(warning Not sure how to install proxysql service on this OS)
 endif
 endif
 endif
