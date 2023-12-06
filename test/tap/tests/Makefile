@@ -100,11 +100,11 @@ TEST_MYSQL_LDIR := $(TEST_MYSQL_PATH)/libmysql
 
 LIBPROXYSQLAR := $(PROXYSQL_LDIR)/libproxysql.a
 
-ODIR := $(PROXYSQL_PATH)//obj
+ODIR := $(PROXYSQL_PATH)/obj
 
 EXECUTABLE := proxysql
 
-OBJ := $(PROXYSQL_PATH)//src/obj/proxysql_global.o $(PROXYSQL_PATH)//src/obj/main.o $(PROXYSQL_PATH)//src/obj/proxy_tls.o
+OBJ := $(PROXYSQL_PATH)/src/obj/proxysql_global.o $(PROXYSQL_PATH)/src/obj/main.o $(PROXYSQL_PATH)/src/obj/proxy_tls.o
 
 IDIRS := -I$(TAP_IDIR) -I$(RE2_IDIR) -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(LIBCONFIG_IDIR) -I$(MARIADB_IDIR) -I$(DAEMONPATH_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(PROMETHEUS_IDIR) -I$(DOTENV_DYN_IDIR) -I$(SSL_IDIR) -I$(SQLITE3_IDIR) -I$(JSON_IDIR)
 LDIRS := -L$(TAP_LDIR) -L$(RE2_LDIR) -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(LIBCONFIG_LDIR) -L$(MARIADB_LDIR) -L$(DAEMONPATH_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR) -L$(DOTENV_DYN_LDIR) -L$(SSL_LDIR) -L$(PCRE_LDIR) -L$(LIBINJECTION_LDIR)
@@ -116,8 +116,8 @@ ifeq ($(UNAME_S),Linux)
 endif
 
 MYLIBS := -Wl,--export-dynamic
-MYLIBS += -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -lcurl
-MYLIBS += -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lcurl -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
+MYLIBS += -Wl,-Bdynamic -lgnutls -ltap -lcpp_dotenv -lcurl -lssl -lcrypto
+MYLIBS += -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid
 MYLIBS += -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 #MYLIBS := -Wl,--export-dynamic -Wl,-Bdynamic -lssl -lcrypto -lgnutls -ltap -lcpp_dotenv -Wl,-Bstatic -lconfig -lproxysql -ldaemon -lconfig++ -lre2 -lpcrecpp -lpcre -lmariadbclient -lhttpserver -lmicrohttpd -linjection -lev -lprometheus-cpp-pull -lprometheus-cpp-core -luuid -Wl,-Bdynamic -lpthread -lm -lz -lrt -ldl $(EXTRALINK)
 MYLIBSJEMALLOC := -Wl,-Bstatic -ljemalloc
@@ -135,7 +135,7 @@ CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201103L)
-$(error Compiler must support at least c++11)
+	$(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
@@ -150,7 +150,7 @@ ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address -DTEST_WITHASAN
 endif
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) -DGITVERSION=\"$(GIT_VERSION)\"
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
 
 
 ### main targets
@@ -268,10 +268,10 @@ setparser_test3: setparser_test3.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_
 	g++ -DPARSERDEBUG $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(WASAN) $(LIBCOREDUMPERAR) -o $@
 
 
-CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR)
-CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR)
-CUSTOMARGS += -Wl,-Bstatic -lcurl
-CUSTOMARGS += -Wl,-Bdynamic -ltap -lcpp_dotenv -lpthread -lz -ldl 
+CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(SSL_IDIR)
+CUSTOMARGS += -L$(TAP_LDIR) -L$(CURL_LDIR) -L$(SSL_LDIR)
+#CUSTOMARGS += -Wl,-Bstatic -lcurl
+CUSTOMARGS += -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lpthread -lz -ldl 
 CUSTOMARGS += $(OPT)
 
 reg_test_3504-change_user_libmariadb_helper: reg_test_3504-change_user_helper.cpp $(TAP_LDIR)/libtap.so
@@ -310,4 +310,6 @@ clean:
 	rm -f *-t || true
 	rm -f galera_1_timeout_count galera_2_timeout_no_count aurora || true
 	rm -f generate_set_session_csv set_testing-240.csv || true
+	rm -f setparser_test setparser_test2 setparser_test3  || true
+	rm -f reg_test_3504-change_user_libmariadb_helper reg_test_3504-change_user_libmysql_helper || true
 	rm -f *.gcda *.gcno || true
