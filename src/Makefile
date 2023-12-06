@@ -127,7 +127,7 @@ endif
 
 WASAN :=
 ifeq ($(WITHASAN),1)
-	WASAN := -WITHASAN -fsanitize=address
+	WASAN := -fsanitize=address
 	# Force the disable of JEMALLOC, since ASAN isn't compatible.
 	export NOJEMALLOC=1
 endif
