@@ -3,15 +3,10 @@
 
 .DEFAULT: all
 .PHONY: all
-all: tap test_deps
-	${MAKE} tests
-	${MAKE} tests_with_deps
+all: tests tests_with_deps
 
 .PHONY: debug
-debug: tap test_deps
-	${MAKE} tests
-	${MAKE} tests_with_deps
-
+debug: tests tests_with_deps
 
 .PHONY: test_deps
 test_deps:
@@ -22,12 +17,12 @@ tap:
 	cd tap && CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: tests
-tests:
-	cd tests && CC=${CC} CXX=${CXX} ${MAKE}
+tests: tap test_deps
+	cd tests && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: tests_with_deps
-tests_with_deps:
-	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE}
+tests_with_deps: tap test_deps
+	cd tests_with_deps && CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 
 .PHONY: clean

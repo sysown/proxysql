@@ -52,7 +52,7 @@ ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address
 endif
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
 
 
 ### main targets

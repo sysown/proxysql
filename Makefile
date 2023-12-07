@@ -46,7 +46,7 @@ CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201103L)
-$(error Compiler must support at least c++11)
+	$(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
@@ -139,6 +139,10 @@ build_deps_debug:
 build_lib_debug: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_src_debug
+build_src_debug: build_lib_debug
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+
 .PHONY: build_src_testaurora
 build_src_testaurora: build_lib_testaurora
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
@@ -190,18 +194,14 @@ build_lib_testall: build_deps_debug
 .PHONY: build_tap_test
 build_tap_test: build_tap_tests
 .PHONY: build_tap_tests
-build_tap_tests: build_src_clickhouse
-	cd test/tap && OPTZ="${O0} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_tap_tests: build_src
+	cd test/tap && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_tap_test_debug
 build_tap_test_debug: build_tap_tests_debug
 .PHONY: build_tap_tests_debug
-build_tap_tests_debug: build_src_debug_clickhouse
+build_tap_tests_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
-
-.PHONY: build_src_debug
-build_src_debug: build_lib_debug
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_deps_clickhouse
 build_deps_clickhouse:
@@ -209,11 +209,7 @@ build_deps_clickhouse:
 
 .PHONY: build_deps_debug_clickhouse
 build_deps_debug_clickhouse:
-ifeq ($(findstring build_tap_test,$(MAKECMDGOALS)),)
 	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
-else
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
-endif
 
 .PHONY: build_lib_clickhouse
 build_lib_clickhouse: build_deps_clickhouse
