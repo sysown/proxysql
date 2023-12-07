@@ -12,6 +12,7 @@ struct LDAP_USER_FIELD_IDX {
 
 class MySQL_LDAP_Authentication {
 public:
+	virtual ~MySQL_LDAP_Authentication() {};
 	virtual char * lookup(char *username, char *pass, 
 			enum cred_username_type usertype, bool *use_ssl, int *default_hostgroup, 
 			char **default_schema, bool *schema_locked, bool *transaction_persistent, 
