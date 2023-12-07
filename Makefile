@@ -45,6 +45,7 @@ export CURVER
 CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+	LEGACY_BUILD := 1
 ifneq ($(CPLUSPLUS),201103L)
 	$(error Compiler must support at least c++11)
 endif
@@ -120,28 +121,48 @@ debug_clickhouse: build_src_debug_clickhouse
 ### helper targets
 
 .PHONY: build_deps
-build_deps:
-	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_deps: $(if $(LEGACY_BUILD),build_deps_legacy,build_deps_default)
 
 .PHONY: build_lib
-build_lib: build_deps
-	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_lib: $(if $(LEGACY_BUILD),build_lib_legacy,build_lib_default)
 
 .PHONY: build_src
-build_src: build_lib
-	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_src: $(if $(LEGACY_BUILD),build_src_legacy,build_src_default)
 
 .PHONY: build_deps_debug
-build_deps_debug:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_deps_debug: $(if $(LEGACY_BUILD),build_deps_debug_legacy,build_deps_debug_default)
 
 .PHONY: build_lib_debug
-build_lib_debug: build_deps_debug
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+build_lib_debug: $(if $(LEGACY_BUILD),build_lib_debug_legacy,build_lib_debug_default)
 
 .PHONY: build_src_debug
-build_src_debug: build_lib_debug
+build_src_debug: $(if $(LEGACY_BUILD),build_src_debug_legacy,build_src_debug_default)
+
+# legacy build targets (pre c++17)
+.PHONY: build_deps_legacy
+build_deps_legacy:
+	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_legacy
+build_lib_legacy: build_deps_legacy
+	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_legacy
+build_src_legacy: build_lib_legacy
+	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_deps_debug_legacy
+build_deps_debug_legacy:
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_debug_legacy
+build_lib_debug_legacy: build_deps_debug_legacy
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_debug_legacy
+build_src_debug_legacy: build_lib_debug_legacy
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+#--
 
 .PHONY: build_src_testaurora
 build_src_testaurora: build_lib_testaurora
@@ -203,28 +224,49 @@ build_tap_test_debug: build_tap_tests_debug
 build_tap_tests_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
+# ClickHouse build targets are now default build targets. 
+# To maintain backward compatibility, ClickHouse targets are still available.
 .PHONY: build_deps_clickhouse
-build_deps_clickhouse:
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_deps_clickhouse: build_deps_default
 
 .PHONY: build_deps_debug_clickhouse
-build_deps_debug_clickhouse:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_deps_debug_clickhouse: build_deps_debug_default
 
 .PHONY: build_lib_clickhouse
-build_lib_clickhouse: build_deps_clickhouse
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_lib_clickhouse: build_lib_default
 
 .PHONY: build_lib_debug_clickhouse
-build_lib_debug_clickhouse: build_deps_debug_clickhouse
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_lib_debug_clickhouse: build_lib_debug_default
 
 .PHONY: build_src_clickhouse
-build_src_clickhouse: build_lib_clickhouse
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_src_clickhouse: build_src_default
 
 .PHONY: build_src_debug_clickhouse
-build_src_debug_clickhouse: build_lib_debug_clickhouse
+build_src_debug_clickhouse: build_src_debug_default
+#--
+
+.PHONY: build_deps_default
+build_deps_default:
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+PHONY: build_deps_debug_default
+build_deps_debug_default:
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_default
+build_lib_default: build_deps_default
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_debug_default
+build_lib_debug_default: build_deps_debug_default
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_default
+build_src_default: build_lib_default
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_debug_default
+build_src_debug_default: build_lib_debug_default
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 
