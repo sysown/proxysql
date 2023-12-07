@@ -148,7 +148,7 @@ tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) ok_packet_mixed_queries-t fwd_eof
 COMMONARGS = $(OPT) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
-	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(MARIADB_IDIR) -L$(MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
 	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
@@ -171,10 +171,10 @@ eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp
 	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 eof_conn_options_check-t: eof_conn_options_check-t.cpp
-	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(MARIADB_IDIR) -L$(MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 eof_fast_forward-t: eof_fast_forward-t.cpp
-	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(MARIADB_IDIR) -L$(MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 
 ### clean targets
