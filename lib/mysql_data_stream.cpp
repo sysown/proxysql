@@ -736,7 +736,12 @@ int MySQL_Data_Stream::write_to_net() {
 					memmove(ssl_write_buf, ssl_write_buf+n, ssl_write_len-n);
 				}
 				ssl_write_len -= n;
-    			ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len);
+				if (ssl_write_len) {
+					ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len);
+				} else {
+					free(ssl_write_buf);
+					ssl_write_buf = NULL;
+				}
 				//proxy_info("new ssl_write_len: %u\n", ssl_write_len);
 				//if (ssl_write_len) {
     			//	return n; // stop here
@@ -887,7 +892,12 @@ int MySQL_Data_Stream::write_to_net_poll() {
 					memmove(ssl_write_buf, ssl_write_buf+n, ssl_write_len-n);
 				}
 				ssl_write_len -= n;
-    			ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len);
+				if (ssl_write_len) {
+					ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len);
+				} else {
+					free(ssl_write_buf);
+					ssl_write_buf = NULL;
+				}
 				//proxy_info("new ssl_write_len: %u\n", ssl_write_len);
 				if (ssl_write_len) {
     				return n; // stop here
