@@ -17,6 +17,59 @@ MARIADB_PATH := $(DEPS_PATH)/mariadb-client-library/mariadb_client
 MARIADB_IDIR := $(MARIADB_PATH)/include
 MARIADB_LDIR := $(MARIADB_PATH)/libmariadb
 
+JEMALLOC_PATH := $(DEPS_PATH)/jemalloc/jemalloc
+JEMALLOC_IDIR := $(JEMALLOC_PATH)/include/jemalloc
+JEMALLOC_LDIR := $(JEMALLOC_PATH)/lib
+
+JSON_IDIR := $(DEPS_PATH)/json
+
+RE2_PATH := $(DEPS_PATH)/re2/re2
+RE2_IDIR := $(RE2_PATH)
+RE2_LDIR := $(RE2_PATH)/obj
+
+SQLITE3_PATH := $(DEPS_PATH)/sqlite3/sqlite3
+SQLITE3_IDIR := $(SQLITE3_PATH)
+SQLITE3_LDIR := $(SQLITE3_PATH)
+
+LIBHTTPSERVER_DIR := $(DEPS_PATH)/libhttpserver/libhttpserver
+LIBHTTPSERVER_IDIR := $(LIBHTTPSERVER_DIR)/src
+LIBHTTPSERVER_LDIR := $(LIBHTTPSERVER_DIR)/build/src/.libs/
+
+LIBCONFIG_PATH := $(DEPS_PATH)/libconfig/libconfig
+LIBCONFIG_IDIR := $(LIBCONFIG_PATH)/lib
+LIBCONFIG_LDIR := $(LIBCONFIG_PATH)/lib/.libs
+
+CURL_DIR := $(DEPS_PATH)/curl/curl
+CURL_IDIR := $(CURL_DIR)/include
+CURL_LDIR := $(CURL_DIR)/lib/.libs
+
+PCRE_PATH := $(DEPS_PATH)/pcre/pcre
+PCRE_LDIR := $(PCRE_PATH)/.libs
+
+MICROHTTPD_DIR := $(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src
+MICROHTTPD_IDIR := $(MICROHTTPD_DIR)/include
+MICROHTTPD_LDIR := $(MICROHTTPD_DIR)/microhttpd/.libs
+
+SSL_DIR := $(DEPS_PATH)/libssl/openssl/
+SSL_IDIR := $(SSL_DIR)/include
+SSL_LDIR := $(SSL_DIR)
+
+EV_DIR := $(DEPS_PATH)/libev/libev/
+EV_IDIR := $(EV_DIR)
+EV_LDIR := $(EV_DIR)/.libs
+
+PROMETHEUS_PATH := $(DEPS_PATH)/prometheus-cpp/prometheus-cpp
+PROMETHEUS_IDIR := $(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
+PROMETHEUS_LDIR := $(PROMETHEUS_PATH)/lib
+
+CITYHASH_DIR := $(DEPS_PATH)/cityhash/cityhash/
+CITYHASH_IDIR := $(CITYHASH_DIR)
+CITYHASH_LDIR := $(CITYHASH_DIR)/src/.libs
+
+COREDUMPER_DIR := $(DEPS_PATH)/coredumper/coredumper
+COREDUMPER_IDIR := $(COREDUMPER_DIR)/include
+COREDUMPER_LDIR := $(COREDUMPER_DIR)/src
+
 TAP_PATH := $(PROXYSQL_PATH)/test/tap/tap
 TAP_IDIR := $(TAP_PATH)
 TAP_LDIR := $(TAP_PATH)
@@ -37,7 +90,7 @@ CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201103L)
-$(error Compiler must support at least c++11)
+	$(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
@@ -52,21 +105,10 @@ ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address
 endif
 
-OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WGCOV)
+OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
 
-IDIRS := -I$(PROXYSQL_IDIR)
-IDIRS += -I$(DEPS_PATH)/sqlite3/sqlite3
-IDIRS += -I$(DEPS_PATH)/json
-IDIRS += -I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/core/include
-IDIRS += -I$(DEPS_PATH)/prometheus-cpp/prometheus-cpp/pull/include
-IDIRS += -I$(DEPS_PATH)/libconfig/libconfig/lib
-IDIRS += -I$(DEPS_PATH)/jemalloc/jemalloc/include/jemalloc
-IDIRS += -I$(DEPS_PATH)/libhttpserver/libhttpserver/src
-IDIRS += -I$(DEPS_PATH)/libmicrohttpd/libmicrohttpd/src/include/
-IDIRS += -I$(DEPS_PATH)/re2/re2
-IDIRS += -I$(DEPS_PATH)/libev/libev
-IDIRS += -I$(DEPS_PATH)/curl/curl/include
-
+IDIRS := -I$(TAP_IDIR) -I$(RE2_IDIR) -I$(PROXYSQL_IDIR) -I$(JEMALLOC_IDIR) -I$(LIBCONFIG_IDIR) -I$(MICROHTTPD_IDIR) -I$(LIBHTTPSERVER_IDIR) -I$(CURL_IDIR) -I$(EV_IDIR) -I$(PROMETHEUS_IDIR) -I$(DOTENV_DYN_IDIR) -I$(SSL_IDIR) -I$(SQLITE3_IDIR) -I$(JSON_IDIR)
+LDIRS := -L$(TAP_LDIR) -L$(RE2_LDIR) -L$(PROXYSQL_LDIR) -L$(JEMALLOC_LDIR) -L$(LIBCONFIG_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(CURL_LDIR) -L$(EV_LDIR) -L$(PROMETHEUS_LDIR) -L$(DOTENV_DYN_LDIR) -L$(SSL_LDIR) -L$(SQLITE3_LDIR) -L$(PCRE_LDIR)
 
 ### main targets
 
@@ -79,7 +121,7 @@ all: tests
 
 .PHONY: debug
 debug: DEBUG := -DDEBUG
-debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
+debug: OPT := $(STDCPP) -O0 -DDEBUG -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN)
 debug: tests
 
 
@@ -103,36 +145,36 @@ $(TEST_MYSQL_LDIR)/libmysqlclient.a:
 #tests: build_test_deps
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) ok_packet_mixed_queries-t fwd_eof_query fwd_eof_ok_query
 
-COMMONARGS := $(OPT) -I$(TAP_IDIR) -L$(TAP_LDIR) -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
+COMMONARGS = $(OPT) -Wl,-Bdynamic -ltap -lcpp_dotenv -lcurl -lssl -lcrypto -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\"
 
 ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
-	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp
-	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 fwd_eof_query: fwd_eof_query.cpp
-	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) -DNON_EOF_SUPPORT $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
 fwd_eof_ok_query: fwd_eof_query.cpp
-	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -I$(TEST_MYSQL_IDIR) -I$(TEST_MYSQL_EDIR) -L$(TEST_MYSQL_LDIR) -lmysqlclient $(COMMONARGS) -o $@
 # NOTE end
 
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp
-	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient -L$(PROXYSQL_LDIR) -lproxysql $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(PROXYSQL_LDIR)/proxysql_utils.cpp  -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp
-	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp
-	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 eof_conn_options_check-t: eof_conn_options_check-t.cpp
-	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 eof_fast_forward-t: eof_fast_forward-t.cpp
-	$(CXX) $< $(IDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) -I$(TEST_MARIADB_IDIR) -L$(TEST_MARIADB_LDIR) -lmariadbclient $(COMMONARGS) -o $@
 
 
 ### clean targets
