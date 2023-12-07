@@ -18,7 +18,6 @@
 
 #include "json.hpp"
 
-#include "MySQL_Protocol.h"
 
 using std::vector;
 using std::string;
