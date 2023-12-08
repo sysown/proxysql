@@ -67,6 +67,8 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
+	plan(5*RESET_CONNECTION_QUERIES);
+
 	bool param = false;
 	{
 		// we parse argv[0] to see if filename includes "param"
@@ -121,6 +123,7 @@ int main(int argc, char** argv) {
 		};
 		std::string update_mysql_queries {};
 		string_format(t_update_mysql_servers, update_mysql_queries, WRITER_HOSTGROUP_ID);
+		diag("Line:%d , Running query: %s", __LINE__ , update_mysql_queries.c_str());
 		MYSQL_QUERY(proxysql_admin, update_mysql_queries.c_str());
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
@@ -131,9 +134,12 @@ int main(int argc, char** argv) {
 		std::string max_stmt_query {};
 		string_format(t_max_stmt_query, max_stmt_query, MAX_STMT_NUM_QUERIES);
 		MYSQL_QUERY(proxysql_admin, max_stmt_query.c_str());
+		diag("Line:%d , Running query: %s", __LINE__ , max_stmt_query.c_str());
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 		uint32_t query_id = 0;
+
+		int rc = 0;
 
 		for (uint32_t i = 0; i < RESET_CONNECTION_QUERIES; i++) {
 			if (i <= MAX_STMT_NUM_QUERIES) {
@@ -157,17 +163,22 @@ int main(int argc, char** argv) {
 			string_format(query_t, query, query_id);
 
 			MYSQL_STMT* stmt = mysql_stmt_init(proxysql_mysql);
+			ok(stmt != NULL , "mysql_stmt_init() succeeded");
 			if (!stmt) {
 				diag("mysql_stmt_init(), out of memory");
 				res = EXIT_FAILURE;
 				goto exit;
 			}
 
-			if (mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()))) {
+			diag("Line:%d , Preparing query: %s", __LINE__ , query.c_str());
+			rc = mysql_stmt_prepare(stmt, query.c_str(), strlen(query.c_str()));
+			ok(rc == 0, "mysql_stmt_prepare() succeeded");
+			if (rc) {
 				diag("mysql_stmt_prepare at line %d failed: %s", __LINE__ , mysql_error(proxysql_mysql));
-				mysql_close(proxysql_mysql);
 				res = EXIT_FAILURE;
 				goto exit;
+			} else {
+				//
 			}
 
 			if (param) {
@@ -189,13 +200,17 @@ int main(int argc, char** argv) {
 				}
 			}
 
-			if (mysql_stmt_execute(stmt)) {
+			rc = mysql_stmt_execute(stmt);
+			ok(rc == 0, "mysql_stmt_execute() succeeded");
+			if (rc) {
 				diag(
 					"mysql_stmt_execute at line %d failed: %s", __LINE__ ,
 					mysql_stmt_error(stmt)
 				);
 				res = EXIT_FAILURE;
 				goto exit;
+			} else {
+				//
 			}
 
 			MYSQL_BIND bind[3];
@@ -226,22 +241,30 @@ int main(int argc, char** argv) {
 			bind[2].length = &length[2];
 			bind[2].error = &error[2];
 
-			if (mysql_stmt_bind_result(stmt, bind)) {
+			rc = mysql_stmt_bind_result(stmt, bind);
+			ok(rc == 0, "mysql_stmt_bind_result() succeeded");
+			if (rc) {
 				diag(
 					"mysql_stmt_bind_result at line %d failed: %s", __LINE__,
 					mysql_stmt_error(stmt)
 				);
 				res = EXIT_FAILURE;
 				goto exit;
+			} else {
+				//
 			}
 
-			if (mysql_stmt_fetch(stmt) == 1) {
+			rc = mysql_stmt_fetch(stmt);
+			ok(rc == 0,"mysql_stmt_fetch() succeeded");
+			if (rc == 1) {
 				diag(
 					"mysql_stmt_fetch at line %d failed: %s", __LINE__,
 					mysql_stmt_error(stmt)
 				);
 				res = EXIT_FAILURE;
 				goto exit;
+			} else {
+				//
 			}
 
 			bool data_match_expected =

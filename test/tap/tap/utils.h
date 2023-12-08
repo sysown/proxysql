@@ -14,6 +14,42 @@
 #include "sqlite3db.h"
 
 #include "command_line.h"
+#include "json.hpp"
+
+#ifndef DISABLE_WARNING_COUNT_LOGGING
+/* We are overriding some of the mariadb APIs to extract the warning count and print it in the log. 
+   This override will apply to all TAP tests, except when the TAP test is linked with the MySQL client library (LIBMYSQL_HELPER defined).
+*/
+static MYSQL* (*real_mysql_init)(MYSQL* mysql) = &mysql_init;
+static int (*real_mysql_query)(MYSQL* mysql, const char* query) = &mysql_query;
+static MYSQL_RES* (*real_mysql_store_result)(MYSQL* mysql) = &mysql_store_result;
+static void (*real_mysql_close)(MYSQL* mysql) = &mysql_close;
+static MYSQL_STMT* (*real_mysql_stmt_init)(MYSQL* mysql) = &mysql_stmt_init;
+static int (*real_mysql_stmt_prepare)(MYSQL_STMT* stmt, const char* stmt_str, unsigned long length) = &mysql_stmt_prepare;
+static int (*real_mysql_stmt_execute)(MYSQL_STMT* stmt) = &mysql_stmt_execute;
+static int (*real_mysql_stmt_store_result)(MYSQL_STMT* stmt) = &mysql_stmt_store_result;
+static my_bool (*real_mysql_stmt_close)(MYSQL_STMT* stmt) = &mysql_stmt_close;
+
+MYSQL* mysql_init_override(MYSQL* mysql, const char* file, int line);
+int mysql_query_override(MYSQL* mysql, const char* query, const char* file, int line);
+MYSQL_RES* mysql_store_result_override(MYSQL* mysql, const char* file, int line);
+void mysql_close_override(MYSQL* mysql, const char* file, int line);
+MYSQL_STMT* mysql_stmt_init_override(MYSQL* mysql, const char* file, int line);
+int mysql_stmt_prepare_override(MYSQL_STMT* stmt, const char* stmt_str, unsigned long length, const char* file, int line);
+int mysql_stmt_execute_override(MYSQL_STMT* stmt, const char* file, int line);
+int mysql_stmt_store_result_override(MYSQL_STMT* stmt, const char* file, int line);
+my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line);
+
+#define mysql_init(mysql) mysql_init_override(mysql,__FILE__,__LINE__)
+#define mysql_query(mysql,query) mysql_query_override(mysql,query,__FILE__,__LINE__)
+#define mysql_store_result(mysql) mysql_store_result_override(mysql,__FILE__,__LINE__)
+#define mysql_close(mysql) mysql_close_override(mysql,__FILE__,__LINE__)
+#define mysql_stmt_init(mysql) mysql_stmt_init_override(mysql,__FILE__,__LINE__)
+#define mysql_stmt_prepare(stmt,stmt_str,length) mysql_stmt_prepare_override(stmt,stmt_str,length,__FILE__,__LINE__)
+#define mysql_stmt_execute(stmt) mysql_stmt_execute_override(stmt,__FILE__,__LINE__)
+#define mysql_stmt_store_result(stmt) mysql_stmt_store_result_override(stmt,__FILE__,__LINE__)
+#define mysql_stmt_close(stmt) mysql_stmt_close_override(stmt,__FILE__,__LINE__)
+#endif 
 
 inline std::string get_formatted_time() {
 	time_t __timer;
@@ -178,11 +214,13 @@ int wait_for_replication(
  * NOTE: This is a duplicate of 'proxysql_find_charset_collate' in 'MySQL_Variables.h'. Including
  * 'MySQL_Variables' is not a easy task due to its interdependeces with other ProxySQL modules.
  */
+/*
 #ifdef LIBMYSQL_HELPER
-MY_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
+MY_CHARSET_INFO * proxysqlTap_find_charset_collate(const char *collatename);
 #else
-MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
+MARIADB_CHARSET_INFO * proxysqlTap_find_charset_collate(const char *collatename);
 #endif
+*/
 /**
  * @brief Creates the new supplied user in ProxySQL with the provided
  *   attributes.
@@ -239,7 +277,7 @@ std::string tap_curtime();
  *  'ms' in the specified interval.
  * @return 0 if success, -1 in case of error.
  */
-int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, uint32_t& cpu_usage);
+int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usage);
 
 /**
  * @brief Helper struct holding connection options for helper functions creating MySQL connections.
@@ -460,6 +498,11 @@ int extract_sqlite3_host_port(MYSQL* admin, std::pair<std::string, int>& host_po
 std::vector<std::string> split(const std::string& s, char delim);
 
 /**
+ * @brief Joins the supplied list of words using the supplied delim.
+ */
+std::string join(std::string delim, const std::vector<std::string>& words);
+
+/**
  * @brief Gets the supplied environmental variable as a std::string.
  * @param var The variable to value to extract.
  * @return The variable value if present, an empty string if not found.
@@ -517,5 +560,87 @@ enum SQ3_RES_T {
  *  In case of failure, ERR field will be populated and others will remain empty.
  */
 sq3_res_t sqlite3_execute_stmt(sqlite3* db, const std::string& query);
+
+/**
+ * @brief If found returns the element index, -1 otherwise.
+ */
+template <typename T>
+int64_t get_elem_idx(const T& e, const std::vector<T>& v) {
+	const auto& it = std::find(v.begin(), v.end(), e);
+
+	if (it == v.end()) {
+		return -1;
+	} else {
+		return it - v.begin();
+	}
+}
+
+/**
+ * @brief Returns a 'JSON' object holding 'PROXYSQL INTERNAL SESSION' contents.
+ * @param proxy And already openned connection to ProxySQL.
+ */
+nlohmann::json fetch_internal_session(MYSQL* proxy);
+
+/**
+ * @brief Returns a string table representation of the supplied resultset.
+ */
+std::string dump_as_table(MYSQL_RES* result);
+
+using mysql_row_t = std::vector<std::string>;
+
+/**
+ * @brief Executes a DQL query and returns the contents of its resultset.
+ * @param conn An already opened MYSQL connection.
+ * @param query The DQL query to be executed.
+ * @param dump_res Wether or not to dump the resultset contents as a table to 'stderr'.
+ * @return A pair with the shape {err_code, contents}.
+ */
+std::pair<int,std::vector<mysql_row_t>> exec_dql_query(MYSQL* conn, const std::string& query, bool dump_res=false);
+
+struct POOL_STATS_IDX {
+	enum {
+		HOSTGROUP,
+		CONN_USED,
+		CONN_FREE,
+		CONN_OK,
+		CONN_ERR,
+		MAX_CONN_USED,
+		QUERIES,
+	};
+};
+
+/**
+ * @brief Dumps a resultset with fields from the supplied hgs from 'stats_mysql_connection_pool'.
+ * @details The fetched fields are 'hostgroup,ConnUsed,ConnFree,ConnOk,ConnERR,MaxConnUsed,Queries'.
+ */
+int dump_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
+
+using pool_state_t = std::map<uint32_t,mysql_row_t>;
+
+/**
+ * @brief Fetches several fields from table 'stats_mysql_connection_pool' for supplied hostgroups.
+ * @details The fetched fields are 'hostgroup,ConnUsed,ConnFree,ConnOk,ConnERR,MaxConnUsed,Queries'.
+ * @param admin An already opened connection to Admin.
+ * @param hgs The hostgroups from which to fetch several fields.
+ * @return A pair of the shape {err_code, pool_state_t}.
+ */
+std::pair<int,pool_state_t> fetch_conn_stats(MYSQL* admin, const std::vector<uint32_t> hgs);
+/**
+ * @brief Waits until the condition specified by the 'query' holds, or 'timeout' is reached.
+ * @details Several details about the function impl:
+ *   - Sleeps of 500ms are performed between each check.
+ *   - The time and check being performed is always logged ahead.
+ *   - If query execution fails, reason is logged, wait aborted and EXIT_FAILURE returned.
+ * @param mysql And already opened conn to ProxySQL in which the query is to be executed.
+ * @param query Query with the condition check, it's expected to return 'TRUE' when the check succeeds.
+ * @param timeout A timeout specified in seconds.
+ * @return EXIT_SUCCESS if the checks holds before the timeout, EXIT_FAILURE otherwise.
+ */
+int wait_for_cond(MYSQL* mysql, const std::string& query, uint32_t timeout);
+
+// Helpers using 'wait_for_cond' on 'stats_mysql_connection'
+void check_conn_count(MYSQL* admin, const std::string& conn_type, uint32_t conn_num, int32_t hg=-1);
+void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
+void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
 
 #endif // #define UTILS_H

@@ -93,14 +93,17 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
 			//rc_conn = mysql_real_connect(conn, node->hostname, username, password, NULL, node->port, NULL, CLIENT_COMPRESS); // FIXME: add optional support for compression
 			rc_conn = mysql_real_connect(conn, node->get_host_address(), username, password, NULL, node->port, NULL, 0);
 //			if (rc_conn) {
 //			}
 			//char *query = query1;
 			if (rc_conn) {
-				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 				rc_query = mysql_query(conn,(char *)"SELECT @@version");
 				if (rc_query == 0) {
@@ -308,7 +311,7 @@ void ProxySQL_Node_Metrics::reset() {
 ProxySQL_Node_Entry::ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char * _comment) : 
 	ProxySQL_Node_Entry(_hostname, _port, _weight, _comment, NULL) {
 	// resolving DNS if available in Cache
-	if (_hostname) {
+	if (_hostname && _port) {
 		size_t ip_count = 0;
 		const std::string& ip = MySQL_Monitor::dns_lookup(_hostname, false, &ip_count);
 
@@ -1037,11 +1040,14 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
 			proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
 			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
-				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 				MYSQL_RES *result1 = NULL;
 				MYSQL_RES *result2 = NULL;
@@ -1308,7 +1314,10 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
 			proxy_info("Cluster: Fetching MySQL Users from peer %s:%d started. Expected checksum: %s\n", hostname, port, expected_checksum.c_str());
 
 			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
@@ -1323,8 +1332,8 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 
 				goto __exit_pull_mysql_users_from_peer;
 			}
-			
-			MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+
+			MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 			rc_query = mysql_query(conn, CLUSTER_QUERY_MYSQL_USERS);
 			if (rc_query == 0) {
@@ -1631,11 +1640,14 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
 			proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d started. Expected checksum %s\n", hostname, port, peer_checksum);
 			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
-				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 				std::vector<MYSQL_RES*> results {};
 
@@ -1914,8 +1926,8 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 							const char * q=(const char *)"INSERT INTO mysql_hostgroup_attributes ( "
 								"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 								"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
-								"ignore_session_variables, comment) VALUES "
-								"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
+								"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
+								"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 							sqlite3_stmt *statement1 = NULL;
 							int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
 							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
@@ -1930,7 +1942,9 @@ void ProxySQL_Cluster::pull_mysql_servers_from_peer(const std::string& checksum,
 								rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // connection_warming
 								rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // throttle_connections_per_sec
 								rc=(*proxy_sqlite3_bind_text)(statement1, 9, row[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ignore_session_variables
-								rc=(*proxy_sqlite3_bind_text)(statement1, 10, row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+								rc=(*proxy_sqlite3_bind_text)(statement1, 10,row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostgroup_settings
+								rc=(*proxy_sqlite3_bind_text)(statement1, 11, row[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // servers_defaults
+								rc=(*proxy_sqlite3_bind_text)(statement1, 12, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
 								SAFE_SQLITE3_STEP2(statement1);
 								rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 								rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
@@ -2049,12 +2063,15 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
 			proxy_info("Cluster: Fetching %s variables from peer %s:%d started\n", vars_type_str, hostname, port);
 			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 
 			if (rc_conn) {
-				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 				std::string s_query = "";
 				string_format("SELECT * FROM runtime_global_variables WHERE variable_name LIKE '%s-%%'", s_query, var_type.c_str());
@@ -2201,14 +2218,17 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 			mysql_options(conn, MYSQL_OPT_CONNECT_TIMEOUT, &timeout);
 			//mysql_options(conn, MYSQL_OPT_READ_TIMEOUT, &timeout_long);
 			//mysql_options(conn, MYSQL_OPT_WRITE_TIMEOUT, &timeout);
-			{ unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val); }
+			{
+				unsigned char val = 1; mysql_options(conn, MYSQL_OPT_SSL_ENFORCE, &val);
+				mysql_options(conn, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
+			}
 			proxy_info(
 				"Cluster: Fetching ProxySQL Servers from peer %s:%d started. Expected checksum: %s\n",
 				hostname, port, expected_checksum.c_str()
 			);
 			rc_conn = mysql_real_connect(conn, ip_address ? ip_address : hostname, username, password, NULL, port, NULL, 0);
 			if (rc_conn) {
-				MySQL_Monitor::dns_cache_update_socket(conn->host, conn->net.fd);
+				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
 				rc_query = mysql_query(conn,"SELECT hostname, port, weight, comment FROM runtime_proxysql_servers ORDER BY hostname, port");
 				if ( rc_query == 0 ) {

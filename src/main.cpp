@@ -961,6 +961,8 @@ static void LoadPlugins() {
 			if (GloWebInterface) {
 				//GloAdmin->init_WebInterfacePlugin();
 				//GloAdmin->load_ldap_variables_to_runtime();
+			} else {
+				proxy_error("Failed to load 'Web_Interface' plugin\n");
 			}
 		}
 	}
@@ -987,6 +989,11 @@ static void LoadPlugins() {
 			exit(EXIT_FAILURE);
 		} else {
 			GloMyLdapAuth = create_MySQL_LDAP_Authentication();
+
+			if (!GloMyLdapAuth) {
+				proxy_error("Failed to load 'MySQL_LDAP_Authentication' plugin\n");
+			}
+
 			// we are removing this from here, and copying in
 			//     ProxySQL_Main_init_phase2___not_started
 			// the keep record of these two lines to make sure we don't
@@ -1011,6 +1018,9 @@ void UnloadPlugins() {
 }
 
 void ProxySQL_Main_init_phase2___not_started() {
+	std::string msg;
+	ProxySQL_create_or_load_TLS(false, msg);
+
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
@@ -1496,7 +1506,6 @@ gotofork:
 	}
 
 __start_label:
-
 	{
 		cpu_timer t;
 		ProxySQL_Main_init_phase2___not_started();

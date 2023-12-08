@@ -1,0 +1,34 @@
+@@ -529,12 +529,19 @@
+   memset(buf, 0, size);
+   if (userdata)
+     strncpy(buf, (char *)userdata, size);
+   return (int)strlen(buf);
+ }
+ 
++static void ma_tls_set_sslkeylog_callback(MYSQL *mysql, SSL_CTX *ssl_ctx) 
++{
++ if (mysql->options.extension && mysql->options.extension->ssl_keylog_callback)
++  {
++    SSL_CTX_set_keylog_callback(ssl_ctx, (void(*)(const SSL*, const char*))mysql->options.extension->ssl_keylog_callback);
++  }
++}
+ 
+ static int ma_tls_set_certs(MYSQL *mysql, SSL *ssl)
+ {
+   char *certfile= mysql->options.ssl_cert,
+        *keyfile= mysql->options.ssl_key;
+   char *pw= (mysql->options.extension) ?
+@@ -656,12 +663,13 @@
+   if (!(ctx= SSL_CTX_new(SSLv23_client_method())))
+ #endif
+     goto error;
+   if (mysql->options.extension)
+     options|= ma_tls_version_options(mysql->options.extension->tls_version);
+   SSL_CTX_set_options(ctx, options);
++  ma_tls_set_sslkeylog_callback(mysql, ctx);
+ #ifdef HAVE_TLS_SESSION_CACHE
+   SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
+   ma_tls_sessions= (MA_SSL_SESSION *)calloc(1, sizeof(struct st_ma_tls_session) * ma_tls_session_cache_size);
+   SSL_CTX_sess_set_new_cb(ctx, ma_tls_session_cb);
+   SSL_CTX_sess_set_remove_cb(ctx, ma_tls_remove_session_cb);
+ #endif

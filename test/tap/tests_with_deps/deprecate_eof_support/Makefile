@@ -21,6 +21,7 @@ OPT=-O2 $(WGCOV) -Wl,--no-as-needed
 debug: OPT=-O0 -DDEBUG -ggdb -Wl,--no-as-needed $(WGCOV) $(WASAN)
 debug: build_deps tests
 
+LLP=$(shell pwd)/../../tap
 $(MARIADB_TEST_DEP)/libmariadb/libmariadbclient.a:
 	cd $(MARIADB_BASE_FOLDER) && CC=${CC} CXX=${CXX} ${MAKE} mariadb_client
 
@@ -53,36 +54,39 @@ TESTS_DEPS=$(TAP_LIBDIR)/libtap.a $(MARIADB_TEST_DEP)/libmariadb/libmariadbclien
 
 tests: $(patsubst %.cpp,%,$(wildcard *-t.cpp)) fwd_eof_query fwd_eof_ok_query
 
-ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) -DDEBUG eof_packet_mixed_queries-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -ltap $(MYLIBS) -Wl,--no-as-needed -ldl -lpthread -o ok_packet_mixed_queries-t -DGITVERSION=\"$(GIT_VERSION)\"
+COMMONARGS1=$(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -ltap -lcpp_dotenv -Wl,--no-as-needed -lz -ldl -lpthread -DGITVERSION=\"$(GIT_VERSION)\" -DDEBUG -I$(JSON_IDIR)
+COMMONARGS=$(COMMONARGS1) $(MYLIBS)
 
-eof_packet_mixed_queries-t: ok_packet_mixed_queries-t $(TESTS_DEPS)
-	$(CXX) -DNON_EOF_SUPPORT -DDEBUG eof_packet_mixed_queries-t.cpp -std=c++11 -I$(TAP_LIBDIR) -I $(MARIADB_TEST_DEP)/include/ -I $(IDIR) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L $(MARIADB_TEST_DEP)/libmariadb -L$(SSL_LDIR) $(OPT) -ltap $(MYLIBS) -ldl -o eof_packet_mixed_queries-t -DGITVERSION=\"$(GIT_VERSION)\"
+ok_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp $(TESTS_DEPS)
+	LD_LIBRARY_PATH=$(LLP) $(CXX) $< $(INCLUDEDIRS) $(LDIRS) $(COMMONARGS) -o $@
+
+eof_packet_mixed_queries-t: eof_packet_mixed_queries-t.cpp ok_packet_mixed_queries-t $(TESTS_DEPS)
+	LD_LIBRARY_PATH=$(LLP) $(CXX) -DNON_EOF_SUPPORT $< $(INCLUDEDIRS) -I$(MARIADB_TEST_DEP)/include/ -L$(MARIADB_TEST_DEP)/libmariadb $(COMMONARGS) -o $@
 
 fwd_eof_query: fwd_eof_query.cpp $(TESTS_DEPS)
-	$(CXX) -DNON_EOF_SUPPORT -DDEBUG fwd_eof_query.cpp $(OPT) -std=c++11 -I$(JSON_IDIR) -I$(TAP_LIBDIR) -I $(MARIADB_TEST_DEP)/include/ -I $(IDIR) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L $(MARIADB_TEST_DEP)/libmariadb $(MYLIBS) -L$(SSL_LDIR) -ltap -ldl -o fwd_eof_query -DGITVERSION=\"$(GIT_VERSION)\"
+	LD_LIBRARY_PATH=$(LLP) $(CXX) -DNON_EOF_SUPPORT $< $(INCLUDEDIRS) -L$(MARIADB_TEST_DEP)/libmariadb $(COMMONARGS) -o $@
 
 #fwd_eof_ok_query: fwd_eof_query.cpp $(TESTS_DEPS)
 #	$(CXX) -DDEBUG fwd_eof_query.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) $(MYLIBS) -L$(SSL_LDIR) -ltap -Wl,--no-as-needed -ldl -lpthread -o fwd_eof_ok_query -DGITVERSION=\"$(GIT_VERSION)\"
 
 # NOTE: Compilation with 'libmysql' instead of 'libmariadb' client to confirm packet sequence id isn't check by 'libmariadb'
 fwd_eof_ok_query: fwd_eof_query.cpp $(TAP_LIBDIR)/libtap.a
-	$(CXX) -DDEBUG fwd_eof_query.cpp $(OPT) -std=c++11 -I$(JSON_IDIR) -I$(TAP_LIBDIR) -I /usr/include/mysql/ -I $(IDIR) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L /usr/lib/x86_64-linux-gnu/ -lmysqlclient -ltap -ldl -o fwd_eof_ok_query -DGITVERSION=\"$(GIT_VERSION)\"
+	LD_LIBRARY_PATH=$(LLP) $(CXX) $< -I/usr/include/mysql/ -I$(IDIR) -L/usr/lib/x86_64-linux-gnu/ -lmysqlclient $(COMMONARGS1) -o $@
 
 deprecate_eof_cache-t: deprecate_eof_cache-t.cpp $(TESTS_DEPS)
-	$(CXX) -DDEBUG deprecate_eof_cache-t.cpp $(OPT) -std=c++11 -I$(JSON_IDIR) -I$(TAP_LIBDIR) -I $(MARIADB_TEST_DEP)/include/ -I $(IDIR) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L$(MARIADB_TEST_DEP)/libmariadb -L$(SSL_LDIR) -L$(PROXYLDIR)  -ltap $(MYLIBS) -lproxysql -ldl -o deprecate_eof_cache-t -DGITVERSION=\"$(GIT_VERSION)\"
+	LD_LIBRARY_PATH=$(LLP) $(CXX) $^ $(INCLUDEDIRS) -L$(MARIADB_TEST_DEP)/libmariadb -L$(PROXYLDIR) -lproxysql $(COMMONARGS) -o $@
 
 eof_cache_mixed_flags-t: eof_cache_mixed_flags-t.cpp $(TESTS_DEPS)
-	$(CXX) -DDEBUG eof_cache_mixed_flags-t.cpp $(OPT) -std=c++11 -I$(JSON_IDIR) -I$(TAP_LIBDIR) -I $(MARIADB_TEST_DEP)/include/ -I $(IDIR) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L $(MARIADB_TEST_DEP)/libmariadb -L$(SSL_LDIR) -ltap $(MYLIBS) -ldl -o eof_cache_mixed_flags-t -DGITVERSION=\"$(GIT_VERSION)\"
+	LD_LIBRARY_PATH=$(LLP) $(CXX) $^ $(INCLUDEDIRS) -L$(MARIADB_TEST_DEP)/libmariadb $(COMMONARGS) -o $@
 
 eof_mixed_flags_queries-t: eof_mixed_flags_queries-t.cpp $(TESTS_DEPS)
-	$(CXX) -DDEBUG eof_mixed_flags_queries-t.cpp $(OPT) -std=c++11 -I$(JSON_IDIR) -I$(TAP_LIBDIR) -I $(MARIADB_TEST_DEP)/include/ -I $(IDIR) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) -L $(MARIADB_TEST_DEP)/libmariadb -L$(SSL_LDIR) -ltap $(MYLIBS) -ldl -o eof_mixed_flags_queries-t -DGITVERSION=\"$(GIT_VERSION)\"
+	LD_LIBRARY_PATH=$(LLP) $(CXX) $^ $(INCLUDEDIRS) -L$(MARIADB_TEST_DEP)/libmariadb $(COMMONARGS) -o $@
 
 eof_conn_options_check-t: eof_conn_options_check-t.cpp $(TESTS_DEPS)
-	$(CXX) -DDEBUG eof_conn_options_check-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -L$(TAP_DEPS_LIBS) $(MYLIBS) -ltap -Wl,--no-as-needed -ldl -lpthread -o eof_conn_options_check-t -DGITVERSION=\"$(GIT_VERSION)\"
+	LD_LIBRARY_PATH=$(LLP) $(CXX) $< $(INCLUDEDIRS) $(LDIRS) $(COMMONARGS) -o $@
 
 eof_fast_forward-t: eof_fast_forward-t.cpp $(TESTS_DEPS)
-	$(CXX) -DDEBUG eof_fast_forward-t.cpp $(INCLUDEDIRS) $(LDIRS) $(OPT) -std=c++11 -I$(TAP_LIBDIR) -L$(TAP_LIBDIR) -ltap $(MYLIBS) -Wl,--no-as-needed -ldl -lpthread -o eof_fast_forward-t -DGITVERSION=\"$(GIT_VERSION)\"
+	LD_LIBRARY_PATH=$(LLP) $(CXX) $< $(INCLUDEDIRS) $(LDIRS) $(COMMONARGS) -o $@
 
 else
 .PHONY: all

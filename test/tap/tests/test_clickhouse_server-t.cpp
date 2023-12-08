@@ -51,9 +51,17 @@ std::vector<std::pair<std::string,std::string>> credentials = {
 	{"cliuser4", "clipass4"}
 };
 
+int set_clickhouse_host(MYSQL *pa, const char *h) {
+	std::string query = "SET clickhouse-host=" + std::string(h);
+	diag("Line: %d . Setting clickhouse-host to '%s'", __LINE__ , h);
+	MYSQL_QUERY(pa, query.c_str()); 
+	MYSQL_QUERY(pa, "LOAD CLICKHOUSE VARIABLES TO RUNTIME");
+	return 0;
+}
+
 int set_clickhouse_port(MYSQL *pa, int p) {
 	std::string query = "SET clickhouse-port=" + std::to_string(p);
-	diag("Line: %d . Setting clickhouse-port to %d", __LINE__ , p);
+	diag("Line: %d . Setting clickhouse-port to '%d'", __LINE__ , p);
 	MYSQL_QUERY(pa, query.c_str()); 
 	MYSQL_QUERY(pa, "LOAD CLICKHOUSE VARIABLES TO RUNTIME");
 	return 0;
@@ -253,6 +261,8 @@ std::vector<query_spec> queries_set1 {
 	std::make_tuple<std::string, int>("SELECT NULL AS a", 0, 1),
 	std::make_tuple<std::string, int>("SELECT NULL+2 AS a, 'hello', NULL+1, 'world', NULL AS b", 0, 1),
 	std::make_tuple<std::string, int>("SELECT CONCAT('AAA',NULL)", 0, 1),
+	std::make_tuple<std::string, int>("SELECT CAST(-1234.1234, 'Decimal32(3)')", 0, 1),
+	std::make_tuple<std::string, int>("SELECT CAST(1000.0, 'Decimal128(3)')", 0, 1),
 	std::make_tuple<std::string, int>("DROP TABLE IF EXISTS table1", 0, -1),
 	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 0, -1),
 	std::make_tuple<std::string, int>("CREATE TABLE table1 (CounterID INT, EventDate DATE, col1 INT) ENGINE=MergeTree(EventDate, (CounterID, EventDate), 8192)", 1148, -1), // the second time it must fails
@@ -401,9 +411,17 @@ int main(int argc, char** argv) {
 			goto cleanup;
 		}
 
-		set_clickhouse_port(proxysql_admin,8000);
+		set_clickhouse_port(proxysql_admin, 8000);
 		test_crash(host_port.first.c_str(), host_port.second);
-		set_clickhouse_port(proxysql_admin,19000);
+
+		const std::string docker_mode = getenv("DOCKER_MODE");
+		if (docker_mode.find("dns") == docker_mode.size() - 3) {
+			set_clickhouse_host(proxysql_admin, "clickhouse");
+			set_clickhouse_port(proxysql_admin, 9000);
+		} else {
+			set_clickhouse_host(proxysql_admin, "127.0.0.1");
+			set_clickhouse_port(proxysql_admin, 19000);
+		}
 
 		MYSQL* proxysql_clickhouse = mysql_init(NULL);
 
@@ -497,8 +515,7 @@ int main(int argc, char** argv) {
 		// NOTE: Wait for ProxySQL to reconfigure, changing Clickhous interface.
 		// Trying to perform a connection immediately after changing the
 		// interface could lead to 'EADDRINUSE' in ProxySQL side.
-		// UPDATE: Timeout increased to '5' seconds to avoid previously described issue.
-		sleep(5);
+		sleep(1);
 
 		// Connect to the new interface
 		std::pair<std::string, int> new_host_port {};

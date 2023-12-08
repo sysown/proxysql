@@ -39,20 +39,20 @@ endif
 
 
 # determine good compiler version for stdc++17
-IS_CXX17 := 0
-ifeq ($(CXX),clang++)
-	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
-	IS_CXX17 := 1
-endif
-else
-	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
-ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
-	IS_CXX17 := 1
-endif
-endif
+#IS_CXX17 := 0
+#ifeq ($(CXX),clang++)
+#	CLANG_VERSION := $(shell clang -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#	CLANG_MIN_VER := $(shell echo 14.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#ifeq ($(CLANG_MIN_VER),$(firstword $(sort $(CLANG_VERSION) $(CLANG_MIN_VER))))
+#	IS_CXX17 := 1
+#endif
+#else
+#	GCC_VERSION := $(shell gcc -dumpfullversion 2>/dev/null || gcc -dumpversion | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#	GCC_MIN_VER := $(shell echo 8.2.0 | tr '.' ' ' | awk '{ printf("%04d.%04d.%04d", $$1, $$2, $$3) }')
+#ifeq ($(GCC_MIN_VER),$(firstword $(sort $(GCC_VERSION) $(GCC_MIN_VER))))
+#	IS_CXX17 := 1
+#endif
+#endif
 
 
 PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
@@ -85,14 +85,10 @@ endif
 libinjection: libinjection/libinjection/src/libinjection.a
 
 
-BIO_MATCH := $(shell ./libssl/verify-bio_st-match.sh \&>/dev/null; echo $$?)
-ifneq ($(BIO_MATCH),0)
-$(error Incompatible OpenSSL version: struct bio_st mismatch!)
-endif
-
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
+	cd libssl && ./verify-bio_st-match.sh
 #	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
 #	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
@@ -120,11 +116,13 @@ libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmi
 #endif
 	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
+	cd libhttpserver/libhttpserver && patch -p0 < ../expose_raw_url.patch
+	cd libhttpserver/libhttpserver && patch -p0 < ../replace_static_global_strings.patch
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
-	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
 
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
@@ -155,22 +153,15 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 ifeq ($(UNAME_S),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
-	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=no && CC=${CC} CXX=${CXX} ${MAKE}
+	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=yes && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl CC=${CC} CXX=${CXX} ${MAKE}
 
 curl: curl/curl/lib/.libs/libcurl.a
 
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
-	cd libmicrohttpd && rm -f libmicrohttpd || true
-ifeq ($(CENTOSVER),6)
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
-else
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.75 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
+	cd libmicrohttpd && tar -zxf libmicrohttpd-*.tar.gz
 #	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
-endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
@@ -195,17 +186,17 @@ lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-ifeq ($(IS_CXX17), 1)
-	echo ">>> Clickhouse CXX17"
+#ifeq ($(IS_CXX17), 1)
+#	echo ">>> Clickhouse CXX17"
 	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
-else
-	echo ">>> Clickhouse CXX11"
-	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
-	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
-	cd clickhouse-cpp && sed -i -e 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
-endif
+#else
+#	echo ">>> Clickhouse CXX11"
+#	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
+#	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
+#	cd clickhouse-cpp && sed -i -e 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
+#endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -215,6 +206,7 @@ clickhouse-cpp: clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-s
 libdaemon/libdaemon/libdaemon/.libs/libdaemon.a:
 	cd libdaemon && rm -rf libdaemon-*/ || true
 	cd libdaemon && tar -zxf libdaemon-0.14.tar.gz
+	cd libdaemon/libdaemon && patch -p0 < ../daemon_fork_umask.patch
 	cd libdaemon/libdaemon && cp ../config.guess . && chmod +x config.guess && cp ../config.sub . && chmod +x config.sub && ./configure --disable-examples
 	cd libdaemon/libdaemon && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -280,6 +272,10 @@ endif
 	# patches for x509 cache . See https://github.com/sysown/proxysql/issues/4117 (Slow connection time with SSL and large CA file , relevant on Aurora)
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.x509cache.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.x509cache.patch
+	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.sslkeylogfile.patch
+	cd mariadb-client-library/mariadb_client && patch include/ma_common.h < ../ma_common.h.sslkeylogfile.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.sslkeylogfile.patch
+	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.sslkeylogfile.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 
@@ -367,7 +363,6 @@ cleanall:
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-* || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
-	cd libmicrohttpd && rm -f libmicrohttpd || true
 	cd curl && rm -rf curl-*/ || true
 	cd libev && rm -rf libev-*/ || true
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true

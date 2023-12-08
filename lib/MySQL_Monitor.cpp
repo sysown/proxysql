@@ -1510,6 +1510,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 					mysql_thread___ssl_p2s_cipher);
 			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
 			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+			mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 		}
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
 		if (timeout==0) timeout=1;
@@ -1525,7 +1526,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 		if (myrc==NULL) {
 			mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
-			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, hostgroup_id, hostname, port, myerrno);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, myerrno);
 			if (myerrno < 2000) {
 				mysql_close(mysql);
 			} else {
@@ -1543,7 +1544,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 #else
 			fcntl(mysql->net.fd, F_SETFL, f|O_NONBLOCK);
 #endif /* FD_CLOEXEC */
-			MySQL_Monitor::dns_cache_update_socket(mysql->host, mysql->net.fd);
+			MySQL_Monitor::update_dns_cache_from_mysql_conn(mysql);
 	}
 	return true;
 }
@@ -3571,7 +3572,6 @@ gr_node_info_t gr_update_hosts_map(
 	// NOTE: This isn't specified in the initializer list due to current standard limitations
 	gr_node_info_t node_info {};
 	node_info.srv_st = gr_srv_st;
-	MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
 
 	// Consider 'time_now' to be 'now - fetch_duration'
 	unsigned long long time_now=realtime_time();
@@ -4463,11 +4463,9 @@ __error:
 
 void* MySQL_Monitor::monitor_dns_cache() {
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
-	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
+	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version = 0;
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
 	mysql_thr->curtime = monotonic_time();
-	MySQL_Monitor__thread_MySQL_Thread_Variables_version = GloMTH->get_global_version();
-	mysql_thr->refresh_variables();
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
 
 	constexpr unsigned int num_dns_resolver_threads = 1;
@@ -4527,7 +4525,9 @@ void* MySQL_Monitor::monitor_dns_cache() {
 		int cols = 0;
 		int affected_rows = 0;
 		SQLite3_result* resultset = NULL;
-		const char* query = (char*)"SELECT trim(hostname) FROM monitor_internal.mysql_servers UNION SELECT trim(hostname) FROM monitor_internal.proxysql_servers";
+		const char* query = (char*)"SELECT trim(hostname) FROM monitor_internal.mysql_servers WHERE port!=0"
+			" UNION "
+			"SELECT trim(hostname) FROM monitor_internal.proxysql_servers WHERE port!=0";
 
 		t1 = monotonic_time();
 
@@ -5264,7 +5264,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
 	int rc;
 	//char *query=NULL;
 	char *query1=NULL;
-	query1=(char *)"INSERT INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
+	query1=(char *)"INSERT OR IGNORE INTO mysql_server_galera_log VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)";
 	sqlite3_stmt *statement1=NULL;
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
 	//rc=(*proxy_sqlite3_prepare_v2)(mondb, query1, -1, &statement1, 0);
@@ -6478,15 +6478,23 @@ std::string MySQL_Monitor::dns_lookup(const char* hostname, bool return_hostname
 	return MySQL_Monitor::dns_lookup(std::string(hostname), return_hostname_if_lookup_fails, ip_count);
 }
 
-bool MySQL_Monitor::dns_cache_update_socket(const std::string& hostname, int socket_fd)
+bool MySQL_Monitor::update_dns_cache_from_mysql_conn(const MYSQL* mysql)
 {
+	assert(mysql);
+
+	// if port==0, UNIX socket is used
+	if (mysql->port == 0)
+		return false;
+
+	const std::string& hostname = mysql->host;
+		
 	// if IP was provided, no need to update dns cache
 	if (hostname.empty() || validate_ip(hostname))
 		return false;
 
 	bool result = false;
 
-	const std::string& ip_addr = get_connected_peer_ip_from_socket(socket_fd);
+	const std::string& ip_addr = get_connected_peer_ip_from_socket(mysql->net.fd);
 	
 	if (ip_addr.empty() == false) {
 		result = _dns_cache_update(hostname, { ip_addr });
@@ -6622,11 +6630,15 @@ void DNS_Cache::remove(const std::string& hostname) {
 }
 
 void DNS_Cache::clear() {
+	size_t records_removed = 0;
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
+	records_removed = records.size();
 	records.clear();
 	rc = pthread_rwlock_unlock(&rwlock_);
 	assert(rc == 0);
+	if (records_removed)
+		__sync_fetch_and_add(&GloMyMon->dns_cache_record_updated, records_removed);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "DNS cache was cleared.\n");
 }
 
@@ -8001,7 +8013,7 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 void MySQL_Monitor::monitor_galera_async() {
 
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
-
+	std::set<std::string> checked_servers;
 	pthread_mutex_lock(&galera_mutex);
 	assert(Galera_Hosts_resultset);
 	mmsds.reserve(Galera_Hosts_resultset->rows_count);
@@ -8009,6 +8021,11 @@ void MySQL_Monitor::monitor_galera_async() {
 
 	for (std::vector<SQLite3_row*>::iterator it = Galera_Hosts_resultset->rows.begin(); it != Galera_Hosts_resultset->rows.end(); ++it) {
 		const SQLite3_row* r = *it;
+		// r->fields[0] = writer_hostgroup, r->fields[1] = hostname, r->fields[2] = port
+		auto ret = checked_servers.insert(std::string(r->fields[0]) + ":" + std::string(r->fields[1]) + ":" + std::string(r->fields[2]));
+		if (ret.second == false) // duplicate server entry
+			continue;
+
 		bool rc_ping = server_responds_to_ping(r->fields[1], atoi(r->fields[2]));
 		if (rc_ping) { // only if server is responding to pings
 

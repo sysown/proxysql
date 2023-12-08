@@ -62,6 +62,36 @@
 
 using namespace clickhouse;
 
+std::string dec128_to_pchar(Int128 value, size_t scale) {
+// code borrowed from https://github.com/bderleta/php-clickhouse/blob/master/conversions.h
+	   bool sign = (value < 0);
+	   char buffer48[48];
+	   char* s = &buffer48[47];
+	   size_t w = 0;
+	   *(--s) = 0;
+	   if (sign)
+			   value = -value;
+	   while (value) {
+			   Int128 v = value;
+			   v %= 10;
+			   char c = (char)v;
+			   *(--s) = c + '0';
+			   if ((++w) == scale)
+					   *(--s) = '.';
+			   value /= 10;
+	   }
+	   while (w < scale) {
+			   *(--s) = '0';
+			   if ((++w) == scale)
+					   *(--s) = '.';
+	   }
+	   if (w == scale)
+			   *(--s) = '0';
+	   if (sign)
+			   *(--s) = '-';
+	   return std::string(s);
+}
+
 __thread MySQL_Session * clickhouse_thread___mysql_sess;
 
 inline void ClickHouse_to_MySQL(const Block& block) {
@@ -99,7 +129,11 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 #endif // CXX17
 			}
 
-			if (cc >= clickhouse::Type::Code::Int8 && cc <= clickhouse::Type::Code::Float64) {
+			if (
+				(cc >= clickhouse::Type::Code::Int8 && cc <= clickhouse::Type::Code::Float64)
+				||
+				(cc >= clickhouse::Type::Code::Decimal && cc <= clickhouse::Type::Code::Decimal128)
+			) {
 				bool _unsigned = false;
 				uint16_t flags = is_null | 128;
 
@@ -149,6 +183,14 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 					case clickhouse::Type::Code::Float64:
 						type = MYSQL_TYPE_DOUBLE;
 						size = 22;
+						decimals = 31;
+						break;
+					case clickhouse::Type::Code::Decimal:
+					case clickhouse::Type::Code::Decimal32:
+					case clickhouse::Type::Code::Decimal64:
+					case clickhouse::Type::Code::Decimal128:
+						type = MYSQL_TYPE_NEWDECIMAL;
+						size = 32;
 						decimals = 31;
 						break;
 					default:
@@ -236,6 +278,15 @@ inline void ClickHouse_to_MySQL(const Block& block) {
 					break;
 				case clickhouse::Type::Code::Float64:
 					s=std::to_string(block[i]->As<ColumnFloat64>()->At(r));
+					break;
+				case clickhouse::Type::Code::Decimal:
+				case clickhouse::Type::Code::Decimal32:
+				case clickhouse::Type::Code::Decimal64:
+				case clickhouse::Type::Code::Decimal128:
+					{
+						size_t scale = block[i]->Type()->As<DecimalType>()->GetScale();
+						s = dec128_to_pchar(block[i]->As<ColumnDecimal>()->At(r), scale);
+					}
 					break;
 				case clickhouse::Type::Code::Enum8:
 					s=block[i]->As<ColumnEnum8>()->NameAt(r);;
@@ -1239,10 +1290,22 @@ __run_query:
 				myds->DSS=STATE_QUERY_SENT_DS;
 				std::stringstream buffer;
 				buffer << e.what();
-    			myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)buffer.str().c_str());
+				PtrSizeArray * PSarrayOUT = sess->client_myds->PSarrayOUT;
+				while (PSarrayOUT->len) { // free PSarrayOUT , for example it could store column definitions
+					PtrSize_t pkt;
+					PSarrayOUT->remove_index_fast(0,&pkt);
+					l_free(pkt.size, pkt.ptr);
+				}
+				myprot->generate_pkt_ERR(true,NULL,NULL,1,1148,(char *)"42000",(char *)buffer.str().c_str());
 				myds->DSS=STATE_SLEEP;
 				std::cerr << "Exception in query for ClickHouse: " << e.what() << std::endl;
-				sess->set_unhealthy();
+				if (strncmp((char *)"DB::Exception: Illegal type",buffer.str().c_str(),strlen("DB::Exception: Illegal type")) == 0) {
+					sess->set_unhealthy();
+				} else if (strncmp((char *)"DB::Exception",buffer.str().c_str(),strlen("DB::Exception")) == 0) {
+					// do nothing
+				} else {
+					sess->set_unhealthy();
+				}
 			}
 		}
 		l_free(pkt->size-sizeof(mysql_hdr),query_no_space); // it is always freed here
@@ -1363,7 +1426,8 @@ static void *child_mysql(void *arg) {
 		myds->revents=fds[0].revents;
 		int rb = 0;
 		rb = myds->read_from_net();
-		if (myds->net_failure) goto __exit_child_mysql;
+		if (myds->net_failure)
+			goto __exit_child_mysql;
 		myds->read_pkts();
 		if (myds->encrypted == true) {
 			// PMC-10004
@@ -1375,13 +1439,19 @@ static void *child_mysql(void *arg) {
 			// We finally removed the chunk size as it seems that any size is possible.
 			while (rb > 0) {
 				rb = myds->read_from_net();
-				if (myds->net_failure) goto __exit_child_mysql;
+				if (myds->net_failure)
+					goto __exit_child_mysql;
 				myds->read_pkts();
 			}
 		}
 		sess->to_process=1;
 		int rc=sess->handler();
-		if (rc==-1) goto __exit_child_mysql;
+		if (rc==-1)
+			goto __exit_child_mysql;
+		if (sess->healthy==0) {
+			proxy_error("Closing clickhouse connection because unhealthy\n");
+			goto __exit_child_mysql;
+		}
 	}
 
 __exit_child_mysql:
@@ -1474,8 +1544,11 @@ __end_while_pool:
                                 } else {
                                         c_split_2(sn, ":" , &add, &port);
                                 }
-
+#ifdef SO_REUSEPORT
+				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128, true) : listen_on_unix(add, 128));
+#else
 				int s = ( atoi(port) ? listen_on_port(add, atoi(port), 128) : listen_on_unix(add, 128));
+#endif // SO_REUSEPORT
 				if (s>0) { fds[nfds].fd=s; fds[nfds].events=POLLIN; fds[nfds].revents=0; callback_func[nfds]=0; socket_names[nfds]=strdup(sn); nfds++; }
 				if (add) free(add);
 				if (port) free(port);

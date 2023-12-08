@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This script allows to manually check that 'test_sqlite3_server-t' is resillient to port change collisions
 # for 'SQLite3' interface. It assumes that the port being used is the default '6030'. The script should be

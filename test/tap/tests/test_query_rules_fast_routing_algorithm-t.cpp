@@ -95,7 +95,8 @@ int extract_sess_qpo_dest_hg(MYSQL* proxy) {
 
 int check_fast_routing_rules(MYSQL* proxy, uint32_t rng_init, uint32_t rng_end) {
 	for (uint32_t i = rng_init; i < rng_end; i += 2) {
-		const string schema { "randomschemaname" + std::to_string(i) };
+//		const string schema { "randomschemaname" + std::to_string(i) };
+		const string schema { "test" + std::to_string(i) };
 
 		diag("Changing schema to '%s'", schema.c_str());
 		if (mysql_select_db(proxy, schema.c_str())) {
@@ -168,7 +169,8 @@ int create_fast_routing_rules_range(
 	MYSQL_QUERY_T(admin, ("DELETE FROM mysql_query_rules_fast_routing WHERE destination_hostgroup BETWEEN " + init + " AND " + end).c_str());
 
 	for (uint32_t i = rng_init; i < rng_end; i += 2) {
-		const string schema { "randomschemaname" + std::to_string(i) + "" };
+//		const string schema { "randomschemaname" + std::to_string(i) + "" };
+		const string schema { "test" + std::to_string(i) + "" };
 		const string user { cl.username };
 		string q = "INSERT INTO mysql_query_rules_fast_routing (username, schemaname, flagIN, destination_hostgroup, comment) VALUES ";
 
@@ -244,6 +246,8 @@ int test_fast_routing_algorithm(
 	if (c_err) { return EXIT_FAILURE; }
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
+	usleep(1000*1000);
+
 	// Seek end of file for error log
 	errlog.seekg(0, std::ios::end);
 	// Get current last id from debug db
@@ -284,6 +288,8 @@ int test_fast_routing_algorithm(
 	diag("Testing 'query_rules_fast_routing_algorithm=%d'", new_algo);
 	MYSQL_QUERY_T(admin, ("SET mysql-query_rules_fast_routing_algorithm=" + std::to_string(new_algo)).c_str());
 	MYSQL_QUERY_T(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+
+	usleep(1000*1000);
 
 	// Seek end of file for error log
 	errlog.seekg(0, std::ios::end);

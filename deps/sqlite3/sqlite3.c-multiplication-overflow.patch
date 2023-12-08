@@ -1,4 +1,4 @@
-@@ -173310,10 +173310,10 @@
+@@ -177218,10 +177218,10 @@
  #ifndef SQLITE_OMIT_TWOSIZE_LOOKASIDE
    if( sz>=LOOKASIDE_SMALL*3 ){
      nBig = szAlloc/(3*LOOKASIDE_SMALL+sz);

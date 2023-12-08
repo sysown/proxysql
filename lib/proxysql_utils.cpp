@@ -1,7 +1,9 @@
 #include "proxysql_utils.h"
+#include "mysqld_error.h"
 
 #include <functional>
 #include <sstream>
+#include <algorithm>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -239,6 +241,9 @@ int wexecvp(
 		// Duplicate file argument to avoid manual duplication
 		_argv.insert(_argv.begin(), file.c_str());
 
+		// close all files , with the exception of the pipes
+		close_all_non_term_fd({ CHILD_READ_FD, CHILD_WRITE_FD, CHILD_WRITE_ERR, PARENT_READ_FD, PARENT_READ_ERR, PARENT_WRITE_FD});
+
 		// Copy the pipe descriptors
 		int dup_read_err = dup2(CHILD_READ_FD, STDIN_FILENO);
 		int dup_write_err = dup2(CHILD_WRITE_FD, STDOUT_FILENO);
@@ -256,6 +261,7 @@ int wexecvp(
 		close(PARENT_READ_FD);
 		close(PARENT_READ_ERR);
 		close(PARENT_WRITE_FD);
+
 
 		char** args = const_cast<char**>(_argv.data());
 		child_err = execvp(file.c_str(), args);
@@ -396,4 +402,52 @@ std::string generate_multi_rows_query(int rows, int params) {
 		}
 	}
 	return s;
+}
+
+void close_all_non_term_fd(std::vector<int> excludeFDs) {
+	DIR *d;
+	struct dirent *dir;
+	d = opendir("/proc/self/fd");
+	if (d) {
+		while ((dir = readdir(d)) != NULL) {
+			if (strlen(dir->d_name) && dir->d_name[0] != '.') {
+				int fd = std::stol(std::string(dir->d_name));
+				if (fd > 2) {
+					if (std::find(excludeFDs.begin(), excludeFDs.end(), fd) == excludeFDs.end()) {
+						close(fd);
+					}
+				}
+			}
+		}
+		closedir(d);
+	} else {
+		struct rlimit nlimit;
+		int rc = getrlimit(RLIMIT_NOFILE, &nlimit);
+		if (rc == 0) {
+			for (unsigned int fd = 3; fd < nlimit.rlim_cur; fd++) {
+				if (std::find(excludeFDs.begin(), excludeFDs.end(), fd) == excludeFDs.end()) {
+					close(fd);
+				}
+			}
+		}
+	}
+}
+
+std::pair<int,const char*> get_dollar_quote_error(const char* version) {
+	const char* ER_PARSE_MSG {
+		"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server"
+			" version for the right syntax to use near '$$' at line 1"
+	};
+
+	if (strcasecmp(version,"8.1.0") == 0) {
+		return { ER_PARSE_ERROR, ER_PARSE_MSG };
+	} else {
+		if (strncasecmp(version, "8.1", 3) == 0) {
+			// SQLSTATE: 42000
+			return { ER_PARSE_ERROR, ER_PARSE_MSG };
+		} else {
+			// SQLSTATE: 42S22
+			return { ER_BAD_FIELD_ERROR, "Unknown column '$$' in 'field list'" };
+		}
+	}
 }

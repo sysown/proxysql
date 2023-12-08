@@ -1,0 +1,13 @@
+diff --git libdaemon/dfork.c libdaemon/dfork.c
+index 70fce86..8373038 100644
+--- libdaemon/dfork.c
++++ libdaemon/dfork.c
+@@ -235,7 +235,7 @@ pid_t daemon_fork(void) {
+             goto fail;
+         }
+ 
+-        umask(0077);
++        // umask(0077);
+ 
+         if (chdir("/") < 0) {
+             daemon_log(LOG_ERR, "chdir() failed: %s", strerror(errno));

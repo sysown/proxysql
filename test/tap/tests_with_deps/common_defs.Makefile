@@ -56,6 +56,10 @@ PROMETHEUS_PATH=$(DEPS_PATH)/prometheus-cpp/prometheus-cpp
 PROMETHEUS_IDIR=$(PROMETHEUS_PATH)/pull/include -I$(PROMETHEUS_PATH)/core/include
 PROMETHEUS_LDIR=$(PROMETHEUS_PATH)/lib
 
+JEMALLOC_PATH=$(DEPS_PATH)/jemalloc/jemalloc
+JEMALLOC_IDIR=$(JEMALLOC_PATH)/include/jemalloc
+JEMALLOC_LDIR=$(JEMALLOC_PATH)/lib
+
 IDIR=$(PROXYSQL_PATH)/include
 LDIR=$(PROXYSQL_PATH)/lib
 TAP_LIBDIR=$(PROXYSQL_PATH)/test/tap/tap
@@ -79,7 +83,7 @@ LDIRS=-L$(TAP_LIBDIR) -L$(LDIR) -L$(JEMALLOC_LDIR) $(LIBCONFIG_LDIR) -L$(RE2_PAT
 	  -L$(DAEMONPATH_LDIR) -L$(PCRE_LDIR) -L$(MICROHTTPD_LDIR) -L$(LIBHTTPSERVER_LDIR) -L$(LIBINJECTION_LDIR)\
 	  -L$(CURL_LDIR) -L$(EV_LDIR) -L$(SSL_LDIR) -L$(PROMETHEUS_LDIR)
 
-MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lmariadbclient -lcurl -lssl -lcrypto -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt -lsqlite3
+MYLIBS=-Wl,--export-dynamic -Wl,-Bstatic -lmariadbclient -lcurl -lssl -lcrypto -Wl,-Bdynamic -lgnutls -lpthread -lm -lz -lrt
 STATIC_LIBS= $(SSL_LDIR)/libssl.a $(SSL_LDIR)/libcrypto.a
 
 # Root directory for the deps used for testing purposes
