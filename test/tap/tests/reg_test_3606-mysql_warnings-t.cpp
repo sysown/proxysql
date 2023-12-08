@@ -26,7 +26,6 @@
 #include "tap.h"
 #include "command_line.h"
 #include "utils.h"
-#include "utils.h"
 
 using std::vector;
 using std::tuple;
