@@ -133,15 +133,8 @@ volatile static unsigned int __global_MySQL_Thread_Variables_version;
 
 
 
-static unsigned int near_pow_2 (unsigned int n) {
-	unsigned int i = 1;
-	while (i < n) i <<= 1;
-	return i ? i : n;
-}
-
-
 void ProxySQL_Poll::shrink() {
-	unsigned int new_size=near_pow_2(len+1);
+	unsigned int new_size=l_near_pow_2(len+1);
 	fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
 	myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
 	last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
@@ -151,7 +144,7 @@ void ProxySQL_Poll::shrink() {
 
 void ProxySQL_Poll::expand(unsigned int more) {
 	if ( (len+more) > size ) {
-		unsigned int new_size=near_pow_2(len+more);
+		unsigned int new_size=l_near_pow_2(len+more);
 		fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
 		myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
 		last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
