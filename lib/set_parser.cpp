@@ -79,6 +79,8 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1() {
 
 	re2::RE2 re0("^\\s*SET\\s+", *opt2);
 	re2::RE2::Replace(&query, re0, "");
+	re2::RE2 re1("(\\s|;)+$", *opt2); // remove trailing spaces and semicolon
+	re2::RE2::Replace(&query, re1, "");
 
 	std::map<std::string,std::vector<std::string>> result;
 
@@ -104,7 +106,12 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		} else if (value4 != "") {
 			// VARIABLE
-		value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
+			if (strcasecmp("transaction_isolation", value4.c_str()) == 0) {
+				value4 = "tx_isolation";
+			} else if (strcasecmp("transaction_read_only", value4.c_str()) == 0) {
+				value4 = "tx_read_only";
+			}
+			value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
 			key = value4;
 			if (value5 == "''" || value5 == "\"\"") {
 				op.push_back("");
@@ -171,12 +178,32 @@ void SetParser::generateRE_parse1v2() {
 
 	string vp = "NULL"; // NULL
 	var_patterns.push_back(vp);
-	vp = "\\w+"; // single word
-	var_patterns.push_back(vp);
-	for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
-		string s = *it + vp + *it;
-		var_patterns.push_back(s); // add with quote
+	//vp = "\\w+"; // single word
+	//var_patterns.push_back(vp);
+	{
+		string vp0 = "(?:\\w|\\d)+"; // single word with letters and digits , for example utf8mb4 and latin1
+	//var_patterns.push_back(vp);
+/*
+		string vp1 = "(?:" + vp0 + "(?:," + vp0 + ")*)"; // multiple words (letters and digits) separated by commas WITHOUT any spaces between words . Used also for sql_mode , example: ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO
+		//var_patterns.push_back(vp1); // do NOT add without quote
+		for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
+			string s = *it + vp1 + *it;
+			var_patterns.push_back(s); // add with quote
+		}
+*/
+		string vp2 = "(?:" + vp0 + "(?:-" + vp0 + ")*)"; // multiple words (letters and digits) separated by dash, WITHOUT any spaces between words . Used also for transaction isolation
+		var_patterns.push_back(vp2);
+		for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
+			string s = *it + vp2 + *it;
+			var_patterns.push_back(s); // add with quote
+		}
 	}
+	//vp = "(?:\\w|\\d)+(?:-|\\w|\\d+)*"; // multiple words (letters and digits) separated by dash, WITHOUT any spaces between words . Used ialso for transaction isolation
+	//var_patterns.push_back(vp);
+//	for (auto it = quote_symbol.begin(); it != quote_symbol.end(); it++) {
+//		string s = *it + vp + *it;
+//		var_patterns.push_back(s); // add with quote
+//	}
 
 	vp = "\\w+(?:,\\w+)+"; // multiple words separated by commas, WITHOUT any spaces between words
 	// NOTE: we do not use multiple words without quotes
@@ -334,6 +361,9 @@ std::map<std::string,std::vector<std::string>> SetParser::parse1v2() {
 
 	re2::RE2 re0("^\\s*SET\\s+", *parse1v2_opt2);
 	re2::RE2::Replace(&query, re0, "");
+	re2::RE2 re1("(\\s|;)+$", *parse1v2_opt2); // remove trailing spaces and semicolon
+	re2::RE2::Replace(&query, re1, "");
+
 VALGRIND_ENABLE_ERROR_REPORTING;
 	std::string var;
 	std::string value1, value2, value3, value4, value5;
@@ -356,6 +386,12 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 			}
 		} else if (value4 != "") {
 			// VARIABLE
+			remove_quotes(value4);
+			if (strcasecmp("transaction_isolation", value4.c_str()) == 0) {
+				value4 = "tx_isolation";
+			} else if (strcasecmp("transaction_read_only", value4.c_str()) == 0) {
+				value4 = "tx_read_only";
+			}
 			value5.erase(value5.find_last_not_of(" \n\r\t,")+1);
 			key = value4;
 			if (value5 == "''" || value5 == "\"\"") {
@@ -415,17 +451,17 @@ std::map<std::string,std::vector<std::string>> SetParser::parse2() {
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "SET parsing: v1='%s' , v2='%s' , v3='%s' , v4='%s' , v5='%s'\n", value1.c_str(), value2.c_str(), value3.c_str(), value4.c_str(), value5.c_str());
 #endif // DEBUG
 		std::string key;
-		if (value1 != "") { // session is specified
+		//if (value1 != "") { // session is specified
 			if (value2 != "") { // isolation level
-				key = value2;
+				key = value1 + ":" + value2;
 				std::transform(value3.begin(), value3.end(), value3.begin(), ::toupper);
 				op.push_back(value3);
 			} else {
-				key = value4;
+				key = value1 + ":" + value4;
 				std::transform(value5.begin(), value5.end(), value5.begin(), ::toupper);
 				op.push_back(value5);
 			}
-		}
+		//}
 		std::transform(key.begin(), key.end(), key.begin(), ::tolower);
 		result[key] = op;
 	}

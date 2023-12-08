@@ -119,10 +119,7 @@ static const std::set<std::string> mysql_variables_strings = {
 	"wsrep_osu_method",
 };
 
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
-extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
+#include "proxysql_find_charset.h"
 
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
@@ -588,6 +585,7 @@ MySQL_Session::MySQL_Session() {
 	mirrorPkt.ptr=NULL;
 	mirrorPkt.size=0;
 	set_status(session_status___NONE);
+	warning_in_hg = -1;
 
 	idle_since = 0;
 	transaction_started_at = 0;
@@ -640,6 +638,7 @@ void MySQL_Session::reset() {
 	autocommit_handled=false;
 	sending_set_autocommit=false;
 	autocommit_on_hostgroup=-1;
+	warning_in_hg = -1;
 	current_hostgroup=-1;
 	default_hostgroup=-1;
 	locked_on_hostgroup=-1;
@@ -917,9 +916,16 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 	// in this part of the code (as at release 2.4.3) where we call
 	// NumActiveTransactions() with the check_savepoint flag .
 	// This to try to handle MySQL bug https://bugs.mysql.com/bug.php?id=107875
-	unsigned int nTrx=NumActiveTransactions(true);
-	if (nTrx) {
+	//
+	// Since we are limited to forwarding just one 'COMMIT|ROLLBACK', we work under the assumption that we
+	// only have one active transaction. Under this premise, we should execute this command under that
+	// specific connection, for that, we update 'current_hostgroup' with the first active transaction we are
+	// able to find. If more transactions are simultaneously open for the session, more 'COMMIT|ROLLBACK'
+	// commands are required to be issued by the client to continue ending transactions.
+	int hg = FindOneActiveTransaction(true);
+	if (hg != -1) {
 		// there is an active transaction, we must forward the request
+		current_hostgroup = hg;
 		return false;
 	} else {
 		// there is no active transaction, we will just reply OK
@@ -1117,6 +1123,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 	j["last_HG_affected_rows"] = last_HG_affected_rows;
 	j["active_transactions"] = active_transactions;
 	j["transaction_time_ms"] = thread->curtime - transaction_started_at;
+	j["warning_in_hg"] = warning_in_hg;
 	j["gtid"]["hid"] = gtid_hid;
 	j["gtid"]["last"] = ( strlen(gtid_buf) ? gtid_buf : "" );
 	j["qpo"]["create_new_connection"] = qpo->create_new_conn;
@@ -1254,6 +1261,8 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["status"]["no_multiplex_HG"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG);
 				j["backends"][i]["conn"]["status"]["compression"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
 				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
+				j["backends"][i]["conn"]["status"]["has_warnings"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+				j["backends"][i]["conn"]["warning_count"] = _myconn->warning_count;
 				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
 				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
@@ -1378,6 +1387,22 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			RequestEnd(NULL);
 		}
 		l_free(pkt->size,pkt->ptr);
+		return true;
+	}
+	// MySQL client check command for dollars quote support, starting at version '8.1.0'. See #4300.
+	if ((pkt->size == strlen("SELECT $$") + 5) && strncasecmp("SELECT $$", (char*)pkt->ptr + 5, pkt->size - 5) == 0) {
+		pair<int,const char*> err_info { get_dollar_quote_error(mysql_thread___server_version) };
+
+		client_myds->DSS=STATE_QUERY_SENT_NET;
+		client_myds->myprot.generate_pkt_ERR(true, NULL, NULL, 1, err_info.first, (char *)"HY000", err_info.second, true);
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
+
+		if (mirror==false) {
+			RequestEnd(NULL);
+		}
+		l_free(pkt->size,pkt->ptr);
+
 		return true;
 	}
 	if (locked_on_hostgroup >= 0 && (strncasecmp((char *)"SET ",(char *)pkt->ptr+5,4)==0)) {
@@ -1530,19 +1555,41 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			return true;
 		}
 	}
-	if ( (pkt->size == 18) && (strncasecmp((char *)"SHOW WARNINGS",(char *)pkt->ptr+5,13)==0) ) {
-		SQLite3_result * resultset=new SQLite3_result(3);
-		resultset->add_column_definition(SQLITE_TEXT,"Level");
-		resultset->add_column_definition(SQLITE_TEXT,"Code");
-		resultset->add_column_definition(SQLITE_TEXT,"Message");
+	// if query digest is disabled, warnings in ProxySQL are also deactivated, 
+	// resulting in an empty response being sent to the client.
+	if ((pkt->size == 18) && (strncasecmp((char*)"SHOW WARNINGS", (char*)pkt->ptr + 5, 13) == 0) &&
+		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
+		SQLite3_result* resultset = new SQLite3_result(3);
+		resultset->add_column_definition(SQLITE_TEXT, "Level");
+		resultset->add_column_definition(SQLITE_TEXT, "Code");
+		resultset->add_column_definition(SQLITE_TEXT, "Message");
 		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
-		if (mirror==false) {
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		if (mirror == false) {
 			RequestEnd(NULL);
 		}
-		l_free(pkt->size,pkt->ptr);
+		l_free(pkt->size, pkt->ptr);
+		return true;
+	}
+	// if query digest is disabled, warnings in ProxySQL are also deactivated, 
+	// resulting in zero warning count sent to the client.
+	if ((pkt->size == 27) && (strncasecmp((char*)"SHOW COUNT(*) WARNINGS", (char*)pkt->ptr + 5, 22) == 0) &&
+		CurrentQuery.QueryParserArgs.digest_text == nullptr) {
+		SQLite3_result* resultset = new SQLite3_result(1);
+		resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
+		char* pta[1];
+		pta[0] = (char*)"0";
+		resultset->add_row(pta);
+		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+		delete resultset;
+		client_myds->DSS = STATE_SLEEP;
+		status = WAITING_CLIENT_DATA;
+		if (mirror == false) {
+			RequestEnd(NULL);
+		}
+		l_free(pkt->size, pkt->ptr);
 		return true;
 	}
 	// 'LOAD DATA LOCAL INFILE' is unsupported. We report an specific error to inform clients about this fact. For more context see #833.
@@ -1576,7 +1623,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 }
 
 void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___create_mirror_session() {
-	if (pktH->size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
+	if (pkt.size < 15*1024*1024 && (qpo->mirror_hostgroup >= 0 || qpo->mirror_flagOUT >= 0)) {
 		// check if there are too many mirror sessions in queue
 		if (thread->mirror_queue_mysql_sessions->len >= (unsigned int)mysql_thread___mirror_max_queue_length) {
 			return;
@@ -1625,9 +1672,9 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				newsess->default_schema=strdup(default_schema);
 			}
 		}
-		newsess->mirrorPkt.size=pktH->size;
+		newsess->mirrorPkt.size=pkt.size;
 		newsess->mirrorPkt.ptr=l_alloc(newsess->mirrorPkt.size);
-		memcpy(newsess->mirrorPkt.ptr,pktH->ptr,pktH->size);
+		memcpy(newsess->mirrorPkt.ptr,pkt.ptr,pkt.size);
 
 		if (thread->mirror_queue_mysql_sessions->len==0) {
 			// there are no sessions in the queue, we try to execute immediately
@@ -2561,9 +2608,15 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			char *sv = mybe->server_myds->myconn->mysql->server_version;
 			if (strncmp(sv,(char *)"8",1)==0) {
 				sprintf(query,q,"transaction_isolation", var_value);
-			}
-			else {
+			} else {
 				sprintf(query,q,"tx_isolation", var_value);
+			}
+		} else if (strncasecmp("tx_read_only", var_name, 12) == 0) {
+			char* sv = mybe->server_myds->myconn->mysql->server_version;
+			if (strncmp(sv, (char *)"8", 1) == 0) {
+				sprintf(query,q,"transaction_read_only", var_value);
+			} else {
+				sprintf(query,q,"tx_read_only", var_value);
 			}
 		} else if (strncasecmp("aurora_read_replica_read_committed", var_name, 34) == 0) {
 			// If aurora_read_replica_read_committed is set, isolation level is
@@ -2573,14 +2626,7 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 			// https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraMySQL.Reference.html#AuroraMySQL.Reference.IsolationLevels
 			// Basically, to change isolation level you must first set
 			// aurora_read_replica_read_committed , and then isolation level
-			MySQL_Connection *beconn = mybe->server_myds->myconn;
-			if (beconn->var_hash[SQL_ISOLATION_LEVEL] != 0) {
-				beconn->var_hash[SQL_ISOLATION_LEVEL] = 0;
-				if (beconn->variables[SQL_ISOLATION_LEVEL].value) {
-					free(beconn->variables[SQL_ISOLATION_LEVEL].value);
-					beconn->variables[SQL_ISOLATION_LEVEL].value = NULL;
-				}
-			}
+			mysql_variables.server_reset_value(this, SQL_ISOLATION_LEVEL);
 			sprintf(query,q,var_name, var_value);
 		} else {
 			sprintf(query,q,var_name, var_value);
@@ -2597,6 +2643,15 @@ bool MySQL_Session::handler_again___status_SETTING_GENERIC_VARIABLE(int *_rc, co
 		myds->DSS = STATE_MARIADB_GENERIC;
 		st=previous_status.top();
 		previous_status.pop();
+
+		if (strcasecmp("transaction isolation level", var_name) == 0) {
+			mysql_variables.server_reset_value(this, SQL_NEXT_ISOLATION_LEVEL);
+			mysql_variables.client_reset_value(this, SQL_NEXT_ISOLATION_LEVEL);
+		} else if (strcasecmp("transaction read", var_name) == 0) {
+			mysql_variables.server_reset_value(this, SQL_NEXT_TRANSACTION_READ);
+			mysql_variables.client_reset_value(this, SQL_NEXT_TRANSACTION_READ);
+		}
+
 		NEXT_IMMEDIATE_NEW(st);
 	} else {
 		if (rc==-1) {
@@ -3245,7 +3300,8 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 				(begint.tv_sec*1000000000+begint.tv_nsec);
 		}
 		assert(qpo);	// GloQPro->process_mysql_query() should always return a qpo
-		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup);
+		// setting 'prepared' to prevent fetching results from the cache if the digest matches
+		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_prepare_stmt);
 		if (rc_break==true) {
 			return;
 		}
@@ -3413,7 +3469,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 		CurrentQuery.stmt_meta=stmt_meta;
 		//current_hostgroup=qpo->destination_hostgroup;
-		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, true);
+		rc_break=handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(&pkt, &lock_hostgroup, ps_type_execute_stmt);
 		if (rc_break==true) {
 			return;
 		}
@@ -4310,6 +4366,7 @@ bool MySQL_Session::handler_rc0_PROCESSING_STMT_PREPARE(enum session_status& st,
 			stmt_info->digest_text=strdup(CurrentQuery.QueryParserArgs.digest_text);
 			stmt_info->digest=CurrentQuery.QueryParserArgs.digest;	// copy digest
 			stmt_info->MyComQueryCmd=CurrentQuery.MyComQueryCmd; // copy MyComQueryCmd
+			stmt_info->calculate_mem_usage();
 		}
 	}
 	global_stmtid=stmt_info->statement_id;
@@ -4555,9 +4612,9 @@ void MySQL_Session::handler_minus1_GenerateErrorMessage(MySQL_Data_Stream *myds,
 	switch (status) {
 		case PROCESSING_QUERY:
 			if (myconn) {
-				MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myds);
+				MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->warning_count, myds);
 			} else {
-				MySQL_Result_to_MySQL_wire(NULL, NULL, myds);
+				MySQL_Result_to_MySQL_wire(NULL, NULL, 0, myds);
 			}
 			break;
 		case PROCESSING_STMT_PREPARE:
@@ -4723,8 +4780,6 @@ int MySQL_Session::handler() {
 	bool wrong_pass=false;
 	if (to_process==0) return 0; // this should be redundant if the called does the same check
 	proxy_debug(PROXY_DEBUG_NET,1,"Thread=%p, Session=%p -- Processing session %p\n" , this->thread, this, this);
-	PtrSize_t pkt;
-	pktH=&pkt;
 	//unsigned int j;
 	//unsigned char c;
 
@@ -5035,7 +5090,7 @@ handler_again:
 
 					switch (status) {
 						case PROCESSING_QUERY:
-							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->myds);
+							MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->warning_count, myconn->myds);
 							break;
 						case PROCESSING_STMT_PREPARE:
 							{
@@ -5124,7 +5179,7 @@ handler_again:
 								break;
 							// rc==2 : a multi-resultset (or multi statement) was detected, and the current statement is completed
 							case 2:
-								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->myds);
+								MySQL_Result_to_MySQL_wire(myconn->mysql, myconn->MyRS, myconn->warning_count, myconn->myds);
 								  if (myconn->MyRS) { // we also need to clear MyRS, so that the next staement will recreate it if needed
 										if (myconn->MyRS_reuse) {
 											delete myconn->MyRS_reuse;
@@ -5158,6 +5213,8 @@ handler_again:
 		case SETTING_TRANSACTION_READ:
 		case SETTING_CHARSET:
 		case SETTING_VARIABLE:
+		case SETTING_NEXT_ISOLATION_LEVEL:
+		case SETTING_NEXT_TRANSACTION_READ:
 			{
 				int rc = 0;
 				if (mysql_variables.update_variable(this, status, rc)) {
@@ -5950,7 +6007,7 @@ int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool
 }
 */
 
-bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, bool prepared) {
+bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, ps_type prepare_stmt_type) {
 /*
 	lock_hostgroup:
 		If this variable is set to true, this session will get lock to a
@@ -5969,22 +6026,86 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 
 	if (pkt->size > (unsigned int) mysql_thread___max_allowed_packet) {
 		handler_WCD_SS_MCQ_qpo_LargePacket(pkt);
+		reset_warning_hostgroup_flag_and_release_connection();
 		return true;
 	}
 
 	if (qpo->OK_msg) {
 		handler_WCD_SS_MCQ_qpo_OK_msg(pkt);
+		reset_warning_hostgroup_flag_and_release_connection();
 		return true;
 	}
 
 	if (qpo->error_msg) {
 		handler_WCD_SS_MCQ_qpo_error_msg(pkt);
+		reset_warning_hostgroup_flag_and_release_connection();
 		return true;
 	}
 
-	if (prepared) {	// for prepared statement we exit here
+	if (prepare_stmt_type & ps_type_execute_stmt) {	// for prepared statement execute we exit here
+		reset_warning_hostgroup_flag_and_release_connection();
 		goto __exit_set_destination_hostgroup;
 	}
+
+	// handle warnings
+	if (CurrentQuery.QueryParserArgs.digest_text) {
+		const char* dig_text = CurrentQuery.QueryParserArgs.digest_text;
+		const size_t dig_len = strlen(dig_text);
+
+		if (dig_len > 0) {
+			if ((dig_len == 13) && (strncasecmp(dig_text, "SHOW WARNINGS", 13) == 0)) {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig_text);
+				if (warning_in_hg > -1) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
+					current_hostgroup = warning_in_hg;
+					return false;
+				} else {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
+					std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(3));
+					resultset->add_column_definition(SQLITE_TEXT, "Level");
+					resultset->add_column_definition(SQLITE_TEXT, "Code");
+					resultset->add_column_definition(SQLITE_TEXT, "Message");
+					SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+					client_myds->DSS = STATE_SLEEP;
+					status = WAITING_CLIENT_DATA;
+					if (mirror == false) {
+						RequestEnd(NULL);
+					}
+					l_free(pkt->size, pkt->ptr);
+					return true;
+				}
+			}
+
+			if ((dig_len == 22) && (strncasecmp(dig_text, "SHOW COUNT(*) WARNINGS", 22) == 0)) {
+				proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Intercepted '%s'\n", dig_text);
+				std::string warning_count = "0";
+				if (warning_in_hg > -1) {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Changing current_hostgroup to '%d'\n", warning_in_hg);
+					current_hostgroup = warning_in_hg;
+					assert(mybe && mybe->server_myds && mybe->server_myds->myconn && mybe->server_myds->myconn->mysql);
+					warning_count = std::to_string(mybe->server_myds->myconn->warning_count);
+				}
+				else {
+					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "No warnings were detected in the previous query. Sending an empty response.\n");
+				}
+				std::unique_ptr<SQLite3_result> resultset(new SQLite3_result(1));
+				resultset->add_column_definition(SQLITE_TEXT, "@@session.warning_count");
+				char* pta[1];
+				pta[0] = (char*)warning_count.c_str();
+				resultset->add_row(pta);
+				SQLite3_to_MySQL(resultset.get(), NULL, 0, &client_myds->myprot, false, (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF));
+				client_myds->DSS = STATE_SLEEP;
+				status = WAITING_CLIENT_DATA;
+				if (mirror == false) {
+					RequestEnd(NULL);
+				}
+				l_free(pkt->size, pkt->ptr);
+				return true;
+			}
+		}
+	}
+
+	reset_warning_hostgroup_flag_and_release_connection();
 
 	// handle here #509, #815 and #816
 	if (CurrentQuery.QueryParserArgs.digest_text) {
@@ -6017,6 +6138,8 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			string nq=string((char *)CurrentQuery.QueryPointer,CurrentQuery.QueryLength);
 			RE2::GlobalReplace(&nq,(char *)"^/\\*!\\d\\d\\d\\d\\d SET(.*)\\*/",(char *)"SET\\1");
 			RE2::GlobalReplace(&nq,(char *)"(?U)/\\*.*\\*/",(char *)"");
+			// remove trailing space and semicolon if present. See issue#4380
+			nq.erase(nq.find_last_not_of(" ;") + 1);
 /*
 			// we do not threat SET SQL_LOG_BIN as a special case
 			if (match_regexes && match_regexes[0]->match(dig)) {
@@ -6449,6 +6572,33 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 								return false;
 							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ISOLATION to %s\n", value1.c_str());
 						}
+					} else if (var == "tx_read_only") {
+						std::string value1 = *values;
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET tx_read_only value %s\n", value1.c_str());
+
+						if (
+							(value1 == "0") ||
+							(strcasecmp(value1.c_str(), "false")==0) ||
+							(strcasecmp(value1.c_str(), "off")==0)
+						) {
+							value1 = "WRITE";
+						} else if (
+							(value1 == "1") ||
+							(strcasecmp(value1.c_str(), "true")==0) ||
+							(strcasecmp(value1.c_str(), "on")==0)
+						) {
+							value1 = "ONLY";
+						} else {
+							//proxy_warning("Unknown tx_read_only value \"%s\"\n", value1.c_str());
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
+						}
+						uint32_t read_only_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
+						if (mysql_variables.client_get_hash(this, SQL_TRANSACTION_READ) != read_only_int) {
+							if (!mysql_variables.client_set_value(this, SQL_TRANSACTION_READ, value1.c_str()))
+								return false;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TX ACCESS MODE to READ %s\n", value1.c_str());
+						}
 					} else if (std::find(mysql_variables.ignore_vars.begin(), mysql_variables.ignore_vars.end(), var) != mysql_variables.ignore_vars.end()) {
 						// this is a variable we parse but ignore
 						// see MySQL_Variables::MySQL_Variables() for a list of ignored variables
@@ -6567,27 +6717,51 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 			} else if (match_regexes && match_regexes[2]->match(dig)) {
 				SetParser parser(nq);
 				std::map<std::string, std::vector<std::string>> set = parser.parse2();
+
 				for(auto it = std::begin(set); it != std::end(set); ++it) {
-					std::string var = it->first;
-					auto values = std::begin(it->second);
-					proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
-					if (var == "isolation level") {
-						std::string value1 = *values;
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SESSION TRANSACTION ISOLATION LEVEL value %s\n", value1.c_str());
-						uint32_t isolation_level_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (mysql_variables.client_get_hash(this, SQL_ISOLATION_LEVEL) != isolation_level_int) {
-							if (!mysql_variables.client_set_value(this, SQL_ISOLATION_LEVEL, value1.c_str()))
-								return false;
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
+
+					const std::vector<std::string>& val = split_string(it->first, ':');
+
+					if (val.size() == 2) {
+
+						const auto values = std::begin(it->second);
+						const std::string& var = val[1];
+
+						enum mysql_variable_name isolation_level_val;
+						enum mysql_variable_name transaction_read_val;
+
+						if (val[0] == "session") {
+							isolation_level_val = SQL_ISOLATION_LEVEL;
+							transaction_read_val = SQL_TRANSACTION_READ;
+						} else {
+							isolation_level_val = SQL_NEXT_ISOLATION_LEVEL;
+							transaction_read_val = SQL_NEXT_TRANSACTION_READ;
 						}
-					} else if (var == "read") {
-						std::string value1 = *values;
-						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET SESSION TRANSACTION READ value %s\n", value1.c_str());
-						uint32_t transaction_read_int=SpookyHash::Hash32(value1.c_str(),value1.length(),10);
-						if (mysql_variables.client_get_hash(this, SQL_TRANSACTION_READ) != transaction_read_int) {
-							if (!mysql_variables.client_set_value(this, SQL_TRANSACTION_READ, value1.c_str()))
-								return false;
-							proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION READ to %s\n", value1.c_str());
+
+						proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET variable %s\n", var.c_str());
+						if (var == "isolation level") {
+							const std::string& value1 = *values;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s TRANSACTION ISOLATION LEVEL value %s\n", val[0].c_str(), value1.c_str());
+							const uint32_t isolation_level_int = SpookyHash::Hash32(value1.c_str(), value1.length(), 10);
+							if (mysql_variables.client_get_hash(this, isolation_level_val) != isolation_level_int) {
+								if (!mysql_variables.client_set_value(this, isolation_level_val, value1.c_str()))
+									return false;
+
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION ISOLATION LEVEL to %s\n", value1.c_str());
+							}
+						} else if (var == "read") {
+							const std::string& value1 = *values;
+							proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Processing SET %s TRANSACTION READ value %s\n", val[0].c_str(), value1.c_str());
+							const uint32_t transaction_read_int = SpookyHash::Hash32(value1.c_str(), value1.length(), 10);
+							if (mysql_variables.client_get_hash(this, transaction_read_val) != transaction_read_int) {
+								if (!mysql_variables.client_set_value(this, transaction_read_val, value1.c_str()))
+									return false;
+
+								proxy_debug(PROXY_DEBUG_MYSQL_COM, 8, "Changing connection TRANSACTION READ to %s\n", value1.c_str());
+							}
+						} else {
+							unable_to_parse_set_statement(lock_hostgroup);
+							return false;
 						}
 					} else {
 						unable_to_parse_set_statement(lock_hostgroup);
@@ -6793,12 +6967,12 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 	}
 
 	// handle command KILL #860
-	if (prepared == false) {
+	//if (prepared == false) {
 		if (handle_command_query_kill(pkt)) {
 			return true;
 		}
-	}
-	if (qpo->cache_ttl>0) {
+	//}
+	if (qpo->cache_ttl>0 && ((prepare_stmt_type & ps_type_prepare_stmt) == 0)) {
 		bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 		uint32_t resbuf=0;
 		unsigned char *aa=GloQC->get(
@@ -7194,7 +7368,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
 			setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 			setStatus = setStatus & ~SERVER_STATUS_CURSOR_EXISTS; // Do not send cursor #1128
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus , mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus , myconn ? myconn->warning_count : 0,mysql->info);
 			client_myds->pkt_sid++;
 		} else {
 			// error
@@ -7206,7 +7380,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 	}
 }
 
-void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds) {
+void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds) {
         if (mysql == NULL) {
                 // error
                 client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
@@ -7221,7 +7395,9 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 		assert(resultset_completed); // the resultset should always be completed if MySQL_Result_to_MySQL_wire is called
 		if (transfer_started==false) { // we have all the resultset when MySQL_Result_to_MySQL_wire was called
 			if (qpo && qpo->cache_ttl>0 && com_field_list==false) { // the resultset should be cached
-				if (mysql_errno(mysql)==0) { // no errors
+				if (mysql_errno(mysql)==0 &&
+					(mysql_warning_count(mysql)==0 || 
+					 mysql_thread___query_cache_handle_warnings==1)) { // no errors
 					if (
 						(qpo->cache_empty_result==1)
 						|| (
@@ -7262,7 +7438,7 @@ void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *My
 				setStatus |= SERVER_MORE_RESULTS_EXIST;
 			setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
 			setStatus = setStatus & ~SERVER_STATUS_CURSOR_EXISTS; // Do not send cursor #1128
-			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus, mysql->warning_count,mysql->info);
+			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,client_myds->pkt_sid+1,num_rows,mysql->insert_id, setStatus, warning_count, mysql->info);
 			//client_myds->pkt_sid++;
 		} else {
 			// error
@@ -7453,8 +7629,10 @@ int MySQL_Session::FindOneActiveTransaction(bool check_savepoint) {
 		_mybe=(MySQL_Backend *)mybes->index(i);
 		if (_mybe->server_myds) {
 			if (_mybe->server_myds->myconn) {
-				if (_mybe->server_myds->myconn->IsActiveTransaction()) {
+				if (_mybe->server_myds->myconn->IsKnownActiveTransaction()) {
 					return (int)_mybe->server_myds->myconn->parent->myhgc->hid;
+				} else if (_mybe->server_myds->myconn->IsActiveTransaction()) {
+					ret = (int)_mybe->server_myds->myconn->parent->myhgc->hid;
 				} else {
 					// we use check_savepoint to check if we shouldn't ignore COMMIT or ROLLBACK due
 					// to MySQL bug https://bugs.mysql.com/bug.php?id=107875 related to
@@ -7999,4 +8177,25 @@ void MySQL_Session::generate_status_one_hostgroup(int hid, std::string& s) {
 	}
 	s = j_res.dump();
 	delete resultset;
+}
+
+void MySQL_Session::reset_warning_hostgroup_flag_and_release_connection()
+{
+	if (warning_in_hg > -1) {
+		// if we've reached this point, it means that warning was found in the previous query, but the
+		// current executed query is not 'SHOW WARNINGS' or 'SHOW COUNT(*) FROM WARNINGS', so we can safely reset warning_in_hg and 
+		// return connection back to the connection pool.
+		MySQL_Backend* _mybe = find_backend(warning_in_hg);
+		if (_mybe) {
+			MySQL_Data_Stream* myds = _mybe->server_myds;
+			if (myds && myds->myconn) {
+				myds->myconn->warning_count = 0;
+				myds->myconn->set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+				if ((myds->myconn->reusable == true) && myds->myconn->IsActiveTransaction() == false && myds->myconn->MultiplexDisabled() == false) {
+					myds->return_MySQL_Connection_To_Pool();
+				}
+			}
+		}
+		warning_in_hg = -1;
+	}
 }

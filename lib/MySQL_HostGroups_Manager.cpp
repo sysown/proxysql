@@ -410,12 +410,12 @@ bool GTID_Server_Data::read_next_gtid() {
 	} else {
 		strncpy(rec_msg,data+pos,l);
 		pos += l+1;
-		rec_msg[l]=0;
+		rec_msg[l] = 0;
 		//int rc = write(1,data+pos,l+1);
 		//fprintf(stdout,"%s\n", rec_msg);
 		if (rec_msg[0]=='I') {
 			//char rec_uuid[80];
-			uint64_t rec_trxid;
+			uint64_t rec_trxid = 0;
 			char *a = NULL;
 			int ul = 0;
 			switch (rec_msg[1]) {
@@ -903,6 +903,7 @@ void MyHGC::reset_attributes() {
 	attributes.throttle_connections_per_sec = 1000000;
 	attributes.autocommit = -1;
 	attributes.free_connections_pct = 10;
+	attributes.handle_warnings = -1;
 	attributes.multiplex = true;
 	attributes.connection_warming = false;
 	free(attributes.init_connect);
@@ -1449,7 +1450,7 @@ void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type e
 	std::string s_port = std::to_string(port);
 	// TODO: Create switch here to classify error codes
 	std::string s_code = std::to_string(code);
-	std::string metric_id = s_hostgroup + ":" + address + ":" + s_port;
+	std::string metric_id = s_hostgroup + ":" + address + ":" + s_port + ":" + s_code;
 	std::map<string, string> metric_labels {
 		{ "hostgroup", s_hostgroup },
 		{ "address", address },
@@ -1768,7 +1769,7 @@ bool MySQL_HostGroups_Manager::commit(
 				}
 				if (atoi(r->fields[7])!=atoi(r->fields[17])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-					proxy_info("Changing max_connections for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[7]) , mysrvc->max_connections , atoi(r->fields[17]));
+					proxy_info("Changing max_connections for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[7]) , mysrvc->max_connections , atoi(r->fields[17]));
 					mysrvc->max_connections=atoi(r->fields[17]);
 				}
 				if (atoi(r->fields[8])!=atoi(r->fields[18])) {
@@ -2234,7 +2235,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 						st=(char *)"SHUNNED";
 						break;
 				}
-				fprintf(stderr,"HID: %d , address: %s , port: %d , gtid_port: %d , weight: %d , status: %s , max_connections: %u , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
+				fprintf(stderr,"HID: %d , address: %s , port: %d , gtid_port: %d , weight: %ld , status: %s , max_connections: %ld , max_replication_lag: %u , use_ssl: %u , max_latency_ms: %u , comment: %s\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, mysrvc->gtid_port, mysrvc->weight, st, mysrvc->max_connections, mysrvc->max_replication_lag, mysrvc->use_ssl, mysrvc->max_latency_us*1000, mysrvc->comment);
 			}
 			lst->add(mysrvc);
 			if (lst->len==32) {
@@ -2591,7 +2592,7 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	} else if (name == "mysql_replication_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
 	} else if (name == "mysql_hostgroup_attributes") {
-		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
+		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
 	} else if (name == "mysql_servers") {
 		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;	
 	} else {
@@ -6920,12 +6921,44 @@ T j_get_srv_default_int_val(
 			proxy_error(
 				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
 					" Value NOT UPDATED.\n",
-				type_name, val_type, key.c_str(), hid
+				type_name, (int) val_type, key.c_str(), hid
 			);
 		}
 	}
 
 	return static_cast<T>(-1);
+}
+
+/**
+ * @brief Initializes the supplied 'MyHGC' with the specified 'hostgroup_settings'.
+ * @details Input verification is performed in the supplied 'hostgroup_settings'. It's expected to be a valid
+ *  JSON that may contain the following fields:
+ *   - handle_warnings: Value must be >= 0.
+ *
+ *  In case input verification fails for a field, supplied 'MyHGC' is NOT updated for that field. An error
+ *  message is logged specifying the source of the error.
+ *
+ * @param hostgroup_settings String containing a JSON defined in 'mysql_hostgroup_attributes'.
+ * @param myhgc The 'MyHGC' of the target hostgroup of the supplied 'hostgroup_settings'.
+ */
+void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc) {
+	const uint32_t hid = myhgc->hid;
+
+	if (hostgroup_settings[0] != '\0') {
+		try {
+			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
+
+			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
+			int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
+			myhgc->attributes.handle_warnings = handle_warnings;
+		}
+		catch (const json::exception& e) {
+			proxy_error(
+				"JSON parsing for 'mysql_hostgroup_attributes.hostgroup_settings' for hostgroup %d failed with exception `%s`.\n",
+				hid, e.what()
+			);
+		}
+	}
 }
 
 /**
@@ -6982,8 +7015,8 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	const char * query=(const char *)"INSERT INTO mysql_hostgroup_attributes ( "
 		"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 		"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
-		"ignore_session_variables, servers_defaults, comment) VALUES "
-		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 
 	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
 	rc = mydb->prepare_v2(query, &statement);
@@ -7019,12 +7052,13 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		int connection_warming           = atoi(r->fields[6]);
 		int throttle_connections_per_sec = atoi(r->fields[7]);
 		char * ignore_session_variables  = r->fields[8];
-		char * servers_defaults          = r->fields[9];
-		char * comment                   = r->fields[10];
-		proxy_info("Loading MySQL Hostgroup Attributes info for (%d,%d,%d,%d,\"%s\",%d,%d,%d,\"%s\",'%s',\"%s\")\n",
+		char * hostgroup_settings		 = r->fields[9];
+		char * servers_defaults          = r->fields[10];
+		char * comment                   = r->fields[11];
+		proxy_info("Loading MySQL Hostgroup Attributes info for (%d,%d,%d,%d,\"%s\",%d,%d,%d,\"%s\",\"%s\",\"%s\",\"%s\")\n",
 			hid, max_num_online_servers, autocommit, free_connections_pct,
 			init_connect, multiplex, connection_warming, throttle_connections_per_sec,
-			ignore_session_variables, servers_defaults, comment
+			ignore_session_variables, hostgroup_settings, servers_defaults, comment
 		);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 1, hid);                          ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 2, max_num_online_servers);       ASSERT_SQLITE_OK(rc, mydb);
@@ -7035,8 +7069,9 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 		rc=(*proxy_sqlite3_bind_int64)(statement, 7, connection_warming);           ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_int64)(statement, 8, throttle_connections_per_sec); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_bind_text)(statement,  9, ignore_session_variables,  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 10, servers_defaults,          -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
-		rc=(*proxy_sqlite3_bind_text)(statement, 11, comment,                   -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 10, hostgroup_settings,		-1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 11, servers_defaults,          -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_bind_text)(statement, 12, comment,                   -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb);
 		SAFE_SQLITE3_STEP2(statement);
 		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
 		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
@@ -7072,6 +7107,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 				// TODO: assign the variables
 			}
 		}
+		init_myhgc_hostgroup_settings(hostgroup_settings, myhgc);
 		init_myhgc_servers_defaults(servers_defaults, myhgc);
 	}
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
@@ -7561,7 +7597,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 				if (mysrvc->max_connections > max_max_connections) {
 					max_max_connections = mysrvc->max_connections;
 				}
-				if (mysrvc->use_ssl > max_use_ssl) {
+				if (mysrvc->use_ssl > (int32_t) max_use_ssl) {
 					max_use_ssl = mysrvc->use_ssl;
 				}
 			}
@@ -7708,7 +7744,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid
 					if (mysrvc->max_connections > max_max_connections) {
 						max_max_connections = mysrvc->max_connections;
 					}
-					if (mysrvc->use_ssl > max_use_ssl) {
+					if (mysrvc->use_ssl > (int32_t) max_use_ssl) {
 						max_use_ssl = mysrvc->use_ssl;
 					}
 					if (strcmp(mysrvc->address,full_hostname)==0 && mysrvc->port==aurora_port) {
@@ -7805,7 +7841,7 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type
 
 	for (const auto& src_node : src_nodes) {
 
-		for (auto& dest_node : dest_nodes) {
+		for (const auto& dest_node : dest_nodes) {
 
 			if (src_node.reader_hostgroup_id == dest_node.reader_hostgroup_id &&
 				src_node.writer_hostgroup_id == dest_node.writer_hostgroup_id) {
@@ -7825,7 +7861,6 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type
 
 	if (dest_nodes.capacity() < (dest_nodes.size() + append.size()))
 		dest_nodes.reserve(dest_nodes.size() + append.size());
-	//dest_nodes.insert(dest_nodes.end(), append.begin(), append.end());
 
 	for (auto& node : append) {
 
@@ -7883,23 +7918,58 @@ unsigned int MySQL_HostGroups_Manager::HostGroup_Server_Mapping::get_hostgroup_i
 
 MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned int hostgroup_id, const MySrvC* srv) {
 
-	MyHGC* hostgroup_container = myHGM->MyHGC_lookup(hostgroup_id);
+	MyHGC* myhgc = myHGM->MyHGC_lookup(hostgroup_id);
 
-	if (!hostgroup_container)
+	if (!myhgc)
 		return NULL;
 
-	if (GloMTH->variables.hostgroup_manager_verbose) {
-		proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%d, status=%d\n", hostgroup_id, srv->address, srv->port, srv->gtid_port, srv->weight, srv->status);
+	MySrvC* ret_srv = NULL;
+	
+	for (uint32_t j = 0; j < myhgc->mysrvs->cnt(); j++) {
+		MySrvC* mysrvc = static_cast<MySrvC*>(myhgc->mysrvs->servers->index(j));
+		if (strcmp(mysrvc->address, srv->address) == 0 && mysrvc->port == srv->port) {
+			if (mysrvc->status == MYSQL_SERVER_STATUS_OFFLINE_HARD) {
+				
+				mysrvc->gtid_port = srv->gtid_port;
+				mysrvc->weight = srv->weight;
+				mysrvc->compression = srv->compression;
+				mysrvc->max_connections = srv->max_connections;
+				mysrvc->max_replication_lag = srv->max_replication_lag;
+				mysrvc->use_ssl = srv->use_ssl;
+				mysrvc->max_latency_us = srv->max_latency_us;
+				mysrvc->comment = strdup(srv->comment);
+				mysrvc->status = MYSQL_SERVER_STATUS_ONLINE;
+
+				if (GloMTH->variables.hostgroup_manager_verbose) {
+					proxy_info(
+						"Found server node in Host Group Container %s:%d as 'OFFLINE_HARD', setting back as 'ONLINE' with:"
+						" hostgroup_id=%d, gtid_port=%d, weight=%ld, compression=%d, max_connections=%ld, use_ssl=%d,"
+						" max_replication_lag=%d, max_latency_ms=%d, comment=%s\n",
+						mysrvc->address, mysrvc->port, hostgroup_id, mysrvc->gtid_port, mysrvc->weight, mysrvc->compression,
+						mysrvc->max_connections, mysrvc->use_ssl, mysrvc->max_replication_lag, (mysrvc->max_latency_us / 1000),
+						mysrvc->comment
+					);
+				}
+				ret_srv = mysrvc;
+				break;
+			}
+		}
+	}
+	
+	if (!ret_srv) {
+		if (GloMTH->variables.hostgroup_manager_verbose) {
+			proxy_info("Creating new server in HG %d : %s:%d , gtid_port=%d, weight=%ld, status=%d\n", hostgroup_id, srv->address, srv->port, srv->gtid_port, srv->weight, srv->status);
+		}
+
+		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%ld, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, srv->status, srv, hostgroup_id);
+
+		ret_srv = new MySrvC(srv->address, srv->port, srv->gtid_port, srv->weight, srv->status, srv->compression,
+			srv->max_connections, srv->max_replication_lag, srv->use_ssl, (srv->max_latency_us / 1000), srv->comment);
+
+		myhgc->mysrvs->add(ret_srv);
 	}
 
-	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Adding new server %s:%d , weight=%d, status=%d, mem_ptr=%p into hostgroup=%d\n", srv->address, srv->port, srv->weight, srv->status, srv, hostgroup_id);
-
-	MySrvC* new_srv = new MySrvC(srv->address, srv->port, srv->gtid_port, srv->weight, srv->status, srv->compression,
-		srv->max_connections, srv->max_replication_lag, srv->use_ssl, (srv->max_latency_us/1000), srv->comment);
-
-	hostgroup_container->mysrvs->add(new_srv);
-
-	return new_srv;
+	return ret_srv;
 }
 
 void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(MySrvC* srv) {

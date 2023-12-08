@@ -79,6 +79,8 @@ struct p_admin_gauge {
 		stack_memory_mysql_threads,
 		stack_memory_admin_threads,
 		stack_memory_cluster_threads,
+		prepare_stmt_metadata_memory_bytes,
+		prepare_stmt_backend_memory_bytes,
 		// stmt metrics
 		stmt_client_active_total,
 		stmt_client_active_unique,
@@ -390,7 +392,7 @@ class ProxySQL_Admin {
 	void admin_shutdown();
 	bool is_command(std::string);
 	void send_MySQL_OK(MySQL_Protocol *myprot, char *msg, int rows=0);
-	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg);
+	void send_MySQL_ERR(MySQL_Protocol *myprot, char *msg, uint32_t code=1045);
 #ifdef DEBUG
 	// these two following functions used to just call and return one function each
 	// this approach was replaced when we introduced debug filters

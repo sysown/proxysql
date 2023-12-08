@@ -19,6 +19,7 @@ using json = nlohmann::json;
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 #define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG      0x00000400
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
+#define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
 
 class Variable {
 public:
@@ -53,6 +54,8 @@ class MySQL_Connection_userinfo {
 
 class MySQL_Connection {
 	private:
+	void update_warning_count_from_connection();
+	void update_warning_count_from_statement();
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
 	public:
@@ -128,6 +131,7 @@ class MySQL_Connection {
 	} statuses;
 
 	unsigned long largest_query_length;
+	unsigned int warning_count;
 	/**
 	 * @brief This represents the internal knowledge of ProxySQL about the connection. It keeps track of those
 	 *  states which *are not reflected* into 'server_status', but are relevant for connection handling.
@@ -209,16 +213,21 @@ class MySQL_Connection {
 	void process_rows_in_ASYNC_STMT_EXECUTE_STORE_RESULT_CONT(unsigned long long& processed_bytes);
 
 	void async_free_result();
-	bool IsActiveTransaction(); /* {
-		bool ret=false;
-			if (mysql) {
-				ret = (mysql->server_status & SERVER_STATUS_IN_TRANS);
-				if (ret == false && (mysql)->net.last_errno) {
-					ret = true;
-				}
-			}
-		return ret;
-	} */
+	/**
+	 * @brief Returns if the connection is **for sure**, known to be in an active transaction.
+	 * @details The function considers two things:
+	 *   1. If 'server_status' is flagged with 'SERVER_STATUS_IN_TRANS'.
+	 *   2. If the connection has 'autcommit=0' and 'autocommit_false_is_transaction' is set.
+	 * @return True if the connection is known to be in a transaction, or equivalent state.
+	 */
+	bool IsKnownActiveTransaction();
+	/**
+	 * @brief Returns if the connection is in a **potential transaction**.
+	 * @details This function is a more strict version of 'IsKnownActiveTransaction', which also considers
+	 *  connections which holds 'unknown_transaction_status' as potentially active transactions.
+	 * @return True if the connection is in potentially in an active transaction.
+	 */
+	bool IsActiveTransaction();
 	bool IsServerOffline();
 	bool IsAutoCommit();
 	bool AutocommitFalse_AndSavepoint();

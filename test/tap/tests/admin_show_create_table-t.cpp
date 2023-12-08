@@ -84,7 +84,7 @@ int main() {
 		ok(c != NULL && proxysql_admin->net.compress == 1 && rows==1, "cipher %s and compression (%d) used while reading %lu row(s) from %s", c, proxysql_admin->net.compress,  rows, it->c_str());
 		MYSQL_ROW row;
 		while ((row = mysql_fetch_row(proxy_res))) {
-			diag(row[1]);
+			diag("%s", row[1]);
 		}
 		mysql_free_result(proxy_res);
 	}

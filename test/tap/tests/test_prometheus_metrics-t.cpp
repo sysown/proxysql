@@ -31,6 +31,9 @@ using std::pair;
 using std::string;
 using std::tuple;
 
+CommandLine cl;
+
+
 int mysql_query_d(MYSQL* mysql, const char* query) {
 	diag("Query: Issuing query '%s' to ('%s':%d)", query, mysql->host, mysql->port);
 	return mysql_query(mysql, query);
@@ -484,7 +487,8 @@ bool rm_add_server_connpool_counters(MYSQL* proxy, MYSQL* admin, const CommandLi
 
 void check_server_data_recv(const map<string,double>& prev_metrics, const map<string,double>& after_metrics) {
 	// Endpoint we are going to target
-	const string endpoint_hg { "endpoint=\"127.0.0.1:13306\",hostgroup=\"0\"" };
+//	const string endpoint_hg { "endpoint=\"127.0.0.1:13306\",hostgroup=\"0\"" };
+	const string endpoint_hg { "endpoint=\"" + std::string(cl.mysql_host) + ":" + std::to_string(cl.mysql_port) + "\",hostgroup=\"0\"" };
 
 	// Metrics identifiers
 	const vector<string> metrics_ids {
@@ -589,7 +593,6 @@ using std::map;
 
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");

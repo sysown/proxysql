@@ -184,7 +184,7 @@ int main(int argc, char** argv) {
 
 	ok(
 		data_match_expected,
-		"Prepared statement result matches expected - Exp=(id:1, c1:100, c2:'abcde'), Act=(id:%d, c1:%d, c2:'%s')",
+		"Prepared statement result matches expected - Exp=(id:1, c1:100, c2:'abcde'), Act=(id:%d, c1:%ld, c2:'%s')",
 		data_id,
 		data_c1,
 		data_c2

@@ -10,9 +10,6 @@
 
 class MySQL_Session;
 
-extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
 extern void print_backtrace(void);
 
 typedef bool (*verify_var)(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);
@@ -39,11 +36,13 @@ public:
 
 	bool client_set_value(MySQL_Session* session, int idx, const std::string& value);
 	bool client_set_hash_and_value(MySQL_Session* session, int idx, const std::string& value, uint32_t hash);
+	void client_reset_value(MySQL_Session* session, int idx);
 	const char* client_get_value(MySQL_Session* session, int idx) const;
 	uint32_t client_get_hash(MySQL_Session* session, int idx) const;
 
 	void server_set_value(MySQL_Session* session, int idx, const char* value);
 	void server_set_hash_and_value(MySQL_Session* session, int idx, const char* value, uint32_t hash);
+	void server_reset_value(MySQL_Session* session, int idx);
 	const char* server_get_value(MySQL_Session* session, int idx) const;
 	inline uint32_t server_get_hash(MySQL_Session* session, int idx) const;
 

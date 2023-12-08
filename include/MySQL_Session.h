@@ -24,6 +24,12 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
+enum ps_type : uint8_t {
+	ps_type_not_set = 0x0,
+	ps_type_prepare_stmt = 0x1,
+	ps_type_execute_stmt = 0x2
+};
+
 std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
 // these structs will be used for various regex hardcoded
@@ -121,12 +127,22 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
 	void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
+	/**
+	 * @brief Handles 'COMMIT|ROLLBACK' commands.
+	 * @details Forwarding the packet is required when there are active transactions. Since we are limited to
+	 *  forwarding just one 'COMMIT|ROLLBACK', we work under the assumption that we only have one active
+	 *  transaction. If more transactions are simultaneously open for the session, more 'COMMIT|ROLLBACK'.
+	 *  commands are required to be issued by the client, so they could be forwarded to the corresponding
+	 *  backend connections.
+	 * @param The received packet to be handled.
+	 * @return 'true' if the packet is intercepted and never forwarded to the client, 'false' otherwise.
+	 */
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
 	/**
@@ -210,6 +226,7 @@ class MySQL_Session
 
 	Query_Info CurrentQuery;
 	PtrSize_t mirrorPkt;
+	PtrSize_t pkt;
 
 	// uint64_t
 	unsigned long long start_time;
@@ -237,7 +254,6 @@ class MySQL_Session
 
 	//this pointer is always initialized inside handler().
 	// it is an attempt to start simplifying the complexing of handler()
-	PtrSize_t *pktH;
 
 	uint32_t thread_session_id;
 	unsigned long long last_insert_id;
@@ -264,6 +280,7 @@ class MySQL_Session
 	int to_process;
 	int pending_connect;
 	enum proxysql_session_type session_type;
+	int warning_in_hg;
 
 	// bool
 	bool autocommit;
@@ -324,11 +341,23 @@ class MySQL_Session
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false);
-	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds=NULL);
+	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions(bool check_savpoint=false);
 	bool HasOfflineBackends();
 	bool SetEventInOfflineBackends();
+	/**
+	 * @brief Finds one active transaction in the current backend connections.
+	 * @details Since only one connection is returned, if the session holds multiple backend connections with
+	 *  potential transactions, the priority is:
+	 *   1. Connections flagged with 'SERVER_STATUS_IN_TRANS', or 'autocommit=0' in combination with
+	 *      'autocommit_false_is_transaction'.
+	 *   2. Connections with 'autocommit=0' holding a 'SAVEPOINT'.
+	 *   3. Connections with 'unknown transaction status', e.g: connections with errors.
+	 * @param check_savepoint Used to also check for connections holding savepoints. See MySQL bug
+	 *  https://bugs.mysql.com/bug.php?id=107875.
+	 * @returns The hostgroup in which the connection was found, -1 in case no connection is found.
+	 */
 	int FindOneActiveTransaction(bool check_savepoint=false);
 	unsigned long long IdleTime();
 
@@ -357,6 +386,7 @@ class MySQL_Session
 	bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
+	void reset_warning_hostgroup_flag_and_release_connection();
 	friend void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
 

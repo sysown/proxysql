@@ -33,23 +33,6 @@
 using std::string;
 using namespace nlohmann;
 
-/**
- * @brief Helper function to convert a 'MYSQL_RES' into a
- *   nlohmann::json.
- *
- * @param result The 'MYSQL_RES*' to be converted into JSON.
- * @param j 'nlohmann::json' output parameter holding the
- *   converted 'MYSQL_RES' supplied.
- */
-void parse_result_json_column(MYSQL_RES *result, json& j) {
-	if(!result) return;
-	MYSQL_ROW row;
-
-	while ((row = mysql_fetch_row(result))) {
-		j = json::parse(row[0]);
-	}
-}
-
 using user_attributes = std::tuple<std::string, std::string, std::string, std::string>;
 
 /**
@@ -87,11 +70,7 @@ int check_front_conn_isolation_level(
 	const std::string& exp_iso_level,
 	const bool set_via_attr
 ) {
-	MYSQL_QUERY(proxysql_mysql, "PROXYSQL INTERNAL SESSION");
-	json j_status {};
-	MYSQL_RES* int_session_res = mysql_store_result(proxysql_mysql);
-	parse_result_json_column(int_session_res, j_status);
-	mysql_free_result(int_session_res);
+	json j_status = fetch_internal_session(proxysql_mysql);
 
 	try {
 		std::string front_conn_isolation_level =
@@ -145,6 +124,7 @@ int check_backend_conn_isolation_level(
 	// Verify that the query produced a correct result
 	if (trx_iso_row && trx_iso_row[0]) {
 		trx_iso_val = std::string { trx_iso_row[0] };
+		mysql_free_result(trx_iso_res);
 	} else {
 		const std::string err_msg {
 			"Empty result received from query '" + select_trx_iso_query + "'"
@@ -224,27 +204,13 @@ int main(int argc, char** argv) {
 	MYSQL* mysql_server = mysql_init(NULL);
 
 	// Creating the new connections
-	if (
-		!mysql_real_connect(
-			proxysql_admin, cl.host, cl.admin_username,
-			cl.admin_password, NULL, cl.admin_port, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
-	if (
-		!mysql_real_connect(
-			mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0
-		)
-	) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(mysql_server)
-		);
+//	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+	if (!mysql_real_connect(mysql_server, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
 	}
 
@@ -256,8 +222,7 @@ int main(int argc, char** argv) {
 			return make_tuple(std::get<0>(u_attr), std::get<1>(u_attr), std::get<2>(u_attr));
 		}
 	);
-	int c_users_res =
-		create_extra_users(proxysql_admin, mysql_server, users_configs);
+	int c_users_res = create_extra_users(proxysql_admin, mysql_server, users_configs);
 	if (c_users_res) { return c_users_res; }
 
 	// Load ProxySQL users to runtime
@@ -334,6 +299,9 @@ int main(int argc, char** argv) {
 		// Close the connection
 		mysql_close(proxysql_mysql);
 	}
+
+	mysql_close(proxysql_admin);
+	mysql_close(mysql_server);
 
 	return exit_status();
 }

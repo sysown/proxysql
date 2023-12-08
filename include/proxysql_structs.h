@@ -173,11 +173,10 @@ enum mysql_variable_name {
 	SQL_CHARACTER_SET_CONNECTION,
 	SQL_CHARACTER_SET_CLIENT,
 	SQL_CHARACTER_SET_DATABASE,
+	SQL_COLLATION_CONNECTION,
+	SQL_NAME_LAST_LOW_WM,
 	SQL_ISOLATION_LEVEL,
 	SQL_TRANSACTION_READ,
-	SQL_COLLATION_CONNECTION,
-	SQL_WSREP_SYNC_WAIT,
-	SQL_NAME_LAST_LOW_WM,
 	SQL_AURORA_READ_REPLICA_READ_COMMITTED,
 	SQL_AUTO_INCREMENT_INCREMENT,
 	SQL_AUTO_INCREMENT_OFFSET,
@@ -221,8 +220,11 @@ enum mysql_variable_name {
 	SQL_TIME_ZONE,
 	SQL_TIMESTAMP,
 	SQL_TMP_TABLE_SIZE,
+	SQL_NEXT_ISOLATION_LEVEL,
+	SQL_NEXT_TRANSACTION_READ,
 	SQL_UNIQUE_CHECKS,
 	SQL_WSREP_OSU_METHOD,
+	SQL_WSREP_SYNC_WAIT,
 	SQL_NAME_LAST_HIGH_WM,
 };
 
@@ -254,6 +256,8 @@ enum session_status {
 	SETTING_MULTIPLE_VARIABLES,
 	SETTING_SET_NAMES,
 	SHOW_WARNINGS,
+	SETTING_NEXT_ISOLATION_LEVEL,
+	SETTING_NEXT_TRANSACTION_READ,
 	session_status___NONE // special marker
 };
 
@@ -863,10 +867,12 @@ __thread bool mysql_thread___log_mysql_warnings_enabled;
 __thread bool mysql_thread___enable_load_data_local_infile;
 __thread int mysql_thread___client_host_cache_size;
 __thread int mysql_thread___client_host_error_counts;
+__thread int mysql_thread___handle_warnings;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
 __thread int mysql_thread___query_cache_soft_ttl_pct;
+__thread int mysql_thread___query_cache_handle_warnings;
 
 /* variables used for SSL , from proxy to server (p2s) */
 __thread char * mysql_thread___ssl_p2s_ca;
@@ -1032,10 +1038,12 @@ extern __thread bool mysql_thread___log_mysql_warnings_enabled;
 extern __thread bool mysql_thread___enable_load_data_local_infile;
 extern __thread int mysql_thread___client_host_cache_size;
 extern __thread int mysql_thread___client_host_error_counts;
+extern __thread int mysql_thread___handle_warnings;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;
 extern __thread int mysql_thread___query_cache_soft_ttl_pct;
+extern __thread int mysql_thread___query_cache_handle_warnings;
 
 /* variables used for SSL , from proxy to server (p2s) */
 extern __thread char * mysql_thread___ssl_p2s_ca;
@@ -1139,13 +1147,12 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_CHARACTER_SET_CONNECTION, SETTING_VARIABLE, false, false, false, false, (char *)"character_set_connection", (char *)"character_set_connection", (char *)"utf8", false } ,
 	{ SQL_CHARACTER_SET_CLIENT,     SETTING_VARIABLE, false, false, false, false, (char *)"character_set_client", (char *)"character_set_client", (char *)"utf8" , false} ,
 	{ SQL_CHARACTER_SET_DATABASE,   SETTING_VARIABLE, false, false, false, false, (char *)"character_set_database", (char *)"character_set_database", (char *)"utf8" , false} ,
+	{ SQL_COLLATION_CONNECTION, SETTING_VARIABLE,     true,  false, false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"utf8_general_ci" , true} ,
+//    { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" , false} ,
+	{ SQL_NAME_LAST_LOW_WM,     SETTING_VARIABLE,     false, false, true,  false, (char *)"placeholder", (char *)"placeholder", (char *)"0" , false} , // this is just a placeholder to separate the previous index from the next block
 	{ SQL_ISOLATION_LEVEL,  SETTING_ISOLATION_LEVEL,  false, true,  false, false, (char *)"SESSION TRANSACTION ISOLATION LEVEL", (char *)"isolation_level", (char *)"READ COMMITTED" , false} ,
 	// NOTE: we also need support for  transaction_read_only session variable
 	{ SQL_TRANSACTION_READ, SETTING_TRANSACTION_READ, false, true,  false, false, (char *)"SESSION TRANSACTION READ", (char *)"transaction_read", (char *)"WRITE" , false} ,
-	{ SQL_COLLATION_CONNECTION, SETTING_VARIABLE,     true,  false, false, false, (char *)"collation_connection", (char *)"collation_connection", (char *)"utf8_general_ci" , true} ,
-//    { SQL_NET_WRITE_TIMEOUT,    SETTING_VARIABLE,     false, false, true,  false, (char *)"net_write_timeout", (char *)"net_write_timeout", (char *)"60" , false} ,
-	{ SQL_WSREP_SYNC_WAIT,      SETTING_VARIABLE,     false, false, true,  false, (char *)"wsrep_sync_wait", (char *)"wsrep_sync_wait", (char *)"0" , false} ,
-	{ SQL_NAME_LAST_LOW_WM,     SETTING_VARIABLE,     false, false, true,  false, (char *)"placeholder", (char *)"placeholder", (char *)"0" , false} , // this is just a placeholder to separate the previous index from the next block
 	{ SQL_AURORA_READ_REPLICA_READ_COMMITTED, SETTING_VARIABLE, false, false, false, true, ( char *)"aurora_read_replica_read_committed", NULL, (char *)"" , false} ,
 	{ SQL_AUTO_INCREMENT_INCREMENT,   SETTING_VARIABLE, false, false, true,  false, (char *)"auto_increment_increment",   NULL, (char *)"" , false} ,
 	{ SQL_AUTO_INCREMENT_OFFSET,      SETTING_VARIABLE, false, false, true,  false, (char *)"auto_increment_offset",      NULL, (char *)"" , false} ,
@@ -1192,9 +1199,11 @@ mysql_variable_st mysql_tracked_variables[] {
 	{ SQL_TIME_ZONE,                  SETTING_VARIABLE, true,  false, false, false, (char *)"time_zone",                  NULL, (char *)"SYSTEM" , false} ,
 	{ SQL_TIMESTAMP,                  SETTING_VARIABLE, false, false, true,  false, (char *)"timestamp",                  NULL, (char *)"" , false} ,
 	{ SQL_TMP_TABLE_SIZE,             SETTING_VARIABLE, false, false, true,  false, (char *)"tmp_table_size",             NULL, (char *)"" , false} ,
+	{ SQL_NEXT_ISOLATION_LEVEL, SETTING_NEXT_ISOLATION_LEVEL, false, true,  false, false, (char *)"transaction isolation level", (char *)"next_isolation_level", (char *)"READ COMMITTED" , false} ,
+	{ SQL_NEXT_TRANSACTION_READ, SETTING_NEXT_TRANSACTION_READ, false, true,  false, false, (char *)"transaction read", (char *)"next_transaction_read", (char *)"WRITE" , false} ,
 	{ SQL_UNIQUE_CHECKS,              SETTING_VARIABLE, true,  false, false, true,  (char *)"unique_checks",              NULL, (char *)"" , false} ,
 	{ SQL_WSREP_OSU_METHOD,           SETTING_VARIABLE, true,  false, false, false, (char *)"wsrep_osu_method",           NULL, (char *)"" , false} ,
-
+	{ SQL_WSREP_SYNC_WAIT,			  SETTING_VARIABLE, false, false, true,  false, (char *)"wsrep_sync_wait",			  (char *)"wsrep_sync_wait", (char *)"0" , false} ,
 	/*
 	variables that will need input validation:
 	binlog_row_image

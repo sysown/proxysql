@@ -1,0 +1,390 @@
+diff --git src/http_utils.cpp src/http_utils.cpp
+index caefabc..fed5d9e 100644
+--- src/http_utils.cpp
++++ src/http_utils.cpp
+@@ -137,98 +137,98 @@ const int http_utils::http_not_extended = MHD_HTTP_NOT_EXTENDED;
+ 
+ const int http_utils::shoutcast_response = MHD_ICY_FLAG;
+ 
+-const std::string http_utils::http_header_accept = MHD_HTTP_HEADER_ACCEPT;
+-const std::string http_utils::http_header_accept_charset =
++const char* http_utils::http_header_accept = MHD_HTTP_HEADER_ACCEPT;
++const char* http_utils::http_header_accept_charset =
+     MHD_HTTP_HEADER_ACCEPT_CHARSET;
+-const std::string http_utils::http_header_accept_encoding =
++const char* http_utils::http_header_accept_encoding =
+     MHD_HTTP_HEADER_ACCEPT_ENCODING;
+-const std::string http_utils::http_header_accept_language =
++const char* http_utils::http_header_accept_language =
+     MHD_HTTP_HEADER_ACCEPT_LANGUAGE;
+-const std::string http_utils::http_header_accept_ranges =
++const char* http_utils::http_header_accept_ranges =
+     MHD_HTTP_HEADER_ACCEPT_RANGES;
+-const std::string http_utils::http_header_age = MHD_HTTP_HEADER_AGE;
+-const std::string http_utils::http_header_allow = MHD_HTTP_HEADER_ALLOW;
+-const std::string http_utils::http_header_authorization =
++const char* http_utils::http_header_age = MHD_HTTP_HEADER_AGE;
++const char* http_utils::http_header_allow = MHD_HTTP_HEADER_ALLOW;
++const char* http_utils::http_header_authorization =
+     MHD_HTTP_HEADER_AUTHORIZATION;
+-const std::string http_utils::http_header_cache_control =
++const char* http_utils::http_header_cache_control =
+     MHD_HTTP_HEADER_CACHE_CONTROL;
+-const std::string http_utils::http_header_connection =
++const char* http_utils::http_header_connection =
+     MHD_HTTP_HEADER_CONNECTION;
+-const std::string http_utils::http_header_content_encoding =
++const char* http_utils::http_header_content_encoding =
+     MHD_HTTP_HEADER_CONTENT_ENCODING;
+-const std::string http_utils::http_header_content_language =
++const char* http_utils::http_header_content_language =
+     MHD_HTTP_HEADER_CONTENT_LANGUAGE;
+-const std::string http_utils::http_header_content_length =
++const char* http_utils::http_header_content_length =
+     MHD_HTTP_HEADER_CONTENT_LENGTH;
+-const std::string http_utils::http_header_content_location =
++const char* http_utils::http_header_content_location =
+     MHD_HTTP_HEADER_CONTENT_LOCATION;
+-const std::string http_utils::http_header_content_md5 =
++const char* http_utils::http_header_content_md5 =
+     MHD_HTTP_HEADER_CONTENT_MD5;
+-const std::string http_utils::http_header_content_range =
++const char* http_utils::http_header_content_range =
+     MHD_HTTP_HEADER_CONTENT_RANGE;
+-const std::string http_utils::http_header_content_type =
++const char* http_utils::http_header_content_type =
+     MHD_HTTP_HEADER_CONTENT_TYPE;
+-const std::string http_utils::http_header_date = MHD_HTTP_HEADER_DATE;
+-const std::string http_utils::http_header_etag = MHD_HTTP_HEADER_ETAG;
+-const std::string http_utils::http_header_expect = MHD_HTTP_HEADER_EXPECT;
+-const std::string http_utils::http_header_expires = MHD_HTTP_HEADER_EXPIRES;
+-const std::string http_utils::http_header_from = MHD_HTTP_HEADER_FROM;
+-const std::string http_utils::http_header_host = MHD_HTTP_HEADER_HOST;
+-const std::string http_utils::http_header_if_match = MHD_HTTP_HEADER_IF_MATCH;
+-const std::string http_utils::http_header_if_modified_since =
++const char* http_utils::http_header_date = MHD_HTTP_HEADER_DATE;
++const char* http_utils::http_header_etag = MHD_HTTP_HEADER_ETAG;
++const char* http_utils::http_header_expect = MHD_HTTP_HEADER_EXPECT;
++const char* http_utils::http_header_expires = MHD_HTTP_HEADER_EXPIRES;
++const char* http_utils::http_header_from = MHD_HTTP_HEADER_FROM;
++const char* http_utils::http_header_host = MHD_HTTP_HEADER_HOST;
++const char* http_utils::http_header_if_match = MHD_HTTP_HEADER_IF_MATCH;
++const char* http_utils::http_header_if_modified_since =
+     MHD_HTTP_HEADER_IF_MODIFIED_SINCE;
+-const std::string http_utils::http_header_if_none_match =
++const char* http_utils::http_header_if_none_match =
+     MHD_HTTP_HEADER_IF_NONE_MATCH;
+-const std::string http_utils::http_header_if_range = MHD_HTTP_HEADER_IF_RANGE;
+-const std::string http_utils::http_header_if_unmodified_since =
++const char* http_utils::http_header_if_range = MHD_HTTP_HEADER_IF_RANGE;
++const char* http_utils::http_header_if_unmodified_since =
+     MHD_HTTP_HEADER_IF_UNMODIFIED_SINCE;
+-const std::string http_utils::http_header_last_modified =
++const char* http_utils::http_header_last_modified =
+     MHD_HTTP_HEADER_LAST_MODIFIED;
+-const std::string http_utils::http_header_location = MHD_HTTP_HEADER_LOCATION;
+-const std::string http_utils::http_header_max_forwards =
++const char* http_utils::http_header_location = MHD_HTTP_HEADER_LOCATION;
++const char* http_utils::http_header_max_forwards =
+     MHD_HTTP_HEADER_MAX_FORWARDS;
+-const std::string http_utils::http_header_pragma = MHD_HTTP_HEADER_PRAGMA;
+-const std::string http_utils::http_header_proxy_authenticate =
++const char* http_utils::http_header_pragma = MHD_HTTP_HEADER_PRAGMA;
++const char* http_utils::http_header_proxy_authenticate =
+     MHD_HTTP_HEADER_PROXY_AUTHENTICATE;
+-const std::string http_utils::http_header_proxy_authentication =
++const char* http_utils::http_header_proxy_authentication =
+     MHD_HTTP_HEADER_PROXY_AUTHORIZATION;
+-const std::string http_utils::http_header_range = MHD_HTTP_HEADER_RANGE;
+-const std::string http_utils::http_header_referer = MHD_HTTP_HEADER_REFERER;
+-const std::string http_utils::http_header_retry_after =
++const char* http_utils::http_header_range = MHD_HTTP_HEADER_RANGE;
++const char* http_utils::http_header_referer = MHD_HTTP_HEADER_REFERER;
++const char* http_utils::http_header_retry_after =
+     MHD_HTTP_HEADER_RETRY_AFTER;
+-const std::string http_utils::http_header_server = MHD_HTTP_HEADER_SERVER;
+-const std::string http_utils::http_header_te = MHD_HTTP_HEADER_TE;
+-const std::string http_utils::http_header_trailer = MHD_HTTP_HEADER_TRAILER;
+-const std::string http_utils::http_header_transfer_encoding =
++const char* http_utils::http_header_server = MHD_HTTP_HEADER_SERVER;
++const char* http_utils::http_header_te = MHD_HTTP_HEADER_TE;
++const char* http_utils::http_header_trailer = MHD_HTTP_HEADER_TRAILER;
++const char* http_utils::http_header_transfer_encoding =
+     MHD_HTTP_HEADER_TRANSFER_ENCODING;
+-const std::string http_utils::http_header_upgrade = MHD_HTTP_HEADER_UPGRADE;
+-const std::string http_utils::http_header_user_agent =
++const char* http_utils::http_header_upgrade = MHD_HTTP_HEADER_UPGRADE;
++const char* http_utils::http_header_user_agent =
+     MHD_HTTP_HEADER_USER_AGENT;
+-const std::string http_utils::http_header_vary = MHD_HTTP_HEADER_VARY;
+-const std::string http_utils::http_header_via = MHD_HTTP_HEADER_VIA;
+-const std::string http_utils::http_header_warning = MHD_HTTP_HEADER_WARNING;
+-const std::string http_utils::http_header_www_authenticate =
++const char* http_utils::http_header_vary = MHD_HTTP_HEADER_VARY;
++const char* http_utils::http_header_via = MHD_HTTP_HEADER_VIA;
++const char* http_utils::http_header_warning = MHD_HTTP_HEADER_WARNING;
++const char* http_utils::http_header_www_authenticate =
+     MHD_HTTP_HEADER_WWW_AUTHENTICATE;
+ 
+-const std::string http_utils::http_version_1_0 = MHD_HTTP_VERSION_1_0;
+-const std::string http_utils::http_version_1_1 = MHD_HTTP_VERSION_1_1;
++const char* http_utils::http_version_1_0 = MHD_HTTP_VERSION_1_0;
++const char* http_utils::http_version_1_1 = MHD_HTTP_VERSION_1_1;
+ 
+-const std::string http_utils::http_method_connect = MHD_HTTP_METHOD_CONNECT;
+-const std::string http_utils::http_method_delete = MHD_HTTP_METHOD_DELETE;
+-const std::string http_utils::http_method_get = MHD_HTTP_METHOD_GET;
+-const std::string http_utils::http_method_head = MHD_HTTP_METHOD_HEAD;
+-const std::string http_utils::http_method_options = MHD_HTTP_METHOD_OPTIONS;
+-const std::string http_utils::http_method_post = MHD_HTTP_METHOD_POST;
+-const std::string http_utils::http_method_put = MHD_HTTP_METHOD_PUT;
+-const std::string http_utils::http_method_trace = MHD_HTTP_METHOD_TRACE;
+-const std::string http_utils::http_method_patch = MHD_HTTP_METHOD_PATCH;
++const char* http_utils::http_method_connect = MHD_HTTP_METHOD_CONNECT;
++const char* http_utils::http_method_delete = MHD_HTTP_METHOD_DELETE;
++const char* http_utils::http_method_get = MHD_HTTP_METHOD_GET;
++const char* http_utils::http_method_head = MHD_HTTP_METHOD_HEAD;
++const char* http_utils::http_method_options = MHD_HTTP_METHOD_OPTIONS;
++const char* http_utils::http_method_post = MHD_HTTP_METHOD_POST;
++const char* http_utils::http_method_put = MHD_HTTP_METHOD_PUT;
++const char* http_utils::http_method_trace = MHD_HTTP_METHOD_TRACE;
++const char* http_utils::http_method_patch = MHD_HTTP_METHOD_PATCH;
+ 
+-const std::string http_utils::http_post_encoding_form_urlencoded =
++const char* http_utils::http_post_encoding_form_urlencoded =
+     MHD_HTTP_POST_ENCODING_FORM_URLENCODED;
+-const std::string http_utils::http_post_encoding_multipart_formdata =
++const char* http_utils::http_post_encoding_multipart_formdata =
+     MHD_HTTP_POST_ENCODING_MULTIPART_FORMDATA;
+ 
+-const std::string http_utils::text_plain = "text/plain";
++const char* http_utils::text_plain = "text/plain";
+ 
+ std::vector<std::string> http_utils::tokenize_url(
+         const std::string& str,
+diff --git src/httpserver/http_utils.hpp src/httpserver/http_utils.hpp
+index e2aa033..5059e06 100644
+--- src/httpserver/http_utils.hpp
++++ src/httpserver/http_utils.hpp
+@@ -189,71 +189,71 @@ class http_utils
+     static const int shoutcast_response;
+ 
+     /* See also: http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html */
+-    static const std::string http_header_accept;
+-    static const std::string http_header_accept_charset;
+-    static const std::string http_header_accept_encoding;
+-    static const std::string http_header_accept_language;
+-    static const std::string http_header_accept_ranges;
+-    static const std::string http_header_age;
+-    static const std::string http_header_allow;
+-    static const std::string http_header_authorization;
+-    static const std::string http_header_cache_control;
+-    static const std::string http_header_connection;
+-    static const std::string http_header_content_encoding;
+-    static const std::string http_header_content_language;
+-    static const std::string http_header_content_length;
+-    static const std::string http_header_content_location;
+-    static const std::string http_header_content_md5;
+-    static const std::string http_header_content_range;
+-    static const std::string http_header_content_type;
+-    static const std::string http_header_date;
+-    static const std::string http_header_etag;
+-    static const std::string http_header_expect;
+-    static const std::string http_header_expires;
+-    static const std::string http_header_from;
+-    static const std::string http_header_host;
+-    static const std::string http_header_if_match;
+-    static const std::string http_header_if_modified_since;
+-    static const std::string http_header_if_none_match;
+-    static const std::string http_header_if_range;
+-    static const std::string http_header_if_unmodified_since;
+-    static const std::string http_header_last_modified;
+-    static const std::string http_header_location;
+-    static const std::string http_header_max_forwards;
+-    static const std::string http_header_pragma;
+-    static const std::string http_header_proxy_authenticate;
+-    static const std::string http_header_proxy_authentication;
+-    static const std::string http_header_range;
+-    static const std::string http_header_referer;
+-    static const std::string http_header_retry_after;
+-    static const std::string http_header_server;
+-    static const std::string http_header_te;
+-    static const std::string http_header_trailer;
+-    static const std::string http_header_transfer_encoding;
+-    static const std::string http_header_upgrade;
+-    static const std::string http_header_user_agent;
+-    static const std::string http_header_vary;
+-    static const std::string http_header_via;
+-    static const std::string http_header_warning;
+-    static const std::string http_header_www_authenticate;
+-
+-    static const std::string http_version_1_0;
+-    static const std::string http_version_1_1;
+-
+-    static const std::string http_method_connect;
+-    static const std::string http_method_delete;
+-    static const std::string http_method_head;
+-    static const std::string http_method_get;
+-    static const std::string http_method_options;
+-    static const std::string http_method_post;
+-    static const std::string http_method_put;
+-    static const std::string http_method_trace;
+-    static const std::string http_method_patch;
+-
+-    static const std::string http_post_encoding_form_urlencoded;
+-    static const std::string http_post_encoding_multipart_formdata;
+-
+-    static const std::string text_plain;
++    static const char* http_header_accept;
++    static const char* http_header_accept_charset;
++    static const char* http_header_accept_encoding;
++    static const char* http_header_accept_language;
++    static const char* http_header_accept_ranges;
++    static const char* http_header_age;
++    static const char* http_header_allow;
++    static const char* http_header_authorization;
++    static const char* http_header_cache_control;
++    static const char* http_header_connection;
++    static const char* http_header_content_encoding;
++    static const char* http_header_content_language;
++    static const char* http_header_content_length;
++    static const char* http_header_content_location;
++    static const char* http_header_content_md5;
++    static const char* http_header_content_range;
++    static const char* http_header_content_type;
++    static const char* http_header_date;
++    static const char* http_header_etag;
++    static const char* http_header_expect;
++    static const char* http_header_expires;
++    static const char* http_header_from;
++    static const char* http_header_host;
++    static const char* http_header_if_match;
++    static const char* http_header_if_modified_since;
++    static const char* http_header_if_none_match;
++    static const char* http_header_if_range;
++    static const char* http_header_if_unmodified_since;
++    static const char* http_header_last_modified;
++    static const char* http_header_location;
++    static const char* http_header_max_forwards;
++    static const char* http_header_pragma;
++    static const char* http_header_proxy_authenticate;
++    static const char* http_header_proxy_authentication;
++    static const char* http_header_range;
++    static const char* http_header_referer;
++    static const char* http_header_retry_after;
++    static const char* http_header_server;
++    static const char* http_header_te;
++    static const char* http_header_trailer;
++    static const char* http_header_transfer_encoding;
++    static const char* http_header_upgrade;
++    static const char* http_header_user_agent;
++    static const char* http_header_vary;
++    static const char* http_header_via;
++    static const char* http_header_warning;
++    static const char* http_header_www_authenticate;
++
++    static const char* http_version_1_0;
++    static const char* http_version_1_1;
++
++    static const char* http_method_connect;
++    static const char* http_method_delete;
++    static const char* http_method_head;
++    static const char* http_method_get;
++    static const char* http_method_options;
++    static const char* http_method_post;
++    static const char* http_method_put;
++    static const char* http_method_trace;
++    static const char* http_method_patch;
++
++    static const char* http_post_encoding_form_urlencoded;
++    static const char* http_post_encoding_multipart_formdata;
++
++    static const char* text_plain;
+ 
+     static std::vector<std::string> tokenize_url(const std::string&,
+         const char separator = '/'
+diff --git src/webserver.cpp src/webserver.cpp
+index 96e53b5..a7be951 100644
+--- src/webserver.cpp
++++ src/webserver.cpp
+@@ -537,22 +537,22 @@ MHD_Result webserver::requests_answer_first_step(
+     const char *encoding = MHD_lookup_connection_value (
+             connection,
+             MHD_HEADER_KIND,
+-            http_utils::http_header_content_type.c_str()
++            http_utils::http_header_content_type
+     );
+ 
+     if ( post_process_enabled &&
+         (
+             0x0 != encoding &&
+             ((0 == strncasecmp (
+-                                http_utils::http_post_encoding_form_urlencoded.c_str(),
++                                http_utils::http_post_encoding_form_urlencoded,
+                                 encoding,
+-                                http_utils::http_post_encoding_form_urlencoded.size()
++                                strlen(http_utils::http_post_encoding_form_urlencoded)
+                                 )
+               )
+              || (0 == strncasecmp (
+-                                   http_utils::http_post_encoding_multipart_formdata.c_str(),
++                                   http_utils::http_post_encoding_multipart_formdata,
+                                    encoding,
+-                                   http_utils::http_post_encoding_multipart_formdata.size()
++                                   strlen(http_utils::http_post_encoding_multipart_formdata)
+                                    )))
+         )
+     )
+@@ -803,43 +803,43 @@ MHD_Result webserver::answer_to_connection(void* cls, MHD_Connection* connection
+             *(mr->complete_uri) + " METHOD: " + method
+     );
+ 
+-    if( 0 == strcasecmp(method, http_utils::http_method_get.c_str()))
++    if( 0 == strcasecmp(method, http_utils::http_method_get))
+     {
+         mr->callback = &http_resource::render_GET;
+     }
+-    else if (0 == strcmp(method, http_utils::http_method_post.c_str()))
++    else if (0 == strcmp(method, http_utils::http_method_post))
+     {
+         mr->callback = &http_resource::render_POST;
+         mr->has_body = true;
+     }
+-    else if (0 == strcasecmp(method, http_utils::http_method_put.c_str()))
++    else if (0 == strcasecmp(method, http_utils::http_method_put))
+     {
+         mr->callback = &http_resource::render_PUT;
+         mr->has_body = true;
+     }
+-    else if (0 == strcasecmp(method,http_utils::http_method_delete.c_str()))
++    else if (0 == strcasecmp(method,http_utils::http_method_delete))
+     {
+         mr->callback = &http_resource::render_DELETE;
+         mr->has_body = true;
+     }
+-    else if (0 == strcasecmp(method, http_utils::http_method_patch.c_str()))
++    else if (0 == strcasecmp(method, http_utils::http_method_patch))
+     {
+         mr->callback = &http_resource::render_PATCH;
+         mr->has_body = true;
+     }
+-    else if (0 == strcasecmp(method, http_utils::http_method_head.c_str()))
++    else if (0 == strcasecmp(method, http_utils::http_method_head))
+     {
+         mr->callback = &http_resource::render_HEAD;
+     }
+-    else if (0 ==strcasecmp(method,http_utils::http_method_connect.c_str()))
++    else if (0 ==strcasecmp(method,http_utils::http_method_connect))
+     {
+         mr->callback = &http_resource::render_CONNECT;
+     }
+-    else if (0 == strcasecmp(method, http_utils::http_method_trace.c_str()))
++    else if (0 == strcasecmp(method, http_utils::http_method_trace))
+     {
+         mr->callback = &http_resource::render_TRACE;
+     }
+-    else if (0 ==strcasecmp(method,http_utils::http_method_options.c_str()))
++    else if (0 ==strcasecmp(method,http_utils::http_method_options))
+     {
+         mr->callback = &http_resource::render_OPTIONS;
+     }

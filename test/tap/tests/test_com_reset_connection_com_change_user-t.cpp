@@ -40,6 +40,17 @@ const std::vector<std::string> tracked_variables {
 	"wsrep_sync_wait"
 };
 
+MARIADB_CHARSET_INFO * proxysqlTap_find_charset_collate(const char *collatename) {
+	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
+	do {
+		if (!strcasecmp(c->name, collatename)) {
+			return c;
+		}
+		++c;
+	} while (c[0].nr != 0);
+	return NULL;
+}
+
 void variable_rows_to_json(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
@@ -968,7 +979,8 @@ int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector
 	MARIADB_CHARSET_INFO* latin2_charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 	mysql->charset = latin2_charset;
 
-	if (!mysql_real_connect(mysql, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+//	if (!mysql_real_connect(mysql, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	}
@@ -1176,7 +1188,8 @@ int main(int argc, char** argv) {
 	};
 
 	MYSQL* mysql_server = mysql_init(NULL);
-	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+//	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+	if (!mysql_real_connect(mysql_server, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
 	}

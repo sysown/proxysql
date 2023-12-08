@@ -332,3 +332,5 @@ std::string trim(const std::string& s);
  * @return An 'unique_ptr' holding the resulting 'SQLite3_result'.
  */
 std::unique_ptr<SQLite3_result> get_SQLite3_resulset(MYSQL_RES* resultset);
+
+std::vector<std::string> split_string(const std::string& str, char delimiter);
