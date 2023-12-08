@@ -237,6 +237,7 @@ class MyHGC {	// MySQL Host Group Container
 		uint32_t throttle_connections_per_sec;
 		int8_t autocommit;
 		int8_t free_connections_pct;
+		int8_t handle_warnings;
 		bool multiplex;
 		bool connection_warming;
 		bool configured; // this variable controls if attributes are configured or not. If not configured, they do not apply
@@ -249,6 +250,10 @@ class MyHGC {	// MySQL Host Group Container
 		int32_t use_ssl;
 	} servers_defaults;
 	void reset_attributes();
+	inline
+	bool handle_warnings_enabled() const {
+		return attributes.configured == true && attributes.handle_warnings != -1 ? attributes.handle_warnings : mysql_thread___handle_warnings;
+	}
 	MyHGC(int);
 	~MyHGC();
 	MySrvC *get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess);

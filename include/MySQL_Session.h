@@ -24,6 +24,12 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
+enum ps_type : uint8_t {
+	ps_type_not_set = 0x0,
+	ps_type_prepare_stmt = 0x1,
+	ps_type_execute_stmt = 0x2
+};
+
 std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
 // these structs will be used for various regex hardcoded
@@ -121,7 +127,7 @@ class MySQL_Session
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_SET_OPTION(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_STATISTICS(PtrSize_t *);
 	void handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_PROCESS_KILL(PtrSize_t *);
-	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, bool ps=false);
+	bool handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *, bool *lock_hostgroup, ps_type prepare_stmt_type=ps_type_not_set);
 
 	void handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection();	
 
@@ -274,6 +280,7 @@ class MySQL_Session
 	int to_process;
 	int pending_connect;
 	enum proxysql_session_type session_type;
+	int warning_in_hg;
 
 	// bool
 	bool autocommit;
@@ -334,7 +341,7 @@ class MySQL_Session
 	MySQL_Backend * find_or_create_backend(int, MySQL_Data_Stream *_myds=NULL);
 	
 	void SQLite3_to_MySQL(SQLite3_result *, char *, int , MySQL_Protocol *, bool in_transaction=false, bool deprecate_eof_active=false);
-	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, MySQL_Data_Stream *_myds=NULL);
+	void MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds=NULL);
 	void MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn);
 	unsigned int NumActiveTransactions(bool check_savpoint=false);
 	bool HasOfflineBackends();
@@ -379,6 +386,7 @@ class MySQL_Session
 	bool has_any_backend();
 	void detected_broken_connection(const char *file, unsigned int line, const char *func, const char *action, MySQL_Connection *myconn, int myerr, const char *message, bool verbose=false);
 	void generate_status_one_hostgroup(int hid, std::string& s);
+	void reset_warning_hostgroup_flag_and_release_connection();
 	friend void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
 

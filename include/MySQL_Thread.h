@@ -581,6 +581,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_crlpath;
 		int query_cache_size_MB;
 		int query_cache_soft_ttl_pct;
+		int query_cache_handle_warnings;
 		int min_num_servers_lantency_awareness;
 		int aurora_max_lag_ms_only_read_from_replicas;
 		bool stats_time_backend_query;
@@ -593,6 +594,7 @@ class MySQL_Threads_Handler
 		bool enable_load_data_local_infile;
 		bool log_mysql_warnings_enabled;
 		int data_packets_history_size;
+		int handle_warnings;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

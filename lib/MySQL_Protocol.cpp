@@ -2726,7 +2726,9 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 		// up to 2.2.0 we used to add an EOF here.
 		// due to bug #3547 we move the logic into add_eof() that can now handle also prepared statements
 		PROXY_TRACE2();
-		add_eof();
+		// if the backend server has CLIENT_DEPRECATE_EOF enabled, and the client does not support
+		// CLIENT_DEPRECATE_EOF, warning_count will be excluded from the intermediate EOF packet
+		add_eof((mysql->server_capabilities & CLIENT_DEPRECATE_EOF));
 	}
 }
 
@@ -2990,7 +2992,7 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 	return length;
 }
 
-void MySQL_ResultSet::add_eof() {
+void MySQL_ResultSet::add_eof(bool suppress_warning_count) {
 	if (myprot) {
 		unsigned int nTrx=myds->sess->NumActiveTransactions();
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
@@ -3001,11 +3003,17 @@ void MySQL_ResultSet::add_eof() {
 		//PSarrayOUT->add(pkt.ptr,pkt.size);
 		//sid++;
 		//resultset_size+=pkt.size;
-
+		
+		// Note: warnings count will only be sent to the client if mysql-query_digests is enabled
+		const MySQL_Backend* _mybe = myds->sess->mybe;
+		const MySQL_Data_Stream* _server_myds = (_mybe && _mybe->server_myds) ? _mybe->server_myds : nullptr;
+		const MySQL_Connection* _myconn = (_server_myds && _server_myds->myds_type == MYDS_BACKEND && _server_myds->myconn) ?
+			_server_myds->myconn : nullptr;
+		const unsigned int warning_count = (_myconn && suppress_warning_count == false) ? _myconn->warning_count : 0;
 		if (deprecate_eof_active) {
 			PtrSize_t pkt;
 			buffer_to_PSarrayOut();
-			myprot->generate_pkt_OK(false, &pkt.ptr, &pkt.size, sid, 0, 0, setStatus, 0, NULL, true);
+			myprot->generate_pkt_OK(false, &pkt.ptr, &pkt.size, sid, 0, 0, setStatus, warning_count, NULL, true);
 			PSarrayOUT.add(pkt.ptr, pkt.size);
 			resultset_size += pkt.size;
 		}
@@ -3015,7 +3023,7 @@ void MySQL_ResultSet::add_eof() {
 			// note that EOF is added on a packet on its own, instead of using a buffer,
 			// so that can be removed using remove_last_eof()
 			buffer_to_PSarrayOut();
-			myprot->generate_pkt_EOF(false, NULL, NULL, sid, 0, setStatus, this);
+			myprot->generate_pkt_EOF(false, NULL, NULL, sid, warning_count, setStatus, this);
 			resultset_size += 9;
 			buffer_to_PSarrayOut();
 		}

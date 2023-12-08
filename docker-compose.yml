@@ -86,6 +86,36 @@ services:
 
 
 ####################################################################################################
+  centos9_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-centos9
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=centos9
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  centos9_clang_build:
+    extends:
+      service: centos9_build
+    image: proxysql/packaging:build-clang-centos9
+    environment:
+      - PKG_RELEASE=centos9-clang
+      - PROXYSQL_BUILD_TYPE=
+
+  centos9_dbg_build:
+    extends:
+      service: centos9_build
+    environment:
+      - PKG_RELEASE=dbg-centos9
+      - PROXYSQL_BUILD_TYPE=debug
+
+
+####################################################################################################
 ####################################################################################################
   fedora27_build:
     extends:
