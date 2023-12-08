@@ -562,6 +562,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"keep_multiplexing_variables",
+	(char *)"default_authentication_plugin",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
 	(char *)"sessions_sort",
@@ -1218,6 +1219,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ssl_p2s_crl=NULL;
 	variables.ssl_p2s_crlpath=NULL;
 	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,transaction_isolation,version");
+	variables.default_authentication_plugin=strdup((char *)"mysql_native_password");
+	variables.default_authentication_plugin_int = 0; // mysql_native_password
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -1439,6 +1442,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
@@ -1573,6 +1577,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
@@ -1923,6 +1928,25 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				if (variables.default_variables[i] == NULL)
 					variables.default_variables[i] = strdup(mysql_tracked_variables[i].default_value);
 				return true;
+			}
+		}
+		if (!strcasecmp(name,"default_authentication_plugin")) {
+			if (vallen) {
+				const char * valids[2] = { "mysql_native_password", "caching_sha2_password" };
+				for (long unsigned int i=0; i < sizeof(valids)/sizeof(char *) ; i++) {
+					if (strcmp(valids[i],value)==0) {
+						free(variables.default_authentication_plugin);
+						variables.default_authentication_plugin=strdup(value);
+						if (i==0) variables.default_authentication_plugin_int = 0;
+						if (i==1) variables.default_authentication_plugin_int = 2;
+						return true;
+					}
+				}
+				// not found
+				proxy_error("%s is an invalid value for default_authentication_plugin\n", value);
+				return false;
+			} else {
+				return false;
 			}
 		}
 	}
@@ -2697,6 +2721,7 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
+	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
@@ -2828,6 +2853,7 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables=NULL; }
+	if (mysql_thread___default_authentication_plugin) { free(mysql_thread___default_authentication_plugin); mysql_thread___default_authentication_plugin=NULL; }
 	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable=NULL; }
@@ -4160,6 +4186,9 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
 	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
+	if (mysql_thread___default_authentication_plugin) free(mysql_thread___default_authentication_plugin);
+	mysql_thread___default_authentication_plugin=GloMTH->get_variable_string((char *)"default_authentication_plugin");
+	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___handle_unknown_charset=GloMTH->get_variable_int((char *)"handle_unknown_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
