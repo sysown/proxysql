@@ -102,7 +102,7 @@ extern char *ssl_ca_fp;
 int admin___web_verbosity = 0;
 char * proxysql_version = NULL;
 
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
+#include "proxysql_find_charset.h"
 
 
 static const vector<string> mysql_servers_tablenames = {

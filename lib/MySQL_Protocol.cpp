@@ -32,8 +32,7 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 #define CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA 0x00200000
 #endif
 
-extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
+#include "proxysql_find_charset.h"
 
 #ifdef DEBUG
 static void __dump_pkt(const char *func, unsigned char *_ptr, unsigned int len) {

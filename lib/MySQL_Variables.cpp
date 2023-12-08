@@ -17,6 +17,7 @@ static inline char is_digit(char c) {
 	return 0;
 }
 
+#include "proxysql_find_charset.h"
 
 verify_var MySQL_Variables::verifiers[SQL_NAME_LAST_HIGH_WM];
 update_var MySQL_Variables::updaters[SQL_NAME_LAST_HIGH_WM];
