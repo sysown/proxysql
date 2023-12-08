@@ -2,6 +2,7 @@
 #include "MySQL_Thread.h"
 #include "MySQL_Session.h"
 #include "mysql_backend.h"
+#include "ProxySQL_Poll.h"
 //#include "MySQL_Data_Stream.h"
 #include "query_cache.hpp"
 #include "mysql_connection.h"
