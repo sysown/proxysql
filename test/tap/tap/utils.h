@@ -16,6 +16,41 @@
 #include "command_line.h"
 #include "json.hpp"
 
+#ifndef DISABLE_WARNING_COUNT_LOGGING
+/* We are overriding some of the mariadb APIs to extract the warning count and print it in the log. 
+   This override will apply to all TAP tests, except when the TAP test is linked with the MySQL client library (LIBMYSQL_HELPER defined).
+*/
+static MYSQL* (*real_mysql_init)(MYSQL* mysql) = &mysql_init;
+static int (*real_mysql_query)(MYSQL* mysql, const char* query) = &mysql_query;
+static MYSQL_RES* (*real_mysql_store_result)(MYSQL* mysql) = &mysql_store_result;
+static void (*real_mysql_close)(MYSQL* mysql) = &mysql_close;
+static MYSQL_STMT* (*real_mysql_stmt_init)(MYSQL* mysql) = &mysql_stmt_init;
+static int (*real_mysql_stmt_prepare)(MYSQL_STMT* stmt, const char* stmt_str, unsigned long length) = &mysql_stmt_prepare;
+static int (*real_mysql_stmt_execute)(MYSQL_STMT* stmt) = &mysql_stmt_execute;
+static int (*real_mysql_stmt_store_result)(MYSQL_STMT* stmt) = &mysql_stmt_store_result;
+static my_bool (*real_mysql_stmt_close)(MYSQL_STMT* stmt) = &mysql_stmt_close;
+
+MYSQL* mysql_init_override(MYSQL* mysql, const char* file, int line);
+int mysql_query_override(MYSQL* mysql, const char* query, const char* file, int line);
+MYSQL_RES* mysql_store_result_override(MYSQL* mysql, const char* file, int line);
+void mysql_close_override(MYSQL* mysql, const char* file, int line);
+MYSQL_STMT* mysql_stmt_init_override(MYSQL* mysql, const char* file, int line);
+int mysql_stmt_prepare_override(MYSQL_STMT* stmt, const char* stmt_str, unsigned long length, const char* file, int line);
+int mysql_stmt_execute_override(MYSQL_STMT* stmt, const char* file, int line);
+int mysql_stmt_store_result_override(MYSQL_STMT* stmt, const char* file, int line);
+my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line);
+
+#define mysql_init(mysql) mysql_init_override(mysql,__FILE__,__LINE__)
+#define mysql_query(mysql,query) mysql_query_override(mysql,query,__FILE__,__LINE__)
+#define mysql_store_result(mysql) mysql_store_result_override(mysql,__FILE__,__LINE__)
+#define mysql_close(mysql) mysql_close_override(mysql,__FILE__,__LINE__)
+#define mysql_stmt_init(mysql) mysql_stmt_init_override(mysql,__FILE__,__LINE__)
+#define mysql_stmt_prepare(stmt,stmt_str,length) mysql_stmt_prepare_override(stmt,stmt_str,length,__FILE__,__LINE__)
+#define mysql_stmt_execute(stmt) mysql_stmt_execute_override(stmt,__FILE__,__LINE__)
+#define mysql_stmt_store_result(stmt) mysql_stmt_store_result_override(stmt,__FILE__,__LINE__)
+#define mysql_stmt_close(stmt) mysql_stmt_close_override(stmt,__FILE__,__LINE__)
+#endif 
+
 inline std::string get_formatted_time() {
 	time_t __timer;
 	char __buffer[30];

@@ -903,6 +903,7 @@ void MyHGC::reset_attributes() {
 	attributes.throttle_connections_per_sec = 1000000;
 	attributes.autocommit = -1;
 	attributes.free_connections_pct = 10;
+	attributes.handle_warnings = -1;
 	attributes.multiplex = true;
 	attributes.connection_warming = false;
 	free(attributes.init_connect);
@@ -6931,7 +6932,8 @@ T j_get_srv_default_int_val(
 /**
  * @brief Initializes the supplied 'MyHGC' with the specified 'hostgroup_settings'.
  * @details Input verification is performed in the supplied 'hostgroup_settings'. It's expected to be a valid
- *  JSON.
+ *  JSON that may contain the following fields:
+ *   - handle_warnings: Value must be >= 0.
  *
  *  In case input verification fails for a field, supplied 'MyHGC' is NOT updated for that field. An error
  *  message is logged specifying the source of the error.
@@ -6945,7 +6947,10 @@ void init_myhgc_hostgroup_settings(const char* hostgroup_settings, MyHGC* myhgc)
 	if (hostgroup_settings[0] != '\0') {
 		try {
 			nlohmann::json j = nlohmann::json::parse(hostgroup_settings);
-			// fields to be populated
+
+			const auto handle_warnings_check = [](int8_t handle_warnings) -> bool { return handle_warnings == 0 || handle_warnings == 1; };
+			int8_t handle_warnings = j_get_srv_default_int_val<int8_t>(j, hid, "handle_warnings", handle_warnings_check);
+			myhgc->attributes.handle_warnings = handle_warnings;
 		}
 		catch (const json::exception& e) {
 			proxy_error(

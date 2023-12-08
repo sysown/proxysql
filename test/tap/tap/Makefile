@@ -30,6 +30,7 @@ all: libtap.a libtap.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
 .PHONY: clean
 clean:
 	rm -f *.o libtap.a libtap.so || true
+	find . -name '*.so' -type f -delete || true
 	find cpp-dotenv/dynamic -name '*.o' -or -name '*.a' -delete || true
 	find cpp-dotenv/static -name '*.o' -or -name '*.a' -delete || true
 

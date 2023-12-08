@@ -175,7 +175,6 @@ int main(int argc, char** argv) {
 			ok(rc == 0, "mysql_stmt_prepare() succeeded");
 			if (rc) {
 				diag("mysql_stmt_prepare at line %d failed: %s", __LINE__ , mysql_error(proxysql_mysql));
-				mysql_close(proxysql_mysql);
 				res = EXIT_FAILURE;
 				goto exit;
 			} else {

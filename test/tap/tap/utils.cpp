@@ -31,6 +31,151 @@ using std::vector;
 using std::to_string;
 using nlohmann::json;
 
+#define LAST_QUERY_EXECUTED_STR(mysql)	(*static_cast<std::string*>(mysql->unused_0)) 
+#define STMT_VECTOR(stmt)				(*static_cast<std::vector<MYSQL_STMT*>*>(stmt->mysql->unused_3))
+#define STMT_EXECUTED_VECTOR(stmt)		(*static_cast<std::vector<std::unique_ptr<char,decltype(&free)>>*>(stmt->mysql->unused_4))
+#define LAST_QUERY_EXECUTED_PTR(mysql)	(static_cast<std::string*>(mysql->unused_0))
+#define STMT_VECTOR_PTR(mysql)			(static_cast<std::vector<MYSQL_STMT*>*>(mysql->unused_3))
+#define STMT_EXECUTED_VECTOR_PTR(mysql)	(static_cast<std::vector<std::unique_ptr<char,decltype(&free)>>*>(mysql->unused_4))
+
+#define STMT_FIND_INDEX(stmt,idx)		const std::vector<MYSQL_STMT*>& vec_stmt = STMT_VECTOR(stmt); \
+										for (size_t i = 0; i < vec_stmt.size(); i++) {\
+											if (vec_stmt[i] == stmt) {\
+												idx = i; \
+												break; \
+											}\
+										}	
+
+#define STMT_PUSH_QUERY(stmt,query)		size_t idx = -1; \
+										STMT_FIND_INDEX(stmt,idx);\
+										if (idx == -1) {\
+											STMT_VECTOR(stmt).emplace_back(stmt); \
+											STMT_EXECUTED_VECTOR(stmt).emplace_back(strdup(query), &free);\
+										} else {\
+											STMT_EXECUTED_VECTOR(stmt)[idx] = std::unique_ptr<char,decltype(&free)>(strdup(query), &free);\
+										}
+
+#define STMT_LOAD_QUERY(stmt,query)		size_t idx = -1; \
+										STMT_FIND_INDEX(stmt,idx);\
+										if (idx != -1) query = STMT_EXECUTED_VECTOR(stmt)[idx].get();
+
+#define STMT_REMOVE(stmt)				size_t idx = -1; \
+										STMT_FIND_INDEX(stmt,idx);\
+										if (idx != -1) {\
+											std::vector<MYSQL_STMT*>& vec_stmt = STMT_VECTOR(stmt);\
+											std::vector<std::unique_ptr<char,decltype(&free)>>& vec_query = STMT_EXECUTED_VECTOR(stmt);\
+											if (idx != vec_stmt.size() - 1) {\
+												vec_stmt[idx] = vec_stmt.back();\
+												vec_query[idx] = std::move(vec_query.back());\
+											}\
+											vec_stmt.pop_back();\
+											vec_query.pop_back();\
+										}
+
+MYSQL* mysql_init_override(MYSQL* mysql, const char* file, int line) {
+	static bool init = false;
+	MYSQL* result = (*real_mysql_init)(mysql);
+	if (init == false) {
+		init = true;
+		fprintf(stdout, ">> [mysql_init] Override functions attached <<\n");
+	}
+	result->unused_0 = new std::string;
+	result->unused_3 = nullptr;
+	result->unused_4 = nullptr;
+	return result;
+}
+
+int mysql_query_override(MYSQL* mysql, const char* query, const char* file, int line) {
+	const int result = (*real_mysql_query)(mysql, query);
+	if (result == 0) {
+		LAST_QUERY_EXECUTED_STR(mysql) = query;
+		if (mysql_errno(mysql) == 0 && mysql_field_count(mysql) == 0 && mysql_warning_count(mysql) > 0) {
+			fprintf(stdout, "File %s, Line %d, [mysql_query] A warning was generated during the execution of the query:'%s', warning count:%d\n",
+				file, line, query, mysql_warning_count(mysql));
+		}
+	}
+	return result;
+}
+
+MYSQL_RES* mysql_store_result_override(MYSQL* mysql, const char* file, int line) {
+	MYSQL_RES* result = (*real_mysql_store_result)(mysql);
+	if (mysql_errno(mysql) == 0 && mysql_warning_count(mysql) > 0) {
+		fprintf(stdout, "File %s, Line %d, [mysql_store_result] A warning was generated during the execution of the query:'%s', warning count:%d\n",
+			file, line, LAST_QUERY_EXECUTED_STR(mysql).c_str(), mysql_warning_count(mysql));
+	}
+	return result;
+}
+
+void mysql_close_override(MYSQL* mysql, const char* file, int line) {
+	delete LAST_QUERY_EXECUTED_PTR(mysql);
+	if (STMT_VECTOR_PTR(mysql)) {
+		delete STMT_VECTOR_PTR(mysql);
+		delete STMT_EXECUTED_VECTOR_PTR(mysql);
+	}
+	(*real_mysql_close)(mysql);
+}
+
+MYSQL_STMT* mysql_stmt_init_override(MYSQL* mysql, const char* file, int line) {
+	MYSQL_STMT* result = (*real_mysql_stmt_init)(mysql);
+	if (result->mysql->unused_3 == nullptr) {
+		std::vector<MYSQL_STMT*>* vec_stmt = new std::vector<MYSQL_STMT*>;
+		std::vector<std::unique_ptr<char,decltype(&free)>>* vec_query = 
+			new std::vector<std::unique_ptr<char,decltype(&free)>>;
+		vec_stmt->reserve(64);
+		vec_query->reserve(64);
+		result->mysql->unused_3 = vec_stmt;
+		result->mysql->unused_4 = vec_query;
+	}
+	return result;
+}
+
+int mysql_stmt_prepare_override(MYSQL_STMT* stmt, const char* stmt_str, unsigned long length, const char* file, int line) {
+	const int result = (*real_mysql_stmt_prepare)(stmt, stmt_str, length);
+	if (result == 0) {
+		STMT_PUSH_QUERY(stmt,stmt_str);
+		// mysql_stmt_warning_count is not available in MySQL connector
+		if (mysql_stmt_errno(stmt) == 0 && /*mysql_stmt_warning_count(stmt)*/mysql_warning_count(stmt->mysql) > 0) {
+			fprintf(stdout, "File %s, Line %d, [mysql_stmt_prepare] A warning was generated during the execution of the query:'%s', warning count:%d\n",
+				file, line, stmt_str, /*mysql_stmt_warning_count(stmt)*/mysql_warning_count(stmt->mysql));
+		}
+	}
+	return result;
+}
+
+int mysql_stmt_execute_override(MYSQL_STMT* stmt, const char* file, int line) {
+	const int result = (*real_mysql_stmt_execute)(stmt);
+	if (result == 0) {
+		// mysql_stmt_warning_count is not available in MySQL connector
+		if (mysql_stmt_errno(stmt) == 0 && mysql_stmt_field_count(stmt) == 0 && 
+			/*mysql_stmt_warning_count(stmt)*/mysql_warning_count(stmt->mysql) > 0) {
+			char* query = nullptr;
+			STMT_LOAD_QUERY(stmt, query);
+			fprintf(stdout, "File %s, Line %d, [mysql_stmt_execute] A warning was generated during the execution of the query:'%s', warning count:%d\n",
+				file, line, (query ? query : ""), /*mysql_stmt_warning_count(stmt)*/mysql_warning_count(stmt->mysql));
+		}
+	}
+	return result;
+}
+
+int mysql_stmt_store_result_override(MYSQL_STMT* stmt, const char* file, int line) {
+	const int result = (*real_mysql_stmt_store_result)(stmt);
+	if (result == 0) {
+		// mysql_stmt_warning_count is not available in MySQL connector
+		if (mysql_stmt_errno(stmt) == 0 && /*mysql_stmt_warning_count(stmt)*/mysql_warning_count(stmt->mysql) > 0) {
+			char* query = nullptr;
+			STMT_LOAD_QUERY(stmt, query);
+			fprintf(stdout, "File %s, Line %d, [mysql_stmt_store_result] A warning was generated during the execution of the query:'%s', warning count:%d\n",
+				file, line, (query ? query : ""), /*mysql_stmt_warning_count(stmt)*/mysql_warning_count(stmt->mysql));
+		}
+	}
+	return result;
+}
+
+my_bool mysql_stmt_close_override(MYSQL_STMT* stmt, const char* file, int line) {
+	STMT_REMOVE(stmt)
+	return (*real_mysql_stmt_close)(stmt);
+}
+
 std::size_t count_matches(const string& str, const string& substr) {
 	std::size_t result = 0;
 	std::size_t pos = 0;

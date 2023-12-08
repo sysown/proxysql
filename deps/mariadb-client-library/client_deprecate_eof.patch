@@ -653,7 +653,7 @@ index 0aaaf1a..229023b 100644
      {
        /* allocate space for rows */
        if (!(current= (MYSQL_ROWS *)ma_alloc_root(&result->alloc, sizeof(MYSQL_ROWS) + packet_len)))
-@@ -276,10 +284,14 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+@@ -276,10 +284,16 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
      {
        *pprevious= 0;
        /* sace status info */
@@ -664,6 +664,8 @@ index 0aaaf1a..229023b 100644
 +
 +      if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF && !is_data_packet) {
 +        ma_read_ok_packet(stmt->mysql, p + 1, packet_len);
++        stmt->upsert_status.warning_count= stmt->mysql->warning_count;
++        stmt->upsert_status.server_status= stmt->mysql->server_status;
 +      } else {
 +        stmt->upsert_status.warning_count= stmt->mysql->warning_count= uint2korr(p + 1);
 +        stmt->upsert_status.server_status= stmt->mysql->server_status= uint2korr(p + 3);
