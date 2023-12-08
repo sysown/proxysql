@@ -119,10 +119,7 @@ static const std::set<std::string> mysql_variables_strings = {
 	"wsrep_osu_method",
 };
 
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char * const name);
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname, const char *collatename);
-extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
+#include "proxysql_find_charset.h"
 
 extern MySQL_Authentication *GloMyAuth;
 extern MySQL_LDAP_Authentication *GloMyLdapAuth;
