@@ -178,6 +178,7 @@ jobs:
 
   unlock:
     runs-on: ubuntu-22.04
+    if: ${{ always() }}
     needs: [ builds ]
     env:
       GH_TOKEN: ${{ secrets.gh_token }}
