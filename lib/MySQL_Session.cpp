@@ -529,6 +529,13 @@ bool Query_Info::is_select_NOT_for_update() {
 	return true;
 }
 
+#define NET_COMMAND_SIZE 1
+
+void Query_Info::replace_query_ptr(const PtrSize_t& pkt) {
+	QueryPointer = static_cast<unsigned char*>(pkt.ptr) + (sizeof(mysql_hdr) + NET_COMMAND_SIZE);
+	QueryLength = pkt.size - (sizeof(mysql_hdr) + NET_COMMAND_SIZE);
+}
+
 void * MySQL_Session::operator new(size_t size) {
 	return l_alloc(size);
 }
@@ -1418,8 +1425,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
-			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
-			CurrentQuery.QueryLength = pkt_2.size;
+			CurrentQuery.replace_query_ptr(pkt_2);
 		}
 	}
 	if ((pkt->size < 60) && (pkt->size > 39) && (strncasecmp((char *)"SET SESSION character_set_results",(char *)pkt->ptr+5,33)==0) ) { // like the above
@@ -1442,8 +1448,7 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			pkt->ptr=pkt_2.ptr;
 			// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
 			// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
-			CurrentQuery.QueryPointer = static_cast<unsigned char*>(pkt_2.ptr);
-			CurrentQuery.QueryLength = pkt_2.size;
+			CurrentQuery.replace_query_ptr(pkt_2);
 		}
 	}
 	if (
@@ -1602,6 +1607,31 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 				);
 			}
 		}
+	}
+	// Handle SQL_MODE with space. Issue #3863.
+	const char sql_mode_special_query[] = { "set session sql_mode=' '" };
+	const size_t sql_mode_special_query_length = strlen(sql_mode_special_query);
+	if (
+		pkt->size == sql_mode_special_query_length + 5 &&
+		strncasecmp(sql_mode_special_query, (char *)pkt->ptr + 5, pkt->size - 5) == 0
+	) {
+		// Replace pkt with a new one with the same query but without the
+		// space, and let handler() process it.
+		PtrSize_t pkt_2;
+		pkt_2.size = pkt->size - 1;
+		pkt_2.ptr = l_alloc(pkt_2.size);
+		mysql_hdr hrd;
+		memcpy(&hrd, pkt->ptr, sizeof(mysql_hdr));
+		hrd.pkt_length = pkt_2.size - 5;
+		memcpy((char *)pkt_2.ptr + 4, (char *)pkt->ptr + 4, 1);
+		memcpy(pkt_2.ptr, &hrd, sizeof(mysql_hdr));
+		memcpy((char *)pkt_2.ptr + 5, sql_mode_special_query, sql_mode_special_query_length);
+		l_free(pkt->size, pkt->ptr);
+		pkt->size = pkt_2.size;
+		pkt->ptr = pkt_2.ptr;
+		// Fix 'use-after-free': To change the pointer of the 'PtrSize_t' being processed by
+		// 'MySQL_Session::handler' we are forced to update 'MySQL_Session::CurrentQuery'.
+		CurrentQuery.replace_query_ptr(pkt_2);
 	}
 
 	return false;
@@ -7916,8 +7946,7 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 	_pkt->size = _pkt->size + strlen(b);
 	_pkt->ptr = _new_pkt.ptr;
 	free(b);
-	CurrentQuery.QueryLength = _pkt->size - 5;
-	CurrentQuery.QueryPointer = (unsigned char *)_pkt->ptr + 5;
+	CurrentQuery.replace_query_ptr(*_pkt);
 }
 
 void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {

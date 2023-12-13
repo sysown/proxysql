@@ -67,8 +67,7 @@ void SetParser::set_query(const std::string& nq) {
 #define VAR_VALUE_P1_3 "|(?:[\\w]+=(?:on|off)|,)+"
 #define VAR_VALUE_P1_4 "|(?:[@\\w/\\d:\\+\\-]|,)+"
 #define VAR_VALUE_P1_5 "|(?:(?:'{1}|\"{1})(?:)(?:'{1}|\"{1}))"
-#define VAR_VALUE_P1_6 "|(?: )+"
-#define VAR_VALUE_P1 "(" VAR_VALUE_P1_1 VAR_VALUE_P1_2 VAR_VALUE_P1_3 VAR_VALUE_P1_4 VAR_VALUE_P1_5 VAR_VALUE_P1_6 ")"
+#define VAR_VALUE_P1 "(" VAR_VALUE_P1_1 VAR_VALUE_P1_2 VAR_VALUE_P1_3 VAR_VALUE_P1_4 VAR_VALUE_P1_5 ")"
 
 std::map<std::string,std::vector<std::string>> SetParser::parse1() {
 

@@ -4,7 +4,6 @@
 #include <unordered_map>
 #include <stdlib.h>
 #include <string.h>
-#include <algorithm>
 
 std::vector<std::string> bool_values = {
 	"0", "1",
@@ -271,7 +270,6 @@ int main() {
 	vars["sql_mode"]->add(std::vector<std::string> {"NO_ENGINE_SUBSTITUTION", "'NO_ENGINE_SUBSTITUTION'", "\"NO_ENGINE_SUBSTITUTION\""});
 	vars["sql_mode"]->add(std::vector<std::string> {"concat(@@sql_mode,',STRICT_TRANS_TABLES')"});
 	vars["sql_mode"]->add(std::vector<std::string> {"CONCAT(CONCAT(@@sql_mode, ',STRICT_ALL_TABLES'), ',NO_AUTO_VALUE_ON_ZERO')"});
-	vars["sql_mode"]->add(std::vector<std::string> {"''", "\"\"", "' '", "\" \"", "'                       '", "\"                       \"",});
 
 
 	vars["default_storage_engine"] = new variable("default_storage_engine", true, false, false);
@@ -344,10 +342,6 @@ example:
 				query += s;
 			}
 			j += "\"" + v->name + "\":\"";
-			if (v->name == "sql_mode")
-				// Remove all whitespaces
-				// see https://github.com/sysown/proxysql/issues/3863
-				s.erase(std::remove(s.begin(), s.end(), ' '), s.end());
 			add_value_j(j,s,v);
 			if (v->name == "max_join_size") {
 				// see https://dev.mysql.com/doc/refman/5.7/en/server-system-variables.html#sysvar_max_join_size

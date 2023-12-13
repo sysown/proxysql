@@ -82,6 +82,7 @@ class Query_Info {
 	void end();
 	char *get_digest_text();
 	bool is_select_NOT_for_update();
+	void replace_query_ptr(const PtrSize_t& pkt);
 };
 
 class MySQL_Session
