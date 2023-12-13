@@ -229,8 +229,8 @@ WITHASAN := $(shell echo $(WITHASAN))
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
-	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
-	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
+	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
 	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
 ifeq ($(PROXYDEBUG),1)
