@@ -38,8 +38,9 @@ jobs:
         sudo dpkg -i orchestrator-client_3.2.6_amd64.deb
         
         sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 467B942D3A79BD29
-        wget https://repo.mysql.com/mysql-apt-config_0.8.24-1_all.deb
-        sudo dpkg -i mysql-apt-config_0.8.24-1_all.deb
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys A8D3785C
+        wget https://repo.mysql.com/mysql-apt-config_0.8.29-1_all.deb
+        sudo dpkg -i mysql-apt-config_0.8.29-1_all.deb
         sudo apt-get update -y
         sudo apt-cache policy mysql-shell
         sudo apt-get install -y mysql-shell
