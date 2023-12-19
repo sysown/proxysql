@@ -105,101 +105,6 @@ mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
 
 extern mysql_variable_st mysql_tracked_variables[];
 
-const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
-	const MARIADB_CHARSET_INFO * c = mariadb_compiled_charsets;
-	do {
-		if (c->nr == nr) {
-			return c;
-		}
-		++c;
-	} while (c[0].nr != 0);
-	return NULL;
-}
-
-/**
- * @brief Finds the default (first) collation for the supplied 'charset name'.
- * @details Previously, this function just returned the first collation found (default). Since v2.5.3, this
- *   function takes into consideration the thread variable 'SQL_COLLATION_CONNECTION'
- *   ('mysql-default_collation_connection'). This was introduced for being able to serve the same default
- *   collation as the server (for bootstrap mode) in case it's detected to be a MySQL 8
- *   ('utf8mb4_0900_ai_ci'), instead of the retrocompatible default collation ('utf8mb4_general_ci'). This
- *   change also allows users to select the default collation that they please for a particular charset, if
- *   the collection specified via 'mysql-default_collation_connection', isn't found, the first found collation
- *   (original default) will be retrieved.
- * @param name The 'charset name' for which to find the default collation.
- * @return The collation found, NULL if none is find.
- */
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name_) {
-	const char* default_collation = mysql_thread___default_variables[SQL_COLLATION_CONNECTION];
-	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
-	MARIADB_CHARSET_INFO* charset_collation = nullptr;
-
-	const char *name;
-	if (strcasecmp(name_,(const char *)"utf8mb3")==0) {
-		name = (const char *)"utf8";
-	} else {
-		name = name_;
-	}
-
-	do {
-		if (!strcasecmp(c->csname, name)) {
-			if (charset_collation == nullptr) {
-				charset_collation = c;
-			}
-
-			if (default_collation == nullptr) {
-				charset_collation = c;
-				break;
-			} else {
-				if (!strcmp(default_collation, c->name)) {
-					charset_collation = c;
-					break;
-				}
-			}
-		}
-		++c;
-	} while (c[0].nr != 0);
-
-	return charset_collation;
-}
-
-MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname_, const char *collatename_) {
-	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
-	char buf[64];
-	const char *csname;
-	const char *collatename;
-	if (strcasecmp(csname_,(const char *)"utf8mb3")==0) {
-		csname = (const char *)"utf8";
-	} else {
-		csname = csname_;
-	}
-	if (strncasecmp(collatename_,(const char *)"utf8mb3", 7)==0) {
-		memcpy(buf,(const char *)"utf8",4);
-		strcpy(buf+4,collatename_+7);
-		collatename = buf;
-	} else {
-		collatename = collatename_;
-	}
-	do {
-		if (!strcasecmp(c->csname, csname) && !strcasecmp(c->name, collatename)) {
-			return c;
-		}
-		++c;
-	} while (c[0].nr != 0);
-	return NULL;
-}
-
-MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
-	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
-	do {
-		if (!strcasecmp(c->name, collatename)) {
-			return c;
-		}
-		++c;
-	} while (c[0].nr != 0);
-	return NULL;
-}
-
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
@@ -225,113 +130,6 @@ extern "C" {
 __thread unsigned int __thread_MySQL_Thread_Variables_version;
 
 volatile static unsigned int __global_MySQL_Thread_Variables_version;
-
-
-
-static unsigned int near_pow_2 (unsigned int n) {
-	unsigned int i = 1;
-	while (i < n) i <<= 1;
-	return i ? i : n;
-}
-
-
-void ProxySQL_Poll::shrink() {
-	unsigned int new_size=near_pow_2(len+1);
-	fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-	myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
-	last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
-	last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
-	size=new_size;
-}
-
-void ProxySQL_Poll::expand(unsigned int more) {
-	if ( (len+more) > size ) {
-		unsigned int new_size=near_pow_2(len+more);
-		fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-		myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
-		last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
-		last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
-		size=new_size;
-	}
-}
-
-ProxySQL_Poll::ProxySQL_Poll() {
-	loop_counters=new StatCounters(15,10);
-	poll_timeout=0;
-	loops=0;
-	len=0;
-	pending_listener_add=0;
-	pending_listener_del=0;
-	bootstrapping_listeners = true;
-	size=MIN_POLL_LEN;
-	fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
-	myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
-	last_recv=(unsigned long long *)malloc(size*sizeof(unsigned long long));
-	last_sent=(unsigned long long *)malloc(size*sizeof(unsigned long long));
-}
-
-
-ProxySQL_Poll::~ProxySQL_Poll() {
-	unsigned int i;
-	for (i=0;i<len;i++) {
-		if (
-			myds[i] && // fix bug #278 . This should be caused by not initialized datastreams used to ping the backend
-			myds[i]->myds_type==MYDS_LISTENER) {
-				delete myds[i];
-		}
-	}
-	free(myds);
-	free(fds);
-	free(last_recv);
-	free(last_sent);
-	delete loop_counters;
-}
-
-
-void ProxySQL_Poll::add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
-	if (len==size) {
-		expand(1);
-	}
-	myds[len]=_myds;
-	fds[len].fd=_fd;
-	fds[len].events=_events;
-	fds[len].revents=0;
-	if (_myds) {
-		_myds->mypolls=this;
-		_myds->poll_fds_idx=len;  // fix a serious bug
-	}
-	last_recv[len]=monotonic_time();
-	last_sent[len]=sent_time;
-	len++;
-}
-
-void ProxySQL_Poll::remove_index_fast(unsigned int i) {
-	if ((int)i==-1) return;
-	myds[i]->poll_fds_idx=-1; // this prevents further delete
-	if (i != (len-1)) {
-		myds[i]=myds[len-1];
-		fds[i].fd=fds[len-1].fd;
-		fds[i].events=fds[len-1].events;
-		fds[i].revents=fds[len-1].revents;
-		myds[i]->poll_fds_idx=i;  // fix a serious bug
-		last_recv[i]=last_recv[len-1];
-		last_sent[i]=last_sent[len-1];
-	}
-	len--;
-	if ( ( len>MIN_POLL_LEN ) && ( size > len*MIN_POLL_DELETE_RATIO ) ) {
-		shrink();
-	}
-}
-
-int ProxySQL_Poll::find_index(int fd) {
-	unsigned int i;
-	for (i=0; i<len; i++) {
-		if (fds[i].fd==fd) {
-			return i;
-		}
-	}
-	return -1;
-}
 
 
 MySQL_Listeners_Manager::MySQL_Listeners_Manager() {
@@ -583,6 +381,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"long_query_time",
 	(char *)"query_cache_size_MB",
 	(char *)"query_cache_soft_ttl_pct",
+	(char *)"query_cache_handle_warnings",
 	(char *)"ping_interval_server_msec",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -633,6 +432,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
 	(char *)"data_packets_history_size",
+	(char *)"handle_warnings",
 	NULL
 };
 
@@ -1096,6 +896,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_retries_on_failure=1;
 	variables.client_host_cache_size=0;
 	variables.client_host_error_counts=0;
+	variables.handle_warnings=1;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
@@ -1105,7 +906,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.free_connections_pct=10;
 	variables.connect_retries_delay=1;
 	variables.monitor_enabled=true;
-	variables.monitor_history=600000;
+	variables.monitor_history=7200000; // changed in 2.6.0 : was 600000
 	variables.monitor_connect_interval=120000;
 	variables.monitor_connect_timeout=600;
 	variables.monitor_ping_interval=8000;
@@ -1144,8 +945,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.automatic_detect_sqli=false;
 	variables.firewall_whitelist_enabled=false;
 	variables.firewall_whitelist_errormsg = strdup((char *)"Firewall blocked this query");
-	variables.use_tcp_keepalive=false;
-	variables.tcp_keepalive_time=0;
+	variables.use_tcp_keepalive=true; // changed in 2.6.0 , was false
+	variables.tcp_keepalive_time=120; // changed in 2.6.0 , was 0
 	variables.throttle_connections_per_sec_to_hostgroup=1000000;
 	variables.max_transaction_idle_time=4*3600*1000;
 	variables.max_transaction_time=4*3600*1000;
@@ -1171,13 +972,14 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
 	variables.set_query_lock_on_hostgroup=1;
-	variables.set_parser_algorithm=1; // in 2.6.0 this must become 2
+	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
 	variables.auto_increment_delay_multiplex_timeout_ms=10000;
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.query_cache_soft_ttl_pct=0;
+	variables.query_cache_handle_warnings=0;
 	variables.init_connect=NULL;
 	variables.ldap_user_variable=NULL;
 	variables.add_ldap_user_comment=NULL;
@@ -1191,7 +993,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.default_schema=strdup((char *)"information_schema");
 	variables.handle_unknown_charset=1;
 	variables.interfaces=strdup((char *)"");
-	variables.server_version=strdup((char *)"5.5.30");
+	variables.server_version=strdup((char *)"8.0.11"); // changed in 2.6.0 , was 5.5.30
 	variables.eventslog_filename=strdup((char *)""); // proxysql-mysql-eventslog is recommended
 	variables.eventslog_filesize=100*1024*1024;
 	variables.eventslog_default_log=0;
@@ -1204,7 +1006,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.poll_timeout=2000;
 	variables.poll_timeout_on_failure=100;
 	variables.have_compress=true;
-	variables.have_ssl = false; // disable by default for performance reason
+	variables.have_ssl = true; // changed in 2.6.0 , was false by default for performance reason
 	variables.commands_stats=true;
 	variables.multiplexing=true;
 	variables.log_unhealthy_connections=true;
@@ -1248,7 +1050,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.session_debug=true;
 #endif /*debug */
 	variables.query_digests_grouping_limit = 3;
-	variables.query_digests_groups_grouping_limit= 0;
+	variables.query_digests_groups_grouping_limit= 10; // changed in 2.6.0 , was 0
 	variables.enable_client_deprecate_eof=true;
 	variables.enable_server_deprecate_eof=true;
 	variables.enable_load_data_local_infile=false;
@@ -2299,6 +2101,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
+		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
 
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
@@ -2309,11 +2112,13 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["max_allowed_packet"]        = make_tuple(&variables.max_allowed_packet,        8192,   1024*1024*1024, false);
 		VariablesPointers_int["max_connections"]           = make_tuple(&variables.max_connections,              1,        1000*1000, false);
 		VariablesPointers_int["max_stmts_per_connection"]  = make_tuple(&variables.max_stmts_per_connection,     1,             1024, false);
-		VariablesPointers_int["max_stmts_cache"]           = make_tuple(&variables.max_stmts_cache,           1024,        1024*1024, false);
+		VariablesPointers_int["max_stmts_cache"]           = make_tuple(&variables.max_stmts_cache,            128,        1024*1024, false);
 		VariablesPointers_int["max_transaction_idle_time"] = make_tuple(&variables.max_transaction_idle_time, 1000,  20*24*3600*1000, false);
 		VariablesPointers_int["max_transaction_time"]      = make_tuple(&variables.max_transaction_time,      1000,  20*24*3600*1000, false);
 		VariablesPointers_int["query_cache_size_mb"]       = make_tuple(&variables.query_cache_size_MB,          0,       1024*10240, false);
 		VariablesPointers_int["query_cache_soft_ttl_pct"]  = make_tuple(&variables.query_cache_soft_ttl_pct,     0,              100, false);
+		VariablesPointers_int["query_cache_handle_warnings"] = make_tuple(&variables.query_cache_handle_warnings,	 0,				   1, false);
+
 #ifdef IDLE_THREADS
 		VariablesPointers_int["session_idle_ms"]           = make_tuple(&variables.session_idle_ms,              1,        3600*1000, false);
 #endif // IDLE_THREADS
@@ -2922,8 +2727,12 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		int nb = fcntl(_fd, F_SETFL, prevflags | O_NONBLOCK);
 		if (nb == -1) {
 			proxy_error("For FD %d fcntl() returned -1 , previous flags %d , errno %d\n", _fd, prevflags, errno);
-			if (shutdown == 0)
-				assert (nb != -1);
+			// previously we were asserting here. But it is possible that this->shutdown is still 0 during the
+			// shutdown itself:
+			// - the current thread is processing connections
+			// - the signal handler thread is still setting shutdown = 0
+			//if (shutdown == 0)
+			//	assert (nb != -1);
 		}
 	}
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
@@ -4062,6 +3871,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");
 	mysql_thread___query_cache_soft_ttl_pct=GloMTH->get_variable_int((char *)"query_cache_soft_ttl_pct");
+	mysql_thread___query_cache_handle_warnings =GloMTH->get_variable_int((char*)"query_cache_handle_warnings");
 	mysql_thread___ping_interval_server_msec=GloMTH->get_variable_int((char *)"ping_interval_server_msec");
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___shun_on_failures=GloMTH->get_variable_int((char *)"shun_on_failures");
@@ -4223,6 +4033,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
 	mysql_thread___client_host_cache_size=GloMTH->get_variable_int((char *)"client_host_cache_size");
 	mysql_thread___client_host_error_counts=GloMTH->get_variable_int((char *)"client_host_error_counts");
+	mysql_thread___handle_warnings=GloMTH->get_variable_int((char*)"handle_warnings");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */

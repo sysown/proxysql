@@ -53,32 +53,6 @@ typedef struct _kill_queue_t {
 	std::vector<thr_id_usr *> query_ids;
 } kill_queue_t;
 
-class ProxySQL_Poll {
-	private:
-	void shrink();
-	void expand(unsigned int more);
-
-	public:
-	unsigned int len;
-	unsigned int size;
-	struct pollfd *fds;
-	MySQL_Data_Stream **myds;
-	unsigned long long *last_recv;
-	unsigned long long *last_sent;
-	std::atomic<bool> bootstrapping_listeners;
-	volatile int pending_listener_add;
-	volatile int pending_listener_del;
-	unsigned int poll_timeout;
-	unsigned long loops;
-	StatCounters *loop_counters;
-
-	ProxySQL_Poll();
-	~ProxySQL_Poll();
-	void add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time);
-	void remove_index_fast(unsigned int i);
-	int find_index(int fd);
-};
-
 enum MySQL_Thread_status_variable {
 	st_var_backend_stmt_prepare,
 	st_var_backend_stmt_execute,
@@ -255,25 +229,6 @@ class __attribute__((aligned(64))) MySQL_Thread
 
 typedef MySQL_Thread * create_MySQL_Thread_t();
 typedef void destroy_MySQL_Thread_t(MySQL_Thread *);
-
-class iface_info {
-	public:
-	char *iface;
-	char *address;
-	int port;
-	int fd;
-	iface_info(char *_i, char *_a, int p, int f) {
-		iface=strdup(_i);
-		address=strdup(_a);
-		port=p;
-		fd=f;
-	}
-	~iface_info() {
-		free(iface);
-		free(address);
-		close(fd);
-	}
-};
 
 class MySQL_Listeners_Manager {
 	private:
@@ -581,6 +536,7 @@ class MySQL_Threads_Handler
 		char * ssl_p2s_crlpath;
 		int query_cache_size_MB;
 		int query_cache_soft_ttl_pct;
+		int query_cache_handle_warnings;
 		int min_num_servers_lantency_awareness;
 		int aurora_max_lag_ms_only_read_from_replicas;
 		bool stats_time_backend_query;
@@ -593,6 +549,7 @@ class MySQL_Threads_Handler
 		bool enable_load_data_local_infile;
 		bool log_mysql_warnings_enabled;
 		int data_packets_history_size;
+		int handle_warnings;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

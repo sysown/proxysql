@@ -47,7 +47,6 @@ services:
       - ./:/opt/proxysql/
     environment:
       - PKG_RELEASE=centos7
-      - PROXYSQL_BUILD_TYPE=clickhouse
 
   centos7_dbg_build:
     extends:
@@ -76,13 +75,43 @@ services:
     image: proxysql/packaging:build-clang-centos8
     environment:
       - PKG_RELEASE=centos8-clang
-      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_TYPE=
 
   centos8_dbg_build:
     extends:
       service: centos8_build
     environment:
       - PKG_RELEASE=dbg-centos8
+      - PROXYSQL_BUILD_TYPE=debug
+
+
+####################################################################################################
+  centos9_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-centos9
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=centos9
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  centos9_clang_build:
+    extends:
+      service: centos9_build
+    image: proxysql/packaging:build-clang-centos9
+    environment:
+      - PKG_RELEASE=centos9-clang
+      - PROXYSQL_BUILD_TYPE=
+
+  centos9_dbg_build:
+    extends:
+      service: centos9_build
+    environment:
+      - PKG_RELEASE=dbg-centos9
       - PROXYSQL_BUILD_TYPE=debug
 
 
@@ -170,7 +199,7 @@ services:
     image: proxysql/packaging:build-clang-fedora34
     environment:
       - PKG_RELEASE=fedora34-clang
-      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_TYPE=
 
   fedora34_dbg_build:
     image: proxysql/packaging:build-fedora34
@@ -268,6 +297,35 @@ services:
       - PROXYSQL_BUILD_TYPE=debug
 
 ####################################################################################################
+  fedora39_build:
+    extends:
+      service: _build
+    image: proxysql/packaging:build-fedora39
+    volumes:
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/rpmbuild/:/root/rpmbuild/
+      - ./docker/images/proxysql/rhel-compliant/rpmmacros/.rpmmacros:/root/.rpmmacros
+      - ./docker/images/proxysql/rhel-compliant/entrypoint/:/opt/entrypoint/
+      - ./:/opt/proxysql/
+    environment:
+      - PKG_RELEASE=fedora39
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora39_clang_build:
+    extends:
+      service: fedora39_build
+    image: proxysql/packaging:build-clang-fedora39
+    environment:
+      - PKG_RELEASE=fedora39-clang
+      - PROXYSQL_BUILD_TYPE=clickhouse
+
+  fedora39_dbg_build:
+    extends:
+      service: fedora39_build
+    environment:
+      - PKG_RELEASE=dbg-fedora39
+      - PROXYSQL_BUILD_TYPE=debug
+
+####################################################################################################
 ####################################################################################################
   debian8_build:
     extends:
@@ -298,7 +356,6 @@ services:
       - ./:/opt/proxysql/
     environment:
       - PKG_RELEASE=debian9
-      - PROXYSQL_BUILD_TYPE=clickhouse
 
   debian9_dbg_build:
     extends:
@@ -346,7 +403,7 @@ services:
     image: proxysql/packaging:build-clang-debian11
     environment:
       - PKG_RELEASE=debian11-clang
-      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_TYPE=
 
   debian11_dbg_build:
     extends:
@@ -415,7 +472,6 @@ services:
       - ./:/opt/proxysql/
     environment:
       - PKG_RELEASE=ubuntu16
-      - PROXYSQL_BUILD_TYPE=clickhouse
 
   ubuntu16_dbg_build:
     extends:
@@ -463,7 +519,7 @@ services:
     image: proxysql/packaging:build-clang-ubuntu20
     environment:
       - PKG_RELEASE=ubuntu20-clang
-      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_TYPE=
 
   ubuntu20_dbg_build:
     extends:
@@ -522,7 +578,7 @@ services:
     image: proxysql/packaging:build-clang-opensuse15
     environment:
       - PKG_RELEASE=opensuse15-clang
-      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_TYPE=
 
   opensuse15_dbg_build:
     extends:
@@ -553,7 +609,7 @@ services:
     image: proxysql/packaging:build-clang-almalinux8
     environment:
       - PKG_RELEASE=almalinux8-clang
-      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_TYPE=
 
   almalinux8_dbg_build:
     extends:
@@ -582,7 +638,7 @@ services:
     image: proxysql/packaging:build-clang-almalinux9
     environment:
       - PKG_RELEASE=almalinux9-clang
-      - PROXYSQL_BUILD_TYPE=clickhouse
+      - PROXYSQL_BUILD_TYPE=
 
   almalinux9_dbg_build:
     extends:

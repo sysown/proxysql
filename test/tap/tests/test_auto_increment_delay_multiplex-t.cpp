@@ -82,20 +82,10 @@ int get_query_result(MYSQL* mysql, const string& query, uint64_t& out_val) {
 #define log_err(err_msg) fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, err_msg);
 
 int get_conn_auto_inc_delay_token(MYSQL* proxy_mysql, int& out_auto_inc_delay) {
-	MYSQL_QUERY(proxy_mysql, "PROXYSQL INTERNAL SESSION");
-	MYSQL_RES* my_res = mysql_store_result(proxy_mysql);
-	vector<mysql_res_row> int_sess_res = extract_mysql_rows(my_res);
-	mysql_free_result(my_res);
-
 	int cur_auto_inc_delay_mult = 0;
 
-	if (int_sess_res.empty()) {
-		log_err("Empty result received from 'PROXYSQL INTERNAL SESSION'");
-		return EXIT_FAILURE;
-	}
-
 	try {
-		nlohmann::json j_int_sess = nlohmann::json::parse(int_sess_res[0][0]);
+		nlohmann::json j_int_sess = fetch_internal_session(proxy_mysql);
 		nlohmann::json backend_conns = j_int_sess.at("backends");
 		nlohmann::json m_off_conn {};
 
@@ -124,20 +114,8 @@ int get_conn_auto_inc_delay_token(MYSQL* proxy_mysql, int& out_auto_inc_delay) {
 }
 
 int get_session_backends(MYSQL* proxy_mysql,vector<json>& out_backend_conns) {
-	MYSQL_QUERY(proxy_mysql, "PROXYSQL INTERNAL SESSION");
-	MYSQL_RES* my_res = mysql_store_result(proxy_mysql);
-	vector<mysql_res_row> int_sess_res = extract_mysql_rows(my_res);
-	mysql_free_result(my_res);
-
-	int cur_auto_inc_delay_mult = 0;
-
-	if (int_sess_res.empty()) {
-		log_err("Empty result received from 'PROXYSQL INTERNAL SESSION'");
-		return EXIT_FAILURE;
-	}
-
 	try {
-		nlohmann::json j_int_sess = nlohmann::json::parse(int_sess_res[0][0]);
+		nlohmann::json j_int_sess = fetch_internal_session(proxy_mysql);
 		nlohmann::json backend_conns = j_int_sess.at("backends");
 		vector<json> _out_conns {};
 
@@ -942,7 +920,8 @@ int main(int argc, char** argv) {
 	MYSQL* proxy_mysql = mysql_init(NULL);
 	MYSQL* proxy_admin = mysql_init(NULL);
 
-	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		return EXIT_FAILURE;
 	}
@@ -967,7 +946,8 @@ int main(int argc, char** argv) {
 		proxy_mysql = mysql_init(NULL);
 		proxy_admin = mysql_init(NULL);
 
-		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: \"%s\"\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		}

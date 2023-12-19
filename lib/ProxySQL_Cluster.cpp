@@ -2246,23 +2246,25 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							const char* q = (const char*)"INSERT INTO mysql_hostgroup_attributes ( "
 								"hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, "
 								"init_connect, multiplex, connection_warming, throttle_connections_per_sec, "
-								"ignore_session_variables, comment) VALUES "
-								"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)";
-							sqlite3_stmt* statement1 = NULL;
+								"ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES "
+								"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+							sqlite3_stmt *statement1 = NULL;
 							int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
 							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 
 							while ((row = mysql_fetch_row(results[5]))) {
-								rc = (*proxy_sqlite3_bind_int64)(statement1, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostgroup_id
-								rc = (*proxy_sqlite3_bind_int64)(statement1, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_num_online_servers
-								rc = (*proxy_sqlite3_bind_int64)(statement1, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // autocommit
-								rc = (*proxy_sqlite3_bind_int64)(statement1, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // free_connections_pct
-								rc = (*proxy_sqlite3_bind_text)(statement1, 5, row[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // variable_name
-								rc = (*proxy_sqlite3_bind_int64)(statement1, 6, atol(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // multiplex
-								rc = (*proxy_sqlite3_bind_int64)(statement1, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // connection_warming
-								rc = (*proxy_sqlite3_bind_int64)(statement1, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // throttle_connections_per_sec
-								rc = (*proxy_sqlite3_bind_text)(statement1, 9, row[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ignore_session_variables
-								rc = (*proxy_sqlite3_bind_text)(statement1, 10, row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 1, atol(row[0])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostgroup_id
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 2, atol(row[1])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // max_num_online_servers
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 3, atol(row[2])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // autocommit
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 4, atol(row[3])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // free_connections_pct
+								rc=(*proxy_sqlite3_bind_text)(statement1, 5, row[4], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // variable_name
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 6, atol(row[5])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // multiplex
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 7, atol(row[6])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // connection_warming
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 8, atol(row[7])); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // throttle_connections_per_sec
+								rc=(*proxy_sqlite3_bind_text)(statement1, 9, row[8], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ignore_session_variables
+								rc=(*proxy_sqlite3_bind_text)(statement1, 10,row[9], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostgroup_settings
+								rc=(*proxy_sqlite3_bind_text)(statement1, 11, row[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // servers_defaults
+								rc=(*proxy_sqlite3_bind_text)(statement1, 12, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
 								SAFE_SQLITE3_STEP2(statement1);
 								rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
 								rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);

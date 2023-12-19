@@ -1,4 +1,5 @@
 #include "proxysql_utils.h"
+#include "mysqld_error.h"
 
 #include <algorithm>
 #include <functional>
@@ -480,6 +481,25 @@ void close_all_non_term_fd(std::vector<int> excludeFDs) {
 					close(fd);
 				}
 			}
+		}
+	}
+}
+
+std::pair<int,const char*> get_dollar_quote_error(const char* version) {
+	const char* ER_PARSE_MSG {
+		"You have an error in your SQL syntax; check the manual that corresponds to your MySQL server"
+			" version for the right syntax to use near '$$' at line 1"
+	};
+
+	if (strcasecmp(version,"8.1.0") == 0) {
+		return { ER_PARSE_ERROR, ER_PARSE_MSG };
+	} else {
+		if (strncasecmp(version, "8.1", 3) == 0) {
+			// SQLSTATE: 42000
+			return { ER_PARSE_ERROR, ER_PARSE_MSG };
+		} else {
+			// SQLSTATE: 42S22
+			return { ER_BAD_FIELD_ERROR, "Unknown column '$$' in 'field list'" };
 		}
 	}
 }

@@ -80,7 +80,8 @@ int main(int argc, char** argv) {
 	diag("Running: %s", query.c_str());
 	MYSQL_QUERY(proxy_admin, query.c_str());
 	query = "INSERT INTO mysql_servers (hostgroup_id, hostname, port, use_ssl) "
-			"VALUES (" + std::to_string(destination_hostgroup) + ", '127.0.0.1', 13306, 0)";
+//			"VALUES (" + std::to_string(destination_hostgroup) + ", '127.0.0.1', 13306, 0)";
+			"VALUES (" + std::to_string(destination_hostgroup) + ", '" + std::string(cl.mysql_host) + "', " + std::to_string(cl.mysql_port) + ", 0)";
 	diag("Running: %s", query.c_str());
 	MYSQL_QUERY(proxy_admin, query.c_str());
 	query = "LOAD MYSQL SERVERS TO RUNTIME";

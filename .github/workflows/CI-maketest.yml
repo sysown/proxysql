@@ -1,0 +1,25 @@
+name: CI-maketest
+
+on:
+  push:
+    branches: [ "v2.x" ]
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+  pull_request:
+    branches: [ "v2.x" ]
+    paths-ignore:
+    - '.github/**'
+    - '**.md'
+#  schedule:
+#    - cron: '15 13 * * 3'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+
+jobs:
+  run:
+    uses: sysown/proxysql/.github/workflows/ci-maketest.yml@GH-Actions
+    secrets: inherit
+    

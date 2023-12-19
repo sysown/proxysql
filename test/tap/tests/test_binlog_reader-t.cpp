@@ -46,12 +46,12 @@ using nlohmann::json;
 
 int create_testing_tables(MYSQL* mysql_server) {
 	// Create the testing database
-	MYSQL_QUERY(mysql_server, "CREATE DATABASE IF NOT EXISTS binlog_db");
-	MYSQL_QUERY(mysql_server, "DROP TABLE IF EXISTS binlog_db.gtid_test");
+	MYSQL_QUERY(mysql_server, "CREATE DATABASE IF NOT EXISTS test");
+	MYSQL_QUERY(mysql_server, "DROP TABLE IF EXISTS test.gtid_test");
 
 	MYSQL_QUERY(
 		mysql_server,
-		"CREATE TABLE IF NOT EXISTS binlog_db.gtid_test ("
+		"CREATE TABLE IF NOT EXISTS test.gtid_test ("
 		"  id INTEGER NOT NULL AUTO_INCREMENT,"
 		"  a INT NOT NULL,"
 		"  c varchar(255),"
@@ -71,7 +71,7 @@ int insert_random_data(MYSQL* proxysql_mysql, uint32_t rows) {
 	for (uint32_t i = 0; i < rows; i++) {
 		string update_query {};
 		string_format(
-			"INSERT INTO binlog_db.gtid_test (a, c, pad) VALUES ('%d', '%s', '%s')", update_query,
+			"INSERT INTO test.gtid_test (a, c, pad) VALUES ('%d', '%s', '%s')", update_query,
 			i, rnd_c.c_str(), rnd_pad.c_str()
 		);
 		MYSQL_QUERY(proxysql_mysql, update_query.c_str());
@@ -85,7 +85,7 @@ int perform_update(MYSQL* proxysql_mysql, uint32_t rows) {
 	string rnd_c = random_string(rand() % 100 + 5);
 	string rnd_pad = random_string(rand() % 60 + 5);
 
-	string query { "UPDATE binlog_db.gtid_test SET a=a+1, c=REVERSE(c)" };
+	string query { "UPDATE test.gtid_test SET a=a+1, c=REVERSE(c)" };
 	MYSQL_QUERY(proxysql_mysql, query.c_str());
 
 	return EXIT_SUCCESS;
@@ -96,10 +96,10 @@ const uint32_t NUM_ROWS = 3000;
 const uint32_t NUM_CHECKS = 500;
 
 map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mysql_res_row>& conn_pool_stats) {
-	uint32_t hg_50_queries = 0;
-	uint32_t hg_50_sync_queries = 0;
-	uint32_t hg_60_queries = 0;
-	uint32_t hg_60_sync_queries = 0;
+	uint32_t hg_1200_queries = 0;
+	uint32_t hg_1200_sync_queries = 0;
+	uint32_t hg_1201_queries = 0;
+	uint32_t hg_1201_sync_queries = 0;
 
 	for (const auto& conn_pool_stats_row : conn_pool_stats) {
 		if (conn_pool_stats_row.size() < 3) {
@@ -112,23 +112,23 @@ map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mys
 		const uint32_t queries = std::stol(conn_pool_stats_row[1]);
 		const uint32_t queries_gtid_sync = std::stol(conn_pool_stats_row[2]);
 
-		if (hg == 50) {
-			hg_50_queries += queries;
-			hg_50_sync_queries += queries_gtid_sync;
-		} else if (hg == 60) {
-			hg_60_queries += queries;
-			hg_60_sync_queries += queries_gtid_sync;
+		if (hg == 1200) {
+			hg_1200_queries += queries;
+			hg_1200_sync_queries += queries_gtid_sync;
+		} else if (hg == 1201) {
+			hg_1201_queries += queries;
+			hg_1201_sync_queries += queries_gtid_sync;
 		}
 	}
 
-	return { { 50, { hg_50_queries, hg_50_sync_queries } }, { 60, { hg_60_queries, hg_60_sync_queries } } };
+	return { { 1200, { hg_1200_queries, hg_1200_sync_queries } }, { 1201, { hg_1201_queries, hg_1201_sync_queries } } };
 }
 
 int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 	// Check connections only performing select doesn't contribute to GITD count
 	MYSQL* select_conn = mysql_init(NULL);
 
-	if (!mysql_real_connect(select_conn, cl.host, "sbtest7", "sbtest7", NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(select_conn, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(select_conn));
 		return EXIT_FAILURE;
 	}
@@ -138,7 +138,7 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 		if (r_row == 0) { r_row = 1; }
 
 		string s_query {};
-		string_format("SELECT * FROM binlog_db.gtid_test WHERE id=%d", s_query, r_row);
+		string_format("SELECT * FROM test.gtid_test WHERE id=%d", s_query, r_row);
 
 		// Perform the select and ignore the result
 		int rc = mysql_query(select_conn, s_query.c_str());
@@ -168,28 +168,28 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 	}
 
 	auto hg_stats { extract_hosgtroups_stats(conn_pool_stats) };
-	uint32_t hg_50_queries = hg_stats.at(50).first;
-	uint32_t hg_50_sync_queries = hg_stats.at(50).second;;
-	uint32_t hg_60_queries = hg_stats.at(60).first;
-	uint32_t hg_60_sync_queries = hg_stats.at(60).second;;
+	uint32_t hg_1200_queries = hg_stats.at(1200).first;
+	uint32_t hg_1200_sync_queries = hg_stats.at(1200).second;;
+	uint32_t hg_1201_queries = hg_stats.at(1201).first;
+	uint32_t hg_1201_sync_queries = hg_stats.at(1201).second;;
 
-	uint32_t hg_50_exp_queries =
+	uint32_t hg_1200_exp_queries =
 		3 +            // Database creation + Table DROP + Table creation
 		NUM_ROWS +     // Initial data load
 		NUM_CHECKS;    // Updates (matching number of checks)
-	uint32_t hg_50_exp_sync_queries = NUM_CHECKS - 1;
+	uint32_t hg_1200_exp_sync_queries = NUM_CHECKS - 1;
 
-	bool hg_50_checks = hg_50_exp_queries == hg_50_queries && hg_50_sync_queries == hg_50_exp_sync_queries;
-	bool hg_60_checks = hg_60_queries == NUM_CHECKS && hg_60_sync_queries == NUM_CHECKS;
+	bool hg_1200_checks = hg_1200_exp_queries == hg_1200_queries && hg_1200_sync_queries == hg_1200_exp_sync_queries;
+	bool hg_1201_checks = hg_1201_queries == NUM_CHECKS && hg_1201_sync_queries == NUM_CHECKS;
 
 	ok(
-		hg_50_checks && hg_60_checks,
+		hg_1200_checks && hg_1201_checks,
 		"GTID based query routing: {"
-			" hg_50: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d },"
-			" hg_60: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d }"
+			" hg_1200: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d },"
+			" hg_1201: { exp_queries: %d, act_queries: %d, exp_sync_queries: %d, act_sync_queries: %d }"
 		" }",
-		hg_50_exp_queries, hg_50_queries, hg_50_exp_sync_queries, hg_50_sync_queries,
-		NUM_CHECKS, hg_60_queries, NUM_CHECKS, hg_60_queries
+		hg_1200_exp_queries, hg_1200_queries, hg_1200_exp_sync_queries, hg_1200_sync_queries,
+		NUM_CHECKS, hg_1201_queries, NUM_CHECKS, hg_1201_queries
 	);
 
 	// Reset connection pool stats
@@ -209,19 +209,19 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 
 	// Extract stats
 	hg_stats = extract_hosgtroups_stats(conn_pool_stats);
-	hg_50_queries = hg_stats.at(50).first;
-	hg_50_sync_queries = hg_stats.at(50).second;;
-	hg_60_queries = hg_stats.at(60).first;
-	hg_60_sync_queries = hg_stats.at(60).second;;
+	hg_1200_queries = hg_stats.at(1200).first;
+	hg_1200_sync_queries = hg_stats.at(1200).second;;
+	hg_1201_queries = hg_stats.at(1201).first;
+	hg_1201_sync_queries = hg_stats.at(1201).second;;
 
-	uint32_t hg_60_exp_queries = NUM_CHECKS / 5;
+	uint32_t hg_1201_exp_queries = NUM_CHECKS / 5;
 	ok(
-		hg_50_queries == 0 && hg_50_sync_queries == 0 && hg_60_queries == hg_60_exp_queries && hg_60_sync_queries == 0,
-		"Queries should only be executed in 'HG 60' and no GTID sync should take place: {"
-		" hg_50: { exp_queries: 0, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
-		" hg_60: { exp_queries: %d, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
+		hg_1200_queries == 0 && hg_1200_sync_queries == 0 && hg_1201_queries == hg_1201_exp_queries && hg_1201_sync_queries == 0,
+		"Queries should only be executed in 'HG 1201' and no GTID sync should take place: {"
+		" hg_1200: { exp_queries: 0, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
+		" hg_1201: { exp_queries: %d, act_queries: %d, exp_sync_queries: 0, act_sync_queries: %d },"
 		" }",
-		hg_50_queries, hg_50_sync_queries, hg_60_exp_queries, hg_60_queries, hg_60_sync_queries
+		hg_1200_queries, hg_1200_sync_queries, hg_1201_exp_queries, hg_1201_queries, hg_1201_sync_queries
 	);
 
 	return EXIT_SUCCESS;
@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
 
-	if (!mysql_real_connect(proxysql_mysql, cl.host, "sbtest7", "sbtest7", NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxysql_mysql, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
 	}
@@ -287,7 +287,7 @@ int main(int argc, char** argv) {
 		if (r_row == 0) { r_row = 1; }
 
 		string s_query {};
-		string_format("SELECT * FROM binlog_db.gtid_test WHERE id=%d", s_query, r_row);
+		string_format("SELECT * FROM test.gtid_test WHERE id=%d", s_query, r_row);
 
 		// Perform the select and ignore the result
 		rc = mysql_query(proxysql_mysql, s_query.c_str());

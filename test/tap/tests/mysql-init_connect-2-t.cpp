@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
 		mysql_close(mysql);
 		unsigned long long end = monotonic_time();
 		unsigned long time_diff_ms = (end-begin)/1000;
-		ok(time_diff_ms>2900 && time_diff_ms < 3200 , "Total query execution time should be around 3 seconds. Actual : %llums", time_diff_ms);
+		ok(time_diff_ms>2900 && time_diff_ms < 3200 , "Total query execution time should be around 3 seconds. Actual : %lums", time_diff_ms);
 	}
 
 	diag("Setting mysql_hostgroup_attributes.init_connect to Syntax Error");

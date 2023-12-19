@@ -147,8 +147,13 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id=999"); // just in case
+//	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id=999"); // just in case
+	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers"); // just in case
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+	MYSQL_QUERY(proxysql_admin, "DELETE FROM proxysql_servers"); // just in case
+	MYSQL_QUERY(proxysql_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
+	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_query_rules"); // just in case
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_users SET default_hostgroup=999");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
 
@@ -159,7 +164,8 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 	// Connect to ProxySQL
-	if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//	if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(proxysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 	    fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 		return exit_status();
 	}
@@ -228,9 +234,10 @@ int main(int argc, char** argv) {
 	STEP_END,
 	STEP_START
 			UPDATE_PREV_METRICS(proxysql_admin),
-			EXECUTE_QUERY("DELETE FROM mysql_servers WHERE hostgroup_id=999", proxysql_admin, false),
+//			EXECUTE_QUERY("DELETE FROM mysql_servers WHERE hostgroup_id=999", proxysql_admin, false),
+			EXECUTE_QUERY("DELETE FROM mysql_servers", proxysql_admin, false),
 			EXECUTE_QUERY("LOAD MYSQL SERVERS TO RUNTIME", proxysql_admin, false),
-			DELAY_SEC(2),
+			DELAY_SEC(20),
 			UPDATE_AFTER_METRICS(proxysql_admin),
 			CHECK_RESULT(std::greater<double>, "proxysql_mysql_monitor_dns_cache_record_updated"),
 			CHECK_RESULT(std::equal_to<double>, "proxysql_mysql_monitor_dns_cache_lookup_success"),

@@ -250,4 +250,12 @@ inline void replace_checksum_zeros(char* checksum) {
 std::string get_checksum_from_hash(uint64_t hash);
 
 void close_all_non_term_fd(std::vector<int> excludeFDs);
+
+/**
+ * @brief Returns the expected error for query 'SELECT $$'.
+ * @param version The 'server_version' for which the error should match.
+ * @return A pair of the shape '{err_code,err_msg}'.
+ */
+std::pair<int,const char*> get_dollar_quote_error(const char* version);
+
 #endif

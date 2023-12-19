@@ -115,7 +115,8 @@ int setup_replication(int server_id, bool frontend_ssl, bool backend_ssl, std::v
 	if (frontend_ssl) {
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	}
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+//	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	if (!mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 	//if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, 3306, NULL, 0)) {
 		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		return exit_status();

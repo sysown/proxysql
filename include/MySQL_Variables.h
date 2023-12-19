@@ -10,9 +10,6 @@
 
 class MySQL_Session;
 
-extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
-extern MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename);
 extern void print_backtrace(void);
 
 typedef bool (*verify_var)(MySQL_Session* session, int idx, uint32_t client_hash, uint32_t server_hash);

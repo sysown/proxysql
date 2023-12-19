@@ -1,0 +1,109 @@
+diff --git src/httpserver/details/modded_request.hpp src/httpserver/details/modded_request.hpp
+index 1ebe5b1..32d4154 100644
+--- src/httpserver/details/modded_request.hpp
++++ src/httpserver/details/modded_request.hpp
+@@ -38,6 +38,7 @@ struct modded_request
+     struct MHD_PostProcessor *pp = 0x0;
+     std::string* complete_uri = 0x0;
+     std::string* standardized_url = 0x0;
++    std::string* url = 0x0;
+     webserver* ws = 0x0;
+ 
+     const std::shared_ptr<http_response> (httpserver::http_resource::*callback)(const httpserver::http_request&);
+@@ -65,6 +66,9 @@ struct modded_request
+             delete dhr; //TODO: verify. It could be an error
+         delete complete_uri;
+         delete standardized_url;
++		if (url) {
++			delete url;
++		}
+     }
+ 
+ };
+diff --git src/httpserver/http_request.hpp src/httpserver/http_request.hpp
+index 0b83fa2..419585d 100644
+--- src/httpserver/http_request.hpp
++++ src/httpserver/http_request.hpp
+@@ -77,6 +77,15 @@ class http_request
+             return path;
+         }
+ 
++        /**
++         * Method used to get the path requested
++         * @return string representing the path requested.
++        **/
++        const std::string& get_url() const
++        {
++            return url;
++        }
++
+         /**
+          * Method used to get all pieces of the path requested; considering an url splitted by '/'.
+          * @return a vector of strings containing all pieces
+@@ -86,6 +95,22 @@ class http_request
+             return http::http_utils::tokenize_url(path);
+         }
+ 
++        /**
++         * Method used to get all pieces of the path requested; considering an url splitted by '/'.
++         * @return a vector of strings containing all pieces
++        **/
++        const std::vector<std::string> get_url_pieces() const
++        {
++            const std::vector<std::string> url_pieces { http::http_utils::tokenize_url(url) };
++            std::vector<std::string> dec_pieces { url_pieces };
++
++            for (std::string& p : dec_pieces) {
++                http::base_unescaper(p, nullptr);
++            }
++
++            return dec_pieces;
++        }
++
+         /**
+          * Method used to obtain a specified piece of the path; considering an url splitted by '/'.
+          * @param index the index of the piece selected
+@@ -233,6 +258,7 @@ class http_request
+         http_request& operator=(http_request&& b) = default;
+ 
+         std::string path;
++        std::string url;
+         std::string method;
+         std::map<std::string, std::string, http::arg_comparator> args;
+         std::string content = "";
+@@ -317,6 +343,15 @@ class http_request
+             this->path = path;
+         }
+ 
++        /**
++         * Sets the raw (unescaped) URL path. Used for 'get_pieces()'
++         * @param url The path searched by the request
++        **/
++        void set_url(const std::string& url)
++        {
++            this->url = url;
++        }
++
+         /**
+          * Method used to set the request METHOD
+          * @param method The method to set for the request
+diff --git src/webserver.cpp src/webserver.cpp
+index e7dd335..96e53b5 100644
+--- src/webserver.cpp
++++ src/webserver.cpp
+@@ -750,6 +750,7 @@ MHD_Result webserver::complete_request(
+     mr->ws = this;
+ 
+     mr->dhr->set_path(mr->standardized_url->c_str());
++    mr->dhr->set_url(mr->url->c_str());
+     mr->dhr->set_method(method);
+     mr->dhr->set_version(version);
+ 
+@@ -793,6 +794,7 @@ MHD_Result webserver::answer_to_connection(void* cls, MHD_Connection* connection
+ 
+     base_unescaper(t_url, static_cast<webserver*>(cls)->unescaper);
+     mr->standardized_url = new string(http_utils::standardize_url(t_url));
++    mr->url = new string(url);
+ 
+     mr->has_body = false;
+ 
