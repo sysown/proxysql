@@ -65,7 +65,8 @@ jobs:
       id: cache-check
       uses: actions/cache/restore@v3
       with:
-        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
+#        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
+        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}-ubuntu22-tap_test
         lookup-only: true
         path: |
           proxysql/binaries/
