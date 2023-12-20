@@ -248,8 +248,8 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_priv.h.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_alloc.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_charset.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_charset.c < ../ma_charset.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
 	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
