@@ -4,6 +4,7 @@
 #include <functional>
 #include <sstream>
 #include <algorithm>
+#include <climits>
 
 #include <fcntl.h>
 #include <poll.h>
@@ -450,4 +451,23 @@ std::pair<int,const char*> get_dollar_quote_error(const char* version) {
 			return { ER_BAD_FIELD_ERROR, "Unknown column '$$' in 'field list'" };
 		}
 	}
+}
+
+/**
+* @brief Parses a string into a long.
+* @details Parses a string into a long, with error checks. Throws an exception if parse fails.
+* @param s The string to parse.
+*
+* @return The parsed value of the string as a long.
+*/
+long parseLong(const char* s) {
+	errno = 0;
+	char *temp;
+	long val = strtol(s, &temp, 0);
+
+	if (temp == s || *temp != '\0' || ((val == LONG_MIN || val == LONG_MAX) && errno == ERANGE)) {
+		throw std::runtime_error("Could not parse long.");
+	}
+
+	return val;
 }

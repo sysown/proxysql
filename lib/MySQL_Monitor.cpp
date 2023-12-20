@@ -3256,6 +3256,240 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 	return ret;
 }
 
+
+/**
+* @brief Discovers the topology of a server.
+* @details Discovers the topology of the server specified by hostname and port.
+* The monitor user must explicitly be granted permissions to view 'mysql.rds_topology'.
+* @param hostname Hostname of the server.
+* @param port Server port.
+*
+* @return Returns a vector of 'MYSQL_ROW' objects which contain the discovered servers.
+*/
+vector<MYSQL_ROW> MySQL_Monitor::discover_topology(const char* hostname, int port) {
+	std::unique_ptr<MySQL_Monitor_State_Data> mmsd(new MySQL_Monitor_State_Data(MON_CONNECT, const_cast<char*> (hostname), port));
+	mmsd->mondb = monitordb;
+	mmsd->mysql = My_Conn_Pool->get_connection(mmsd->hostname, mmsd->port, mmsd.get());
+
+	unsigned long long start_time = monotonic_time();
+	mmsd->t1=start_time;
+
+	bool read_only_success = false;
+	bool crc = false;
+	if (mmsd->mysql == NULL) { // we don't have a connection, let's create it
+		bool rc;
+		rc = mmsd->create_new_connection();
+		if (mmsd->mysql) {
+			GloMyMon->My_Conn_Pool->conn_register(mmsd.get());
+		}
+		crc = true;
+		if (rc == false) {
+			unsigned long long now = monotonic_time();
+			char *new_error = (char *) malloc(50 + strlen(mmsd->mysql_error_msg));
+			snprintf(new_error, sizeof(mmsd->mysql_error_msg), "timeout on creating new connection: %s", mmsd->mysql_error_msg);
+			free(mmsd->mysql_error_msg);
+			mmsd->mysql_error_msg = new_error;
+			proxy_error("Timeout on discover_topology check for %s:%d after %lldms. Unable to create a connection. If the server is overload, increase mysql-monitor_connect_timeout. Error: %s.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000, new_error);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_CONN_TIMEOUT);
+			goto __exit_monitor_discover_topology;
+		}
+	}
+
+	mmsd->interr = 0; // reset the value
+	mmsd->async_exit_status = mysql_query_start(&mmsd->interr,mmsd->mysql, "SELECT * from mysql.rds_topology");
+	while (mmsd->async_exit_status) {
+		const unsigned long long now = monotonic_time();
+		mmsd->async_exit_status = wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
+
+		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
+			mmsd->mysql_error_msg = strdup("timeout check");
+			proxy_error("Timeout on discover_topology check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT);
+			goto __exit_monitor_discover_topology;
+		}
+
+		if (mmsd->interr) {
+			// error during query
+			mmsd->mysql_error_msg = strdup(mysql_error(mmsd->mysql));
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+			goto __exit_monitor_discover_topology;
+		}
+
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status = mysql_query_cont(&mmsd->interr, mmsd->mysql, mmsd->async_exit_status);
+		}
+	}
+
+	if (mmsd->interr) {
+		// error during query
+		mmsd->mysql_error_msg = strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+		goto __exit_monitor_discover_topology;
+	}
+
+	mmsd->async_exit_status = mysql_store_result_start(&mmsd->result,mmsd->mysql);
+	while (mmsd->async_exit_status && ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0)) {
+		mmsd->async_exit_status = wait_for_mysql(mmsd->mysql, mmsd->async_exit_status);
+		const unsigned long long now = monotonic_time();
+
+		if (now > mmsd->t1 + mysql_thread___monitor_read_only_timeout * 1000) {
+			mmsd->mysql_error_msg = strdup("timeout check");
+			proxy_error("Timeout on discover_topology check for %s:%d after %lldms. If the server is overload, increase mysql-monitor_read_only_timeout.\n", mmsd->hostname, mmsd->port, (now-mmsd->t1)/1000);
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, ER_PROXYSQL_READ_ONLY_CHECK_TIMEOUT);
+			goto __exit_monitor_discover_topology;
+		}
+
+		if ((mmsd->async_exit_status & MYSQL_WAIT_TIMEOUT) == 0) {
+			mmsd->async_exit_status = mysql_store_result_cont(&mmsd->result, mmsd->mysql, mmsd->async_exit_status);
+		}
+	}
+
+	if (mmsd->interr) { // ping failed
+		mmsd->mysql_error_msg = strdup(mysql_error(mmsd->mysql));
+		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+	}
+
+__exit_monitor_discover_topology:
+	if (mmsd->mysql) {
+		// if we reached here we didn't put the connection back
+		if (mmsd->mysql_error_msg) {
+			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+			GloMyMon->My_Conn_Pool->conn_unregister(mmsd.get());
+			mysql_close(mmsd->mysql); // if we reached here we should destroy it
+			mmsd->mysql = NULL;
+		} else {
+			if (crc) {
+				bool rc = mmsd->set_wait_timeout();
+				if (rc) {
+					GloMyMon->My_Conn_Pool->put_connection(mmsd->hostname, mmsd->port, mmsd->mysql);
+				} else {
+					MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+					GloMyMon->My_Conn_Pool->conn_unregister(mmsd.get());
+					mysql_close(mmsd->mysql); // set_wait_timeout failed
+				}
+				mmsd->mysql = NULL;
+			} else { // really not sure how we reached here, drop it
+				MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql));
+				GloMyMon->My_Conn_Pool->conn_unregister(mmsd.get());
+				mysql_close(mmsd->mysql);
+				mmsd->mysql = NULL;
+			}
+		}
+	}
+
+	// Process the output of the query, if any
+	vector<MYSQL_ROW> discovered_rows;
+	if (mmsd->result) {
+		MYSQL_FIELD *fields = mysql_fetch_fields(mmsd->result);
+		int num_fields = mysql_num_fields(mmsd->result);
+
+		for (int i = 0; i < num_fields; i++) {
+			MYSQL_ROW curr_row = mysql_fetch_row(mmsd->result);
+			string discovered_hostname = curr_row[1];
+			string discovered_port = curr_row[2];
+
+			if (strcmp(hostname, curr_row[1]) != 0) {
+				discovered_rows.push_back(curr_row);
+			}
+		}
+
+		mysql_free_result(mmsd->result);
+		mmsd->result = NULL;
+	} else {
+		proxy_info("Unable to query for topology.\n");
+	}
+
+	return discovered_rows;
+}
+
+/**
+* @brief Discovers the topology of a server and adds the discovered servers to 'mysql_servers'.
+* @details Helper method which calls the 'discover_topology' method as well as
+* 'MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups' in order to discover topology
+* and then add it to 'mysql_servers'.
+*/
+void MySQL_Monitor::discover_topology_and_add_to_mysql_servers() {
+	char *error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result *runtime_mysql_servers = NULL;
+
+	char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.runtime_mysql_servers ORDER BY hostgroup_id, hostname, port";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	admindb->execute_statement(query, &error , &cols , &affected_rows , &runtime_mysql_servers);
+
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		set<string> existing_servers;
+		vector<string> servers_to_add;
+		unordered_map<string, MySQL_HostGroups_Manager::serverDetails> hostname_values_mapping;
+
+		// Do an initial loop through query results to keep track of existing server hostnames
+		for (std::vector<SQLite3_row *>::iterator it = runtime_mysql_servers->rows.begin(); it != runtime_mysql_servers->rows.end(); it++) {
+			SQLite3_row *r1 = *it;
+
+			string current_hostname = r1->fields[1];
+			if (std::find(existing_servers.begin(), existing_servers.end(), current_hostname) == existing_servers.end()) {
+				existing_servers.insert(current_hostname);
+			}
+		}
+
+		// Discover topology for each server in runtime_mysql_servers that have an aws endpoint
+		for (std::vector<SQLite3_row *>::iterator it = runtime_mysql_servers->rows.begin(); it != runtime_mysql_servers->rows.end(); it++) {
+			SQLite3_row *r1 = *it;
+
+			long int hostgroup = parseLong(r1->fields[0]);
+			string current_hostname = r1->fields[1];
+			long int port = parseLong(r1->fields[2]);
+
+			if (current_hostname.find(AWS_ENDPOINT_SUFFIX_STRING) != std::string::npos) {
+				vector<MYSQL_ROW> discovered_servers = GloMyMon->discover_topology(current_hostname.c_str(), port);
+
+				if (!discovered_servers.empty()) {
+					for (MYSQL_ROW s: discovered_servers) {
+						vector<string> value_vector;
+						string discovered_id = s[0];
+						string discovered_hostname = s[1];
+						string discovered_port = s[2];
+
+						// Add discovered servers that don't already exist in runtime_mysql_servers
+						if (std::find(existing_servers.begin(), existing_servers.end(), discovered_hostname) == existing_servers.end()) {
+							servers_to_add.push_back(discovered_hostname);
+
+							MySQL_HostGroups_Manager::serverDetails original_server_values = {
+								parseLong(r1->fields[0]),           // hostgroup_id
+								r1->fields[1],                      // hostname
+								parseLong(discovered_port.c_str()), // port, use from topology discovery instead of from originating server
+								parseLong(r1->fields[3]),           // gtid_port
+								r1->fields[4],                      // status, but not using it
+								parseLong(r1->fields[5]),           // weight
+								parseLong(r1->fields[6]),           // compression
+								parseLong(r1->fields[7]),           // max_connections
+								parseLong(r1->fields[8]),           // max_replication_lag
+								parseLong(r1->fields[9]),           // use_ssl
+								parseLong(r1->fields[10]),          // max_latency_ms
+								r1->fields[11]                      // comment, but not using it
+							};
+
+							hostname_values_mapping[discovered_hostname] = original_server_values;
+						}
+					}
+				}
+			}
+		}
+		if (!servers_to_add.empty()) {
+			int successfully_added_all_servers = MyHGM->add_discovered_servers_to_mysql_servers_and_replication_hostgroups(servers_to_add, hostname_values_mapping);
+
+			if (successfully_added_all_servers == EXIT_FAILURE) {
+				proxy_info("Inserting auto-discovered servers failed.\n");
+			} else {
+				proxy_info("Inserting auto-discovered servers succeeded.\n");
+			}
+		}
+	}
+}
+
 void * MySQL_Monitor::monitor_read_only() {
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
@@ -3269,6 +3503,8 @@ void * MySQL_Monitor::monitor_read_only() {
 	unsigned long long t1;
 	unsigned long long t2;
 	unsigned long long next_loop_at=0;
+	int topology_loop = 0;
+	int topology_loop_max = mysql_thread___monitor_topology_discovery_interval;
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
@@ -3286,6 +3522,18 @@ void * MySQL_Monitor::monitor_read_only() {
 			mysql_thr->refresh_variables();
 			next_loop_at=0;
 		}
+
+		if (topology_loop >= topology_loop_max) {
+			try {
+				discover_topology_and_add_to_mysql_servers();
+				topology_loop = 0;
+			} catch (std::runtime_error &e) {
+				proxy_error("Error during topology auto-discovery: %s\n", e.what());
+			} catch (...) {
+				proxy_error("Unknown error during topology auto-discovery.\n");
+			}
+		}
+		topology_loop += 1;
 
 		if (t1 < next_loop_at) {
 			goto __sleep_monitor_read_only;

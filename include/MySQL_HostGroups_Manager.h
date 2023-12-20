@@ -814,6 +814,24 @@ class MySQL_HostGroups_Manager {
 	void set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us);
 	unsigned long long Get_Memory_Stats();
 
+	struct serverDetails {
+		long int hostgroup_id;
+		string hostname;
+		uint16_t port;
+		uint16_t gtid_port;
+		string status;
+		int64_t weight;
+		unsigned int compression;
+		int64_t max_connections;
+		unsigned int max_replication_lag;
+		int32_t use_ssl;
+		unsigned int max_latency_ms;
+		string comment;
+	};
+
+	int add_discovered_servers_to_mysql_servers_and_replication_hostgroups(vector<string> servers_to_add, unordered_map<string, MySQL_HostGroups_Manager::serverDetails> hostname_values_mapping);
+	void rebuild_hostname_hostgroup_mapping();
+
 	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);

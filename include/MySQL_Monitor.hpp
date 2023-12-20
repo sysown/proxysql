@@ -56,6 +56,8 @@ struct cmp_str {
 
 #define N_L_ASE 16
 
+#define AWS_ENDPOINT_SUFFIX_STRING "rds.amazonaws.com"
+
 /*
 
 Implementation of monitoring in AWS Aurora will be different than previous modules
@@ -418,6 +420,8 @@ class MySQL_Monitor {
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
+	vector<MYSQL_ROW> discover_topology(const char* hostname, int port);
+	void discover_topology_and_add_to_mysql_servers();
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
