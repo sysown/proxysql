@@ -1,4 +1,8 @@
-@@ -30,8 +30,7 @@
+diff --git include/ma_priv.h include/ma_priv.h
+index 0fefd52e..3872458b 100644
+--- include/ma_priv.h
++++ include/ma_priv.h
+@@ -30,8 +30,7 @@ MYSQL_FIELD * unpack_fields(const MYSQL *mysql, MYSQL_DATA *data,
  
  static inline my_bool ma_has_extended_type_info(const MYSQL *mysql)
  {
