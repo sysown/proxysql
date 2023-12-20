@@ -243,7 +243,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.ipv6_fix.patch # make sure this patch is applied after mariadb_lib.c.collation.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_async.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_password.c < ../ma_password.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
 	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
