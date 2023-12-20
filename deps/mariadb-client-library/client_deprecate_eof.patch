@@ -170,7 +170,7 @@ index e475e25..1a04b2f 100644
 + */
 +int
 +unpack_field(const MYSQL *mysql, MA_MEM_ROOT *alloc, my_bool default_value,
-+    MYSQL_ROWS *row, MYSQL_FIELD *field)
++    MYSQL_ROWS *row, MYSQL_FIELD *field, ulong* field_length)
 +{
 +  unsigned int i, field_count = sizeof(rset_field_offsets) / sizeof(size_t) / 2;
 +  char *p = NULL;
@@ -187,7 +187,7 @@ index e475e25..1a04b2f 100644
 +    // Copy data in case of not empty
 +    else
 +    {
-+      uint length = (uint)(row->data[i+1] - row->data[i] - 1);
++      uint length = (uint)((field_length != NULL) ? field_length[i] : (row->data[i+1] - row->data[i] - 1));
 +      *(char **)(((char *)field) + rset_field_offsets[i*2]) =
 +        ma_strdup_root(alloc, (char *)row->data[i]);
 +      *(unsigned int *)(((char *)field) + rset_field_offsets[i*2+1]) =
@@ -314,7 +314,7 @@ index e475e25..1a04b2f 100644
 -    field->def_length= 0;
 -
 -    field->max_length= 0;
-+    if (unpack_field(mysql, alloc, default_value, row, field) != 0)
++    if (unpack_field(mysql, alloc, default_value, row, field, NULL) != 0)
 +      goto error;
    }
    if (field < result + fields)
@@ -440,7 +440,7 @@ index e475e25..1a04b2f 100644
 +    {
 +        if (mthd_my_read_one_row(mysql, m_field_count, m_rows.data, m_len) == -1)
 +          return NULL;
-+        if (unpack_field(mysql, mem_root, 0, &m_rows, m_fields++))
++        if (unpack_field(mysql, mem_root, 0, &m_rows, m_fields++, m_len))
 +          return NULL;
 +    }
 +    // read EOF packet in case of client not supporting 'CLIENT_DEPRECATE_EOF'
