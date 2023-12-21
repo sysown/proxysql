@@ -32,7 +32,7 @@ jobs:
         #echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
 
         MATRIX="[ "
-        for TM in proxysql/tap-matrix*; do
+        for TM in proxysql/tap-matrix*.json; do
           TM=${TM#proxysql/tap-matrix-}
           MATRIX+="${TM%.json}, "
         done
