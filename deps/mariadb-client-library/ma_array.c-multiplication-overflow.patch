@@ -1,4 +1,8 @@
-@@ -46,7 +46,7 @@
+diff --git libmariadb/ma_array.c libmariadb/ma_array.c
+index d067aa4a..81fc3c40 100644
+--- libmariadb/ma_array.c
++++ libmariadb/ma_array.c
+@@ -46,7 +46,7 @@ my_bool ma_init_dynamic_array(DYNAMIC_ARRAY *array, uint element_size,
    array->max_element=init_alloc;
    array->alloc_increment=alloc_increment;
    array->size_of_element=element_size;
@@ -7,7 +11,7 @@
    {
      array->max_element=0;
      return(TRUE);
-@@ -80,7 +80,7 @@
+@@ -80,7 +80,7 @@ unsigned char *ma_alloc_dynamic(DYNAMIC_ARRAY *array)
    if (array->elements == array->max_element)
    {
      char *new_ptr;
@@ -16,7 +20,7 @@
  			          array->alloc_increment)*
  				   array->size_of_element)))
        return 0;
-@@ -111,14 +111,14 @@
+@@ -111,14 +111,14 @@ my_bool ma_set_dynamic(DYNAMIC_ARRAY *array, void * element, uint idx)
        char *new_ptr;
        size=(idx+array->alloc_increment)/array->alloc_increment;
        size*= array->alloc_increment;
@@ -33,7 +37,7 @@
      array->elements=idx+1;
    }
    memcpy(array->buffer+(idx * array->size_of_element),element,
-@@ -155,7 +155,7 @@
+@@ -155,7 +155,7 @@ void ma_delete_dynamic_element(DYNAMIC_ARRAY *array, uint idx)
    char *ptr=array->buffer+array->size_of_element*idx;
    array->elements--;
    memmove(ptr,ptr+array->size_of_element,
@@ -42,7 +46,7 @@
  }
  
  
-@@ -166,7 +166,7 @@
+@@ -166,7 +166,7 @@ void ma_freeze_size(DYNAMIC_ARRAY *array)
    if (array->buffer && array->max_element != elements)
    {
      array->buffer=(char*) realloc(array->buffer,
