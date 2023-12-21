@@ -23,14 +23,25 @@ jobs:
     - name: Set matrix
       id: set-matrix
       run: |
-        echo -n "[ " > proxysql/tap-matrix.json
-        echo -n "'multiple_prepared_statements-t', " >> proxysql/tap-matrix.json
-        echo -n "'test_sqlite3_.*-t', " >> proxysql/tap-matrix.json
-        echo -n "'test_ssl_.*-t', " >> proxysql/tap-matrix.json
-        echo -n "'set_testing.*-t', " >> proxysql/tap-matrix.json
-        echo -n " ]" >> proxysql/tap-matrix.json
-        
-        echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
+        #echo -n "[ " > proxysql/tap-matrix.json
+        #echo -n "'multiple_prepared_statements-t', " >> proxysql/tap-matrix.json
+        #echo -n "'test_sqlite3_.*-t', " >> proxysql/tap-matrix.json
+        #echo -n "'test_ssl_.*-t', " >> proxysql/tap-matrix.json
+        #echo -n "'set_testing.*-t', " >> proxysql/tap-matrix.json
+        #echo -n " ]" >> proxysql/tap-matrix.json
+        #echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
+
+        MATRIX="[ "
+        for TM in proxysql/tap-matrix*; do
+          TM=${TM#proxysql/tap-matrix-}
+          MATRIX+="${TM%.json}, "
+        done
+        MATRIX+=" ]"
+        echo "===================="
+        echo "matrix=${MATRIX}"
+        echo "===================="
+        echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+
 
   tests:
     runs-on: ubuntu-22.04
@@ -109,6 +120,7 @@ jobs:
         #mkdir test
         
         # select tests
+        echo "export TAP_WORKDIR="$WORKSPACE/test/tap/${{ matrix.testgroup }}/" >> test/env.sh
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=0" >> test/env.sh
         echo "export TEST_PY_CHUSER=0" >> test/env.sh
@@ -116,7 +128,7 @@ jobs:
         echo "export TEST_PY_TAP=1" >> test/env.sh
         echo "export TEST_PY_TAPINT=0" >> test/env.sh
         echo "export TEST_PY_FAILOVER=0" >> test/env.sh
-        echo 'export TEST_PY_TAP_INCL="${{ matrix.testgroup }}"' >> test/env.sh
+        #echo 'export TEST_PY_TAP_INCL="${{ matrix.testgroup }}"' >> test/env.sh
         #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
         echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
         echo 'export WITHGCOV=0' >> test/env.sh
