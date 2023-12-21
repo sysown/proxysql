@@ -31,12 +31,13 @@ jobs:
         #echo -n " ]" >> proxysql/tap-matrix.json
         #echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
 
-        MATRIX="[ "
-        for TM in proxysql/tap-matrix*.json; do
-          TM=${TM#proxysql/tap-matrix-}
-          MATRIX+="'${TM%.json}', "
-        done
-        MATRIX+=" ]"
+        #MATRIX="[ "
+        #for TM in proxysql/tap-matrix*.json; do
+        #  TM=${TM#proxysql/tap-matrix-}
+        #  MATRIX+="'${TM%.json}', "
+        #done
+        #MATRIX+=" ]"
+        MATRIX="[ 'tests', 'tests_with_deps/deprecate_eof_support' ]"
         echo "===================="
         echo "matrix=${MATRIX}"
         echo "===================="
@@ -128,8 +129,8 @@ jobs:
         echo "export TEST_PY_TAP=1" >> test/env.sh
         echo "export TEST_PY_TAPINT=0" >> test/env.sh
         echo "export TEST_PY_FAILOVER=0" >> test/env.sh
-        #echo 'export TEST_PY_TAP_INCL="${{ matrix.testgroup }}"' >> test/env.sh
-        #echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
+        echo 'export TEST_PY_TAP_INCL=""' >> test/env.sh
+        echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
         echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
         echo 'export WITHGCOV=0' >> test/env.sh
         #echo 'export' >> test/env.sh
@@ -223,7 +224,7 @@ jobs:
         ./docker-compose-destroy.bash
         
         sudo chmod -R 777 ${{ github.workspace }}/*
-        echo "${{ matrix.testgroup }}" | tr -d '*|' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
+        echo "${{ matrix.testgroup }}" | tr -d '*|' | sed 's|.*/||' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
 
     - name: Archive artifacts
       if: ${{ failure() }}
