@@ -34,7 +34,7 @@ jobs:
         MATRIX="[ "
         for TM in proxysql/tap-matrix*.json; do
           TM=${TM#proxysql/tap-matrix-}
-          MATRIX+="${TM%.json}, "
+          MATRIX+="'${TM%.json}', "
         done
         MATRIX+=" ]"
         echo "===================="
