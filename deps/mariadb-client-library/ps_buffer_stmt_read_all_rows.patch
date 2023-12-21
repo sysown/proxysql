@@ -1,10 +1,10 @@
 diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
-index bbc2831..e66d810 100644
+index 7c6482ac..40a8ded1 100644
 --- libmariadb/mariadb_stmt.c
 +++ libmariadb/mariadb_stmt.c
-@@ -207,6 +207,24 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+@@ -218,6 +218,24 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
  
-   while ((packet_len = ma_net_safe_read(stmt->mysql, &is_data_packet)) != packet_error)
+   while ((packet_len = ma_net_safe_read(stmt->mysql)) != packet_error)
    {
 +    // This change is required due to the new algorithm introduced in ProxySQL in #3295.
 +    // ********************************************************************************
@@ -25,5 +25,5 @@ index bbc2831..e66d810 100644
 +    // ********************************************************************************
 +
      p= stmt->mysql->net.read_pos;
-     // The check is by 'ma_net_safe_read'
-     if (p[0] == 0 || is_data_packet)
+     if (packet_len > 7 || p[0] != 254)
+     {
