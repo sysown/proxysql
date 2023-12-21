@@ -261,6 +261,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ps_buffer_stmt_read_all_rows.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt_store_result_err.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../empty_split_compress_packet.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../sslkeylogfile.patch
 	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
@@ -270,10 +271,6 @@ endif
 	# patches for x509 cache . See https://github.com/sysown/proxysql/issues/4117 (Slow connection time with SSL and large CA file , relevant on Aurora)
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.x509cache.patch
 	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.x509cache.patch
-	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch include/ma_common.h < ../ma_common.h.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.sslkeylogfile.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 

@@ -1,0 +1,77 @@
+diff --git include/ma_common.h include/ma_common.h
+index 1ac0cb68..0d3f39b3 100644
+--- include/ma_common.h
++++ include/ma_common.h
+@@ -80,6 +80,7 @@ struct st_mysql_options_extension {
+   char *proxy_header;
+   size_t proxy_header_len;
+   int (*io_wait)(my_socket handle, my_bool is_read, int timeout);
++  void (*ssl_keylog_callback)(const void *ssl, const char *line);
+   my_bool skip_read_response;
+   char *restricted_auth;
+   char *rpl_host;
+diff --git include/mysql.h include/mysql.h
+index 9ee86227..c07717c5 100644
+--- include/mysql.h
++++ include/mysql.h
+@@ -257,7 +257,8 @@ extern const char *SQLSTATE_UNKNOWN;
+     MARIADB_OPT_RESTRICTED_AUTH,
+     MARIADB_OPT_RPL_REGISTER_REPLICA,
+     MARIADB_OPT_STATUS_CALLBACK,
+-    MARIADB_OPT_SERVER_PLUGINS
++    MARIADB_OPT_SERVER_PLUGINS,
++    MARIADB_OPT_SSL_KEYLOG_CALLBACK
+   };
+ 
+   enum mariadb_value {
+diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
+index be4c91d1..87dd7c3e 100644
+--- libmariadb/mariadb_lib.c
++++ libmariadb/mariadb_lib.c
+@@ -3634,6 +3634,9 @@ mysql_optionsv(MYSQL *mysql,enum mysql_option option, ...)
+   case MYSQL_OPT_SSL_CRLPATH:
+     OPT_SET_EXTENDED_VALUE_STR(&mysql->options, ssl_crlpath, (char *)arg1);
+     break;
++  case MARIADB_OPT_SSL_KEYLOG_CALLBACK:
++    OPT_SET_EXTENDED_VALUE(&mysql->options, ssl_keylog_callback, arg1);
++    break;
+   case MYSQL_OPT_CONNECT_ATTR_DELETE:
+     {
+       uchar *h;
+@@ -4000,6 +4003,9 @@ mysql_get_optionv(MYSQL *mysql, enum mysql_option option, void *arg, ...)
+   case MYSQL_OPT_SSL_CRLPATH:
+     *((char **)arg)= mysql->options.extension ? mysql->options.extension->ssl_crlpath : NULL;
+     break;
++  case MARIADB_OPT_SSL_KEYLOG_CALLBACK:
++    *((void(**)(const void *, const char *))arg)= mysql->options.extension ? mysql->options.extension->ssl_keylog_callback : NULL;
++    break;
+   case MARIADB_OPT_TLS_VERSION:
+   case MYSQL_OPT_TLS_VERSION:
+     *((char **)arg)= mysql->options.extension ? mysql->options.extension->tls_version : NULL;
+diff --git libmariadb/secure/openssl.c libmariadb/secure/openssl.c
+index 2a272504..67d90c6a 100644
+--- libmariadb/secure/openssl.c
++++ libmariadb/secure/openssl.c
+@@ -317,6 +317,13 @@ int ma_tls_get_password(char *buf, int size,
+   return (int)strlen(buf);
+ }
+ 
++static void ma_tls_set_sslkeylog_callback(MYSQL *mysql, SSL_CTX *ctx) 
++{
++  if (mysql->options.extension && mysql->options.extension->ssl_keylog_callback)
++  {
++    SSL_CTX_set_keylog_callback(ctx, (void(*)(const SSL*, const char*))mysql->options.extension->ssl_keylog_callback);
++  }
++}
+ 
+ static int ma_tls_set_certs(MYSQL *mysql, SSL_CTX *ctx)
+ {
+@@ -433,7 +440,7 @@ void *ma_tls_init(MYSQL *mysql)
+   if (mysql->options.extension) 
+     options= ma_tls_version_options(mysql->options.extension->tls_version);
+   SSL_CTX_set_options(ctx, options ? options : default_options);
+-
++  ma_tls_set_sslkeylog_callback(mysql, ctx);
+   if (ma_tls_set_certs(mysql, ctx))
+   {
+     goto error;
