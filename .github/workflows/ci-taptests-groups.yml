@@ -18,7 +18,7 @@ jobs:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
         fail-on-cache-miss: true
         path: |
-          proxysql/tap-matrix.*
+          proxysql/tap-matrix*
 
     - name: Set matrix
       id: set-matrix
