@@ -120,7 +120,7 @@ jobs:
         #mkdir test
         
         # select tests
-        echo "export TAP_WORKDIR="$WORKSPACE/test/tap/${{ matrix.testgroup }}/" >> test/env.sh
+        echo 'export TAP_WORKDIR="$WORKSPACE/test/tap/${{ matrix.testgroup }}/"' >> test/env.sh
         echo "export TEST_PY_INTERNAL=0" >> test/env.sh
         echo "export TEST_PY_BENCHMARK=0" >> test/env.sh
         echo "export TEST_PY_CHUSER=0" >> test/env.sh
