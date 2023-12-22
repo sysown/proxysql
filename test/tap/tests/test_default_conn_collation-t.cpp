@@ -10,7 +10,7 @@
 #include <string>
 
 #include "mysql.h"
-#include "mysql/mysqld_error.h"
+#include "mysqld_error.h"
 
 #include "tap.h"
 #include "utils.h"

@@ -12,8 +12,8 @@
 #include <string>
 #include <stdio.h>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysqld_error.h"
 
 #include "command_line.h"
 #include "json.hpp"

@@ -5,7 +5,8 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
-#include <openssl/ssl.h>
+
+#include "openssl/ssl.h"
 
 #include "mysql.h"
 #include "proxysql_structs.h"

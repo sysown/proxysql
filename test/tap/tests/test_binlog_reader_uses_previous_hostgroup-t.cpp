@@ -10,7 +10,7 @@
  */
 
 #include <unistd.h>
-#include <mysql.h>
+#include "mysql.h"
 #include <vector>
 #include <string>
 
