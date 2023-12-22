@@ -54,7 +54,7 @@ jobs:
             type: ''
           - dist: 'fedora37'
             type: '-clang'
-          - dist: 'ubuntu20'
+          - dist: 'ubuntu22'
             type: '-clang'
           - dist: 'ubuntu22'
             type: '-tap'
