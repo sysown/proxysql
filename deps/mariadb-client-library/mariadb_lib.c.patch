@@ -1,5 +1,5 @@
 diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
-index e8db51a0..66b44df4 100644
+index e8db51a0..71f0d84a 100644
 --- libmariadb/mariadb_lib.c
 +++ libmariadb/mariadb_lib.c
 @@ -1936,10 +1936,16 @@ restart:
@@ -48,7 +48,12 @@ index e8db51a0..66b44df4 100644
    {
      if (ctxt)
        my_context_install_suspend_resume_hook(ctxt, NULL, NULL);
-@@ -2138,6 +2153,7 @@ void ma_invalidate_stmts(MYSQL *mysql, const char *function_name)
+@@ -2134,10 +2149,11 @@ my_bool STDCALL mariadb_reconnect(MYSQL *mysql)
+   return(0);
+ }
+ 
+-void ma_invalidate_stmts(MYSQL *mysql, const char *function_name)
++void ma_invalidate_stmts(MYSQL *mysql, [[maybe_unused]] const char *function_name)
  {
    if (mysql->stmts)
    {
