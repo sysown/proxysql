@@ -31,7 +31,7 @@ index 47f0f2b6..7c6482ac 100644
 +          !(stmt->fields= (MYSQL_FIELD *)ma_alloc_root(fields_ma_alloc_root,
 +          sizeof(MYSQL_FIELD) * mysql->field_count)))
 +      {
-+        SET_CLIENT_STMT_ERROR(stmt, CR_OUT_OF_MEMORY, SQLSTATE_UNKNOWN, 0);
++        stmt_set_error(stmt, CR_OUT_OF_MEMORY, SQLSTATE_UNKNOWN, 0);
 +        return(1);
 +      }
 +      memset(stmt->bind, 0, sizeof(MYSQL_BIND) * mysql->field_count);
