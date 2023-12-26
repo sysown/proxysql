@@ -1,15 +1,19 @@
-@@ -178,8 +178,8 @@
+diff --git include/mariadb_com.h include/mariadb_com.h
+index 96e6e04f..7acc7403 100644
+--- include/mariadb_com.h
++++ include/mariadb_com.h
+@@ -183,9 +183,7 @@ enum enum_server_command
+         (!(mysql->server_capabilities & CLIENT_MYSQL))
  
  #define MARIADB_CLIENT_SUPPORTED_FLAGS (MARIADB_CLIENT_PROGRESS |\
-                                        MARIADB_CLIENT_COM_MULTI |\
 -                                       MARIADB_CLIENT_STMT_BULK_OPERATIONS|\
--                                       MARIADB_CLIENT_EXTENDED_METADATA)
-+                                       MARIADB_CLIENT_STMT_BULK_OPERATIONS\
-+                                       )
+-                                       MARIADB_CLIENT_EXTENDED_METADATA|\
+-                                       MARIADB_CLIENT_CACHE_METADATA)
++                                       MARIADB_CLIENT_STMT_BULK_OPERATIONS)
  
  #define CLIENT_SUPPORTED_FLAGS  (CLIENT_MYSQL |\
                                   CLIENT_FOUND_ROWS |\
-@@ -210,8 +210,6 @@
+@@ -221,8 +219,6 @@ enum enum_server_command
                                   CLIENT_LONG_FLAG |\
                                   CLIENT_TRANSACTIONS |\
                                   CLIENT_SECURE_CONNECTION |\
@@ -17,4 +21,4 @@
 -                                 CLIENT_PS_MULTI_RESULTS |\
                                   CLIENT_PROTOCOL_41 |\
                                   CLIENT_PLUGIN_AUTH |\
-                                  CLIENT_SESSION_TRACKING |\
+                                  CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA | \
