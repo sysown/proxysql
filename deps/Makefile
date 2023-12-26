@@ -262,9 +262,9 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt_store_result_err.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../empty_split_compress_packet.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
-#	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
+	#cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
+	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
 	# patches for replication testing
 	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_rpl.c < ../mariadb_rpl.c.patch
 	cd mariadb-client-library/mariadb_client && patch include/mariadb_rpl.h < ../mariadb_rpl.h.patch
