@@ -1,7 +1,16 @@
 diff --git libmariadb/ma_charset.c libmariadb/ma_charset.c
-index f6ed6f80..aeff8a28 100644
+index f6ed6f80..fbe5ac8d 100644
 --- libmariadb/ma_charset.c
 +++ libmariadb/ma_charset.c
+@@ -542,7 +542,7 @@ static unsigned int check_mb_gb18030_valid(const char * start, const char * end)
+ */
+ 
+ #define UTF8_MB4 "utf8mb4"
+-#define UTF8_MB3 "utf8mb3"
++#define UTF8_MB3 "utf8"
+ 
+ /* {{{ mysql_charsets */
+ const MARIADB_CHARSET_INFO mariadb_compiled_charsets[] =
 @@ -722,7 +722,7 @@ const MARIADB_CHARSET_INFO mariadb_compiled_charsets[] =
    { 182, 1, "utf32", "utf32_unicode_520_ci", "", 0, "UTF32", 4, 4, mysql_mbcharlen_utf32, check_mb_utf32},
    { 183, 1, "utf32", "utf32_vietnamese_ci", "", 0, "UTF32", 4, 4, mysql_mbcharlen_utf32, check_mb_utf32},
