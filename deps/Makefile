@@ -268,8 +268,7 @@ endif
 	# patches for x509 cache . See https://github.com/sysown/proxysql/issues/4117 (Slow connection time with SSL and large CA file , relevant on Aurora)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../x509cache.patch
 	# patches for replication testing
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_rpl.c < ../mariadb_rpl.c.patch
-	cd mariadb-client-library/mariadb_client && patch include/mariadb_rpl.h < ../mariadb_rpl.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 
