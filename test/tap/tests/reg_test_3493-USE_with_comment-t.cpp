@@ -24,7 +24,7 @@
 #include <string>
 #include <stdio.h>
 
-#include <mysql.h>
+#include "mysql.h"
 
 #include "tap.h"
 #include "command_line.h"

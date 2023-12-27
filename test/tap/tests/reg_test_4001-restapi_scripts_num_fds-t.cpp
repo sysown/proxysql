@@ -22,7 +22,7 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 
-#include <mysql.h>
+#include "mysql.h"
 
 #include "command_line.h"
 #include "proxysql_utils.h"

@@ -8,8 +8,8 @@
 #include <string>
 #include <unistd.h>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysqld_error.h"
 
 #include "tap.h"
 #include "utils.h"

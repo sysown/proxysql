@@ -14,10 +14,6 @@ on:
 #  schedule:
 #    - cron: '15 13 * * 3'
   workflow_dispatch:
-#  workflow_run:
-#    workflows: ["CI-builds"]
-#    types: 
-#      - completed
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -28,6 +24,7 @@ jobs:
     secrets: inherit
 
   run:
+    if: ${{ always() }}
     needs: [ "cache" ]
     uses: sysown/proxysql/.github/workflows/ci-basictests.yml@GH-Actions
     secrets: inherit

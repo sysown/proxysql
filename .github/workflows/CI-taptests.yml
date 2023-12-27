@@ -24,6 +24,7 @@ jobs:
     secrets: inherit
 
   run:
+    if: ${{ always() }}
     needs: [ "cache" ]
     uses: sysown/proxysql/.github/workflows/ci-taptests.yml@GH-Actions
     secrets: inherit
