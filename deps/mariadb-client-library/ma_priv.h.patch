@@ -1,5 +1,5 @@
 diff --git include/ma_priv.h include/ma_priv.h
-index 0fefd52e..607d92a4 100644
+index 0fefd52e..6172d0ec 100644
 --- include/ma_priv.h
 +++ include/ma_priv.h
 @@ -28,10 +28,9 @@ MYSQL_FIELD * unpack_fields(const MYSQL *mysql, MYSQL_DATA *data,
@@ -7,7 +7,7 @@ index 0fefd52e..607d92a4 100644
                              my_bool default_value);
  
 -static inline my_bool ma_has_extended_type_info(const MYSQL *mysql)
-+static inline my_bool ma_has_extended_type_info([[maybe_unused]] const MYSQL *mysql)
++static inline my_bool ma_has_extended_type_info(const MYSQL *mysql __attribute__((unused)))
  {
 -  return ((mysql->extension->mariadb_server_capabilities) &
 -          (MARIADB_CLIENT_EXTENDED_METADATA >> 32)) != 0;
