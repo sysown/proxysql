@@ -35,7 +35,7 @@ index 916024a8..79564a10 100644
  
  int STDCALL mysql_set_server_option(MYSQL *mysql,
 diff --git libmariadb/secure/openssl.c libmariadb/secure/openssl.c
-index 67d90c6a..fe75eaae 100644
+index 67d90c6a..5f9d4572 100644
 --- libmariadb/secure/openssl.c
 +++ libmariadb/secure/openssl.c
 @@ -30,6 +30,11 @@
@@ -50,7 +50,7 @@ index 67d90c6a..fe75eaae 100644
  #if defined(_WIN32) && !defined(_OPENSSL_Applink) && defined(HAVE_OPENSSL_APPLINK_C)
  #include <openssl/applink.c>
  #endif
-@@ -70,6 +75,84 @@
+@@ -70,6 +75,81 @@
  extern my_bool ma_tls_initialized;
  extern unsigned int mariadb_deinitialize_ssl;
  
@@ -60,10 +60,8 @@ index 67d90c6a..fe75eaae 100644
 +__thread char **local_x509_sha1s = NULL;
 +
 +static int proxysql_SSL_CTX_local_x509store_add_file(SSL_CTX *ctx, const char *CAfile, int add_in_store) {
-+  int found = 0;
-+  int i = 0;
++  int found=0, i=0, fd=-1;
 +
-+  int fd = -1;
 +  struct stat statbuf;
 +  unsigned char temp[SHA_DIGEST_LENGTH];
 +  char file_sha1[SHA_DIGEST_LENGTH*2+2];
@@ -76,8 +74,7 @@ index 67d90c6a..fe75eaae 100644
 +    unsigned char *fb = (unsigned char *)mmap(0, statbuf.st_size, PROT_READ, MAP_SHARED, fd, 0);
 +    if (fb != MAP_FAILED) {
 +      SHA1(fb, statbuf.st_size, temp);
-+      int i;
-+      for (i=0; i < SHA_DIGEST_LENGTH; i++) {
++      for (int i=0; i < SHA_DIGEST_LENGTH; i++) {
 +        sprintf((char*)&(file_sha1[i*2]), "%02x", temp[i]);
 +      }
 +      munmap(fb,statbuf.st_size);
@@ -135,7 +132,7 @@ index 67d90c6a..fe75eaae 100644
  #define MAX_SSL_ERR_LEN 100
  char tls_library_version[TLS_VERSION_LENGTH];
  
-@@ -331,7 +414,7 @@ static int ma_tls_set_certs(MYSQL *mysql, SSL_CTX *ctx)
+@@ -331,7 +411,7 @@ static int ma_tls_set_certs(MYSQL *mysql, SSL_CTX *ctx)
         *keyfile= mysql->options.ssl_key;
    char *pw= (mysql->options.extension) ?
              mysql->options.extension->tls_pw : NULL;
@@ -144,7 +141,7 @@ index 67d90c6a..fe75eaae 100644
    /* add cipher */
    if ((mysql->options.ssl_cipher &&
          mysql->options.ssl_cipher[0] != 0))
-@@ -345,10 +428,27 @@ static int ma_tls_set_certs(MYSQL *mysql, SSL_CTX *ctx)
+@@ -345,10 +425,27 @@ static int ma_tls_set_certs(MYSQL *mysql, SSL_CTX *ctx)
    }
  
    /* ca_file and ca_path */
