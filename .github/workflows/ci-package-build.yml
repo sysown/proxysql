@@ -84,9 +84,9 @@ jobs:
             type: '-clang'
 
 #         broken after v2.6.0 - https://github.com/sysown/proxysql/pull/4395
-          - dist: 'amalinux8'
+          - dist: 'almalinux8'
             type: '-clang'
-          - dist: 'amalinux9'
+          - dist: 'almalinux9'
             type: '-clang'
           - dist: 'centos8'
             type: '-clang'
