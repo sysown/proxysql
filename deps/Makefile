@@ -233,6 +233,7 @@ endif
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../x509cache.patch
 	# patches for replication testing
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../cmakelists.txt.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 

@@ -1,0 +1,13 @@
+diff --git CMakeLists.txt CMakeLists.txt
+index d7150b4d..86c4dc6c 100644
+--- CMakeLists.txt
++++ CMakeLists.txt
+@@ -286,7 +286,7 @@ ELSEIF()
+ ENDIF()
+ 
+ IF(NOT DEFAULT_CHARSET)
+-  SET(DEFAULT_CHARSET "utf8mb4")
++  SET(DEFAULT_CHARSET "latin1")
+ ENDIF()
+ 
+ 
