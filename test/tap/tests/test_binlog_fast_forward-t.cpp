@@ -38,13 +38,17 @@ std::vector<std::string> adminQ_set1 = {
 int pull_replication(MYSQL *mysql, int server_id) {
 	MARIADB_RPL_EVENT *event= NULL;
 	MARIADB_RPL *rpl= mariadb_rpl_init(mysql);
+	if (!rpl) {
+		fprintf(stderr, "File %s, line %d, Error: mariadb_rpl_init failed\n", __FILE__, __LINE__);
+		return exit_status();
+	}
 	rpl->server_id= server_id;
 	rpl->start_position= 4;
 	rpl->flags= MARIADB_RPL_BINLOG_SEND_ANNOTATE_ROWS;
-
-	if (mariadb_rpl_open(rpl))
+	if (mariadb_rpl_open(rpl)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mariadb_rpl_error(rpl));
 		return exit_status();
-
+	}
 	int num_heartbeats = 0;
 	int num_events = 0;
 
