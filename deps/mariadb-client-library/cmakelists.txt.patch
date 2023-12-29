@@ -1,5 +1,5 @@
 diff --git CMakeLists.txt CMakeLists.txt
-index d7150b4d..86c4dc6c 100644
+index d7150b4d..ff32e2f2 100644
 --- CMakeLists.txt
 +++ CMakeLists.txt
 @@ -286,7 +286,7 @@ ELSEIF()
@@ -8,6 +8,15 @@ index d7150b4d..86c4dc6c 100644
  IF(NOT DEFAULT_CHARSET)
 -  SET(DEFAULT_CHARSET "utf8mb4")
 +  SET(DEFAULT_CHARSET "latin1")
+ ENDIF()
+ 
+ 
+@@ -405,7 +405,7 @@ IF ((NOT WIN32) AND (CMAKE_C_COMPILER_ID MATCHES "Clang" OR CMAKE_C_COMPILER_ID
+ ELSEIF(CMAKE_C_COMPILER_ID MATCHES "MSVC")
+   SET(WARNING_AS_ERROR "/WX")
+ ENDIF()
+-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${WARNING_AS_ERROR}")
++SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${WARNING_AS_ERROR} -Wno-deprecated-non-prototype")
  ENDIF()
  
  

@@ -46,7 +46,7 @@ int pull_replication(MYSQL *mysql, int server_id) {
 	rpl->start_position= 4;
 	rpl->flags= MARIADB_RPL_BINLOG_SEND_ANNOTATE_ROWS;
 	if (mariadb_rpl_open(rpl)) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mariadb_rpl_error(rpl));
+		fprintf(stderr, "File %s, line %d, Error: '%d':%s\n", __FILE__, __LINE__, mysql_errno(rpl->mysql), mysql_error(rpl->mysql));
 		return exit_status();
 	}
 	int num_heartbeats = 0;
