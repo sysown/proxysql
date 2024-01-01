@@ -1,5 +1,5 @@
 diff --git CMakeLists.txt CMakeLists.txt
-index d7150b4d..ff32e2f2 100644
+index d7150b4d..e8508f8f 100644
 --- CMakeLists.txt
 +++ CMakeLists.txt
 @@ -286,7 +286,7 @@ ELSEIF()
@@ -16,7 +16,7 @@ index d7150b4d..ff32e2f2 100644
    SET(WARNING_AS_ERROR "/WX")
  ENDIF()
 -SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${WARNING_AS_ERROR}")
-+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${WARNING_AS_ERROR} -Wno-deprecated-non-prototype")
++#SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${WARNING_AS_ERROR}")
  ENDIF()
  
  
