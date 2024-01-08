@@ -499,6 +499,11 @@ int main(int argc, char *argv[]) {
 		return EXIT_FAILURE;
 	}
 
+	diag("Disabling admin-hash_passwords to be able to run test on MySQL 8");
+	MYSQL_QUERY(proxysql_admin, "SET admin-hash_passwords='false'");
+	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
+	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
+
 	// find all reader host groups
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
 	MYSQL_QUERY(proxysql_admin, "SELECT hostgroup_id, comment FROM mysql_servers WHERE hostgroup_id%10 = 1 GROUP BY hostgroup_id");
@@ -512,18 +517,14 @@ int main(int argc, char *argv[]) {
 
 	//queries = 3000;
 	//queries = testCases.size();
+	queries = queries / rows_res.size();		// keep test duration constant
 	unsigned int p = queries * num_threads;
-	p *= 2;					// number of algorithms
-	p *= rows_res.size();	// number of host groups
+	p *= 2;										// number of algorithms
+	p *= rows_res.size();						// number of host groups
 	plan(p);
 
 	for (const auto& act_row : rows_res) {
 		diag("Using hostgroup: %s '%s'", act_row[0].c_str(), act_row[1].c_str());
-
-		diag("Disabling admin-hash_passwords to be able to run test on MySQL 8");
-		MYSQL_QUERY(proxysql_admin, "SET admin-hash_passwords='false'");
-		MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
-		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
 
 		diag("Creating new hostgroup 101: DELETE FROM mysql_servers WHERE hostgroup_id = 101");
 		MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
