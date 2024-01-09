@@ -38,13 +38,17 @@ std::vector<std::string> adminQ_set1 = {
 int pull_replication(MYSQL *mysql, int server_id) {
 	MARIADB_RPL_EVENT *event= NULL;
 	MARIADB_RPL *rpl= mariadb_rpl_init(mysql);
+	if (!rpl) {
+		fprintf(stderr, "File %s, line %d, Error: mariadb_rpl_init failed\n", __FILE__, __LINE__);
+		return exit_status();
+	}
 	rpl->server_id= server_id;
 	rpl->start_position= 4;
 	rpl->flags= MARIADB_RPL_BINLOG_SEND_ANNOTATE_ROWS;
-
-	if (mariadb_rpl_open(rpl))
+	if (mariadb_rpl_open(rpl)) {
+		fprintf(stderr, "File %s, line %d, Error: '%d':%s\n", __FILE__, __LINE__, mysql_errno(rpl->mysql), mysql_error(rpl->mysql));
 		return exit_status();
-
+	}
 	int num_heartbeats = 0;
 	int num_events = 0;
 
@@ -149,6 +153,16 @@ int main(int argc, char** argv) {
 				  __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	}
+
+	const std::vector<std::string> query_rules = { "INSERT OR IGNORE INTO mysql_query_rules (rule_id,active,match_digest,destination_hostgroup,multiplex,apply) VALUES\
+		(-1,1,'^(SELECT @rpl_semi_sync_slave=\\?.*|SET @rpl_semi_sync_slave=\\?.*)$',0,0,1)", 
+		"LOAD MYSQL QUERY RULES TO RUNTIME" };
+
+	for (const auto& query : query_rules) {
+		diag("Running on Admin: %s", query.c_str());
+		MYSQL_QUERY(mysqladmin, query.c_str());
+	}
+
 	// we now test various combination
 	setup_replication(11, false, false, repl_queries_set1);
 	setup_replication(12, true,  false, repl_queries_set1);

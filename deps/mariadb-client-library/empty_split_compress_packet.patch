@@ -1,8 +1,8 @@
 diff --git libmariadb/ma_net.c libmariadb/ma_net.c
-index 15be4fc..39a8138 100644
+index 2e932b17..0b1d0cce 100644
 --- libmariadb/ma_net.c
 +++ libmariadb/ma_net.c
-@@ -498,6 +498,7 @@ ulong ma_net_read(NET *net)
+@@ -510,6 +510,7 @@ ulong ma_net_read(NET *net)
          {
            current+= 4; /* length + sequence_id,
                            no more data will follow */

@@ -1,0 +1,29 @@
+diff --git include/mariadb_rpl.h include/mariadb_rpl.h
+index ea0ca4db..697e5684 100644
+--- include/mariadb_rpl.h
++++ include/mariadb_rpl.h
+@@ -134,7 +134,8 @@ enum mariadb_rpl_event {
+   VIEW_CHANGE_EVENT= 37,
+   XA_PREPARE_LOG_EVENT= 38,
+   PARTIAL_UPDATE_ROWS_EVENT = 39,
+-
++  HEARTBEAT_LOG_EVENT_V2 = 41,
++  
+   /*
+     Add new events here - right above this comment!
+     Existing events (except ENUM_END_EVENT) should never change their numbers
+diff --git libmariadb/mariadb_rpl.c libmariadb/mariadb_rpl.c
+index daa6d242..dd3f905c 100644
+--- libmariadb/mariadb_rpl.c
++++ libmariadb/mariadb_rpl.c
+@@ -1888,6 +1888,9 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
+       }
+       break;
+     }
++    case ROWS_QUERY_LOG_EVENT:
++    case HEARTBEAT_LOG_EVENT_V2:
++      break;
+     default:
+       /* We need to report an error if this event can't be ignored */
+       if (!(rpl_event->flags & LOG_EVENT_IGNORABLE_F))
+

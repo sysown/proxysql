@@ -193,53 +193,47 @@ jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
-	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
-	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
+	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
 	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
 ifeq ($(PROXYDEBUG),1)
-	cd mariadb-client-library/mariadb_client && patch include/ma_context.h < ../ma_context.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 else ifeq ($(USEVALGRIND),1)
-	cd mariadb-client-library/mariadb_client && patch include/ma_context.h < ../ma_context.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 endif
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.collation.patch # make sure this path is applied after mariadb_lib.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.ipv6_fix.patch # make sure this patch is applied after mariadb_lib.c.collation.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.collation.patch # make sure this path is applied after mariadb_lib.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.ipv6_fix.patch # make sure this patch is applied after mariadb_lib.c.collation.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_async.c < ../mariadb_async.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_password.c < ../ma_password.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_async.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
-	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
-	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
-	cd mariadb-client-library/mariadb_client && patch include/ma_priv.h < ../ma_priv.h.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_alloc.c < ../ma_alloc.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_charset.c < ../ma_charset.c.patch
-#	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
-	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
-	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../cr_new_stmt_metadata_removal.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../ps_buffer_stmt_read_all_rows.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../empty_split_compress_packet.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt_store_result_err.patch
-
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mysql.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_priv.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_alloc.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_charset.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../unittest_basic-t.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../unittest_charset.c.patch
 ifeq ($(WITHASAN),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_asan.patch
 endif
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_dyncol.c < ../mariadb_dyncol.c-multiplication-overflow.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_array.c < ../ma_array.c-multiplication-overflow.patch
-	cd mariadb-client-library/mariadb_client && patch zlib/zutil.c < ../zutil.c-multiplication-overflow.patch
-	# patches for replication testing
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_rpl.c < ../mariadb_rpl.c.patch
-	cd mariadb-client-library/mariadb_client && patch include/mariadb_rpl.h < ../mariadb_rpl.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_dyncol.c-multiplication-overflow.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_array.c-multiplication-overflow.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../zutil.c-multiplication-overflow.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../cr_new_stmt_metadata_removal.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ps_buffer_stmt_read_all_rows.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt_store_result_err.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../empty_split_compress_packet.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../sslkeylogfile.patch
+	#cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_com.h.patch
 	# patches for x509 cache . See https://github.com/sysown/proxysql/issues/4117 (Slow connection time with SSL and large CA file , relevant on Aurora)
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.x509cache.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.x509cache.patch
-	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch include/ma_common.h < ../ma_common.h.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.sslkeylogfile.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../x509cache.patch
+	# patches for replication testing
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../cmakelists.txt.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 
