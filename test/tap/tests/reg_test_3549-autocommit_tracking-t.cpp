@@ -12,7 +12,7 @@
 #include <string>
 #include <stdio.h>
 
-#include <mysql.h>
+#include "mysql.h"
 
 #include "proxysql_utils.h"
 #include "tap.h"

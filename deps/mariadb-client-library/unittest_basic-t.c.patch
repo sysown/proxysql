@@ -1,6 +1,8 @@
---- /tmp/basic-t.c	2017-12-28 14:55:55.958512116 +0100
-+++ unittest/libmariadb/basic-t.c	2017-12-28 14:56:08.770490417 +0100
-@@ -48,7 +48,7 @@
+diff --git unittest/libmariadb/basic-t.c unittest/libmariadb/basic-t.c
+index 40a44962..9d3219be 100644
+--- unittest/libmariadb/basic-t.c
++++ unittest/libmariadb/basic-t.c
+@@ -52,7 +52,7 @@ static int test_conc75(MYSQL *my)
    rc= mysql_query(mysql, "CREATE TABLE a (a varchar(200))");
    check_mysql_rc(rc, mysql);
  

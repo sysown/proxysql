@@ -1,4 +1,8 @@
-@@ -131,6 +131,7 @@ my_bool mthd_supported_buffer_type(enum
+diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
+index 5bcecfde..47f0f2b6 100644
+--- libmariadb/mariadb_stmt.c
++++ libmariadb/mariadb_stmt.c
+@@ -149,6 +149,7 @@ my_bool mthd_supported_buffer_type(enum enum_field_types type)
    case MYSQL_TYPE_TIMESTAMP:
    case MYSQL_TYPE_TINY:
    case MYSQL_TYPE_TINY_BLOB:
@@ -6,7 +10,7 @@
    case MYSQL_TYPE_VAR_STRING:
    case MYSQL_TYPE_YEAR:
      return 1;
-@@ -1229,6 +1230,7 @@ my_bool STDCALL mysql_stmt_bind_param(MY
+@@ -1332,6 +1333,7 @@ my_bool STDCALL mysql_stmt_bind_param(MYSQL_STMT *stmt, MYSQL_BIND *bind)
          break;
        case MYSQL_TYPE_STRING:
        case MYSQL_TYPE_JSON:

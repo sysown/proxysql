@@ -1,8 +1,8 @@
 diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
-index bbc2831..2168065 100644
+index 47f0f2b6..7c6482ac 100644
 --- libmariadb/mariadb_stmt.c
 +++ libmariadb/mariadb_stmt.c
-@@ -2013,7 +2013,61 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+@@ -2098,7 +2098,61 @@ int mthd_stmt_read_execute_response(MYSQL_STMT *stmt)
      stmt->state= MYSQL_STMT_WAITING_USE_OR_STORE;
      /* in certain cases parameter types can change: For example see bug
         4026 (SELECT ?), so we need to update field information */
@@ -19,7 +19,7 @@ index bbc2831..2168065 100644
 +    if (mysql->field_count != stmt->field_count)
 +    {
 +      MA_MEM_ROOT *fields_ma_alloc_root=
-+                   &((MADB_STMT_EXTENSION *)stmt->extension)->fields_ma_alloc_root;
++                        &((MADB_STMT_EXTENSION *)stmt->extension)->fields_ma_alloc_root;
 +      uint i;
 +
 +      // 'ma_free_root' will free all the allocated memory for 'fields_ma_alloc_root'
@@ -27,11 +27,11 @@ index bbc2831..2168065 100644
 +      // the required space for 'MYSQL_BIND'.
 +      ma_free_root(fields_ma_alloc_root, MYF(0));
 +      if (!(stmt->bind= (MYSQL_BIND *)ma_alloc_root(fields_ma_alloc_root,
-+              sizeof(MYSQL_BIND) * mysql->field_count)) ||
++          sizeof(MYSQL_BIND) * mysql->field_count)) ||
 +          !(stmt->fields= (MYSQL_FIELD *)ma_alloc_root(fields_ma_alloc_root,
-+              sizeof(MYSQL_FIELD) * mysql->field_count)))
++          sizeof(MYSQL_FIELD) * mysql->field_count)))
 +      {
-+        SET_CLIENT_STMT_ERROR(stmt, CR_OUT_OF_MEMORY, SQLSTATE_UNKNOWN, 0);
++        stmt_set_error(stmt, CR_OUT_OF_MEMORY, SQLSTATE_UNKNOWN, 0);
 +        return(1);
 +      }
 +      memset(stmt->bind, 0, sizeof(MYSQL_BIND) * mysql->field_count);
@@ -65,14 +65,14 @@ index bbc2831..2168065 100644
      {
        uint i;
        for (i=0; i < stmt->field_count; i++)
-@@ -2025,12 +2079,8 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
+@@ -2110,12 +2164,8 @@ int mthd_stmt_read_execute_response(MYSQL_STMT *stmt)
          stmt->fields[i].charsetnr= mysql->fields[i].charsetnr;
          stmt->fields[i].max_length= mysql->fields[i].max_length;
        }
 -    } else
 -    {
 -      /* table was altered, see test_wl4166_2  */
--      SET_CLIENT_STMT_ERROR(stmt, CR_NEW_STMT_METADATA, SQLSTATE_UNKNOWN, 0);
+-      stmt_set_error(stmt, CR_NEW_STMT_METADATA, SQLSTATE_UNKNOWN, 0);
 -      return(1);
      }
 +    /*********************************************************************/

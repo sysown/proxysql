@@ -1,4 +1,8 @@
-@@ -479,19 +479,20 @@
+diff --git libmariadb/mariadb_async.c libmariadb/mariadb_async.c
+index feb73329..f2fba5d4 100644
+--- libmariadb/mariadb_async.c
++++ libmariadb/mariadb_async.c
+@@ -479,19 +479,20 @@ MK_ASYNC_CONT_BODY(
  struct mysql_set_character_set_params {
    MYSQL *mysql;
    const char *csname;
@@ -21,7 +25,7 @@
  {
  MK_ASYNC_START_BODY(
    mysql_set_character_set,
-@@ -500,6 +501,7 @@
+@@ -500,6 +501,7 @@ MK_ASYNC_START_BODY(
      WIN_SET_NONBLOCKING(mysql)
      parms.mysql= mysql;
      parms.csname= csname;

@@ -1,9 +1,13 @@
-@@ -85,7 +85,7 @@
+diff --git libmariadb/ma_alloc.c libmariadb/ma_alloc.c
+index d6db279e..4526fef0 100644
+--- libmariadb/ma_alloc.c
++++ libmariadb/ma_alloc.c
+@@ -86,7 +86,7 @@ void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
    if (! next)
    {						/* Time to alloc new block */
      get_size= MAX(Size+ALIGN_SIZE(sizeof(MA_USED_MEM)),
 -              (mem_root->block_size & ~1) * (mem_root->block_num >> 2));
-+              (mem_root->block_size & ~1) * ( (mem_root->block_num >> 2) < 4 ? 4 : (mem_root->block_num >> 2) ) );
++              (mem_root->block_size & ~1) * ((mem_root->block_num >> 2) < 4 ? 4 : (mem_root->block_num >> 2)));
  
      if (!(next = (MA_USED_MEM*) malloc(get_size)))
      {

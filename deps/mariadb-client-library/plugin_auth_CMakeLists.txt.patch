@@ -1,4 +1,8 @@
-@@ -70,7 +70,7 @@
+diff --git plugins/auth/CMakeLists.txt plugins/auth/CMakeLists.txt
+index 83e324b9..7c4ed019 100644
+--- plugins/auth/CMakeLists.txt
++++ plugins/auth/CMakeLists.txt
+@@ -77,7 +77,7 @@ IF(CRYPTO_PLUGIN)
    REGISTER_PLUGIN(TARGET caching_sha2_password
                  TYPE MARIADB_CLIENT_PLUGIN_AUTH
                  CONFIGURATIONS DYNAMIC STATIC OFF
@@ -7,7 +11,7 @@
                  SOURCES ${CC_SOURCE_DIR}/plugins/auth/caching_sha2_pw.c 
                          ${CRYPT_SOURCE}
                  LIBRARIES ${CRYPT_LIBS})
-@@ -81,7 +81,7 @@
+@@ -88,7 +88,7 @@ IF(CRYPTO_PLUGIN)
      REGISTER_PLUGIN(TARGET sha256_password
                      TYPE MARIADB_CLIENT_PLUGIN_AUTH
                      CONFIGURATIONS DYNAMIC STATIC OFF
@@ -16,7 +20,7 @@
                      SOURCES ${AUTH_DIR}/sha256_pw.c
                      LIBRARIES ${CRYPT_LIBS})
    ENDIF()
-@@ -123,6 +123,6 @@
+@@ -137,6 +137,6 @@ REGISTER_PLUGIN(TARGET mysql_old_password
  REGISTER_PLUGIN(TARGET mysql_clear_password
                  TYPE MARIADB_CLIENT_PLUGIN_AUTH
                  CONFIGURATIONS DYNAMIC STATIC OFF

@@ -1,4 +1,8 @@
-@@ -25,6 +25,8 @@
+diff --git include/ma_context.h include/ma_context.h
+index 0ad7f68b..ad26a721 100644
+--- include/ma_context.h
++++ include/ma_context.h
+@@ -26,6 +26,8 @@
    (This particular implementation uses Posix ucontext swapcontext().)
  */
  

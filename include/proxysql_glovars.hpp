@@ -6,7 +6,7 @@
 
 #include <memory>
 #include <string.h>
-#include <prometheus/registry.h>
+#include "prometheus/registry.h"
 
 #include "configfile.hpp"
 #include "proxy_defines.h"

@@ -1,4 +1,8 @@
-@@ -3999,13 +3999,13 @@
+diff --git libmariadb/mariadb_dyncol.c libmariadb/mariadb_dyncol.c
+index 42de69ee..6b040d11 100644
+--- libmariadb/mariadb_dyncol.c
++++ libmariadb/mariadb_dyncol.c
+@@ -4000,13 +4000,13 @@ mariadb_dyncol_val_long(longlong *ll, DYNAMIC_COLUMN_VALUE *val)
          (val->x.time_value.neg ? -1 : 1);
        break;
      case DYN_COL_DATE:
