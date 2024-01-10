@@ -9710,9 +9710,6 @@ void ProxySQL_Admin::stats___mysql_query_rules() {
 }
 
 void ProxySQL_Admin::stats___proxysql_servers_checksums() {
-	statsdb->execute("BEGIN");
-	statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
-	SQLite3_result *resultset=NULL;
 	// NOTE: This mutex unlock is required due to a race condition created when:
 	//  - One Admin session has the following callstack:
 	//      + admin_session_handler -> locks on 'sql_query_global_mutex'
@@ -9727,8 +9724,10 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 	//      + ProxySQL_Cluster::pull_mysql_query_rules_from_peer -> tries to lock on 'sql_query_global_mutex'
 	//  Producing a deadlock scenario between the two threads.
 	pthread_mutex_unlock(&this->sql_query_global_mutex);
-	resultset=GloProxyCluster->get_stats_proxysql_servers_checksums();
+	SQLite3_result* resultset = GloProxyCluster->get_stats_proxysql_servers_checksums();
 	pthread_mutex_lock(&this->sql_query_global_mutex);
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement1=NULL;
