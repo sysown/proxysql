@@ -1154,9 +1154,6 @@ unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool p
 
 unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 	unsigned long long ret = 0;
-	pthread_rwlock_wrlock(&digest_rwlock);
-
-
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
 	pthread_rwlock_wrlock(&digest_rwlock);
@@ -1399,7 +1396,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 			digest_umap_aux.insert(element);
 		}
 	}
-	digest_text_umap.insert(digest_text_umap_aux.begin(), digest_text_umap_aux.end());
+	digest_text_umap_aux.insert(digest_text_umap_aux_2.begin(), digest_text_umap_aux_2.end());
 	digest_umap_aux_2.clear();
 	digest_text_umap_aux_2.clear();
 
@@ -1409,7 +1406,6 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 	// content of the auxiliary maps.
 	pthread_rwlock_wrlock(&digest_rwlock);
 	digest_umap_aux.swap(digest_umap);
-	digest_text_umap_aux.swap(digest_text_umap);
 	for (const auto& element : digest_umap_aux) {
 		uint64_t digest = element.first;
 		QP_query_digest_stats *qds = (QP_query_digest_stats *)element.second;
