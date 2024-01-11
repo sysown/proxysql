@@ -53,6 +53,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+using std::string;
+
 #define MYSQL_QUERY__(mysql, query) \
 	do { \
 		if (mysql_query(mysql, query)) { \
@@ -862,6 +864,28 @@ int main(int, char**) {
 	MYSQL_RES* my_res = mysql_store_result(proxy_admin);
 	std::vector<mysql_res_row> core_nodes { extract_mysql_rows(my_res) };
 	mysql_free_result(my_res);
+
+	// 2.1 If core nodes are not reachable, assume no cluster is running; make test gracefully exit
+	if (core_nodes.size()) {
+		const string host { core_nodes[0][0] };
+		const int port = std::stol(core_nodes[0][1]);
+		MYSQL* c_node_admin = mysql_init(NULL);
+
+		if (!mysql_real_connect(c_node_admin, host.c_str(), cl.admin_username, cl.admin_password, NULL, port, NULL, 0)) {
+			int myerrno = mysql_errno(c_node_admin);
+
+			if (myerrno == 2002) {
+				diag("Unable to connect to cluster Core nodes; required environment not met, gracefully exiting...");
+				plan(0);
+				return exit_status();
+			} else {
+				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
+				return EXIT_FAILURE;
+			}
+		}
+
+		mysql_close(c_node_admin);
+	}
 
 	// 3. Wait for all Core nodes to sync (confirm primary out of core nodes)
 	std::string check_no_primary_query {};
