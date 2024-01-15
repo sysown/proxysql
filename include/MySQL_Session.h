@@ -146,9 +146,21 @@ class MySQL_Session
 	bool handler_CommitRollback(PtrSize_t *);
 	bool handler_SetAutocommit(PtrSize_t *);
 	/**
-	 * @brief Performs the cleanup of current session state, and the required operations to the supplied
-	 *   'MySQL_Data_Stream' required for processing further queries.
-	 * @param The 'MySQL_Data_Stream' which executed the previous query and which status should be updated.
+	 * @brief Should execute most of the commands executed when a request is finalized.
+	 * @details Cleanup of current session state, and required operations to the supplied 'MySQL_Data_Stream'
+	 *   for further queries processing. Takes care of the following actions:
+	 *   - Update the status of the backend connection (if supplied), with previous query actions.
+	 *   - Log the query for the required statuses.
+	 *   - Cleanup the previous Query_Processor output.
+	 *   - Free the resources of the backend connection (if supplied).
+	 *   - Reset all the required session status flags. E.g:
+	 *       + status
+	 *       + client_myds::DSS
+	 *       + started_sending_data_to_client
+	 *       + previous_hostgroup
+	 *   NOTE: Should become the place to hook other functions.
+	 * @param myds If not null, should point to a MySQL_Data_Stream (backend connection) which connection status
+	 *   should be updated, and previous query resources cleanup.
 	 */
 	void RequestEnd(MySQL_Data_Stream *);
 	void LogQuery(MySQL_Data_Stream *);

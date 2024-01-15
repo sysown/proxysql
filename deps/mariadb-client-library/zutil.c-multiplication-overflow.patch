@@ -1,7 +1,11 @@
-@@ -303,7 +303,7 @@
+diff --git external/zlib/zutil.c external/zlib/zutil.c
+index 9543ae82..6a1ed031 100644
+--- external/zlib/zutil.c
++++ external/zlib/zutil.c
+@@ -310,7 +310,7 @@ voidpf ZLIB_INTERNAL zcalloc(opaque, items, size)
      unsigned size;
  {
-     if (opaque) items += size - size; /* make compiler happy */
+     (void)opaque;
 -    return sizeof(uInt) > 2 ? (voidpf)malloc(items * size) :
 +    return sizeof(uInt) > 2 ? (voidpf)malloc((long) items * size) :
                                (voidpf)calloc(items, size);

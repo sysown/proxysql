@@ -5,26 +5,16 @@
 #define CLUSTER_SYNC_INTERFACES_MYSQL "('mysql-interfaces')"
 
 #include <memory>
-#include <prometheus/registry.h>
+#include <string.h>
+#include "prometheus/registry.h"
 
 #include "configfile.hpp"
 #include "proxy_defines.h"
+#include "proxysql_utils.h"
 
 namespace ez {
 class ezOptionParser;
 };
-
-/**
- * @brief Helper function used to replace spaces and zeros by '0' char in the supplied checksum buffer.
- * @param checksum Input buffer containing the checksum.
- */
-inline void replace_checksum_zeros(char* checksum) {
-	for (int i=2; i<18; i++) {
-		if (checksum[i]==' ' || checksum[i]==0) {
-			checksum[i]='0';
-		}
-	}
-}
 
 #ifndef ProxySQL_Checksum_Value_LENGTH
 #define ProxySQL_Checksum_Value_LENGTH 20
@@ -126,6 +116,24 @@ class ProxySQL_GlobalVariables {
 #ifdef PROXYSQLCLICKHOUSE
 		bool clickhouse_server;
 #endif /* PROXYSQLCLICKHOUSE */
+		int gr_bootstrap_mode;
+		char* gr_bootstrap_uri;
+		char* gr_bootstrap_account;
+		char* gr_bootstrap_account_create;
+		char* gr_bootstrap_account_host;
+		uint64_t gr_bootstrap_password_retries;
+		char* gr_bootstrap_conf_bind_address;
+		uint64_t gr_bootstrap_conf_base_port;
+		bool gr_bootstrap_conf_use_sockets;
+		bool gr_bootstrap_conf_skip_tcp;
+		char* gr_bootstrap_ssl_ca;
+		char* gr_bootstrap_ssl_capath;
+		char* gr_bootstrap_ssl_cert;
+		char* gr_bootstrap_ssl_cipher;
+		char* gr_bootstrap_ssl_crl;
+		char* gr_bootstrap_ssl_crlpath;
+		char* gr_bootstrap_ssl_key;
+		char* gr_bootstrap_ssl_mode;
 		pthread_mutex_t ext_glomth_mutex;
 
 		bool ssl_keylog_enabled;
@@ -149,6 +157,7 @@ class ProxySQL_GlobalVariables {
 		ProxySQL_Checksum_Value mysql_variables;
 		ProxySQL_Checksum_Value ldap_variables;
 		ProxySQL_Checksum_Value proxysql_servers;
+		ProxySQL_Checksum_Value mysql_servers_v2;
 		uint64_t global_checksum;
 		unsigned long long updates_cnt;
 		unsigned long long dumped_at;

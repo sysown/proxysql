@@ -4,12 +4,16 @@
 #include "btree_map.h"
 #include "proxysql.h"
 
+#include <random>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 
 //#define PROXYSQL_EXTERN
 #include "cpp.h"
+
+#include "mysqld_error.h"
 
 #include "ProxySQL_Statistics.hpp"
 #include "MySQL_PreparedStatement.h"
@@ -21,6 +25,7 @@
 #include "MySQL_LDAP_Authentication.hpp"
 #include "proxysql_restapi.h"
 #include "Web_Interface.hpp"
+#include "proxysql_utils.h"
 
 #include <libdaemon/dfork.h>
 #include <libdaemon/dsignal.h>
@@ -44,7 +49,9 @@ extern "C" MySQL_LDAP_Authentication * create_MySQL_LDAP_Authentication_func() {
 */
 
 
-
+using std::map;
+using std::string;
+using std::vector;
 
 
 volatile create_MySQL_LDAP_Authentication_t * create_MySQL_LDAP_Authentication = NULL;
@@ -563,6 +570,30 @@ void ProxySQL_Main_process_global_variables(int argc, const char **argv) {
 				GloVars.ldap_auth_plugin=strdup(ldap_auth_plugin.c_str());
 			}
 		}
+		const map<string, char**> varnames_globals_map {
+			{ "mysql-ssl_p2s_ca", &GloVars.global.gr_bootstrap_ssl_ca },
+			{ "mysql-ssl_p2s_capath", &GloVars.global.gr_bootstrap_ssl_capath },
+			{ "mysql-ssl_p2s_cert", &GloVars.global.gr_bootstrap_ssl_cert },
+			{ "mysql-ssl_p2s_key", &GloVars.global.gr_bootstrap_ssl_key },
+			{ "mysql-ssl_p2s_cipher", &GloVars.global.gr_bootstrap_ssl_cipher },
+			{ "mysql-ssl_p2s_crl", &GloVars.global.gr_bootstrap_ssl_crl },
+			{ "mysql-ssl_p2s_crlpath", &GloVars.global.gr_bootstrap_ssl_crlpath }
+		};
+		// Command line options always take precedence
+		if (GloVars.global.gr_bootstrap_mode && root.exists("mysql_variables")) {
+			const Setting& mysql_vars = root["mysql_variables"];
+
+			for (const pair<const string,char**>& name_global : varnames_globals_map) {
+				for (const auto& setting_it : mysql_vars) {
+					if (*name_global.second == nullptr) {
+						if (setting_it.getName() == name_global.first && setting_it.isString()) {
+							const char* setting_val = setting_it.c_str();
+							*name_global.second = strdup(setting_val);
+						}
+					}
+				}
+			}
+		}
 	} else {
 		proxy_warning("Unable to open config file %s\n", GloVars.config_file); // issue #705
 		if (GloVars.__cmd_proxysql_config_file) {
@@ -672,7 +703,7 @@ void ProxySQL_Main_init_main_modules() {
 }
 
 
-void ProxySQL_Main_init_Admin_module() {
+void ProxySQL_Main_init_Admin_module(const bootstrap_info_t& bootstrap_info) {
 	// cluster module needs to be initialized before
 	GloProxyCluster = new ProxySQL_Cluster();
 	GloProxyCluster->init();
@@ -681,7 +712,7 @@ void ProxySQL_Main_init_Admin_module() {
 	//GloProxyStats->init();
 	GloProxyStats->print_version();
 	GloAdmin = new ProxySQL_Admin();
-	GloAdmin->init();
+	GloAdmin->init(bootstrap_info);
 	GloAdmin->print_version();
 	if (binary_sha1) {
 		proxy_info("ProxySQL SHA1 checksum: %s\n", binary_sha1);
@@ -934,7 +965,9 @@ void ProxySQL_Main_init() {
 
 static void LoadPlugins() {
 	GloMyLdapAuth = NULL;
-	SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
+	if (proxy_sqlite3_open_v2 == nullptr) {
+		SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
+	}
 	if (GloVars.web_interface_plugin) {
 		dlerror();
 		char * dlsym_error = NULL;
@@ -1017,14 +1050,14 @@ void UnloadPlugins() {
 	}
 }
 
-void ProxySQL_Main_init_phase2___not_started() {
+void ProxySQL_Main_init_phase2___not_started(const bootstrap_info_t& boostrap_info) {
 	std::string msg;
 	ProxySQL_create_or_load_TLS(false, msg);
 
 	LoadPlugins();
 
 	ProxySQL_Main_init_main_modules();
-	ProxySQL_Main_init_Admin_module();
+	ProxySQL_Main_init_Admin_module(boostrap_info);
 	GloMTH->print_version();
 
 	{
@@ -1327,6 +1360,351 @@ namespace {
 	static const bool SET_TERMINATE = std::set_terminate(my_terminate);
 }
 
+/**
+ * @brief Regex for parsing URI connections.
+ * @details Groups explanation:
+ *  + HierPart doesn't hold '//' making previous non-capturing group optional. E.g:
+ *     - '127.0.0.1:3306'
+ *     - 'mysql-server-1:3306'
+ *  + UserInfo is inside a non-capturing group to avoid matching '@'.
+ *  + Host,Port groups are inside a non-capturing group to allow URI like: 'mysql://user:pass@'
+ *  + RegName matches any valid Ipv4 or domain name.
+ *  + Ipv6 matches Ipv6, it's NOT spec conforming, we don't verify the supplied Ip in the regex.
+ *  + Port matches the supplied port.
+ *  + Optionally match a supplied (/).
+ *  + Ensure match termination in HierPart group, forcing conditional subgroups matching.
+ */
+const char CONN_URI_REGEX[] {
+	"^(:?(?P<Scheme>[a-z][a-z0-9\\+\\-\\.]*):\\/\\/)?"
+	"(?P<HierPart>"
+		"(?:(?P<UserInfo>(?:\\%[0-9a-f][0-9a-f]|[a-z0-9\\-\\.\\_\\~]|[\\!\\$\\&\\'\\(\\)\\*\\+\\,\\;\\=]|\\:)*)\\@)?"
+		"(:?"
+			"(?P<Host>"
+				"(?P<RegName>(?:\\%[0-9a-f][0-9a-f]|[a-z0-9\\-\\.\\_\\~]|[\\!\\$\\&\\'\\(\\)\\*\\+\\,\\;\\=]])*)|"
+				"(?P<Ipv6>\\[(?:[0-9a-f]|[\\:])*\\]))"
+			"(?:\\:(?P<Port>[0-9]+)?)?"
+		")?"
+		"(?:\\/)?"
+	")?$"
+};
+
+/**
+ * @brief Holds each of the groups matched in a string by 'CONN_URI_REGEX'.
+ */
+struct conn_uri_t {
+	string scheme;
+	string hierpart;
+	string user;
+	string pass;
+	string host;
+	uint32_t port;
+};
+
+/**
+ * @brief Uses Regex 'CONN_URI_REGEX' to parse the supplied string.
+ * @details Tries to perform a 'PartialMatchN' over the 'CONN_URI_REGEX'. Right now doesn't perform a *full*
+ *   check on the validity of the semantics of the URI itself. It does perform some checks.
+ * @param conn_uri A connection URI.
+ * @return On success `{EXIT_SUCCESS, conn_uri_t}`, otherwise `{EXIT_FAILURE, conn_uri_t{}}`. Error cause is
+ *   logged.
+ */
+pair<int,conn_uri_t> parse_conn_uri(const string& conn_uri) {
+	re2::RE2::Options opts(RE2::Quiet);
+	opts.set_case_sensitive(false);
+
+	re2::RE2 re(CONN_URI_REGEX, opts);;
+	if (re.error_code()) {
+		proxy_error("Regex creation failed - %s\n", re.error().c_str());
+		assert(0);
+	}
+
+	const int num_groups = re.NumberOfCapturingGroups();
+	std::vector<std::string> str_args(num_groups, std::string {});
+	std::vector<RE2::Arg> re2_args {};
+
+	for (std::string& str_arg : str_args) {
+		re2_args.push_back(RE2::Arg(&str_arg));
+	}
+
+	std::vector<const RE2::Arg*> matches {};
+	for (RE2::Arg& re2_arg : re2_args) {
+		matches.push_back(&re2_arg);
+	}
+
+	const re2::RE2::Arg* const* args = &matches[0];
+	RE2::PartialMatchN(conn_uri, re, args, num_groups);
+
+	const map<string, int>& groups = re.NamedCapturingGroups();
+	map<string,int>::const_iterator group_it;
+
+	string scheme {};
+	string hierpart {};
+	string userinfo {};
+	string host {};
+	uint32_t port = 0;
+
+	if ((group_it = groups.find("Scheme")) != groups.end()) { scheme = str_args[group_it->second - 1]; }
+	if ((group_it = groups.find("HierPart")) != groups.end()) { hierpart = str_args[group_it->second - 1]; }
+	if ((group_it = groups.find("UserInfo")) != groups.end()) { userinfo = str_args[group_it->second - 1]; }
+	if ((group_it = groups.find("Host")) != groups.end()) { host = str_args[group_it->second - 1]; }
+
+	// Remove the enclosing(`[]`) from IPv6 addresses
+	if (host.empty() == false && host.size() > 2) {
+		if (host[0] == '[') {
+			host = host.substr(1, host.size()-2);
+		}
+	}
+
+	string user {};
+	string pass {};
+
+	int32_t match_err = EXIT_SUCCESS;
+
+	// Extract supplied info for user:pass
+	vector<string> v_userinfo = split_str(userinfo, ':');
+	if (v_userinfo.size() == 1) {
+		user = v_userinfo[0];
+	} else if (v_userinfo.size() == 2) {
+		user = v_userinfo[0];
+		pass = v_userinfo[1];
+	} else if (v_userinfo.size() > 2) {
+		proxy_error(
+			"Invalid UserInfo '%s' supplied in connection URI. UserInfo should contain at max two fields 'user:pass'\n",
+			userinfo.c_str()
+		);
+		match_err = EXIT_FAILURE;
+	}
+
+	if ((group_it = groups.find("Port")) != groups.end()) {
+		const string s_port { str_args[group_it->second - 1] };
+
+		if (!s_port.empty()) {
+			char* p_end = nullptr;
+			port = std::strtol(s_port.c_str(), &p_end, 10);
+
+			if (errno == ERANGE || p_end == s_port.c_str()) {
+				proxy_error("Invalid Port '%s' supplied in connection URI.\n", s_port.c_str());
+				match_err = EXIT_FAILURE;
+			}
+		}
+	}
+
+	struct conn_uri_t uri_data { scheme, hierpart, user, pass, host, port };
+
+	return { match_err, uri_data };
+}
+
+/**
+ * @brief Helper function to serialize 'conn_uri_t' for debugging purposes.
+ */
+string to_string(const conn_uri_t& conn_uri) {
+	nlohmann::ordered_json j;
+
+	j["scheme"] = conn_uri.scheme;
+	j["user"] = conn_uri.user;
+#ifdef DEBUG
+	j["pass"] = conn_uri.pass;
+#endif
+	j["host"] = conn_uri.host;
+	j["port"] = conn_uri.port;
+
+	return j.dump();
+}
+
+/**
+ * @brief Query for fetching MySQL users during bootstrapping.
+ * @details For security reasons, users matching the following names are excluded:
+ *   - `mysql.%`
+ *   - `root`
+ *   - `bt_proxysql_%`
+ *   Users starting with `bt_proxysql_` are considered `ProxySQL` created used during `bootstrap` for
+ *   monitoring purposes. A user, could create it's own monitoring accounts under this prefix, to avoid
+ *   ProxySQL fetching them as regular users.
+ */
+const char BOOTSTRAP_SELECT_USERS[] {
+	"SELECT DISTINCT user,ssl_type,authentication_string,plugin,password_expired FROM mysql.user"
+		" WHERE user NOT LIKE 'mysql.%' AND user NOT LIKE 'bt_proxysql_%'"
+#ifndef DEBUG
+		" AND user != 'root'"
+#endif
+};
+
+/**
+ * @brief Query for fetching MySQL servers during bootstrapping.
+ * @details As the regular GR monitoring queries, makes use of `replication_group_members` table.
+ */
+const char BOOTSTRAP_SELECT_SERVERS[] {
+	"SELECT MEMBER_ID,MEMBER_HOST,MEMBER_PORT,MEMBER_STATE,MEMBER_ROLE,MEMBER_VERSION FROM"
+		" performance_schema.replication_group_members"
+};
+
+/**
+ * @brief Stores credentials for monitoring created accounts during bootstrap.
+ */
+struct acct_creds_t {
+	string user;
+	string pass;
+};
+
+/**
+ * @brief Minimal set of permissions for a created GR monitoring account.
+ * @details Right now we **do not grant** permissions to `mysql_innodb_cluster_metadata` tables, since for now
+ *   we don't make any use of them.
+ */
+const vector<string> t_grant_perms_queries {
+	"GRANT USAGE ON *.* TO `%s`@`%%`",
+//  NOTE: For now, we don't make use of any `mysql_innodb_cluster_metadata` tables
+//	"GRANT SELECT, EXECUTE ON `mysql_innodb_cluster_metadata`.* TO `%s`@`%%`",
+//  NOTE: For now, we don't make use of 'routers' and 'v2_routers' table
+//	"GRANT INSERT, UPDATE, DELETE ON `mysql_innodb_cluster_metadata`.`routers` TO `%s`@`%%`",
+//	"GRANT INSERT, UPDATE, DELETE ON `mysql_innodb_cluster_metadata`.`v2_routers` TO `%s`@`%%`",
+	"GRANT SELECT ON `performance_schema`.`global_variables` TO `%s`@`%%`",
+	"GRANT SELECT ON `performance_schema`.`replication_group_member_stats` TO `%s`@`%%`",
+	"GRANT SELECT ON `performance_schema`.`replication_group_members` TO `%s`@`%%`"
+};
+
+/**
+ * @brief Grants the minimal set of permissions for GR monitoring to a supplies user.
+ * @details All permissions will be granted for host `%`.
+ * @param mysql An already opened MySQL connection.
+ * @param user The username to grant permissions to.
+ * @return Either `0` for success, or the corresponding `mysql_errno` for failure.
+ */
+int grant_user_perms(MYSQL* mysql, const string& user) {
+	for (const string& t_query : t_grant_perms_queries) {
+		const string query { cstr_format(t_query.c_str(), user.c_str()).str };
+
+		proxy_info("GRANT permissions '%s' to user\n", query.c_str());
+		int myerr = mysql_query(mysql, query.c_str());
+		if (myerr) {
+			return mysql_errno(mysql);
+		}
+	}
+
+	return 0;
+}
+
+/**
+ * @brief Generates a random password conforming with MySQL 'MEDIUM' policy.
+ * @param size The target password size.
+ * @return The random password generated.
+ */
+string gen_rand_password(std::size_t size) {
+	const string lowercase { "abcdefghijklmnopqrstuvwxyz" };
+	const string uppercase { "ABCDEFGHIJKLMNOPQRSTUVWXYZ" };
+	const string digits { "0123456789" };
+	const string symbols { "~@#$^&*]}[{()|-=+;:.>,</?" };
+	string allphabet { lowercase + uppercase + digits + symbols };
+
+	std::random_device rd {};
+	std::mt19937 gen { rd() };
+
+	string pass {};
+
+	if (size == 0) {
+		return pass;
+	} else if (size <= 4) {
+		std::shuffle(allphabet.begin(), allphabet.end(), gen);
+		pass = allphabet.substr(0, size);
+	} else {
+		// 1 numeric character
+		pass += digits[gen() % digits.size()];
+		// 1 lowercase character
+		pass += lowercase[gen() % lowercase.size()];
+		// 1 uppercase character
+		pass += toupper(lowercase[gen() % lowercase.size()]);
+		// 1 special (nonalphanumeric) character
+		pass += symbols[gen() % symbols.size()];
+
+		std::shuffle(allphabet.begin(), allphabet.end(), gen);
+		std::size_t remains = size - 4;
+
+		if (remains < allphabet.size()) {
+			pass += allphabet.substr(0, remains);
+		} else {
+			std::size_t req_modulus = static_cast<std::size_t>(remains / allphabet.size());
+			std::size_t req_reminder = remains % allphabet.size();
+
+			for (std::size_t i = 0; i < req_modulus; i++) {
+				std::shuffle(allphabet.begin(), allphabet.end(), gen);
+				pass += allphabet;
+			}
+
+			std::shuffle(allphabet.begin(), allphabet.end(), gen);
+			pass += allphabet.substr(0, req_reminder);
+		}
+	}
+
+	return pass;
+}
+
+/**
+ * @brief Creates a random monitoring account for bootstrap with a random generated password.
+ * @param mysql An already opened MySQL connection.
+ * @param max_retries Maximum number of attempts for creating the user.
+ * @return On success `{0, acct_creds_t}`, otherwise `{mysql_errno, acct_creds_t{}}`. Error cause is logged.
+ */
+pair<int32_t,acct_creds_t> create_random_bootstrap_account(MYSQL* mysql, uint32_t max_retries) {
+	// Random username
+	const string monitor_user { "bt_proxysql_" + rand_str(12) };
+	string monitor_pass {};
+
+	int myerr = ER_NOT_VALID_PASSWORD;
+	uint32_t retries = 0;
+
+	while (retries < max_retries && (myerr == ER_NOT_VALID_PASSWORD)) {
+		monitor_pass = gen_rand_password(16);
+
+		const string user_create {
+			"CREATE USER IF NOT EXISTS '" + monitor_user + "'@'%' IDENTIFIED BY '" + monitor_pass + "'"
+		};
+
+		int myres = mysql_query(mysql, user_create.c_str());
+		myerr = mysql_errno(mysql);
+
+		if (myres || myerr) {
+			if (myerr != ER_NOT_VALID_PASSWORD) {
+				return { myerr, { "", "" } };
+			} else {
+				proxy_info(
+					"Bootstrap config, failed to create password for user '%s'. Retrying...\n", monitor_user.c_str()
+				);
+				retries += 1;
+			}
+		} else {
+			break;
+		}
+	}
+
+	if (myerr == 0) {
+		myerr = grant_user_perms(mysql, monitor_user);
+	}
+
+	return { myerr, { monitor_user, monitor_pass } };
+}
+
+/**
+ * @brief Creates a monitoring account for bootstrap with the supplied parameters.
+ * @param mysql An already opened MySQL connection.
+ * @param user The username for the new account.
+ * @param pass The password for the new account.
+ * @return On success `{0,acct_creds_t}`, otherwise `{mysql_errno,acct_creds_t}`. Doesn't log errors.
+ */
+pair<int32_t,acct_creds_t> create_bootstrap_account(MYSQL* mysql, const string& user, const string& pass) {
+	const string monitor_user { "'" + user + "'" };
+	const string user_create {
+		"CREATE USER IF NOT EXISTS " + monitor_user + "@'%' IDENTIFIED BY '" + pass + "'"
+	};
+
+	int myerr = mysql_query(mysql, user_create.c_str());
+
+	if (myerr == 0) {
+		myerr = grant_user_perms(mysql, user);
+	}
+
+	return { myerr, { user, pass } };
+}
+
 int main(int argc, const char * argv[]) {
 
 	{
@@ -1374,6 +1752,287 @@ int main(int argc, const char * argv[]) {
 		} else {
 			proxy_error("Call to getrlimit failed: %s\n", strerror(errno));
 		}
+	}
+
+	bootstrap_info_t bootstrap_info {};
+	// Try to connect to MySQL for performing the bootstrapping process:
+	//   - If data isn't found we perform the bootstrap process.
+	//   - If non-empty datadir is present, reconfiguration should be performed.
+	if (GloVars.global.gr_bootstrap_mode == 1) {
+		// Check the other required arguments for performing the bootstrapping process:
+		//  - Username
+		//  - Password - asked by prompt or supplied
+		//  - Connection string parsing is required
+		const string conn_uri { GloVars.global.gr_bootstrap_uri };
+		const pair<int32_t,conn_uri_t> parse_uri_res { parse_conn_uri(conn_uri) };
+		const conn_uri_t uri_data = parse_uri_res.second;
+
+		if (parse_uri_res.first == EXIT_FAILURE) {
+			proxy_info("Aborting bootstrap due to failed to parse or match URI - `%s`\n", to_string(uri_data).c_str());
+			exit(parse_uri_res.first);
+		} else {
+			proxy_info("Bootstrap connection data supplied via URI - `%s`\n", to_string(uri_data).c_str());
+		}
+
+		const char* c_host = uri_data.host.c_str();
+		const char* c_user = uri_data.user.empty() ? "root" : uri_data.user.c_str();
+		const char* c_pass = nullptr;
+		uint32_t port = uri_data.port == 0 ? 3306 : uri_data.port;
+		uint32_t flags = CLIENT_SSL;
+
+		nlohmann::ordered_json conn_data { { "host", c_host }, { "user", c_user }, { "port", port } };
+		proxy_info("Performing bootstrap connection using URI data and defaults - `%s`\n", conn_data.dump().c_str());
+
+		if (uri_data.pass.empty()) {
+			c_pass = getpass("Enter password: ");
+		} else {
+			c_pass = uri_data.pass.c_str();
+		}
+
+		MYSQL* mysql = mysql_init(NULL);
+
+		// SSL explicitly disabled by user for backend connections
+		if (GloVars.global.gr_bootstrap_ssl_mode) {
+			if (!strcasecmp(GloVars.global.gr_bootstrap_ssl_mode, "DISABLED")) {
+				flags = 0;
+			}
+		}
+
+		if (flags == CLIENT_SSL) {
+			mysql_ssl_set(
+				mysql,
+				GloVars.global.gr_bootstrap_ssl_key,
+				GloVars.global.gr_bootstrap_ssl_cert,
+				GloVars.global.gr_bootstrap_ssl_ca,
+				GloVars.global.gr_bootstrap_ssl_capath,
+				GloVars.global.gr_bootstrap_ssl_cipher
+			);
+		}
+
+		if (!mysql_real_connect(mysql, c_host, c_user, c_pass, nullptr, port, NULL, flags)) {
+			proxy_error("Bootstrap failed, connection error '%s'\n", mysql_error(mysql));
+			exit(EXIT_FAILURE);
+		}
+
+		if (uri_data.pass.empty()) {
+			uint32_t passlen = strlen(c_pass);
+			memset(static_cast<void*>(const_cast<char*>(c_pass)), 0, passlen);
+		}
+
+		// Get server default collation and version directly from initial handshake
+		bootstrap_info.server_language = mysql->server_language;
+		bootstrap_info.server_version = mysql->server_version;
+
+		// Fetch all required data for Bootstrap
+		int myrc = mysql_query(mysql, BOOTSTRAP_SELECT_SERVERS);
+
+		if (myrc) {
+			proxy_error("Bootstrap failed, query failed with error - %s\n", mysql_error(mysql));
+			exit(EXIT_FAILURE);
+		}
+
+		MYSQL_RES* myres_members = mysql_store_result(mysql);
+
+		if (myres_members == nullptr || mysql_num_rows(myres_members) == 0) {
+			proxy_error("Bootstrap failed, expected server %s:%d to have Group Replication configured\n", c_host, port);
+			exit(EXIT_FAILURE);
+		}
+
+		myrc = mysql_query(mysql, BOOTSTRAP_SELECT_USERS);
+
+		if (myrc) {
+			proxy_error("Bootstrap failed, query failed with error - %s\n", mysql_error(mysql));
+			exit(EXIT_FAILURE);
+		}
+
+		MYSQL_RES* myres_users = mysql_store_result(mysql);
+
+		if (myres_users == nullptr) {
+			proxy_error("Bootstrap failed, storing resultset failed with error - %s\n", mysql_error(mysql));
+			exit(EXIT_FAILURE);
+		}
+
+		// TODO-NOTE: Maybe further data verification should be performed here; bootstrap-info holding final types
+		bootstrap_info.servers = myres_members;
+		bootstrap_info.users = myres_users;
+
+		// Setup a bootstrap account - monitoring
+		const string account_create_policy {
+			GloVars.global.gr_bootstrap_account_create == nullptr ? "if-not-exists" :
+				GloVars.global.gr_bootstrap_account_create
+		};
+
+		if (GloVars.global.gr_bootstrap_account == nullptr && GloVars.global.gr_bootstrap_account_create != nullptr) {
+			proxy_error("Bootstrap failed, option '--account-create' can only be used in combination with '--account'\n");
+			exit(EXIT_FAILURE);
+		}
+
+		const uint32_t password_retries = GloVars.global.gr_bootstrap_password_retries;
+		string new_mon_user {};
+		string new_mon_pass {};
+
+		if (GloVars.global.gr_bootstrap_account != nullptr) {
+			const vector<string> valid_policies { "if-not-exists", "always", "never" };
+			if (std::find(valid_policies.begin(), valid_policies.end(), account_create_policy) == valid_policies.end()) {
+				proxy_error("Bootstrap failed, unknown '--account-create' option '%s'\n", account_create_policy.c_str());
+				exit(EXIT_FAILURE);
+			}
+
+			// Since an account has been specified, we require the password for the account
+			const string mon_user { GloVars.global.gr_bootstrap_account };
+			const string get_acc_pass_msg { "Please enter MySQL password for " + mon_user + ": " };
+
+			// Get the account pass directly from user input
+			const string mon_pass = getpass(get_acc_pass_msg.c_str());
+
+			// 1. Check if account exists
+			const string get_user_cnt { "SELECT COUNT(*) FROM mysql.user WHERE user='" + mon_user + "'" };
+			int cnt_err = mysql_query(mysql, get_user_cnt.c_str());
+			MYSQL_RES* myres = mysql_store_result(mysql);
+
+			if (cnt_err || myres == nullptr) {
+				proxy_error("Bootstrap failed, detecting count existence failed with error - %s\n", mysql_error(mysql));
+				exit(EXIT_FAILURE);
+			}
+
+			MYSQL_ROW myrow = mysql_fetch_row(myres);
+			uint32_t acc_exists = atoi(myrow[0]);
+			mysql_free_result(myres);
+
+			if (account_create_policy == "if-not-exists") {
+				// 2. Account doesn't exists, create new account. Otherwise reuse current
+				if (acc_exists == 0) {
+					pair<int32_t,acct_creds_t> new_creds { create_bootstrap_account(mysql, mon_user, mon_pass) };
+
+					if (new_creds.first) {
+						proxy_error("Bootstrap failed, user creation failed with error - %s\n", mysql_error(mysql));
+						exit(EXIT_FAILURE);
+					} {
+						// Store the credentials as the new 'monitor' ones.
+						new_mon_user = mon_user;
+						new_mon_pass = new_creds.second.pass;
+					}
+				} else {
+					new_mon_user = mon_user;
+					new_mon_pass = mon_pass;
+				}
+			} else if (account_create_policy == "always") {
+				if (acc_exists == 0) {
+					pair<int32_t,acct_creds_t> new_creds { create_bootstrap_account(mysql, mon_user, mon_pass) };
+
+					if (new_creds.first) {
+						proxy_error("Bootstrap failed, user creation failed with error - %s\n", mysql_error(mysql));
+						exit(EXIT_FAILURE);
+					}
+				} else {
+					proxy_error(
+						"Bootstrap failed, account '%s' already exists but supplied option '--account-create=\"always\"'\n",
+						mon_user.c_str()
+					);
+					exit(EXIT_FAILURE);
+				}
+
+				new_mon_user = mon_user;
+				new_mon_pass = mon_pass;
+			} else if (account_create_policy == "never") {
+				if (acc_exists == 0) {
+					proxy_error(
+						"Bootstrap failed, account '%s' doesn't exists but supplied option '--account-create=\"never\"'\n",
+						mon_user.c_str()
+					);
+					exit(EXIT_FAILURE);
+				}
+
+				new_mon_user = mon_user;
+				new_mon_pass = mon_pass;
+			} else {
+				proxy_error("Bootstrap failed, unknown '--account-create' option '%s'\n", account_create_policy.c_str());
+				exit(EXIT_FAILURE);
+			}
+		} else {
+			string prev_bootstrap_user {};
+			string prev_bootstrap_pass {};
+
+			if (Proxy_file_exists(GloVars.admindb)) {
+				SQLite3DB::LoadPlugin(GloVars.sqlite3_plugin);
+				SQLite3DB* configdb = new SQLite3DB();
+				configdb->open((char*)GloVars.admindb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
+
+				{
+					const char check_table[] {
+						"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='bootstrap_variables'"
+					};
+
+					int table_exists = 0;
+
+					char* error = nullptr;
+					int cols = 0;
+					int affected_rows = 0;
+					SQLite3_result* resultset = NULL;
+
+					configdb->execute_statement(check_table, &error , &cols , &affected_rows , &resultset);
+
+					if (error == nullptr && resultset) {
+						table_exists = atoi(resultset->rows[0]->fields[0]);
+						delete resultset;
+					} else {
+						const char* err_msg = error != nullptr ? error : "Empty resultset";
+						proxy_error("Bootstrap failed, query failed with error - %s", err_msg);
+						exit(EXIT_FAILURE);
+					}
+
+					if (table_exists != 0) {
+						const char query_user_pass[] {
+							"SELECT variable_name,variable_value FROM bootstrap_variables"
+								" WHERE variable_name='bootstrap_username' OR variable_name='bootstrap_password'"
+								" ORDER BY variable_name"
+						};
+						configdb->execute_statement(query_user_pass, &error, &cols, &affected_rows, &resultset);
+
+						if (resultset->rows.size() != 0) {
+							prev_bootstrap_user = resultset->rows[1]->fields[1];
+							prev_bootstrap_pass = resultset->rows[0]->fields[1];
+						}
+
+						if (resultset) {
+							delete resultset;
+						}
+					}
+				}
+
+				delete configdb;
+			}
+
+			if (!prev_bootstrap_pass.empty() && !prev_bootstrap_user.empty()) {
+				proxy_info(
+					"Bootstrap info, detected previous bootstrap user '%s' reusing account...\n",
+					prev_bootstrap_user.c_str()
+				);
+
+				new_mon_user = prev_bootstrap_user;
+				new_mon_pass = prev_bootstrap_pass;
+			} else {
+				// Create random account with random password
+				pair<int32_t,acct_creds_t> mon_creds { create_random_bootstrap_account(mysql, password_retries) };
+
+				if (mon_creds.first) {
+					proxy_error(
+						"Bootstrap failed, user creation '%s' failed with error - %s\n",
+						mon_creds.second.user.c_str(), mysql_error(mysql)
+					);
+					exit(EXIT_FAILURE);
+				} else {
+					new_mon_user = mon_creds.second.user;
+					new_mon_pass = mon_creds.second.pass;
+					bootstrap_info.rand_gen_user = true;
+				}
+			}
+		}
+
+		bootstrap_info.mon_user = new_mon_user;
+		bootstrap_info.mon_pass = new_mon_pass;
+
+		mysql_close(mysql);
 	}
 
 	{
@@ -1508,7 +2167,7 @@ gotofork:
 __start_label:
 	{
 		cpu_timer t;
-		ProxySQL_Main_init_phase2___not_started();
+		ProxySQL_Main_init_phase2___not_started(bootstrap_info);
 #ifdef DEBUG
 		std::cerr << "Main init phase2 completed in ";
 #endif

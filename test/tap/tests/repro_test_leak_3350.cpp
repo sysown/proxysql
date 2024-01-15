@@ -12,7 +12,7 @@
 #include <cstring>
 #include <unistd.h>
 
-#include <mysql.h>
+#include "mysql.h"
 
 #include "tap.h"
 #include "command_line.h"
