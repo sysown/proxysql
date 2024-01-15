@@ -88,16 +88,18 @@ int main(int argc, char** argv) {
 	diag("Testing the loading of mysql_hostgroup_attributes");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysqladmin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysqladmin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysqladmin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysqladmin->net.compress == 0, "Compression: (%d)", mysqladmin->net.compress);
+		ok(cl.compression == mysqladmin->net.compress, "Compression: (%d)", mysqladmin->net.compress);
 	}
 
 	for (std::unordered_map<std::string,std::string>::iterator it = queries_and_checksums.begin(); it != queries_and_checksums.end(); it++) {

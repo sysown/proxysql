@@ -24,17 +24,19 @@ int main(int argc, char** argv) {
 	diag("Testing autocommit and transaction in SQLite3 Server");
 
 	MYSQL* mysql = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	mysql_options(mysql, MYSQL_SET_CHARSET_NAME, "utf8");
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, 6030, NULL, 0)) {
 		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		return exit_status();
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
 
 	MYSQL_RES *res;

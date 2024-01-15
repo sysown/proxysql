@@ -171,13 +171,15 @@ int check_connect_retries(MYSQL* admin, uint32_t retries, uint32_t hg, uint32_t 
 	diag("Connecting: username='%s' cl.use_ssl=%d", user.c_str(), cl.use_ssl);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, user.c_str(), user.c_str(), NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy->net.compress == 0, "Compression: (%d)", proxy->net.compress);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	diag("START: Checking behavior first 'ConnectionError' in the connection");
@@ -324,13 +326,15 @@ int check_connect_error_consistency(MYSQL* admin, uint32_t hg, bool ff, uint32_t
 	diag("Connecting: username='%s' cl.use_ssl=%d", user.c_str(), cl.use_ssl);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, user.c_str(), user.c_str(), NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy->net.compress == 0, "Compression: (%d)", proxy->net.compress);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	diag("START: checking behavior first 'ConnectionError' in the connection");
@@ -389,13 +393,15 @@ int check_connect_timeout_precedence(MYSQL* admin, uint32_t hg, bool ff) {
 	diag("Connecting: username='%s' cl.use_ssl=%d", user.c_str(), cl.use_ssl);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, user.c_str(), user.c_str(), NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy->net.compress == 0, "Compression: (%d)", proxy->net.compress);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	diag("START: Checking that timeout should have precedence over retries");
@@ -427,16 +433,18 @@ int main(int, char**) {
 	);
 
 	MYSQL* admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	uint32_t unused_port = get_unused_port();

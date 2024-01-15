@@ -176,6 +176,8 @@ int prepare_stmt_queries(const vector<query_t>& p_queries) {
 	MYSQL* proxy_mysql = mysql_init(NULL);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 	diag("%s: Openning INITIAL connection...", tap_curtime().c_str());
 	if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
@@ -183,7 +185,7 @@ int prepare_stmt_queries(const vector<query_t>& p_queries) {
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy_mysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy_mysql->net.compress == 0, "Compression: (%d)", proxy_mysql->net.compress);
+		ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 	}
 
 	vector<query_t> queries {};
@@ -517,16 +519,18 @@ int exec_simple_conn_tests(const vector<test_def_t>& tests_def, const queries_ex
 		diag("Starting test '%s'", test_name.c_str());
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
-		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d", cl.root_username, cl.use_ssl);
+		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		} else {
 			const char * c = mysql_get_ssl_cipher(proxy_mysql);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(proxy_mysql->net.compress == 0, "Compression: (%d)", proxy_mysql->net.compress);
+			ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 		}
 
 		// TEST SETUP queries
@@ -554,16 +558,18 @@ int text_exec_simple_conn_tests(const vector<test_def_t>& tests_def) {
 		diag("Starting test '%s'", test_name.c_str());
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
-		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d", cl.root_username, cl.use_ssl);
+		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		} else {
 			const char * c = mysql_get_ssl_cipher(proxy_mysql);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(proxy_mysql->net.compress == 0, "Compression: (%d)", proxy_mysql->net.compress);
+			ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 		}
 
 		// TEST SETUP queries
@@ -618,16 +624,18 @@ int _wait_for_replication(MYSQL* proxy_admin, const std::string& check, uint32_t
 
 		while (elapsed.count() < timeout && queries < retries) {
 			MYSQL* proxy = mysql_init(NULL);
-			diag("Connecting: cl.root_username='%s' cl.use_ssl=%d", cl.root_username, cl.use_ssl);
+			diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
 			if (cl.use_ssl)
 				mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+			if (cl.compression)
+				mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 			if (!mysql_real_connect(proxy, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 				return EXIT_FAILURE;
 			} else {
 				const char * c = mysql_get_ssl_cipher(proxy);
 				ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-				ok(proxy->net.compress == 0, "Compression: (%d)", proxy->net.compress);
+				ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 			}
 
 			int rc = mysql_query(proxy, check.c_str());
@@ -677,16 +685,18 @@ int stmt_exec_simple_conn_tests(const vector<test_def_t>& tests_def) {
 		diag("Starting test '%s'", test_name.c_str());
 
 		MYSQL* proxy_mysql = mysql_init(NULL);
-		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d", cl.root_username, cl.use_ssl);
+		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxy_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
 		} else {
 			const char * c = mysql_get_ssl_cipher(proxy_mysql);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(proxy_mysql->net.compress == 0, "Compression: (%d)", proxy_mysql->net.compress);
+			ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 		}
 
 		// TEST SETUP queries
@@ -703,16 +713,18 @@ int stmt_exec_simple_conn_tests(const vector<test_def_t>& tests_def) {
 				diag("Executing query '%s' with REPLICATION WAIT", query.c_str());
 
 				MYSQL* admin = mysql_init(NULL);
-				diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+				diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 				if (cl.use_ssl)
 					mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+				if (cl.compression)
+					mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 				if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 					fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 					return EXIT_FAILURE;
 				} else {
 					const char * c = mysql_get_ssl_cipher(admin);
 					ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-					ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
+					ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 				}
 
 				int wait_res = _wait_for_replication(admin, query, 10, 1);
@@ -1000,9 +1012,11 @@ const vector<query_t> test_compression_queries {
 int test_client_conn_compression_st() {
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, CLIENT_COMPRESS)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
@@ -1057,16 +1071,18 @@ int main(int argc, char *argv[]) {
 	plan(2+2+2*6+2*4+2*102+2*10+2*4 + compression_exp_tests + computed_exp_tests);
 
 	MYSQL* proxy_admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy_admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy_admin->net.compress == 0, "Compression: (%d)", proxy_admin->net.compress);
+		ok(cl.compression == proxy_admin->net.compress, "Compression: (%d)", proxy_admin->net.compress);
 	}
 
 	// Set a replication lag inferior to default one (60). This is to prevent reads

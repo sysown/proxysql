@@ -196,29 +196,33 @@ int main(int argc, char** argv) {
 	plan(2+2+2*c_user_attributes.size() + c_user_attributes.size()*4);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxysql_admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	MYSQL* mysql_server = mysql_init(NULL);
 	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql_server, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql_server, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql_server, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysql_server);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysql_server->net.compress == 0, "Compression: (%d)", mysql_server->net.compress);
+		ok(cl.compression == mysql_server->net.compress, "Compression: (%d)", mysql_server->net.compress);
 	}
 
 	// Creating the new required users
@@ -246,13 +250,15 @@ int main(int argc, char** argv) {
 		diag("Connecting: username='%s' cl.use_ssl=%d", std::get<0>(user_attribute).c_str(), cl.use_ssl);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect( proxysql_mysql, cl.host, std::get<0>(user_attribute).c_str(), std::get<1>(user_attribute).c_str(), NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 			return EXIT_FAILURE;
 		} else {
 			const char * c = mysql_get_ssl_cipher(proxysql_mysql);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(proxysql_mysql->net.compress == 0, "Compression: (%d)", proxysql_mysql->net.compress);
+			ok(cl.compression == proxysql_mysql->net.compress, "Compression: (%d)", proxysql_mysql->net.compress);
 		}
 
 		std::string exp_iso_level {};

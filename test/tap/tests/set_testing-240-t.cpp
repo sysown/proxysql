@@ -135,17 +135,19 @@ void * my_conn_thread(void *arg) {
 		std::string nextcs = cs[i%cs.size()];
 
 		MYSQL *mysql = mysql_init(NULL);
-		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d", cl.root_username, cl.use_ssl);
+		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
 		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, nextcs.c_str());
 		if (cl.use_ssl)
 			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, cl.port + rand()%multiport, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			exit(EXIT_FAILURE);
 		} else {
 			const char * c = mysql_get_ssl_cipher(mysql);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
 
 		if (i < total_conn_having_client_deprecate_eof_support) {
@@ -497,16 +499,18 @@ int main(int argc, char *argv[]) {
 	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxysql_admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	diag("Disabling admin-hash_passwords to be able to run test on MySQL 8");

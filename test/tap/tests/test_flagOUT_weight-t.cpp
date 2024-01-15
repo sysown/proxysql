@@ -59,16 +59,18 @@ int main(int argc, char** argv) {
 	plan(2+2 + 4);
 
 	MYSQL* mysqladmin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysqladmin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysqladmin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysqladmin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysqladmin->net.compress == 0, "Compression: (%d)", mysqladmin->net.compress);
+		ok(cl.compression == mysqladmin->net.compress, "Compression: (%d)", mysqladmin->net.compress);
 	}
 
 	diag("We will reconfigure ProxySQL to use SQLite3 Server on hostgroup 1458 and 1459, IP 127.0.0.1 and port 6030");
@@ -77,16 +79,18 @@ int main(int argc, char** argv) {
 		return exit_status();
 
 	MYSQL* mysql = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, cl.host, username, password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		return exit_status();
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
 
 

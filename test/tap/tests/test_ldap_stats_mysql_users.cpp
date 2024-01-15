@@ -107,29 +107,33 @@ int main(int argc, char** argv) {
 	diag("New process limits: { %ld, %ld }", limits.rlim_cur, limits.rlim_max);
 
 	MYSQL* proxy = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy->net.compress == 0, "Compression: (%d)", proxy->net.compress);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	MYSQL* admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	// Get the maximum number of connections per LDAP user right now, ''
@@ -215,13 +219,15 @@ int main(int argc, char** argv) {
 				diag("Connecting: username='%s' cl.use_ssl=%d", LDAP_USER.c_str(), cl.use_ssl);
 				if (cl.use_ssl)
 					mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
+				if (cl.compression)
+					mysql_options(conn, MYSQL_OPT_COMPRESS, NULL);
 				if (!mysql_real_connect(conn, cl.host, LDAP_USER.c_str(), LDAP_PASS.c_str(), NULL, cl.port, NULL, 0)) {
 					fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(conn));
 					goto cleanup;
 				} else {
 					const char * c = mysql_get_ssl_cipher(conn);
 					ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-					ok(conn->net.compress == 0, "Compression: (%d)", conn->net.compress);
+					ok(cl.compression == conn->net.compress, "Compression: (%d)", conn->net.compress);
 				}
 
 				user_conns.push_back(conn);

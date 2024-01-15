@@ -119,16 +119,18 @@ int valid_proxysql_conn(const std::string& addr, const CommandLine& cl, std::str
 	int my_err = EXIT_SUCCESS;
 
 	MYSQL* proxysql = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql, addr.c_str(), cl.username, cl.password, NULL, 6033, NULL, 0)) {
 		my_err = mysql_errno(proxysql);
 		err_msg = mysql_error(proxysql);
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxysql->net.compress == 0, "Compression: (%d)", proxysql->net.compress);
+		ok(cl.compression == proxysql->net.compress, "Compression: (%d)", proxysql->net.compress);
 	}
 
 	mysql_close(proxysql);
@@ -852,16 +854,18 @@ int main(int, char**) {
 	plan(5*2 + 30);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxysql_admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	// Setup the virtual namespaces to be used by the test

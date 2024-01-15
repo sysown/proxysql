@@ -84,9 +84,11 @@ void * my_conn_thread(void *arg) {
 		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, nextcs.c_str());
 		if (cl.use_ssl)
 			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		MYSQL *rc = NULL;
 		if (multi_users == 0) {
-			diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+			diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 			rc = mysql_real_connect(mysql, cl.host, cl.username, cl.password, schema, cl.port + rand()%multiport, NULL, 0);
 		} else {
 			int i = (rand()%multi_users) + 1;
@@ -101,7 +103,7 @@ void * my_conn_thread(void *arg) {
 		} else {
 			const char * c = mysql_get_ssl_cipher(mysql);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
 
 		mysqlconns[i] = mysql;
@@ -317,16 +319,18 @@ int main(int argc, char *argv[]) {
 	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysqladmin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysqladmin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysqladmin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysqladmin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysqladmin->net.compress == 0, "Compression: (%d)", mysqladmin->net.compress);
+		ok(cl.compression == mysqladmin->net.compress, "Compression: (%d)", mysqladmin->net.compress);
 	}
 /*
 	MYSQL_QUERY(mysqladmin, "update global_variables set variable_value='ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION' where variable_name='mysql-default_sql_mode'");

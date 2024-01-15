@@ -448,16 +448,18 @@ int test_simple_reset_admin(MYSQL*, const CommandLine& cl, const std::vector<use
 	int res = EXIT_FAILURE;
 
 	MYSQL* admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	// FIXME: 'COM_CHANGE_USER' doesn't return proper error right now for unsupported sessions types.
@@ -984,13 +986,15 @@ int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector
 	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
 
 	std::vector<var_val> bef_vars_vals {};
@@ -1143,29 +1147,33 @@ int main(int argc, char** argv) {
 	// Use a known default charset for the connection
 	MARIADB_CHARSET_INFO* latin2_charset = proxysqlTap_find_charset_collate("latin2_general_ci");
 	proxysql->charset = latin2_charset;
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql, cl.host, cl.username, cl.password, "information_schema", cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxysql->net.compress == 0, "Compression: (%d)", proxysql->net.compress);
+		ok(cl.compression == proxysql->net.compress, "Compression: (%d)", proxysql->net.compress);
 	}
 
 	MYSQL* admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.admin_host, cl.admin_username, cl.admin_password, "information_schema", cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	// Set the number of backend connections to '1' for making sure all the operations are performed in the same
@@ -1198,13 +1206,15 @@ int main(int argc, char** argv) {
 	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql_server, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql_server, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql_server, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysql_server);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysql_server->net.compress == 0, "Compression: (%d)", mysql_server->net.compress);
+		ok(cl.compression == mysql_server->net.compress, "Compression: (%d)", mysql_server->net.compress);
 	}
 
 	int err_code = create_extra_users(admin, mysql_server, extra_users);

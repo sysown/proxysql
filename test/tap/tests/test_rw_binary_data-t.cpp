@@ -391,29 +391,33 @@ int main(int argc, char** argv) {
 	plan(2+2 + (MAX_COLUMNS-1)*(2*NUM_TESTS+1));
 
 	MYSQL* admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
+		ok(cl.compression == admin->net.compress, "Compression: (%d)", admin->net.compress);
 	}
 
 	MYSQL* proxy = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy->net.compress == 0, "Compression: (%d)", proxy->net.compress);
+		ok(cl.compression == proxy->net.compress, "Compression: (%d)", proxy->net.compress);
 	}
 
 	// Reset 'stats_mysql_query_digest' to verify that test doesn't pollute the content

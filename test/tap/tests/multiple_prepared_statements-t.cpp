@@ -139,16 +139,18 @@ int main(int argc, char** argv) {
 	diag("Creating connections");
 	for (int i=0; i<NCONNS; i++) {
 		conns[i] = mysql_init(NULL);
-		diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(conns[i], NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(conns[i], MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(conns[i], cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(conns[i]));
 			return EXIT_FAILURE;
 		} else {
 			const char * c = mysql_get_ssl_cipher(conns[i]);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(conns[i]->net.compress == 0, "Compression: (%d)", conns[i]->net.compress);
+			ok(cl.compression == conns[i]->net.compress, "Compression: (%d)", conns[i]->net.compress);
 		}
 	}
 
@@ -159,16 +161,18 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxysql_admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	diag("Preparing statements");

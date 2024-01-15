@@ -112,9 +112,11 @@ vector<digest_stats> get_digest_stats(MYSQL* proxy_admin) {
 
 void run_dummy_queries() {
 	MYSQL* proxy_mysql = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		slowest_query = -1.0;
@@ -122,7 +124,7 @@ void run_dummy_queries() {
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy_mysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy_mysql->net.compress == 0, "Compression: (%d)", proxy_mysql->net.compress);
+		ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 	}
 
 	vector<double> execution_times = {};
@@ -187,16 +189,18 @@ int main(int argc, char** argv) {
 	plan(2+2+2 + 1 + DUMMY_QUERIES.size() * 5); // always specify the number of tests that are going to be performed
 
 	MYSQL *proxy_admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy_admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy_admin->net.compress == 0, "Compression: (%d)", proxy_admin->net.compress);
+		ok(cl.compression == proxy_admin->net.compress, "Compression: (%d)", proxy_admin->net.compress);
 	}
 
 	MYSQL_QUERY(proxy_admin, "TRUNCATE TABLE stats.stats_mysql_query_digest");
@@ -212,9 +216,11 @@ int main(int argc, char** argv) {
 	}
 
 	MYSQL *proxy_mysql = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxy_mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 		mysql_close(proxy_admin);
@@ -222,7 +228,7 @@ int main(int argc, char** argv) {
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxy_mysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxy_mysql->net.compress == 0, "Compression: (%d)", proxy_mysql->net.compress);
+		ok(cl.compression == proxy_mysql->net.compress, "Compression: (%d)", proxy_mysql->net.compress);
 	}
 
 	time_t init_time = time(NULL);

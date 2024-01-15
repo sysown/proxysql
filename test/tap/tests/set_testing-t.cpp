@@ -97,17 +97,19 @@ void * my_conn_thread(void *arg) {
 		std::string nextcs = cs[i%cs.size()];
 
 		MYSQL *mysql = mysql_init(NULL);
-		diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, nextcs.c_str());
 		if (cl.use_ssl)
 			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, schema, cl.port + rand()%multiport, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			exit(EXIT_FAILURE);
 		} else {
 			const char * c = mysql_get_ssl_cipher(mysql);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
+			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
 
 		mysqlconns[i] = mysql;

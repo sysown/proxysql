@@ -79,13 +79,15 @@ int test_crash(const char *host, int port) {
 		// Correctly connect to Clickhouse server
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_clickhouse, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, host, credentials[2].first.c_str(), credentials[2].second.c_str(), NULL, port, NULL, 0)) {
 			diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_clickhouse));
 			return exit_status();
 		} else {
 			const char * c = mysql_get_ssl_cipher(proxysql_clickhouse);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(proxysql_clickhouse->net.compress == 0, "Compression: (%d)", proxysql_clickhouse->net.compress);
+			ok(cl.compression == proxysql_clickhouse->net.compress, "Compression: (%d)", proxysql_clickhouse->net.compress);
 		}
 
 		char * q = (char *)"SELECT 1";
@@ -386,16 +388,18 @@ int main(int argc, char** argv) {
 
 	// Connect to ProxySQL Admin and check current clickhouse configuration
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxysql_admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	create_users(proxysql_admin);
@@ -430,6 +434,8 @@ int main(int argc, char** argv) {
 		diag("Connecting: username='%s' cl.use_ssl=%d", "foobar_user", cl.use_ssl);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_clickhouse, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), "foobar_user", cl.password, NULL, host_port.second, NULL, 0)) {
 			inv_user_err = mysql_error(proxysql_clickhouse);
 			failed_to_connect = true;
@@ -451,6 +457,8 @@ int main(int argc, char** argv) {
 		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[0].first.c_str(), cl.use_ssl);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_clickhouse, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), credentials[0].first.c_str(), "foobar_pass", NULL, host_port.second, NULL, 0)) {
 			inv_pass_err = mysql_error(proxysql_clickhouse);
 			failed_to_connect = true;
@@ -470,13 +478,15 @@ int main(int argc, char** argv) {
 		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[0].first.c_str(), cl.use_ssl);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_clickhouse, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), credentials[0].first.c_str(), credentials[0].second.c_str(), NULL, host_port.second, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_clickhouse));
 			goto cleanup;
 		} else {
 			const char * c = mysql_get_ssl_cipher(proxysql_clickhouse);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(proxysql_clickhouse->net.compress == 0, "Compression: (%d)", proxysql_clickhouse->net.compress);
+			ok(cl.compression == proxysql_clickhouse->net.compress, "Compression: (%d)", proxysql_clickhouse->net.compress);
 		}
 
 		diag("Started performing queries set 1");
@@ -525,13 +535,15 @@ int main(int argc, char** argv) {
 		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[1].first.c_str(), cl.use_ssl);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
+		if (cl.compression)
+			mysql_options(proxysql_clickhouse, MYSQL_OPT_COMPRESS, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, new_host_port.first.c_str(), credentials[1].first.c_str(), credentials[1].second.c_str(), NULL, new_host_port.second, NULL, 0)) {
 			new_intf_conn_err = mysql_error(proxysql_clickhouse);
 			success_to_connect = false;
 		} else {
 			const char * c = mysql_get_ssl_cipher(proxysql_clickhouse);
 			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-			ok(proxysql_clickhouse->net.compress == 0, "Compression: (%d)", proxysql_clickhouse->net.compress);
+			ok(cl.compression == proxysql_clickhouse->net.compress, "Compression: (%d)", proxysql_clickhouse->net.compress);
 		}
 
 		ok(

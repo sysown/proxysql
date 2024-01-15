@@ -23,16 +23,18 @@ int main(int argc, char** argv) {
 	 * HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE
 	 */
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(proxysql_admin, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
 	} else {
 		const char * c = mysql_get_ssl_cipher(proxysql_admin);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
+		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	set_admin_global_variable(proxysql_admin, "mysql-handle_unknown_charset", "1");
@@ -47,16 +49,18 @@ int main(int argc, char** argv) {
 
 	/* Check that set names can set collation > 255 */
 	MYSQL* mysql = mysql_init(NULL);
-	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return -1;
 	} else {
 		const char * c = mysql_get_ssl_cipher(mysql);
 		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
-		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
+		ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 	}
 
 	if (mysql_query(mysql, "set names 'utf8'")) return exit_status();
@@ -78,8 +82,19 @@ int main(int argc, char** argv) {
 	/* Check that default collation can be configures through admin */
 	std::string var_name="mysql-default_charset";
 	MYSQL * mysql_a = mysql_init(NULL);
-	if (!mysql) return exit_status();
-	if (!mysql_real_connect(mysql_a, cl.host, "admin", "admin", NULL, 6032, NULL, 0)) return exit_status();
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql_a, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql_a, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(mysql_a, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_a));
+		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql_a);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql_a->net.compress, "Compression: (%d)", mysql_a->net.compress);
+	}
 
 	if (mysql_query(mysql_a, "update global_variables set variable_value='latin1' where variable_name='mysql-default_charset'")) return exit_status();
 	if (mysql_query(mysql_a, "load mysql variables to runtime")) return exit_status();
@@ -99,8 +114,19 @@ int main(int argc, char** argv) {
 
 
 	MYSQL* mysql_b = mysql_init(NULL);
-	if (!mysql_b) return exit_status();
-	if (!mysql_real_connect(mysql_b, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) return exit_status();
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql_b, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql_b, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(mysql_b, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_b));
+		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql_b);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql_b->net.compress, "Compression: (%d)", mysql_b->net.compress);
+	}
 
 	get_server_version(mysql_b, version);
 	if (version.data()[0] == '5') {
@@ -118,9 +144,20 @@ int main(int argc, char** argv) {
 	//set_admin_global_variable(proxysql_admin, "mysql-default_collation_connection", "utf8mb4_general_ci");
 	//if (mysql_query(proxysql_admin, "load mysql variables to runtime")) return exit_status();
 	MYSQL * mysql_c = mysql_init(NULL);
-	if (!mysql_c) return exit_status();
-	if (mysql_options(mysql_c, MYSQL_SET_CHARSET_NAME, "utf8mb4")) return exit_status();
-	if (!mysql_real_connect(mysql_c, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) return exit_status();
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
+	mysql_options(mysql_c, MYSQL_SET_CHARSET_NAME, "utf8mb4");
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql_c, NULL, NULL, NULL, NULL, NULL);
+	if (cl.compression)
+		mysql_options(mysql_c, MYSQL_OPT_COMPRESS, NULL);
+	if (!mysql_real_connect(mysql_c, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_c));
+		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql_c);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(cl.compression == mysql_c->net.compress, "Compression: (%d)", mysql_c->net.compress);
+	}
 
 	if (get_server_version(mysql_c, version)) return exit_status();
 	if (version.data()[0] == '5') {
