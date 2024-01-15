@@ -35,6 +35,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 using query_spec = std::tuple<std::string, int, int>;
 
 const int proxysql_clickhouse_port = 6090;
@@ -70,13 +72,22 @@ int set_clickhouse_port(MYSQL *pa, int p) {
 int test_crash(const char *host, int port) {
 	// try to connect and run queries while there is no backend
 	for (int i=0; i<crash_loops; i++) {
+
 		MYSQL * proxysql_clickhouse = mysql_init(NULL);
-		diag("Line: %d . Create connection %d in test_cash()", __LINE__ , i);
+		diag("Line: %d . Create connection %d in test_crash()", __LINE__ , i);
+		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[2].first.c_str(), cl.use_ssl);
 		// Correctly connect to Clickhouse server
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, host, credentials[2].first.c_str(), credentials[2].second.c_str(), NULL, port, NULL, 0)) {
 			diag("File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_clickhouse));
 			return exit_status();
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_clickhouse);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxysql_clickhouse->net.compress == 0, "Compression: (%d)", proxysql_clickhouse->net.compress);
 		}
+
 		char * q = (char *)"SELECT 1";
 		int query_err = mysql_query(proxysql_clickhouse, q);
 		MYSQL_RES * result = mysql_store_result(proxysql_clickhouse);
@@ -91,6 +102,7 @@ int test_crash(const char *host, int port) {
 	}
 	return 0;
 }
+
 int create_users(MYSQL *pa) {
 	diag("Emptying clickhouse_users table");
 	MYSQL_QUERY(pa, "DELETE FROM clickhouse_users");
@@ -357,11 +369,11 @@ std::vector<std::string> ch_intf_queries {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// plan as many tests as queries
 	plan(
-		crash_loops
+		7*2 // connections
+		+ crash_loops
 		+ 2 /* Fail to connect with wrong username and password */
 		+ 4 // during LOAD USERS TO RUNTIME
 		+ 4 // during LOAD USERS TO RUNTIME , second time
@@ -372,19 +384,19 @@ int main(int argc, char** argv) {
 		+ 1 /* Connect to new setup interface */
 	);
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
-	MYSQL* proxysql_admin = mysql_init(NULL);
-
 	// Connect to ProxySQL Admin and check current clickhouse configuration
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
 	}
-
 
 	create_users(proxysql_admin);
 	create_users(proxysql_admin); // to trigger more code coverage
@@ -415,6 +427,9 @@ int main(int argc, char** argv) {
 		// Connect with invalid username
 		std::string inv_user_err {};
 		bool failed_to_connect = false;
+		diag("Connecting: username='%s' cl.use_ssl=%d", "foobar_user", cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), "foobar_user", cl.password, NULL, host_port.second, NULL, 0)) {
 			inv_user_err = mysql_error(proxysql_clickhouse);
 			failed_to_connect = true;
@@ -433,6 +448,9 @@ int main(int argc, char** argv) {
 		// Connect with invalid password
 		std::string inv_pass_err {};
 		failed_to_connect = false;
+		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[0].first.c_str(), cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), credentials[0].first.c_str(), "foobar_pass", NULL, host_port.second, NULL, 0)) {
 			inv_pass_err = mysql_error(proxysql_clickhouse);
 			failed_to_connect = true;
@@ -449,9 +467,16 @@ int main(int argc, char** argv) {
 		proxysql_clickhouse = mysql_init(NULL);
 
 		// Correctly connect to Clickhouse server
+		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[0].first.c_str(), cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, host_port.first.c_str(), credentials[0].first.c_str(), credentials[0].second.c_str(), NULL, host_port.second, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_clickhouse));
 			goto cleanup;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_clickhouse);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxysql_clickhouse->net.compress == 0, "Compression: (%d)", proxysql_clickhouse->net.compress);
 		}
 
 		diag("Started performing queries set 1");
@@ -497,9 +522,16 @@ int main(int argc, char** argv) {
 		// Connect with invalid username
 		bool success_to_connect = true;
 		std::string new_intf_conn_err {};
+		diag("Connecting: username='%s' cl.use_ssl=%d", credentials[1].first.c_str(), cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_clickhouse, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_clickhouse, new_host_port.first.c_str(), credentials[1].first.c_str(), credentials[1].second.c_str(), NULL, new_host_port.second, NULL, 0)) {
 			new_intf_conn_err = mysql_error(proxysql_clickhouse);
 			success_to_connect = false;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_clickhouse);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxysql_clickhouse->net.compress == 0, "Compression: (%d)", proxysql_clickhouse->net.compress);
 		}
 
 		ok(

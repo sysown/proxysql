@@ -43,19 +43,21 @@ std::string get_admin_mysql_ifaces(MYSQL *admin) {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	plan(13);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
+	plan(2+2 + 13);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
 	}
+
 	{
 		std::string current = get_admin_mysql_ifaces(proxysql_admin);
 		char * expected = (char *)"0.0.0.0:6032;0.0.0.0:6031;/tmp/proxysql_admin.sock";
@@ -77,11 +79,20 @@ int main(int argc, char** argv) {
 
 	{
 		diag("Connecting on Unix Socket");
+
 		MYSQL* proxysql_admin2 = mysql_init(NULL);
+		diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_admin2, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_admin2, NULL, cl.admin_username, cl.admin_password, NULL, 0, "/tmp/proxysql_admin.sock", 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin2));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_admin2);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxysql_admin2->net.compress == 0, "Compression: (%d)", proxysql_admin2->net.compress);
 		}
+
 		std::string current = get_admin_mysql_ifaces(proxysql_admin2);
 		char * expected = (char *)"0.0.0.0:6032;/tmp/proxysql_admin.sock";
 		ok(strcmp(current.c_str(),expected)==0, "Line: %d , Current admin-mysql_ifaces = %s . Expected = %s", __LINE__, current.c_str(), expected);
@@ -103,7 +114,12 @@ int main(int argc, char** argv) {
 	{
 		diag("Connecting on Unix Socket. It should fail");
 		MYSQL* proxysql_admin2 = mysql_init(NULL);
+		diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_admin2, NULL, NULL, NULL, NULL, NULL);
 		MYSQL * ret = mysql_real_connect(proxysql_admin2, NULL, cl.admin_username, cl.admin_password, NULL, 0, "/tmp/proxysql_admin.sock", 0);
+		if (ret)
+			mysql_close(proxysql_admin2);
 		ok(ret == NULL, "Connection to Unix Socket should fail with error: %s", mysql_error(proxysql_admin2));
 	}
 

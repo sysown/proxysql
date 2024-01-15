@@ -37,6 +37,7 @@ using std::string;
 
 const std::string fdev_random { "/dev/random" };
 const size_t NUM_TESTS = 100;
+const size_t MAX_COLUMNS = 5; // starting at 1
 
 /**
  * @brief Create a random binary string of the supplied size. The string isn't allowed to contain single
@@ -387,22 +388,32 @@ void stmt_protocol_check(MYSQL* proxy, MYSQL* admin, const size_t idx, const vec
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
+	plan(2+2 + (MAX_COLUMNS-1)*(2*NUM_TESTS+1));
 
-	MYSQL* proxy = mysql_init(NULL);
 	MYSQL* admin = mysql_init(NULL);
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
 	}
+
+	MYSQL* proxy = mysql_init(NULL);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	// if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, 13306, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxy->net.compress == 0, "Compression: (%d)", proxy->net.compress);
 	}
 
 	// Reset 'stats_mysql_query_digest' to verify that test doesn't pollute the content
@@ -417,8 +428,6 @@ int main(int argc, char** argv) {
 
 	// We just care about the data, so we intentionally ignore '\'
 	MYSQL_QUERY(proxy, "SET sql_mode='NO_BACKSLASH_ESCAPES'");
-
-	size_t MAX_COLUMNS = 5;
 
 	for (size_t num_columns = 1; num_columns < MAX_COLUMNS; num_columns++) {
 		string create_table_query { gen_create_table(num_columns, "DEFAULT CHARSET=latin2") };

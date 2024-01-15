@@ -193,25 +193,32 @@ int extract_exp_iso_level(
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
-	plan(c_user_attributes.size() * 4);
+	plan(2+2+2*c_user_attributes.size() + c_user_attributes.size()*4);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-	MYSQL* mysql_server = mysql_init(NULL);
-
-	// Creating the new connections
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
 	}
-//	if (!mysql_real_connect(mysql_server, cl.host, "root", "root", NULL, 13306, NULL, 0)) {
+
+	MYSQL* mysql_server = mysql_init(NULL);
+	diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql_server, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysql_server, cl.mysql_host, cl.mysql_username, cl.mysql_password, NULL, cl.mysql_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql_server));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql_server);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(mysql_server->net.compress == 0, "Compression: (%d)", mysql_server->net.compress);
 	}
 
 	// Creating the new required users
@@ -236,9 +243,16 @@ int main(int argc, char** argv) {
 	for (const auto& user_attribute : user_attributes) {
 		// Create the new connection to verify
 		MYSQL* proxysql_mysql = mysql_init(NULL);
+		diag("Connecting: username='%s' cl.use_ssl=%d", std::get<0>(user_attribute).c_str(), cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect( proxysql_mysql, cl.host, std::get<0>(user_attribute).c_str(), std::get<1>(user_attribute).c_str(), NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxysql_mysql->net.compress == 0, "Compression: (%d)", proxysql_mysql->net.compress);
 		}
 
 		std::string exp_iso_level {};

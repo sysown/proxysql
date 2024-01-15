@@ -23,31 +23,38 @@ int main(int argc, char** argv) {
 	if(cl.getEnv())
 		return exit_status();
 
-	plan(96);
+	plan(2+2 + 96);
 	diag("Testing mysql-enforce_autocommit_on_reads");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
-	if (!mysqladmin)
-		return exit_status();
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysqladmin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysqladmin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(mysqladmin->net.compress == 0, "Compression: (%d)", mysqladmin->net.compress);
 	}
 
 	MYSQL_QUERY(mysqladmin, "SET mysql-enforce_autocommit_on_reads=0");
 	MYSQL_QUERY(mysqladmin, "load mysql variables to runtime");
 
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql)
-		return exit_status();
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
-	              mysql_error(mysql));
+		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
 	}
+
 	MYSQL_RES *res;
 	if (create_table_test_sbtest1(100,mysql)) {
 		fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);

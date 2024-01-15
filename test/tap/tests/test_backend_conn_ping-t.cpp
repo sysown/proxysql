@@ -39,6 +39,9 @@ using std::pair;
 
 using srv_cfg = vector<pair<string,int>>;
 
+
+CommandLine cl;
+
 int wait_timeout = 10;
 
 #ifndef SESSIONS_FOR_CONNECTIONS_HANDLER
@@ -82,63 +85,60 @@ int compute_wait_timeout(MYSQL *my_conn) {
 }
 
 
-int change_mysql_cfg(
-	const CommandLine& cl, const string& host, const string& port, const srv_cfg& new_srv_cfg, srv_cfg& out_old_srv_cfg
-) {
+int change_mysql_cfg(const CommandLine& cl, const string& host, const string& port, const srv_cfg& new_srv_cfg, srv_cfg& out_old_srv_cfg) {
 	int res = EXIT_SUCCESS;
 
 	MYSQL* my_conn = mysql_init(NULL);
-	if (!my_conn) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
-		return EXIT_FAILURE;
-	}
-
 	diag("Connecting to %s:%s with user %s", host.c_str(), port.c_str(), cl.mysql_username);
+	if (cl.use_ssl)
+		mysql_ssl_set(my_conn, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(my_conn, host.c_str(), cl.mysql_username, cl.mysql_password, NULL, std::stol(port.c_str()), NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
-		res = EXIT_FAILURE;
+		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(my_conn);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(my_conn->net.compress == 0, "Compression: (%d)", my_conn->net.compress);
 	}
 
-	if (res == EXIT_SUCCESS) {
-		srv_cfg old_server_config {};
+	srv_cfg old_server_config {};
 
-		for (const pair<string,int>& config_var : new_srv_cfg) {
-			string query = "SELECT @@" + config_var.first;
-			diag("Line:%d : Running: %s", __LINE__, query.c_str());
-			res = mysql_query(my_conn, query.c_str());
-			if (res != EXIT_SUCCESS) {
-				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
-				res = EXIT_FAILURE;
-				break;
-			}
+	for (const pair<string,int>& config_var : new_srv_cfg) {
+		string query = "SELECT @@" + config_var.first;
+		diag("Line:%d : Running: %s", __LINE__, query.c_str());
+		res = mysql_query(my_conn, query.c_str());
+		if (res != EXIT_SUCCESS) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
+			res = EXIT_FAILURE;
+			break;
+		}
 
-			MYSQL_RES* my_res = mysql_store_result(my_conn);
-			if (my_res == nullptr) {
-				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
-				res = EXIT_FAILURE;
-				break;
-			}
+		MYSQL_RES* my_res = mysql_store_result(my_conn);
+		if (my_res == nullptr) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
+			res = EXIT_FAILURE;
+			break;
+		}
 
-			MYSQL_ROW row = mysql_fetch_row(my_res);
-			if (row == nullptr || row[0] == nullptr) {
-				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
-				res = EXIT_FAILURE;
-				break;
-			} else {
-				diag("Line:%d : Returned: %s = %s", __LINE__, config_var.first.c_str(), row[0]);
-				old_server_config.push_back({ config_var.first, std::stol(row[0]) });
-			}
+		MYSQL_ROW row = mysql_fetch_row(my_res);
+		if (row == nullptr || row[0] == nullptr) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
+			res = EXIT_FAILURE;
+			break;
+		} else {
+			diag("Line:%d : Returned: %s = %s", __LINE__, config_var.first.c_str(), row[0]);
+			old_server_config.push_back({ config_var.first, std::stol(row[0]) });
+		}
 
-			mysql_free_result(my_res);
+		mysql_free_result(my_res);
 
-			query = string { "SET GLOBAL " + config_var.first + "=" + std::to_string(config_var.second) };
-			diag("Line:%d : Setting on %s:%s : %s", __LINE__ , host.c_str(), port.c_str(), query.c_str());
-			mysql_query(my_conn, query.c_str());
-			if (res != EXIT_SUCCESS) {
-				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
-				res = EXIT_FAILURE;
-				break;
-			}
+		query = string { "SET GLOBAL " + config_var.first + "=" + std::to_string(config_var.second) };
+		diag("Line:%d : Setting on %s:%s : %s", __LINE__ , host.c_str(), port.c_str(), query.c_str());
+		mysql_query(my_conn, query.c_str());
+		if (res != EXIT_SUCCESS) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(my_conn));
+			res = EXIT_FAILURE;
+			break;
 		}
 
 		if (res == EXIT_SUCCESS) {
@@ -152,16 +152,18 @@ int change_mysql_cfg(
 }
 
 int create_new_backend_conn(const CommandLine& cl, int tg_hg, vector<MYSQL*>& mysql_conns) {
+
 	MYSQL* conn = mysql_init(NULL);
-
-	if (!conn) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(conn));
-		return EXIT_FAILURE;
-	}
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(conn, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(conn, cl.host, cl.username, cl.password, "backend_conn_ping_test", cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(conn));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(conn);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(conn->net.compress == 0, "Compression: (%d)", conn->net.compress);
 	}
 
 	const string query { "DO /* ;hostgroup=" + std::to_string(tg_hg) + ";create_new_connection=1 */ 1" };
@@ -206,9 +208,8 @@ struct test_params_t {
 
 using svr_addr = pair<string,uint32_t>;
 
-int check_backend_conns(
-	const CommandLine& cl, const test_params_t& test_params, uint32_t hg, const vector<svr_addr>& svrs_addrs
-) {
+int check_backend_conns(const CommandLine& cl, const test_params_t& test_params, uint32_t hg, const vector<svr_addr>& svrs_addrs) {
+
 	vector<MYSQL*> mysql_conns {};
 	int res = EXIT_SUCCESS;
 
@@ -236,19 +237,32 @@ int check_backend_conns(
 	vector<MYSQL*> svrs_conns {};
 
 	{
+		diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(admin);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
 		}
 
 		for (const auto& svr_addr : svrs_addrs) {
-			MYSQL* mysql = mysql_init(NULL);
 
-//			if (!mysql_real_connect(mysql, svr_addr.first.c_str(), cl.username, cl.password, NULL, svr_addr.second, NULL, 0)) {
+			MYSQL* mysql = mysql_init(NULL);
+			diag("Connecting: cl.mysql_username='%s' cl.use_ssl=%d", cl.mysql_username, cl.use_ssl);
+			if (cl.use_ssl)
+				mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 			if (!mysql_real_connect(mysql, svr_addr.first.c_str(), cl.mysql_username, cl.mysql_password, NULL, svr_addr.second, NULL, 0)) {
 				fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 				res = EXIT_FAILURE;
 				goto cleanup;
+			} else {
+				const char * c = mysql_get_ssl_cipher(mysql);
+				ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+				ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
 			}
 
 			svrs_conns.push_back(mysql);
@@ -426,14 +440,8 @@ int wait_target_backend_conns(MYSQL* admin, uint32_t tg_backend_conns, uint32_t 
 }
 
 int main(int, char**) {
-	CommandLine cl;
 
-	plan(4);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
+//	plan(2+2 + 4);
 
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
@@ -441,15 +449,16 @@ int main(int, char**) {
 	setrlimit(RLIMIT_NOFILE, &limits);
 
 	MYSQL* proxy_mysql = mysql_init(NULL);
-
-	// Initialize connections
-	if (!proxy_mysql) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
-		return exit_status();
-	}
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
-		return exit_status();
+		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxy_mysql->net.compress == 0, "Compression: (%d)", proxy_mysql->net.compress);
 	}
 
 	// Create a new 'db' for connection filtering
@@ -458,15 +467,18 @@ int main(int, char**) {
 	mysql_close(proxy_mysql);
 
 	MYSQL* proxy_admin = mysql_init(NULL);
-	if (!proxy_admin) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
-		return exit_status();
-	}
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
-		return exit_status();
+		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxy_admin->net.compress == 0, "Compression: (%d)", proxy_admin->net.compress);
 	}
+
 
 	if (compute_wait_timeout(proxy_admin) != EXIT_SUCCESS) {
 		return exit_status();
@@ -482,6 +494,13 @@ int main(int, char**) {
 	double its = (conn_creation_intv - b_0/rate) / ( b / rate );
 	double delay_s = conn_creation_intv / its;
 
+	plan(
+		2+2 + // connections
+		b_0*2 + //
+		its*(b*2)*2 + // * num of hg?
+		4 // tests
+	);
+	diag(">>> %d <<<", its);
 	// Cleanup previous backend connections
 	diag("Cleaning up previous backend connections...");
 	MYSQL_QUERY(proxy_admin, "UPDATE mysql_servers SET max_connections=0");
@@ -562,7 +581,8 @@ int main(int, char**) {
 	vector<svr_addr> s_server_test;
 	vector<svr_addr> m_server_test;
 
-	const string docker_mode = getenv("DOCKER_MODE");
+	const char * env_str = getenv("DOCKER_MODE");
+	const string docker_mode { env_str ? env_str : "" };
 	if (docker_mode.find("dns") == docker_mode.size() - 3) {
 		s_server_test.assign({ { "mysql1.infra-mysql57", 3306 } });
 		m_server_test.assign({ { "mysql1.infra-mysql57", 3306 }, { "mysql2.infra-mysql57", 3306 }, { "mysql3.infra-mysql57", 3306 } });

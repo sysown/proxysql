@@ -30,21 +30,20 @@ std::string queries[4] = {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(8);
+	plan(2 + 8);
 
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql)
-		return exit_status();
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
-	    fprintf(stderr, "Failed to connect to database: Error: %s\n",
-	              mysql_error(mysql));
+		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
 	}
-
 
 	if (create_table_test_sbtest1(500,mysql)) {
 		fprintf(stderr, "File %s, line %d, Error: create_table_test_sbtest1() failed\n", __FILE__, __LINE__);

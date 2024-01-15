@@ -106,14 +106,9 @@ void check_matching_logline(fstream& f_log, string regex) {
 }
 
 int main(int, char**) {
-	plan(12);
+	plan(2 + 12);
 
 	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	// Open the error log and fetch the final position
 	const string f_path { get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };
@@ -126,10 +121,16 @@ int main(int, char**) {
 	}
 
 	MYSQL* admin = mysql_init(NULL);
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(admin->net.compress == 0, "Compression: (%d)", admin->net.compress);
 	}
 
 	// Cleanup

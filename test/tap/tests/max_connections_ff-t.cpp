@@ -47,12 +47,20 @@ int create_n_trxs(const CommandLine& cl, size_t n, vector<MYSQL*>& out_conns, in
 	vector<MYSQL*> res_conns {};
 
 	for (size_t i = 0; i < n; i++) {
+
 		MYSQL* proxy_mysql = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_mysql, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxy_mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, client_flags)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_mysql));
 			return EXIT_FAILURE;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxy_mysql->net.compress == 0, "Compression: (%d)", proxy_mysql->net.compress);
 		}
-	
+
 		mysql_query(proxy_mysql, "BEGIN");
 
 		res_conns.push_back(proxy_mysql);
@@ -219,10 +227,17 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 	// Create a new ff connection and check that a query expires after 'connection'
 	{
 		MYSQL* proxy_ff = mysql_init(NULL);
+		diag("Connecting: username='%s' cl.use_ssl=%d", username.c_str(), cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_ff, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxy_ff, cl.host, username.c_str(), username.c_str(), NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_ff));
 			res = EXIT_FAILURE;
 			goto cleanup;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_ff);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxy_ff->net.compress == 0, "Compression: (%d)", proxy_ff->net.compress);
 		}
 
 		std::chrono::nanoseconds duration;
@@ -368,10 +383,17 @@ int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int ma
 		diag("Creating new 'fast_forward' connection using user '%s'", username.c_str());
 
 		MYSQL* proxy_ff = mysql_init(NULL);
+		diag("Connecting: username='%s' cl.use_ssl=%d", username.c_str(), cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxy_ff, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxy_ff, cl.host, username.c_str(), username.c_str(), NULL, cl.port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_ff));
 			res = EXIT_FAILURE;
 			goto cleanup;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxy_ff);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxy_ff->net.compress == 0, "Compression: (%d)", proxy_ff->net.compress);
 		}
 
 		// 3.1 Issue a simple query into the new 'fast_forward' connection
@@ -435,23 +457,24 @@ cleanup:
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	// 'test_ff_sess_exceeds_max_conns' performs '1' check, 'test_ff_only_one_free_conn' performs '2' checks
-	plan(1 * 2 + 2 * 2);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
 	plan(
-		1*2 + // 'test_ff_sess_exceeds_max_conns'
-		2*2   // 'test_ff_only_one_free_conn'
+		2 +			// connection admin
+		4+8+4+8 +	// connection user
+		1*2 +		// 'test_ff_sess_exceeds_max_conns'
+		2*2			// 'test_ff_only_one_free_conn'
 	);
 
 	MYSQL* proxy_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxy_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxy_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxy_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxy_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxy_admin->net.compress == 0, "Compression: (%d)", proxy_admin->net.compress);
 	}
 
 	// 1. Test for: '4000' timeout, '1' max_connections

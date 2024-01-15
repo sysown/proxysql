@@ -41,27 +41,24 @@ int k = 0;
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	int plans = 2 * 3; // 4 INSERT queries each of them triggers a SELECT and a data comparison
-	plans *= NUM_EXECUTIONS;
+	int plans = 2; // connect
+	plans += 2 * 3 * NUM_EXECUTIONS; // 4 INSERT queries each of them triggers a SELECT and a data comparison
 	plans += 3; // prepares
 	plans += (2 * NUM_EXECUTIONS / 5); //mysql_stmt_reset()
 
 	plan(plans);
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
-		return exit_status();
-	}
-
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
 	}
 
 	idx = 1000;

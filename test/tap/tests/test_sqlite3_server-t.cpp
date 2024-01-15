@@ -272,11 +272,19 @@ string connect_with_retries(MYSQL* sqlite3, const CommandLine& cl, const pair<st
 	diag("Attempting connection to new interface on (%s,%d)", host, port);
 
 	while (n < retries) {
-		MYSQL* sqlite3 = mysql_init(NULL);
 		conn_err.clear();
 
+		MYSQL* sqlite3 = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(sqlite3, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(sqlite3, host, cl.username, cl.password, NULL, port, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(sqlite3));
 			conn_err = mysql_error(sqlite3);
+		} else {
+			const char * c = mysql_get_ssl_cipher(sqlite3);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(sqlite3->net.compress == 0, "Compression: (%d)", sqlite3->net.compress);
 		}
 		mysql_close(sqlite3);
 
@@ -333,23 +341,25 @@ int main(int argc, char** argv) {
 
 	// plan as many tests as queries
 	plan(
+		2+2+2 + // connect
 		2 /* Fail to connect with wrong username and password */ + successful_queries.size()
 		+ unsuccessful_queries.size() + admin_queries.size() + sqlite_intf_queries.size()
 		+ 2 /* Check port is properly taken by ProxySQL without error after each change */
 		+ 2 /* Connect to new/old interfaces when changed */
 	);
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
-	MYSQL* proxysql_admin = mysql_init(NULL);
-
 	// Connect to ProxySQL Admin and check current SQLite3 configuration
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	{
@@ -360,11 +370,13 @@ int main(int argc, char** argv) {
 			goto cleanup;
 		}
 
-		MYSQL* proxysql_sqlite3 = mysql_init(NULL);
-
 		// Connect with invalid username
 		std::string inv_user_err {};
 		bool failed_to_connect = false;
+		MYSQL* proxysql_sqlite3 = mysql_init(NULL);
+		diag("Connecting: username='%s' cl.use_ssl=%d", "foobar_user", cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_sqlite3, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_sqlite3, host_port.first.c_str(), "foobar_user", cl.password, NULL, host_port.second, NULL, 0)) {
 			inv_user_err = mysql_error(proxysql_sqlite3);
 			failed_to_connect = true;
@@ -375,14 +387,15 @@ int main(int argc, char** argv) {
 			"An invalid user should fail to connect to SQLite3 server, error was: %s",
 			inv_user_err.c_str()
 		);
-
-		// Reinitialize MYSQL handle
 		mysql_close(proxysql_sqlite3);
-		proxysql_sqlite3 = mysql_init(NULL);
 
 		// Connect with invalid password
 		std::string inv_pass_err {};
 		failed_to_connect = false;
+		proxysql_sqlite3 = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_sqlite3, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_sqlite3, host_port.first.c_str(), cl.username, "foobar_pass", NULL, host_port.second, NULL, 0)) {
 			inv_pass_err = mysql_error(proxysql_sqlite3);
 			failed_to_connect = true;
@@ -393,15 +406,20 @@ int main(int argc, char** argv) {
 			"An invalid password should fail to connect to SQLite3 server, error was: %s",
 			inv_pass_err.c_str()
 		);
-
-		// Reinitialize MYSQL handle
 		mysql_close(proxysql_sqlite3);
-		proxysql_sqlite3 = mysql_init(NULL);
 
 		// Correctly connect to SQLite3 server
+		proxysql_sqlite3 = mysql_init(NULL);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+		if (cl.use_ssl)
+			mysql_ssl_set(proxysql_sqlite3, NULL, NULL, NULL, NULL, NULL);
 		if (!mysql_real_connect(proxysql_sqlite3, host_port.first.c_str(), cl.username, cl.password, NULL, host_port.second, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_sqlite3));
 			goto cleanup;
+		} else {
+			const char * c = mysql_get_ssl_cipher(proxysql_sqlite3);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(proxysql_sqlite3->net.compress == 0, "Compression: (%d)", proxysql_sqlite3->net.compress);
 		}
 
 		diag("Started performing successful queries");

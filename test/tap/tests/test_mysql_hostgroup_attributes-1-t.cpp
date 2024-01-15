@@ -54,10 +54,6 @@ int run_one_test(MYSQL *mysqladmin, const char *expected_checksum, const char *q
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
-
-
 	std::unordered_map<std::string,std::string> queries_and_checksums = {
 		{
 			"0x666CFBEEDB76EE9C",
@@ -88,17 +84,20 @@ int main(int argc, char** argv) {
 		}
 	};
 
-	plan(queries_and_checksums.size()*4);
+	plan(2 + queries_and_checksums.size()*4);
 	diag("Testing the loading of mysql_hostgroup_attributes");
 
 	MYSQL* mysqladmin = mysql_init(NULL);
-	if (!mysqladmin)
-		return exit_status();
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysqladmin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysqladmin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
-	    fprintf(stderr, "File %s, line %d, Error: %s\n",
-	              __FILE__, __LINE__, mysql_error(mysqladmin));
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysqladmin));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysqladmin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(mysqladmin->net.compress == 0, "Compression: (%d)", mysqladmin->net.compress);
 	}
 
 	for (std::unordered_map<std::string,std::string>::iterator it = queries_and_checksums.begin(); it != queries_and_checksums.end(); it++) {

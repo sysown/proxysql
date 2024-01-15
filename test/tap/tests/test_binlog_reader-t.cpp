@@ -126,11 +126,18 @@ map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mys
 
 int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 	// Check connections only performing select doesn't contribute to GITD count
-	MYSQL* select_conn = mysql_init(NULL);
 
+	MYSQL* select_conn = mysql_init(NULL);
+	diag("Connecting: username='%s' cl.use_ssl=%d", "sbtest8", cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(select_conn, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(select_conn, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(select_conn));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(select_conn);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(select_conn->net.compress == 0, "Compression: (%d)", select_conn->net.compress);
 	}
 
 	for (uint32_t i = 0; i < NUM; i++) {
@@ -230,11 +237,6 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
 	bool stop_on_failure = false;
 
 	if (argc == 2) {
@@ -244,19 +246,33 @@ int main(int argc, char** argv) {
 	if (stop_on_failure) {
 		plan(0);
 	} else {
-		plan(3);
+		plan(2+2+2 + 3);
 	}
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
-	MYSQL* proxysql_admin = mysql_init(NULL);
-
+	diag("Connecting: username='%s' cl.use_ssl=%d", "sbtest8", cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_mysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql_mysql, cl.host, "sbtest8", "sbtest8", NULL, cl.port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_mysql));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_mysql->net.compress == 0, "Compression: (%d)", proxysql_mysql->net.compress);
 	}
+
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	vector<pair<uint32_t, mysql_res_row>> failed_rows {};

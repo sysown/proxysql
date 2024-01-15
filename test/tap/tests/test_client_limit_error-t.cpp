@@ -116,12 +116,19 @@ int invalid_proxysql_conn(const std::string& addr, const CommandLine& cl, std::s
 }
 
 int valid_proxysql_conn(const std::string& addr, const CommandLine& cl, std::string& err_msg) {
-	MYSQL* proxysql = mysql_init(NULL);
 	int my_err = EXIT_SUCCESS;
 
+	MYSQL* proxysql = mysql_init(NULL);
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql, addr.c_str(), cl.username, cl.password, NULL, 6033, NULL, 0)) {
 		my_err = mysql_errno(proxysql);
 		err_msg = mysql_error(proxysql);
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql->net.compress == 0, "Compression: (%d)", proxysql->net.compress);
 	}
 
 	mysql_close(proxysql);
@@ -842,28 +849,19 @@ int main(int, char**) {
 	int res = 0;
 	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
-	plan(30);
+	plan(5*2 + 30);
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-
-	// Initialize connections
-	if (!proxysql_admin) {
-		fprintf(
-			stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__,
-			mysql_error(proxysql_admin)
-		);
-		return -1;
-	}
-
-	// Connect to ProxySQL Admin
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	// Setup the virtual namespaces to be used by the test

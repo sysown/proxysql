@@ -13,10 +13,7 @@
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(6);
+	plan(2 + 2 + 6);
 	diag("Testing correct collation set with proxysql");
 
 	std::string var_collation_connection = "collation_connection";
@@ -25,23 +22,42 @@ int main(int argc, char** argv) {
 	/* setup global variables
 	 * HANDLE_UNKNOWN_CHARSET__REPLACE_WITH_DEFAULT_VERBOSE
 	 */
-	MYSQL* mysqlAdmin = mysql_init(NULL);
-	if (!mysqlAdmin) return exit_status();
-	if (!mysql_real_connect(mysqlAdmin, cl.host, "admin", "admin", NULL, 6032, NULL, 0)) return exit_status();
-	set_admin_global_variable(mysqlAdmin, "mysql-handle_unknown_charset", "1");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_charset", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_character_set_client", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_character_set_results", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_character_set_connection", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_character_set_database", "utf8mb4");
-	set_admin_global_variable(mysqlAdmin, "mysql-default_collation_connection", "utf8mb4_general_ci");
-	if (mysql_query(mysqlAdmin, "load mysql variables to runtime")) return exit_status();
-	if (mysql_query(mysqlAdmin, "save mysql variables to disk")) return exit_status();
+	MYSQL* proxysql_admin = mysql_init(NULL);
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
+	if (!mysql_real_connect(proxysql_admin, cl.host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
+		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
+	}
+
+	set_admin_global_variable(proxysql_admin, "mysql-handle_unknown_charset", "1");
+	set_admin_global_variable(proxysql_admin, "mysql-default_charset", "utf8mb4");
+	set_admin_global_variable(proxysql_admin, "mysql-default_character_set_client", "utf8mb4");
+	set_admin_global_variable(proxysql_admin, "mysql-default_character_set_results", "utf8mb4");
+	set_admin_global_variable(proxysql_admin, "mysql-default_character_set_connection", "utf8mb4");
+	set_admin_global_variable(proxysql_admin, "mysql-default_character_set_database", "utf8mb4");
+	set_admin_global_variable(proxysql_admin, "mysql-default_collation_connection", "utf8mb4_general_ci");
+	if (mysql_query(proxysql_admin, "load mysql variables to runtime")) return exit_status();
+	if (mysql_query(proxysql_admin, "save mysql variables to disk")) return exit_status();
 
 	/* Check that set names can set collation > 255 */
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql) return exit_status();
-	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) return exit_status();
+	diag("Connecting: cl.username='%s' cl.use_ssl=%d", cl.username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
+		return -1;
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
+	}
 
 	if (mysql_query(mysql, "set names 'utf8'")) return exit_status();
 	show_variable(mysql, var_collation_connection, var_value);
@@ -99,8 +115,8 @@ int main(int argc, char** argv) {
 
 
 	/* check initial options */
-	//set_admin_global_variable(mysqlAdmin, "mysql-default_collation_connection", "utf8mb4_general_ci");
-	//if (mysql_query(mysqlAdmin, "load mysql variables to runtime")) return exit_status();
+	//set_admin_global_variable(proxysql_admin, "mysql-default_collation_connection", "utf8mb4_general_ci");
+	//if (mysql_query(proxysql_admin, "load mysql variables to runtime")) return exit_status();
 	MYSQL * mysql_c = mysql_init(NULL);
 	if (!mysql_c) return exit_status();
 	if (mysql_options(mysql_c, MYSQL_SET_CHARSET_NAME, "utf8mb4")) return exit_status();

@@ -34,33 +34,33 @@
 
 CommandLine cl;
 
-int queries_per_connections=10;
-//unsigned int num_threads=1;
-//unsigned int num_threads=5;
-unsigned int num_threads=20;
-int count=20;
+int queries_per_connections = 10;
+//unsigned int num_threads = 1;
+//unsigned int num_threads = 5;
+unsigned int num_threads = 20;
+int count = 20;
 int total_conn_having_client_deprecate_eof_support = (count * 0.2); // 20% of connections will have CLIENT_DEPRECATE_EOF flag enabled
-char *username=NULL;
-char *password=NULL;
-char *host=(char *)"localhost";
-int port=3306;
-int multiport=1;
-char *schema=(char *)"information_schema";
+//char *username = NULL;
+//char *password = NULL;
+//char *host = (char *)"localhost";
+//int port = 3306;
+int multiport = 1;
+char *schema = (char *)"information_schema";
 int silent = 0;
 int sysbench = 0;
-int local=0;
-int queries=3000;
-int uniquequeries=0;
-int histograms=-1;
+int local = 0;
+int queries = 3000;
+int uniquequeries = 0;
+int histograms = -1;
 
 bool is_mariadb = false;
-unsigned int g_connect_OK=0;
-unsigned int g_connect_ERR=0;
-unsigned int g_select_OK=0;
-unsigned int g_select_ERR=0;
+unsigned int g_connect_OK = 0;
+unsigned int g_connect_ERR = 0;
+unsigned int g_select_OK = 0;
+unsigned int g_select_ERR = 0;
 
-unsigned int g_passed=0;
-unsigned int g_failed=0;
+unsigned int g_passed = 0;
+unsigned int g_failed = 0;
 
 unsigned int status_connections = 0;
 unsigned int connect_phase_completed = 0;
@@ -131,12 +131,21 @@ void * my_conn_thread(void *arg) {
 	std::vector<std::string> cs = {"latin1", "utf8", "utf8mb4", "latin2", "latin7"};
 
 	for (i=0; i<count; i++) {
-		MYSQL *mysql=mysql_init(NULL);
+
 		std::string nextcs = cs[i%cs.size()];
 
+		MYSQL *mysql = mysql_init(NULL);
+		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d", cl.root_username, cl.use_ssl);
 		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, nextcs.c_str());
-		if (mysql==NULL) {
+		if (cl.use_ssl)
+			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
+		if (!mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, cl.port + rand()%multiport, NULL, 0)) {
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			exit(EXIT_FAILURE);
+		} else {
+			const char * c = mysql_get_ssl_cipher(mysql);
+			ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+			ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
 		}
 
 		if (i < total_conn_having_client_deprecate_eof_support) {
@@ -160,7 +169,7 @@ void * my_conn_thread(void *arg) {
 
 	while(__sync_fetch_and_add(&connect_phase_completed,0) != num_threads) {
 	}
-	MYSQL *mysql=NULL;
+	MYSQL *mysql = NULL;
 	int mysql_idx = 0;
 	json vars;
 	std::string paddress = "";
@@ -175,7 +184,7 @@ void * my_conn_thread(void *arg) {
 			mysql=mysqlconns[mysql_idx];
 			vars = varsperconn[mysql_idx];
 		}
-		if (strcmp(username,(char *)"root")) {
+		if (strcmp(cl.username,(char *)"root")) {
 			if (strstr(testCases[r2].command.c_str(),"database")) {
 				std::lock_guard<std::mutex> lock(mtx_);
 				skip(1, "connections mysql[%p] proxysql[%s], command [%s]", mysql, paddress.c_str(), testCases[r2].command.c_str());
@@ -467,11 +476,6 @@ void * my_conn_thread(void *arg) {
 
 int main(int argc, char *argv[]) {
 
-	if(cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return exit_status();
-	}
-
 	std::string fileName2(std::string(cl.workdir) + "/set_testing-240.csv");
 
 /*
@@ -479,11 +483,11 @@ int main(int argc, char *argv[]) {
 	queries_per_connections = 10;
 	count = 10;
 */
-	username = cl.username;
-	password = cl.password;
-	host = cl.host;
+//	username = cl.username;
+//	password = cl.password;
+//	host = cl.host;
 //	host = "127.0.0.1";
-	port = cl.port;
+//	port = cl.port;
 //	port = 6033;
 
 	diag("Loading test cases from file. This will take some time...");
@@ -493,10 +497,16 @@ int main(int argc, char *argv[]) {
 	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
-
+	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d", cl.admin_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(proxysql_admin, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(proxysql_admin, cl.admin_host, cl.admin_username, cl.admin_password, NULL, cl.admin_port, NULL, 0)) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
+	} else {
+		const char * c = mysql_get_ssl_cipher(proxysql_admin);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(proxysql_admin->net.compress == 0, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
 	diag("Disabling admin-hash_passwords to be able to run test on MySQL 8");

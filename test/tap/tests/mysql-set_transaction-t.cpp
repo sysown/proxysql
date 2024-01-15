@@ -119,19 +119,19 @@ int check_transaction_access_mode(MYSQL* mysql) {
 int main(int argc, char** argv) {
 	CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
-
-	plan(48);
+	plan(2 + 48);
 
 	MYSQL* mysql = mysql_init(NULL);
-	if (!mysql)
-		return exit_status();
-
-//	if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
+	diag("Connecting: cl.root_username='%s' cl.use_ssl=%d", cl.root_username, cl.use_ssl);
+	if (cl.use_ssl)
+		mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 	if (!mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, NULL, cl.root_port, NULL, 0)) {
 		fprintf(stderr, "Failed to connect to database: Error: %s\n", mysql_error(mysql));
 		return exit_status();
+	} else {
+		const char * c = mysql_get_ssl_cipher(mysql);
+		ok(cl.use_ssl == 0 ? c == NULL : c != NULL, "Cipher: %s", c == NULL ? "NULL" : c);
+		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
 	}
 
 	if (create_table_test_sbtest1(0,mysql)) {
