@@ -26,6 +26,24 @@ const char* QUERY_CONN_CLOSED {
 	"SELECT ConnOk - ConnFree FROM stats.stats_mysql_connection_pool WHERE hostgroup=%d"
 };
 
+
+void * work(void *arg) {
+	sleep(30);
+	diag("Timeout! - exiting...");
+	exit(EXIT_FAILURE);
+	return NULL;
+}
+
+int run_funct_timeout(void *(*start_routine)(void *), int timeout) {
+	// we run the test on a separate thread because we have a built-in timeout
+	pthread_t thread_id;
+	if (pthread_create(&thread_id, NULL, start_routine, NULL)) {
+		fprintf(stderr, "Error calling pthread_create()");
+		return EXIT_FAILURE;
+	}
+	return 0;
+}
+
 int conn_pool_hg_stat_conn_closed(MYSQL* proxy_admin, int hg_id, vector<string>& out_stats) {
 	MYSQL_RES* my_stats_res = NULL;
 
@@ -77,6 +95,7 @@ int main(int argc, char** argv) {
 	}
 
 	plan(2 + 1);
+	run_funct_timeout(work, 30);
 
 	const int destination_hostgroup = 2;
 	string query;

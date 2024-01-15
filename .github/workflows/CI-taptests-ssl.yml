@@ -20,12 +20,12 @@ concurrency:
 
 jobs:
   cache:
-    uses: mirostauder/proxysql/.github/workflows/ci-builds.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-builds.yml@GH-Actions
     secrets: inherit
 
   run:
     if: ${{ always() }}
     needs: [ "cache" ]
-    uses: mirostauder/proxysql/.github/workflows/ci-taptests-ssl.yml@GH-Actions
+    uses: sysown/proxysql/.github/workflows/ci-taptests-ssl.yml@GH-Actions
     secrets: inherit
     

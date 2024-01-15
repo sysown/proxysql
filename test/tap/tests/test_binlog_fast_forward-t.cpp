@@ -110,8 +110,13 @@ int setup_replication(int server_id, bool frontend_ssl, bool backend_ssl, std::v
 	std::vector<std::string> admin_queries = {};
 	admin_queries.push_back(std::string("SET mysql-have_ssl='") + std::string(frontend_ssl ? "true" : "false") + "'");
 	admin_queries.push_back("LOAD MYSQL VARIABLES TO RUNTIME");
+	admin_queries.push_back(std::string("UPDATE mysql_users SET use_ssl=") + std::string(frontend_ssl ? "1" : "0") + " WHERE username = 'root'");
+	admin_queries.push_back("LOAD MYSQL USERS TO RUNTIME");
 	admin_queries.push_back(std::string("UPDATE mysql_servers SET use_ssl=") + std::string(backend_ssl ? "1" : "0"));
 	admin_queries.push_back("LOAD MYSQL SERVERS TO RUNTIME");
+
+	if (run_queries_sets(admin_queries, mysqladmin, "Running on Admin"))
+		return exit_status();
 
 	MYSQL * mysql = mysql_init(NULL);
 	diag("Connecting: cl.root_username='%s' frontend_ssl=%d", cl.root_username,frontend_ssl);
@@ -126,8 +131,6 @@ int setup_replication(int server_id, bool frontend_ssl, bool backend_ssl, std::v
 		ok(mysql->net.compress == 0, "Compression: (%d)", mysql->net.compress);
 	}
 
-	if (run_queries_sets(admin_queries, mysqladmin, "Running on Admin"))
-		return exit_status();
 	if (run_queries_sets(mysql_queries, mysql, "Running on MySQL"))
 		return exit_status();
 	int rc = pull_replication(mysql, server_id);
