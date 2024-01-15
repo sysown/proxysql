@@ -16,6 +16,9 @@
 
 
 #include "tap.h"
+#include "command_line.h"
+
+CommandLine cl;
 
 int main(int argc, char** argv) {
 	plan(1);

@@ -11,6 +11,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 /*
 This test includes a lot of repetitive checks that could have been organized into functions.
 But they have been left in this way to easily identify the failed check
@@ -18,7 +20,6 @@ But they have been left in this way to easily identify the failed check
 
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2 + 48);
 	diag("Testing autocommit and transaction in SQLite3 Server");

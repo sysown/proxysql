@@ -63,6 +63,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 /* Helper function to do the waiting for events on the socket. */
 static int wait_for_mysql(MYSQL *mysql, int status) {
@@ -93,12 +94,6 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	bool create_leak = false;
 

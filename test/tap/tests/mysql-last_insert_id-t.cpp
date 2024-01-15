@@ -11,12 +11,7 @@
 #include "command_line.h"
 #include "utils.h"
 
-inline unsigned long long monotonic_time() {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
-}
-
+CommandLine cl;
 
 std::string queries[4] = {
 	"SELECT LAST_INSERT_ID() LIMIT 1",
@@ -25,10 +20,13 @@ std::string queries[4] = {
 	"SELECT @@IDENTITY"
 };
 
-
+inline unsigned long long monotonic_time() {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
+}
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2 + 8);
 

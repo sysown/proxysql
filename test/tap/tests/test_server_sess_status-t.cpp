@@ -20,6 +20,8 @@
 using std::pair;
 using std::string;
 
+CommandLine cl;
+
 int get_user_def_hg(MYSQL* admin, const string& user) {
 	const string sel_q { "SELECT default_hostgroup FROM mysql_users WHERE username='" + user + "'" };
 	if (mysql_query(admin, sel_q.c_str())) {
@@ -78,7 +80,6 @@ pair<string,int> get_def_srv_host(MYSQL* admin, const string user) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// TODO: Harcoded for now, this is an initial version of the test.
 	plan(2+2+2 + 6);

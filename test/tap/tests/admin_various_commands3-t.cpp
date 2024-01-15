@@ -15,6 +15,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 /* this test:
 	* enables mysql-have_ssl
 	* execute various command
@@ -42,10 +44,8 @@ int run_q(MYSQL *mysql, const char *q) {
 	return 0;
 }
 int main() {
-	CommandLine cl;
 
 	srandom(123);
-
 
 	for (auto it = vals.begin() ; it != vals.end() ; it++) {
 		std::string q = "PROXYSQLTEST 1 " + std::to_string(*it);

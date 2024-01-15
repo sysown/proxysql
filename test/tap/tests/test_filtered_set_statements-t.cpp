@@ -22,11 +22,14 @@
 #include "utils.h"
 #include <iostream>
 
+CommandLine cl;
+
 /**
  * @brief Queries to be tested that are known to be filtered by ProxySQL.
  *
  * TODO: Fill with all the statements that should be properly handled by ProxySQL.
  */
+
 std::vector<std::pair<std::string, std::string>> filtered_set_queries {
 	{ "sql_mode", "'ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO'" },
 	{ "wait_timeout", "28801" },
@@ -70,7 +73,6 @@ std::vector<std::string> get_valid_set_query_set(const std::string& set_query, c
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// plan one test per statement attempt + one check 'SUM(sum_time) == 0' for each 'filtered_set_queries'
 	plan(2+2 + filtered_set_queries.size() + filtered_set_queries.size()*get_valid_set_query_set("", "").size());

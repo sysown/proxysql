@@ -9,6 +9,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 /*
 mysql_stmt_send_long_data_large-t.cpp is almost identical to mysql_stmt_send_long_data-t.cpp
 but it uses very large buffers.
@@ -39,7 +41,6 @@ int idx2 = 0;
 int k = 0;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	int plans = 2; // connect
 	plans += 2 * 3 * NUM_EXECUTIONS; // 4 INSERT queries each of them triggers a SELECT and a data comparison

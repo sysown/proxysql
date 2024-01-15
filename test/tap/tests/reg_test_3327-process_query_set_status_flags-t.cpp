@@ -19,6 +19,8 @@
 using std::string;
 using namespace nlohmann;
 
+CommandLine cl;
+
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
@@ -29,12 +31,6 @@ void parse_result_json_column(MYSQL_RES *result, json& j) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 

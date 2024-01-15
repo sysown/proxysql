@@ -17,6 +17,8 @@
 using std::vector;
 using std::string;
 
+CommandLine cl;
+
 int induce_set_parsing_failure(MYSQL* proxy) {
 	int rc = mysql_query(proxy, "SET NAMES");
 	if (rc != EXIT_FAILURE) {
@@ -48,7 +50,6 @@ int test_table_reset(MYSQL* proxy_admin) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(
 		2+2 + // connection

@@ -14,6 +14,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 std::string get_admin_mysql_ifaces(MYSQL *admin) {
 	std::string ret = "";
 	const char * query = (const char *)"SELECT variable_value FROM runtime_global_variables WHERE variable_name='admin-mysql_ifaces';";
@@ -41,7 +43,6 @@ std::string get_admin_mysql_ifaces(MYSQL *admin) {
 
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2 + 13);
 

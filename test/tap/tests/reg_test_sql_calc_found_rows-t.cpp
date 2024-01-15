@@ -27,6 +27,8 @@ using std::pair;
 
 using nlohmann::json;
 
+CommandLine cl;
+
 int get_stmt_result(MYSQL_STMT* stmt, int64_t& out_data) {
 	MYSQL_BIND bind[1];
 	int64_t data_c;
@@ -56,12 +58,6 @@ int get_stmt_result(MYSQL_STMT* stmt, int64_t& out_data) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	plan(6);
 

@@ -22,6 +22,8 @@ using namespace nlohmann;
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 int check_arguments(int argc, char** argv) {
 	int err_code = 0;
 
@@ -74,14 +76,8 @@ void MySQL_result_to_JSON(MYSQL_RES* resultset, json& j_res) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
+
 	int res_code { 0 };
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
-
 	int check_res = check_arguments(argc, argv);
 	if (check_res) { return -1; }
 

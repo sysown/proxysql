@@ -9,15 +9,11 @@
 #include "tap.h"
 #include "command_line.h"
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(1);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	const std::string user = "root";
 	const std::string test_deps_path = getenv("TEST_DEPS");

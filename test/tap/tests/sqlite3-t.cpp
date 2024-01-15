@@ -1,7 +1,6 @@
 #define PROXYSQL_EXTERN
 #define MAIN_PROXY_SQLITE3
 #include <stdlib.h>
-#include "tap.h"
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -12,6 +11,11 @@
 #include "proxysql_structs.h"
 #include "sqlite3db.h"
 #include "MySQL_LDAP_Authentication.hpp"
+
+#include "tap.h"
+#include "command_line.h"
+
+CommandLine cl;
 
 MySQL_LDAP_Authentication* GloMyLdapAuth = nullptr;
 

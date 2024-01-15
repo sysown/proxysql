@@ -12,6 +12,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 /*
 This TAP test:
 - configures SSL on various hostgroups
@@ -26,8 +28,6 @@ inline unsigned long long monotonic_time() {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
 
 	char * p_infra_datadir = std::getenv("REGULAR_INFRA_DATADIR");
 	if (p_infra_datadir == NULL) {

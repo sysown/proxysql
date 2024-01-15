@@ -35,6 +35,8 @@
 using std::vector;
 using std::string;
 
+CommandLine cl;
+
 const std::string fdev_random { "/dev/random" };
 const size_t NUM_TESTS = 100;
 const size_t MAX_COLUMNS = 5; // starting at 1
@@ -49,6 +51,7 @@ const size_t MAX_COLUMNS = 5; // starting at 1
  *
  * @return The randomly generated binary string.
  */
+
 int get_random_bin_str(std::size_t str_size, string& str_bin_data, bool rm_final_5c = true) {
 	std::ifstream ifs_random(fdev_random, std::ios::binary);
 	if (!ifs_random.is_open()) {
@@ -386,7 +389,6 @@ void stmt_protocol_check(MYSQL* proxy, MYSQL* admin, const size_t idx, const vec
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2 + (MAX_COLUMNS-1)*(2*NUM_TESTS+1));
 

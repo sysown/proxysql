@@ -23,10 +23,11 @@
 #include "proxysql_utils.h"
 #include "re2/re2.h"
 
+CommandLine cl;
+
 int LOOPS = 1000;
 
 int main(int, char**) {
-	CommandLine cl;
 
 	plan(2 + 3*LOOPS);
 

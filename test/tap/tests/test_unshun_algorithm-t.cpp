@@ -77,6 +77,8 @@ const uint32_t SERVERS_COUNT = 10;
 
 using std::string;
 
+CommandLine cl;
+
 int shunn_server(MYSQL* proxysql_admin, uint32_t i, uint32_t j) {
 	std::string t_simulator_error_query { "PROXYSQL_SIMULATOR mysql_error %d 127.0.0.1:330%d 1234" };
 	std::string simulator_error_q_i {};
@@ -395,7 +397,6 @@ int test_unshun_algorithm_behavior(MYSQL* proxysql_mysql, MYSQL* proxysql_admin)
 	return EXIT_SUCCESS;
 }
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(
 		2+2 + // connections

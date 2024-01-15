@@ -22,6 +22,8 @@
 using std::vector;
 using std::string;
 
+CommandLine cl;
+
 const char* QUERY_CONN_CLOSED {
 	"SELECT ConnOk - ConnFree FROM stats.stats_mysql_connection_pool WHERE hostgroup=%d"
 };
@@ -79,7 +81,6 @@ cleanup:
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	MYSQL* proxy_admin = mysql_init(NULL);
 	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);

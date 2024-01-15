@@ -12,6 +12,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 char * username = (char *)"user1459";
 char * password = (char *)"pass1459";
@@ -54,7 +55,6 @@ int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::st
 
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2 + 4);
 

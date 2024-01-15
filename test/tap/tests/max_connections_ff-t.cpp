@@ -41,7 +41,9 @@ using hrc = std::chrono::high_resolution_clock;
 
 using nlohmann::json;
 
-int create_n_trxs(const CommandLine& cl, size_t n, vector<MYSQL*>& out_conns, int client_flags = 0) {
+CommandLine cl;
+
+int create_n_trxs(size_t n, vector<MYSQL*>& out_conns, int client_flags = 0) {
 	diag("Creating '%ld' transactions to test 'max_connections'", n);
 
 	vector<MYSQL*> res_conns {};
@@ -150,7 +152,7 @@ cleanup:
 	return err;
 }
 
-int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, long srv_conn_to, int max_conns) {
+int test_ff_sess_exceeds_max_conns(MYSQL* proxy_admin, long srv_conn_to, int max_conns) {
 	// We assume 'regular infra' and use hardcoded hg '0' and username 'sbtest1' for this test
 	const int tg_hg = 0;
 	const string username = "sbtest1";
@@ -219,7 +221,7 @@ int test_ff_sess_exceeds_max_conns(const CommandLine& cl, MYSQL* proxy_admin, lo
 	}
 
 	// See 'IMPORTANT-NOTE' on file @details.
-	my_err = create_n_trxs(cl, max_conns, trx_conns, CLIENT_IGNORE_SPACE);
+	my_err = create_n_trxs(max_conns, trx_conns, CLIENT_IGNORE_SPACE);
 	if (my_err) {
 		diag("Failed to create the required '%d' transactions", max_conns);
 		res = EXIT_FAILURE;
@@ -291,7 +293,7 @@ cleanup:
 	return EXIT_SUCCESS;
 }
 
-int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int max_conns) {
+int test_ff_only_one_free_conn(MYSQL* proxy_admin, int max_conns) {
 	if (proxy_admin == NULL || max_conns == 0) {
 		diag("'test_ff_only_one_free_conn' received invalid params.");
 		return EINVAL;
@@ -340,7 +342,7 @@ int test_ff_only_one_free_conn(const CommandLine& cl, MYSQL* proxy_admin, int ma
 	}
 	mysql_free_result(mysql_store_result(proxy_admin));
 
-	my_err = create_n_trxs(cl, max_conns, trx_conns);
+	my_err = create_n_trxs(max_conns, trx_conns);
 	if (my_err) {
 		diag("Failed to create the required '%d' transactions", max_conns);
 		res = EXIT_FAILURE;
@@ -461,7 +463,6 @@ cleanup:
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(
 		2 +			// connection admin
@@ -486,13 +487,13 @@ int main(int argc, char** argv) {
 	}
 
 	// 1. Test for: '4000' timeout, '1' max_connections
-	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 8000, 1);
+	test_ff_sess_exceeds_max_conns(proxy_admin, 8000, 1);
 	// 2. Test for: '2000' timeout, '3' max_connections
-	test_ff_sess_exceeds_max_conns(cl, proxy_admin, 2000, 3);
+	test_ff_sess_exceeds_max_conns(proxy_admin, 2000, 3);
 	// 3. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 1
-	test_ff_only_one_free_conn(cl, proxy_admin, 1);
+	test_ff_only_one_free_conn(proxy_admin, 1);
 	// 3. Test for only one 'FreeConn' that should be destroyed due to incoming 'fast_forward' conn - MaxConn: 3
-	test_ff_only_one_free_conn(cl, proxy_admin, 3);
+	test_ff_only_one_free_conn(proxy_admin, 3);
 
 	mysql_close(proxy_admin);
 

@@ -29,15 +29,12 @@
 using nlohmann::json;
 using std::string;
 
+CommandLine cl;
+
 const int NUM_CONNECTIONS = 2047;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);
 	diag("Old process limits: { %ld, %ld }", limits.rlim_cur, limits.rlim_max);

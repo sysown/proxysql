@@ -31,6 +31,8 @@ using std::vector;
 // Used for 'extract_module_host_port'
 #include "modules_server_test.h"
 
+CommandLine cl;
+
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
@@ -160,9 +162,7 @@ int create_mysql_servers_range(
 	return EXIT_SUCCESS;
 };
 
-int create_fast_routing_rules_range(
-	const CommandLine& cl, MYSQL* admin, const pair<string,int>& host_port, uint32_t rng_init, uint32_t rng_end
-) {
+int create_fast_routing_rules_range(MYSQL* admin, const pair<string,int>& host_port, uint32_t rng_init, uint32_t rng_end) {
 	const string init { std::to_string(rng_init) };
 	const string end { std::to_string(rng_end) };
 
@@ -242,7 +242,7 @@ int test_fast_routing_algorithm(
 	diag("Initial 'mysql_query_rules_memory' of '%d'", init_rules_mem_stats);
 
 	// Check that fast_routing rules are being properly triggered
-	c_err = create_fast_routing_rules_range(cl, admin, host_port, rng_init, rng_end);
+	c_err = create_fast_routing_rules_range(admin, host_port, rng_init, rng_end);
 	if (c_err) { return EXIT_FAILURE; }
 	MYSQL_QUERY_T(admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 

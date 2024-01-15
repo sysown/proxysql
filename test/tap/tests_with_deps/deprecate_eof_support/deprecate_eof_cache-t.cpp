@@ -23,6 +23,8 @@ using std::vector;
 using std::string;
 using std::pair;
 
+CommandLine cl;
+
 /**
  * @brief Creates the tables required for the test.
  * @param mysql_server The initialized connection to the server.
@@ -54,7 +56,6 @@ std::vector<std::string> queries {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	uint32_t c_operations = 50;
 	to_opts_t opts { 10000*1000, 100*1000, 500*1000, 2000*1000 };
@@ -63,11 +64,6 @@ int main(int argc, char** argv) {
 	p += c_operations; // inserts
 	p += c_operations*12; // 12 tests each time
 	plan(p);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	MYSQL* proxy_mysql = mysql_init(NULL);
 	MYSQL* proxy_admin = mysql_init(NULL);

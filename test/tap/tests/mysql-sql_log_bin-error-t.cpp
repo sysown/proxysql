@@ -11,8 +11,9 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2 + 1);
 

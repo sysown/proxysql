@@ -9,6 +9,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 /*
 This test verifies a variety of things:
@@ -28,7 +29,6 @@ int run_q(MYSQL *mysql, const char *q) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	int np = 0;
 	np += 2 * NUM_CONNS; 	// connections

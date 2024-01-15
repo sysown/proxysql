@@ -33,11 +33,14 @@
 using std::string;
 using namespace nlohmann;
 
+CommandLine cl;
+
 using user_attributes = std::tuple<std::string, std::string, std::string, std::string>;
 
 /**
  * @brief User names and attributes to be check and verified.
  */
+
 const std::vector<user_attributes> c_user_attributes {
 	std::make_tuple(
 		"sbtest1",
@@ -191,7 +194,6 @@ int extract_exp_iso_level(
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2+2*c_user_attributes.size() + c_user_attributes.size()*4);
 

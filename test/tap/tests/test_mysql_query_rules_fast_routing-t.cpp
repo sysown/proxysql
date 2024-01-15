@@ -11,11 +11,11 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 std::vector<int> params = { 100, 1234, 2356, 129645, 345123, 412317 };
 
 int main(int argc, char** argv) {
-
-	CommandLine cl;
 
 	// Initialize TAP with planned number of checks and print the name of the test
 	plan(2 + params.size());

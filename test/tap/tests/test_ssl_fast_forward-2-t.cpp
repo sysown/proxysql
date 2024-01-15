@@ -12,6 +12,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 /*
 this test uses a lot of code from test_ssl_fast_forward-t.cpp
@@ -76,10 +77,6 @@ int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::st
 #define UL 96000 // upper limit
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if(cl.getEnv())
-		return exit_status();
 
 	unsigned int p = 0;
 	p += 5*ITER1;

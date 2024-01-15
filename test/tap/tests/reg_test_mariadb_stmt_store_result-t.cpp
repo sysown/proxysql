@@ -19,6 +19,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 #ifndef LIBMYSQL_HELPER
 /* Helper function to do the waiting for events on the socket. */
 static int wait_for_mysql(MYSQL *mysql, int status) {
@@ -124,18 +126,12 @@ using std::string;
 const int TWO_EXECUTIONS = 2;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(1 + TWO_EXECUTIONS*2); // 1 prepare + executions * 2 (execute + store)
 	bool use_async = false;
 
 	if (argc == 2 && string { argv[1] } == "async") {
 		use_async = true;
-	}
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
 	}
 
 	MYSQL* mysql = mysql_init(NULL);

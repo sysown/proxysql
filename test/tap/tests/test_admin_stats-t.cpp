@@ -38,6 +38,8 @@ using std::string;
 using std::to_string;
 using std::vector;
 
+CommandLine cl;
+
 int wait_for_history_update(MYSQL* proxysql_admin, uint32_t timeout) {
 	uint64_t previous_timestamp = 0;
 	uint32_t retries = 0;
@@ -75,7 +77,6 @@ int wait_for_history_update(MYSQL* proxysql_admin, uint32_t timeout) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	/** @brief Minimum number of distinct variable_name strings in the history_mysql_status_variables_lookup table */
 	const int min_distinct_variable_names = 50;

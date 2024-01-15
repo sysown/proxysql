@@ -11,6 +11,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 struct transaction_param {
 	struct next_transaction {
 		std::string set_transaction_val;
@@ -117,7 +119,6 @@ int check_transaction_access_mode(MYSQL* mysql) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2 + 48);
 

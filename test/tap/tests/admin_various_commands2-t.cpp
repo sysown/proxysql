@@ -15,6 +15,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 /* this test:
 	* enables mysql-have_ssl
 	* execute various command
@@ -108,7 +110,6 @@ int run_q(MYSQL *mysql, const char *q) {
 	return 0;
 }
 int main() {
-	CommandLine cl;
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);

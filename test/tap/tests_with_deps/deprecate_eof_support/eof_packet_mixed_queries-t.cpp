@@ -31,6 +31,8 @@ using std::pair;
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 std::vector<std::string> queries {
 	"SELECT * FROM test.ok_packet_mariadb_test WHERE id=%d",
 	"INSERT INTO test.ok_packet_mariadb_test (c, pad) VALUES ('%s', '%s')",
@@ -501,17 +503,11 @@ int test_target_queries(MYSQL* proxy) {
 const uint32_t HG_ID = 0;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(
 		3 + // TEXT protocol checks
 		2 // Binary protocol checks
 	);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* admin = mysql_init(NULL);
 	if (!admin) {

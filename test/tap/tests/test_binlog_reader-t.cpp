@@ -44,6 +44,8 @@ using std::map;
 
 using nlohmann::json;
 
+CommandLine cl;
+
 int create_testing_tables(MYSQL* mysql_server) {
 	// Create the testing database
 	MYSQL_QUERY(mysql_server, "CREATE DATABASE IF NOT EXISTS test");
@@ -124,7 +126,7 @@ map<uint32_t, pair<uint32_t,uint32_t>> extract_hosgtroups_stats(const vector<mys
 	return { { 1200, { hg_1200_queries, hg_1200_sync_queries } }, { 1201, { hg_1201_queries, hg_1201_sync_queries } } };
 }
 
-int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
+int perform_rnd_selects(uint32_t NUM) {
 	// Check connections only performing select doesn't contribute to GITD count
 
 	MYSQL* select_conn = mysql_init(NULL);
@@ -163,7 +165,7 @@ int perform_rnd_selects(const CommandLine& cl, uint32_t NUM) {
 	return EXIT_SUCCESS;
 }
 
-int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* proxysql_admin) {
+int check_gitd_tracking(MYSQL* proxysql_mysql, MYSQL* proxysql_admin) {
 	// Check that all queries were routed to the correct hostgroup
 	MYSQL_QUERY(proxysql_admin, "SELECT hostgroup, queries, Queries_GTID_sync FROM stats.stats_mysql_connection_pool");
 	MYSQL_RES* conn_pool_stats_myres = mysql_store_result(proxysql_admin);
@@ -207,7 +209,7 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 	mysql_free_result(mysql_store_result(proxysql_admin));
 
 	// Perform random selects, no prior updates in the connection, no GTID tracking should take place
-	rc = perform_rnd_selects(cl, NUM_CHECKS / 5);
+	rc = perform_rnd_selects(NUM_CHECKS / 5);
 	if (rc != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	// Update stats
@@ -237,7 +239,6 @@ int check_gitd_tracking(const CommandLine& cl, MYSQL* proxysql_mysql, MYSQL* pro
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	bool stop_on_failure = false;
 
@@ -335,7 +336,7 @@ int main(int argc, char** argv) {
 
 	{
 		if (stop_on_failure == 0) {
-			check_gitd_tracking(cl, proxysql_mysql, proxysql_admin);
+			check_gitd_tracking(proxysql_mysql, proxysql_admin);
 
 			const double pct_fail_rate = failed_rows.size() * 100 / static_cast<double>(NUM_CHECKS);
 			ok(

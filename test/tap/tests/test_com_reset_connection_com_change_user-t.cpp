@@ -31,6 +31,8 @@
 using nlohmann::json;
 using var_val = std::pair<std::string, std::string>;
 
+CommandLine cl;
+
 const std::vector<std::string> tracked_variables {
 	"sql_log_bin", "sql_mode", "time_zone", "sql_auto_is_null",  "sql_safe_updates", "session_track_gtids",
 	//"max_join_size", "net_write_timeout", "sql_select_limit",  "sql_select_limit", "character_set_results",
@@ -399,7 +401,7 @@ int get_default_trx_isolation_attr(const std::string& user_attributes, std::stri
 	return EXIT_SUCCESS;
 }
 
-int test_simple_select_after_reset(MYSQL* proxysql, const CommandLine&, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_simple_select_after_reset(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	// Do an initial reset
 	if (com_reset) {
 		int err_code = mysql_reset_connection(proxysql);
@@ -444,7 +446,7 @@ int test_simple_select_after_reset(MYSQL* proxysql, const CommandLine&, const st
 	return EXIT_SUCCESS;
 }
 
-int test_simple_reset_admin(MYSQL*, const CommandLine& cl, const std::vector<user_config>&, bool) {
+int test_simple_reset_admin(MYSQL*, const std::vector<user_config>&, bool) {
 	int res = EXIT_FAILURE;
 
 	MYSQL* admin = mysql_init(NULL);
@@ -478,7 +480,7 @@ int test_simple_reset_admin(MYSQL*, const CommandLine& cl, const std::vector<use
 	return res;
 }
 
-int test_transaction_rollback(MYSQL* proxysql, const CommandLine&, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_transaction_rollback(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	MYSQL_QUERY(proxysql, "DROP TABLE IF EXISTS test.com_reset_connection_trx");
 	MYSQL_QUERY(
 		proxysql,
@@ -533,7 +535,7 @@ int test_transaction_rollback(MYSQL* proxysql, const CommandLine&, const std::ve
 	return EXIT_SUCCESS;
 }
 
-int test_tracked_variables_cleanup(MYSQL* proxysql, const CommandLine&, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_tracked_variables_cleanup(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	// Get the initial values for the tracked variables
 	std::vector<std::string> var_names {};
 	std::transform(
@@ -715,7 +717,7 @@ int test_tracked_variables_cleanup(MYSQL* proxysql, const CommandLine&, const st
 	return reset_values_match ? 0 : 1;
 }
 
-int test_user_defined_variables_cleanup(MYSQL* proxysql, const CommandLine&, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_user_defined_variables_cleanup(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	// Do an initial reset
 	if (com_reset) {
 		int err_code = mysql_reset_connection(proxysql);
@@ -843,7 +845,7 @@ int test_user_defined_variables_cleanup(MYSQL* proxysql, const CommandLine&, con
 	return EXIT_SUCCESS;
 }
 
-int test_recover_session_values(MYSQL* proxysql, const CommandLine& cl, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_recover_session_values(MYSQL* proxysql, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	std::string username = std::get<0>(user_configs[0]);
 	std::string password = std::get<1>(user_configs[0]);
 
@@ -976,7 +978,7 @@ int test_recover_session_values(MYSQL* proxysql, const CommandLine& cl, const st
 	}
 }
 
-int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector<user_config>& user_configs, bool com_reset=true) {
+int test_mysql_server_variables(MYSQL*, const std::vector<user_config>& user_configs, bool com_reset=true) {
 	// Do an initial reset
 
 	MYSQL* mysql = mysql_init(NULL);
@@ -1123,7 +1125,7 @@ int test_mysql_server_variables(MYSQL*, const CommandLine& cl, const std::vector
 	return reset_values_match ? 0 : 1;
 }
 
-using test_function = std::function<int(MYSQL*,const CommandLine&,const std::vector<user_config>&,bool)>;
+using test_function = std::function<int(MYSQL*, const std::vector<user_config>&, bool)>;
 
 std::vector<std::pair<std::string, test_function>> tests_fns {
 	{ "test_simple_select_after_reset", test_simple_select_after_reset },
@@ -1138,7 +1140,6 @@ std::vector<std::pair<std::string, test_function>> tests_fns {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// One 'reset_connection' and 'change_user_test'
 	plan(2+2+2+2+2 + tests_fns.size() * 2);
@@ -1230,7 +1231,7 @@ int main(int argc, char** argv) {
 
 		// Test the 'reset_connection' first
 		try {
-			test_res = test_fn.second(proxysql, cl, extra_users, true);
+			test_res = test_fn.second(proxysql, extra_users, true);
 		} catch (const std::exception& ex) {
 			diag("Exception while executing test '%s', exception msg: '%s'", test_fn.first.c_str(), ex.what());
 		}
@@ -1241,7 +1242,7 @@ int main(int argc, char** argv) {
 
 		// Test the 'change_user' later
 		try {
-			test_res = test_fn.second(proxysql, cl, extra_users, false);
+			test_res = test_fn.second(proxysql, extra_users, false);
 		} catch (const std::exception& ex) {
 			diag("Exception while executing test '%s', exception msg: '%s'", test_fn.first.c_str(), ex.what());
 		}

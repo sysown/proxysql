@@ -277,7 +277,7 @@ std::string tap_curtime();
  *  'ms' in the specified interval.
  * @return 0 if success, -1 in case of error.
  */
-int get_proxysql_cpu_usage(const CommandLine& cl, uint32_t intv, double& cpu_usage);
+int get_proxysql_cpu_usage(uint32_t intv, double& cpu_usage);
 
 /**
  * @brief Helper struct holding connection options for helper functions creating MySQL connections.

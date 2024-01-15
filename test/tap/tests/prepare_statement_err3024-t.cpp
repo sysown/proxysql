@@ -18,6 +18,8 @@
 #include "proxysql_utils.h"
 #include "utils.h"
 
+CommandLine cl;
+
 const int NUM_EXECUTIONS = 5;
 
 std::string select_query[3] = {
@@ -125,7 +127,6 @@ int create_table_test_sbtest1(int num_rows, MYSQL *mysql) {
 using std::string;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2 + 3 + NUM_EXECUTIONS*3*2); // 3 prepare + 3 * execution * 2 (execute + store)
 

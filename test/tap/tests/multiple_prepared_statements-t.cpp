@@ -29,6 +29,8 @@ It stresses how proxysql managers prepared statements, specifically:
 #include "tap.h"
 //#include "utils.h"
 
+CommandLine cl;
+
 int g_seed = 0;
 
 inline int fastrand() {
@@ -126,7 +128,6 @@ int execute_stmt(int idx) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(
 		1*2 +	// connection admin

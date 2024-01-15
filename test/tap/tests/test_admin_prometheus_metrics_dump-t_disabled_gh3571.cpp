@@ -19,10 +19,11 @@
 
 using std::string;
 
+CommandLine cl;
+
 std::size_t supported_metrics = 121;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2 + 3);
 

@@ -14,6 +14,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 const int STRING_SIZE=32;
 
 int g_seed = 0;
@@ -307,12 +309,6 @@ int insert_and_check(MYSQL_STMT *stmti, MYSQL_STMT *stmts, int id, char *name1, 
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	int np = 4; // init + prepare
 	np += 25*2; // number of INSERT+SELECT

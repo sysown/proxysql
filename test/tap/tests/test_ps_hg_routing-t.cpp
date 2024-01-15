@@ -13,14 +13,12 @@
 
 #include <stdlib.h>
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
+
 	char buf[1024];
-
 	const int STRING_SIZE=32;
-
-	if(cl.getEnv())
-		return exit_status();
 
 	plan(2+2 + 1);
 	diag("Testing PS host groups routing");

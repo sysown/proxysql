@@ -26,6 +26,8 @@ using nlohmann::json;
 
 using namespace std;
 
+CommandLine cl;
+
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;
 	MYSQL_ROW row;
@@ -37,7 +39,6 @@ void parse_result_json_column(MYSQL_RES *result, json& j) {
 
 // This test was previously failing due to replication not catching up quickly enough when doing
 int main(int, char**) {
-	CommandLine cl;
 
 	plan(2+2 + NUMQUERIES*2+1);
 

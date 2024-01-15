@@ -38,11 +38,14 @@
 #include "json.hpp"
 #include "tap.h"
 #include "utils.h"
+#include "command_line.h"
 
 using nlohmann::json;
 
 using std::vector;
 using std::string;
+
+CommandLine cl;
 
 void parse_result_json_column(MYSQL_RES *result, json& j) {
 	if(!result) return;

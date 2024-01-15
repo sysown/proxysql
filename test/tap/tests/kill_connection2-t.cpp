@@ -9,6 +9,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 /*
 This test verifies that client connections are dropped because of:
@@ -26,7 +27,7 @@ int run_q(MYSQL *mysql, const char *q) {
 MYSQL * conns[NUM_CONNS];
 unsigned long mythreadid[NUM_CONNS];
 
-int create_connections(CommandLine& cl) {
+int create_connections() {
 	for (int i = 0; i < NUM_CONNS ; i++) {
 
 		MYSQL * mysql = mysql_init(NULL);
@@ -68,7 +69,6 @@ int find_tids() {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	int np = 2;
 	np += 2 * NUM_CONNS ;	// connection
@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
 	int rc = 0;
-	rc = create_connections(cl);
+	rc = create_connections();
 	if (rc != 0) {
 		return exit_status();
 	}
@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
 	MYSQL_QUERY(proxysql_admin, "SET mysql-max_transaction_time=17000"); // to force a close on transaction	
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
-	rc = create_connections(cl);
+	rc = create_connections();
 	if (rc != 0) {
 		return exit_status();
 	}

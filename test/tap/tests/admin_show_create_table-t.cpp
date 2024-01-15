@@ -15,6 +15,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 /* this test:
 	* enables mysql-have_ssl
 	* retrieves all tables in the most important schemas
@@ -22,7 +24,6 @@ using std::string;
 */
 
 int main() {
-	CommandLine cl;
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);

@@ -29,20 +29,16 @@
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 typedef std::chrono::high_resolution_clock hrc;
 
 const vector<uint32_t> test_retry_delays { 1000, 2000, 3000 };
 const double DUR_EPSILON = 1;
 
 int main() {
-	CommandLine cl;
 
 	plan(2+2 + test_retry_delays.size());
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);

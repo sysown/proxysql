@@ -23,6 +23,8 @@
 using std::string;
 using namespace nlohmann;
 
+CommandLine cl;
+
 /**
  * @brief Valid variations of 'SET wait_timeout' supported
  *  by ProxySQL to be ignored.
@@ -58,12 +60,6 @@ std::vector<std::string> valids_set_wait_timeout {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(2 * valids_set_wait_timeout.size());
 

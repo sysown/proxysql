@@ -11,6 +11,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 /*
 This test includes a lot of repetitive checks that could have been organized into functions.
 But they have been left in this way to easily identify the failed check
@@ -18,10 +20,6 @@ But they have been left in this way to easily identify the failed check
 
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if(cl.getEnv())
-		return exit_status();
 
 	plan(2+2 + 96);
 	diag("Testing mysql-enforce_autocommit_on_reads");

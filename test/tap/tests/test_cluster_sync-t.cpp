@@ -159,7 +159,7 @@ const uint32_t SYNC_TIMEOUT = 10;
 const uint32_t CONNECT_TIMEOUT = 10;
 const uint32_t R_PORT = 16062;
 
-int setup_config_file(const CommandLine& cl) {
+int setup_config_file() {
 	const std::string t_fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync-t.cnf";
 	const std::string fmt_config_file = std::string(cl.workdir) + "test_cluster_sync_config/test_cluster_sync.cnf";
 	const std::string datadir_path = std::string(cl.workdir) + "test_cluster_sync_config";
@@ -246,9 +246,7 @@ int setup_config_file(const CommandLine& cl) {
 	return 0;
 }
 
-int check_nodes_sync(
-	const CommandLine& cl, const vector<mysql_res_row>& core_nodes, const string& check_query, uint32_t sync_timeout
-) {
+int check_nodes_sync(const vector<mysql_res_row>& core_nodes, const string& check_query, uint32_t sync_timeout) {
 	for (const auto& node : core_nodes) {
 		const string host { node[0] };
 		const int port = std::stol(node[1]);
@@ -284,10 +282,7 @@ const std::string t_debug_query = "mysql -u%s -p%s -h %s -P%d -C -e \"%s\"";
 using mysql_server_tuple = tuple<int,string,int,int,string,int,int,int,int,int,int,string>;
 
 
-int check_mysql_servers_sync(
-	const CommandLine& cl, MYSQL* proxy_admin, MYSQL* r_proxy_admin,
-	const vector<mysql_server_tuple>& insert_mysql_servers_values
-) {
+int check_mysql_servers_sync(MYSQL* proxy_admin, MYSQL* r_proxy_admin, const vector<mysql_server_tuple>& insert_mysql_servers_values) {
 	MYSQL_QUERY(proxy_admin, "SET mysql-monitor_enabled='false'");
 	MYSQL_QUERY(proxy_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
 
@@ -1109,7 +1104,7 @@ int main(int, char**) {
 	string_format(t_update_proxysql_servers, update_proxysql_servers, cl.host, cl.admin_port);
 
 	// Setup the config file using the env variables in 'CommandLine'
-	if (setup_config_file(cl)) {
+	if (setup_config_file()) {
 		return EXIT_FAILURE;
 	}
 
@@ -1133,7 +1128,7 @@ int main(int, char**) {
 		check_no_primary_query, cl.host, cl.admin_port
 	);
 
-	int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+	int check_res = check_nodes_sync(core_nodes, check_no_primary_query, SYNC_TIMEOUT);
 	if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 	// 4. Remove all current servers from primary instance (only secondary sync matters)
@@ -1142,7 +1137,7 @@ int main(int, char**) {
 	MYSQL_QUERY(proxy_admin, "LOAD PROXYSQL SERVERS TO RUNTIME");
 
 	// Launch proxysql with cluster config
-	std::thread proxy_replica_th([&save_proxy_stderr, &cl] () {
+	std::thread proxy_replica_th([&save_proxy_stderr] () {
 		const string replica_stderr { string(cl.workdir) + "test_cluster_sync_config/cluster_sync_node_stderr.txt" };
 		const std::string proxysql_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql.db";
 		const std::string stats_db = std::string(cl.workdir) + "test_cluster_sync_config/proxysql_stats.db";
@@ -1202,7 +1197,7 @@ int main(int, char**) {
 			std::make_tuple(1001, "127.0.0.1", 13307, 13, "OFFLINE_SOFT", 2, 1, 500, 300, 1, 200, "")
 		};
 
-		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values);
+		check_mysql_servers_sync(proxy_admin, r_proxy_admin, insert_mysql_servers_values);
 
 		vector<mysql_server_tuple> insert_mysql_servers_values_2 {
 			std::make_tuple(1000, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "mysql_1"),
@@ -1211,7 +1206,7 @@ int main(int, char**) {
 			std::make_tuple(1003, "127.0.0.1", 13309, 15, "OFFLINE_SOFT", 1, 0, 500, 300, 1, 200, "mysql_4_offline")
 		};
 
-		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values_2);
+		check_mysql_servers_sync(proxy_admin, r_proxy_admin, insert_mysql_servers_values_2);
 
 		vector<mysql_server_tuple> insert_mysql_servers_values_3 {
 			std::make_tuple(1000, "127.0.0.1", 13306, 12, "ONLINE", 1, 1, 1000, 300, 1, 200, "mysql_1"),
@@ -1220,7 +1215,7 @@ int main(int, char**) {
 			std::make_tuple(1003, "127.0.0.1", 13309, 15, "OFFLINE_HARD", 1, 0, 500, 300, 1, 200, "mysql_4_offline")
 		};
 
-		check_mysql_servers_sync(cl, proxy_admin, r_proxy_admin, insert_mysql_servers_values_3);
+		check_mysql_servers_sync(proxy_admin, r_proxy_admin, insert_mysql_servers_values_3);
 	}
 
 	{
@@ -2693,7 +2688,7 @@ cleanup:
 		);
 
 		// Wait for the other nodes to sync ProxySQL servers to include Primary
-		int check_res = check_nodes_sync(cl, core_nodes, check_no_primary_query, SYNC_TIMEOUT);
+		int check_res = check_nodes_sync(core_nodes, check_no_primary_query, SYNC_TIMEOUT);
 		if (check_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 
 		// Recover the old ProxySQL servers from backup in primary

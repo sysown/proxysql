@@ -9,6 +9,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 const int NUM_EXECUTIONS = 10;
 
 std::string select_query = "SELECT /* hostgroup=0 */ * FROM test.sbtest1 WHERE id = ?";
@@ -28,7 +30,6 @@ int idx2 = 0;
 int k = 0;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	int plans = 2; // connection
 	plans += 4 * 3 * NUM_EXECUTIONS; // 4 INSERT queries each of them triggers a SELECT and a data comparison

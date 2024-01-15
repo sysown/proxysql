@@ -14,11 +14,13 @@
 #include <poll.h>
 #include <assert.h>
 
-typedef int     myf;    // Type of MyFlags in my_funcs
-#define MYF(v)      (myf) (v)
-#define MY_KEEP_PREALLOC    1
-#define MY_ALIGN(A,L)    (((A) + (L) - 1) & ~((L) - 1))
-#define ALIGN_SIZE(A)    MY_ALIGN((A),sizeof(double))
+CommandLine cl;
+
+typedef int myf; // Type of MyFlags in my_funcs
+#define MYF(v) (myf) (v)
+#define MY_KEEP_PREALLOC 1
+#define MY_ALIGN(A,L) (((A) + (L) - 1) & ~((L) - 1))
+#define ALIGN_SIZE(A) MY_ALIGN((A),sizeof(double))
 void ma_free_root(MA_MEM_ROOT *root, myf MyFLAGS);
 void *ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size);
 //void ma_free_root(MA_MEM_ROOT *, int);
@@ -453,7 +455,6 @@ int test_ps_async(MYSQL* proxy, MYSQL* admin) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2+2 + 4);
 	diag("Testing PS async store result");

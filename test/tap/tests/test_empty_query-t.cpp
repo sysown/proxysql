@@ -8,12 +8,13 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 uint32_t EXECUTIONS = 100;
 
 int main(int argc, char** argv) {
-	plan(2 + 1);
 
-	CommandLine cl;
+	plan(2 + 1);
 
 	MYSQL* proxy = mysql_init(NULL);
 	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);

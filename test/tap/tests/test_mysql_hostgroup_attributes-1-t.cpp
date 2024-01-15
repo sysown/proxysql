@@ -13,6 +13,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 int run_queries_sets(std::vector<std::string>& queries, MYSQL *my, const std::string& message_prefix) {
 	for (std::vector<std::string>::iterator it = queries.begin(); it != queries.end(); it++) {
@@ -52,7 +53,6 @@ int run_one_test(MYSQL *mysqladmin, const char *expected_checksum, const char *q
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	std::unordered_map<std::string,std::string> queries_and_checksums = {
 		{

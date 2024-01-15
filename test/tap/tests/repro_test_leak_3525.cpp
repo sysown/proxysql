@@ -13,11 +13,9 @@
 #include "command_line.h"
 #include "utils.h"
 
-int main(int argc, char** argv) {
-	CommandLine cl;
+CommandLine cl;
 
-	if(cl.getEnv())
-		return exit_status();
+int main(int argc, char** argv) {
 
 	plan(1);
 

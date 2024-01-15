@@ -53,6 +53,8 @@ const int sqlite3_port = 0;
 
 #include "modules_server_test.h"
 
+CommandLine cl;
+
 void fetch_and_discard_results(MYSQL_RES* result, bool verbose=false) {
 	MYSQL_ROW row = nullptr;
 	unsigned int num_fields = 0;
@@ -260,7 +262,7 @@ int check_errorlog_for_addrinuse(MYSQL* admin, fstream& logfile) {
 	}
 }
 
-string connect_with_retries(MYSQL* sqlite3, const CommandLine& cl, const pair<string,int>& host_port) {
+string connect_with_retries(MYSQL* sqlite3, const pair<string,int>& host_port) {
 	uint32_t n = 0;
 	uint32_t retries = 10;
 	bool conn_success = false;
@@ -339,7 +341,6 @@ int enforce_sqlite_iface_change(MYSQL*admin, fstream& logfile, const uint32_t re
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// plan as many tests as queries
 	plan(
@@ -467,7 +468,7 @@ int main(int argc, char** argv) {
 			goto cleanup;
 		}
 
-		std::string new_intf_conn_err { connect_with_retries(proxysql_sqlite3, cl, new_host_port) };
+		std::string new_intf_conn_err { connect_with_retries(proxysql_sqlite3, new_host_port) };
 
 		ok(
 			new_intf_conn_err.empty() == true,
@@ -493,7 +494,7 @@ int main(int argc, char** argv) {
 		// interface could be locked somehow by ProxySQL, and we avoid trying to stablish a connection that
 		// could stall the test. Instead we intentionally fail.
 		if (iface_err == 0) {
-			old_intf_conn_err = connect_with_retries(proxysql_sqlite3, cl, host_port);
+			old_intf_conn_err = connect_with_retries(proxysql_sqlite3, host_port);
 		} else {
 			old_intf_conn_err = "Interface failed to be changed. Skipping connection attempt...";
 		}

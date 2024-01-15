@@ -26,18 +26,14 @@
 
 using std::string;
 
+CommandLine cl;
+
 /* This is an estimation of the supported number of metrics as for '2022-12-15' */
 uint32_t SUPPORTED_METRICS = 148;
 
 int main(int argc, char** argv) {
+
 	plan(5);
-
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* admin = mysql_init(NULL);
 

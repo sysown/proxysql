@@ -85,7 +85,7 @@ int compute_wait_timeout(MYSQL *my_conn) {
 }
 
 
-int change_mysql_cfg(const CommandLine& cl, const string& host, const string& port, const srv_cfg& new_srv_cfg, srv_cfg& out_old_srv_cfg) {
+int change_mysql_cfg(const string& host, const string& port, const srv_cfg& new_srv_cfg, srv_cfg& out_old_srv_cfg) {
 	int res = EXIT_SUCCESS;
 
 	MYSQL* my_conn = mysql_init(NULL);
@@ -153,7 +153,7 @@ int change_mysql_cfg(const CommandLine& cl, const string& host, const string& po
 	return res;
 }
 
-int create_new_backend_conn(const CommandLine& cl, int tg_hg, vector<MYSQL*>& mysql_conns) {
+int create_new_backend_conn(int tg_hg, vector<MYSQL*>& mysql_conns) {
 
 	MYSQL* conn = mysql_init(NULL);
 	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
@@ -212,14 +212,14 @@ struct test_params_t {
 
 using svr_addr = pair<string,uint32_t>;
 
-int check_backend_conns(const CommandLine& cl, const test_params_t& test_params, uint32_t hg, const vector<svr_addr>& svrs_addrs) {
+int check_backend_conns(const test_params_t& test_params, uint32_t hg, const vector<svr_addr>& svrs_addrs) {
 
 	vector<MYSQL*> mysql_conns {};
 	int res = EXIT_SUCCESS;
 
 	diag("Line:%d : Creating %f connections on hg %d", __LINE__ , test_params.init_batch_size, hg);
 	for (uint32_t i = 0; i < test_params.init_batch_size; i++) {
-		int c_res = create_new_backend_conn(cl, hg, mysql_conns);
+		int c_res = create_new_backend_conn(hg, mysql_conns);
 		if (c_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 	}
 
@@ -229,7 +229,7 @@ int check_backend_conns(const CommandLine& cl, const test_params_t& test_params,
 	for (uint32_t i = 0; i < test_params.its; i++) {
 		diag("Line:%d : Creating %f connections on hg %d , iteration %d", __LINE__ , test_params.batch_size, hg, i);
 		for (uint32_t j = 0; j < test_params.batch_size; j++) {
-			int c_res = create_new_backend_conn(cl, hg, mysql_conns);
+			int c_res = create_new_backend_conn(hg, mysql_conns);
 			if (c_res != EXIT_SUCCESS) { return EXIT_FAILURE; }
 		}
 
@@ -577,7 +577,7 @@ int main(int, char**) {
 		for (const mysql_res_row& srv_row : servers_rows) {
 			srv_cfg old_srv_cfg {};
 			diag("Line:%d : %s:%s", __LINE__ , srv_row[0].c_str(), srv_row[1].c_str());
-			int cfg_res = change_mysql_cfg(cl, srv_row[0], srv_row[1], new_srv_cfg, old_srv_cfg);
+			int cfg_res = change_mysql_cfg(srv_row[0], srv_row[1], new_srv_cfg, old_srv_cfg);
 
 			if (cfg_res != EXIT_SUCCESS) {
 				return exit_status();
@@ -611,7 +611,7 @@ int main(int, char**) {
 	}
 
 	diag("Performing 'check_backend_conns()' for servers: '%s'", nlohmann::json(s_server_test).dump().c_str());
-	int s_server_rc = check_backend_conns(cl, test_params, 0, s_server_test);
+	int s_server_rc = check_backend_conns(test_params, 0, s_server_test);
 	if (s_server_rc == EXIT_SUCCESS) {
 		diag("Cleaning up previous backend connections...");
 		string query = "UPDATE mysql_servers SET max_connections=0";
@@ -642,7 +642,7 @@ int main(int, char**) {
 		if (w_res == EXIT_SUCCESS) {
 			diag("Performing 'check_backend_conns()' for servers: '%s'", nlohmann::json(m_server_test).dump().c_str());
 
-			int m_server_rc = check_backend_conns(cl, test_params, 1, m_server_test);
+			int m_server_rc = check_backend_conns(test_params, 1, m_server_test);
 			if (m_server_rc == EXIT_FAILURE) {
 				diag("'check_backend_conns()' failed for servers: '%s'", nlohmann::json(s_server_test).dump().c_str());
 			}
@@ -659,7 +659,7 @@ int main(int, char**) {
 			const srv_cfg& old_srv_config = server_old_config.second;
 
 			srv_cfg _tmp_conf {};
-			int cfg_res = change_mysql_cfg(cl, res_row[0], res_row[1], old_srv_config, _tmp_conf);
+			int cfg_res = change_mysql_cfg(res_row[0], res_row[1], old_srv_config, _tmp_conf);
 			if (cfg_res != EXIT_SUCCESS) {
 				return EXIT_FAILURE;
 			}

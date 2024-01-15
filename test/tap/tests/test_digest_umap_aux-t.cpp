@@ -181,11 +181,6 @@ void run_stats_digest_query(MYSQL* proxy_admin) {
 
 int main(int argc, char** argv) {
 
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
-
 	plan(2+2+2 + 1 + DUMMY_QUERIES.size() * 5); // always specify the number of tests that are going to be performed
 
 	MYSQL *proxy_admin = mysql_init(NULL);

@@ -19,6 +19,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 /**
  * @brief Checks that 'SET NAMES' is being executed properly in the backend connection.
  * @param proxysql_mysql A MYSQL handle to an already stablished MySQL connection.
@@ -212,12 +214,6 @@ std::vector<std::pair<std::string, std::function<void(MYSQL*)>>> special_queries
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(special_queries_checks.size() * 2);
 	int check_num = 0;

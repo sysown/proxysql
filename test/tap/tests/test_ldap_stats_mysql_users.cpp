@@ -25,6 +25,8 @@ using std::string;
 using std::vector;
 using std::map;
 
+CommandLine cl;
+
 using user_stats_t = std::tuple<string,uint32_t>;
 
 const string LDAP_USER_T { "clientuser" };
@@ -86,6 +88,7 @@ const uint32_t LDAP_MAX_CONNS = 20;
 const uint32_t USER_NUM = 30;
 
 int main(int argc, char** argv) {
+
 	plan(
 		2+2	+ // connections
 		2*USER_NUM + // connections *tg_conns ???
@@ -96,8 +99,6 @@ int main(int argc, char** argv) {
 		LDAP_MAX_CONNS * 5 + // Check that conns are properly created below 'LDAP_MAX_CONNS'
 		5 // Check that conns fails to be created over 'LDAP_MAX_CONNS'
 	);
-
-	CommandLine cl;
 
 	struct rlimit limits { 0, 0 };
 	getrlimit(RLIMIT_NOFILE, &limits);

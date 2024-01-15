@@ -360,7 +360,7 @@ int main(int argc, char *argv[]) {
 
 	std::string fileName(std::string(cl.workdir) + "/set_testing-t.csv");
 
-	if (detect_version(cl, is_mariadb, is_cluster) != 0) {
+	if (detect_version(is_mariadb, is_cluster) != 0) {
 		diag("Cannot detect MySQL version");
 		return exit_status();
 	}

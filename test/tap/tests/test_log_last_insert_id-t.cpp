@@ -20,8 +20,9 @@ using std::string;
 using nlohmann::json;
 using std::fstream;
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	MYSQL * proxysql_mysql = mysql_init(NULL);
 	MYSQL* proxysql_admin = mysql_init(NULL);
@@ -29,9 +30,6 @@ int main(int argc, char** argv) {
 	char * datadir = NULL;
 
 	plan(4); // 3 INSERTs + a count on entries
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-	}
 
 	datadir = getenv("REGULAR_INFRA_DATADIR");
 	if (datadir == NULL) {

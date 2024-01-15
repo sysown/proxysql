@@ -22,12 +22,13 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 using query_spec = std::tuple<std::string, int>;
 
 const int sqlite3_port = 0;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// plan as many tests as queries
 	plan(
@@ -38,11 +39,6 @@ int main(int argc, char** argv) {
 		/* Correctly connects with proper username and password */
 		1
 	);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 

@@ -34,6 +34,8 @@
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 const int SIGNAL_NUM = 5;
 const string base_address { "http://localhost:6070/sync/" };
 
@@ -49,12 +51,6 @@ vector<std::tuple<string, params, rescode_t, signal_t, int>> endpoint_requests {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	plan(endpoint_requests.size());
 

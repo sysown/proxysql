@@ -31,7 +31,9 @@ using std::pair;
 using std::vector;
 using std::tuple;
 
-int create_and_close_proxy_conn(const CommandLine& cl) {
+CommandLine cl;
+
+int create_and_close_proxy_conn() {
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
@@ -53,7 +55,7 @@ int create_and_close_proxy_conn(const CommandLine& cl) {
 	return EXIT_SUCCESS;
 }
 
-int set_statement_query(const CommandLine& cl) {
+int set_statement_query() {
 
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 	diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
@@ -152,15 +154,14 @@ int check_log_line(const function<int()>& proxy_action,  const string& err_id, c
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	diag("This test is now disabled because the plan is to have debugging always enabled");
 	plan(1);
 	ok(1,"This test is now disabled because the plan is to have debugging always enabled");
 	return exit_status();
 
-	const auto create_conn_action = [&cl]() -> int { return create_and_close_proxy_conn(cl); };
-	const auto set_statement_action = [&cl]() -> int { return set_statement_query(cl); };
+	const auto create_conn_action = []() -> int { return create_and_close_proxy_conn(); };
+	const auto set_statement_action = []() -> int { return set_statement_query(); };
 
 	vector<tuple<string,string,function<int()>>> regexes_and_actions {
 		{ "mysql_connection", "~MySQL_Connection", create_conn_action },
@@ -263,7 +264,7 @@ int main(int argc, char** argv) {
 
 				MYSQL_QUERY(proxysql_admin, "LOAD DEBUG TO RUNTIME");
 
-				const auto proxy_action = [&cl]() -> int { return create_and_close_proxy_conn(cl); };
+				const auto proxy_action = []() -> int { return create_and_close_proxy_conn(); };
 
 				int c_res = check_log_line(proxy_action, err_id, f_path, filter_comb.second);
 				if (c_res != EXIT_SUCCESS) { goto cleanup; }

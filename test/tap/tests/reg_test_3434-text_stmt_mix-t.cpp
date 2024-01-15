@@ -26,6 +26,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 const int STRING_SIZE=32;
 
 int g_seed = 0;
@@ -54,10 +56,7 @@ void gen_random_str(char *s, const int len) {
 	s[len] = 0;
 }
 
-int perform_text_select(
-	const CommandLine& cl,
-	const std::string& query
-) {
+int perform_text_select(const std::string& query) {
 	MYSQL* proxysql_text = mysql_init(NULL);
 	if (!proxysql_text) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_text));
@@ -76,11 +75,7 @@ int perform_text_select(
 	return EXIT_SUCCESS;
 }
 
-int perform_stmt_select(
-	const CommandLine& cl,
-	const std::string& query,
-	uint32_t num_query_params
-) {
+int perform_stmt_select(const std::string& query, uint32_t num_query_params) {
 	int res = EXIT_SUCCESS;
 	MYSQL* proxysql_mysql = mysql_init(NULL);
 
@@ -250,12 +245,6 @@ uint32_t ITERATIONS = 10;
 uint32_t HOSTGROUP = 0;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(1);
 
@@ -345,9 +334,9 @@ int main(int argc, char** argv) {
 			text_query_1 = query_1.substr(0, pos);
 		}
 
-		query_res = perform_stmt_select(cl, query_1, SELECT_PARAM_NUM);
+		query_res = perform_stmt_select(query_1, SELECT_PARAM_NUM);
 		if (query_res != EXIT_SUCCESS) { break; }
-		query_res = perform_text_select(cl, text_query_1);
+		query_res = perform_text_select(text_query_1);
 		if (query_res != EXIT_SUCCESS) { break; }
 
 		std::string query_2 {
@@ -361,7 +350,7 @@ int main(int argc, char** argv) {
 			text_query_2 = query_1.substr(0, pos);
 		}
 
-		query_res = perform_stmt_select(cl, query_2, SELECT_PARAM_NUM);
+		query_res = perform_stmt_select(query_2, SELECT_PARAM_NUM);
 		if (query_res != EXIT_SUCCESS) { break; }
 	}
 

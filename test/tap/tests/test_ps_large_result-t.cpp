@@ -14,6 +14,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 const int NUM_ROWS=10000;
 
 int restore_admin(MYSQL* mysqladmin) {
@@ -26,7 +28,6 @@ int restore_admin(MYSQL* mysqladmin) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2 + 9);
 	diag("Testing PS large resultset");

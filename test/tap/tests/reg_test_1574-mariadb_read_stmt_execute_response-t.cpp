@@ -28,16 +28,12 @@
 
 using std::string;
 
+CommandLine cl;
+
 const int STRING_SIZE=32;
 const int NUM_TEST_TABLES = 50;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(50);
 

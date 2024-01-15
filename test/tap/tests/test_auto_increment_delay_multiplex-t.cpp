@@ -38,11 +38,12 @@
 #include "utils.h"
 #include "tap.h"
 
-
 using std::function;
 using std::string;
 using std::vector;
 using nlohmann::json;
+
+CommandLine cl;
 
 const char* INSERT_QUERY { "INSERT INTO test.auto_inc_multiplex (c2, c3) VALUES ('foo','bar')" };
 const char* CREATE_TABLE_QUERY {
@@ -898,7 +899,6 @@ const vector<function<int(MYSQL*, MYSQL*)>> conn_delay_multiplex_tests {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(
 		2 + 2 + // connections

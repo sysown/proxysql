@@ -28,6 +28,8 @@ using nlohmann::json;
 using std::string;
 using std::fstream;
 
+CommandLine cl;
+
 int update_and_check_servers_defaults(MYSQL* admin, const json& j_servers_defaults) {
 	const string INSERT_QUERY {
 		"INSERT INTO mysql_hostgroup_attributes (hostgroup_id, servers_defaults)"
@@ -106,9 +108,8 @@ void check_matching_logline(fstream& f_log, string regex) {
 }
 
 int main(int, char**) {
-	plan(2 + 12);
 
-	CommandLine cl;
+	plan(2 + 12);
 
 	// Open the error log and fetch the final position
 	const string f_path { get_env("REGULAR_INFRA_DATADIR") + "/proxysql.log" };

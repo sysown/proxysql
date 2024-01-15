@@ -27,6 +27,8 @@
 #include "tap.h"
 #include "utils.h"
 
+CommandLine cl;
+
 int g_seed = 0;
 
 inline int fastrand() {
@@ -313,7 +315,6 @@ int create_testing_tables(MYSQL* proxysql, uint32_t num_tables) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2+2 + dst_hostgroup_tests.size());
 

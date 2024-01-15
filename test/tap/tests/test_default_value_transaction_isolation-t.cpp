@@ -11,8 +11,9 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2+2+2 + 3);
 	diag("Testing default value for session varable transaction isolation");

@@ -10,6 +10,7 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
 
 /*
  * this test assumes that this proxysql instance is part of a 10 nodes cluster
@@ -139,7 +140,7 @@ int module_in_sync(
 	return 1;
 }
 
-int create_connections(CommandLine& cl) {
+int create_connections() {
 	for (int i = 0; i < cluster_ports.size() ; i++) {
 
 		MYSQL * mysql = mysql_init(NULL);
@@ -184,17 +185,11 @@ int trigger_sync_and_check(MYSQL *mysql, std::string modname, const char *update
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	int np = 8;
 	np += 4*5*(4+(cluster_ports.size()-4));
 
 	plan(np);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	MYSQL* proxysql_admin = mysql_init(NULL);
 	diag("Connecting: cl.admin_username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
@@ -247,7 +242,7 @@ int main(int argc, char** argv) {
 
 	MYSQL_RES* proxy_res;
 	int rc = 0;
-	rc = create_connections(cl);
+	rc = create_connections();
 	if (rc != 0) {
 		return exit_status();
 	}

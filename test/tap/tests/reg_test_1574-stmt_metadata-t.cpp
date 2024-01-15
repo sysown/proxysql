@@ -29,6 +29,8 @@
 
 using std::string;
 
+CommandLine cl;
+
 const int STRING_SIZE=32;
 
 int g_seed = 0;
@@ -52,12 +54,6 @@ void gen_random_str(char *s, const int len) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(3);
 

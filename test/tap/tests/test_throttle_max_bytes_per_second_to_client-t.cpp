@@ -11,15 +11,15 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 inline unsigned long long monotonic_time() {
-  struct timespec ts;
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (((unsigned long long) ts.tv_sec) * 1000000) + (ts.tv_nsec / 1000);
 }
 
-
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2 + 1);
 

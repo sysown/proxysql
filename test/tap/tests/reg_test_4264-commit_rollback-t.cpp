@@ -63,6 +63,8 @@ const uint32_t TG_HG_1 = 1047;
 const uint32_t TG_HG_2 = 1048;
 const string TG_HG_STR { to_string(TG_HG_1) };
 
+CommandLine cl;
+
 /**
  * @details Flow for explicit and persistent trxs:
  *  - BEGIN -> Starts a trx, in default hostgroup.
@@ -74,7 +76,7 @@ const string TG_HG_STR { to_string(TG_HG_1) };
  *    + Check that query have been executed in the 'BEGIN' hostgroup.
  *    + Check that ConnUsed have decreased after query.
  */
-int explicit_trx_persist(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
+int explicit_trx_persist(MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
 	const vector<uint32_t> tg_hgs { DF_HG };
 	const pair<int,pool_state_t> pre_pool_state_res { fetch_conn_stats(admin, tg_hgs) };
 	if (pre_pool_state_res.first) { return EXIT_FAILURE; }
@@ -105,7 +107,7 @@ int explicit_trx_persist(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const stri
  * @details Same check as 'explicit_trx_persist' but trx is created in random hostgroup.
  *  Ensures that default hostgroup routing works as non-default routing.
  */
-int explicit_trx_persist_2(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
+int explicit_trx_persist_2(MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
 	const vector<uint32_t> tg_hgs { DF_HG, TG_HG_1 };
 	const pair<int,pool_state_t> pre_pool_state_res { fetch_conn_stats(admin, tg_hgs) };
 	if (pre_pool_state_res.first) { return EXIT_FAILURE; }
@@ -137,23 +139,23 @@ int explicit_trx_persist_2(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const st
  *  'transaction_persistent=1' should disable routing, and all operations
  *  should be done in the same backend connection.
  */
-int explicit_trx_persist_c(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_trx_persist(cl, admin, proxy, "COMMIT");
+int explicit_trx_persist_c(MYSQL* admin, MYSQL* proxy) {
+	return explicit_trx_persist(admin, proxy, "COMMIT");
 }
 
-int explicit_trx_persist_r(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_trx_persist(cl, admin, proxy, "ROLLBACK");
+int explicit_trx_persist_r(MYSQL* admin, MYSQL* proxy) {
+	return explicit_trx_persist(admin, proxy, "ROLLBACK");
 }
 
-int explicit_trx_persist_2_c(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_trx_persist_2(cl, admin, proxy, "COMMIT");
+int explicit_trx_persist_2_c(MYSQL* admin, MYSQL* proxy) {
+	return explicit_trx_persist_2(admin, proxy, "COMMIT");
 }
 
-int explicit_trx_persist_2_r(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_trx_persist_2(cl, admin, proxy, "ROLLBACK");
+int explicit_trx_persist_2_r(MYSQL* admin, MYSQL* proxy) {
+	return explicit_trx_persist_2(admin, proxy, "ROLLBACK");
 }
 
-int implicit_trx_persist(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
+int implicit_trx_persist(MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
 	const vector<uint32_t> tg_hgs { DF_HG, TG_HG_1 };
 	const pair<int,pool_state_t> pre_pool_state_res { fetch_conn_stats(admin, tg_hgs) };
 	if (pre_pool_state_res.first) { return EXIT_FAILURE; }
@@ -183,15 +185,15 @@ int implicit_trx_persist(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const stri
 	return EXIT_SUCCESS;
 }
 
-int implicit_trx_persist_c(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return implicit_trx_persist(cl, admin, proxy, "COMMIT");
+int implicit_trx_persist_c(MYSQL* admin, MYSQL* proxy) {
+	return implicit_trx_persist(admin, proxy, "COMMIT");
 }
 
-int implicit_trx_persist_r(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return implicit_trx_persist(cl, admin, proxy, "ROLLBACK");
+int implicit_trx_persist_r(MYSQL* admin, MYSQL* proxy) {
+	return implicit_trx_persist(admin, proxy, "ROLLBACK");
 }
 
-int explicit_trx_persist_no_def_hg(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
+int explicit_trx_persist_no_def_hg(MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
 	const vector<uint32_t> tg_hgs { TG_HG_1 };
 	const pair<int,pool_state_t> pre_pool_state_res { fetch_conn_stats(admin, tg_hgs) };
 	if (pre_pool_state_res.first) { return EXIT_FAILURE; }
@@ -214,15 +216,15 @@ int explicit_trx_persist_no_def_hg(CommandLine& cl, MYSQL* admin, MYSQL* proxy, 
 	return EXIT_SUCCESS;
 }
 
-int explicit_trx_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_trx_persist_no_def_hg(cl, admin, proxy, "COMMIT");
+int explicit_trx_persist_no_def_hg_c(MYSQL* admin, MYSQL* proxy) {
+	return explicit_trx_persist_no_def_hg(admin, proxy, "COMMIT");
 }
 
-int explicit_trx_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_trx_persist_no_def_hg(cl, admin, proxy, "ROLLBACK");
+int explicit_trx_persist_no_def_hg_r(MYSQL* admin, MYSQL* proxy) {
+	return explicit_trx_persist_no_def_hg(admin, proxy, "ROLLBACK");
 }
 
-int implicit_trx_persist_no_def_hg(CommandLine& cl, MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
+int implicit_trx_persist_no_def_hg(MYSQL* admin, MYSQL* proxy, const string& trx_cmd) {
 	const vector<uint32_t> tg_hgs { DF_HG, TG_HG_1 };
 	const pair<int,pool_state_t> pre_pool_state_res { fetch_conn_stats(admin, tg_hgs) };
 	if (pre_pool_state_res.first) { return EXIT_FAILURE; }
@@ -249,12 +251,12 @@ int implicit_trx_persist_no_def_hg(CommandLine& cl, MYSQL* admin, MYSQL* proxy, 
 	return EXIT_SUCCESS;
 }
 
-int implicit_trx_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return implicit_trx_persist_no_def_hg(cl, admin, proxy, "COMMIT");
+int implicit_trx_persist_no_def_hg_c(MYSQL* admin, MYSQL* proxy) {
+	return implicit_trx_persist_no_def_hg(admin, proxy, "COMMIT");
 }
 
-int implicit_trx_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return implicit_trx_persist_no_def_hg(cl, admin, proxy, "ROLLBACK");
+int implicit_trx_persist_no_def_hg_r(MYSQL* admin, MYSQL* proxy) {
+	return implicit_trx_persist_no_def_hg(admin, proxy, "ROLLBACK");
 }
 
 /**
@@ -268,7 +270,7 @@ int implicit_trx_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL* proxy
  *    + Check that query have been executed in the 'BEGIN' hostgroup.
  *    + Check that ConnUsed have decreased after query.
  */
-int explicit_trx_no_persist(CommandLine& cl, MYSQL* admin, MYSQL*, const string& trx_cmd) {
+int explicit_trx_no_persist(MYSQL* admin, MYSQL*, const string& trx_cmd) {
 	MYSQL* proxy_sbtest = mysql_init(NULL);
 
 	if (!mysql_real_connect(proxy_sbtest, cl.host, "sbtest1", "sbtest1", NULL, cl.port, NULL, 0)) {
@@ -307,7 +309,7 @@ int explicit_trx_no_persist(CommandLine& cl, MYSQL* admin, MYSQL*, const string&
  * @details Same check as 'explicit_trx_no_persist' but trx is created in random hostgroup.
  *  Ensures that default hostgroup routing works as non-default routing.
  */
-int explicit_trx_no_persist_2(CommandLine& cl, MYSQL* admin, MYSQL*, const string& trx_cmd) {
+int explicit_trx_no_persist_2(MYSQL* admin, MYSQL*, const string& trx_cmd) {
 	MYSQL* sbtest = mysql_init(NULL);
 
 	if (!mysql_real_connect(sbtest, cl.host, "sbtest1", "sbtest1", NULL, cl.port, NULL, 0)) {
@@ -343,23 +345,23 @@ int explicit_trx_no_persist_2(CommandLine& cl, MYSQL* admin, MYSQL*, const strin
 	return EXIT_SUCCESS;
 }
 
-int explicit_trx_no_persist_c(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return explicit_trx_no_persist(cl, admin, nullptr, "COMMIT");
+int explicit_trx_no_persist_c(MYSQL* admin, MYSQL*) {
+	return explicit_trx_no_persist(admin, nullptr, "COMMIT");
 }
 
-int explicit_trx_no_persist_r(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return explicit_trx_no_persist(cl, admin, nullptr, "ROLLBACK");
+int explicit_trx_no_persist_r(MYSQL* admin, MYSQL*) {
+	return explicit_trx_no_persist(admin, nullptr, "ROLLBACK");
 }
 
-int explicit_trx_no_persist_2_c(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_trx_no_persist_2(cl, admin, proxy, "COMMIT");
+int explicit_trx_no_persist_2_c(MYSQL* admin, MYSQL* proxy) {
+	return explicit_trx_no_persist_2(admin, proxy, "COMMIT");
 }
 
-int explicit_trx_no_persist_2_r(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_trx_no_persist_2(cl, admin, proxy, "ROLLBACK");
+int explicit_trx_no_persist_2_r(MYSQL* admin, MYSQL* proxy) {
+	return explicit_trx_no_persist_2(admin, proxy, "ROLLBACK");
 }
 
-int explicit_trx_no_persist_no_def_hg(CommandLine& cl, MYSQL* admin, MYSQL*, const string& trx_cmd) {
+int explicit_trx_no_persist_no_def_hg(MYSQL* admin, MYSQL*, const string& trx_cmd) {
 	MYSQL* proxy_sbtest = mysql_init(NULL);
 
 	if (!mysql_real_connect(proxy_sbtest, cl.host, "sbtest1", "sbtest1", NULL, cl.port, NULL, 0)) {
@@ -394,19 +396,19 @@ int explicit_trx_no_persist_no_def_hg(CommandLine& cl, MYSQL* admin, MYSQL*, con
 	return EXIT_SUCCESS;
 };
 
-int explicit_trx_no_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return explicit_trx_no_persist_no_def_hg(cl, admin, nullptr, "COMMIT");
+int explicit_trx_no_persist_no_def_hg_c(MYSQL* admin, MYSQL*) {
+	return explicit_trx_no_persist_no_def_hg(admin, nullptr, "COMMIT");
 }
 
-int explicit_trx_no_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return explicit_trx_no_persist_no_def_hg(cl, admin, nullptr, "ROLLBACK");
+int explicit_trx_no_persist_no_def_hg_r(MYSQL* admin, MYSQL*) {
+	return explicit_trx_no_persist_no_def_hg(admin, nullptr, "ROLLBACK");
 }
 
 /**
  * @details Checks that implicit transactions with no persistence execute the rollback in the correct
  *  hostgroup.
  */
-int implicit_trx_no_persist_no_def_hg(CommandLine& cl, MYSQL* admin, MYSQL*, const string& trx_cmd) {
+int implicit_trx_no_persist_no_def_hg(MYSQL* admin, MYSQL*, const string& trx_cmd) {
 	MYSQL* proxy_sbtest = mysql_init(NULL);
 
 	if (!mysql_real_connect(proxy_sbtest, cl.host, "sbtest1", "sbtest1", NULL, cl.port, NULL, 0)) {
@@ -459,12 +461,12 @@ int implicit_trx_no_persist_no_def_hg(CommandLine& cl, MYSQL* admin, MYSQL*, con
 	return EXIT_SUCCESS;
 };
 
-int implicit_trx_no_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return implicit_trx_no_persist_no_def_hg(cl, admin, nullptr, "COMMIT");
+int implicit_trx_no_persist_no_def_hg_c(MYSQL* admin, MYSQL*) {
+	return implicit_trx_no_persist_no_def_hg(admin, nullptr, "COMMIT");
 }
 
-int implicit_trx_no_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return implicit_trx_no_persist_no_def_hg(cl, admin, nullptr, "ROLLBACK");
+int implicit_trx_no_persist_no_def_hg_r(MYSQL* admin, MYSQL*) {
+	return implicit_trx_no_persist_no_def_hg(admin, nullptr, "ROLLBACK");
 }
 
 /**
@@ -481,7 +483,7 @@ int implicit_trx_no_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL*) {
  *    + Check that conns used have decreased in hg.
  */
 int explicit_unknown_trx_persist_no_def_hg(
-	CommandLine& cl, MYSQL* admin, MYSQL* proxy, const string& trx_cmd
+	MYSQL* admin, MYSQL* proxy, const string& trx_cmd
 ) {
 	diag("Ensure 'autocommit=1' for reused connection");
 	MYSQL_QUERY_T(proxy, "SET autocommit=1");
@@ -524,12 +526,12 @@ int explicit_unknown_trx_persist_no_def_hg(
 	return EXIT_SUCCESS;
 }
 
-int explicit_unknown_trx_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_unknown_trx_persist_no_def_hg(cl, admin, proxy, "COMMIT");
+int explicit_unknown_trx_persist_no_def_hg_c(MYSQL* admin, MYSQL* proxy) {
+	return explicit_unknown_trx_persist_no_def_hg(admin, proxy, "COMMIT");
 }
 
-int explicit_unknown_trx_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL* proxy) {
-	return explicit_unknown_trx_persist_no_def_hg(cl, admin, proxy, "ROLLBACK");
+int explicit_unknown_trx_persist_no_def_hg_r(MYSQL* admin, MYSQL* proxy) {
+	return explicit_unknown_trx_persist_no_def_hg(admin, proxy, "ROLLBACK");
 }
 
 /**
@@ -545,7 +547,7 @@ int explicit_unknown_trx_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQ
  *    + Check that conns used have decreased in hg.
  */
 int implicit_unknown_trx_persist_no_def_hg(
-	CommandLine& cl, MYSQL* admin, MYSQL* proxy, const string& trx_cmd
+	MYSQL* admin, MYSQL* proxy, const string& trx_cmd
 ) {
 	diag("Ensure 'autocommit=1' for reused connection");
 	MYSQL_QUERY_T(proxy, "SET autocommit=1");
@@ -587,12 +589,12 @@ int implicit_unknown_trx_persist_no_def_hg(
 	return EXIT_SUCCESS;
 }
 
-int implicit_unknown_trx_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return implicit_unknown_trx_persist_no_def_hg(cl, admin, nullptr, "COMMIT");
+int implicit_unknown_trx_persist_no_def_hg_c(MYSQL* admin, MYSQL*) {
+	return implicit_unknown_trx_persist_no_def_hg(admin, nullptr, "COMMIT");
 }
 
-int implicit_unknown_trx_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return implicit_unknown_trx_persist_no_def_hg(cl, admin, nullptr, "ROLLBACK");
+int implicit_unknown_trx_persist_no_def_hg_r(MYSQL* admin, MYSQL*) {
+	return implicit_unknown_trx_persist_no_def_hg(admin, nullptr, "ROLLBACK");
 }
 
 /**
@@ -605,7 +607,7 @@ int implicit_unknown_trx_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQ
  *    + Should be executed in trx with 'unknown_transaction_status'.
  */
 int explicit_and_unknown_trx_no_persist_no_def_hg(
-	CommandLine& cl, MYSQL* admin, MYSQL*, const string& trx_cmd
+	MYSQL* admin, MYSQL*, const string& trx_cmd
 ) {
 	MYSQL* proxy_sbtest = mysql_init(NULL);
 
@@ -661,12 +663,12 @@ int explicit_and_unknown_trx_no_persist_no_def_hg(
 	return EXIT_SUCCESS;
 }
 
-int explicit_and_unknown_trx_no_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return explicit_and_unknown_trx_no_persist_no_def_hg(cl, admin, nullptr, "COMMIT");
+int explicit_and_unknown_trx_no_persist_no_def_hg_c(MYSQL* admin, MYSQL*) {
+	return explicit_and_unknown_trx_no_persist_no_def_hg(admin, nullptr, "COMMIT");
 }
 
-int explicit_and_unknown_trx_no_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return explicit_and_unknown_trx_no_persist_no_def_hg(cl, admin, nullptr, "ROLLBACK");
+int explicit_and_unknown_trx_no_persist_no_def_hg_r(MYSQL* admin, MYSQL*) {
+	return explicit_and_unknown_trx_no_persist_no_def_hg(admin, nullptr, "ROLLBACK");
 }
 
 /**
@@ -680,7 +682,7 @@ int explicit_and_unknown_trx_no_persist_no_def_hg_r(CommandLine& cl, MYSQL* admi
  *    + Should be executed in trx with 'unknown_transaction_status', hg 'M'.
  */
 int implicit_and_unknown_trx_no_persist_no_def_hg(
-	CommandLine& cl, MYSQL* admin, MYSQL*, const string& trx_cmd
+	MYSQL* admin, MYSQL*, const string& trx_cmd
 ) {
 	MYSQL* sbtest = mysql_init(NULL);
 
@@ -744,12 +746,12 @@ int implicit_and_unknown_trx_no_persist_no_def_hg(
 	return EXIT_SUCCESS;
 }
 
-int implicit_and_unknown_trx_no_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return implicit_and_unknown_trx_no_persist_no_def_hg(cl, admin, nullptr, "COMMIT");
+int implicit_and_unknown_trx_no_persist_no_def_hg_c(MYSQL* admin, MYSQL*) {
+	return implicit_and_unknown_trx_no_persist_no_def_hg(admin, nullptr, "COMMIT");
 }
 
-int implicit_and_unknown_trx_no_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return implicit_and_unknown_trx_no_persist_no_def_hg(cl, admin, nullptr, "ROLLBACK");
+int implicit_and_unknown_trx_no_persist_no_def_hg_r(MYSQL* admin, MYSQL*) {
+	return implicit_and_unknown_trx_no_persist_no_def_hg(admin, nullptr, "ROLLBACK");
 }
 
 /**
@@ -768,7 +770,7 @@ int implicit_and_unknown_trx_no_persist_no_def_hg_r(CommandLine& cl, MYSQL* admi
  *   * Third command hits the conn with 'unknown trx' status.
  */
 int implicit_trx_and_savepoints_no_persist_no_def_hg_(
-	CommandLine& cl, MYSQL* admin, MYSQL*, const string& trx_cmd
+	MYSQL* admin, MYSQL*, const string& trx_cmd
 ) {
 	MYSQL* sbtest = mysql_init(NULL);
 
@@ -970,7 +972,7 @@ int implicit_trx_and_savepoints_no_persist_no_def_hg_(
  *   * Third command hits the conn with 'unknown trx' status.
  */
 int implicit_trx_and_savepoints_no_persist_no_def_hg(
-	CommandLine& cl, MYSQL* admin, MYSQL*, const string& trx_cmd
+	MYSQL* admin, MYSQL*, const string& trx_cmd
 ) {
 	MYSQL* sbtest = mysql_init(NULL);
 
@@ -1056,17 +1058,17 @@ int implicit_trx_and_savepoints_no_persist_no_def_hg(
 	return EXIT_SUCCESS;
 }
 
-int implicit_trx_and_savepoints_no_persist_no_def_hg_c(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return implicit_trx_and_savepoints_no_persist_no_def_hg_(cl, admin, nullptr, "COMMIT");
+int implicit_trx_and_savepoints_no_persist_no_def_hg_c(MYSQL* admin, MYSQL*) {
+	return implicit_trx_and_savepoints_no_persist_no_def_hg_(admin, nullptr, "COMMIT");
 }
 
-int implicit_trx_and_savepoints_no_persist_no_def_hg_r(CommandLine& cl, MYSQL* admin, MYSQL*) {
-	return implicit_trx_and_savepoints_no_persist_no_def_hg(cl, admin, nullptr, "ROLLBACK");
+int implicit_trx_and_savepoints_no_persist_no_def_hg_r(MYSQL* admin, MYSQL*) {
+	return implicit_trx_and_savepoints_no_persist_no_def_hg(admin, nullptr, "ROLLBACK");
 }
 
 struct test_case_t {
 	string name;
-	function<int(CommandLine&,MYSQL*,MYSQL*)> fn;
+	function<int(MYSQL*,MYSQL*)> fn;
 };
 
 #define create_test_case(name) { #name, name }
@@ -1156,14 +1158,8 @@ int prepare_tables_and_config(MYSQL* admin, MYSQL* proxy) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(313);
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	MYSQL* proxy = mysql_init(NULL);
 	if (!mysql_real_connect(proxy, cl.host, cl.username, cl.password, NULL, cl.port, NULL, 0)) {
@@ -1185,7 +1181,7 @@ int main(int argc, char** argv) {
 	for (const auto test : test_cases) {
 		fprintf(stderr, "\n");
 		diag("Starting test '%s'", test.name.c_str());
-		test.fn(cl, admin, proxy);
+		test.fn(admin, proxy);
 	}
 
 cleanup:

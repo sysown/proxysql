@@ -38,6 +38,8 @@
 using std::string;
 using std::vector;
 
+CommandLine cl;
+
 /* Helper function to do the waiting for events on the socket. */
 static int wait_for_mysql(MYSQL *mysql, int status) {
 	struct pollfd pfd;
@@ -77,12 +79,6 @@ const vector<string> tc_rules {
 };
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	// temporary disable the whole test
 	plan(1);
@@ -93,7 +89,7 @@ int main(int argc, char** argv) {
 
 	diag("Checking ProxySQL idle CPU usage");
 	double idle_cpu = 0;
-	int ret_i_cpu = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, idle_cpu);
+	int ret_i_cpu = get_proxysql_cpu_usage(REPORT_INTV_SEC, idle_cpu);
 	if (ret_i_cpu) {
 		diag("Getting initial CPU usage failed with error - %d", ret_i_cpu);
 		diag("Aborting further testing");
@@ -189,7 +185,7 @@ cleanup:
 	}
 
 	double final_cpu_usage = 0;
-	int ret_f_cpu = get_proxysql_cpu_usage(cl, REPORT_INTV_SEC, final_cpu_usage);
+	int ret_f_cpu = get_proxysql_cpu_usage(REPORT_INTV_SEC, final_cpu_usage);
 	diag("Getting the final CPU usage returned - %d", ret_f_cpu);
 
 	ok(

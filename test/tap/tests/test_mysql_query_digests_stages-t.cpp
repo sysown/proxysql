@@ -53,6 +53,8 @@ __thread int mysql_thread___query_digests_groups_grouping_limit = 1;
 using std::vector;
 using std::string;
 
+CommandLine cl;
+
 std::string replace_str(const std::string& str, const std::string& match, const std::string& repl) {
 	if(match.empty()) {
 		return str;
@@ -418,7 +420,7 @@ int count_crashing_test_defs(const nlohmann::json& j_test_defs, uint32_t& test_n
 	return EXIT_SUCCESS;
 }
 
-void process_crashing_tests(CommandLine& cl, const nlohmann::json& test_defs) {
+void process_crashing_tests(const nlohmann::json& test_defs) {
 	int res = EXIT_SUCCESS;
 
 	for (const auto& test_def : test_defs) {
@@ -757,12 +759,6 @@ void process_grouping_tests(uint32_t max_groups) {
 int MAX_GEN_QUERY_LENGTH = 1800;
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	bool exec_crashing_tests = true;
 	bool exec_grouping_tests = true;
@@ -829,7 +825,7 @@ int main(int argc, char** argv) {
 		process_digest_tests(regular_tests_defs);
 	}
 	if (exec_crashing_tests) {
-		process_crashing_tests(cl, crashing_tests_defs);
+		process_crashing_tests(crashing_tests_defs);
 	}
 	if (exec_grouping_tests) {
 		for (uint32_t i = 300; i < MAX_GEN_QUERY_LENGTH; i += 50) {

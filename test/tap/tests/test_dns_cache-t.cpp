@@ -21,6 +21,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 std::vector<std::string> split(const std::string& s, char delimiter) {
 	std::vector<std::string> tokens {};
 	std::string token {};
@@ -128,7 +130,6 @@ bool check_result(const std::string& key, const std::map<std::string, double>& p
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	// Initialize Admin connection
 	MYSQL* proxysql_admin = mysql_init(NULL);

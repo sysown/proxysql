@@ -38,6 +38,8 @@
 #include "utils.h"
 #include "errno.h"
 
+CommandLine cl;
+
 /**
  * @brief String size of the columns created for the testing table.
  */
@@ -59,13 +61,6 @@ const uint32_t WRITER_HOSTGROUP_ID = 0;
 
 int main(int argc, char** argv) {
 	int res = EXIT_SUCCESS;
-
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(5*RESET_CONNECTION_QUERIES);
 

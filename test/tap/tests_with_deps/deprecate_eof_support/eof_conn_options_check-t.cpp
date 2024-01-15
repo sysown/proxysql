@@ -27,6 +27,8 @@
 
 using nlohmann::json;
 
+CommandLine cl;
+
 /**
  * @brief Extracts all the columns from a `MYSQL_RES` into a `nlohmann::json`.
  *
@@ -98,12 +100,6 @@ int queryInternalEOFStatus(MYSQL *mysql, std::pair<int,int>& c_s_flags) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	std::vector<std::pair<int,int>> states {
 		{0, 0},

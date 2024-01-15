@@ -10,6 +10,9 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
+
 const int NUM_ROWS=5;
 
 int restore_admin(MYSQL* mysqladmin) {
@@ -22,10 +25,6 @@ int restore_admin(MYSQL* mysqladmin) {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if(cl.getEnv())
-		return exit_status();
 
 	plan(2+2 + 3);
 	diag("Testing PS large resultset");

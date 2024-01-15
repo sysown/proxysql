@@ -16,17 +16,14 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 using std::string;
 
 int main(int argc, char** argv) {
 	plan(1);
 
 	CommandLine cl {};
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	string php_stdout {};
 	string php_stderr {};

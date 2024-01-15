@@ -11,6 +11,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 /*
 This TAP test validate the use of mysql-init_connect.
 It uses 2 valid init_connect, and 2 invalid ones that trigger PMC-10003.
@@ -24,7 +26,6 @@ inline unsigned long long monotonic_time() {
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
 
 	plan(2+2+2+2+2 + 8);
 

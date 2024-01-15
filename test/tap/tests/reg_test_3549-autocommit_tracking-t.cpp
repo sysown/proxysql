@@ -24,6 +24,8 @@ using nlohmann::json;
 
 using query_spec = std::tuple<std::string, int>;
 
+CommandLine cl;
+
 void fetch_and_discard_results(MYSQL_RES* result, bool verbose=false) {
 	MYSQL_ROW row = nullptr;
 	unsigned int num_fields = 0;
@@ -275,12 +277,6 @@ void execute_test_definition(MYSQL* proxysql, std::pair<std::string, test_spec> 
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return -1;
-	}
 
 	plan(test_definitions.size());
 
