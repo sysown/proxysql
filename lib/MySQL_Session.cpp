@@ -933,10 +933,11 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 		uint16_t setStatus = 0;
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
 		if (mirror==false) {
 			RequestEnd(NULL);
+		} else {
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
 		}
 		l_free(pkt->size,pkt->ptr);
 		if (c=='c' || c=='C') {
@@ -1079,10 +1080,11 @@ __ret_autocommit_OK:
 					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 					if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-					client_myds->DSS=STATE_SLEEP;
-					status=WAITING_CLIENT_DATA;
 					if (mirror==false) {
 						RequestEnd(NULL);
+					} else {
+						client_myds->DSS=STATE_SLEEP;
+						status=WAITING_CLIENT_DATA;
 					}
 					__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
 				}
@@ -1309,10 +1311,11 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 	// default
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1064,(char *)"42000",(char *)"Unknown PROXYSQL INTERNAL command",true);
-	client_myds->DSS=STATE_SLEEP;
-	status=WAITING_CLIENT_DATA;
 	if (mirror==false) {
 		RequestEnd(NULL);
+	} else {
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
 	}
 	l_free(pkt->size,pkt->ptr);
 }
@@ -1530,10 +1533,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
 			if (mirror==false) {
 				RequestEnd(NULL);
+			} else {
+				client_myds->DSS=STATE_SLEEP;
+				status=WAITING_CLIENT_DATA;
 			}
 			l_free(pkt->size,pkt->ptr);
 			__sync_fetch_and_add(&MyHGM->status.frontend_set_names, 1);
@@ -1550,10 +1554,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		resultset->add_column_definition(SQLITE_TEXT, "Message");
 		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
-		client_myds->DSS = STATE_SLEEP;
-		status = WAITING_CLIENT_DATA;
 		if (mirror == false) {
 			RequestEnd(NULL);
+		} else {
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
 		}
 		l_free(pkt->size, pkt->ptr);
 		return true;
@@ -1582,10 +1587,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
 			client_myds->DSS=STATE_QUERY_SENT_NET;
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1047,(char *)"HY000",(char *)"Unsupported 'LOAD DATA LOCAL INFILE' command",true);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
 			if (mirror==false) {
 				RequestEnd(NULL);
+			} else {
+				client_myds->DSS=STATE_SLEEP;
+				status=WAITING_CLIENT_DATA;
 			}
 			l_free(pkt->size,pkt->ptr);
 			return true;
@@ -2541,8 +2547,6 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
-				status=WAITING_CLIENT_DATA;
-				client_myds->DSS=STATE_SLEEP;
 				RequestEnd(myds);
 			}
 		} else {
@@ -6690,8 +6694,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-						client_myds->DSS=STATE_SLEEP;
-						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
 						l_free(pkt->size,pkt->ptr);
 						return true;
@@ -6757,8 +6759,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-						client_myds->DSS=STATE_SLEEP;
-						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
 						l_free(pkt->size,pkt->ptr);
 						return true;
@@ -6797,8 +6797,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-						client_myds->DSS=STATE_SLEEP;
-						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
 						l_free(pkt->size,pkt->ptr);
 						return true;
@@ -7667,8 +7665,6 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 		}
 	}
 }
-// this should execute most of the commands executed when a request is finalized
-// this should become the place to hook other functions
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	// check if multiplexing needs to be disabled
 	char *qdt = NULL;
@@ -7856,8 +7852,6 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 								if (autocommit) setStatus = SERVER_STATUS_AUTOCOMMIT;
 								client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-								client_myds->DSS=STATE_SLEEP;
-								status=WAITING_CLIENT_DATA;
 								RequestEnd(NULL);
 								l_free(pkt->size,pkt->ptr);
 								return true;

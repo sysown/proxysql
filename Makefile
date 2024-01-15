@@ -89,10 +89,13 @@ default: build_src
 .PHONY: debug
 debug: build_src_debug
 
+.PHONY: testaurora_random
+testaurora_random: build_src_testaurora_random
+
 .PHONY: testaurora
 testaurora: build_src_testaurora
-	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
-	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+	# cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
+	# cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgalera
 testgalera: build_src_testgalera
@@ -168,9 +171,17 @@ build_src_debug_legacy: build_lib_debug_legacy
 build_src_testaurora: build_lib_testaurora
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_src_testaurora_random
+build_src_testaurora_random: build_lib_testaurora_random
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_AURORA_RANDOM" CC=${CC} CXX=${CXX} ${MAKE}
+
 .PHONY: build_lib_testaurora
 build_lib_testaurora: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_testaurora_random
+build_lib_testaurora_random: build_deps_debug
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_AURORA_RANDOM" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testgalera
 build_src_testgalera: build_lib_testgalera

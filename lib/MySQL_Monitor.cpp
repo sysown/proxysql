@@ -212,6 +212,9 @@ public:
 __conn_register_label:
 		for (unsigned int i=0; i<conns->len; i++) {
 			MYSQL *my1 = (MYSQL *)conns->index(i);
+			// 'my1' can be NULL due to connection cleanup
+			if (my1 == nullptr) continue;
+
 			assert(my!=my1);
 			//assert(my->net.fd!=my1->net.fd); // FIXME: we changed this with the next section of code
 			if (my->net.fd == my1->net.fd) {
@@ -232,6 +235,20 @@ __conn_register_label:
 #endif // DEBUG
 		return;
 	};
+	/**
+	 * @brief Unregister the conn from the supplied 'mmsd'.
+	 * @details DEBUG only helper function useful for checking the get/put connection flow
+	 *  for 'MySQL_Monitor_Connection_Pool'. This function should be called whenever a monitoring action does
+	 *  no longer require the conn of it's 'MMSD' and the conn has been considered 'non-suited' for being
+	 *  returned to the conn pool. This can be due to a failure in the data querying from the server itself,
+	 *  or due to unexpected data retrieved from the server. Due to this, the flow for calling this function
+	 *  during 'async' monitoring actions is:
+	 *   - If an error has taken place during the fetching itself, this function shall be called as soon as
+	 *     the failure is detected by the async state machine.
+	 *   - In case no error has taken place (TASK_RESULT_SUCCESS), this function should be called by the
+	 *     task-handler if it determines that the retrieved data is malformed. See handle_mmsd_mysql_conn.
+	 * @param mmsd The 'mmsd' which conn should be unregistered.
+	 */
 	void conn_unregister(MySQL_Monitor_State_Data *mmsd) {
 #ifdef DEBUG
 		std::lock_guard<std::mutex> lock(mutex);
@@ -322,6 +339,9 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 				if (my) {
 					for (unsigned int j=0; j<conns->len; j++) {
 						MYSQL *my1 = (MYSQL *)conns->index(j);
+						// 'my1' can be NULL due to connection cleanup
+						if (!my1) continue;
+
 						assert(my!=my1);
 						assert(my->net.fd!=my1->net.fd);
 					}
@@ -488,19 +508,23 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 /**
  * @brief MySQL 8 status query for Group Replication members.
  * @details Since 'MySQL 8' we rely on 'COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE', deprecating the previously
- *  required 'sys.gr_member_routing_candidate_status' view.
+ *  required 'sys.gr_member_routing_candidate_status' view. Another additions:
+ *  - A new field 'members' has been added to the query, containing the current cluster members as seen by the
+ *  queried node. This field is used for auto discovery.
+ *  - Server state 'RECOVERING' is now also considered when detecting if a member is a 'viable' candidate.
  */
 const char MYSQL_8_GR_QUERY[] {
 	"SELECT (SELECT IF ("
 			"MEMBER_STATE='ONLINE' AND ("
-				"(SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE MEMBER_STATE != 'ONLINE') >="
+				"(SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE MEMBER_STATE NOT IN ('ONLINE', 'RECOVERING')) >="
 					" ((SELECT COUNT(*) FROM performance_schema.replication_group_members)/2) = 0)"
 			", 'YES', 'NO')) AS viable_candidate,"
 		" (SELECT IF (@@read_only, 'YES', 'NO')) as read_only,"
-		" COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE AS transactions_behind "
+		" COUNT_TRANSACTIONS_REMOTE_IN_APPLIER_QUEUE AS transactions_behind, "
+		" (SELECT GROUP_CONCAT(CONCAT(member_host, \":\", member_port)) FROM performance_schema.replication_group_members) AS members "
 	"FROM "
 		"performance_schema.replication_group_members "
-		"JOIN performance_schema.replication_group_member_stats rgms USING(member_id)"
+		"JOIN performance_schema.replication_group_member_stats rgms USING(member_id) "
 	"WHERE rgms.MEMBER_ID=@@SERVER_UUID"
 };
 
@@ -609,7 +633,7 @@ void MySQL_Monitor_State_Data::init_async() {
 		async_state_machine_ = ASYNC_QUERY_START;
 #ifdef TEST_GROUPREP
 		{
-			query_ = "SELECT viable_candidate,read_only,transactions_behind FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS ";
+			query_ = "SELECT viable_candidate,read_only,transactions_behind,members FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS ";
 			query_ += std::string(hostname) + ":" + std::to_string(port);
 		}
 #else
@@ -1861,7 +1885,7 @@ void * monitor_group_replication_thread(void *arg) {
 	mmsd->interr=0; // reset the value
 #ifdef TEST_GROUPREP
 	{
-		std::string s { "SELECT viable_candidate,read_only,transactions_behind FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS" };
+		std::string s { "SELECT viable_candidate,read_only,transactions_behind,members FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS" };
 		s += " " + std::string(mmsd->hostname) + ":" + std::to_string(mmsd->port);
 		mmsd->async_exit_status=mysql_query_start(&mmsd->interr,mmsd->mysql,s.c_str());
 	}
@@ -3368,18 +3392,6 @@ set<uint32_t> extract_writer_hgs(SQLite3_result* Group_Replication_Hosts_results
 }
 
 /**
- * @brief Holds the info from a GR server definition.
- */
-typedef struct _gr_host_def_t {
-	string host;
-	int port;
-	int use_ssl;
-	bool writer_is_also_reader;
-	int max_transactions_behind;
-	int max_transactions_behind_count;
-} gr_host_def_t;
-
-/**
  * @brief Extracts a 'MySQL_Monitor_State_Data' from the provided 'SQLite3_result*'.
  * @details The expected contents of the provided 'SQLite3_result*' are the ones generated by
  *  'MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table'.
@@ -3499,12 +3511,66 @@ unique_ptr<MySQL_Monitor_State_Data> init_mmsd_with_conn(
 	return mmsd;
 }
 
+using gr_srv_addr_t = pair<string,int32_t>;
+
 struct gr_srv_st_t {
 	bool viable_candidate = false;
 	bool read_only = true;
 	int64_t transactions_behind = -1;
 	bool inv_srv_state = false;
+	vector<gr_srv_addr_t> gr_members {};
 };
+
+#define GR_MEMBER_ENTRY_ERR "%s '%s' in 'members' field from GR query to server '%s:%d'. Autodiscovery action aborted.\n"
+
+vector<pair<string,int32_t>> parse_gr_members_addrs(
+	const MySQL_Monitor_State_Data* mmsd, const vector<string>& gr_cluster_members
+) {
+#ifdef DEBUG
+	nlohmann::ordered_json members { gr_cluster_members };
+	proxy_debug(
+		PROXY_DEBUG_MONITOR, 7, "Received 'members' field '%s' from GR query to server '%s:%d'\n", members.dump().c_str(),
+		mmsd->hostname, mmsd->port
+	);
+#endif
+	vector<pair<string,int32_t>> result {};
+
+	for (const auto& cluster_member : gr_cluster_members) {
+		const vector<string> gr_member_host_port { split_str(cluster_member, ':') };
+		if (gr_member_host_port.size() != 2) {
+			proxy_error(GR_MEMBER_ENTRY_ERR, "Invalid server entry", cluster_member.c_str(), mmsd->hostname, mmsd->port);
+			break;
+		}
+
+		const string srv_host { gr_member_host_port[0] };
+		const char* c_str_port { gr_member_host_port[1].c_str() };
+
+		int32_t srv_port = -1;
+
+		{
+			char* p_end = nullptr;
+			long port = std::strtol(c_str_port, &p_end, 10);
+
+			if (c_str_port == p_end) {
+				proxy_error(
+					GR_MEMBER_ENTRY_ERR, "Failed to parse port for server entry", cluster_member.c_str(), mmsd->hostname, mmsd->port
+				);
+				break;
+			} else {
+				srv_port = port;
+			}
+		}
+
+		result.push_back({srv_host, srv_port});
+	}
+
+	// If any entry fails to parse, we invalidate the whole action
+	if (gr_cluster_members.size() != result.size()) {
+		return {};
+	} else {
+		return result;
+	}
+}
 
 gr_srv_st_t extract_gr_srv_st(MySQL_Monitor_State_Data* mmsd) {
 	gr_srv_st_t gr_srv_st {};
@@ -3516,14 +3582,21 @@ gr_srv_st_t extract_gr_srv_st(MySQL_Monitor_State_Data* mmsd) {
 		num_fields = mysql_num_fields(mmsd->result);
 		num_rows = mysql_num_rows(mmsd->result);
 
-		if (fields == NULL || num_fields!=3 || num_rows!=1) {
-			proxy_error(
-				"'mysql_fetch_fields' returns 'NULL', or 'mysql_num_fields(%d)', or 'mysql_num_rows(%d)' are incorrect."
-					" Server %s:%d. See bug #1994\n",
-				num_fields, num_rows, mmsd->hostname, mmsd->port
-			);
+		if (fields == NULL || num_fields!=4 || num_rows!=1) {
+			if (num_rows == 0) {
+				proxy_error(
+					"Empty resultset for GR monitoring query from server %s:%d. Server is likely misconfigured\n",
+					mmsd->hostname, mmsd->port
+				);
+			} else {
+				proxy_error(
+					"Invalid resultset for GR monitoring query from server %s:%d. Either 'mysql_fetch_fields=NULL' or unexpected 'mysql_num_fields=%d'."
+						" Please report this incident\n",
+					 mmsd->hostname, mmsd->port, num_fields
+				);
+			}
 			if (mmsd->mysql_error_msg == NULL) {
-				mmsd->mysql_error_msg = strdup("Unknown error");
+				mmsd->mysql_error_msg = strdup("Invalid or malformed resultset");
 			}
 			gr_srv_st.inv_srv_state = true;
 		} else {
@@ -3537,11 +3610,17 @@ gr_srv_st_t extract_gr_srv_st(MySQL_Monitor_State_Data* mmsd) {
 			if (row[2]) {
 				gr_srv_st.transactions_behind=atol(row[2]);
 			}
+			if (mmsd->cur_monitored_gr_srvs && row[3]) {
+				const string str_members_addrs { row[3] };
+				const vector<string> members_addrs { split_str(str_members_addrs, ',') };
+
+				gr_srv_st.gr_members = parse_gr_members_addrs(mmsd, members_addrs);
+			}
 		}
 	}
 
 	proxy_debug(
-		PROXY_DEBUG_MONITOR, 4,
+		PROXY_DEBUG_MONITOR, 7,
 		"Fetched %u:%s:%d info - interr: %d, error: %s, viable_candidate:'%d', read_only:'%d',"
 			" transactions_behind:'%ld'\n",
 		mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mmsd->interr, mmsd->mysql_error_msg,
@@ -3664,6 +3743,24 @@ void gr_mon_action_over_resp_srv(MySQL_Monitor_State_Data* mmsd, const gr_node_i
 			MyHGM->group_replication_lag_action(
 				mmsd->writer_hostgroup, mmsd->hostname, mmsd->port, node_info.lag_counts, node_info.srv_st.read_only, enable
 			);
+
+			if (mmsd->cur_monitored_gr_srvs && node_info.srv_st.gr_members.empty() == false) {
+				for (const gr_srv_addr_t& gr_member : node_info.srv_st.gr_members) {
+					const string& srv_host { gr_member.first };
+					const int32_t srv_port { gr_member.second };
+					bool found = false;
+
+					for (const gr_host_def_t& host_def : *mmsd->cur_monitored_gr_srvs) {
+						if (srv_host == host_def.host && srv_port == host_def.port) {
+							found = true;
+						}
+					}
+
+					if (found == false) {
+						MyHGM->update_group_replication_add_autodiscovered(srv_host, srv_port, mmsd->writer_hostgroup);
+					}
+				}
+			}
 		}
 	}
 }
@@ -3695,12 +3792,16 @@ void gr_handle_actions_over_unresp_srvs(const vector<gr_host_def_t>& hosts_defs,
  *  before placing the connection back into the 'ConnectionPool', on failure, we discard the connection.
  * @param mmsd The mmsd wrapper holding all information for returning the connection.
  */
-void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd, bool unregister_conn_on_failure) {
+void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
 	if (mmsd == nullptr) return;
 
 	if (mmsd->mysql) {
 		if (mmsd->interr || mmsd->mysql_error_msg) {
-			if (unregister_conn_on_failure) {
+			// If 'MySQL_Monitor_State_Data' reaches the end of a task_handler without 'TASK_RESULT_UNKNOWN':
+			//  1. Connection failed to be created, 'task_result' should be 'TASK_RESULT_UNKNOWN'. No
+			//     unregister needed.
+			//  2. Fetching operation failed, the async fetching handler already handled the 'unregister'.
+			if (mmsd->get_task_result() == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 				GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 			}
 			mysql_close(mmsd->mysql);
@@ -3717,7 +3818,7 @@ void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd, bool unregister_conn
 					MyHGM->p_update_mysql_error_counter(
 						p_mysql_error_type::proxysql, mmsd->hostgroup_id, mmsd->hostname, mmsd->port, mysql_errno(mmsd->mysql)
 					);
-					if (unregister_conn_on_failure) {
+					if (mmsd->get_task_result() == MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_SUCCESS) {
 						GloMyMon->My_Conn_Pool->conn_unregister(mmsd);
 					}
 					mysql_close(mmsd->mysql);
@@ -3766,9 +3867,9 @@ void gr_report_fetching_errs(MySQL_Monitor_State_Data* mmsd) {
  * @param mmsd The server 'MySQL_Monitor_State_Data' after the fetching is completed. It should either
  *  hold a valid 'MYSQL_RES' or an error.
  */
-void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd, bool unregister_conn_on_failure) {
+void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
 	// We base 'start_time' on the conn init for 'MySQL_Monitor_State_Data'. If a conn creation was
-	// required, we take into account this time into account, otherwise we asume that 'start_time=t1'.
+	// required, we take into account this time into account, otherwise we assume that 'start_time=t1'.
 	uint64_t start_time = 0;
 	if (mmsd->created_conn) {
 		start_time = mmsd->init_time;
@@ -3789,7 +3890,7 @@ void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd, bool unregiste
 	}
 
 	// Handle 'mmsd' MySQL conn return to 'ConnectionPool'
-	handle_mmsd_mysql_conn(mmsd, unregister_conn_on_failure);
+	handle_mmsd_mysql_conn(mmsd);
 }
 
 /**
@@ -3894,6 +3995,11 @@ void* monitor_GR_thread_HG(void *arg) {
 			}
 		}
 
+		int rnd_discoverer = conn_mmsds.size() == 0 ? -1 : rand() % conn_mmsds.size();
+		if (rnd_discoverer != -1) {
+			conn_mmsds[rnd_discoverer]->cur_monitored_gr_srvs = &hosts_defs;
+		}
+
 		// TODO: This needs to be reworked once we change the way monitoring actions work on clusters, taking
 		// the full cluster fetch data to avoid transient states. For now, since we perform the monitoring
 		// actions independently, we workaround the limitation of 'Monitor_Poll' of only handling
@@ -3905,7 +4011,7 @@ void* monitor_GR_thread_HG(void *arg) {
 
 		// Handle 'mmsds' that failed to optain conns
 		for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : fail_mmsds) {
-			async_gr_mon_actions_handler(mmsd.get(), true);
+			async_gr_mon_actions_handler(mmsd.get());
 		}
 
 		// Update 't1' for subsequent fetch operations and reset errors
@@ -3922,6 +4028,10 @@ void* monitor_GR_thread_HG(void *arg) {
 		}
 
 		///////////////////////////////////////////////////////////////////////////////////////
+
+		if (rnd_discoverer != -1) {
+			conn_mmsds[rnd_discoverer]->cur_monitored_gr_srvs = nullptr;
+		}
 
 		// Set the time for the next iteration
 		next_check_time = curtime + mysql_thread___monitor_groupreplication_healthcheck_interval * 1000;
@@ -5780,12 +5890,12 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 		rnd %= num_hosts;
 		rc_ping = GloMyMon->server_responds_to_ping(hpa[rnd].host, hpa[rnd].port);
 		//proxy_info("Looping Monitor thread for AWS Aurora writer HG %u\n", wHG);
-#ifdef TEST_AURORA
+#ifdef TEST_AURORA_RANDOM
 		if (rand() % 100 < 30) {
 			// we randomly fail 30% of the requests
 			rc_ping = false;
 		}
-#endif // TEST_AURORA
+#endif // TEST_AURORA_RANDOM
 		if (rc_ping) {
 			found_pingable_host = true;
 			cur_host_idx = rnd;
@@ -5808,12 +5918,12 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 			}
 		}
 
-#ifdef TEST_AURORA
+#ifdef TEST_AURORA_RANDOM
 		if (rand() % 200 == 0) {
 			// we randomly fail 0.5% of the requests
 			found_pingable_host = false;
 		}
-#endif // TEST_AURORA
+#endif // TEST_AURORA_RANDOM
 
 		if (found_pingable_host == false) {
 			proxy_error("No node is pingable for AWS Aurora cluster with writer HG %u\n", wHG);
@@ -5867,7 +5977,10 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 	mmsd->t1=monotonic_time();
 	mmsd->interr=0; // reset the value
 #ifdef TEST_AURORA
-	mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, "SELECT SERVER_ID, SESSION_ID, LAST_UPDATE_TIMESTAMP, REPLICA_LAG_IN_MILLISECONDS, CPU FROM REPLICA_HOST_STATUS ORDER BY SERVER_ID");
+	{
+		string query { TEST_AURORA_MONITOR_BASE_QUERY + std::to_string(wHG) };
+		mmsd->async_exit_status = mysql_query_start(&mmsd->interr, mmsd->mysql, query.c_str());
+	}
 #else
 	// for reference we list the old queries.
 	// original implementation:
@@ -6075,34 +6188,6 @@ __fast_exit_monitor_aws_aurora_HG_thread:
 			}
 		}
 	}
-/*
-		mmsd->writer_hostgroup=atoi(r->fields[0]);
-		mmsd->writer_is_also_reader=atoi(r->fields[4]);
-					mmsd->max_transactions_behind=atoi(r->fields[5]);
-					mmsd->mondb=monitordb;
-					WorkItem* item;
-					item=new WorkItem(mmsd,monitor_AWS_Aurora_thread);
-					GloMyMon->queue.add(item);
-					usleep(us);
-*/
-//				}
-
-/*
-		for
-		for (std::vector<SQLite3_row *>::iterator it = Galera_Hosts_resultset->rows.begin() ; it != Galera_Hosts_resultset->rows.end(); ++it) {
-
-		}
-				SQLite3_row *r=*it;
-				bool rc_ping = true;
-				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
-				if (rc_ping) { // only if server is responding to pings
-					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
-					mmsd->writer_hostgroup=atoi(r->fields[0]);
-					mmsd->writer_is_also_reader=atoi(r->fields[4]);
-					mmsd->max_transactions_behind=atoi(r->fields[5]);
-					mmsd->mondb=monitordb;
-
-*/
 	}
 __exit_monitor_AWS_Aurora_thread_HG_now:
 	if (mmsd) {
@@ -6222,66 +6307,6 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 			pthread_mutex_unlock(&aws_aurora_mutex);
 		}
 
-/*
-		if (t1 < next_loop_at) {
-			goto __sleep_monitor_aws_aurora;
-		}
-
-		if (next_loop_at == 0) {
-			// free the queue
-
-		}
-
-		next_loop_at=t1+1000*mysql_thread___monitor_galera_healthcheck_interval;
-		pthread_mutex_lock(&aws_aurora_mutex);
-		if (AWS_Aurora_Hosts_resultset==NULL) {
-				goto __end_monitor_aws_aurora_loop;
-		} else {
-			if (AWS_Aurora_Hosts_resultset->rows_count==0) {
-				goto __end_monitor_aws_aurora_loop;
-			}
-			int us=100;
-			if (AWS_Aurora_Hosts_resultset->rows_count) {
-				us=mysql_thread___monitor_read_only_interval/2/Galera_Hosts_resultset->rows_count;
-			}
-			for (std::vector<SQLite3_row *>::iterator it = Galera_Hosts_resultset->rows.begin() ; it != Galera_Hosts_resultset->rows.end(); ++it) {
-				SQLite3_row *r=*it;
-				bool rc_ping = true;
-				rc_ping = server_responds_to_ping(r->fields[1],atoi(r->fields[2]));
-				if (rc_ping) { // only if server is responding to pings
-					MySQL_Monitor_State_Data *mmsd=new MySQL_Monitor_State_Data(r->fields[1],atoi(r->fields[2]), NULL, atoi(r->fields[3]));
-					mmsd->writer_hostgroup=atoi(r->fields[0]);
-					mmsd->writer_is_also_reader=atoi(r->fields[4]);
-					mmsd->max_transactions_behind=atoi(r->fields[5]);
-					mmsd->mondb=monitordb;
-					WorkItem* item;
-					item=new WorkItem(mmsd,monitor_AWS_Aurora_thread);
-					GloMyMon->queue.add(item);
-					usleep(us);
-				}
-				if (GloMyMon->shutdown) {
-					pthread_mutex_unlock(&galera_mutex);
-					return NULL;
-				}
-			}
-		}
-
-__end_monitor_aws_aurora_loop:
-		pthread_mutex_unlock(&aws_aurora_mutex);
-		if (mysql_thread___monitor_enabled==true) {
-		}
-
-__sleep_monitor_aws_aurora:
-		t2=monotonic_time();
-		if (t2<next_loop_at) {
-			unsigned long long st=0;
-			st=next_loop_at-t2;
-			if (st > 200000) {
-				st = 200000;
-			}
-			usleep(st);
-		}
-*/
 		usleep(10000);
 	}
 	if (mysql_thr) {
@@ -6323,6 +6348,18 @@ unsigned int MySQL_Monitor::estimate_lag(char* server_id, AWS_Aurora_status_entr
 	return mlag;
 }
 
+void print_aws_aurora_status_entry(AWS_Aurora_status_entry* aase) {
+	if (aase && aase->start_time) {
+		if (aase->host_statuses->size()) {
+			for (AWS_Aurora_replica_host_status_entry* hse : *aase->host_statuses) {
+				if (hse) {
+					fprintf(stderr,"%s %s %s %f %f\n", hse->server_id, hse->session_id, hse->last_update_timestamp, hse->replica_lag_ms , hse->cpu);
+				}
+			}
+		}
+	}
+}
+
 void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
 #ifdef TEST_AURORA
 	unsigned int i = 0;
@@ -6340,16 +6377,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 		for (i=0; i < N_L_ASE; i++) {
 			AWS_Aurora_status_entry *aase = lasts_ase[i];
 			if (ev == true || i == ase_idx) {
-				if (aase && aase->start_time) {
-					if ( aase->host_statuses->size() ) {
-						for (std::vector<AWS_Aurora_replica_host_status_entry *>::iterator it3 = aase->host_statuses->begin(); it3!=aase->host_statuses->end(); ++it3) {
-							AWS_Aurora_replica_host_status_entry *hse = *it3;
-							if (hse) {
-								fprintf(stderr,"%s %s %s %f %f\n", hse->server_id, hse->session_id, hse->last_update_timestamp, hse->replica_lag_ms , hse->cpu);
-							}
-						}
-					}
-				}
+				print_aws_aurora_status_entry(aase);
 			}
 		}
 	}
@@ -6383,7 +6411,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 							if (strcmp(prev_hse->server_id,hse->server_id)==0) {
 								bool prev_enabled = true;
 
-								unsigned int prev_lag_ms = estimate_lag(hse->server_id, lasts_ase, ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
+								unsigned int prev_lag_ms = estimate_lag(hse->server_id, lasts_ase, prev_ase_idx, add_lag_ms, min_lag_ms, lag_num_checks);
 								if (prev_lag_ms > max_latency_ms) {
 									prev_enabled = false;
 								}
@@ -7566,7 +7594,7 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks_2(
 	for (MySQL_Monitor_State_Data* mmsd : mmsds) {
 		const MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
-		async_gr_mon_actions_handler(mmsd, false);
+		async_gr_mon_actions_handler(mmsd);
 	}
 
 	return true;
