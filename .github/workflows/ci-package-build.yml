@@ -161,7 +161,7 @@ jobs:
 #      if: always()
 #      uses: actions/upload-artifact@v3
 #      with:
-#        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-${{ matrix.dist }}
+#        name: ${{ github.workflow }}-${{ env.GIT_VERSION }}-${{ matrix.dist }}
 #        path: |
 #          ./binaries/
 #          !./**/.gitignore
