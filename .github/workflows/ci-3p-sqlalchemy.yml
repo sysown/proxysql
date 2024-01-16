@@ -82,7 +82,7 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_sqlalchemy/logs
           
