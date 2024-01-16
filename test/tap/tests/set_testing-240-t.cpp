@@ -553,20 +553,14 @@ int main(int argc, char *argv[]) {
 		MYSQL_QUERY(proxysql_admin, update.c_str());
 		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
 
-		if (detect_version(cl, is_mariadb) != 0) {
+		if (detect_version(is_mariadb) != 0) {
 			diag("Cannot detect MySQL version");
 			return exit_status();
 		}
 
-		if (strcmp(host,"localhost")==0) {
-			local = 1;
-		}
-		if (uniquequeries == 0) {
-			if (queries) uniquequeries=queries;
-		}
-		if (uniquequeries) {
-			uniquequeries=(int)sqrt(uniquequeries);
-		}
+//		if (strcmp(cl.host, "localhost")==0) {
+//			local = 1;
+//		}
 
 		for (int algo = 1; algo <= 2; algo++ ) {
 			connect_phase_completed = 0;
