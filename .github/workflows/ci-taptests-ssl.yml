@@ -48,6 +48,7 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update -y
+        sudo apt-get full-upgrade -y
         sudo apt-get install -y python3-pymysql python3-structlog sysbench mycli
         sudo pip3 install fastcov
         
