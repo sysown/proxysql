@@ -135,13 +135,18 @@ void * my_conn_thread(void *arg) {
 		std::string nextcs = cs[i%cs.size()];
 
 		MYSQL *mysql = mysql_init(NULL);
-		diag("Connecting: cl.root_username='%s' cl.use_ssl=%d cl.compression=%d", cl.root_username, cl.use_ssl, cl.compression);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.username, cl.use_ssl, cl.compression);
 		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, nextcs.c_str());
+		if (i < total_conn_having_client_deprecate_eof_support) {
+			// enable 'CLIENT_DEPRECATE_EOF' support
+			mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+		}
 		if (cl.use_ssl)
 			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)
 			mysql_options(mysql, MYSQL_OPT_COMPRESS, NULL);
-		if (!mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, cl.port + rand()%multiport, NULL, 0)) {
+		int port = local ? 0 : ( cl.port + rand()%multiport );
+		if (!mysql_real_connect(mysql, cl.host, cl.username, cl.password, schema, port, NULL, 0)) {
 			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
 			exit(EXIT_FAILURE);
 		} else {
@@ -150,19 +155,6 @@ void * my_conn_thread(void *arg) {
 			ok(cl.compression == mysql->net.compress, "Compression: (%d)", mysql->net.compress);
 		}
 
-		if (i < total_conn_having_client_deprecate_eof_support) {
-			// enable 'CLIENT_DEPRECATE_EOF' support
-			mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
-		}
-		int port = local ? 0 : ( cl.port + rand()%multiport );
-		MYSQL *rc=mysql_real_connect(mysql, cl.host, cl.username, cl.password, schema, port, NULL, 0);
-
-		if (rc==NULL) {
-			if (silent==0) {
-				fprintf(stderr,"Error while connecting on %s:%d : %s\n", cl.host , port , mysql_error(mysql));
-			}
-			return NULL;
-		}
 		mysqlconns[i]=mysql;
 		set_sql_mode[i]=false;
 		__sync_add_and_fetch(&status_connections,1);
