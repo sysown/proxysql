@@ -473,11 +473,13 @@ void MySQL_Protocol::generate_one_byte_pkt(unsigned char b) {
 	sequence_id++;
 	mysql_hdr myhdr;
 	myhdr.pkt_id=sequence_id;
-	myhdr.pkt_length=1;
+	myhdr.pkt_length=2;
 	unsigned int size=myhdr.pkt_length+sizeof(mysql_hdr);
 	unsigned char *_ptr=(unsigned char *)l_alloc(size);
 	memcpy(_ptr, &myhdr, sizeof(mysql_hdr));
 	int l=sizeof(mysql_hdr);
+	_ptr[l]=1;
+	l++;
 	_ptr[l]=b;
 	(*myds)->PSarrayOUT->add((void *)_ptr,size);
 	(*myds)->pkt_sid=sequence_id;
