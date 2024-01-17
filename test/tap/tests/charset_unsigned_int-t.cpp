@@ -14,7 +14,7 @@ CommandLine cl;
 
 int main(int argc, char** argv) {
 
-	plan(2 + 2 + 6);
+	plan(2+2+2+2+2 + 6);
 	diag("Testing correct collation set with proxysql");
 
 	std::string var_collation_connection = "collation_connection";

@@ -376,7 +376,11 @@ int main(int argc, char *argv[]) {
 //	host = cl.host;
 //	port = cl.port;
 
-	plan(2 + queries * num_threads);
+	int p = 2;										// admin connection
+	p += 2 * queries / queries_per_connections;		// user connections
+	p += queries * num_threads;						// tests
+	plan(p);
+
 	if (!readTestCases(fileName)) {
 		fprintf(stderr, "Cannot read %s\n", fileName.c_str());
 		return exit_status();
