@@ -1903,8 +1903,12 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 	}
 	if (!strcasecmp(name,"server_capabilities")) {
-		int intv=atoi(value);
-		if (intv > 10 && intv <= 65535) {
+		// replaced atoi() with strtoul() to have a 32 bit result
+		uint32_t intv = strtoul(value, NULL, 10);
+		if (intv > 10) {
+			// Note that:
+			// - some capabilities are changed at runtime while performing the handshake with the client
+			// - even if we support 32 bits capabilities, many of them do not have any real meaning for proxysql (not supported)
 			variables.server_capabilities=intv;
 			return true;
 		} else {
