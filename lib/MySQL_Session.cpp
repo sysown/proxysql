@@ -1191,7 +1191,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
 			j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
 			j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-			j["conn"]["status"]["transaction"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_TRANSACTION);
 			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 		}
 	}
@@ -1250,7 +1249,18 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
 				j["backends"][i]["conn"]["status"]["has_warnings"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 				j["backends"][i]["conn"]["warning_count"] = _myconn->warning_count;
-				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
+				{
+					// MultiplexDisabled : status returned by MySQL_Connection::MultiplexDisabled();
+					// MultiplexDisabled_ext : status returned by MySQL_Connection::MultiplexDisabled() || MySQL_Connection::isActiveTransaction()
+					bool multiplex_disabled = _myconn->MultiplexDisabled();
+					j["backends"][i]["conn"]["MultiplexDisabled"] = multiplex_disabled;
+					if (multiplex_disabled == false) {
+						if (_myconn->IsActiveTransaction() == true) {
+							multiplex_disabled = true;
+						}
+					}
+					j["backends"][i]["conn"]["MultiplexDisabled_ext"] = multiplex_disabled;
+				}
 				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
 				j["backends"][i]["conn"]["client_flag"]["value"] = _myconn->options.client_flag;
