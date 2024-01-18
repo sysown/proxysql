@@ -758,6 +758,12 @@ admin_metrics_map = std::make_tuple(
 		)
 	},
 	admin_gauge_vector {
+		std::make_tuple (
+			p_admin_gauge::mysql_listener_paused,
+			"proxysql_mysql_listener_paused",
+			"MySQL listener paused because of PROXYSQL PAUSE.",
+			metric_tags {}
+		),
 		// memory metrics
 		std::make_tuple (
 			p_admin_gauge::connpool_memory_bytes,
@@ -9421,6 +9427,11 @@ void ProxySQL_Admin::p_update_metrics() {
 	this->p_stats___memory_metrics();
 	// Update stmt metrics
 	this->p_update_stmt_metrics();
+
+	// updated mysql_listener_paused
+	int st = ( proxysql_mysql_paused == true ? 1 : 0);
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_listener_paused]->Set(st);
+
 }
 
 /**
@@ -9915,7 +9926,14 @@ void ProxySQL_Admin::stats___mysql_global() {
 		statsdb->execute(query);
 		free(query);
 	}
-
+	{
+		vn=(char *)"mysql_listener_paused";
+		sprintf(bu, "%s", ( proxysql_mysql_paused==true ? "true" : "false") );
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+	}
 	statsdb->execute("COMMIT");
 }
 
