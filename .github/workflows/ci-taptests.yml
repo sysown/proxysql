@@ -64,6 +64,7 @@ jobs:
         sudo apt-get update -y
         sudo apt-get full-upgrade -y
         sudo apt-get install -y python3-pymysql python3-structlog sysbench mycli
+        sudo apt-get install -y --no-install-recommends python3-pip
         sudo pip3 install fastcov
         
         wget https://github.com/openark/orchestrator/releases/download/v3.2.6/orchestrator-client_3.2.6_amd64.deb
