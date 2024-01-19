@@ -17,10 +17,18 @@
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
 static void term_handler(int sig) {
-  proxy_warning("Received TERM signal: shutdown in progress...\n");
+	proxy_warning("Received TERM signal: shutdown in progress...\n");
+/*
+In ProxySQL 2.1 we replace PROXYSQL SHUTDOWN with PROXYSQL SHUTDOWN SLOW , and the former command now perform a "fast shutdown".
+The same is now implemented for TERM signal handler.
+*/
 #ifdef DEBUG
+	// Note: in DEBUG built we will still perform a slow shutdown.
+	// DEBUG built is not meant for production use.
+	__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+#else
+	exit(EXIT_SUCCESS);
 #endif
-  __sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 }
 
 void crash_handler(int sig) {
