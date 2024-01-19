@@ -24,7 +24,6 @@ jobs:
     secrets: inherit
 
   run:
-    if: ${{ always() }}
     needs: [ "cache" ]
     uses: sysown/proxysql/.github/workflows/ci-3p-mariadb-connector-c.yml@GH-Actions
     secrets: inherit
