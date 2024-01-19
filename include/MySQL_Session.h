@@ -133,6 +133,7 @@ class MySQL_Session
 
 	void return_proxysql_internal(PtrSize_t *);
 	bool handler_special_queries(PtrSize_t *);
+	bool handler_special_queries_STATUS(PtrSize_t *);
 	/**
 	 * @brief Handles 'COMMIT|ROLLBACK' commands.
 	 * @details Forwarding the packet is required when there are active transactions. Since we are limited to
