@@ -244,7 +244,7 @@ jobs:
           proxysql/binaries/
           proxysql/src/
           proxysql/libs/
-          proxysql/deps/
+#          proxysql/deps/
 
     - name: Archive artifacts tests
       if: ${{ failure() }}
@@ -252,4 +252,4 @@ jobs:
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
-          proxysql/test/
+          proxysql/test/tap/tests*
