@@ -308,13 +308,30 @@ jobs:
         sudo chmod -R 777 ${{ github.workspace }}/*
         echo "${{ matrix.testgroup }}" | tr -d '*|' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
         
-    - name: Archive artifacts
-      if: ${{ failure() }}
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
-          proxysql/ci_gcov_logs/
-          proxysql/ci_infra_logs/
-          proxysql/ci_tests_logs/
+          proxysql/ci_*_logs/
+
+    - name: Archive artifacts bins
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        path: |
+          proxysql/binaries/
+          proxysql/src/
+          proxysql/libs/
+#          proxysql/deps/
+
+    - name: Archive artifacts tests
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        path: |
+          proxysql/test/tap/tests*
           

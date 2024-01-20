@@ -58,13 +58,22 @@ jobs:
         sudo chmod -R 777 ${{ github.workspace }}/*
         exit $RC
 
-    - name: Archive artifacts
-      if: always()
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}
         path: |
           proxysql/ci_*_logs/
+          
+    - name: Archive artifacts bin
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-bin-run#${{ github.run_number }}
+        path: |
+          proxysql/binaries/
           proxysql/src/
-          
-          
+          proxysql/libs/
+#          proxysql/deps/
+            

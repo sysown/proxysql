@@ -191,7 +191,7 @@ jobs:
         exit $RC
 
     - name: Cleanup
-      if: ${{ always() }}
+      if: ${{ failure() && !cancelled() }}
       run: |
         set +e
         cd ${{ github.workspace }}/jenkins-build-scripts
@@ -212,7 +212,7 @@ jobs:
         echo "${{ matrix.taptests }}" | tr -d '*|' | xargs -0 printf 'taptests=%s' >> $GITHUB_ENV
 
     - name: Archive artifacts logs
-      if: ${{ failure() }}
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v3
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.taptests }}
@@ -220,7 +220,7 @@ jobs:
           proxysql/ci_*_logs/
 
     - name: Archive artifacts bins
-      if: ${{ failure() }}
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v3
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.taptests }}
@@ -231,7 +231,7 @@ jobs:
 #          proxysql/deps/
 
     - name: Archive artifacts tests
-      if: ${{ failure() }}
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v3
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.taptests }}

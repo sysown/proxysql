@@ -79,7 +79,7 @@ jobs:
         fi
     
     - name: Archive artifacts logs
-      if: ${{ failure() }}
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v3
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}

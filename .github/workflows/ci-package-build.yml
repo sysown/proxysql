@@ -59,7 +59,7 @@ jobs:
         dist: [ 'almalinux8','almalinux9','centos6','centos7','centos8','debian8','debian9','debian10','debian11','debian12','fedora27','fedora28','fedora33','fedora34','fedora36','fedora37','fedora38','fedora39','opensuse15','ubuntu14','ubuntu16','ubuntu18','ubuntu20','ubuntu22' ]
         type: [ '','-dbg','-clang' ]
         exclude:
-#         broken before v2.6.0 - clang too old
+#         broken - clang too old
           - dist: 'centos6'
             type: '-clang'
           - dist: 'centos7'
@@ -83,24 +83,6 @@ jobs:
           - dist: 'ubuntu18'
             type: '-clang'
 
-#         broken after v2.6.0 - https://github.com/sysown/proxysql/pull/4395
-#          - dist: 'almalinux8'
-#            type: '-clang'
-#          - dist: 'almalinux9'
-#            type: '-clang'
-#          - dist: 'centos8'
-#            type: '-clang'
-#          - dist: 'centos9'
-#            type: '-clang'
-#          - dist: 'debian11'
-#            type: '-clang'
-#          - dist: 'fedora34'
-#            type: '-clang'
-#          - dist: 'opensuse15'
-#            type: '-clang'
-#          - dist: 'ubuntu20'
-#            type: '-clang'
-
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
@@ -115,7 +97,7 @@ jobs:
         echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
     
     - name: Update release
-      if: always()
+      if: ${{ !cancelled() }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
@@ -158,7 +140,7 @@ jobs:
         gh release upload v2.x-head --repo ${{ github.repository }} --clobber ${{ env.BIN_PKG }}
     
 #    - name: Archive artifacts
-#      if: always()
+#      if: ${{ failure() && !cancelled() }}
 #      uses: actions/upload-artifact@v3
 #      with:
 #        name: ${{ github.workflow }}-${{ env.GIT_VERSION }}-${{ matrix.dist }}

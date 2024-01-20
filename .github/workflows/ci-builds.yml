@@ -171,7 +171,7 @@ jobs:
           proxysql/tap-matrix*
 
     - name: Archive artifacts
-      if: ${{ failure() }}
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v3
       with:
         name: ci-builds-${{ github.sha }}-run#${{ github.run_number }}
@@ -196,7 +196,7 @@ jobs:
           gh variable -R sysown/proxysql delete ${LOCK} || true
         elif [[ ! -z ${PROBE} ]]; then
           echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-          exit -1
+        #  exit -1
         else
           echo "Not locked '${LOCK^^}'"
         fi

@@ -58,11 +58,11 @@ jobs:
       run: |
         grep 'exited with code 0' build.log
         
-    - name: Archive artifacts
-      if: ${{ failure() }}
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v3
       with:
-        name: ${{ env.GITHUB_WORKFLOW }}-${{ matrix.target }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ matrix.target }}
         path: |
           ./build-*.log
           
