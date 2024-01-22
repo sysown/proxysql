@@ -431,7 +431,7 @@ char * sha256_crypt_r (const char *key, const char *salt, char *buffer, int bufl
   sha256_init_ctx (&alt_ctx);
 
   /* For every character in the password add the entire password.  */
-  for (unsigned char cnta = 0; cnta < 16 + alt_result[0]; ++cnta)
+  for (cnt = 0; cnt < static_cast<size_t>(16) + alt_result[0]; ++cnt)
     sha256_process_bytes (salt, salt_len, &alt_ctx);
 
   /* Finish the digest.  */
