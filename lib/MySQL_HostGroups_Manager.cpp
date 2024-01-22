@@ -2904,6 +2904,7 @@ void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, 
 }
 
 MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms, MySQL_Session *sess) {
+	PROFILER1_BLOCK1(a);
 	MySrvC *mysrvc=NULL;
 	unsigned int j;
 	unsigned int sum=0;
@@ -3248,6 +3249,7 @@ MySrvC *MyHGC::get_random_MySrvC(char * gtid_uuid, uint64_t gtid_trxid, int max_
 //MySrvC * MySrvList::idx(unsigned int i) { return (MySrvC *)servers->index(i); }
 
 void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned int end, unsigned int& conn_found_idx, unsigned int& connection_quality_level, unsigned int& number_of_matching_session_variables, const MySQL_Connection * client_conn) {
+	PROFILER1_BLOCK1(a);
 	char *schema = client_conn->userinfo->schemaname;
 	MySQL_Connection * conn=NULL;
 	unsigned int k;
@@ -3313,6 +3315,7 @@ void MySrvConnList::get_random_MyConn_inner_search(unsigned int start, unsigned 
 
 
 MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff) {
+	PROFILER1_BLOCK1(a);
 	MySQL_Connection * conn=NULL;
 	unsigned int i;
 	unsigned int conn_found_idx;
@@ -3508,6 +3511,7 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 }
 
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
+	PROFILER1_BLOCK1(a);
 	MySQL_Connection * conn=NULL;
 	wrlock();
 	status.myconnpoll_get++;
@@ -3531,6 +3535,7 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 }
 
 void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, bool _lock) {
+	PROFILER1_BLOCK1(a);
 	bool to_del=true; // the default, legacy behavior
 	MySrvC *mysrvc=(MySrvC *)c->parent;
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE && c->send_quit && queue.size() < __sync_fetch_and_add(&GloMTH->variables.connpoll_reset_queue_length,0)) {
@@ -3941,6 +3946,7 @@ void MySQL_HostGroups_Manager::drop_all_idle_connections() {
  *   dropped as well
  */
 int MySQL_HostGroups_Manager::get_multiple_idle_connections(int _hid, unsigned long long _max_last_time_used, MySQL_Connection **conn_list, int num_conn) {
+	PROFILER1_BLOCK1(a);
 	wrlock();
 	drop_all_idle_connections();
 	int num_conn_current=0;

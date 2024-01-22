@@ -514,6 +514,7 @@ void MySQL_Data_Stream::check_data_flow() {
 }
 
 int MySQL_Data_Stream::read_from_net() {
+	PROFILER1_BLOCK1(a);
 	if (encrypted) {
 		//proxy_info("Entering\n");
 	}
@@ -688,6 +689,7 @@ int MySQL_Data_Stream::read_from_net() {
 }
 
 int MySQL_Data_Stream::write_to_net() {
+	PROFILER1_BLOCK1(a);
     int bytes_io=0;
 	int s = queue_data(queueOUT);
 	int n;
@@ -849,6 +851,7 @@ void MySQL_Data_Stream::set_pollout() {
 }
 
 int MySQL_Data_Stream::write_to_net_poll() {
+	PROFILER1_BLOCK1(a);
 	int rc=0;
 	if (active==0) return rc;
 /*
@@ -953,6 +956,7 @@ int MySQL_Data_Stream::read_pkts() {
 }
 
 int MySQL_Data_Stream::buffer2array() {
+	PROFILER1_BLOCK1(a);
 	int ret=0;
 	bool fast_mode=sess->session_fast_forward;
 	{
@@ -1263,6 +1267,7 @@ void MySQL_Data_Stream::generate_compressed_packet() {
 
 
 int MySQL_Data_Stream::array2buffer() {
+	PROFILER1_BLOCK1(a);
 	int ret=0;
 	unsigned int idx=0;
 	bool cont=true;

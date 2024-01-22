@@ -711,6 +711,7 @@ bool MySQL_Connection::match_tracked_options(const MySQL_Connection *c) {
 
 // non blocking API
 void MySQL_Connection::connect_start() {
+	PROFILER1_BLOCK1(a);
 	PROXY_TRACE();
 	mysql=mysql_init(NULL);
 	assert(mysql);
@@ -906,6 +907,7 @@ void MySQL_Connection::connect_start() {
 }
 
 void MySQL_Connection::connect_cont(short event) {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_connect_cont(&ret_mysql, mysql, mysql_status(event, true));
 }
@@ -1017,17 +1019,20 @@ void MySQL_Connection::set_query(char *stmt, unsigned long length) {
 }
 
 void MySQL_Connection::real_query_start() {
+	PROFILER1_BLOCK1(a);
 	PROXY_TRACE();
 	async_exit_status = mysql_real_query_start(&interr , mysql, query.ptr, query.length);
 }
 
 void MySQL_Connection::real_query_cont(short event) {
+	PROFILER1_BLOCK1(a);
 	if (event == 0) return;
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_real_query_cont(&interr ,mysql , mysql_status(event, true));
 }
 
 void MySQL_Connection::stmt_prepare_start() {
+	PROFILER1_BLOCK1(a);
 	PROXY_TRACE();
 	query.stmt=mysql_stmt_init(mysql);
 	my_bool my_arg=true;
@@ -1036,11 +1041,13 @@ void MySQL_Connection::stmt_prepare_start() {
 }
 
 void MySQL_Connection::stmt_prepare_cont(short event) {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_stmt_prepare_cont(&interr , query.stmt , mysql_status(event, true));
 }
 
 void MySQL_Connection::stmt_execute_start() {
+	PROFILER1_BLOCK1(a);
 	PROXY_TRACE();
 	int _rc=0;
 	assert(query.stmt->mysql); // if we reached here, we hit bug #740
@@ -1058,6 +1065,7 @@ void MySQL_Connection::stmt_execute_start() {
 }
 
 void MySQL_Connection::stmt_execute_cont(short event) {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_PROTOCOL, 6,"event=%d\n", event);
 	async_exit_status = mysql_stmt_execute_cont(&interr , query.stmt , mysql_status(event, true));
 }
@@ -1091,6 +1099,7 @@ void MySQL_Connection::set_is_client() {
 #define NEXT_IMMEDIATE(new_st) do { async_state_machine = new_st; goto handler_again; } while (0)
 
 MDB_ASYNC_ST MySQL_Connection::handler(short event) {
+	PROFILER1_BLOCK1(a);
 	unsigned long long processed_bytes=0;	// issue #527 : this variable will store the amount of bytes processed during this event
 	if (mysql==NULL) {
 		// it is the first time handler() is being called

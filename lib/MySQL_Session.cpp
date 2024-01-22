@@ -1304,6 +1304,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 }
 
 void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
+	PROFILER1_BLOCK1(a);
 	unsigned int l = 0;
 	l = strlen((char *)"PROXYSQL INTERNAL SESSION");
 	if (pkt->size==(5+l) && strncasecmp((char *)"PROXYSQL INTERNAL SESSION", (char *)pkt->ptr+5, l)==0) {
@@ -1399,6 +1400,7 @@ bool MySQL_Session::handler_special_queries_STATUS(PtrSize_t *pkt) {
 }
 
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
+	PROFILER1_BLOCK1(a);
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
 	if (
@@ -2967,6 +2969,7 @@ bool MySQL_Session::handler_again___status_CHANGING_SCHEMA(int *_rc) {
 
 
 bool MySQL_Session::handler_again___status_CONNECTING_SERVER(int *_rc) {
+	PROFILER1_BLOCK1(a);
 	//fprintf(stderr,"CONNECTING_SERVER\n");
 	unsigned long long curtime=monotonic_time();
 	thread->atomic_curtime=curtime;
@@ -3832,6 +3835,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___default() {
 }
 
 int MySQL_Session::get_pkts_from_client(bool& wrong_pass, PtrSize_t& pkt) {
+	PROFILER1_BLOCK1(a);
 	int handler_ret = 0;
 	unsigned char c;
 
@@ -3974,6 +3978,7 @@ __get_pkts_from_client:
 							case _MYSQL_COM_QUERY:
 								__sync_add_and_fetch(&thread->status_variables.stvar[st_var_queries],1);
 								if (session_type == PROXYSQL_SESSION_MYSQL) {
+									PROFILER1_BLOCK1(a);
 									bool rc_break=false;
 									bool lock_hostgroup = false;
 									if (session_fast_forward==false) {
@@ -4763,6 +4768,7 @@ void MySQL_Session::handler_minus1_HandleBackendConnection(MySQL_Data_Stream *my
 
 // this function was inline
 int MySQL_Session::RunQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn) {
+	PROFILER1_BLOCK1(a);
 	PROXY_TRACE2();
 	int rc = 0;
 	switch (status) {
@@ -4814,6 +4820,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA() {
 }
 
 void MySQL_Session::housekeeping_before_pkts() {
+	PROFILER1_BLOCK1(a);
 	if (mysql_thread___multiplexing) {
 		for (const int hg_id : hgs_expired_conns) {
 			MySQL_Backend* mybe = find_backend(hg_id);
@@ -4842,6 +4849,7 @@ void MySQL_Session::housekeeping_before_pkts() {
 
 // this function was inline
 void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
+	PROFILER1_BLOCK1(a);
 	if (myconn->get_gtid(mybe->gtid_uuid,&mybe->gtid_trxid)) {
 		if (mysql_thread___client_session_track_gtid) {
 			gtid_hid = current_hostgroup;
@@ -4851,6 +4859,7 @@ void MySQL_Session::handler_rc0_Process_GTID(MySQL_Connection *myconn) {
 }
 
 int MySQL_Session::handler() {
+	PROFILER1_BLOCK1(a);
 	int handler_ret = 0;
 	bool prepared_stmt_with_no_params = false;
 	bool wrong_pass=false;
@@ -5038,6 +5047,7 @@ handler_again:
 									goto handler_again;
 								}
 
+								PROFILER1_BLOCK1(a);
 								for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
 									auto client_hash = client_myds->myconn->var_hash[i];
 #ifdef DEBUG
@@ -5064,6 +5074,7 @@ handler_again:
 										}
 									}
 								}
+								PROFILER1_BLOCK1(b);
 								MySQL_Connection *c_con = client_myds->myconn;
 								vector<uint32_t>::const_iterator it_c = c_con->dynamic_variables_idx.begin();  // client connection iterator
 								for ( ; it_c != c_con->dynamic_variables_idx.end() ; it_c++) {
@@ -6082,6 +6093,7 @@ int MySQL_Session::handler_WCD_SS_MCQ_qpo_Parse_SQL_LOG_BIN(PtrSize_t *pkt, bool
 */
 
 bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY_qpo(PtrSize_t *pkt, bool *lock_hostgroup, ps_type prepare_stmt_type) {
+	PROFILER1_BLOCK1(a);
 /*
 	lock_hostgroup:
 		If this variable is set to true, this session will get lock to a
@@ -7228,6 +7240,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 }
 
 void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED__get_connection() {
+	PROFILER1_BLOCK1(a);
 			// Get a MySQL Connection
 
 		MySQL_Connection *mc=NULL;
@@ -7401,6 +7414,7 @@ void MySQL_Session::handler___client_DSS_QUERY_SENT___server_DSS_NOT_INITIALIZED
 }
 
 void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Connection *myconn) {
+	PROFILER1_BLOCK1(a);
 	MySQL_ResultSet *MyRS = NULL;
 	if (myconn) {
 		if (myconn->MyRS) {
@@ -7449,6 +7463,7 @@ void MySQL_Session::MySQL_Stmt_Result_to_MySQL_wire(MYSQL_STMT *stmt, MySQL_Conn
 }
 
 void MySQL_Session::MySQL_Result_to_MySQL_wire(MYSQL *mysql, MySQL_ResultSet *MyRS, unsigned int warning_count, MySQL_Data_Stream *_myds) {
+	PROFILER1_BLOCK1(a);
         if (mysql == NULL) {
                 // error
                 client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,client_myds->pkt_sid+1, 2013, (char *)"HY000" ,(char *)"Lost connection to MySQL server during query");
@@ -7628,6 +7643,7 @@ void MySQL_Session::set_unhealthy() {
 
 
 unsigned int MySQL_Session::NumActiveTransactions(bool check_savepoint) {
+	PROFILER1_BLOCK1(a);
 	unsigned int ret=0;
 	if (mybes==0) return ret;
 	MySQL_Backend *_mybe;
@@ -7718,6 +7734,7 @@ int MySQL_Session::FindOneActiveTransaction(bool check_savepoint) {
 }
 
 unsigned long long MySQL_Session::IdleTime() {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret = 0;
 	if (client_myds==0) return 0;
 	if (status!=WAITING_CLIENT_DATA && status!=CONNECTING_CLIENT) return 0;
@@ -7736,6 +7753,7 @@ unsigned long long MySQL_Session::IdleTime() {
 // this is called either from RequestEnd(), or at the end of executing
 // prepared statements
 void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
+	PROFILER1_BLOCK1(a);
 	// we need to access statistics before calling CurrentQuery.end()
 	// so we track the time here
 	CurrentQuery.end_time=thread->curtime;
@@ -7753,6 +7771,7 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 	}
 }
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
+	PROFILER1_BLOCK1(a);
 	// check if multiplexing needs to be disabled
 	char *qdt = NULL;
 
@@ -8002,6 +8021,7 @@ void MySQL_Session::add_ldap_comment_to_pkt(PtrSize_t *_pkt) {
 }
 
 void MySQL_Session::finishQuery(MySQL_Data_Stream *myds, MySQL_Connection *myconn, bool prepared_stmt_with_no_params) {
+	PROFILER1_BLOCK1(a);
 					myds->myconn->reduce_auto_increment_delay_token();
 					if (locked_on_hostgroup >= 0) {
 						if (qpo->multiplex == -1) {

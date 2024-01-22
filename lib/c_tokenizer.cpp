@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "c_tokenizer.h"
+#include "ProxySQL_Profiler.hpp"
 
 extern __thread int mysql_thread___query_digests_max_query_length;
 
@@ -2620,6 +2621,7 @@ char* mysql_query_digest_second_stage(const char* const q, int q_len, char** con
  * @return A pointer to the start of the supplied buffer, or the allocated memory containing the digest.
  */
 char* mysql_query_digest_and_first_comment_2(const char* const q, int q_len, char** const fst_cmnt, char* const buf) {
+	PROFILER1_BLOCK1(a);
 #ifdef DEBUG
 	if (buf != NULL) {
 		memset(buf, 0, 127);

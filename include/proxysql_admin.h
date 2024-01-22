@@ -547,6 +547,8 @@ class ProxySQL_Admin {
 	void stats___mysql_gtid_executed();
 	void stats___mysql_client_host_cache(bool reset);
 
+	void stats___profiling1(bool reset);
+
 	// Update prometheus metrics
 	void p_stats___memory_metrics();
 	void p_update_stmt_metrics();

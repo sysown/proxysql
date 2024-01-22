@@ -1717,6 +1717,7 @@ SQLite3_result * Query_Processor::get_query_digests_reset() {
 
 
 Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *sess, void *ptr, unsigned int size, Query_Info *qi) {
+	PROFILER1_BLOCK1(a);
 	// NOTE: if ptr == NULL , we are calling process_mysql_query() on an STMT_EXECUTE
 	// to avoid unnecssary deallocation/allocation, we initialize qpo witout new allocation
 	Query_Processor_Output *ret=sess->qpo;

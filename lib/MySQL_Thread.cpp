@@ -2908,6 +2908,7 @@ void MySQL_Thread::run___get_multiple_idle_connections(int& num_idles) {
 
 // this function was inline in MySQL_Thread::run()
 void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
+	PROFILER1_BLOCK1(a);
 	bool check_if_move_to_idle_thread = false;
 #ifdef IDLE_THREADS
 	if (GloVars.global.idle_threads) {
@@ -2955,6 +2956,7 @@ void MySQL_Thread::ProcessAllMyDS_BeforePoll() {
 
 // this function was inline in MySQL_Thread::run()
 void MySQL_Thread::ProcessAllMyDS_AfterPoll() {
+	PROFILER1_BLOCK1(a);
 	for (unsigned int n = 0; n < mypolls.len; n++) {
 		proxy_debug(PROXY_DEBUG_NET,3, "poll for fd %d events %d revents %d\n", mypolls.fds[n].fd , mypolls.fds[n].events, mypolls.fds[n].revents);
 
@@ -3004,6 +3006,7 @@ void MySQL_Thread::run___cleanup_mirror_queue() {
 
 // main loop
 void MySQL_Thread::run() {
+	PROFILER1_BLOCK1(a);
 	unsigned int n;
 	int rc;
 
@@ -3425,6 +3428,7 @@ void MySQL_Thread::worker_thread_gets_sessions_from_idle_thread() {
 
 
 bool MySQL_Thread::process_data_on_data_stream(MySQL_Data_Stream *myds, unsigned int n) {
+	PROFILER1_BLOCK1(a);
 				if (mypolls.fds[n].revents) {
 #ifdef IDLE_THREADS
 					if (myds->myds_type==MYDS_FRONTEND) {
@@ -3713,6 +3717,7 @@ void MySQL_Thread::ProcessAllSessions_MaintenanceLoop(MySQL_Session *sess, unsig
 }
 
 void MySQL_Thread::process_all_sessions() {
+	PROFILER1_BLOCK1(a);
 	unsigned int n;
 	unsigned int total_active_transactions_=0;
 #ifdef IDLE_THREADS
@@ -3798,6 +3803,7 @@ void MySQL_Thread::process_all_sessions() {
 			delete sess;
 		} else {
 			if (sess->to_process==1) {
+				PROFILER1_BLOCK1(a);
 				if (sess->pause_until <= curtime) {
 					rc=sess->handler();
 					//total_active_transactions_+=sess->active_transactions;

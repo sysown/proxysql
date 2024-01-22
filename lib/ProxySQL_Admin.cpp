@@ -105,6 +105,8 @@ char * proxysql_version = NULL;
 
 #include "proxysql_find_charset.h"
 
+std::mutex GlobalProfiling1_mutex;
+std::unordered_map<std::string,CounterProfiling1> GlobalProfiling1 = {};
 
 static const vector<string> mysql_servers_tablenames = {
 	"mysql_servers",
@@ -360,6 +362,9 @@ extern char * binary_sha1;
 
 extern int ProxySQL_create_or_load_TLS(bool bootstrap, std::string& msg);
 
+
+extern void GenerateMermaid1(string& output);
+
 #define PANIC(msg)  { perror(msg); exit(EXIT_FAILURE); }
 
 pthread_mutex_t sock_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -549,6 +554,9 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 #define STATS_SQLITE_TABLE_MEMORY_METRICS "CREATE TABLE stats_memory_metrics (Variable_Name VARCHAR NOT NULL PRIMARY KEY , Variable_Value VARCHAR NOT NULL)"
 
 #define STATS_SQLITE_TABLE_MYSQL_GTID_EXECUTED "CREATE TABLE stats_mysql_gtid_executed (hostname VARCHAR NOT NULL , port INT NOT NULL DEFAULT 3306 , gtid_executed VARCHAR , events INT NOT NULL)"
+
+#define STATS_SQLITE_TABLE_PROFILING1 "CREATE TABLE stats_profiling1 (path VARCHAR NOT NULL , count INT NOT NULL , total_time INT NOT NULL)"
+#define STATS_SQLITE_TABLE_PROFILING1_RESET "CREATE TABLE stats_profiling1_reset (path VARCHAR NOT NULL , count INT NOT NULL , total_time INT NOT NULL)"
 
 #define STATS_SQLITE_TABLE_MYSQL_ERRORS "CREATE TABLE stats_mysql_errors (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , errno INT NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, schemaname, errno) )"
 #define STATS_SQLITE_TABLE_MYSQL_ERRORS_RESET "CREATE TABLE stats_mysql_errors_reset (hostgroup INT NOT NULL , hostname VARCHAR NOT NULL , port INT NOT NULL , username VARCHAR NOT NULL , client_address VARCHAR NOT NULL , schemaname VARCHAR NOT NULL , errno INT NOT NULL , count_star INTEGER NOT NULL , first_seen INTEGER NOT NULL , last_seen INTEGER NOT NULL , last_error VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup, hostname, port, username, schemaname, errno) )"
@@ -3226,6 +3234,10 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 
 	//bool stats_proxysql_servers_status = false; // temporary disabled because not implemented
 
+
+	bool stats_profiling1 = false;
+	bool stats_profiling1_reset = false;
+
 	if (strcasestr(query_no_space,"processlist"))
 		// This will match the following usecases:
 		// SHOW PROCESSLIST
@@ -3265,6 +3277,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 		{ stats_mysql_global=true; refresh=true; }
 	if (strstr(query_no_space,"stats_memory_metrics"))
 		{ stats_memory_metrics=true; refresh=true; }
+	if (strstr(query_no_space,"stats_profiling1")) {
+		stats_profiling1 = true;
+		if (strstr(query_no_space,"stats_profiling1_reset")) {
+			stats_profiling1_reset = true;
+		}
+		refresh = true;
+	}
 	if (strstr(query_no_space,"stats_mysql_connection_pool_reset"))
 		{
 			stats_mysql_connection_pool_reset=true; refresh=true;
@@ -3385,6 +3404,13 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 	if (refresh==true) {
 		//pthread_mutex_lock(&admin_mutex);
 		//ProxySQL_Admin *SPA=(ProxySQL_Admin *)pa;
+		if (stats_profiling1_reset) {
+			stats___profiling1(true);
+		} else {
+			if (stats_profiling1) {
+				stats___profiling1(false);
+			}
+		}
 		if (stats_mysql_processlist)
 			stats___mysql_processlist();
 		if (stats_mysql_query_digest_reset) {
@@ -5124,6 +5150,22 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 		goto __end_show_commands; // in the next block there are only SHOW commands
 	}
 
+	if (!strncasecmp("SHOW PROFILER MERMAID", query_no_space, strlen("SHOW PROFILIER MERMAID"))) {
+		char* pta[1];
+		pta[0] = NULL;
+		SQLite3_result* resultset = new SQLite3_result(1);
+		resultset->add_column_definition(SQLITE_TEXT,"Data");
+		string output = "";
+		GenerateMermaid1(output);
+		pta[0] = (char *)output.c_str();
+		resultset->add_row(pta);
+		sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot); 
+		delete resultset;
+		run_query = false;
+
+		goto __run_query;
+	}
+
 	if (!strncasecmp("SHOW PROMETHEUS METRICS", query_no_space, strlen("SHOW PROMETHEUS METRICS"))) {
 		char* pta[1];
 		pta[0] = NULL;
@@ -5501,6 +5543,7 @@ void ProxySQL_Admin::vacuum_stats(bool is_admin) {
 
 
 void *child_mysql(void *arg) {
+	PROFILER1_BLOCK1(a);
 	if (GloMTH == nullptr) { return NULL; }
 
 	pthread_attr_t thread_attr;
@@ -6534,6 +6577,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_errors_reset", STATS_SQLITE_TABLE_MYSQL_ERRORS_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_global", STATS_SQLITE_TABLE_MYSQL_GLOBAL);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_gtid_executed", STATS_SQLITE_TABLE_MYSQL_GTID_EXECUTED);
+	insert_into_tables_defs(tables_defs_stats,"stats_profiling1", STATS_SQLITE_TABLE_PROFILING1);
+	insert_into_tables_defs(tables_defs_stats,"stats_profiling1_reset", STATS_SQLITE_TABLE_PROFILING1_RESET);
 	insert_into_tables_defs(tables_defs_stats,"stats_memory_metrics", STATS_SQLITE_TABLE_MEMORY_METRICS);
 	insert_into_tables_defs(tables_defs_stats,"stats_mysql_users", STATS_SQLITE_TABLE_MYSQL_USERS);
 	insert_into_tables_defs(tables_defs_stats,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES); // workaround for issue #708
@@ -12519,6 +12564,32 @@ void ProxySQL_Admin::stats___mysql_users() {
 	}
 
 	free(ads);
+}
+
+
+void ProxySQL_Admin::stats___profiling1(bool reset) {
+	int rc;
+	sqlite3_stmt *statement1=NULL;
+	char *query1=NULL;
+	query1=(char *)"INSERT INTO stats_profiling1 VALUES (?1, ?2, ?3)";
+	rc = statsdb->prepare_v2(query1, &statement1);
+	ASSERT_SQLITE_OK(rc, statsdb);
+	statsdb->execute("DELETE FROM stats_profiling1");
+	statsdb->execute("DELETE FROM stats_profiling1_reset");
+	const std::lock_guard<std::mutex> lock(GlobalProfiling1_mutex);
+	for (auto it = GlobalProfiling1.begin() ; it != GlobalProfiling1.end() ; it++) {
+		CounterProfiling1& c = it->second;
+		rc=(*proxy_sqlite3_bind_text)(statement1, 1, it->first.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 2, c.cnt); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_bind_int64)(statement1, 3, c.tottime); ASSERT_SQLITE_OK(rc, statsdb);
+		SAFE_SQLITE3_STEP(statement1);
+		rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+		rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, statsdb);
+	}
+	if (reset == true) {
+		statsdb->execute("INSERT INTO stats_profiling1_reset SELECT * FROM stats_profiling1");
+		GlobalProfiling1.clear();
+	}
 }
 
 void ProxySQL_Admin::stats___mysql_gtid_executed() {
