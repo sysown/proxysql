@@ -360,6 +360,7 @@ static unsigned long long mem_used_rule(QP_rule_t *qr) {
 }
 
 static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
+	PROFILER1_BLOCK1(a);
 	re2_t *r=(re2_t *)malloc(sizeof(re2_t));
 	r->opt1=NULL;
 	r->re1=NULL;
@@ -390,6 +391,7 @@ static re2_t * compile_query_rule(QP_rule_t *qr, int i) {
 };
 
 static void __delete_query_rule(QP_rule_t *qr) {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Deleting rule in %p : rule_id:%d, active:%d, username=%s, schemaname=%s, flagIN:%d, %smatch_pattern=\"%s\", flagOUT:%d replace_pattern=\"%s\", destination_hostgroup:%d, apply:%d\n", qr, qr->rule_id, qr->active, qr->username, qr->schemaname, qr->flagIN, (qr->negate_match_pattern ? "(!)" : "") , qr->match_pattern, qr->flagOUT, qr->replace_pattern, qr->destination_hostgroup, qr->apply);
 	if (qr->username)
 		free(qr->username);
@@ -447,6 +449,7 @@ static void __delete_query_rule(QP_rule_t *qr) {
 //    of freeing the previous resources associated to the 'query_rules' and 'query_rules_fast_routing' out of
 //    the 'Query_Processor' general locking ('wrlock').
 void __reset_rules(std::vector<QP_rule_t *> * qrs) {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 5, "Resetting rules in Query Processor Table %p\n", qrs);
 	if (qrs==NULL) return;
 	QP_rule_t *qr;
@@ -664,6 +667,7 @@ unsigned long long Query_Processor::get_new_req_conns_count() {
 }
 
 QP_rule_t * Query_Processor::new_query_rule(int rule_id, bool active, char *username, char *schemaname, int flagIN, char *client_addr, char *proxy_addr, int proxy_port, char *digest, char *match_digest, char *match_pattern, bool negate_match_pattern, char *re_modifiers, int flagOUT, char *replace_pattern, int destination_hostgroup, int cache_ttl, int cache_empty_result, int cache_timeout , int reconnect, int timeout, int retries, int delay, int next_query_flagIN, int mirror_flagOUT, int mirror_hostgroup, char *error_msg, char *OK_msg, int sticky_conn, int multiplex, int gtid_from_hostgroup, int log, bool apply, char *attributes, char *comment) {
+	PROFILER1_BLOCK1(a);
 	QP_rule_t * newQR=(QP_rule_t *)malloc(sizeof(QP_rule_t));
 	newQR->rule_id=rule_id;
 	newQR->active=active;
@@ -863,6 +867,7 @@ SQLite3_result * Query_Processor::get_stats_commands_counters() {
 	return result;
 }
 SQLite3_result * Query_Processor::get_stats_query_rules() {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping query rules statistics, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(2);
 	pthread_rwlock_rdlock(&rwlock);
@@ -883,6 +888,7 @@ SQLite3_result * Query_Processor::get_stats_query_rules() {
 }
 
 SQLite3_result * Query_Processor::get_current_query_rules() {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(35);
 	pthread_rwlock_rdlock(&rwlock);
@@ -935,6 +941,7 @@ SQLite3_result * Query_Processor::get_current_query_rules() {
 }
 
 int Query_Processor::get_current_query_rules_fast_routing_count() {
+	PROFILER1_BLOCK1(a);
 	int result = 0;
 	pthread_rwlock_rdlock(&rwlock);
 	result = fast_routing_resultset->rows_count;
@@ -954,6 +961,7 @@ SQLite3_result * Query_Processor::get_current_query_rules_inner() {
 }
 
 SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query rules fast_routing, using Global version %d\n", version);
 	SQLite3_result *result=new SQLite3_result(5);
 	pthread_rwlock_rdlock(&rwlock);
@@ -983,6 +991,7 @@ SQLite3_result * Query_Processor::get_current_query_rules_fast_routing() {
 int Query_Processor::search_rules_fast_routing_dest_hg(
 	khash_t(khStrInt)** __rules_fast_routing, const char* u, const char* s, int flagIN, bool lock
 ) {
+	PROFILER1_BLOCK1(a);
 	int dest_hg = -1;
 	const size_t u_len = strlen(u);
 	size_t keylen = u_len+strlen(rand_del)+strlen(s)+30; // 30 is a big number
@@ -1038,6 +1047,7 @@ struct get_query_digests_parallel_args {
 */
 //unsigned long long iget_query_digests_total_size_parallel(umap_query_digest *gu, umap_query_digest_text *gtu, int *m_, unsigned long long *r2) {
 void * get_query_digests_total_size_parallel(void *_arg) {
+	PROFILER1_BLOCK1(a);
 	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
 	unsigned long long i = 0;
 	unsigned long long m = arg->m;
@@ -1073,6 +1083,7 @@ void * get_query_digests_total_size_parallel(void *_arg) {
 }
 
 void * get_query_digests_parallel(void *_arg) {
+	PROFILER1_BLOCK1(a);
 	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
 	unsigned long long i = 0;
 	unsigned long long m = arg->m;
@@ -1121,6 +1132,7 @@ void * get_query_digests_parallel(void *_arg) {
 
 void * purge_query_digests_parallel(void *_arg) {
 	get_query_digests_parallel_args *arg = (get_query_digests_parallel_args *)_arg;
+	PROFILER1_BLOCK1(a);
 	unsigned long long i = 0;
 	unsigned long long r = 0;
 	unsigned long long m = arg->m;
@@ -1143,6 +1155,7 @@ void * purge_query_digests_parallel(void *_arg) {
 }
 
 unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool parallel, char **msg) {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret = 0;
 	if (async_purge) {
 		ret = purge_query_digests_async(msg);
@@ -1153,6 +1166,7 @@ unsigned long long Query_Processor::purge_query_digests(bool async_purge, bool p
 }
 
 unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret = 0;
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
@@ -1192,6 +1206,7 @@ unsigned long long Query_Processor::purge_query_digests_async(char **msg) {
 
 
 unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret = 0;
 	pthread_rwlock_wrlock(&digest_rwlock);
 	size_t map_size = digest_umap.size();
@@ -1232,6 +1247,7 @@ unsigned long long Query_Processor::purge_query_digests_sync(bool parallel) {
 }
 
 unsigned long long Query_Processor::get_query_digests_total_size() {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret=0;
 	pthread_rwlock_rdlock(&digest_rwlock);
 	size_t map_size = digest_umap.size();
@@ -1287,6 +1303,7 @@ unsigned long long Query_Processor::get_query_digests_total_size() {
 }
 
 std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const bool use_resultset) {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
 	SQLite3_result *result = NULL;
 	// Create two auxiliary maps and swap its content with the main maps. This
@@ -1431,6 +1448,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_v2(const boo
 }
 
 SQLite3_result * Query_Processor::get_query_digests() {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current query digest\n");
 	SQLite3_result *result = NULL;
 	pthread_rwlock_rdlock(&digest_rwlock);
@@ -1500,6 +1518,7 @@ SQLite3_result * Query_Processor::get_query_digests() {
 std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(
 	const bool copy, const bool use_resultset
 ) {
+	PROFILER1_BLOCK1(a);
 	SQLite3_result *result = NULL;
 	umap_query_digest digest_umap_aux;
 	umap_query_digest_text digest_text_umap_aux;
@@ -1615,6 +1634,7 @@ std::pair<SQLite3_result *, int> Query_Processor::get_query_digests_reset_v2(
 }
 
 void Query_Processor::get_query_digests_reset(umap_query_digest *uqd, umap_query_digest_text *uqdt) {
+	PROFILER1_BLOCK1(a);
 	pthread_rwlock_wrlock(&digest_rwlock);
 	digest_umap.swap(*uqd);
 	digest_text_umap.swap(*uqdt);
@@ -1622,6 +1642,7 @@ void Query_Processor::get_query_digests_reset(umap_query_digest *uqd, umap_query
 }
 
 SQLite3_result * Query_Processor::get_query_digests_reset() {
+	PROFILER1_BLOCK1(a);
 	SQLite3_result *result = NULL;
 	pthread_rwlock_wrlock(&digest_rwlock);
 	unsigned long long curtime1;
@@ -1756,6 +1777,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 		len = qi->stmt_info->query_length;
 	}
 	if (__sync_add_and_fetch(&version,0) > _thr_SQP_version) {
+		PROFILER1_BLOCK1(a);
 		// update local rules;
 		proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Detected a changed in version. Global:%d , local:%d . Refreshing...\n", version, _thr_SQP_version);
 		pthread_rwlock_rdlock(&rwlock);
@@ -1850,6 +1872,7 @@ Query_Processor_Output * Query_Processor::process_mysql_query(MySQL_Session *ses
 	if (sess->next_query_flagIN >= 0) {
 		flagIN=sess->next_query_flagIN;
 	}
+	PROFILER1_BLOCK1(b);
 	int reiterate=mysql_thread___query_processor_iterations;
 	if (sess->mirror==true) {
 		// we are into a mirror session
@@ -2157,6 +2180,7 @@ __exit_process_mysql_query:
 		}
 	}
 	if (mysql_thread___firewall_whitelist_enabled) {
+		PROFILER1_BLOCK1(a);
 		char *username = NULL;
 		char *client_address = NULL;
 		bool check_run = true;
@@ -2272,6 +2296,7 @@ void Query_Processor::delete_QP_out(Query_Processor_Output *o) {
 };
 
 void Query_Processor::update_query_processor_stats() {
+	PROFILER1_BLOCK1(a);
 	// Note:
 	// this function is called by each thread to update global query statistics
 	//
@@ -2308,6 +2333,7 @@ void Query_Processor::update_query_processor_stats() {
 
 
 void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_length, int flags) {
+	PROFILER1_BLOCK1(a);
 	// trying to get rid of libinjection
 	// instead of initializing qp->sf , we copy query info later in this function
 	qp->digest_text=NULL;
@@ -2335,11 +2361,13 @@ void Query_Processor::query_parser_init(SQP_par_t *qp, char *query, int query_le
 };
 
 enum MYSQL_COM_QUERY_command Query_Processor::query_parser_command_type(SQP_par_t *qp) {
+	PROFILER1_BLOCK1(a);
 	enum MYSQL_COM_QUERY_command ret=__query_parser_command_type(qp);
 	return ret;
 }
 
 unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *sess, enum MYSQL_COM_QUERY_command c, SQP_par_t *qp, unsigned long long t) {
+	PROFILER1_BLOCK1(a);
 	if (c>=MYSQL_COM_QUERY___NONE) return 0;
 	unsigned long long ret=_thr_commands_counters[c]->add_time(t);
 
@@ -2397,6 +2425,7 @@ unsigned long long Query_Processor::query_parser_update_counters(MySQL_Session *
 }
 
 void Query_Processor::update_query_digest(SQP_par_t *qp, int hid, MySQL_Connection_userinfo *ui, unsigned long long t, unsigned long long n, MySQL_STMT_Global_info *_stmt_info, MySQL_Session *sess) {
+	PROFILER1_BLOCK1(a);
 	pthread_rwlock_wrlock(&digest_rwlock);
 	QP_query_digest_stats *qds;
 
@@ -2474,6 +2503,7 @@ uint64_t Query_Processor::get_digest(SQP_par_t *qp) {
 }
 
 enum MYSQL_COM_QUERY_command Query_Processor::__query_parser_command_type(SQP_par_t *qp) {
+	PROFILER1_BLOCK1(a);
 	char *text=NULL; // this new variable is a pointer to either qp->digest_text , or to the query
 	if (qp->digest_text) {
 		text=qp->digest_text;
@@ -2861,6 +2891,7 @@ __exit__query_parser_command_type:
 }
 
 bool Query_Processor::query_parser_first_comment(Query_Processor_Output *qpo, char *fc) {
+	PROFILER1_BLOCK1(a);
 	bool ret=false;
 	tokenizer_t tok;
 	tokenizer( &tok, fc, ";", TOKENIZER_NO_EMPTIES );
@@ -2988,6 +3019,7 @@ void Query_Processor::query_parser_free(SQP_par_t *qp) {
 };
 
 bool Query_Processor::whitelisted_sqli_fingerprint(char *_s) {
+	PROFILER1_BLOCK1(a);
 	bool ret = false;
 	string s = _s;
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
@@ -3001,6 +3033,7 @@ bool Query_Processor::whitelisted_sqli_fingerprint(char *_s) {
 }
 
 void Query_Processor::load_mysql_firewall_sqli_fingerprints(SQLite3_result *resultset) {
+	PROFILER1_BLOCK1(a);
 	global_mysql_firewall_whitelist_sqli_fingerprints.erase(global_mysql_firewall_whitelist_sqli_fingerprints.begin(), global_mysql_firewall_whitelist_sqli_fingerprints.end());
 	// perform the inserts
 	for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
@@ -3016,6 +3049,7 @@ void Query_Processor::load_mysql_firewall_sqli_fingerprints(SQLite3_result *resu
 }
 
 void Query_Processor::load_mysql_firewall_users(SQLite3_result *resultset) {
+	PROFILER1_BLOCK1(a);
 	unsigned long long tot_size = 0;
 	std::unordered_map<std::string, int>::iterator it;
 	for (it = global_mysql_firewall_whitelist_users.begin() ; it != global_mysql_firewall_whitelist_users.end(); ++it) {
@@ -3073,6 +3107,7 @@ void Query_Processor::load_mysql_firewall_users(SQLite3_result *resultset) {
 }
 
 void Query_Processor::load_mysql_firewall_rules(SQLite3_result *resultset) {
+	PROFILER1_BLOCK1(a);
 	unsigned long long tot_size = 0;
 	global_mysql_firewall_whitelist_rules_map___size = 0;
 	//size_t rand_del_size = strlen(rand_del);
@@ -3153,6 +3188,7 @@ void Query_Processor::save_query_rules(SQLite3_result *resultset) {
 }
 
 fast_routing_hashmap_t Query_Processor::create_fast_routing_hashmap(SQLite3_result* resultset) {
+	PROFILER1_BLOCK1(a);
 	khash_t(khStrInt)* fast_routing = nullptr;
 	char* keys_values = nullptr;
 	unsigned long long keys_values_size = 0;
@@ -3195,6 +3231,7 @@ fast_routing_hashmap_t Query_Processor::create_fast_routing_hashmap(SQLite3_resu
 }
 
 SQLite3_result* Query_Processor::load_fast_routing(const fast_routing_hashmap_t& fast_routing_hashmap) {
+	PROFILER1_BLOCK1(a);
 	khash_t(khStrInt)* _rules_fast_routing = fast_routing_hashmap.rules_fast_routing;
 	SQLite3_result* _rules_resultset = fast_routing_hashmap.rules_resultset;
 
@@ -3269,6 +3306,7 @@ int Query_Processor::testing___find_HG_in_mysql_query_rules_fast_routing_dual(
 }
 
 void Query_Processor::get_current_mysql_firewall_whitelist(SQLite3_result **u, SQLite3_result **r, SQLite3_result **sf) {
+	PROFILER1_BLOCK1(a);
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	if (global_mysql_firewall_whitelist_rules_runtime) {
 		*r = new SQLite3_result(global_mysql_firewall_whitelist_rules_runtime);
@@ -3283,6 +3321,7 @@ void Query_Processor::get_current_mysql_firewall_whitelist(SQLite3_result **u, S
 }
 
 void Query_Processor::load_mysql_firewall(SQLite3_result *u, SQLite3_result *r, SQLite3_result *sf) {
+	PROFILER1_BLOCK1(a);
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	if (global_mysql_firewall_whitelist_rules_runtime) {
 		delete global_mysql_firewall_whitelist_rules_runtime;
@@ -3308,6 +3347,7 @@ void Query_Processor::load_mysql_firewall(SQLite3_result *u, SQLite3_result *r, 
 }
 
 unsigned long long Query_Processor::get_mysql_firewall_memory_users_table() {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret = 0;
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	ret = global_mysql_firewall_whitelist_users_map___size;
@@ -3316,6 +3356,7 @@ unsigned long long Query_Processor::get_mysql_firewall_memory_users_table() {
 }
 
 unsigned long long Query_Processor::get_mysql_firewall_memory_users_config() {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret = 0;
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	ret = global_mysql_firewall_whitelist_users_result___size;
@@ -3324,6 +3365,7 @@ unsigned long long Query_Processor::get_mysql_firewall_memory_users_config() {
 }
 
 unsigned long long Query_Processor::get_mysql_firewall_memory_rules_table() {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret = 0;
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	ret = global_mysql_firewall_whitelist_rules_map___size;
@@ -3332,6 +3374,7 @@ unsigned long long Query_Processor::get_mysql_firewall_memory_rules_table() {
 }
 
 unsigned long long Query_Processor::get_mysql_firewall_memory_rules_config() {
+	PROFILER1_BLOCK1(a);
 	unsigned long long ret = 0;
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	ret = global_mysql_firewall_whitelist_rules_result___size;
@@ -3340,6 +3383,7 @@ unsigned long long Query_Processor::get_mysql_firewall_memory_rules_config() {
 }
 
 SQLite3_result * Query_Processor::get_mysql_firewall_whitelist_rules() {
+	PROFILER1_BLOCK1(a);
 	SQLite3_result *ret = NULL;
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	if (global_mysql_firewall_whitelist_rules_runtime) {
@@ -3350,6 +3394,7 @@ SQLite3_result * Query_Processor::get_mysql_firewall_whitelist_rules() {
 }
 
 SQLite3_result * Query_Processor::get_mysql_firewall_whitelist_users() {
+	PROFILER1_BLOCK1(a);
 	SQLite3_result *ret = NULL;
 	pthread_mutex_lock(&global_mysql_firewall_whitelist_mutex);
 	if (global_mysql_firewall_whitelist_users_runtime) {
