@@ -723,6 +723,7 @@ void MySrvList::remove(MySrvC *s) {
 }
 
 void MySrvConnList::drop_all_connections() {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Dropping all connections (%u total) on MySrvConnList %p for server %s:%d , hostgroup=%d , status=%d\n", conns_length(), this, mysrvc->address, mysrvc->port, mysrvc->myhgc->hid, mysrvc->status);
 	while (conns_length()) {
 		MySQL_Connection *conn=(MySQL_Connection *)conns->remove_index_fast(0);
@@ -768,6 +769,7 @@ MySrvC::MySrvC(
 }
 
 void MySrvC::connect_error(int err_num, bool get_mutex) {
+	PROFILER1_BLOCK1(a);
 	// NOTE: this function operates without any mutex
 	// although, it is not extremely important if any counter is lost
 	// as a single connection failure won't make a significant difference
@@ -856,6 +858,7 @@ void MySrvC::connect_error(int err_num, bool get_mutex) {
 }
 
 void MySrvC::shun_and_killall() {
+	PROFILER1_BLOCK1(a);
 	status=MYSQL_SERVER_STATUS_SHUNNED;
 	shunned_automatic=true;
 	shunned_and_kill_all_connections=true;
@@ -879,6 +882,7 @@ MySrvList::~MySrvList() {
 
 
 MyHGC::MyHGC(int _hid) {
+	PROFILER1_BLOCK1(a);
 	hid=_hid;
 	mysrvs=new MySrvList(this);
 	current_time_now = 0;
@@ -892,6 +896,7 @@ MyHGC::MyHGC(int _hid) {
 }
 
 void MyHGC::reset_attributes() {
+	PROFILER1_BLOCK1(a);
 	if (attributes.initialized == false) {
 		attributes.init_connect = NULL;
 		attributes.comment = NULL;
@@ -1441,6 +1446,7 @@ void MySQL_HostGroups_Manager::wrlock() {
 }
 
 void MySQL_HostGroups_Manager::p_update_mysql_error_counter(p_mysql_error_type err_type, unsigned int hid, char* address, uint16_t port, unsigned int code) {
+	PROFILER1_BLOCK1(a);
 	p_hg_dyn_counter::metric metric = p_hg_dyn_counter::mysql_error;
 	if (err_type == p_mysql_error_type::proxysql) {
 		metric = p_hg_dyn_counter::proxysql_mysql_error;
@@ -1481,6 +1487,7 @@ void MySQL_HostGroups_Manager::wrunlock() {
 
 
 void MySQL_HostGroups_Manager::wait_servers_table_version(unsigned v, unsigned w) {
+	PROFILER1_BLOCK1(a);
 	struct timespec ts;
 	clock_gettime(CLOCK_REALTIME, &ts);
 	//ts.tv_sec += w;
@@ -1501,6 +1508,7 @@ unsigned int MySQL_HostGroups_Manager::get_servers_table_version() {
 
 // we always assume that the calling thread has acquired a rdlock()
 int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
+	PROFILER1_BLOCK1(a);
 	if (resultset==NULL) {
 		return 0;
 	}
@@ -1582,6 +1590,7 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **error) {
+	PROFILER1_BLOCK1(a);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -1594,6 +1603,7 @@ SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **err
 void MySQL_HostGroups_Manager::CUCFT1(
 	SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName, uint64_t& raw_checksum
 ) {
+	PROFILER1_BLOCK1(a);
 	char *error=NULL;
 	int cols=0;
 	int affected_rows=0;
@@ -1618,6 +1628,7 @@ void MySQL_HostGroups_Manager::CUCFT1(
 }
 
 void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& myhash, bool& init) {
+	PROFILER1_BLOCK1(a);
 	// Always reset the current table values before recomputing
 	for (size_t i = 0; i < table_resultset_checksum.size(); i++) {
 		if (i != HGM_TABLES::MYSQL_SERVERS && i != HGM_TABLES::MYSQL_SERVERS_V2) {
@@ -1640,6 +1651,7 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
  * 
 */
 void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
+	PROFILER1_BLOCK1(a);
 
 	if (hgsm_mysql_servers_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS] ||
 		hgsm_mysql_replication_hostgroups_checksum != table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS])
@@ -1712,6 +1724,7 @@ void MySQL_HostGroups_Manager::update_hostgroup_manager_mappings() {
  * @return An SQLite3 resultset for the query 'MYHGM_GEN_ADMIN_RUNTIME_SERVERS'.
  */
 unique_ptr<SQLite3_result> get_admin_runtime_mysql_servers(SQLite3DB* mydb) {
+	PROFILER1_BLOCK1(a);
 	char* error = nullptr;
 	int cols = 0;
 	int affected_rows = 0;
@@ -1733,6 +1746,7 @@ unique_ptr<SQLite3_result> get_admin_runtime_mysql_servers(SQLite3DB* mydb) {
  * @return A resulset holding 'mysql_servers_v2'.
  */
 unique_ptr<SQLite3_result> get_mysql_servers_v2() {
+	PROFILER1_BLOCK1(a);
 	char* error = nullptr;
 	int cols = 0;
 	int affected_rows = 0;
@@ -1755,6 +1769,7 @@ void update_glovars_checksum_with_peers(
 	time_t peer_checksum_epoch,
 	bool update_version
 ) {
+	PROFILER1_BLOCK1(a);
 	module_checksum.set_checksum(const_cast<char*>(new_checksum.c_str()));
 
 	if (update_version)
@@ -1789,6 +1804,7 @@ void update_glovars_mysql_servers_checksum(
 	const runtime_mysql_servers_checksum_t& peer_checksum = {},
 	bool update_version = false
 ) {
+	PROFILER1_BLOCK1(a);
 	time_t new_epoch = time(NULL);
 
 	update_glovars_checksum_with_peers(
@@ -1820,6 +1836,7 @@ void update_glovars_mysql_servers_v2_checksum(
 	const mysql_servers_v2_checksum_t& peer_checksum = {},
 	bool update_version = false
 ) {
+	PROFILER1_BLOCK1(a);
 	time_t new_epoch = time(NULL);
 
 	update_glovars_checksum_with_peers(
@@ -1833,6 +1850,7 @@ void update_glovars_mysql_servers_v2_checksum(
 }
 
 uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers(SQLite3_result* runtime_mysql_servers) {
+	PROFILER1_BLOCK1(a);
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
 
@@ -1850,6 +1868,7 @@ uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers(SQL
 }
 
 uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers_v2(SQLite3_result* mysql_servers_v2) {
+	PROFILER1_BLOCK1(a);
 	if (mysql_servers_v2 == nullptr) {
 		unique_ptr<SQLite3_result> resultset { get_mysql_servers_v2() };
 		save_mysql_servers_v2(resultset.release());
@@ -1864,6 +1883,7 @@ uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers_v2(
 }
 
 std::string MySQL_HostGroups_Manager::gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash) {
+	PROFILER1_BLOCK1(a);
 	bool init = false;
 	SpookyHash global_hash {};
 
@@ -1893,6 +1913,7 @@ bool MySQL_HostGroups_Manager::commit(
 	bool only_commit_runtime_mysql_servers,
 	bool update_version
 ) {
+	PROFILER1_BLOCK1(a);
 	// if only_commit_runtime_mysql_servers is true, mysql_servers_v2 resultset will not be entertained and will cause memory leak.
 	if (only_commit_runtime_mysql_servers) {
 		proxy_info("Generating runtime mysql servers records only.\n");
@@ -2216,6 +2237,7 @@ bool MySQL_HostGroups_Manager::commit(
  * @param runtime_mysql_servers resultset of runtime mysql_servers or can be a nullptr.
 */
 uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers) {
+	PROFILER1_BLOCK1(a);
 
 	//Note: GloVars.checksum_mutex needs to be locked
 	SQLite3_result* resultset = nullptr;
@@ -2244,6 +2266,7 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 }
 
 bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
+	PROFILER1_BLOCK1(a);
 	bool ret = false;
 	pthread_rwlock_rdlock(&gtid_rwlock);
 	std::string s1 = mysrvc->address;
@@ -2266,6 +2289,7 @@ bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uin
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
+	PROFILER1_BLOCK1(a);
 	pthread_rwlock_wrlock(&gtid_rwlock);
 	// first, set them all as active = false
 	std::unordered_map<string, GTID_Server_Data *>::iterator it = gtid_map.begin();
@@ -2342,6 +2366,7 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 }
 
 void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
+	PROFILER1_BLOCK1(a);
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		MySrvC *mysrvc=NULL;
@@ -2362,6 +2387,7 @@ void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 
 
 void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
+	PROFILER1_BLOCK1(a);
 	int rc;
 	sqlite3_stmt *statement1=NULL;
 	sqlite3_stmt *statement32=NULL;
@@ -2501,6 +2527,7 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
+	PROFILER1_BLOCK1(a);
 	if (incoming_replication_hostgroups==NULL)
 		return;
 	if (mysql_thread___hostgroup_manager_verbose) {
@@ -2534,6 +2561,7 @@ void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 
 
 void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table() {
+	PROFILER1_BLOCK1(a);
 	if (incoming_group_replication_hostgroups==NULL) {
 		return;
 	}
@@ -2614,6 +2642,7 @@ void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_table
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_group_replication_hostgroups_monitor_resultset() {
+	PROFILER1_BLOCK1(a);
 	pthread_mutex_lock(&GloMyMon->group_replication_mutex);
 	{
 		char *error=NULL;
@@ -2733,6 +2762,7 @@ void MySQL_HostGroups_Manager::generate_mysql_galera_hostgroups_table() {
 }
 
 void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock) {
+	PROFILER1_BLOCK1(a);
 	if (lock) {
 		wrlock();
 	}
@@ -2765,6 +2795,7 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) {
+	PROFILER1_BLOCK1(a);
 	char * query = (char *)"";
 	if (name == "mysql_aws_aurora_hostgroups") {
 		query=(char *)"SELECT writer_hostgroup,reader_hostgroup,active,aurora_port,domain_name,max_lag_ms,"
@@ -2849,6 +2880,7 @@ void MySQL_HostGroups_Manager::increase_reset_counter() {
 	wrunlock();
 }
 void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lock) {
+	PROFILER1_BLOCK1(a);
 	assert(c->parent);
 	MySrvC *mysrvc=NULL;
 	if (_lock)
@@ -2890,6 +2922,7 @@ __exit_push_MyConn_to_pool:
 }
 
 void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, unsigned int cnt) {
+	PROFILER1_BLOCK1(a);
 	unsigned int i=0;
 	MySQL_Connection *c=NULL;
 	c=ca[i];
@@ -3458,6 +3491,7 @@ MySQL_Connection * MySrvConnList::get_random_MyConn(MySQL_Session *sess, bool ff
 }
 
 void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid) {
+	PROFILER1_BLOCK1(a);
 	// we scan all hostgroups looking for a specific server to unshun
 	// if skip_hid is not NULL , the specific hostgroup is skipped
 	if (GloMTH->variables.hostgroup_manager_verbose >= 3) {
@@ -3606,6 +3640,7 @@ void MySQL_HostGroups_Manager::destroy_MyConn_from_pool(MySQL_Connection *c, boo
 inline double get_prometheus_counter_val(
 	std::map<std::string, prometheus::Counter*>& counter_map, const std::string& endpoint_id
 ) {
+	PROFILER1_BLOCK1(a);
 	const auto& counter_entry = counter_map.find(endpoint_id);
 	double current_val = 0;
 
@@ -3623,6 +3658,7 @@ void reset_hg_attrs_server_defaults(MySrvC* mysrvc) {
 }
 
 void update_hg_attrs_server_defaults(MySrvC* mysrvc, MyHGC* myhgc) {
+	PROFILER1_BLOCK1(a);
 	if (mysrvc->weight == -1) {
 		if (myhgc->servers_defaults.weight != -1) {
 			mysrvc->weight = myhgc->servers_defaults.weight;
@@ -3650,6 +3686,7 @@ void update_hg_attrs_server_defaults(MySrvC* mysrvc, MyHGC* myhgc) {
 }
 
 void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
+	PROFILER1_BLOCK1(a);
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding MySrvC %p (%s:%d) for hostgroup %d\n", mysrvc, mysrvc->address, mysrvc->port, _hid);
 
 	// Since metrics for servers are stored per-endpoint; the metrics for a particular endpoint can live longer than the
@@ -3670,6 +3707,7 @@ void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
 }
 
 void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const char *address, unsigned int port, int current_replication_lag) {
+	PROFILER1_BLOCK1(a);
 	int j;
 	for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
@@ -3722,6 +3760,7 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 }
 
 void MySQL_HostGroups_Manager::replication_lag_action(const std::list<replication_lag_server_t>& mysql_servers) {
+	PROFILER1_BLOCK1(a);
 
 	//this method does not use admin table, so this lock is not needed. 
 	//GloAdmin->mysql_servers_wrlock();
@@ -3774,6 +3813,7 @@ void MySQL_HostGroups_Manager::replication_lag_action(const std::list<replicatio
  * @param enable Boolean specifying if the server should be enabled or not.
  */
 void MySQL_HostGroups_Manager::group_replication_lag_action_set_server_status(MyHGC* myhgc, char* address, int port, int lag_count, bool enable) {
+	PROFILER1_BLOCK1(a);
 	if (myhgc == NULL || address == NULL) return;
 	proxy_debug(
 		PROXY_DEBUG_MONITOR, 5, "Params - address: %s, port: %d, lag_count: %d, enable: %d\n", address, port,
@@ -3814,6 +3854,7 @@ void MySQL_HostGroups_Manager::group_replication_lag_action_set_server_status(My
 void MySQL_HostGroups_Manager::group_replication_lag_action(
 	int _hid, char *address, unsigned int port, int lag_counts, bool read_only, bool enable
 ) {
+	PROFILER1_BLOCK1(a);
 	GloAdmin->mysql_servers_wrlock();
 	wrlock();
 
@@ -3881,6 +3922,7 @@ __exit_replication_lag_action:
 }
 
 void MySQL_HostGroups_Manager::drop_all_idle_connections() {
+	PROFILER1_BLOCK1(a);
 	// NOTE: the caller should hold wrlock
 	int i, j;
 	for (i=0; i<(int)MyHostGroups->len; i++) {
@@ -4051,6 +4093,7 @@ __exit_get_multiple_idle_connections:
 }
 
 void MySQL_HostGroups_Manager::save_incoming_mysql_table(SQLite3_result *s, const string& name) {
+	PROFILER1_BLOCK1(a);
 	SQLite3_result ** inc = NULL;
 	if (name == "mysql_aws_aurora_hostgroups") {
 		inc = &incoming_aws_aurora_hostgroups;
@@ -4073,6 +4116,7 @@ void MySQL_HostGroups_Manager::save_incoming_mysql_table(SQLite3_result *s, cons
 }
 
 void MySQL_HostGroups_Manager::save_runtime_mysql_servers(SQLite3_result *s) {
+	PROFILER1_BLOCK1(a);
 	if (runtime_mysql_servers) {
 		delete runtime_mysql_servers;
 		runtime_mysql_servers = nullptr;
@@ -4081,6 +4125,7 @@ void MySQL_HostGroups_Manager::save_runtime_mysql_servers(SQLite3_result *s) {
 }
 
 void MySQL_HostGroups_Manager::save_mysql_servers_v2(SQLite3_result* s) {
+	PROFILER1_BLOCK1(a);
 	if (incoming_mysql_servers_v2) {
 		delete incoming_mysql_servers_v2;
 		incoming_mysql_servers_v2 = nullptr;
@@ -4089,6 +4134,7 @@ void MySQL_HostGroups_Manager::save_mysql_servers_v2(SQLite3_result* s) {
 }
 
 SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& name) {
+	PROFILER1_BLOCK1(a);
 	if (name == "mysql_aws_aurora_hostgroups") {
 		return this->incoming_aws_aurora_hostgroups;
 	} else if (name == "mysql_galera_hostgroups") {
@@ -4112,6 +4158,7 @@ SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& 
 
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Free_Connections() {
+	PROFILER1_BLOCK1(a);
 	const int colnum=13;
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Free Connections in Pool\n");
 	SQLite3_result *result=new SQLite3_result(colnum);
@@ -4238,6 +4285,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_counter(
 	const std::string& endpoint_id, const std::map<std::string, std::string>& labels, std::map<std::string,
 	prometheus::Counter*>& m_map, unsigned long long value, p_hg_dyn_counter::metric idx
 ) {
+	PROFILER1_BLOCK1(a);
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		const auto& cur_val = counter_id->second->Value();
@@ -4257,6 +4305,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(
 	const std::string& endpoint_id, const std::map<std::string, std::string>& labels,
 	std::map<std::string, prometheus::Gauge*>& m_map, unsigned long long value, p_hg_dyn_gauge::metric idx
 ) {
+	PROFILER1_BLOCK1(a);
 	const auto& counter_id = m_map.find(endpoint_id);
 	if (counter_id != m_map.end()) {
 		counter_id->second->Set(value);
@@ -4272,6 +4321,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool_update_gauge(
 }
 
 void MySQL_HostGroups_Manager::p_update_connection_pool() {
+	PROFILER1_BLOCK1(a);
 	std::vector<string> cur_servers_ids {};
 	wrlock();
 	for (int i = 0; i < static_cast<int>(MyHostGroups->len); i++) {
@@ -4369,6 +4419,7 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int *hid) {
+	PROFILER1_BLOCK1(a);
   const int colnum=14;
   proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 4, "Dumping Connection Pool\n");
   SQLite3_result *result=new SQLite3_result(colnum);
@@ -4493,6 +4544,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Connection_Pool(bool _reset, int
 }
 
 void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int read_only) {
+	PROFILER1_BLOCK1(a);
 	// define queries
 	const char *Q1B=(char *)"SELECT hostgroup_id,status FROM ( SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=writer_hostgroup) AND hostname='%s' AND port=%d UNION SELECT DISTINCT writer_hostgroup FROM mysql_replication_hostgroups JOIN mysql_servers WHERE (hostgroup_id=reader_hostgroup) AND hostname='%s' AND port=%d) LEFT JOIN mysql_servers ON hostgroup_id=writer_hostgroup AND hostname='%s' AND port=%d";
 	const char *Q2A=(char *)"DELETE FROM mysql_servers WHERE hostname='%s' AND port=%d AND hostgroup_id IN (SELECT writer_hostgroup FROM mysql_replication_hostgroups WHERE writer_hostgroup=mysql_servers.hostgroup_id) AND status='OFFLINE_HARD'";
@@ -4845,6 +4897,7 @@ void MySQL_HostGroups_Manager::read_only_action(char *hostname, int port, int re
  * 
  */
 void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_server_t>& mysql_servers) {
+	PROFILER1_BLOCK1(a);
 
 	bool update_mysql_servers_table = false;
 
@@ -4993,6 +5046,7 @@ void MySQL_HostGroups_Manager::read_only_action_v2(const std::list<read_only_ser
 // it temporary disables a host that is not responding to pings, and mark the host in a way that when used the connection will be dropped
 // return true if the status was changed
 bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
+	PROFILER1_BLOCK1(a);
 	time_t t = time(NULL);
 	bool ret = false;
 	wrlock();
@@ -5050,6 +5104,7 @@ bool MySQL_HostGroups_Manager::shun_and_killall(char *hostname, int port) {
 // the connection pool will use this information to evaluate or exclude a specific hosts
 // note that this variable is in microsecond, while user defines it in millisecond
 void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int port, unsigned int _current_latency_us) {
+	PROFILER1_BLOCK1(a);
 	wrlock();
 	MySrvC *mysrvc=NULL;
   for (unsigned int i=0; i<MyHostGroups->len; i++) {
@@ -5069,6 +5124,7 @@ void MySQL_HostGroups_Manager::set_server_current_latency_us(char *hostname, int
 }
 
 void MySQL_HostGroups_Manager::p_update_metrics() {
+	PROFILER1_BLOCK1(a);
 	p_update_counter(status.p_counter_array[p_hg_counter::servers_table_version], status.servers_table_version);
 	// Update *server_connections* related metrics
 	status.p_gauge_array[p_hg_gauge::server_connections_connected]->Set(status.server_connections_connected);
@@ -5119,6 +5175,7 @@ void MySQL_HostGroups_Manager::p_update_metrics() {
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
+	PROFILER1_BLOCK1(a);
 	const int colnum=2;
 	char buf[256];
 	char **pta=(char **)malloc(sizeof(char *)*colnum);
@@ -5165,6 +5222,7 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
 
 
 unsigned long long MySQL_HostGroups_Manager::Get_Memory_Stats() {
+	PROFILER1_BLOCK1(a);
 	unsigned long long intsize=0;
 	wrlock();
 	MySrvC *mysrvc=NULL;
@@ -5275,6 +5333,7 @@ bool Group_Replication_Info::update(int b, int r, int o, int mw, int mtb, bool _
 }
 
 void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
+	PROFILER1_BLOCK1(a);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -5378,6 +5437,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_offline(char *_hostn
  * @param _error Reason why the server has beens et as 'read_only'.
  */
 void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
+	PROFILER1_BLOCK1(a);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -5495,6 +5555,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_read_only(char *_hos
  * @param _writer_hostgroup 'writer_hostgroup' of the cluster in which server is going to be placed as writer.
  */
 void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
+	PROFILER1_BLOCK1(a);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -5680,6 +5741,7 @@ void MySQL_HostGroups_Manager::update_group_replication_set_writer(char *_hostna
  * @param _writer_hostgroup Target hostgroup on which perform the final server placement.
  */
 void MySQL_HostGroups_Manager::converge_group_replication_config(int _writer_hostgroup) {
+	PROFILER1_BLOCK1(a);
 
 	// we first gather info about the cluster
 	pthread_mutex_lock(&Group_Replication_Info_mutex);
@@ -5918,6 +5980,7 @@ Galera_Info::~Galera_Info() {
 }
 
 bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, char *c) {
+	PROFILER1_BLOCK1(a);
 	bool ret=false;
 	__active=true;
 	if (backup_writer_hostgroup!=b) {
@@ -5968,6 +6031,7 @@ bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, 
 }
 
 void print_galera_nodes_last_status() {
+	PROFILER1_BLOCK1(a);
 	std::unique_ptr<SQLite3_result> result { new SQLite3_result(13) };
 
 	result->add_column_definition(SQLITE_TEXT,"hostname");
@@ -6026,6 +6090,7 @@ void print_galera_nodes_last_status() {
 }
 
 void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *_error, bool soft) {
+	PROFILER1_BLOCK1(a);
 	bool set_offline = false;
 	int cols=0;
 	int affected_rows=0;
@@ -6182,6 +6247,7 @@ void MySQL_HostGroups_Manager::update_galera_set_offline(char *_hostname, int _p
 }
 
 void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *_error) {
+	PROFILER1_BLOCK1(a);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -6261,6 +6327,7 @@ void MySQL_HostGroups_Manager::update_galera_set_read_only(char *_hostname, int 
 }
 
 Galera_Info *MySQL_HostGroups_Manager::get_galera_node_info(int hostgroup) {
+	PROFILER1_BLOCK1(a);
 	pthread_mutex_lock(&Galera_Info_mutex);
 	auto it2 = Galera_Info_Map.find(hostgroup);
 	Galera_Info *info = nullptr;
@@ -6273,6 +6340,7 @@ Galera_Info *MySQL_HostGroups_Manager::get_galera_node_info(int hostgroup) {
 }
 
 void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _port, int _writer_hostgroup) {
+	PROFILER1_BLOCK1(a);
 	std::lock_guard<std::mutex> lock(galera_set_writer_mutex);
 	int cols=0;
 	int affected_rows=0;
@@ -6488,6 +6556,7 @@ void MySQL_HostGroups_Manager::update_galera_set_writer(char *_hostname, int _po
 // * mysql_servers_incoming has already entries copied from mysql_servers and ready to be loaded
 // at this moment, it is only used to check if there are more than one writer
 void MySQL_HostGroups_Manager::converge_galera_config(int _writer_hostgroup) {
+	PROFILER1_BLOCK1(a);
 
 	// we first gather info about the cluster
 	pthread_mutex_lock(&Galera_Info_mutex);
@@ -6761,6 +6830,7 @@ void MySQL_HostGroups_Manager::p_update_mysql_gtid_executed() {
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_stats_mysql_gtid_executed() {
+	PROFILER1_BLOCK1(a);
 	const int colnum = 4;
 	SQLite3_result * result = new SQLite3_result(colnum);
 	result->add_column_definition(SQLITE_TEXT,"hostname");
@@ -6928,6 +6998,7 @@ class MySQL_Errors_stats {
 };
 
 void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, int port, char *username, char *address, char *schemaname, int err_no, char *last_error) {
+	PROFILER1_BLOCK1(a);
 	SpookyHash myhash;
 	uint64_t hash1;
 	uint64_t hash2;
@@ -6983,6 +7054,7 @@ void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, i
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
+	PROFILER1_BLOCK1(a);
 	SQLite3_result *result=new SQLite3_result(11);
 	pthread_mutex_lock(&mysql_errors_mutex);
 	result->add_column_definition(SQLITE_TEXT,"hid");
@@ -7206,6 +7278,7 @@ void init_myhgc_servers_defaults(char* servers_defaults, MyHGC* myhgc) {
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
+	PROFILER1_BLOCK1(a);
 	if (incoming_hostgroup_attributes==NULL) {
 		return;
 	}
@@ -7326,6 +7399,7 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 }
 
 void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
+	PROFILER1_BLOCK1(a);
 	if (incoming_aws_aurora_hostgroups==NULL) {
 		return;
 	}
@@ -7425,6 +7499,7 @@ void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 //void MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int _rhid, char *address, unsigned int port, float current_replication_lag, bool enable, bool verbose) {
 // this function returns false is the server is in the wrong HG
 bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int _rhid, char *_server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose) {
+	PROFILER1_BLOCK1(a);
 	bool ret = false; // return false by default
 	bool reader_found_in_whg = false;
 	if (is_writer) {
@@ -7530,6 +7605,7 @@ bool MySQL_HostGroups_Manager::aws_aurora_replication_lag_action(int _whid, int 
 int MySQL_HostGroups_Manager::create_new_server_in_hg(
 	uint32_t hid, const srv_info_t& srv_info, const srv_opts_t& srv_opts
 ) {
+	PROFILER1_BLOCK1(a);
 	int32_t res = -1;
 	MySrvC* mysrvc = find_server_in_hg(hid, srv_info.addr, srv_info.port);
 
@@ -7573,6 +7649,7 @@ int MySQL_HostGroups_Manager::create_new_server_in_hg(
 }
 
 int MySQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& addr, uint16_t port) {
+	PROFILER1_BLOCK1(a);
 	MySrvC* mysrvc = find_server_in_hg(hid, addr, port);
 	if (mysrvc == nullptr) {
 		return -1;
@@ -7609,6 +7686,7 @@ int MySQL_HostGroups_Manager::remove_server_in_hg(uint32_t hid, const string& ad
 
 // FIXME: complete this!!
 void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid, char *_server_id, bool verbose) {
+	PROFILER1_BLOCK1(a);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -7843,6 +7921,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_set_writer(int _whid, int _rhid
 }
 
 void MySQL_HostGroups_Manager::update_aws_aurora_set_reader(int _whid, int _rhid, char *_server_id) {
+	PROFILER1_BLOCK1(a);
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
@@ -7969,6 +8048,7 @@ const char SELECT_AWS_AURORA_SERVERS_FOR_MONITOR[] {
 };
 
 void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lock) {
+	PROFILER1_BLOCK1(a);
 	if (lock) {
 		pthread_mutex_lock(&AWS_Aurora_Info_mutex);
 		pthread_mutex_lock(&GloMyMon->aws_aurora_mutex);
@@ -7997,6 +8077,7 @@ void MySQL_HostGroups_Manager::update_aws_aurora_hosts_monitor_resultset(bool lo
 }
 
 MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std::string& addr, int port) {
+	PROFILER1_BLOCK1(a);
 	MySrvC* f_server = nullptr;
 
 	MyHGC* myhgc = nullptr;
@@ -8022,6 +8103,7 @@ MySrvC* MySQL_HostGroups_Manager::find_server_in_hg(unsigned int _hid, const std
 }
 
 void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type dest_type, Type src_type) {
+	PROFILER1_BLOCK1(a);
 
 	assert(dest_type != src_type);
 
@@ -8074,6 +8156,7 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::copy_if_not_exists(Type
 }
 
 void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::remove(Type type, size_t index) {
+	PROFILER1_BLOCK1(a);
 
 	std::vector<Node>& nodes = mapping[type];
 
@@ -8110,6 +8193,7 @@ unsigned int MySQL_HostGroups_Manager::HostGroup_Server_Mapping::get_hostgroup_i
 }
 
 MySrvC* MySQL_HostGroups_Manager::HostGroup_Server_Mapping::insert_HGM(unsigned int hostgroup_id, const MySrvC* srv) {
+	PROFILER1_BLOCK1(a);
 
 	MyHGC* myhgc = myHGM->MyHGC_lookup(hostgroup_id);
 
