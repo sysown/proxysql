@@ -8,6 +8,12 @@ extern thread_local std::string thread_bt;
 extern std::mutex GlobalProfiling1_mutex;
 extern std::unordered_map<std::string,CounterProfiling1> GlobalProfiling1;
 
+#define CLOCKID CLOCK_MONOTONIC
+//#define CLOCKID CLOCK_REALTIME
+//#define CLOCKID CLOCK_MONOTONIC_COARSE
+//#define CLOCKID CLOCK_REALTIME_COARSE
+//#define CLOCKID CLOCK_THREAD_CPUTIME_ID
+
 
 class Counter2 {
 	public:
@@ -94,29 +100,6 @@ void retrieve_total_leaf_times(unordered_map<string, Counter2 *>& MyMap) {
 	}
 }
 
-/*
-void retrieve_total_leaf_times(unordered_map<string, Counter2 *>& MyMap, int algo) {
-	for (auto it = MyMap.begin() ; it != MyMap.end() ; it++) {
-		Counter2 *c2 = it->second;
-		c2->tottime2 = 0;
-		if (algo == 1) {
-			if (c2->map.size()) {
-				retrieve_total_leaf_times(c2->map, algo);
-			}
-			c2->tottime2 = c2->tottime;
-			total_leaf_times += c2->tottime2;
-		} else if (algo == 2) {
-			if (c2->map.size()) {
-				retrieve_total_leaf_times(c2->map, algo);
-			}
-			for (auto it2 = c2->map.begin() ; it2 != c2->map.end(); it2++) {
-				c2->tottime -= it2->second->tottime;
-			}
-		} else if (algo == 3) {
-		} 
-	}
-}
-*/
 void print_values(string& output, unordered_map<string, Counter2 *>& MyMap, string parent, int algo) {
 	for (auto it = MyMap.begin() ; it != MyMap.end() ; it++) {
 		Counter2 *c2 = it->second;
@@ -188,8 +171,7 @@ void GenerateMermaid1(string& output) {
 Profiler1::Profiler1(int l, const char *__file, int __line, const char *__func) {
 	log = l;
 	if (log) {
-		clock_gettime(CLOCK_MONOTONIC,&begint);
-		//clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
+		clock_gettime(CLOCKID,&begint);
 	}
 	prev_bt = thread_bt;
 	thread_bt += std::string(__file) + ":" + std::to_string(__line) + ":" + std::string(__func) + " ";
@@ -197,8 +179,7 @@ Profiler1::Profiler1(int l, const char *__file, int __line, const char *__func) 
 
 Profiler1::~Profiler1() {
 	if (log) {
-		clock_gettime(CLOCK_MONOTONIC,&endt);
-		//clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
+		clock_gettime(CLOCKID,&endt);
 		unsigned long long delta = (endt.tv_sec*1000000000+endt.tv_nsec) - (begint.tv_sec*1000000000+begint.tv_nsec);
 		const std::lock_guard<std::mutex> lock(GlobalProfiling1_mutex);
 		auto it = GlobalProfiling1.find(thread_bt);
