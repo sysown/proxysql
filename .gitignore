@@ -93,6 +93,7 @@ deps/prometheus-cpp/prometheus-cpp-*/
 deps/re2/re2-*/
 deps/sqlite3/sqlite-amalgamation-*/
 deps/coredumper/coredumper-*/
+deps/postgresql/postgresql-*/
 
 test/.vagrant
 .DS_Store

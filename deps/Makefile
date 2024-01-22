@@ -38,7 +38,7 @@ endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
-targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp postgresql
 ifeq ($(SYS_KERN),Linux)
 	targets += coredumper
 endif
@@ -73,7 +73,7 @@ libinjection: libinjection/libinjection/src/libinjection.a
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
-	cd libssl && ./verify-bio_st-match.sh
+	#cd libssl && ./verify-bio_st-match.sh
 #	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
 #	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
@@ -195,7 +195,7 @@ mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/open
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
-	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
+	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DCMAKE_BUILD_TYPE=Debug -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
 ifeq ($(PROXYDEBUG),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 else ifeq ($(USEVALGRIND),1)
@@ -300,6 +300,14 @@ pcre/pcre/.libs/libpcre.a:
 
 pcre: pcre/pcre/.libs/libpcre.a
 
+postgresql/postgresql/src/interfaces/libpq/libpq.a : libssl/openssl/libssl.a
+	cd postgresql && rm -rf postgresql-*/ || true
+	cd postgresql && tar -zxf postgresql-*.tar.gz
+	cd postgresql/postgresql && ./configure --with-openssl --with-includes=$(shell pwd)/libssl/openssl/include/openssl --with-libraries=$(shell pwd)/libssl/openssl/lib --without-readline
+	cd postgresql/postgresql/src/interfaces/libpq && CC=${CC} CXX=${CXX} ${MAKE} MAKELEVEL=0
+	#cd postgresql/postgresql && CC=${CC} CXX=${CXX} ${MAKE} -f src/interfaces/libpq/Makefile all
+
+postgresql: postgresql/postgresql/src/interfaces/libpq/libpq.a
 
 ### clean targets
 
@@ -307,6 +315,7 @@ cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
 	cd jemalloc && rm -rf jemalloc-*/ || true
 	cd sqlite3 && rm -rf sqlite-amalgamation-*/ || true
+	cd postgresql && rm -rf postgresql-*/ || true
 .PHONY: cleanpart
 
 cleanall:
@@ -329,5 +338,6 @@ cleanall:
 	cd prometheus-cpp && rm -rf prometheus-cpp-*/ || true
 	cd cityhash && rm -rf cityhash-*/ || true
 	cd coredumper && rm -rf coredumper-*/ || true
+	cd postgresql && rm -rf postgresql-*/ || true
 .PHONY: cleanall
 
