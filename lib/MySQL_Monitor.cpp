@@ -294,6 +294,7 @@ void MySQL_Monitor_Connection_Pool::purge_all_connections() {
 }
 
 MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, MySQL_Monitor_State_Data *mmsd) {
+	PROFILER1_BLOCK1(a);
 	std::lock_guard<std::mutex> lock(mutex);
 #ifdef DEBUG
 	pthread_mutex_lock(&m2);
@@ -364,6 +365,7 @@ MYSQL * MySQL_Monitor_Connection_Pool::get_connection(char *hostname, int port, 
 }
 
 void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYSQL *my) {
+	PROFILER1_BLOCK1(a);
 	unsigned long long now = monotonic_time();
 	std::lock_guard<std::mutex> lock(mutex);
 #ifdef DEBUG
@@ -416,6 +418,7 @@ void MySQL_Monitor_Connection_Pool::put_connection(char *hostname, int port, MYS
 }
 
 void MySQL_Monitor_Connection_Pool::purge_some_connections() {
+	PROFILER1_BLOCK1(a);
 	unsigned long long now = monotonic_time();
 	std::lock_guard<std::mutex> lock(mutex);
 #ifdef DEBUG
@@ -577,6 +580,7 @@ MySQL_Monitor_State_Data::~MySQL_Monitor_State_Data() {
 }
 
 void MySQL_Monitor_State_Data::init_async() {
+	PROFILER1_BLOCK1(a);
 	assert(mysql);
 
 	switch (task_id_) {
@@ -702,6 +706,7 @@ void MySQL_Monitor_State_Data::init_async() {
 }
 
 void MySQL_Monitor_State_Data::mark_task_as_timeout(unsigned long long time) {
+	PROFILER1_BLOCK1(a);
 	
 	task_result_ = MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_TIMEOUT;
 	t2 = time;
@@ -1104,6 +1109,7 @@ MySQL_Monitor::~MySQL_Monitor() {
 };
 
 void MySQL_Monitor::p_update_metrics() {
+	PROFILER1_BLOCK1(a);
 	if (GloMyMon) {
 		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers]->Set(GloMyMon->num_threads);
 		this->metrics.p_gauge_array[p_mon_gauge::mysql_monitor_workers_aux]->Set(GloMyMon->aux_threads);
@@ -1151,6 +1157,7 @@ void MySQL_Monitor::drop_tables_defs(std::vector<table_def_t *> *tables_defs) {
 
 // This function is copied from ProxySQL_Admin
 void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<table_def_t *> *tables_defs) {
+	PROFILER1_BLOCK1(a);
 	table_def_t *td;
 	db->execute("PRAGMA foreign_keys = OFF");
 	for (std::vector<table_def_t *>::iterator it=tables_defs->begin(); it!=tables_defs->end(); ++it) {
@@ -1161,6 +1168,7 @@ void MySQL_Monitor::check_and_build_standard_tables(SQLite3DB *db, std::vector<t
 };
 
 void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
+	PROFILER1_BLOCK1(a);
 	pthread_mutex_lock(&GloMyMon->mysql_servers_mutex);
 
 	if (resultset != nullptr) {
@@ -1220,6 +1228,7 @@ void MySQL_Monitor::update_monitor_mysql_servers(SQLite3_result* resultset) {
 }
 
 void MySQL_Monitor::update_monitor_proxysql_servers(SQLite3_result* resultset) {
+	PROFILER1_BLOCK1(a);
 	pthread_mutex_lock(&GloMyMon->proxysql_servers_mutex);
 
 	if (resultset != nullptr) {
@@ -1280,6 +1289,7 @@ void MySQL_Monitor::update_monitor_proxysql_servers(SQLite3_result* resultset) {
 }
 
 void * monitor_connect_thread(void *arg) {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -1341,6 +1351,7 @@ void * monitor_connect_thread(void *arg) {
 }
 
 void * monitor_ping_thread(void *arg) {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -1484,6 +1495,7 @@ __fast_exit_monitor_ping_thread:
 }
 
 bool MySQL_Monitor_State_Data::set_wait_timeout() {
+	PROFILER1_BLOCK1(a);
 	if (mysql_thread___monitor_wait_timeout==false) {
 		return true;
 	}
@@ -1523,6 +1535,7 @@ __exit_set_wait_timeout:
 }
 
 bool MySQL_Monitor_State_Data::create_new_connection() {
+	PROFILER1_BLOCK1(a);
 		mysql=mysql_init(NULL);
 		assert(mysql);
 		if (use_ssl) {
@@ -1574,6 +1587,7 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 }
 
 void * monitor_read_only_thread(void *arg) {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	bool timeout_reached = false;
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
@@ -1853,6 +1867,7 @@ __fast_exit_monitor_read_only_thread:
 }
 
 void * monitor_group_replication_thread(void *arg) {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -2204,6 +2219,7 @@ __fast_exit_monitor_group_replication_thread:
 }
 
 void * monitor_galera_thread(void *arg) {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -2604,6 +2620,7 @@ __fast_exit_monitor_galera_thread:
 }
 
 void * monitor_replication_lag_thread(void *arg) {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	MySQL_Monitor_State_Data *mmsd=(MySQL_Monitor_State_Data *)arg;
 	if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -2894,6 +2911,7 @@ __fast_exit_monitor_replication_lag_thread:
 
 
 void * MySQL_Monitor::monitor_connect() {
+	PROFILER1_BLOCK1(a);
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
 	MySQL_Thread * mysql_thr = new MySQL_Thread();
@@ -3021,6 +3039,7 @@ __sleep_monitor_connect_loop:
 }
 
 void * MySQL_Monitor::monitor_ping() {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
@@ -3248,6 +3267,7 @@ __sleep_monitor_ping_loop:
 
 
 bool MySQL_Monitor::server_responds_to_ping(char *address, int port) {
+	PROFILER1_BLOCK1(a);
 	bool ret = true; // default
 	char *error=NULL;
 	int cols=0;
@@ -3281,6 +3301,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
 void * MySQL_Monitor::monitor_read_only() {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
@@ -3379,6 +3400,7 @@ __sleep_monitor_read_only:
 }
 
 set<uint32_t> extract_writer_hgs(SQLite3_result* Group_Replication_Hosts_resultset) {
+	PROFILER1_BLOCK1(a);
 	set<uint32_t> writer_hgs {};
 
 	// NOTE: This operation should be at worst `N * log(N)`
@@ -3469,6 +3491,7 @@ string create_conn_err_msg(const unique_ptr<MySQL_Monitor_State_Data>& mmsd) {
 unique_ptr<MySQL_Monitor_State_Data> init_mmsd_with_conn(
 	const gr_host_def_t srv_def, uint32_t writer_hg, uint64_t start_time
 ) {
+	PROFILER1_BLOCK1(a);
 	char* c_hostname = const_cast<char*>(srv_def.host.c_str());
 	unique_ptr<MySQL_Monitor_State_Data> mmsd {
 		new MySQL_Monitor_State_Data { MON_GROUP_REPLICATION, c_hostname, srv_def.port, static_cast<bool>(srv_def.use_ssl) }
@@ -3526,6 +3549,7 @@ struct gr_srv_st_t {
 vector<pair<string,int32_t>> parse_gr_members_addrs(
 	const MySQL_Monitor_State_Data* mmsd, const vector<string>& gr_cluster_members
 ) {
+	PROFILER1_BLOCK1(a);
 #ifdef DEBUG
 	nlohmann::ordered_json members { gr_cluster_members };
 	proxy_debug(
@@ -3573,6 +3597,7 @@ vector<pair<string,int32_t>> parse_gr_members_addrs(
 }
 
 gr_srv_st_t extract_gr_srv_st(MySQL_Monitor_State_Data* mmsd) {
+	PROFILER1_BLOCK1(a);
 	gr_srv_st_t gr_srv_st {};
 
 	if (mmsd->interr == 0 && mmsd->result) {
@@ -3701,6 +3726,7 @@ gr_node_info_t gr_update_hosts_map(
  * @param node_info The fetched server information itself.
  */
 void gr_mon_action_over_resp_srv(MySQL_Monitor_State_Data* mmsd, const gr_node_info_t& node_info) {
+	PROFILER1_BLOCK1(a);
 	// NOTE: We update MyHGM outside the mutex group_replication_mutex
 	if (mmsd->mysql_error_msg) { // there was an error checking the status of the server, surely we need to reconfigure GR
 		if (node_info.num_timeouts == 0) {
@@ -3773,6 +3799,7 @@ void gr_mon_action_over_resp_srv(MySQL_Monitor_State_Data* mmsd, const gr_node_i
  * @param wr_hg The writer hostgroup from the unresponsive hosts.
  */
 void gr_handle_actions_over_unresp_srvs(const vector<gr_host_def_t>& hosts_defs, uint32_t wr_hg) {
+	PROFILER1_BLOCK1(a);
 	char unresp_err_msg[] = "Server unresponsive to PING requests";
 
 	for (const gr_host_def_t& host_def : hosts_defs) {
@@ -3793,6 +3820,7 @@ void gr_handle_actions_over_unresp_srvs(const vector<gr_host_def_t>& hosts_defs,
  * @param mmsd The mmsd wrapper holding all information for returning the connection.
  */
 void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
+	PROFILER1_BLOCK1(a);
 	if (mmsd == nullptr) return;
 
 	if (mmsd->mysql) {
@@ -3837,6 +3865,7 @@ void handle_mmsd_mysql_conn(MySQL_Monitor_State_Data* mmsd) {
  * @param mmsd The 'mmsd' which failures are to be reported.
  */
 void gr_report_fetching_errs(MySQL_Monitor_State_Data* mmsd) {
+	PROFILER1_BLOCK1(a);
 	if (mmsd->mysql) {
 		if (mmsd->interr || mmsd->mysql_error_msg) {
 			proxy_error(
@@ -3868,6 +3897,7 @@ void gr_report_fetching_errs(MySQL_Monitor_State_Data* mmsd) {
  *  hold a valid 'MYSQL_RES' or an error.
  */
 void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
+	PROFILER1_BLOCK1(a);
 	// We base 'start_time' on the conn init for 'MySQL_Monitor_State_Data'. If a conn creation was
 	// required, we take into account this time into account, otherwise we assume that 'start_time=t1'.
 	uint64_t start_time = 0;
@@ -3899,6 +3929,7 @@ void async_gr_mon_actions_handler(MySQL_Monitor_State_Data* mmsd) {
  * @return The created and initialized 'MySQL_Thread'.
  */
 unique_ptr<MySQL_Thread> init_mysql_thread_struct() {
+	PROFILER1_BLOCK1(a);
 	unique_ptr<MySQL_Thread> mysql_thr { new MySQL_Thread() };
 	mysql_thr->curtime = monotonic_time();
 	mysql_thr->refresh_variables();
@@ -3912,6 +3943,7 @@ struct mon_thread_info_t {
 };
 
 void* monitor_GR_thread_HG(void *arg) {
+	PROFILER1_BLOCK1(a);
 	uint32_t wr_hg = *(static_cast<uint32_t*>(arg));
 	proxy_info("Started Monitor thread for Group Replication writer HG %u\n", wr_hg);
 
@@ -4047,6 +4079,7 @@ void* monitor_GR_thread_HG(void *arg) {
  * @return A vector of 'mon_thread_info_t' holding info of the created threads.
  */
 vector<mon_thread_info_t> create_group_replication_worker_threads(const set<uint32_t>& writer_hgs) {
+	PROFILER1_BLOCK1(a);
 	proxy_info("Activating Monitoring of %lu Group Replication clusters\n", writer_hgs.size());
 
 	vector<mon_thread_info_t> threads_info {};
@@ -4070,6 +4103,7 @@ vector<mon_thread_info_t> create_group_replication_worker_threads(const set<uint
 
 
 void* MySQL_Monitor::monitor_group_replication_2() {
+	PROFILER1_BLOCK1(a);
 	uint64_t last_raw_checksum = 0;
 
 	// Quick exit during shutdown/restart
@@ -4133,6 +4167,7 @@ void* MySQL_Monitor::monitor_group_replication_2() {
 }
 
 void * MySQL_Monitor::monitor_group_replication() {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
@@ -4240,6 +4275,7 @@ __sleep_monitor_group_replication:
 	return NULL;
 }
 void * MySQL_Monitor::monitor_galera() {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 //	struct event_base *libevent_base;
@@ -4311,6 +4347,7 @@ __sleep_monitor_galera:
 }
 
 void * MySQL_Monitor::monitor_replication_lag() {
+	PROFILER1_BLOCK1(a);
 	mysql_close(mysql_init(NULL));
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version;
@@ -4473,6 +4510,7 @@ std::string debug_iplisttostring(const T& ips) {
 }
 
 void* monitor_dns_resolver_thread(void* args) {
+	PROFILER1_BLOCK1(a);
 
 	DNS_Resolve_Data* dns_resolve_data = static_cast<DNS_Resolve_Data*>(args);
 
@@ -4572,6 +4610,7 @@ __error:
 }
 
 void* MySQL_Monitor::monitor_dns_cache() {
+	PROFILER1_BLOCK1(a);
 	// initialize the MySQL Thread (note: this is not a real thread, just the structures associated with it)
 	unsigned int MySQL_Monitor__thread_MySQL_Thread_Variables_version = 0;
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
@@ -5092,6 +5131,7 @@ MyGR_monitor_node::~MyGR_monitor_node() {
 }
 
 int MyGR_monitor_node::get_lag_behind_count(int txs_behind) {
+	PROFILER1_BLOCK1(a);
 	int max_lag = 10;
 	if (mysql_thread___monitor_groupreplication_max_transactions_behind_count < max_lag)
 		max_lag = mysql_thread___monitor_groupreplication_max_transactions_behind_count;
@@ -5131,6 +5171,7 @@ int MyGR_monitor_node::get_lag_behind_count(int txs_behind) {
 }
 
 int MyGR_monitor_node::get_timeout_count() {
+	PROFILER1_BLOCK1(a);
 	int num_timeouts = 0;
 	int max_num_timeout = 10;
 	if (mysql_thread___monitor_groupreplication_healthcheck_max_timeout_count < max_num_timeout)
@@ -5172,6 +5213,7 @@ int MyGR_monitor_node::get_timeout_count() {
 
 // return true if status changed
 bool MyGR_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, char *_error) {
+	PROFILER1_BLOCK1(a);
 	bool ret=false;
 	if (idx_last_entry==-1) ret=true;
 	int prev_last_entry=idx_last_entry;
@@ -5284,6 +5326,7 @@ Galera_monitor_node::~Galera_monitor_node() {
 
 // return true if status changed
 bool Galera_monitor_node::add_entry(unsigned long long _st, unsigned long long _ct, long long _tb, bool _pp, bool _ro, int _local_state, bool _desync, bool _reject, bool _sst_donor_reject, bool _pxc_maint_mode, char *_error) {
+	PROFILER1_BLOCK1(a);
 	bool ret=false;
 	if (idx_last_entry==-1) ret=true;
 	int prev_last_entry=idx_last_entry;
@@ -5329,6 +5372,7 @@ bool Galera_monitor_node::add_entry(unsigned long long _st, unsigned long long _
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
+	PROFILER1_BLOCK1(a);
 	//sqlite3 *mondb=monitordb->get_db();
 	int rc;
 	//char *query=NULL;
@@ -5370,6 +5414,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_group_replication_log() {
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_galera_log() {
+	PROFILER1_BLOCK1(a);
 	//sqlite3 *mondb=monitordb->get_db();
 	int rc;
 	//char *query=NULL;
@@ -5475,6 +5520,7 @@ char * MySQL_Monitor::galera_find_last_node(int writer_hostgroup) {
 }
 
 std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_hostgroup) {
+	PROFILER1_BLOCK1(a);
 	std::vector<string> * result = new std::vector<string>();
 	pthread_mutex_lock(&GloMyMon->galera_mutex);
 	std::map<std::string, Galera_monitor_node *>::iterator it2;
@@ -5507,6 +5553,7 @@ std::vector<string> * MySQL_Monitor::galera_find_possible_last_nodes(int writer_
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
+	PROFILER1_BLOCK1(a);
 	//sqlite3 *mondb=monitordb->get_db();
 	int rc;
 	//char *query=NULL;
@@ -5575,6 +5622,7 @@ void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_log() {
 }
 
 void MySQL_Monitor::populate_monitor_mysql_server_aws_aurora_check_status() {
+	PROFILER1_BLOCK1(a);
 	//sqlite3 *mondb=monitordb->get_db();
 	int rc;
 	//char *query=NULL;
@@ -5708,6 +5756,7 @@ AWS_Aurora_monitor_node::~AWS_Aurora_monitor_node() {
 }
 
 bool AWS_Aurora_monitor_node::add_entry(AWS_Aurora_status_entry *ase) {
+	PROFILER1_BLOCK1(a);
 	bool ret=false;
 	if (idx_last_entry==-1) ret=true;
 	idx_last_entry++;
@@ -5841,7 +5890,8 @@ void * monitor_AWS_Aurora_thread_HG(void *arg) {
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true && exit_now==false) {
 
-		
+		PROFILER1_BLOCK1(a);
+
 		unsigned int glover;
 		t1=monotonic_time();
 
@@ -6238,6 +6288,7 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 
 	while (GloMyMon->shutdown==false && mysql_thread___monitor_enabled==true) {
 
+		PROFILER1_BLOCK1(a);
 		unsigned int glover;
 
 		if (!GloMTH) return NULL;	// quick exit during shutdown/restart
@@ -6321,6 +6372,7 @@ void * MySQL_Monitor::monitor_aws_aurora() {
 }
 
 unsigned int MySQL_Monitor::estimate_lag(char* server_id, AWS_Aurora_status_entry** aase, unsigned int idx, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+	PROFILER1_BLOCK1(a);
 	assert(aase);
 	assert(server_id);
 	assert(idx >= 0 && idx < N_L_ASE);
@@ -6361,6 +6413,7 @@ void print_aws_aurora_status_entry(AWS_Aurora_status_entry* aase) {
 }
 
 void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int rHG, AWS_Aurora_status_entry **lasts_ase, unsigned int ase_idx, unsigned int max_latency_ms, unsigned int add_lag_ms, unsigned int min_lag_ms, unsigned int lag_num_checks) {
+	PROFILER1_BLOCK1(a);
 #ifdef TEST_AURORA
 	unsigned int i = 0;
 	bool verbose = false;
@@ -6478,6 +6531,7 @@ void MySQL_Monitor::evaluate_aws_aurora_results(unsigned int wHG, unsigned int r
 }
 
 std::string MySQL_Monitor::dns_lookup(const std::string& hostname, bool return_hostname_if_lookup_fails, size_t* ip_count) {
+	PROFILER1_BLOCK1(a);
 	
 	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
 
@@ -6508,6 +6562,7 @@ std::string MySQL_Monitor::dns_lookup(const char* hostname, bool return_hostname
 
 bool MySQL_Monitor::update_dns_cache_from_mysql_conn(const MYSQL* mysql)
 {
+	PROFILER1_BLOCK1(a);
 	assert(mysql);
 
 	// if port==0, UNIX socket is used
@@ -6534,6 +6589,7 @@ bool MySQL_Monitor::update_dns_cache_from_mysql_conn(const MYSQL* mysql)
 bool MySQL_Monitor::_dns_cache_update(const std::string &hostname, std::vector<std::string>&& ip_address) {
 	static thread_local std::shared_ptr<DNS_Cache> dns_cache_thread;
 
+	PROFILER1_BLOCK1(a);
 	if (!dns_cache_thread && GloMyMon)
 		dns_cache_thread = GloMyMon->dns_cache;
 
@@ -6548,6 +6604,7 @@ bool MySQL_Monitor::_dns_cache_update(const std::string &hostname, std::vector<s
 }
 
 void MySQL_Monitor::trigger_dns_cache_update() {
+	PROFILER1_BLOCK1(a);
 	if (GloMyMon) {
 		GloMyMon->force_dns_cache_update = true;
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Triggering DNS cache update sequence.\n");
@@ -6555,6 +6612,7 @@ void MySQL_Monitor::trigger_dns_cache_update() {
 }
 
 bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips) {
+	PROFILER1_BLOCK1(a);
 
 	if (!enabled) return false;
 
@@ -6574,6 +6632,7 @@ bool DNS_Cache::add(const std::string& hostname, std::vector<std::string>&& ips)
 }
 
 bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::string>&& ips) {
+	PROFILER1_BLOCK1(a);
 	if (!enabled) return false;
 
 	int rc = pthread_rwlock_wrlock(&rwlock_);
@@ -6594,6 +6653,7 @@ bool DNS_Cache::add_if_not_exist(const std::string& hostname, std::vector<std::s
 }
 
 std::string DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
+	PROFILER1_BLOCK1(a);
 
 	if (ip_addr.ips.empty())
 		return "";
@@ -6604,6 +6664,7 @@ std::string DNS_Cache::get_next_ip(const IP_ADDR& ip_addr) const {
 }
 
 std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) const {
+	PROFILER1_BLOCK1(a);
 	if (!enabled) return "";
 
 	std::string ip;
@@ -6637,6 +6698,7 @@ std::string DNS_Cache::lookup(const std::string& hostname, size_t* ip_count) con
 }
 
 void DNS_Cache::remove(const std::string& hostname) {
+	PROFILER1_BLOCK1(a);
 	bool item_removed = false;
 
 	int rc = pthread_rwlock_wrlock(&rwlock_);
@@ -6658,6 +6720,7 @@ void DNS_Cache::remove(const std::string& hostname) {
 }
 
 void DNS_Cache::clear() {
+	PROFILER1_BLOCK1(a);
 	size_t records_removed = 0;
 	int rc = pthread_rwlock_wrlock(&rwlock_);
 	assert(rc == 0);
@@ -6671,6 +6734,7 @@ void DNS_Cache::clear() {
 }
 
 bool DNS_Cache::empty() const {
+	PROFILER1_BLOCK1(a);
 	bool result = true;
 
 	int rc = pthread_rwlock_rdlock(&rwlock_);
@@ -6905,6 +6969,7 @@ private:
 };
 
 MySQL_Monitor_State_Data_Task_Result MySQL_Monitor_State_Data::task_handler(short event_, short& wait_event) {
+	PROFILER1_BLOCK1(a);
 	assert(task_handler_);
 
 	if (event_ != -1) {
@@ -6933,6 +6998,7 @@ MySQL_Monitor_State_Data_Task_Result MySQL_Monitor_State_Data::task_handler(shor
 }
 
 MySQL_Monitor_State_Data_Task_Result MySQL_Monitor_State_Data::ping_handler(short event_, short& wait_event) {
+	PROFILER1_BLOCK1(a);
 	MySQL_Monitor_State_Data_Task_Result result = MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING;
 	int status = 0;
 
@@ -6995,6 +7061,7 @@ __again:
 }
 
 bool MySQL_Monitor::monitor_ping_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
+	PROFILER1_BLOCK1(a);
 	
 	for (auto& mmsd : mmsds) {
 
@@ -7051,6 +7118,7 @@ bool MySQL_Monitor::monitor_ping_process_ready_tasks(const std::vector<MySQL_Mon
 }
 
 void MySQL_Monitor::monitor_ping_async(SQLite3_result* resultset) {
+	PROFILER1_BLOCK1(a);
 	assert(resultset);
 
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
@@ -7085,6 +7153,7 @@ void MySQL_Monitor::monitor_ping_async(SQLite3_result* resultset) {
 }
 
 MySQL_Monitor_State_Data_Task_Result MySQL_Monitor_State_Data::generic_handler(short event_, short& wait_event) {
+	PROFILER1_BLOCK1(a);
 	MySQL_Monitor_State_Data_Task_Result result_ret = MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING;
 	int status = 0;
 
@@ -7193,6 +7262,7 @@ __again:
 }
 
 bool MySQL_Monitor::monitor_read_only_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
+	PROFILER1_BLOCK1(a);
 
 	std::list<read_only_server_t> mysql_servers;
 
@@ -7328,6 +7398,7 @@ VALGRIND_ENABLE_ERROR_REPORTING;
 }
 
 void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset) {
+	PROFILER1_BLOCK1(a);
 	assert(resultset);
 
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
@@ -7379,6 +7450,7 @@ void MySQL_Monitor::monitor_read_only_async(SQLite3_result* resultset) {
 }
 
 bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
+	PROFILER1_BLOCK1(a);
 
 	for (auto& mmsd : mmsds) {
 
@@ -7543,6 +7615,7 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks(const std::vec
 }
 
 void MySQL_Monitor::monitor_group_replication_async() {
+	PROFILER1_BLOCK1(a);
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
 
 	pthread_mutex_lock(&group_replication_mutex);
@@ -7591,6 +7664,7 @@ void MySQL_Monitor::monitor_group_replication_async() {
 bool MySQL_Monitor::monitor_group_replication_process_ready_tasks_2(
 	const vector<MySQL_Monitor_State_Data*>& mmsds
 ) {
+	PROFILER1_BLOCK1(a);
 	for (MySQL_Monitor_State_Data* mmsd : mmsds) {
 		const MySQL_Monitor_State_Data_Task_Result task_result = mmsd->get_task_result();
 		assert(task_result != MySQL_Monitor_State_Data_Task_Result::TASK_RESULT_PENDING);
@@ -7603,6 +7677,7 @@ bool MySQL_Monitor::monitor_group_replication_process_ready_tasks_2(
 void MySQL_Monitor::monitor_gr_async_actions_handler(
 	const vector<unique_ptr<MySQL_Monitor_State_Data>>& mmsds
 ) {
+	PROFILER1_BLOCK1(a);
 	Monitor_Poll monitor_poll(mmsds.size());
 
 	for (const unique_ptr<MySQL_Monitor_State_Data>& mmsd : mmsds) {
@@ -7621,6 +7696,7 @@ void MySQL_Monitor::monitor_gr_async_actions_handler(
 
 bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 	
+	PROFILER1_BLOCK1(a);
 	std::list<std::tuple<int, std::string, unsigned int, int>> mysql_servers;
 
 	for (auto& mmsd : mmsds) {
@@ -7740,6 +7816,7 @@ bool MySQL_Monitor::monitor_replication_lag_process_ready_tasks(const std::vecto
 }
 
 void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
+	PROFILER1_BLOCK1(a);
 	assert(resultset);
 
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
@@ -7780,6 +7857,7 @@ void MySQL_Monitor::monitor_replication_lag_async(SQLite3_result* resultset) {
 
 bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_Monitor_State_Data*>& mmsds) {
 
+	PROFILER1_BLOCK1(a);
 	for (auto& mmsd : mmsds) {
 
 		const auto task_result = mmsd->get_task_result();
@@ -8040,6 +8118,7 @@ bool MySQL_Monitor::monitor_galera_process_ready_tasks(const std::vector<MySQL_M
 
 void MySQL_Monitor::monitor_galera_async() {
 
+	PROFILER1_BLOCK1(a);
 	std::vector<std::unique_ptr<MySQL_Monitor_State_Data>> mmsds;
 	std::set<std::string> checked_servers;
 	pthread_mutex_lock(&galera_mutex);
