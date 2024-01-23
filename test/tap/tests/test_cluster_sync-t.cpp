@@ -2323,7 +2323,6 @@ int main(int, char**) {
 			std::make_tuple("mysql-init_connect"                                           , ""                           ),
 			std::make_tuple("mysql-ldap_user_variable"                                     , ""                           ),
 			std::make_tuple("mysql-add_ldap_user_comment"                                  , ""                           ),
-			std::make_tuple("mysql-default_tx_isolation"                                   , "READ-COMMITTED"             ),
 			std::make_tuple("mysql-default_session_track_gtids"                            , "OFF"                        ),
 			std::make_tuple("mysql-connpoll_reset_queue_length"                            , "50"                         ),
 			std::make_tuple("mysql-min_num_servers_lantency_awareness"                     , "1000"                       ),
