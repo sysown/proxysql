@@ -1,6 +1,15 @@
 /* c_tokenizer.c */
 // Borrowed from http://www.cplusplus.com/faq/sequences/strings/split/
 
+
+#ifdef PROXYSQL_PROFILER_TAP
+// c_tokenizer.cpp is being compiled with a TAP test
+// thus disable the profiler
+#define PROXYSQL_PROFILER
+#define PROFILER1_BLOCK1(a)
+#endif // PROXYSQL_PROFILER_TAP
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
