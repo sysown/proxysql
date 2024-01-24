@@ -46,14 +46,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - dist: 'centos6'
-            type: ''
           - dist: 'centos7'
             type: ''
-          - dist: 'debian11'
+          - dist: 'debian10'
             type: ''
-          - dist: 'fedora37'
+          - dist: 'opensuse15'
             type: '-clang'
+          - dist: 'ubuntu16'
+            type: ''
           - dist: 'ubuntu22'
             type: '-clang'
           - dist: 'ubuntu22'
