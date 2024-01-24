@@ -34,9 +34,10 @@ mariadb_client: mariadb-connector-c/mariadb-connector-c/libmariadb/libmariadbcli
 #	cd mysql-connector-c/mysql-connector-c && cmake . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=$(DEPS_PATH)/libssl/openssl
 #	cd mysql-connector-c/mysql-connector-c && CC=${CC} CXX=${CXX} ${MAKE} mysqlclient mysql
 
-mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a:
-	cd mysql-connector-c && curl -C - -O -s https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz || true
-	cd mysql-connector-c && wget -nc -q https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz || true
+mysql-connector-c/mysql-boost-5.7.44.tar.gz:
+	cd mysql-connector-c && curl -C - -O -s https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz || wget -nc -q https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-boost-5.7.44.tar.gz
+
+mysql-connector-c/mysql-connector-c/libmysql/libmysqlclient.a: mysql-connector-c/mysql-boost-5.7.44.tar.gz
 	cd mysql-connector-c && rm -rf mysql-*/ || true
 	cd mysql-connector-c && tar -zxf mysql-boost-5.7.*.tar.gz
 	cd mysql-connector-c && ln -fsT $$(ls -1d mysql-5.7.*/) mysql-connector-c
