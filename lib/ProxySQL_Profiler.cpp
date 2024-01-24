@@ -76,27 +76,27 @@ void insert_element(unordered_map<string, Counter2 *>& MyMap, vector<string>& wo
 		}
 }
 
-void retrieve_total_leaf_times(unordered_map<string, Counter2 *>& MyMap) {
-	total_leaf_times1 = 0;
-	total_leaf_times2 = 0;
-	total_leaf_times3 = 0;
+void retrieve_total_leaf_times(unordered_map<string, Counter2 *>& MyMap, bool root) {
 	for (auto it = MyMap.begin() ; it != MyMap.end() ; it++) {
 		Counter2 *c2 = it->second;
-		c2->tottime1 = c2->tottime;
+		c2->tottime1 = 0;
 		c2->tottime2 = 0;
-		c2->tottime3 = c2->tottime;;
+		c2->tottime3 = 0;
 		if (c2->map.size()) {
-			retrieve_total_leaf_times(c2->map);
+			retrieve_total_leaf_times(c2->map, false);
 			for (auto it2 = c2->map.begin() ; it2 != c2->map.end(); it2++) {
-				c2->tottime2 += it2->second->tottime2; // time of all the leaves from this branch
-				c2->tottime3 -= it2->second->tottime; // its own time only
+				c2->tottime1 += it2->second->tottime;
+				//c2->tottime2 += it2->second->tottime2; // time of all the leaves from this branch
+				//c2->tottime3 += it2->second->tottime; // its own time only
 			}
 		} else {
 			c2->tottime2 = c2->tottime; // time of only leaves
-			total_leaf_times2 += c2->tottime2;
+			//total_leaf_times2 += c2->tottime2;
 		}
-		total_leaf_times1 += c2->tottime;
-		total_leaf_times3 += c2->tottime3;
+		if (root == false) {
+			total_leaf_times1 += c2->tottime - c2->tottime1; // its own time only
+			total_leaf_times3 += c2->tottime3;
+		}
 	}
 }
 
@@ -105,6 +105,9 @@ void print_values(string& output, unordered_map<string, Counter2 *>& MyMap, stri
 		Counter2 *c2 = it->second;
 		string last_word = c2->last_word;
 		string path = parent + last_word + " ";
+		if (parent == "") {
+			output += "```mermaid\nflowchart LR\n";
+		}
 		if (c2->map.size() == 0) {
 			if (last_word != "") {
 				auto it = GlobalProfiling1.find(path);
@@ -115,33 +118,42 @@ void print_values(string& output, unordered_map<string, Counter2 *>& MyMap, stri
 			}
 		} else {
 			print_values(output, c2->map, path, algo);
-			output += c2->name + "[" + last_word + "]\n";
-			char buf[10];
-			for (auto it2 = c2->map.begin() ; it2 != c2->map.end() ; it2++) {
-				Counter2 *c3 = it2->second;
-				double pct = 0;
-				unsigned long long tt = 0;
-				switch (algo) {
-					case 1:
-						tt = c3->tottime1;
-						pct = (double)tt * 100 / total_leaf_times1;
-						break;
-					case 2:
-						tt = c3->tottime2;
-						pct = (double)tt * 100 / total_leaf_times2;
-						break;
-					case 3:
-						tt = c3->tottime3;
-						pct = (double)tt * 100 / total_leaf_times3;
-						break;
-					default:
-						assert(0);
-						break;
-				}
-				sprintf(buf, "%.2f", pct);
-				output += c3->name + "[\"" + c3->last_word + "\n" + to_string(tt) + " (" + string(buf) + "%)\"]\n";
-				output += c2->name + " -- " + to_string(c3->cnt) + " --> " + c3->name + "\n";
-			}
+		}
+		char buf[64];
+/*
+		output += c2->name + "[\"" + last_word + "\"]\n";
+*/
+		double pct = 0;
+		unsigned long long tt = 0;
+		if (parent != "" ) {
+		switch (algo) {
+			case 1:
+				tt = c2->tottime;
+				pct = tt * 100;
+				pct /= total_leaf_times1;
+				//pct = (double)tt * 100 / total_leaf_times1;
+				break;
+			case 2:
+				tt = c2->tottime2;
+				pct = (double)tt * 100 / total_leaf_times2;
+				break;
+			case 3:
+				tt = c2->tottime3;
+				pct = (double)tt * 100 / total_leaf_times3;
+				break;
+			default:
+				assert(0);
+				break;
+		}
+		}
+		sprintf(buf, "%.2f", pct);
+		output += c2->name + "[\"" + c2->last_word + "\n" + to_string(tt) + " (" + string(buf) + "%)\"]\n";
+		for (auto it2 = c2->map.begin() ; it2 != c2->map.end() ; it2++) {
+			Counter2 *c3 = it2->second;
+			output += c2->name + " -- " + to_string(c3->cnt) + " --> " + c3->name + "\n";
+		}
+		if (parent == "") {
+			output += "```\n";
 		}
 	}
 }
@@ -149,7 +161,7 @@ void print_values(string& output, unordered_map<string, Counter2 *>& MyMap, stri
 void GenerateMermaid1(string& output) {
 	MyMap = {};
 	MMID = 1;
-	output = "```mermaid\nflowchart LR\n";
+	output = "";
 	const std::lock_guard<std::mutex> lock(GlobalProfiling1_mutex);
 	for (auto it = GlobalProfiling1.begin() ; it != GlobalProfiling1.end() ; it++) {
 		vector<string> words = {};
@@ -157,15 +169,15 @@ void GenerateMermaid1(string& output) {
 		CounterProfiling1& c = it->second;
 		insert_element(MyMap, words, 0, c);
 	}
-	retrieve_total_leaf_times(MyMap);
+	total_leaf_times1 = 0;
+	total_leaf_times2 = 0;
+	total_leaf_times3 = 0;
+	retrieve_total_leaf_times(MyMap, true);
 	print_values(output, MyMap,"",1);
-	output += "```\n";
-	output += "```mermaid\nflowchart LR\n";
+/* // DO NOT USE THIS FOR NOW , MATH IS WRONG
 	print_values(output, MyMap,"",2);
-	output += "```\n";
-	output += "```mermaid\nflowchart LR\n";
 	print_values(output, MyMap,"",3);
-	output += "```";
+*/
 }
 
 Profiler1::Profiler1(int l, const char *__file, int __line, const char *__func) {
