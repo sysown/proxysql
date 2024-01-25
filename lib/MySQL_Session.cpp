@@ -5034,7 +5034,7 @@ handler_again:
 							}
 							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
 
-								if (unlikely(client_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (myconn->options.client_flag & CLIENT_MULTI_STATEMENTS)) { // micro-optimization. Perform this check outside handler_again___verify_backend_multi_statement
+								if (unlikely((client_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (myconn->options.client_flag & CLIENT_MULTI_STATEMENTS))) { // micro-optimization. Perform this check outside handler_again___verify_backend_multi_statement
 									if (handler_again___verify_backend_multi_statement()) {
 										goto handler_again;
 									}
