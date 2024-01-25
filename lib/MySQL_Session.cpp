@@ -5049,8 +5049,26 @@ handler_again:
 									goto handler_again;
 								}
 
+/*
+								// Since all variables below SQL_NAME_LAST_LOW_WM
+								// are related to charset, this section of the code is
+								// redundant because verify_set_names() takes care of it.
+								bool SQL_NAME_LAST_LOW_WM_matches = true;
+								// this is a "fast" version of the extensive check that follows
+								for (auto i = 0; i < SQL_NAME_LAST_LOW_WM && SQL_NAME_LAST_LOW_WM_matches == true; i++) {
+									if (i == SQL_CHARACTER_ACTION) {
+										if (client_myconn->var_hash[i] != myconn->var_hash[i]) {
+											SQL_NAME_LAST_LOW_WM_matches = false;
+										}
+									}
+								}
+								if (SQL_NAME_LAST_LOW_WM_matches == false) {
 								for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
-									auto client_hash = client_myds->myconn->var_hash[i];
+									auto client_hash = client_myconn->var_hash[i];
+									if (i == SQL_CHARACTER_ACTION) {
+										// SQL_CHARACTER_ACTION has no meaning for the backend
+										continue;
+									}
 #ifdef DEBUG
 									if (GloVars.global.gdbg) {
 										switch (i) {
@@ -5075,11 +5093,12 @@ handler_again:
 										}
 									}
 								}
-								MySQL_Connection *c_con = client_myds->myconn;
-								vector<uint32_t>::const_iterator it_c = c_con->dynamic_variables_idx.begin();  // client connection iterator
-								for ( ; it_c != c_con->dynamic_variables_idx.end() ; it_c++) {
+								}
+*/
+								vector<uint32_t>::const_iterator it_c = client_myconn->dynamic_variables_idx.begin();  // client connection iterator
+								for ( ; it_c != client_myconn->dynamic_variables_idx.end() ; it_c++) {
 									auto i = *it_c;
-									auto client_hash = c_con->var_hash[i];
+									auto client_hash = client_myconn->var_hash[i];
 									auto server_hash = myconn->var_hash[i];
 									if (client_hash != server_hash) {
 										if(
