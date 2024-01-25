@@ -482,27 +482,61 @@ bool update_server_variable(MySQL_Session* session, int idx, int &_rc) {
 }
 
 bool verify_set_names(MySQL_Session* session) {
-	uint32_t client_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
+	MySQL_Connection *client_myconn = session->client_myds->myconn;
+	uint32_t client_charset_hash = client_myconn->var_hash[SQL_CHARACTER_SET_CLIENT];
+#ifdef DEBUG
+	// client_get_hash() should return the same result
+	uint32_t client_charset_hash_2 = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CLIENT);
+	assert(client_charset_hash == client_charset_hash_2);
+#endif // DEBUG
 	if (client_charset_hash == 0)
 		return false;
 
-	uint32_t results_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_RESULTS);
+	uint32_t results_charset_hash = client_myconn->var_hash[SQL_CHARACTER_SET_RESULTS];
+#ifdef DEBUG
+	// client_get_hash() should return the same result
+	uint32_t results_charset_hash_2 = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_RESULTS);
+	assert(results_charset_hash == results_charset_hash_2);
+#endif // DEBUG
 	if (client_charset_hash != results_charset_hash)
 		return false;
 
-	uint32_t connection_charset_hash = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CONNECTION);
+	uint32_t connection_charset_hash = client_myconn->var_hash[SQL_CHARACTER_SET_CONNECTION];
+#ifdef DEBUG
+	// client_get_hash() should return the same result
+	uint32_t connection_charset_hash_2 = mysql_variables.client_get_hash(session, SQL_CHARACTER_SET_CONNECTION);
+	assert(connection_charset_hash == connection_charset_hash_2);
+#endif // DEBUG
 	if (client_charset_hash != connection_charset_hash)
 		return false;
 
-	uint32_t collation_hash = mysql_variables.client_get_hash(session, SQL_COLLATION_CONNECTION);
+	uint32_t collation_hash = client_myconn->var_hash[SQL_COLLATION_CONNECTION];
+#ifdef DEBUG
+	// client_get_hash() should return the same result
+	uint32_t collation_hash_2 = mysql_variables.client_get_hash(session, SQL_COLLATION_CONNECTION);
+	assert(collation_hash == collation_hash_2);
+#endif // DEBUG
 	if (client_charset_hash != collation_hash)
 		return false;
 
-	if (client_charset_hash != mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_CLIENT) ||
-			results_charset_hash != mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_RESULTS) ||
-			connection_charset_hash != mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_CONNECTION) ||
-			collation_hash != mysql_variables.server_get_hash(session, SQL_COLLATION_CONNECTION)) {
-
+	bool variables_match = true;
+	MySQL_Connection *server_myconn = session->mybe->server_myds->myconn;
+	if (
+		client_charset_hash     != server_myconn->var_hash[SQL_CHARACTER_SET_CLIENT]     ||
+		results_charset_hash    != server_myconn->var_hash[SQL_CHARACTER_SET_RESULTS]    ||
+		connection_charset_hash != server_myconn->var_hash[SQL_CHARACTER_SET_CONNECTION] ||
+		collation_hash          != server_myconn->var_hash[SQL_COLLATION_CONNECTION]
+	) {
+		variables_match = false;
+	}
+#ifdef DEBUG
+	// server_get_hash() should return the same result
+	assert(mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_CLIENT)     == server_myconn->var_hash[SQL_CHARACTER_SET_CLIENT]);
+	assert(mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_RESULTS)    == server_myconn->var_hash[SQL_CHARACTER_SET_RESULTS]);
+	assert(mysql_variables.server_get_hash(session, SQL_CHARACTER_SET_CONNECTION) == server_myconn->var_hash[SQL_CHARACTER_SET_CONNECTION]);
+	assert(mysql_variables.server_get_hash(session, SQL_COLLATION_CONNECTION)     == server_myconn->var_hash[SQL_COLLATION_CONNECTION]);
+#endif // DEBUG
+	if (variables_match == false) {
 		switch(session->status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
 			case PROCESSING_QUERY:
 				session->previous_status.push(PROCESSING_QUERY);
