@@ -212,24 +212,30 @@ bool MySQL_Variables::client_set_value(MySQL_Session* session, int idx, const st
 }
 
 const char* MySQL_Variables::client_get_value(MySQL_Session* session, int idx) const {
+#ifdef DEBUG
 	assert(session);
 	assert(session->client_myds);
 	assert(session->client_myds->myconn);
+#endif // DEBUG
 	return session->client_myds->myconn->variables[idx].value;
 }
 
 uint32_t MySQL_Variables::client_get_hash(MySQL_Session* session, int idx) const {
+#ifdef DEBUG
 	assert(session);
 	assert(session->client_myds);
 	assert(session->client_myds->myconn);
+#endif // DEBUG
 	return session->client_myds->myconn->var_hash[idx];
 }
 
 void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const char* value) {
+#ifdef DEBUG
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
 	assert(session->mybe->server_myds->myconn);
+#endif // DEBUG
 	if (!value) return; // FIXME: I am not sure about this implementation . If value == NULL , show the variable be reset?
 	session->mybe->server_myds->myconn->var_hash[idx] = SpookyHash::Hash32(value,strlen(value),10);
 
@@ -242,10 +248,12 @@ void MySQL_Variables::server_set_value(MySQL_Session* session, int idx, const ch
 }
 
 void MySQL_Variables::server_reset_value(MySQL_Session* session, int idx) {
+#ifdef DEBUG
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
 	assert(session->mybe->server_myds->myconn);
+#endif // DEBUG
 
 	MySQL_Connection *backend_conn = session->mybe->server_myds->myconn;
 	
@@ -261,18 +269,22 @@ void MySQL_Variables::server_reset_value(MySQL_Session* session, int idx) {
 }
 
 const char* MySQL_Variables::server_get_value(MySQL_Session* session, int idx) const {
+#ifdef DEBUG
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
 	assert(session->mybe->server_myds->myconn);
+#endif // DEBUG
 	return session->mybe->server_myds->myconn->variables[idx].value;
 }
 
 uint32_t MySQL_Variables::server_get_hash(MySQL_Session* session, int idx) const {
+#ifdef DEBUG
 	assert(session);
 	assert(session->mybe);
 	assert(session->mybe->server_myds);
 	assert(session->mybe->server_myds->myconn);
+#endif // DEBUG
 	return session->mybe->server_myds->myconn->var_hash[idx];
 }
 
