@@ -18,6 +18,7 @@ extern MySQL_Variables mysql_variables;
 
 class MySQL_ResultSet {
 	private:
+	int nTrx;
 	bool deprecate_eof_active;
 	public:
 	bool transfer_started;

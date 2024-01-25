@@ -5006,8 +5006,10 @@ handler_again:
 					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 				}
 				if (default_hostgroup>=0) {
-					if (handler_again___verify_backend_user_schema()) {
-						goto handler_again;
+					if (mybe->server_myds->DSS != STATE_MARIADB_QUERY) { // probably this should be: if (mybe->server_myds->DSS == STATE_READY || mybe->server_myds->DSS == STATE_MARIADB_GENERIC) {
+						if (handler_again___verify_backend_user_schema()) {
+							goto handler_again;
+						}
 					}
 					if (mirror==false) { // do not care about autocommit and charset if mirror
 							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , default_HG=%d server_myds DSS=%d , locked_on_HG=%d\n", this, default_hostgroup, mybe->server_myds->DSS, locked_on_hostgroup);
