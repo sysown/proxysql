@@ -261,6 +261,7 @@ class MySQL_Session
 	 *  maintenance thread. These values will be used to release the retained connections in the specific
 	 *  hostgroups in housekeeping operations, before client packet processing. Currently 'housekeeping_before_pkts'.
 	 */
+	size_t hgs_expired_conns_cnt = 0;
 	std::vector<int32_t> hgs_expired_conns {};
 	char * default_schema;
 	char * user_attributes;

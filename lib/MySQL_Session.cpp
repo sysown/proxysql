@@ -770,6 +770,7 @@ void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connec
 			}
 		}
 	}
+	hgs_expired_conns_cnt = hgs_expired_conns.size();
 }
 
 MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
@@ -4837,6 +4838,7 @@ void MySQL_Session::housekeeping_before_pkts() {
 		if (hgs_expired_conns.empty() == false) {
 			hgs_expired_conns.clear();
 		}
+		hgs_expired_conns_cnt = hgs_expired_conns.size();
 	}
 }
 
@@ -4884,7 +4886,9 @@ int MySQL_Session::handler() {
 	}
 	}
 
-	housekeeping_before_pkts();
+	if (unlikely(hgs_expired_conns_cnt != 0)) {
+		housekeeping_before_pkts();
+	}
 	handler_ret = get_pkts_from_client(wrong_pass, pkt);
 	if (handler_ret != 0) {
 		return handler_ret;
