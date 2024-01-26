@@ -2423,7 +2423,13 @@ __do_auth:
 		if (vars1.pass_len==0 && strlen(vars1.password)==0) {
 			ret=true;
 			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password=''\n", (*myds), (*myds)->sess, vars1.user);
-		} else {
+		}
+		// For empty passwords client expects either 'OK' or 'ERR'
+		else if (vars1.pass_len == 0 && strlen(vars1.password) != 0) {
+			ret=false;
+			proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password=''\n", (*myds), (*myds)->sess, vars1.user);
+		}
+		else {
 #ifdef DEBUG
 			char *tmp_pass=strdup(vars1.password);
 			int lpass = strlen(tmp_pass);
