@@ -311,7 +311,7 @@ amd64-ubuntu: ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clan
 
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
 arm64-almalinux: almalinux8 almalinux9
-arm64-centos: centos7 centos8
+arm64-centos: centos7 centos8 centos9
 arm64-debian: debian10 debian11 debian12
 arm64-fedora: fedora38 fedora39
 arm64-opensuse: opensuse15
