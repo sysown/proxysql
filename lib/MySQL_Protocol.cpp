@@ -2227,6 +2227,9 @@ void MySQL_Protocol::PPHR_sha2full(
 			if (session_type == PROXYSQL_SESSION_MYSQL || session_type == PROXYSQL_SESSION_SQLITE || session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
 				// currently proxysql doesn't know the clear text password for that specific user, let's set it!
 				GloMyAuth->set_clear_text_password((char *)vars1.user, USERNAME_FRONTEND, (const char *)vars1.pass);
+				// Update 'vars1' password with 'clear text' one, so session can be later updated with it
+				if (vars1.password) { free(vars1.password); }
+				vars1.password = strdup(reinterpret_cast<const char*>(vars1.pass));
 			}
 		}
 	} else {
