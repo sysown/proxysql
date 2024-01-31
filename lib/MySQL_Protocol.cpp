@@ -1562,6 +1562,11 @@ bool MySQL_Protocol::process_pkt_COM_CHANGE_USER(unsigned char *pkt, unsigned in
 	// FIXME: add support for default schema and fast forward, see issue #255 and #256
 	(*myds)->sess->default_hostgroup=default_hostgroup;
 	(*myds)->sess->transaction_persistent=transaction_persistent;
+	// Could be reached several times before auth completion; allocating attributes should be reset
+	if ((*myds)->sess->user_attributes) {
+		free((*myds)->sess->user_attributes);
+		(*myds)->sess->user_attributes = nullptr;
+	}
 	(*myds)->sess->user_attributes=user_attributes;
 	if (password==NULL) {
 		ret=false;
@@ -1955,8 +1960,17 @@ void MySQL_Protocol::PPHR_5passwordTrue(
 	proxy_debug(PROXY_DEBUG_MYSQL_AUTH, 5, "Session=%p , DS=%p , username='%s' , password='%s'\n", (*myds), (*myds)->sess, vars1.user, tmp_pass);
 	free(tmp_pass);
 #endif // debug
+	// Could be reached several times before auth completion; allocating attributes should be reset
 	(*myds)->sess->default_hostgroup = attr1.default_hostgroup;
+	if ((*myds)->sess->default_schema) {
+		free((*myds)->sess->default_schema);
+		(*myds)->sess->default_schema = nullptr;
+	}
 	(*myds)->sess->default_schema = attr1.default_schema; // just the pointer is passed
+	if ((*myds)->sess->user_attributes) {
+		free((*myds)->sess->user_attributes);
+		(*myds)->sess->user_attributes = nullptr;
+	}
 	(*myds)->sess->user_attributes = attr1.attributes; // just the pointer is passed
 #ifdef DEBUG
 	debug_spiffe_id(vars1.user,attr1.attributes, __LINE__, __func__);
@@ -2519,19 +2533,26 @@ __exit_do_auth:
 		goto __exit_process_pkt_handshake_response;
 	}
 
+	// Could be reached several times before auth completion; allocating attributes should be reset
 	if (ret==true) {
 
 		(*myds)->DSS=STATE_CLIENT_HANDSHAKE;
 
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username=strdup((const char *)vars1.user);
+		if (userinfo->password) {
+			free(userinfo->password);
+		}
 		userinfo->password=strdup((const char *)vars1.password);
 		if (vars1.db) userinfo->set_schemaname(vars1.db,strlen(vars1.db));
 	} else {
 		// we always duplicate username and password, or crashes happen
 		if (!userinfo->username) // if set already, ignore
 			userinfo->username=strdup((const char *)vars1.user);
-		if (vars1.pass_len) userinfo->password=strdup((const char *)"");
+		if (vars1.pass_len) {
+			if (userinfo->password) { free(userinfo->password); }
+			userinfo->password=strdup((const char *)"");
+		};
 	}
 	userinfo->set(NULL,NULL,NULL,NULL); // just to call compute_hash()
 
