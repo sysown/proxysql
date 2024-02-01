@@ -16,7 +16,7 @@ jobs:
     
     - name: Cache restore
       id: cache-matrix
-      uses: actions/cache/restore@v3
+      uses: actions/cache/restore@v4
       with:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
         fail-on-cache-miss: true
@@ -71,7 +71,7 @@ jobs:
 
     - name: Cache restore src
       id: cache-src
-      uses: actions/cache/restore@v3
+      uses: actions/cache/restore@v4
       with:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_src
         fail-on-cache-miss: true
@@ -80,7 +80,7 @@ jobs:
 
     - name: Cache restore test
       id: cache-test
-      uses: actions/cache/restore@v3
+      uses: actions/cache/restore@v4
       with:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_test
         fail-on-cache-miss: true
@@ -89,7 +89,7 @@ jobs:
 
     - name: Cache restore tap-matrix
       id: cache-matrix
-      uses: actions/cache/restore@v3
+      uses: actions/cache/restore@v4
       with:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
         fail-on-cache-miss: true
@@ -97,7 +97,7 @@ jobs:
           proxysql/tap-matrix*
 
     - name: Checkout jenkins_build_scripts
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'proxysql/jenkins-build-scripts'
         ref: 'kubernetes'
@@ -273,7 +273,7 @@ jobs:
 
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.taptests }}
         path: |
@@ -281,7 +281,7 @@ jobs:
 
     - name: Archive artifacts bins
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.taptests }}
         path: |
@@ -292,7 +292,7 @@ jobs:
 
     - name: Archive artifacts tests
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.taptests }}
         path: |

@@ -63,7 +63,7 @@ jobs:
 
     - name: Cache check
       id: cache-check
-      uses: actions/cache/restore@v3
+      uses: actions/cache/restore@v4
       with:
 #        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_bin
@@ -73,7 +73,7 @@ jobs:
 
     - name: Checkout repository
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
 #        repository: 'sysown/proxysql'
 #        ref: 'v2.x'
@@ -137,7 +137,7 @@ jobs:
     - name: Cache save bin
       id: cache-save-bin
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' }}
-      uses: actions/cache/save@v3
+      uses: actions/cache/save@v4
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
         path: |
@@ -146,7 +146,7 @@ jobs:
     - name: Cache save src
       id: cache-save-src
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
-      uses: actions/cache/save@v3
+      uses: actions/cache/save@v4
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_src
         path: |
@@ -155,7 +155,7 @@ jobs:
     - name: Cache save test
       id: cache-save-test
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
-      uses: actions/cache/save@v3
+      uses: actions/cache/save@v4
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_test
         path: |
@@ -164,7 +164,7 @@ jobs:
     - name: Cache save matrix
       id: cache-save-matrix
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
-      uses: actions/cache/save@v3
+      uses: actions/cache/save@v4
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_matrix
         path: |
@@ -172,7 +172,7 @@ jobs:
 
     - name: Archive artifacts
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ci-builds-${{ github.sha }}-run#${{ github.run_number }}
         path: |

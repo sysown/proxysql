@@ -29,7 +29,7 @@ jobs:
     steps:
          
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'sysown/proxysql'
 #        ref: 'v2.x'
@@ -60,7 +60,7 @@ jobs:
         
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ matrix.target }}
         path: |

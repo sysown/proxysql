@@ -11,7 +11,7 @@ jobs:
     steps:
     - name: Cache restore src
       id: cache-src
-      uses: actions/cache/restore@v3
+      uses: actions/cache/restore@v4
       with:
         key: CI-builds_${{ github.sha }}_ubuntu22-tap_src
         fail-on-cache-miss: true
@@ -83,7 +83,7 @@ jobs:
 
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}
         path: |
@@ -91,7 +91,7 @@ jobs:
           
     - name: Archive artifacts bin
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-bin-run#${{ github.run_number }}
         path: |

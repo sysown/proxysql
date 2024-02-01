@@ -53,7 +53,7 @@ jobs:
         sudo apt-get install -y --allow-downgrades libmysqlclient-dev=5.7*
 
     - name: Checkout proxysql
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'sysown/proxysql'
 #        ref: 'v2.x'
@@ -67,7 +67,7 @@ jobs:
         echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
 
     - name: Checkout jenkins_build_scripts
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'proxysql/jenkins-build-scripts'
         ref: 'kubernetes'
@@ -146,7 +146,7 @@ jobs:
         
     - name: Archive artifacts
       if: ${{ always() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
         path: |
@@ -194,7 +194,7 @@ jobs:
         sudo apt-get install -y --allow-downgrades libmysqlclient-dev=5.7*
         
     - name: Checkout proxysql
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'sysown/proxysql'
 #        ref: 'v2.x'
@@ -208,7 +208,7 @@ jobs:
         echo "GIT_VERSION=$(git describe --long --abbrev=7)" >> $GITHUB_ENV
         
     - name: Download build
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
         name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
         path: proxysql
@@ -219,7 +219,7 @@ jobs:
         sudo ln -s ${{ github.workspace }}/proxysql /opt/proxysql
         
     - name: Checkout jenkins_build_scripts
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'proxysql/jenkins-build-scripts'
         ref: 'kubernetes'
@@ -310,7 +310,7 @@ jobs:
         
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
@@ -318,7 +318,7 @@ jobs:
 
     - name: Archive artifacts bins
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |
@@ -329,7 +329,7 @@ jobs:
 
     - name: Archive artifacts tests
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
         path: |

@@ -16,7 +16,7 @@ jobs:
     steps:
         
     - name: Checkout proxysql_3p_testing
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: 'proxysql/proxysql_3p_testing'
         ref: 'main'
@@ -28,7 +28,7 @@ jobs:
           proxysql
         
     - name: Cache restore bin
-      uses: actions/cache/restore@v3
+      uses: actions/cache/restore@v4
       with:
         key: CI-builds_${{ github.sha }}_debian11_bin
         fail-on-cache-miss: true
@@ -80,7 +80,7 @@ jobs:
     
     - name: Archive artifacts logs
       if: ${{ failure() && !cancelled() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}
         path: |
