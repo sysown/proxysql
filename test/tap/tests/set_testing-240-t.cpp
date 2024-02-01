@@ -527,6 +527,7 @@ int main(int argc, char *argv[]) {
 	unsigned int p = queries * num_threads;
 	p *= 2;										// number of algorithms
 	p *= rows_res.size();						// number of host groups
+	p += 2 + 2*num_threads*count*2;				// number of connections (2 algorithms)
 	plan(p);
 
 	for (const auto& act_row : rows_res) {
