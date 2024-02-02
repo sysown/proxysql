@@ -275,7 +275,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.taptests }}
+        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.taptests }}-${{ matrix.usessl }}-${{ matrix.compress }}
         path: |
           proxysql/ci_*_logs/
 
@@ -283,7 +283,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.taptests }}
+        name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.taptests }}-${{ matrix.usessl }}-${{ matrix.compress }}
         path: |
           proxysql/binaries/
           proxysql/src/
@@ -294,7 +294,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.taptests }}
+        name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.taptests }}-${{ matrix.usessl }}-${{ matrix.compress }}
         path: |
           proxysql/test/tap/tests*
           
