@@ -57,6 +57,7 @@ struct cmp_str {
 #define N_L_ASE 16
 
 #define AWS_ENDPOINT_SUFFIX_STRING "rds.amazonaws.com"
+#define QUERY_READ_ONLY_AND_AWS_TOPOLOGY_DISCOVERY "SELECT @@global.read_only read_only, id, endpoint, port from mysql.rds_topology"
 
 /*
 
@@ -191,7 +192,8 @@ enum MySQL_Monitor_State_Data_Task_Type {
 	MON_GROUP_REPLICATION,
 	MON_REPLICATION_LAG,
 	MON_GALERA,
-	MON_AWS_AURORA
+	MON_AWS_AURORA,
+	MON_READ_ONLY__AND__AWS_RDS_TOPOLOGY_DISCOVERY
 };
 
 enum class MySQL_Monitor_State_Data_Task_Result {
@@ -420,8 +422,7 @@ class MySQL_Monitor {
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
-	vector<MYSQL_ROW> discover_topology(const char* hostname, int port);
-	void discover_topology_and_add_to_mysql_servers();
+	void process_discovered_topology(const std::string& originating_server_hostname, vector<MYSQL_ROW> discovered_servers);
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
@@ -533,7 +534,7 @@ private:
 	 * Note: Calling init_async is mandatory before executing tasks asynchronously.
 	*/
 	void monitor_ping_async(SQLite3_result* resultset);
-	void monitor_read_only_async(SQLite3_result* resultset);	
+	void monitor_read_only_async(SQLite3_result* resultset, bool do_discovery_check);
 	void monitor_replication_lag_async(SQLite3_result* resultset);
 	void monitor_group_replication_async();
 	void monitor_galera_async();

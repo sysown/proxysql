@@ -7922,29 +7922,36 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(MySrvC* srv)
 
 /**
 * @brief Updates replication hostgroups by adding autodiscovered mysql servers.
-* @details Adds each server from 'servers_to_add' to the 'runtime_mysql_servers' table.
+* @details Adds each server from 'new_server_values_mapping' to the 'runtime_mysql_servers' table.
 * We then rebuild the 'mysql_servers' table as well as the internal 'hostname_hostgroup_mapping'.
-* @param servers_to_add A vector containing the strings representing the hostnames of servers to add to 'mysql_servers'.
-* @param hostname_values_mapping A mapping containing the hostname of the discovered server mapped to the metadata of server from which it was discovered, stored in a 'serverDetails' struct.
+* @param new_server_values_mapping A mapping containing the hostname of the discovered server mapped to the metadata of server from which it was discovered, stored in a 'serverDetails' struct.
 *
 * @return Returns EXIT_FAILURE code on failure and EXIT_SUCCESS code on success.
 */
-int MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(vector<string> servers_to_add, unordered_map<string, MySQL_HostGroups_Manager::serverDetails> hostname_values_mapping) {
+int MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(unordered_map<string, MySQL_HostGroups_Manager::serverDetails> new_server_values_mapping) {
 	int exit_code = EXIT_SUCCESS;
+	bool added_new_server = false;
 	wrlock();
 
 	try {
-		for (string host : servers_to_add) {
-			long int hostgroup_id = hostname_values_mapping[host].hostgroup_id;
-			uint16_t port = hostname_values_mapping[host].port;
+		for (const auto &s : new_server_values_mapping) {
+			if (new_server_values_mapping.find(s.first) == new_server_values_mapping.end()) {
+				continue;
+			}
 
-			uint16_t gtid_port = hostname_values_mapping[host].gtid_port;
-			int64_t weight = hostname_values_mapping[host].weight;
-			unsigned int compression = hostname_values_mapping[host].compression;
-			int64_t max_connections = hostname_values_mapping[host].max_connections;
-			unsigned int max_replication_lag = hostname_values_mapping[host].max_replication_lag;
-			int32_t use_ssl = hostname_values_mapping[host].use_ssl;
-			unsigned int max_latency_ms = hostname_values_mapping[host].max_latency_ms;
+			string host = s.first;
+			MySQL_HostGroups_Manager::serverDetails new_server_values = new_server_values_mapping[host];
+
+			long int hostgroup_id = new_server_values.hostgroup_id;
+			uint16_t port = new_server_values.port;
+
+			uint16_t gtid_port = new_server_values.gtid_port;
+			int64_t weight = new_server_values.weight;
+			unsigned int compression = new_server_values.compression;
+			int64_t max_connections = new_server_values.max_connections;
+			unsigned int max_replication_lag = new_server_values.max_replication_lag;
+			int32_t use_ssl = new_server_values.use_ssl;
+			unsigned int max_latency_ms = new_server_values.max_latency_ms;
 
 			MySrvC* mysrvc = new MySrvC(
 				const_cast<char*>(host.c_str()), port, gtid_port, weight, MYSQL_SERVER_STATUS_ONLINE,
@@ -7956,15 +7963,18 @@ int MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replic
 				"Adding new discovered server %s:%d with: hostgroup=%d, weight=%ld, max_connections=%ld, use_ssl=%d\n",
 				host.c_str(), port, hostgroup_id, mysrvc->weight, mysrvc->max_connections, mysrvc->use_ssl
 			);
+
+			added_new_server = true;
 		}
 
-		purge_mysql_servers_table();
-		mydb->execute("DELETE FROM mysql_servers");
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
-		generate_mysql_servers_table();
-		update_table_mysql_servers_for_monitor(false);
-		rebuild_hostname_hostgroup_mapping();
-
+		if (added_new_server) {
+			purge_mysql_servers_table();
+			mydb->execute("DELETE FROM mysql_servers");
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers\n");
+			generate_mysql_servers_table();
+			update_table_mysql_servers_for_monitor(false);
+			rebuild_hostname_hostgroup_mapping();
+		}
 	} catch (...) {
 		exit_code = EXIT_FAILURE;
 	}

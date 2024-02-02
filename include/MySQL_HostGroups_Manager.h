@@ -816,7 +816,7 @@ class MySQL_HostGroups_Manager {
 
 	struct serverDetails {
 		long int hostgroup_id;
-		string hostname;
+		string originating_hostname;
 		uint16_t port;
 		uint16_t gtid_port;
 		string status;
@@ -829,7 +829,7 @@ class MySQL_HostGroups_Manager {
 		string comment;
 	};
 
-	int add_discovered_servers_to_mysql_servers_and_replication_hostgroups(vector<string> servers_to_add, unordered_map<string, MySQL_HostGroups_Manager::serverDetails> hostname_values_mapping);
+	int add_discovered_servers_to_mysql_servers_and_replication_hostgroups(unordered_map<string, MySQL_HostGroups_Manager::serverDetails> new_server_values_mapping);
 	void rebuild_hostname_hostgroup_mapping();
 
 	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);

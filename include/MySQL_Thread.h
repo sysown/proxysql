@@ -305,7 +305,7 @@ struct p_th_gauge {
 		mysql_monitor_ping_interval,
 		mysql_monitor_ping_timeout,
 		mysql_monitor_ping_max_failures,
-		mysql_monitor_topology_discovery_interval,
+		mysql_monitor_aws_rds_topology_discovery_interval,
 		mysql_monitor_read_only_interval,
 		mysql_monitor_read_only_timeout,
 		mysql_monitor_writer_is_also_reader,
@@ -387,8 +387,8 @@ class MySQL_Threads_Handler
 		int monitor_ping_max_failures;
 		//! Monitor ping timeout. Unit: 'ms'.
 		int monitor_ping_timeout;
-		//! Monitor topology discovery interval. Unit: 'one discovery check per X monitor_read_only checks'.
-		int monitor_topology_discovery_interval;
+		//! Monitor aws rds topology discovery interval. Unit: 'one discovery check per X monitor_read_only checks'.
+		int monitor_aws_rds_topology_discovery_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
 		int monitor_read_only_interval;
 		//! Monitor read only timeout. Unit: 'ms'.
