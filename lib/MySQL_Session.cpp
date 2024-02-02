@@ -25,7 +25,10 @@
 
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
-
+#define SELECT_DB_USER "select DATABASE(), USER() limit 1"
+#define SELECT_DB_USER_LEN 33
+#define SELECT_CHARSET_STATUS "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
+#define SELECT_CHARSET_STATUS_LEN 115
 #define PROXYSQL_VERSION_COMMENT "\x01\x00\x00\x01\x01\x27\x00\x00\x02\x03\x64\x65\x66\x00\x00\x00\x11\x40\x40\x76\x65\x72\x73\x69\x6f\x6e\x5f\x63\x6f\x6d\x6d\x65\x6e\x74\x00\x0c\x21\x00\x18\x00\x00\x00\xfd\x00\x00\x1f\x00\x00\x05\x00\x00\x03\xfe\x00\x00\x02\x00\x0b\x00\x00\x04\x0a(ProxySQL)\x05\x00\x00\x05\xfe\x00\x00\x02\x00"
 #define PROXYSQL_VERSION_COMMENT_LEN 81
 
@@ -933,10 +936,11 @@ bool MySQL_Session::handler_CommitRollback(PtrSize_t *pkt) {
 		uint16_t setStatus = 0;
 		if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-		client_myds->DSS=STATE_SLEEP;
-		status=WAITING_CLIENT_DATA;
 		if (mirror==false) {
 			RequestEnd(NULL);
+		} else {
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
 		}
 		l_free(pkt->size,pkt->ptr);
 		if (c=='c' || c=='C') {
@@ -1079,10 +1083,11 @@ __ret_autocommit_OK:
 					uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 					if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 					client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-					client_myds->DSS=STATE_SLEEP;
-					status=WAITING_CLIENT_DATA;
 					if (mirror==false) {
 						RequestEnd(NULL);
+					} else {
+						client_myds->DSS=STATE_SLEEP;
+						status=WAITING_CLIENT_DATA;
 					}
 					__sync_fetch_and_add(&MyHGM->status.autocommit_cnt_filtered, 1);
 				}
@@ -1189,7 +1194,6 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			j["conn"]["client_flag"]["client_deprecate_eof"] = (client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF ? 1 : 0);
 			j["conn"]["no_backslash_escapes"] = client_myds->myconn->options.no_backslash_escapes;
 			j["conn"]["status"]["compression"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_COMPRESSION);
-			j["conn"]["status"]["transaction"] = client_myds->myconn->get_status(STATUS_MYSQL_CONNECTION_TRANSACTION);
 			j["conn"]["ps"]["client_stmt_to_global_ids"] = client_myds->myconn->local_stmts->client_stmt_to_global_ids;
 		}
 	}
@@ -1248,7 +1252,18 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 				j["backends"][i]["conn"]["status"]["prepared_statement"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT);
 				j["backends"][i]["conn"]["status"]["has_warnings"] = _myconn->get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
 				j["backends"][i]["conn"]["warning_count"] = _myconn->warning_count;
-				j["backends"][i]["conn"]["MultiplexDisabled"] = _myconn->MultiplexDisabled();
+				{
+					// MultiplexDisabled : status returned by MySQL_Connection::MultiplexDisabled();
+					// MultiplexDisabled_ext : status returned by MySQL_Connection::MultiplexDisabled() || MySQL_Connection::isActiveTransaction()
+					bool multiplex_disabled = _myconn->MultiplexDisabled();
+					j["backends"][i]["conn"]["MultiplexDisabled"] = multiplex_disabled;
+					if (multiplex_disabled == false) {
+						if (_myconn->IsActiveTransaction() == true) {
+							multiplex_disabled = true;
+						}
+					}
+					j["backends"][i]["conn"]["MultiplexDisabled_ext"] = multiplex_disabled;
+				}
 				j["backends"][i]["conn"]["ps"]["backend_stmt_to_global_ids"] = _myconn->local_stmts->backend_stmt_to_global_ids;
 				j["backends"][i]["conn"]["ps"]["global_stmt_to_backend_ids"] = _myconn->local_stmts->global_stmt_to_backend_ids;
 				j["backends"][i]["conn"]["client_flag"]["value"] = _myconn->options.client_flag;
@@ -1309,17 +1324,92 @@ void MySQL_Session::return_proxysql_internal(PtrSize_t *pkt) {
 	// default
 	client_myds->DSS=STATE_QUERY_SENT_NET;
 	client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1064,(char *)"42000",(char *)"Unknown PROXYSQL INTERNAL command",true);
-	client_myds->DSS=STATE_SLEEP;
-	status=WAITING_CLIENT_DATA;
 	if (mirror==false) {
 		RequestEnd(NULL);
+	} else {
+		client_myds->DSS=STATE_SLEEP;
+		status=WAITING_CLIENT_DATA;
 	}
 	l_free(pkt->size,pkt->ptr);
+}
+
+/**
+ * @brief Handles special queries executed by the STATUS command in mysql cli .
+ *   Specifically:
+ *   "select DATABASE(), USER() limit 1"
+ *   "select @@character_set_client, @@character_set_connection, @@character_set_server, @@character_set_database limit 1"
+ *   See Github issues 4396 and 4426
+ *
+ * @param PtrSize_t The packet from the client
+ *
+ * @return True if the queries are handled
+ */
+bool MySQL_Session::handler_special_queries_STATUS(PtrSize_t *pkt) {
+	if (pkt->size == (SELECT_DB_USER_LEN+5)) {
+		if (strncasecmp(SELECT_DB_USER,(char *)pkt->ptr+5, SELECT_DB_USER_LEN)==0) {
+			SQLite3_result *resultset = new SQLite3_result(2);
+			resultset->add_column_definition(SQLITE_TEXT,"DATABASE()");
+			resultset->add_column_definition(SQLITE_TEXT,"USER()");
+			char *pta[2];
+			pta[0] = client_myds->myconn->userinfo->username;
+			pta[1] = client_myds->myconn->userinfo->schemaname;
+			resultset->add_row(pta);
+			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+			delete resultset;
+			l_free(pkt->size,pkt->ptr);
+			return true;
+		}
+	}
+	if (pkt->size == (SELECT_CHARSET_STATUS_LEN+5)) {
+		if (strncasecmp(SELECT_CHARSET_STATUS,(char *)pkt->ptr+5, SELECT_CHARSET_STATUS_LEN)==0) {
+			SQLite3_result *resultset = new SQLite3_result(4);
+			resultset->add_column_definition(SQLITE_TEXT,"@@character_set_client");
+			resultset->add_column_definition(SQLITE_TEXT,"@@character_set_connection");
+			resultset->add_column_definition(SQLITE_TEXT,"@@character_set_server");
+			resultset->add_column_definition(SQLITE_TEXT,"@@character_set_database");
+
+			string vals[4];
+			json j = {};
+			MySQL_Connection *conn = client_myds->myconn;
+			// here we do a bit back and forth to and from JSON to reuse existing code instead of writing new code.
+			// This is not great for performance, but this query is rarely executed.
+			conn->variables[SQL_CHARACTER_SET_CLIENT].fill_client_internal_session(j, SQL_CHARACTER_SET_CLIENT);
+			conn->variables[SQL_CHARACTER_SET_CONNECTION].fill_client_internal_session(j, SQL_CHARACTER_SET_CONNECTION);
+			conn->variables[SQL_CHARACTER_SET_DATABASE].fill_client_internal_session(j, SQL_CHARACTER_SET_DATABASE);
+
+			vals[0] = j["conn"][mysql_tracked_variables[SQL_CHARACTER_SET_CLIENT].internal_variable_name];
+			vals[1] = j["conn"][mysql_tracked_variables[SQL_CHARACTER_SET_CONNECTION].internal_variable_name];
+			vals[2] = string(mysql_thread___default_variables[SQL_CHARACTER_SET]);
+			vals[3] = j["conn"][mysql_tracked_variables[SQL_CHARACTER_SET_DATABASE].internal_variable_name];
+
+			const char *pta[4];
+			for (int i=0; i<4; i++) {
+				pta[i] = vals[i].c_str();
+			}
+			resultset->add_row(pta);
+			bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
+			SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
+			delete resultset;
+			l_free(pkt->size,pkt->ptr);
+			return true;
+		}
+	}
+	return false;
 }
 
 bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 	bool deprecate_eof_active = client_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF;
 
+	if (
+		(pkt->size == (SELECT_DB_USER_LEN+5))
+		||
+		(pkt->size == (SELECT_CHARSET_STATUS_LEN+5))
+	) {
+		if (handler_special_queries_STATUS(pkt) == true) {
+			return true;
+		}
+	}
 	if (pkt->size>(5+18) && strncasecmp((char *)"PROXYSQL INTERNAL ",(char *)pkt->ptr+5,18)==0) {
 		return_proxysql_internal(pkt);
 		return true;
@@ -1530,10 +1620,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 			uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 			if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 			client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
 			if (mirror==false) {
 				RequestEnd(NULL);
+			} else {
+				client_myds->DSS=STATE_SLEEP;
+				status=WAITING_CLIENT_DATA;
 			}
 			l_free(pkt->size,pkt->ptr);
 			__sync_fetch_and_add(&MyHGM->status.frontend_set_names, 1);
@@ -1550,10 +1641,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		resultset->add_column_definition(SQLITE_TEXT, "Message");
 		SQLite3_to_MySQL(resultset, NULL, 0, &client_myds->myprot, false, deprecate_eof_active);
 		delete resultset;
-		client_myds->DSS = STATE_SLEEP;
-		status = WAITING_CLIENT_DATA;
 		if (mirror == false) {
 			RequestEnd(NULL);
+		} else {
+			client_myds->DSS=STATE_SLEEP;
+			status=WAITING_CLIENT_DATA;
 		}
 		l_free(pkt->size, pkt->ptr);
 		return true;
@@ -1582,10 +1674,11 @@ bool MySQL_Session::handler_special_queries(PtrSize_t *pkt) {
 		if (mysql_thread___enable_load_data_local_infile == false) {
 			client_myds->DSS=STATE_QUERY_SENT_NET;
 			client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,1047,(char *)"HY000",(char *)"Unsupported 'LOAD DATA LOCAL INFILE' command",true);
-			client_myds->DSS=STATE_SLEEP;
-			status=WAITING_CLIENT_DATA;
 			if (mirror==false) {
 				RequestEnd(NULL);
+			} else {
+				client_myds->DSS=STATE_SLEEP;
+				status=WAITING_CLIENT_DATA;
 			}
 			l_free(pkt->size,pkt->ptr);
 			return true;
@@ -2541,8 +2634,6 @@ bool MySQL_Session::handler_again___status_CHANGING_CHARSET(int *_rc) {
 				client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,1,mysql_errno(myconn->mysql),sqlstate,mysql_error(myconn->mysql));
 				myds->destroy_MySQL_Connection_From_Pool(true);
 				myds->fd=0;
-				status=WAITING_CLIENT_DATA;
-				client_myds->DSS=STATE_SLEEP;
 				RequestEnd(myds);
 			}
 		} else {
@@ -6690,8 +6781,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-						client_myds->DSS=STATE_SLEEP;
-						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
 						l_free(pkt->size,pkt->ptr);
 						return true;
@@ -6757,8 +6846,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-						client_myds->DSS=STATE_SLEEP;
-						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
 						l_free(pkt->size,pkt->ptr);
 						return true;
@@ -6797,8 +6884,6 @@ bool MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 						uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 						if (autocommit) setStatus |= SERVER_STATUS_AUTOCOMMIT;
 						client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-						client_myds->DSS=STATE_SLEEP;
-						status=WAITING_CLIENT_DATA;
 						RequestEnd(NULL);
 						l_free(pkt->size,pkt->ptr);
 						return true;
@@ -7667,8 +7752,6 @@ void MySQL_Session::LogQuery(MySQL_Data_Stream *myds) {
 		}
 	}
 }
-// this should execute most of the commands executed when a request is finalized
-// this should become the place to hook other functions
 void MySQL_Session::RequestEnd(MySQL_Data_Stream *myds) {
 	// check if multiplexing needs to be disabled
 	char *qdt = NULL;
@@ -7856,8 +7939,6 @@ bool MySQL_Session::handle_command_query_kill(PtrSize_t *pkt) {
 								uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 								if (autocommit) setStatus = SERVER_STATUS_AUTOCOMMIT;
 								client_myds->myprot.generate_pkt_OK(true,NULL,NULL,1,0,0,setStatus,0,NULL);
-								client_myds->DSS=STATE_SLEEP;
-								status=WAITING_CLIENT_DATA;
 								RequestEnd(NULL);
 								l_free(pkt->size,pkt->ptr);
 								return true;

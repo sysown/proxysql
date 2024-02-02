@@ -6,7 +6,7 @@
 
 #include <cstring>
 #include <stdio.h>
-#include <mysql.h>
+#include "mysql.h"
 #include <algorithm>
 
 #include "tap.h"

@@ -1,4 +1,8 @@
-@@ -1109,7 +1109,10 @@ mysql_init(MYSQL *mysql)
+diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
+index 66b44df4..c9aec200 100644
+--- libmariadb/mariadb_lib.c
++++ libmariadb/mariadb_lib.c
+@@ -1283,7 +1283,10 @@ mysql_init(MYSQL *mysql)
      goto error;
    mysql->options.report_data_truncation= 1;
    mysql->options.connect_timeout=CONNECT_TIMEOUT;
@@ -10,7 +14,7 @@
    mysql->methods= &MARIADB_DEFAULT_METHODS;
    strcpy(mysql->net.sqlstate, "00000");
    mysql->net.last_error[0]= mysql->net.last_errno= mysql->net.extension->extended_errno= 0;
-@@ -1625,11 +1628,15 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql
+@@ -1918,11 +1921,15 @@ restart:
      }
    }
  
@@ -31,7 +35,7 @@
  
    if (!mysql->charset)
    {
-@@ -1892,10 +1899,16 @@ my_bool	STDCALL mysql_change_user(MYSQL
+@@ -2208,10 +2215,16 @@ my_bool	STDCALL mysql_change_user(MYSQL *mysql, const char *user,
         *s_db= mysql->db;
    int rc;
  
@@ -52,7 +56,7 @@
  
    mysql->user= strdup(user ? user : "");
    mysql->passwd= strdup(passwd ? passwd : "");
-@@ -2963,6 +2976,12 @@ mysql_optionsv(MYSQL *mysql,enum mysql_o
+@@ -3492,6 +3505,12 @@ mysql_optionsv(MYSQL *mysql,enum mysql_option option, ...)
      OPT_SET_VALUE_STR(&mysql->options, charset_dir, arg1);
      break;
    case MYSQL_SET_CHARSET_NAME:

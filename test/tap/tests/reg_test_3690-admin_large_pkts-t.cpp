@@ -16,7 +16,7 @@
 #include <iostream>
 #include <random>
 
-#include <mysql.h>
+#include "mysql.h"
 
 #include "json.hpp"
 #include "tap.h"

@@ -140,6 +140,7 @@ enum debug_module {
 	PROXY_DEBUG_QUERY_STATISTICS,
 	PROXY_DEBUG_RESTAPI,
 	PROXY_DEBUG_MONITOR,
+	PROXY_DEBUG_CLUSTER,
 	PROXY_DEBUG_UNKNOWN // this module doesn't exist. It is used only to define the last possible module
 };
 
@@ -777,7 +778,6 @@ __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___keep_multiplexing_variables;
 __thread char *mysql_thread___init_connect;
 __thread char *mysql_thread___ldap_user_variable;
-__thread char *mysql_thread___default_tx_isolation;
 __thread char *mysql_thread___default_session_track_gtids;
 __thread char *mysql_thread___firewall_whitelist_errormsg;
 __thread int mysql_thread___max_allowed_packet;
@@ -947,7 +947,6 @@ extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___keep_multiplexing_variables;
 extern __thread char *mysql_thread___init_connect;
 extern __thread char *mysql_thread___ldap_user_variable;
-extern __thread char *mysql_thread___default_tx_isolation;
 extern __thread char *mysql_thread___default_session_track_gtids;
 extern __thread char *mysql_thread___firewall_whitelist_errormsg;
 extern __thread int mysql_thread___max_allowed_packet;

@@ -66,6 +66,55 @@ using json = nlohmann::json;
 
 #define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
+/*
+ * @brief Generates the 'runtime_mysql_servers' resultset exposed to other ProxySQL cluster members.
+ * @details Makes 'SHUNNED' and 'SHUNNED_REPLICATION_LAG' statuses equivalent to 'ONLINE'. 'SHUNNED' states
+ *  are by definition local transitory states, this is why a 'mysql_servers' table reconfiguration isn't
+ *  normally performed when servers are internally imposed with these statuses. This means, that propagating
+ *  this state to other cluster members is undesired behavior, and so it's generating a different checksum,
+ *  due to a server having this particular state, that will result in extra unnecessary fetching operations.
+ *  The query also filters out 'OFFLINE_HARD' servers, 'OFFLINE_HARD' is a local status which is equivalent to
+ *  a server no longer being part of the table (DELETED state). And so, they shouldn't be propagated.
+ *
+ *  For placing the query into a single line for debugging purposes:
+ *  ```
+ *  sed 's/^\t\+"//g; s/"\s\\$//g; s/\\"/"/g' /tmp/select.sql | paste -sd ''
+ *  ```
+ */
+#define MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS \
+	"SELECT " \
+		"hostgroup_id, hostname, port, gtid_port," \
+		"CASE status" \
+		" WHEN 0 THEN \"ONLINE\"" \
+		" WHEN 1 THEN \"ONLINE\"" \
+		" WHEN 2 THEN \"OFFLINE_SOFT\"" \
+		" WHEN 3 THEN \"OFFLINE_HARD\"" \
+		" WHEN 4 THEN \"ONLINE\" " \
+		"END status," \
+		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
+	"FROM mysql_servers " \
+	"WHERE status != 3 " \
+	"ORDER BY hostgroup_id, hostname, port" \
+
+/**
+ * @brief Generates the 'mysql_servers_v2' resultset exposed to other ProxySQL cluster members.
+ * @details The generated resultset is used for the checksum computation of the runtime ProxySQL config
+ *  ('mysql_servers_v2' checksum), and it's also forwarded to other cluster members when querying the Admin
+ *  interface with 'CLUSTER_QUERY_MYSQL_SERVERS_V2'. It makes 'SHUNNED' state equivalent to 'ONLINE', and also
+ *  filters out any 'OFFLINE_HARD' entries. This is done because none of the statuses are valid configuration
+ *  statuses, they are local, transient status that ProxySQL uses during operation.
+ */
+#define MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS \
+	"SELECT " \
+		"hostgroup_id, hostname, port, gtid_port, " \
+		"CASE" \
+		" WHEN status=\"SHUNNED\" THEN \"ONLINE\"" \
+		" ELSE status " \
+		"END AS status, " \
+		"weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment " \
+	"FROM main.mysql_servers " \
+	"WHERE status != \"OFFLINE_HARD\" " \
+	"ORDER BY hostgroup_id, hostname, port" \
 
 typedef std::unordered_map<std::uint64_t, void *> umap_mysql_errors;
 
@@ -437,6 +486,27 @@ enum REPLICATION_LAG_SERVER_T {
 	RLS__SIZE
 };
 
+/**
+ * @brief Contains the minimal info for server creation.
+ */
+struct srv_info_t {
+	/* @brief Server address */
+	string addr;
+	/* @brief Server port */
+	uint16_t port;
+	/* @brief Server type identifier, used for logging, e.g: 'Aurora AWS', 'GR', etc... */
+	string kind;
+};
+
+/**
+ * @brief Contains options to be specified during server creation.
+ */
+struct srv_opts_t {
+	int64_t weigth;
+	int64_t max_conns;
+	int32_t use_ssl;
+};
+
 class MySQL_HostGroups_Manager {
 	private:
 	SQLite3DB	*admindb;
@@ -451,12 +521,13 @@ class MySQL_HostGroups_Manager {
 #endif
 
 	enum HGM_TABLES {
-		MYSQL_SERVERS = 0,
+		MYSQL_SERVERS_V2 = 0,
 		MYSQL_REPLICATION_HOSTGROUPS,
 		MYSQL_GROUP_REPLICATION_HOSTGROUPS,
 		MYSQL_GALERA_HOSTGROUPS,
 		MYSQL_AWS_AURORA_HOSTGROUPS,
 		MYSQL_HOSTGROUP_ATTRIBUTES,
+		MYSQL_SERVERS,
 
 		__HGM_TABLES_SIZE
 	};
@@ -539,8 +610,26 @@ class MySQL_HostGroups_Manager {
 		MySQL_HostGroups_Manager* myHGM;
 	};
 
+	/**
+	 * @brief Used by 'MySQL_Monitor::read_only' to hold a mapping between servers and hostgroups.
+	 * @details The hostgroup mapping holds the MySrvC for each of the hostgroups in which the servers is
+	 *  present, distinguishing between 'READER' and 'WRITER' hostgroups.
+	 */
 	std::unordered_map<std::string, std::unique_ptr<HostGroup_Server_Mapping>> hostgroup_server_mapping;
+	/**
+	 * @brief Holds the previous computed checksum for 'mysql_servers'.
+	 * @details Used to check if the servers checksums has changed during 'commit', if a change is detected,
+	 *  the member 'hostgroup_server_mapping' is required to be regenerated.
+	 *
+	 *  This is only updated during 'read_only_action_v2', since the action itself modifies
+	 *  'hostgroup_server_mapping' in case any actions needs to be performed against the servers.
+	 */
 	uint64_t hgsm_mysql_servers_checksum = 0;
+	/**
+	 * @brief Holds the previous checksum for the 'MYSQL_REPLICATION_HOSTGROUPS'.
+	 * @details Used during 'commit' to determine if config has changed for 'MYSQL_REPLICATION_HOSTGROUPS',
+	 *   and 'hostgroup_server_mapping' should be rebuild.
+	 */
 	uint64_t hgsm_mysql_replication_hostgroups_checksum = 0;
 
 
@@ -559,7 +648,7 @@ class MySQL_HostGroups_Manager {
 	/**
 	 * @brief This resultset holds the current values for 'runtime_mysql_servers' computed by either latest
 	 *  'commit' or fetched from another Cluster node. It's also used by ProxySQL_Admin to respond to the
-	 *  intercepted query 'CLUSTER_QUERY_MYSQL_SERVERS'.
+	 *  intercepted query 'CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS'.
 	 * @details This resultset can't right now just contain the value for 'incoming_mysql_servers' as with the
 	 *  rest of the intercepted resultset. This is due to 'runtime_mysql_servers' reconfigurations that can be
 	 *  triggered by monitoring actions like 'Galera' currently performs. These actions not only trigger status
@@ -590,6 +679,17 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result *incoming_replication_hostgroups;
 
 	void generate_mysql_group_replication_hostgroups_table();
+	/**
+	 * @brief Regenerates the resultset used by 'MySQL_Monitor' containing the servers to be monitored.
+	 * @details This function is required to be called after any action that results in the addition of a new
+	 * 	server that 'MySQL_Monitor' should be aware of for 'group_replication', i.e. a server added to the
+	 * 	hostgroups present in any entry of 'mysql_group_replication_hostgroups'. E.g:
+	 * 	  - Inside 'generate_mysql_group_replication_hostgroups_table'.
+	 * 	  - Autodiscovery.
+	 *
+	 * 	NOTE: This is a common pattern for all the clusters monitoring.
+	 */
+	void generate_mysql_group_replication_hostgroups_monitor_resultset();
 	SQLite3_result *incoming_group_replication_hostgroups;
 
 	pthread_mutex_t Group_Replication_Info_mutex;
@@ -609,6 +709,8 @@ class MySQL_HostGroups_Manager {
 
 	void generate_mysql_hostgroup_attributes_table();
 	SQLite3_result *incoming_hostgroup_attributes;
+
+	SQLite3_result* incoming_mysql_servers_v2;
 
 	std::thread *HGCU_thread;
 
@@ -753,16 +855,78 @@ class MySQL_HostGroups_Manager {
 	void wrlock();
 	void wrunlock();
 	int servers_add(SQLite3_result *resultset);
-	bool commit(SQLite3_result* runtime_mysql_servers = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	/**
+	 * @brief Generates a new global checksum for module 'mysql_servers_v2' using the provided hash.
+	 * @param servers_v2_hash The 'raw_checksum' from 'MYHGM_GEN_CLUSTER_ADMIN_MYSQL_SERVERS' or peer node.
+	 * @return Checksum computed using the provided hash, and 'mysql_servers' config tables hashes.
+	 */
+	std::string gen_global_mysql_servers_v2_checksum(uint64_t servers_v2_hash);
+	bool commit(
+		const peer_runtime_mysql_servers_t& peer_runtime_mysql_servers = {},
+		const peer_mysql_servers_v2_t& peer_mysql_servers_v2 = {},
+		bool only_commit_runtime_mysql_servers = true,
+		bool update_version = false
+	);
+	/**
+	 * @brief Extracted from 'commit'. Performs the following actions:
+	 *  1. Re-generates the 'myhgm.mysql_servers' table.
+	 *  2. If supplied 'runtime_mysql_servers' is 'nullptr':
+	 *  	1. Gets the contents of the table via 'MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS'.
+	 *  	2. Save the resultset into 'this->runtime_mysql_servers'.
+	 *  3. If supplied 'runtime_mysql_servers' isn't 'nullptr':
+	 *  	1. Updates the 'this->runtime_mysql_servers' with it.
+	 *  4. Updates 'HGM_TABLES::MYSQL_SERVERS' with raw checksum from 'this->runtime_mysql_servers'.
+	 * @param runtime_mysql_servers If not 'nullptr', used to update 'this->runtime_mysql_servers'.
+	 * @return The updated 'MySQL_HostGroups_Manager::runtime_mysql_servers'.
+	 */
+	uint64_t commit_update_checksum_from_mysql_servers(SQLite3_result* runtime_mysql_servers = nullptr);
+	/**
+	 * @brief Analogous to 'commit_generate_mysql_servers_table' but for 'incoming_mysql_servers_v2'.
+	 */
+	uint64_t commit_update_checksum_from_mysql_servers_v2(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
+	/**
+	 * @brief Update all HGM_TABLES checksums and uses them to update the supplied SpookyHash.
+	 * @details Checksums are the checksums for the following tables:
+	 *  - mysql_replication_hostgroups
+	 *  - mysql_group_replication_hostgroups
+	 *  - mysql_galera_hostgroups
+	 *  - mysql_aws_aurora_hostgroups
+	 *  - mysql_hostgroup_attributes
+	 *
+	 *  These checksums are used to compute the global checksum for 'mysql_servers_v2'.
+	 * @param myhash SpookyHash to be updated with all the computed checksums.
+	 * @param init Indicates if the SpookyHash checksum is initialized.
+	 */
 	void commit_update_checksums_from_tables(SpookyHash& myhash, bool& init);
-	void CUCFT1(SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName, uint64_t& raw_checksum); // used by commit_update_checksums_from_tables()
-
+	/**
+	 * @brief Performs the following actions:
+	 *  1. Gets the current contents of table 'myhgm.TableName', using 'ColumnName' ordering.
+	 *  2. Computes the checksum for that resultset.
+	 *  3. Updates the supplied 'raw_checksum' and the supplied 'SpookyHash' with it.
+	 * @details Stands for 'commit_update_checksum_from_table_1'.
+	 * @param myhash Hash to be updated with the resultset checksum from the selected table.
+	 * @param init If the supplied 'SpookyHash' has already being initialized.
+	 * @param TableName The tablename from which to obtain the resultset for the 'raw_checksum' computation.
+	 * @param ColumnName A column name to use for ordering in the supplied 'TableName'.
+	 * @param raw_checksum A 'raw_checksum' to be updated with the obtained resultset.
+	 */
+	void CUCFT1(
+		SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName, uint64_t& raw_checksum
+	);
 	/**
 	 * @brief Store the resultset for the 'runtime_mysql_servers' table set that have been loaded to runtime.
 	 *  The store configuration is later used by Cluster to propagate current config.
 	 * @param The resulset to be stored replacing the current one.
 	 */
 	void save_runtime_mysql_servers(SQLite3_result *);
+
+	/**
+	 * @brief Store the resultset for the 'mysql_servers_v2' table.
+	 *  The store configuration is later used by Cluster to propagate current config.
+	 * @param The resulset to be stored replacing the current one.
+	 */
+	void save_mysql_servers_v2(SQLite3_result* s);
+
 	/**
 	 * @brief These setters/getter functions store and retrieve the currently hold resultset for the
 	 *  'incoming_*' table set that have been loaded to runtime. The store configuration is later used by
@@ -774,7 +938,20 @@ class MySQL_HostGroups_Manager {
 	SQLite3_result* get_current_mysql_table(const string& name);
 
 	SQLite3_result * execute_query(char *query, char **error);
-	SQLite3_result *dump_table_mysql(const string&);
+	/**
+	 * @brief Creates a resultset with the current full content of the target table.
+	 * @param string The target table. Valid values are:
+	 *   - "mysql_aws_aurora_hostgroups"
+	 *   - "mysql_galera_hostgroups"
+	 *   - "mysql_group_replication_hostgroups"
+	 *   - "mysql_replication_hostgroups"
+	 *   - "mysql_hostgroup_attributes"
+	 *   - "mysql_servers"
+	 *   - "cluster_mysql_servers"
+	 *   When targeting 'mysql_servers' table is purged and regenerated.
+	 * @return The generated resultset.
+	 */
+	SQLite3_result* dump_table_mysql(const string&);
 
 	/**
 	 * @brief Update the public member resulset 'mysql_servers_to_monitor'. This resulset should contain the latest
@@ -792,6 +969,34 @@ class MySQL_HostGroups_Manager {
 	MyHGC * MyHGC_lookup(unsigned int);
 	
 	void MyConn_add_to_pool(MySQL_Connection *);
+	/**
+	 * @brief Creates a new server in the target hostgroup if isn't already present.
+	 * @details If the server is found already in the target hostgroup, no action is taken, unless its status
+	 *   is 'OFFLINE_HARD'. In case of finding it as 'OFFLINE_HARD':
+	 *     1. Server hostgroup attributes are reset to known values, so they can be updated.
+	 *     2. Server attributes are updated to either table definition values, or hostgroup 'servers_defaults'.
+	 *     3. Server is bring back as 'ONLINE'.
+	 * @param hid The hostgroup in which the server is to be created (or to bring it back as 'ONLINE').
+	 * @param srv_info Basic server info to be used during creation.
+	 * @param srv_opts Server creation options.
+	 * @return 0 in case of success, -1 in case of failure.
+	 */
+	int create_new_server_in_hg(uint32_t hid, const srv_info_t& srv_info, const srv_opts_t& srv_opts);
+	/**
+	 * @brief Completely removes server from the target hostgroup if found.
+	 * @details Several actions are taken if server is found:
+	 *   - Set the server as 'OFFLINE_HARD'.
+	 *   - Drop all current FREE connections to the server.
+	 *   - Delete the server from the 'myhgm.mysql_servers' table.
+	 *
+	 *   This later step is not required if the caller is already going to perform a full deletion of the
+	 *   servers in the target hostgroup. Which is a common operation during table regeneration.
+	 * @param hid Target hostgroup id.
+	 * @param addr Target server address.
+	 * @param port Target server port.
+	 * @return 0 in case of success, -1 in case of failure.
+	 */
+	int remove_server_in_hg(uint32_t hid, const string& addr, uint16_t port);
 
 	MySQL_Connection * get_MyConn_from_pool(unsigned int hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms);
 
@@ -835,6 +1040,33 @@ class MySQL_HostGroups_Manager {
 	void update_group_replication_set_offline(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_read_only(char *_hostname, int _port, int _writer_hostgroup, char *error);
 	void update_group_replication_set_writer(char *_hostname, int _port, int _writer_hostgroup);
+	/**
+	 * @brief Tries to add a new server found during GR autodiscovery to the supplied hostgroup.
+	 * @details For adding the new server, several actions are performed:
+	 *  1. Lookup the target server in the corresponding MyHGC for the supplied hostgroup.
+	 *  2. If server is found, and it's status isn't 'OFFLINE_HARD' do nothing. Otherwise:
+	 *      - If server is found as 'OFFLINE_HARD', reset the internal values corresponding to
+	 *        'servers_defaults' values to '-1', update the defaulted values to the ones in its 'MyHGC', lastly
+	 *        re-enable the server and log the action.
+	 *      - If server isn't found, create it in the corresponding reader hostgroup of the supplied writer
+	 *        hostgroup, setting all 'servers_defaults' params as '-1', log the action.
+	 *      - After any of the two previous actions, always regenerate servers data structures.
+	 *
+	 *  NOTE: Server data structures regeneration requires:
+	 *   1. Purging the 'mysql_servers_table' (Lazy removal of 'OFFLINE_HARD' servers.)
+	 *   2. Regenerate the actual 'myhgm::mysql_servers' table from memory structures.
+	 *   3. Update the 'mysql_servers' resultset used for monitoring. This resultset is used for general
+	 *      monitoring actions like 'ping', 'connect'.
+	 *   4. Regenerate the specific resultset for 'Group Replication' monitoring. This resultset is the way to
+	 *      communicate back to the main monitoring thread that servers config has changed, and a new thread
+	 *      shall be created with the new servers config. This same principle is used for Aurora.
+	 *
+	 * @param _host Server address.
+	 * @param _port Server port.
+	 * @param _wr_hg Writer hostgroup of the cluster being monitored. Autodiscovered servers are always added
+	 *   to the reader hostgroup by default, later monitoring actions will re-position the server is required.
+	 */
+	void update_group_replication_add_autodiscovered(const std::string& _host, int _port, int _wr_hg);
 	void converge_group_replication_config(int _writer_hostgroup);
 	/**
 	 * @brief Set the supplied server as SHUNNED, this function shall be called
@@ -873,6 +1105,19 @@ class MySQL_HostGroups_Manager {
 	bool aws_aurora_replication_lag_action(int _whid, int _rhid, char *server_id, float current_replication_lag_ms, bool enable, bool is_writer, bool verbose=true);
 	void update_aws_aurora_set_writer(int _whid, int _rhid, char *server_id, bool verbose=true);
 	void update_aws_aurora_set_reader(int _whid, int _rhid, char *server_id);
+	/**
+	 * @brief Updates the resultset and corresponding checksum used by Monitor for AWS Aurora.
+	 * @details This is required to be called when:
+	 *   - The 'mysql_aws_aurora_hostgroups' table is regenerated (via 'commit').
+	 *   - When new servers are discovered, and created in already monitored Aurora clusters.
+	 *
+	 *   The resultset holds the servers that are present in 'mysql_servers' table, and share hostgroups with
+	 *   the **active** clusters specified in 'mysql_aws_aurora_hostgroups'. See query
+	 *   'SELECT_AWS_AURORA_SERVERS_FOR_MONITOR'.
+	 * @param lock Wether if both 'AWS_Aurora_Info_mutex' and 'MySQL_Monitor::aws_aurora_mutex' mutexes should
+	 *   be taken or not.
+	 */
+	void update_aws_aurora_hosts_monitor_resultset(bool lock=false);
 
 	SQLite3_result * get_stats_mysql_gtid_executed();
 	void generate_mysql_gtid_executed_tables();
@@ -887,6 +1132,54 @@ class MySQL_HostGroups_Manager {
 	void shutdown();
 	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);
 	MySrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
+
+private:
+	void update_hostgroup_manager_mappings();
+	uint64_t get_mysql_servers_checksum(SQLite3_result* runtime_mysql_servers = nullptr);
+	uint64_t get_mysql_servers_v2_checksum(SQLite3_result* incoming_mysql_servers_v2 = nullptr);
 };
+
+/**
+ * @brief Helper function used to try to extract a value from the JSON field 'servers_defaults'.
+ *
+ * @param j JSON object constructed from 'servers_defaults' field.
+ * @param hid Hostgroup for which the 'servers_defaults' is defined in 'mysql_hostgroup_attributes'. Used for
+ *  error logging.
+ * @param key The key for the value to be extracted.
+ * @param val_check A validation function, checks if the value is within a expected range.
+ *
+ * @return The value extracted from the supplied JSON. In case of error '-1', and error cause is logged.
+ */
+template <typename T, typename std::enable_if<std::is_integral<T>::value, bool>::type = true>
+T j_get_srv_default_int_val(
+	const json& j, uint32_t hid, const string& key, const function<bool(T)>& val_check
+) {
+	if (j.find(key) != j.end()) {
+		const json::value_t val_type = j[key].type();
+		const char* type_name = j[key].type_name();
+
+		if (val_type == json::value_t::number_integer || val_type == json::value_t::number_unsigned) {
+			T val = j[key].get<T>();
+
+			if (val_check(val)) {
+				return val;
+			} else {
+				proxy_error(
+					"Invalid value %ld supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+						" Value NOT UPDATED.\n",
+					static_cast<int64_t>(val), key.c_str(), hid
+				);
+			}
+		} else {
+			proxy_error(
+				"Invalid type '%s'(%hhu) supplied for 'mysql_hostgroup_attributes.servers_defaults.%s' for hostgroup %d."
+					" Value NOT UPDATED.\n",
+				type_name, static_cast<std::uint8_t>(val_type), key.c_str(), hid
+			);
+		}
+	}
+
+	return static_cast<T>(-1);
+}
 
 #endif /* __CLASS_MYSQL_HOSTGROUPS_MANAGER_H */

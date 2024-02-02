@@ -19,17 +19,20 @@
  * the queries issued for generating the checksum for each of the target modules, for simpler reasoning, they should
  * also represent the actual resultset being received when issuing them, since this resultset is used for computing the
  * 'expected checksum' for the fetched config before loading it to runtime. This is done for the following modules:
- *   - 'runtime_mysql_servers': tables 'mysql_servers', 'mysql_replication_hostgroups', 'mysql_group_replication_hostroups',
- *     'mysql_galera_hostgroups', 'mysql_aws_aurora_hostgroups', 'mysql_hostgroup_attributes'.
+ *   - 'runtime_mysql_servers': tables 'mysql_servers'
  *   - 'runtime_mysql_users'.
  *   - 'runtime_mysql_query_rules'.
- *
+ *   - 'mysql_servers_v2': tables admin 'mysql_servers', 'mysql_replication_hostgroups', 'mysql_group_replication_hostroups',
+ *     'mysql_galera_hostgroups', 'mysql_aws_aurora_hostgroups', 'mysql_hostgroup_attributes'.
  * IMPORTANT: For further clarify this means that it's important that the actual resultset produced by the intercepted
  * query preserve the filtering and ordering expressed in this queries.
  */
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_servers'. See top comment for details. */
-#define CLUSTER_QUERY_MYSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+#define CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM runtime_mysql_servers WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
+
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'mysql_servers_v2'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_SERVERS_V2 "PROXY_SELECT hostgroup_id, hostname, port, gtid_port, status, weight, compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, comment FROM mysql_servers_v2 WHERE status<>'OFFLINE_HARD' ORDER BY hostgroup_id, hostname, port"
 
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_replication_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS "PROXY_SELECT writer_hostgroup, reader_hostgroup, comment FROM runtime_mysql_replication_hostgroups ORDER BY writer_hostgroup"
@@ -189,6 +192,7 @@ class ProxySQL_Node_Entry {
 		ProxySQL_Checksum_Value_2 mysql_servers;
 		ProxySQL_Checksum_Value_2 mysql_users;
 		ProxySQL_Checksum_Value_2 proxysql_servers;
+		ProxySQL_Checksum_Value_2 mysql_servers_v2;
 	} checksums_values;
 	uint64_t global_checksum;
 };
@@ -279,7 +283,9 @@ class ProxySQL_Cluster_Nodes {
 	SQLite3_result * stats_proxysql_servers_checksums();
 	SQLite3_result * stats_proxysql_servers_metrics();
 	void get_peer_to_sync_mysql_query_rules(char **host, uint16_t *port, char** ip_address);
-	void get_peer_to_sync_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
+	void get_peer_to_sync_runtime_mysql_servers(char **host, uint16_t *port, char **peer_checksum, char** ip_address);
+	void get_peer_to_sync_mysql_servers_v2(char** host, uint16_t* port, char** peer_mysql_servers_v2_checksum, 
+		char** peer_runtime_mysql_servers_checksum, char** ip_address);
 	void get_peer_to_sync_mysql_users(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_mysql_variables(char **host, uint16_t *port, char** ip_address);
 	void get_peer_to_sync_admin_variables(char **host, uint16_t* port, char** ip_address);
@@ -367,6 +373,31 @@ struct variable_type {
 };
 
 /**
+ * @brief Specifies the sync algorithm to use when pulling config from another ProxySQL cluster peer.
+ */
+enum class mysql_servers_sync_algorithm {
+	/**
+	 * @brief Sync 'runtime_mysql_servers' and 'mysql_server_v2' from remote peer.
+	 * @details This means that both config and runtime servers info are to be synced, in other words, both
+	 *  user promoted config and runtime changes performed by ProxySQL ('Monitor') in the remote peer will
+	 *  trigger the start of syncing operations.
+	 */
+	runtime_mysql_servers_and_mysql_servers_v2 = 1,
+	/**
+	 * @brief Sync only mysql_server_v2 (config) from the remote peer.
+	 * @details Since 'runtime_mysql_servers' isn't considered for fetching, only config changes promoted by
+	 *  the user in the remote peer will by acknowledge and trigger the start of a syncing operation.
+	 */
+	mysql_servers_v2 = 2,
+	/**
+	 * @brief Dependent on whether ProxySQL has been started with the -M flag.
+	 * @details If '-M' is not present, 'runtime_mysql_servers_and_mysql_servers_v2' is selected, otherwise
+	 *  'mysql_servers_v2' is chosen.
+	 */
+	auto_select = 3
+};
+
+/**
  * @brief Simple struct for holding a query, and three messages to report
  *  the progress of the query execution.
  */
@@ -378,21 +409,23 @@ struct fetch_query {
 };
 
 class ProxySQL_Cluster {
-	private:
+private:
+	SQLite3DB* mydb;
 	pthread_mutex_t mutex;
 	std::vector<pthread_t> term_threads;
 	ProxySQL_Cluster_Nodes nodes;
-	char *cluster_username;
-	char *cluster_password;
+	char* cluster_username;
+	char* cluster_password;
 	struct {
-		std::array<prometheus::Counter*, p_cluster_counter::__size> p_counter_array {};
-		std::array<prometheus::Gauge*, p_cluster_gauge::__size> p_gauge_array {};
+		std::array<prometheus::Counter*, p_cluster_counter::__size> p_counter_array{};
+		std::array<prometheus::Gauge*, p_cluster_gauge::__size> p_gauge_array{};
 	} metrics;
 	int fetch_and_store(MYSQL* conn, const fetch_query& f_query, MYSQL_RES** result);
 	friend class ProxySQL_Node_Entry;
-	public:
+public:
 	pthread_mutex_t update_mysql_query_rules_mutex;
-	pthread_mutex_t update_mysql_servers_mutex;
+	pthread_mutex_t update_runtime_mysql_servers_mutex;
+	pthread_mutex_t update_mysql_servers_v2_mutex;
 	pthread_mutex_t update_mysql_users_mutex;
 	pthread_mutex_t update_mysql_variables_mutex;
 	pthread_mutex_t update_proxysql_servers_mutex;
@@ -407,7 +440,7 @@ class ProxySQL_Cluster {
 	 */
 	SQLite3_result* proxysql_servers_to_monitor;
 
-	char *admin_mysql_ifaces;
+	char* admin_mysql_ifaces;
 	int cluster_check_interval_ms;
 	int cluster_check_status_frequency;
 	int cluster_mysql_query_rules_diffs_before_sync;
@@ -417,6 +450,7 @@ class ProxySQL_Cluster {
 	int cluster_mysql_variables_diffs_before_sync;
 	int cluster_ldap_variables_diffs_before_sync;
 	int cluster_admin_variables_diffs_before_sync;
+	int cluster_mysql_servers_sync_algorithm;
 	bool cluster_mysql_query_rules_save_to_disk;
 	bool cluster_mysql_servers_save_to_disk;
 	bool cluster_mysql_users_save_to_disk;
@@ -428,7 +462,7 @@ class ProxySQL_Cluster {
 	~ProxySQL_Cluster();
 	void init() {};
 	void print_version();
-	void load_servers_list(SQLite3_result *r, bool _lock = true) {
+	void load_servers_list(SQLite3_result* r, bool _lock = true) {
 		nodes.load_servers_list(r, _lock);
 	}
 	void update_table_proxysql_servers_for_monitor(SQLite3_result* resultset) {
@@ -440,17 +474,17 @@ class ProxySQL_Cluster {
 
 		MySQL_Monitor::trigger_dns_cache_update();
 	}
-	void get_credentials(char **, char **);
-	void set_username(char *);
-	void set_password(char *);
-	void set_admin_mysql_ifaces(char *);
-	bool Update_Node_Metrics(char * _h, uint16_t _p, MYSQL_RES *_r, unsigned long long _response_time) {
+	void get_credentials(char**, char**);
+	void set_username(char*);
+	void set_password(char*);
+	void set_admin_mysql_ifaces(char*);
+	bool Update_Node_Metrics(char* _h, uint16_t _p, MYSQL_RES* _r, unsigned long long _response_time) {
 		return nodes.Update_Node_Metrics(_h, _p, _r, _response_time);
 	}
-	bool Update_Global_Checksum(char * _h, uint16_t _p, MYSQL_RES *_r) {
+	bool Update_Global_Checksum(char* _h, uint16_t _p, MYSQL_RES* _r) {
 		return nodes.Update_Global_Checksum(_h, _p, _r);
 	}
-	bool Update_Node_Checksums(char * _h, uint16_t _p, MYSQL_RES *_r = NULL) {
+	bool Update_Node_Checksums(char* _h, uint16_t _p, MYSQL_RES* _r = NULL) {
 		return nodes.Update_Node_Checksums(_h, _p, _r);
 	}
 	void Reset_Global_Checksums(bool lock) {
@@ -459,17 +493,19 @@ class ProxySQL_Cluster {
 	SQLite3_result *dump_table_proxysql_servers() {
 		return nodes.dump_table_proxysql_servers();
 	}
-	SQLite3_result * get_stats_proxysql_servers_checksums() {
+	SQLite3_result* get_stats_proxysql_servers_checksums() {
 		return nodes.stats_proxysql_servers_checksums();
 	}
-	SQLite3_result * get_stats_proxysql_servers_metrics() {
+	SQLite3_result* get_stats_proxysql_servers_metrics() {
 		return nodes.stats_proxysql_servers_metrics();
 	}
 	void p_update_metrics();
 	void thread_ending(pthread_t);
 	void join_term_thread();
 	void pull_mysql_query_rules_from_peer(const std::string& expected_checksum, const time_t epoch);
-	void pull_mysql_servers_from_peer(const std::string& expected_checksum, const time_t epoch);
+	void pull_runtime_mysql_servers_from_peer(const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server);
+	void pull_mysql_servers_v2_from_peer(const mysql_servers_v2_checksum_t& peer_mysql_server_v2,
+		const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {}, bool fetch_runtime_mysql_servers = false);
 	void pull_mysql_users_from_peer(const std::string& expected_checksum, const time_t epoch);
 	/**
 	 * @brief Pulls from peer the specified global variables by the type parameter.

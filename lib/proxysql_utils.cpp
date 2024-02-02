@@ -1,6 +1,7 @@
 #include "proxysql_utils.h"
 #include "mysqld_error.h"
 
+#include <algorithm>
 #include <functional>
 #include <sstream>
 #include <algorithm>
@@ -8,6 +9,7 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <random>
 #include <signal.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -15,7 +17,9 @@
 #include <string.h>
 #include <unistd.h>
 
+using std::function;
 using std::string;
+using std::unique_ptr;
 using std::vector;
 
 __attribute__((__format__ (__printf__, 1, 2)))
@@ -369,6 +373,18 @@ int wexecvp(
 	return child_err;
 }
 
+std::vector<std::string> split_str(const std::string& s, char delimiter) {
+	std::vector<std::string> tokens {};
+	std::string token {};
+	std::istringstream tokenStream(s);
+
+	while (std::getline(tokenStream, token, delimiter)) {
+		tokens.push_back(token);
+	}
+
+	return tokens;
+}
+
 std::string replace_str(const std::string& str, const std::string& match, const std::string& repl) {
 	if(match.empty()) {
 		return str;
@@ -403,6 +419,42 @@ std::string generate_multi_rows_query(int rows, int params) {
 		}
 	}
 	return s;
+}
+
+string rand_str(std::size_t strSize) {
+	string dic { "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" };
+	std::random_device rd {};
+	std::mt19937 gen { rd() };
+
+	std::shuffle(dic.begin(), dic.end(), gen);
+
+	if (strSize < dic.size()) {
+		return dic.substr(0, strSize);
+	} else {
+		std::size_t req_modulus = static_cast<std::size_t>(strSize / dic.size());
+		std::size_t req_reminder = strSize % dic.size();
+		string random_str {};
+
+		for (std::size_t i = 0; i < req_modulus; i++) {
+			std::shuffle(dic.begin(), dic.end(), gen);
+			random_str.append(dic);
+		}
+
+		random_str.append(dic.substr(0, req_reminder));
+
+		return random_str;
+	}
+}
+
+std::string get_checksum_from_hash(uint64_t hash) {
+	uint32_t d32[2] = { 0 };
+	memcpy(&d32, &hash, sizeof(hash));
+
+	vector<char> s_buf(ProxySQL_Checksum_Value_LENGTH, 0);
+	sprintf(&s_buf[0],"0x%0X%0X", d32[0], d32[1]);
+	replace_checksum_zeros(&s_buf[0]);
+
+	return string { &s_buf.front() };
 }
 
 void close_all_non_term_fd(std::vector<int> excludeFDs) {

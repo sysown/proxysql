@@ -2,6 +2,7 @@
 #define __PROXYSQL_UTILS_H
 
 #include <cstdarg>
+#include <functional>
 #include <type_traits>
 #include <memory>
 #include <string>
@@ -10,6 +11,12 @@
 #include <sys/types.h>
 #include <dirent.h>
 #include <sys/resource.h>
+
+#include "sqlite3db.h"
+
+#ifndef ProxySQL_Checksum_Value_LENGTH
+#define ProxySQL_Checksum_Value_LENGTH 20
+#endif
 
 #ifndef ETIME
 // ETIME is not defined on FreeBSD
@@ -206,8 +213,41 @@ uint64_t get_timestamp_us();
  */
 std::string replace_str(const std::string& str, const std::string& match, const std::string& repl);
 
+/**
+ * @brief Split a string into a vector of strings with the provided 'char' delimiter.
+ * @param s String to be split.
+ * @param delimiter Delimiter to be used.
+ * @return Vector with the string splits. Empty if none is found.
+ */
+std::vector<std::string> split_str(const std::string& s, char delimiter);
 
 std::string generate_multi_rows_query(int rows, int params);
+
+/**
+ * @brief Generates a random string of the length of the provider 'strSize' parameter.
+ * @param strSize The size of the string to be generated.
+ * @return A random string.
+ */
+std::string rand_str(std::size_t strSize);
+
+/**
+ * @brief Helper function used to replace spaces and zeros by '0' char in the supplied checksum buffer.
+ * @param checksum Input buffer containing the checksum.
+ */
+inline void replace_checksum_zeros(char* checksum) {
+	for (int i=2; i<18; i++) {
+		if (checksum[i]==' ' || checksum[i]==0) {
+			checksum[i]='0';
+		}
+	}
+}
+
+/**
+ * @brief Generates a ProxySQL checksum as a string from the supplied integer hash.
+ * @param hash The integer hash to be formated as a string.
+ * @return String representation of the supplied hash.
+ */
+std::string get_checksum_from_hash(uint64_t hash);
 
 void close_all_non_term_fd(std::vector<int> excludeFDs);
 

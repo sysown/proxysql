@@ -1,9 +1,11 @@
 #ifndef __CLASS_SQLITE3DB_H
 #define __CLASS_SQLITE3DB_H
+#include <pthread.h>
 #include "sqlite3.h"
 #undef swap
 #undef min
 #undef max
+#include <cstdint>
 #include <vector>
 #define PROXYSQL_SQLITE3DB_PTHREAD_MUTEX
 
@@ -153,6 +155,7 @@ class SQLite3_result {
 	void add_column_definition(int a, const char *b);
 	int add_row(sqlite3_stmt *stmt, bool skip=false);
 	int add_row(char **_fields);
+	int add_row(const char **_fields) { return add_row((char **)_fields); }
 	int add_row(SQLite3_row *old_row);
 	int add_row(const char* _field, ...);
 	SQLite3_result(sqlite3_stmt *stmt);
