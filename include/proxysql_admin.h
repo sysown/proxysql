@@ -90,6 +90,7 @@ struct p_admin_gauge {
 		stmt_cached,
 		fds_in_use,
 		version_info,
+		mysql_listener_paused,
 		__size
 	};
 };

@@ -423,7 +423,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"init_connect",
 	(char *)"ldap_user_variable",
 	(char *)"add_ldap_user_comment",
-	(char *)"default_tx_isolation",
 	(char *)"default_session_track_gtids",
 	(char *)"connpoll_reset_queue_length",
 	(char *)"min_num_servers_lantency_awareness",
@@ -986,7 +985,6 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
 	}
-	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
 	variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
@@ -1248,12 +1246,6 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 				return strdup(variables.default_variables[i]);
 			}
 		}
-		if (!strcmp(name,"default_tx_isolation")) {
-			if (variables.default_tx_isolation==NULL) {
-				variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
-			}
-			return strdup(variables.default_tx_isolation);
-		}
 		if (!strcmp(name,"default_session_track_gtids")) {
 			if (variables.default_session_track_gtids==NULL) {
 				variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
@@ -1368,12 +1360,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 		} else {
 			return strdup(variables.add_ldap_user_comment);
 		}
-	}
-	if (!strcasecmp(name,"default_tx_isolation")) {
-		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
-		}
-		return strdup(variables.default_tx_isolation);
 	}
 	if (!strcasecmp(name,"default_session_track_gtids")) {
 		if (variables.default_session_track_gtids==NULL) {
@@ -1704,19 +1690,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		return true;
 	}
 
-	if (!strcasecmp(name,"default_tx_isolation")) {
-		if (variables.default_tx_isolation) free(variables.default_tx_isolation);
-		variables.default_tx_isolation=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_tx_isolation=strdup(value);
-		}
-		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION); // default
-		}
-		return true;
-	}
-
 	if (!strcasecmp(name,"default_session_track_gtids")) {
 		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 		variables.default_session_track_gtids=NULL;
@@ -1879,8 +1852,12 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 	}
 	if (!strcasecmp(name,"server_capabilities")) {
-		int intv=atoi(value);
-		if (intv > 10 && intv <= 65535) {
+		// replaced atoi() with strtoul() to have a 32 bit result
+		uint32_t intv = strtoul(value, NULL, 10);
+		if (intv > 10) {
+			// Note that:
+			// - some capabilities are changed at runtime while performing the handshake with the client
+			// - even if we support 32 bits capabilities, many of them do not have any real meaning for proxysql (not supported)
 			variables.server_capabilities=intv;
 			return true;
 		} else {
@@ -2529,7 +2506,6 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
-	if (variables.default_tx_isolation) free(variables.default_tx_isolation);
 	if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.auditlog_filename) free(variables.auditlog_filename);
@@ -2660,7 +2636,6 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable=NULL; }
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment=NULL; }
-	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation=NULL; }
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids=NULL; }
 
 	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
@@ -3955,8 +3930,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___ldap_user_variable=GloMTH->get_variable_string((char *)"ldap_user_variable");
 	if (mysql_thread___add_ldap_user_comment) free(mysql_thread___add_ldap_user_comment);
 	mysql_thread___add_ldap_user_comment=GloMTH->get_variable_string((char *)"add_ldap_user_comment");
-	if (mysql_thread___default_tx_isolation) free(mysql_thread___default_tx_isolation);
-	mysql_thread___default_tx_isolation=GloMTH->get_variable_string((char *)"default_tx_isolation");
 	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
 	mysql_thread___default_session_track_gtids=GloMTH->get_variable_string((char *)"default_session_track_gtids");
 
