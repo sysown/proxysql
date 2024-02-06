@@ -148,7 +148,7 @@ bool trigger_access_denied_wrong_password_total(MYSQL*, MYSQL*) {
 	bool access_denied_error = false;
 	// Connect to ProxySQL
 	MYSQL* proxysql = mysql_init(NULL);
-	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression", "invalid_username", cl.use_ssl, cl.compression);
+	diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", "invalid_username", cl.use_ssl, cl.compression);
 	if (cl.use_ssl)
 		mysql_ssl_set(proxysql, NULL, NULL, NULL, NULL, NULL);
 	if (cl.compression)

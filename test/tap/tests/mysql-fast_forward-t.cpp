@@ -32,7 +32,7 @@ int create_connections() {
 	for (int i = 0; i < NUM_CONNS ; i++) {
 
 		MYSQL * mysql = mysql_init(NULL);
-		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression", cl.admin_username, cl.use_ssl, cl.compression);
+		diag("Connecting: cl.username='%s' cl.use_ssl=%d cl.compression=%d", cl.admin_username, cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(mysql, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)

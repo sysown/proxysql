@@ -379,7 +379,7 @@ int main(int argc, char** argv) {
 		std::string inv_user_err {};
 		bool failed_to_connect = false;
 		MYSQL* proxysql_sqlite3 = mysql_init(NULL);
-		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression", "foobar_user", cl.use_ssl, cl.compression);
+		diag("Connecting: username='%s' cl.use_ssl=%d cl.compression=%d", "foobar_user", cl.use_ssl, cl.compression);
 		if (cl.use_ssl)
 			mysql_ssl_set(proxysql_sqlite3, NULL, NULL, NULL, NULL, NULL);
 		if (cl.compression)
