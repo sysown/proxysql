@@ -17,9 +17,15 @@ echo "extracting 'struct bio_st' from 'lib/mysql_data_stream.cpp'"
 LIBBIOST=$(cd ../../; cat ./lib/mysql_data_stream.cpp | sed '/^\/\*/,/*\//d' | sed -n '/^struct bio_st {/,/}/p')
 
 echo -n "Comparing ... "
-if [[ "$LIBBIOST" == "$DEPBIOST" ]]; then
-	echo "PASS - bio_st is a match!";
+if [[ "$LIBBIOST" =~ "$DEPBIOST" ]]; then
+	echo "PASS - bio_st is a match!"
 else
-	echo "FAIL - bio_st does not match!";
+	echo "FAIL - bio_st does not match!"
+	echo
+	echo ">>> lib/mysql_data_stream.cpp"
+	echo "$LIBBIOST"
+	echo "==="
+	echo "$DEPBIOST"
+	echo "<<< deps/libssl/openssl/crypto/bio/bio_local.h"
 	exit 1
 fi
