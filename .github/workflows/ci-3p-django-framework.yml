@@ -46,6 +46,10 @@ jobs:
         # extend timout
         cd test_django-framework
         sed -i 's/timeout -v -s1 800 //' run-tests.bash
+
+        # fix permissions
+        chown -R root:root django/cache
+        chmod 777 django/cache
         
     - name: Run tests
       run: |
