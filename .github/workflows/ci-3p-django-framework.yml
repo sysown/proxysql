@@ -1,0 +1,89 @@
+name: CI-3p-django-framework
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  TESTNAME: django-framework
+  TESTDIST: debian11
+  INFRADB:  mysql57
+  BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+        
+    - name: Checkout proxysql_3p_testing
+      uses: actions/checkout@v4
+      with:
+        repository: 'proxysql/proxysql_3p_testing'
+        ref: 'main'
+        fetch-depth: 1
+        path: 'proxysql_3p_testing'
+        token: ${{ secrets.GH_TOKEN }}
+        sparse-checkout: |
+          test_django-framework
+          proxysql
+
+    - name: Cache restore bin
+      uses: actions/cache/restore@v4
+      with:
+        key: CI-builds_${{ github.sha }}_debian11_bin
+        fail-on-cache-miss: true
+        path: |
+          proxysql/binaries/
+        
+    - name: Prepare
+      run: |
+        set +e
+        
+        cd proxysql_3p_testing/
+        git sparse-checkout list
+        ./setup.sh
+        
+        # extend timout
+        cd test_django-framework
+        sed -i 's/timeout -v -s1 800 //' run-tests.bash
+        
+    - name: Run tests
+      run: |
+        set +e
+        
+        cd proxysql_3p_testing/test_django-framework
+        ./run-tests.bash
+        RC=$?
+        
+        #sudo chmod -R 777 ${{ github.workspace }}/*
+        exit $RC
+        
+    - name: Check baseline
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
+      run: |
+        cd proxysql_3p_testing/test_django-framework
+        FAILS=$(cat logs/*run-tests.log | grep -oP '^===== \d+ failed, ' | awk '{ print $2 }')
+        if [[ -z ${FAILS} ]]; then
+          echo "Baseline '${BASELINE}' WARN: no results found"
+          exit 0
+        fi
+        if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
+          echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
+          exit 1
+        else
+          echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
+          if [[ ${{ github.ref_name }} == v2.x ]]; then
+            gh variable -R sysown/proxysql set BASELINE_3P_DJANGO_FRAMEWORK -b "${FAILS}"
+          fi
+        fi
+    
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}
+        path: |
+          proxysql_3p_testing/test_django-framework/logs
+          
+          
