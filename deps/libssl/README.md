@@ -10,6 +10,8 @@ In ProxySQL 2.4.8 , libssl was upgraded from version 3.0.2 to 3.0.8
 
 In ProxySQL 2.5.x , libssl was upgraded from version 3.0.8 to 3.1.0
 
+In ProxySQL 2.6.0 , libssl was upgraded from version 3.1.0 to 3.1.5
+
 
 Do not upgrade without extensive testing.
 
