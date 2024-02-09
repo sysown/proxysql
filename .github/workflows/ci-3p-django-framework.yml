@@ -48,8 +48,8 @@ jobs:
         sed -i 's/timeout -v -s1 800 //' run-tests.bash
 
         # fix permissions
-        #mkdir django/cache
-        #chmod -R 777 django/cache
+        mkdir django/cache
+        chmod -R 777 django/cache
         
     - name: Run tests
       run: |
