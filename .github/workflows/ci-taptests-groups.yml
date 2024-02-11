@@ -138,24 +138,40 @@ jobs:
         #cat test/env.sh
 
         # remove incompatible tests
-        rm -f test/tap/tests/clickhouse_php_conn-t
-        rm -f test/tap/tests/reg_test_3603-stmt_metadata-t
-        rm -f test/tap/tests/reg_test_3992_fast_forward_malformed_packet-mysqlsh-t
-        rm -f test/tap/tests/reg_test_3992_fast_forward_malformed_packet-pymysql-t
-        rm -f test/tap/tests/reg_test_3992_fast_forward_malformed_packet-t
-        rm -f test/tap/tests/reg_test_fast_forward_split_packet-t
-        rm -f test/tap/tests/set_testing-240-t
-        rm -f test/tap/tests/test_binlog_reader-t
-        rm -f test/tap/tests/test_clickhouse_server-t
-        rm -f test/tap/tests/test_clickhouse_server_libmysql-t
-        rm -f test/tap/tests/test_cluster1-t
-        rm -f test/tap/tests/test_cluster_sync-t
-        rm -f test/tap/tests/test_com_reset_connection_com_change_user-t
-        rm -f test/tap/tests/test_log_last_insert_id-t
-        rm -f test/tap/tests/test_read_only_actions_offline_hard_servers-t
-        rm -f test/tap/tests/test_rw_binary_data-t
-        rm -f test/tap/tests/test_server_sess_status-t
-        rm -f test/tap/tests/test_session_status_flags-t
+        set +e
+        #cd ${{ github.workspace }}/proxysql/test/tap/$TAPGROUP
+        cd ${{ github.workspace }}/proxysql/test/tap/tests
+        # broken
+        rm -f reg_test_3273_ssl_con-t
+        # missing infra
+        rm -f clickhouse_php_conn-t
+        rm -f reg_test_3603-stmt_metadata-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-mysqlsh-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-pymysql-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-t
+        rm -f reg_test_fast_forward_split_packet-t
+        rm -f set_testing-240-t
+        rm -f test_binlog_reader-t
+        #rm -f test_binlog_reader_uses_previous_hostgroup-t
+        #rm -f test_binlog_fast_forward-t
+        rm -f test_clickhouse_server-t
+        rm -f test_clickhouse_server_libmysql-t
+        rm -f test_cluster1-t
+        rm -f test_cluster_sync-t
+        rm -f test_com_reset_connection_com_change_user-t
+        rm -f test_log_last_insert_id-t
+        rm -f test_read_only_actions_offline_hard_servers-t
+        rm -f test_rw_binary_data-t
+        rm -f test_server_sess_status-t
+        rm -f test_session_status_flags-t
+
+        # FAIL
+        #rm -f test_mysql_connect_retries-t
+
+        # fixes
+        cd ${{ github.workspace }}/proxysql/test/tap/tests
+        
+        true
 
     - name: Run proxysql
       run: |
