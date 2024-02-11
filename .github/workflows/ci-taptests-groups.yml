@@ -134,7 +134,7 @@ jobs:
         echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
         echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
         echo 'export WITHGCOV=0' >> test/env.sh
-        echo 'export TAP_DISK_USAGE="$WORKSPACE/ci_*_logs/* $WORKSPACE/src /home/runner/runners/*"' >> test/env.sh
+        echo 'export TAP_DISK_USAGE="$WORKSPACE/ci_*_logs/* $WORKSPACE/ci_infra_logs/regular_infra/* $WORKSPACE/src /home/runner/runners/*"' >> test/env.sh
         #echo 'export' >> test/env.sh
         #cat test/env.sh
 
