@@ -56,6 +56,13 @@ jobs:
         testgroup: ${{ fromJson(needs.select.outputs.matrix) }}
     steps:
 
+    - name: Maximize build space
+      uses: easimon/maximize-build-space@master
+      with:
+        root-reserve-mb: 512
+        swap-size-mb: 4096
+#        remove-dotnet: 'true'
+
     - name: Install dependencies
       run: |
         sudo apt-get update -y
