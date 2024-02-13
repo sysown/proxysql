@@ -67,10 +67,14 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_django-framework
-        FAILS=$(cat logs/*run-tests.log | grep -oP ', failed=\d+' | tr '=' '' | awk '{ print $3 }')
+        FAILS=$(cat logs/*run-tests.log | grep -oP 'FAILED \(failures=\d+' | tr '=' ' ' | awk '{ print $3 }')
         if [[ -z ${FAILS} ]]; then
-          echo "Baseline '${BASELINE}' WARN: no results found"
-          exit 0
+          FAILS=$(cat logs/*run-tests.log | grep -oP 'OK \(skipped=\d+')
+          if [[ -z ${FAILS} ]]; then
+            echo "Baseline '${BASELINE}' WARN: no results found"
+            exit 0
+          else
+            FAILS=0
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
           echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
