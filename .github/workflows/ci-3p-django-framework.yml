@@ -75,6 +75,7 @@ jobs:
             exit 0
           else
             FAILS=0
+          fi
         fi
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
           echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
