@@ -7,12 +7,17 @@ on:
 env:
   TESTNAME: django-framework
   TESTDIST: debian11
-  INFRADB:  mysql57
-  BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK }}
+#  INFRADB:  mysql8
+#  BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK }}
 
 jobs:
   test:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        infradb: [ 'mysql8', 'mariadb10' ]
+
     steps:
         
     - name: Checkout proxysql_3p_testing
@@ -50,6 +55,10 @@ jobs:
         # fix permissions
         mkdir django/cache
         chmod -R 777 django/cache
+
+        # set tested database infra
+        sed -i 's/^fn_test_proxysql/#fn_test_proxysql/' run-tests.bash
+        sed -i '/fn_start_prep/a fn_test_proxysql-dev ${{ matrix.infradb }}' run-tests.bash
         
     - name: Run tests
       run: |
@@ -65,6 +74,7 @@ jobs:
     - name: Check baseline
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
+        BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} }}
       run: |
         cd proxysql_3p_testing/test_django-framework
         FAILS=$(cat logs/*run-tests.log | grep -oP 'FAILED \(failures=\d+' | tr '=' ' ' | awk '{ print $3 }')
@@ -83,7 +93,7 @@ jobs:
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           if [[ ${{ github.ref_name }} == v2.x ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_DJANGO_FRAMEWORK -b "${FAILS}"
+            gh variable -R sysown/proxysql set BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} -b "${FAILS}"
           fi
         fi
     
