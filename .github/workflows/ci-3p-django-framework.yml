@@ -8,7 +8,7 @@ env:
   TESTNAME: django-framework
   TESTDIST: debian11
 #  INFRADB:  mysql8
-#  BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK }}
+  BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK }}
 
 jobs:
   test:
@@ -74,9 +74,10 @@ jobs:
     - name: Check baseline
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
-        BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} }}
       run: |
         cd proxysql_3p_testing/test_django-framework
+        BASELINE=$(gh variable -R sysown/proxysql list | grep -i BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} | awk '{ print $2 }')
+
         FAILS=$(cat logs/*run-tests.log | grep -oP 'FAILED \(failures=\d+' | tr '=' ' ' | awk '{ print $3 }')
         if [[ -z ${FAILS} ]]; then
           FAILS=$(cat logs/*run-tests.log | grep -oP 'OK \(skipped=\d+')
@@ -87,6 +88,7 @@ jobs:
             FAILS=0
           fi
         fi
+
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
           echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
           exit 1
