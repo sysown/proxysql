@@ -203,6 +203,7 @@ class MySrvC {	// MySQL Server Container
 	unsigned int max_connections_used; // The maximum number of connections that has been opened
 	unsigned int connect_OK;
 	unsigned int connect_ERR;
+	int cur_replication_lag;
 	unsigned int cur_replication_lag_count;
 	// note that these variables are in microsecond, while user defines max latency in millisecond
 	unsigned int current_latency_us;

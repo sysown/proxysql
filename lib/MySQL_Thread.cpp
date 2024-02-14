@@ -432,6 +432,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"query_cache_stores_empty_result",
 	(char *)"data_packets_history_size",
 	(char *)"handle_warnings",
+	(char *)"recover_replication_lag_shunned_servers_on_commit",
 	NULL
 };
 
@@ -896,6 +897,7 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.client_host_cache_size=0;
 	variables.client_host_error_counts=0;
 	variables.handle_warnings=1;
+	variables.recover_replication_lag_shunned_servers_on_commit=1;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
@@ -2079,6 +2081,7 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
 		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
+		VariablesPointers_int["recover_replication_lag_shunned_servers_on_commit"] = make_tuple(&variables.recover_replication_lag_shunned_servers_on_commit, 0, 1, false);
 
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
@@ -4007,6 +4010,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___client_host_cache_size=GloMTH->get_variable_int((char *)"client_host_cache_size");
 	mysql_thread___client_host_error_counts=GloMTH->get_variable_int((char *)"client_host_error_counts");
 	mysql_thread___handle_warnings=GloMTH->get_variable_int((char*)"handle_warnings");
+	mysql_thread___recover_replication_lag_shunned_servers_on_commit=GloMTH->get_variable_int((char*)"recover_replication_lag_shunned_servers_on_commit");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */
