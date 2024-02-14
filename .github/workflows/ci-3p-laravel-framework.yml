@@ -82,7 +82,7 @@ jobs:
         
         FAILS=$(cat logs/*run-tests.log | grep -oP '^There were \d+ failures:' | awk '{ print $3 }')
         if [[ -z ${FAILS} ]]; then
-          FAILS=$(cat logs/*run-tests.log | grep -oP 'OK \(\d+ tests,' | tr '(' ' ' | awk '{ print $2 }')
+          FAILS=$(cat logs/*run-tests.log | grep -oP 'OK \(\d+ tests,')
           if [[ -z ${FAILS} ]]; then
             echo "Baseline '${BASELINE}' WARN: no results found"
             exit 0
