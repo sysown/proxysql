@@ -7,12 +7,17 @@ on:
 env:
   TESTNAME: laravel-framework
   TESTDIST: debian11
-  INFRADB:  mysql57
-  BASELINE: ${{ vars.BASELINE_3P_LARAVEL_FRAMEWORK }}
+#  INFRADB:  mysql57
+#  BASELINE: ${{ vars.BASELINE_3P_LARAVEL_FRAMEWORK }}
 
 jobs:
   test:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+
     steps:
         
     - name: Checkout proxysql_3p_testing
@@ -51,6 +56,10 @@ jobs:
         #mkdir laravel/cache
         #chmod -R 777 laravel/cache
         
+        # set tested database infra
+        sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
+        sed -i '/^fn_start_prep$/a fn_test_proxysql-dev ${{ matrix.infradb }}' run-tests.bash
+
     - name: Run tests
       run: |
         set +e
@@ -67,18 +76,26 @@ jobs:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
         cd proxysql_3p_testing/test_laravel-framework
-        FAILS=$(cat logs/*run-tests.log | grep -oP '^===== \d+ failed, ' | awk '{ print $2 }')
+        BASELINE=$(gh variable -R sysown/proxysql list | grep -i BASELINE_3P_LARAVEL_FRAMEWORK_${{ matrix.infradb }} | awk '{ print $2 }')
+        
+        FAILS=$(cat logs/*run-tests.log | grep -oP '^There were \d+ failures:' | awk '{ print $3 }')
         if [[ -z ${FAILS} ]]; then
-          echo "Baseline '${BASELINE}' WARN: no results found"
-          exit 0
+          FAILS=$(cat logs/*run-tests.log | grep -oP 'OK \(d+ tests,')
+          if [[ -z ${FAILS} ]]; then
+            echo "Baseline '${BASELINE}' WARN: no results found"
+            exit 0
+          else
+            FAILS=0
+          fi
         fi
+        
         if [[ ${FAILS} -gt ${BASELINE:-10000} ]]; then
           echo "Baseline '${BASELINE:-10000}' FAIL: FAILS = ${FAILS}"
           exit 1
         else
           echo "Baseline '${BASELINE:-10000}' PASS: FAILS = ${FAILS}"
           if [[ ${{ github.ref_name }} == v2.x ]]; then
-            gh variable -R sysown/proxysql set BASELINE_3P_LARAVEL_FRAMEWORK -b "${FAILS}"
+            gh variable -R sysown/proxysql set BASELINE_3P_LARAVEL_FRAMEWORK_${{ matrix.infradb }} -b "${FAILS}"
           fi
         fi
     
@@ -86,7 +103,7 @@ jobs:
       if: ${{ failure() && !cancelled() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-${{ matrix.infradb }}-logs-run#${{ github.run_number }}
         path: |
           proxysql_3p_testing/test_laravel-framework/logs
           
