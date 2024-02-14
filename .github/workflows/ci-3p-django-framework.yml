@@ -57,7 +57,7 @@ jobs:
         chmod -R 777 django/cache
 
         # set tested database infra
-        sed -i 's/^fn_test_proxysql/#fn_test_proxysql/' run-tests.bash
+        sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
         sed -i '/fn_start_prep/a fn_test_proxysql-dev ${{ matrix.infradb }}' run-tests.bash
         
     - name: Run tests
