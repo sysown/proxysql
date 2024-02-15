@@ -57,10 +57,9 @@ jobs:
         #chmod -R 777 laravel/cache
         
         # set tested database infra
-        #sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
-        #sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
-        #sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
-        sed -i '/^\sdocker exec testinfra-laravel-framework bash/i docker exec testinfra-laravel-framework bash -c "ls -l /opt/laravel-framework"' run-tests.bash
+        sed -i 's/^fn_test_proxysql m/#fn_test_proxysql m/' run-tests.bash
+        sed -i 's/^fn_test_proxysql_dev m/#fn_test_proxysql_dev m/' run-tests.bash
+        sed -i '/^fn_start_prep$/a fn_test_proxysql_dev ${{ matrix.infradb }}' run-tests.bash
 
     - name: Run tests
       run: |
