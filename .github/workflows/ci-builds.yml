@@ -61,6 +61,8 @@ jobs:
             type: '-clang'
           - dist: 'ubuntu22'
             type: '-tap'
+          - dist: 'ubuntu22'
+            type: '-tap-asan'
 
     steps:
 
