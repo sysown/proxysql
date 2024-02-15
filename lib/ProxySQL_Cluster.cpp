@@ -4454,7 +4454,7 @@ void ProxySQL_Node_Address::resolve_hostname() {
 		const std::string& ip = MySQL_Monitor::dns_lookup(hostname, false, &ip_count);
 
 		if (ip_count > 1) {
-			proxy_warning("ProxySQL Cluster node '%s' has more than one (%ld) mapped IP address: under some circumstances this may lead to undefined behavior. It is recommended to provide IP address or hostname with only one resolvable IP.\n",
+			proxy_error("Proxy cluster node '%s' has more than one ('%ld') mapped IP address. It is recommended to provide IP address or domain with one resolvable IP address.\n",
 				hostname, ip_count);
 		}
 
