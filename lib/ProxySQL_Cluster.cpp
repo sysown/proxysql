@@ -271,6 +271,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				}
 			} else {
 				proxy_warning("Cluster: unable to connect to peer %s:%d . Error: %s\n", node->hostname, node->port, mysql_error(conn));
+				node->resolve_hostname();
 				mysql_close(conn);
 				conn = mysql_init(NULL);
 				int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
@@ -317,19 +318,7 @@ void ProxySQL_Node_Metrics::reset() {
 ProxySQL_Node_Entry::ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char * _comment) : 
 	ProxySQL_Node_Entry(_hostname, _port, _weight, _comment, NULL) {
 	// resolving DNS if available in Cache
-	if (_hostname && _port) {
-		size_t ip_count = 0;
-		const std::string& ip = MySQL_Monitor::dns_lookup(_hostname, false, &ip_count);
-
-		if (ip_count > 1) {
-			proxy_warning("ProxySQL Cluster node '%s' has more than one (%ld) mapped IP address: under some circumstances this may lead to undefined behavior. It is recommended to provide IP address or hostname with only one resolvable IP.\n",
-				_hostname, ip_count);
-		}
-
-		if (ip.empty() == false) {
-			ip_addr = strdup(ip.c_str());
-		}
-	}
+	resolve_hostname();
 }
 
 ProxySQL_Node_Entry::ProxySQL_Node_Entry(char* _hostname, uint16_t _port, uint64_t _weight, char* _comment, char* ip) {
@@ -382,6 +371,26 @@ ProxySQL_Node_Entry::~ProxySQL_Node_Entry() {
 	}
 	free(metrics);
 	metrics = NULL;
+}
+
+void ProxySQL_Node_Entry::resolve_hostname() {
+	if (ip_addr) {
+		free(ip_addr);
+		ip_addr = NULL;
+	}
+	if (hostname && port) {
+		size_t ip_count = 0;
+		const std::string& ip = MySQL_Monitor::dns_lookup(hostname, false, &ip_count);
+
+		if (ip_count > 1) {
+			proxy_warning("ProxySQL Cluster node '%s' has more than one (%ld) mapped IP address: under some circumstances this may lead to undefined behavior. It is recommended to provide IP address or hostname with only one resolvable IP.\n",
+				hostname, ip_count);
+		}
+
+		if (ip.empty() == false) {
+			ip_addr = strdup(ip.c_str());
+		}
+	}
 }
 
 bool ProxySQL_Node_Entry::get_active() {
@@ -2922,6 +2931,7 @@ void ProxySQL_Cluster_Nodes::load_servers_list(SQLite3_result *resultset, bool _
 			//pthread_detach(a->thrid);
 		} else {
 			node = ite->second;
+			node->resolve_hostname();
 			node->set_active(true);
 			node->set_weight(w_);
 			node->set_comment(c_);
@@ -4403,4 +4413,53 @@ void ProxySQL_Cluster::join_term_thread() {
 		pthread_join(t,NULL);
 	}
 	pthread_mutex_unlock(&mutex);
+}
+
+ProxySQL_Node_Address::ProxySQL_Node_Address(char* h, uint16_t p) : ProxySQL_Node_Address(h, p, NULL) {
+	// resolving DNS if available in Cache
+	resolve_hostname();
+}
+ProxySQL_Node_Address::ProxySQL_Node_Address(char* h, uint16_t p, char* ip) {
+	hostname = strdup(h);
+	ip_addr = NULL;
+	if (ip) {
+		ip_addr = strdup(ip);
+	}
+	admin_mysql_ifaces = NULL;
+	port = p;
+	uuid = NULL;
+	hash = 0;
+}
+ProxySQL_Node_Address::~ProxySQL_Node_Address() {
+	if (hostname) free(hostname);
+	if (uuid) free(uuid);
+	if (admin_mysql_ifaces) free(admin_mysql_ifaces);
+	if (ip_addr) free(ip_addr);
+}
+const char* ProxySQL_Node_Address::get_host_address() const {
+	const char* host_address = hostname;
+
+	if (ip_addr)
+		host_address = ip_addr;
+
+	return host_address;
+}
+void ProxySQL_Node_Address::resolve_hostname() {
+	if (ip_addr) {
+		free(ip_addr);
+		ip_addr = NULL;
+	}
+	if (hostname && port) {
+		size_t ip_count = 0;
+		const std::string& ip = MySQL_Monitor::dns_lookup(hostname, false, &ip_count);
+
+		if (ip_count > 1) {
+			proxy_warning("ProxySQL Cluster node '%s' has more than one (%ld) mapped IP address: under some circumstances this may lead to undefined behavior. It is recommended to provide IP address or hostname with only one resolvable IP.\n",
+				hostname, ip_count);
+		}
+
+		if (ip.empty() == false) {
+			ip_addr = strdup(ip.c_str());
+		}
+	}
 }
