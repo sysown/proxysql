@@ -105,9 +105,13 @@ jobs:
         cd proxysql/
         git fetch --tags --force
         mkdir ci_build_log
+        if [[ "${{ matrix.type }}" =~ "-asan" ]]; then
+          sed -i "/command/i \      - WITHASAN=1" docker-compose.yml
+          sed -i "/command/i \      - TEST_WITHASAN=1" docker-compose.yml
+        fi
         if [[ "${{ matrix.type }}" =~ "-tap" ]]; then
           # prebuild dependencies without debug
-          sed -i "/command/c \    command: bash -l -c 'cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
+          sed -i "/command/c \    command: bash -l -c '${ASAN} cd /opt/proxysql && make -j$(nproc) build_deps_clickhouse'" docker-compose.yml
           make ${{ matrix.dist }} | tee ci_build_log/build-deps.log
           # build tap tests
           sed -i "s/^build_tap_test_debug: build_src_debug$/build_tap_test_debug: build_src_debug_clickhouse/" Makefile
