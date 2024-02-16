@@ -1061,7 +1061,7 @@ class PS_global_stats {
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<7;i++) {
+		for (i=0;i<9;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
