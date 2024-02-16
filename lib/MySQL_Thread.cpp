@@ -1809,16 +1809,18 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		} else if (value[0] == '/') {
 			char *full_path = strdup(value);
-                        char *eval_dirname = dirname(full_path);
-                        DIR* eventlog_dir = opendir(eval_dirname);
-			free(full_path);
-                        if (eventlog_dir) {
+			char* eval_dirname = dirname(full_path);
+			DIR* eventlog_dir = opendir(eval_dirname);
+			if (eventlog_dir) {
 				closedir(eventlog_dir);
 				free(variables.auditlog_filename);
-				variables.auditlog_filename=strdup(value);
-                                return true;
-			} else {
+				variables.auditlog_filename = strdup(value);
+				free(full_path);
+				return true;
+			}
+			else {
 				proxy_error("%s is an invalid value for auditlog_filename path, the directory cannot be accessed\n", eval_dirname);
+				free(full_path);
 				return false;
 			}
 		} else {
@@ -1833,16 +1835,18 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		} else if (value[0] == '/') {
 			char *full_path = strdup(value);
-                        char *eval_dirname = dirname(full_path);
-                        DIR* eventlog_dir = opendir(eval_dirname);
-			free(full_path);
-                        if (eventlog_dir) {
+			char* eval_dirname = dirname(full_path);
+			DIR* eventlog_dir = opendir(eval_dirname);
+			if (eventlog_dir) {
 				closedir(eventlog_dir);
 				free(variables.eventslog_filename);
-				variables.eventslog_filename=strdup(value);
-                                return true;
-			} else {
+				variables.eventslog_filename = strdup(value);
+				free(full_path);
+				return true;
+			}
+			else {
 				proxy_error("%s is an invalid value for eventslog_filename path, the directory cannot be accessed\n", eval_dirname);
+				free(full_path);
 				return false;
 			}
 		} else {
