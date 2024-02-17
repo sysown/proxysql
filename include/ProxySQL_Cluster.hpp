@@ -96,47 +96,11 @@ public:
 	char *hostname;
 	char *admin_mysql_ifaces;
 	uint16_t port;
-	ProxySQL_Node_Address(char *h, uint16_t p) : ProxySQL_Node_Address(h, p, NULL) {
-		// resolving DNS if available in Cache
-		if (h && p) {
-			size_t ip_count = 0;
-			const std::string& ip = MySQL_Monitor::dns_lookup(h, false, &ip_count);
-
-			if (ip_count > 1) {
-				proxy_error("Proxy cluster node '%s' has more than one ('%ld') mapped IP address. It is recommended to provide IP address or domain with one resolvable IP address.\n",
-					h, ip_count);
-			}
-
-			if (ip.empty() == false) {
-				ip_addr = strdup(ip.c_str());
-			}
-		}
-	}
-	ProxySQL_Node_Address(char* h, uint16_t p, char* ip) {
-		hostname = strdup(h);
-		ip_addr = NULL;
-		if (ip) {
-			ip_addr = strdup(ip);
-		}
-		admin_mysql_ifaces = NULL;
-		port = p;
-		uuid = NULL;
-		hash = 0;
-	}
-	~ProxySQL_Node_Address() {
-		if (hostname) free(hostname);
-		if (uuid) free(uuid);
-		if (admin_mysql_ifaces) free(admin_mysql_ifaces);
-		if (ip_addr) free(ip_addr);
-	}
-	const char* get_host_address() const {
-		const char* host_address = hostname;
-
-		if (ip_addr)
-			host_address = ip_addr;
-
-		return host_address;
-	}
+	ProxySQL_Node_Address(char* h, uint16_t p);
+	ProxySQL_Node_Address(char* h, uint16_t p, char* ip);
+	~ProxySQL_Node_Address();
+	const char* get_host_address() const;
+	void resolve_hostname();
 private:
 	char* ip_addr;
 };
@@ -163,6 +127,7 @@ class ProxySQL_Node_Entry {
 	ProxySQL_Node_Entry(char *_hostname, uint16_t _port, uint64_t _weight, char *_comment);
 	ProxySQL_Node_Entry(char* _hostname, uint16_t _port, uint64_t _weight, char* _comment, char* ip);
 	~ProxySQL_Node_Entry();
+	void resolve_hostname();
 	bool get_active();
 	void set_active(bool a);
 	uint64_t get_weight();
