@@ -548,7 +548,7 @@ class MySQL_Threads_Handler
 		bool log_mysql_warnings_enabled;
 		int data_packets_history_size;
 		int handle_warnings;
-		int recover_replication_lag_shunned_servers_on_commit;
+		int evaluate_replication_lag_on_servers_load;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

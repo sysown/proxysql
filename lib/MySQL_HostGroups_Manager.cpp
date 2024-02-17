@@ -2028,7 +2028,7 @@ bool MySQL_HostGroups_Manager::commit(
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[15])) {
 					bool change_server_status = true;
-					if (GloMTH->variables.recover_replication_lag_shunned_servers_on_commit == 1) {
+					if (GloMTH->variables.evaluate_replication_lag_on_servers_load == 1) {
 						if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && // currently server is shunned due to replication lag
 							(MySerStatus)atoi(r->fields[15]) == MYSQL_SERVER_STATUS_ONLINE) { // new server status is online
 							if (mysrvc->cur_replication_lag != -2) { // Master server? Seconds_Behind_Master column is not present
