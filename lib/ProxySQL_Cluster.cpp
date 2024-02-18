@@ -2045,7 +2045,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 
 					MYSQL_RES* fetch_res = nullptr;
 					if (fetch_and_store(conn, query, &fetch_res) == 0) {
-						results[6] = fetch_res;
+						results[7] = fetch_res;
 					} else {
 						fetching_error = true;
 					}
