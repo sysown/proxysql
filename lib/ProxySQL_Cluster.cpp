@@ -1722,6 +1722,7 @@ incoming_servers_t convert_mysql_servers_resultsets(const std::vector<MYSQL_RES*
 			get_SQLite3_resulset(results[4]).release(),
 			get_SQLite3_resulset(results[5]).release(),
 			get_SQLite3_resulset(results[6]).release(),
+			get_SQLite3_resulset(results[7]).release(),
 		};
 	}
 }
@@ -1924,7 +1925,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 			if (rc_conn) {
 				MySQL_Monitor::update_dns_cache_from_mysql_conn(conn);
 
-				std::vector<MYSQL_RES*> results(7,nullptr);
+				std::vector<MYSQL_RES*> results(8,nullptr);
 
 				// servers messages
 				std::string fetch_servers_done = "";
@@ -1955,6 +1956,12 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 				string_format("Cluster: Fetching 'MySQL Hostgroup Attributes' from peer %s:%d\n", fetch_hostgroup_attributes_start, hostname, port);
 				std::string fetch_hostgroup_attributes_err = "";
 				string_format("Cluster: Fetching 'MySQL Hostgroup Attributes' from peer %s:%d failed: \n", fetch_hostgroup_attributes_err, hostname, port);
+
+				// mysql servers ssl params messages
+				std::string fetch_mysql_servers_ssl_params_start = "";
+				string_format("Cluster: Fetching 'MySQL Servers SSL Params' from peer %s:%d\n", fetch_mysql_servers_ssl_params_start, hostname, port);
+				std::string fetch_mysql_servers_ssl_params_err = "";
+				string_format("Cluster: Fetching 'MySQL Servers SSL Params' from peer %s:%d failed: \n", fetch_mysql_servers_ssl_params_err, hostname, port);
 
 				// Create fetching queries
 
@@ -1998,6 +2005,12 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						p_cluster_counter::pulled_mysql_servers_hostgroup_attributes_success,
 						p_cluster_counter::pulled_mysql_servers_hostgroup_attributes_failure,
 						{ fetch_hostgroup_attributes_start, "", fetch_hostgroup_attributes_err }
+					},
+					{
+						CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS,
+						p_cluster_counter::pulled_mysql_servers_ssl_params_success,
+						p_cluster_counter::pulled_mysql_servers_ssl_params_failure,
+						{ fetch_mysql_servers_ssl_params_start, "", fetch_mysql_servers_ssl_params_err }
 					}
 				};
 
@@ -2275,6 +2288,42 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_hostgroup_attributes'\n");
 						proxy_info("Dumping fetched 'mysql_hostgroup_attributes'\n");
 						GloAdmin->admindb->execute_statement((char*)"SELECT * FROM mysql_hostgroup_attributes", &error, &cols, &affected_rows, &resultset);
+						resultset->dump_to_stderr();
+						delete resultset;
+
+						// sync mysql_servers_ssl_params
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Writing mysql_servers_ssl_params table\n");
+						proxy_info("Cluster: Writing mysql_servers_ssl_params table\n");
+						GloAdmin->admindb->execute("DELETE FROM mysql_servers_ssl_params");
+						{
+							const char* q = (const char*)"INSERT INTO mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+							sqlite3_stmt *statement1 = NULL;
+							int rc = GloAdmin->admindb->prepare_v2(q, &statement1);
+							ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+
+							while ((row = mysql_fetch_row(results[6]))) {
+								rc=(*proxy_sqlite3_bind_text)(statement1,  1,  row[0],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // hostname
+								rc=(*proxy_sqlite3_bind_int64)(statement1, 2,  atol(row[1]));                  ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // port
+								rc=(*proxy_sqlite3_bind_text)(statement1,  3,  row[2],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // username
+								rc=(*proxy_sqlite3_bind_text)(statement1,  4,  row[3],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_ca
+								rc=(*proxy_sqlite3_bind_text)(statement1,  5,  row[4],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_cert
+								rc=(*proxy_sqlite3_bind_text)(statement1,  6,  row[5],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_key
+								rc=(*proxy_sqlite3_bind_text)(statement1,  7,  row[6],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_capath
+								rc=(*proxy_sqlite3_bind_text)(statement1,  8,  row[7],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_crl
+								rc=(*proxy_sqlite3_bind_text)(statement1,  9,  row[8],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_crlpath
+								rc=(*proxy_sqlite3_bind_text)(statement1,  10, row[9],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // ssl_cipher
+								rc=(*proxy_sqlite3_bind_text)(statement1,  11, row[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // tls_version
+								rc=(*proxy_sqlite3_bind_text)(statement1,  12, row[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, GloAdmin->admindb); // comment
+								SAFE_SQLITE3_STEP2(statement1);
+								rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+								rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, GloAdmin->admindb);
+							}
+							(*proxy_sqlite3_finalize)(statement1);
+						}
+
+						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Dumping fetched 'mysql_servers_ssl_params'\n");
+						proxy_info("Dumping fetched 'mysql_servers_ssl_params'\n");
+						GloAdmin->admindb->execute_statement((char*)"SELECT * FROM mysql_servers_ssl_params", &error, &cols, &affected_rows, &resultset);
 						resultset->dump_to_stderr();
 						delete resultset;
 
@@ -4021,6 +4070,27 @@ cluster_metrics_map = std::make_tuple(
 			"Number of times a 'module' have been pulled from a peer.",
 			metric_tags {
 				{ "module_name", "mysql_servers_hostgroup_attributes" },
+				{ "status", "failure" }
+			}
+		),
+		// ====================================================================
+
+		// ====================================================================
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_ssl_params_success,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_servers_ssl_params" },
+				{ "status", "success" }
+			}
+		),
+		std::make_tuple (
+			p_cluster_counter::pulled_mysql_servers_ssl_params_failure,
+			"proxysql_cluster_pulled_total",
+			"Number of times a 'module' have been pulled from a peer.",
+			metric_tags {
+				{ "module_name", "mysql_servers_ssl_params" },
 				{ "status", "failure" }
 			}
 		),

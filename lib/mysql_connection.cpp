@@ -740,14 +740,28 @@ void MySQL_Connection::connect_start() {
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
 	if (parent->use_ssl) {
-		mysql_ssl_set(mysql,
-				mysql_thread___ssl_p2s_key,
-				mysql_thread___ssl_p2s_cert,
-				mysql_thread___ssl_p2s_ca,
-				mysql_thread___ssl_p2s_capath,
-				mysql_thread___ssl_p2s_cipher);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		MySQLServers_SslParams * ssl_params = MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username);
+		if (ssl_params == NULL) {
+			mysql_ssl_set(mysql,
+					mysql_thread___ssl_p2s_key,
+					mysql_thread___ssl_p2s_cert,
+					mysql_thread___ssl_p2s_ca,
+					mysql_thread___ssl_p2s_capath,
+					mysql_thread___ssl_p2s_cipher);
+			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
+			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		} else {
+			mysql_ssl_set(mysql,
+					ssl_params->ssl_key.c_str(),
+					ssl_params->ssl_cert.c_str(),
+					ssl_params->ssl_ca.c_str(),
+					ssl_params->ssl_capath.c_str(),
+					ssl_params->ssl_cipher.c_str()
+			);
+			mysql_options(mysql, MYSQL_OPT_SSL_CRL, ssl_params->ssl_crl.c_str());
+			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, ssl_params->ssl_crlpath.c_str());
+			delete ssl_params;
+		}
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 	unsigned int timeout= 1;

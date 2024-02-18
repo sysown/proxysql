@@ -43,6 +43,9 @@
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_hostgroup_attributes'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES "PROXY_SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM runtime_mysql_hostgroup_attributes ORDER BY hostgroup_id"
 
+/* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_servers_ssl_params'. See top comment for details. */
+#define CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS "PROXY_SELECT hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment FROM runtime_mysql_servers_ssl_params ORDER BY hostname, port, username"
+
 /* @brief Query to be intercepted by 'ProxySQL_Admin' for 'runtime_mysql_aws_aurora_hostgroups'. See top comment for details. */
 #define CLUSTER_QUERY_MYSQL_AWS_AURORA "PROXY_SELECT writer_hostgroup, reader_hostgroup, active, aurora_port, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment FROM runtime_mysql_aws_aurora_hostgroups ORDER BY writer_hostgroup"
 
@@ -310,6 +313,8 @@ struct p_cluster_counter {
 		pulled_mysql_servers_aws_aurora_hostgroups_failure,
 		pulled_mysql_servers_hostgroup_attributes_success,
 		pulled_mysql_servers_hostgroup_attributes_failure,
+		pulled_mysql_servers_ssl_params_success,
+		pulled_mysql_servers_ssl_params_failure,
 		pulled_mysql_servers_runtime_checks_success,
 		pulled_mysql_servers_runtime_checks_failure,
 
