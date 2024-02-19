@@ -7007,6 +7007,12 @@ ProxySQL_Admin::~ProxySQL_Admin() {
 	delete (RE2 *)match_regexes.re[3];
 	free(match_regexes.re);
 	delete (re2::RE2::Options *)match_regexes.opt;
+
+	for (std::unordered_map<std::string, void*>::iterator it = map_test_mysql_firewall_whitelist_rules.begin(); it != map_test_mysql_firewall_whitelist_rules.end(); ++it) {
+		PtrArray* myptrarray = (PtrArray*)it->second;
+		delete myptrarray;
+	}
+	map_test_mysql_firewall_whitelist_rules.clear();
 };
 
 // This function is used only used to export what collations are available
