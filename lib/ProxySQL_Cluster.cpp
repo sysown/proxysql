@@ -2052,15 +2052,15 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 				}
 
 				if (fetching_error == false) {
-					const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 6); // ignore runtime_mysql_servers in checksum calculation
+					const uint64_t servers_hash = compute_servers_tables_raw_checksum(results, 7); // ignore runtime_mysql_servers in checksum calculation
 					const string computed_checksum{ get_checksum_from_hash(servers_hash) };
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for MySQL Servers v2 from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 					proxy_info("Cluster: Computed checksum for MySQL Servers v2 from peer %s:%d : %s\n", hostname, port, computed_checksum.c_str());
 
 					bool runtime_checksum_matches = true;
 
-					if (results[6]) {
-						const uint64_t runtime_mysql_server_hash = mysql_raw_checksum(results[6]);
+					if (results[7]) {
+						const uint64_t runtime_mysql_server_hash = mysql_raw_checksum(results[7]);
 						const std::string runtime_mysql_server_computed_checksum = get_checksum_from_hash(runtime_mysql_server_hash);
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, runtime_mysql_server_computed_checksum.c_str());
 						proxy_info("Cluster: Computed checksum for MySQL Servers from peer %s:%d : %s\n", hostname, port, runtime_mysql_server_computed_checksum.c_str());
