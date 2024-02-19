@@ -1162,6 +1162,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 	char * hostname = NULL;
 	char * ip_address = NULL;
 	uint16_t port = 0;
+	bool fetch_failed = false;
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_query_rules_mutex);
 	nodes.get_peer_to_sync_mysql_query_rules(&hostname, &port, &ip_address);
 	if (hostname) {
@@ -1340,16 +1341,19 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 								hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
 							);
 							metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
+							fetch_failed = true;
 						}
 					} else {
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 						proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
+						fetch_failed = true;
 					}
 				} else {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
+					fetch_failed = true;
 				}
 				if (result1) {
 					mysql_free_result(result1);
@@ -1361,6 +1365,7 @@ void ProxySQL_Cluster::pull_mysql_query_rules_from_peer(const string& expected_c
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching MySQL Query Rules from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_query_rules_failure]->Increment();
+				fetch_failed = true;
 			}
 		}
 __exit_pull_mysql_query_rules_from_peer:
@@ -1377,6 +1382,7 @@ __exit_pull_mysql_query_rules_from_peer:
 		proxy_info("No hostname found\n");
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_query_rules_mutex);
+	if (fetch_failed == true) sleep(1);
 }
 
 uint64_t get_mysql_users_checksum(
@@ -1450,6 +1456,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 	char * hostname = NULL;
 	char * ip_address = NULL;
 	uint16_t port = 0;
+	bool fetch_failed = false;
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_users_mutex);
 	nodes.get_peer_to_sync_mysql_users(&hostname, &port, &ip_address);
 	if (hostname) {
@@ -1481,11 +1488,13 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
+				fetch_failed = true;
 
 				if (GloMyLdapAuth) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
+					fetch_failed = true;
 				}
 
 				goto __exit_pull_mysql_users_from_peer;
@@ -1517,6 +1526,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 						proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 						proxy_info("Cluster: Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
+						fetch_failed = true;
 					}
 				}
 
@@ -1582,6 +1592,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 						hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
 					);
 					metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
+					fetch_failed = true;
 
 					if (GloMyLdapAuth) {
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_ldap_mapping_failure]->Increment();
@@ -1591,6 +1602,7 @@ void ProxySQL_Cluster::pull_mysql_users_from_peer(const string& expected_checksu
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching MySQL Users from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_users_failure]->Increment();
+				fetch_failed = true;
 
 				if (GloMyLdapAuth) {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching LDAP Mappings from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
@@ -1617,6 +1629,7 @@ __exit_pull_mysql_users_from_peer:
 			free(ip_address);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_users_mutex);
+	if (fetch_failed == true) sleep(1);
 }
 
 /**
@@ -1744,7 +1757,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 	char * ip_address = NULL;
 	uint16_t port = 0;
 	char * peer_checksum = NULL;
-
+	bool fetch_failed = false;
 	pthread_mutex_lock(&GloProxyCluster->update_runtime_mysql_servers_mutex);
 	nodes.get_peer_to_sync_runtime_mysql_servers(&hostname, &port, &peer_checksum, &ip_address);
 	if (hostname) {
@@ -1830,6 +1843,7 @@ void ProxySQL_Cluster::pull_runtime_mysql_servers_from_peer(const runtime_mysql_
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment();
+				fetch_failed = true;
 			}
 		}
 		if (username) {
@@ -1853,6 +1867,7 @@ __exit_pull_mysql_servers_from_peer:
 			free(ip_address);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_runtime_mysql_servers_mutex);
+	if (fetch_failed == true) sleep(1);
 }
 
 /**
@@ -1894,7 +1909,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 	uint16_t port = 0;
 	char* peer_mysql_servers_v2_checksum = NULL;
 	char* peer_runtime_mysql_servers_checksum = NULL;
-
+	bool fetch_failed = false;
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_servers_v2_mutex);
 	nodes.get_peer_to_sync_mysql_servers_v2(&hostname, &port, &peer_mysql_servers_v2_checksum, 
 		&peer_runtime_mysql_servers_checksum, &ip_address);
@@ -2023,6 +2038,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 						results[i] = fetch_res;
 					} else {
 						fetching_error = true;
+						fetch_failed = true;
 						break;
 					}
 				}
@@ -2352,6 +2368,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 							hostname, port, peer_mysql_servers_v2_checksum, computed_checksum.c_str()
 						);
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_variables_failure]->Increment();
+						fetch_failed = true;
 					}
 
 					// free results
@@ -2365,6 +2382,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching MySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_mysql_servers_failure]->Increment();
+				fetch_failed = true;
 			}
 		}
 		if (username) {
@@ -2391,6 +2409,7 @@ void ProxySQL_Cluster::pull_mysql_servers_v2_from_peer(const mysql_servers_v2_ch
 			free(peer_runtime_mysql_servers_checksum);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_servers_v2_mutex);
+	if (fetch_failed == true) sleep(1);
 }
 
 void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, const string& expected_checksum, const time_t epoch) {
@@ -2418,6 +2437,7 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 		assert(0);
 	}
 
+	bool fetch_failed = false;
 	pthread_mutex_lock(&GloProxyCluster->update_mysql_variables_mutex);
 	if (var_type == "mysql") {
 		nodes.get_peer_to_sync_mysql_variables(&hostname, &port, &ip_address);
@@ -2559,16 +2579,19 @@ void ProxySQL_Cluster::pull_global_variables_from_peer(const string& var_type, c
 							vars_type_str, hostname, port, expected_checksum.c_str(), computed_checksum.c_str()
 						);
 						metrics.p_counter_array[p_cluster_counter::pulled_mysql_variables_failure]->Increment();
+						fetch_failed = true;
 					}
 				} else {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching %s Variables from peer %s:%d failed: %s\n", vars_type_str, hostname, port, mysql_error(conn));
 					proxy_info("Cluster: Fetching %s Variables from peer %s:%d failed: %s\n", vars_type_str, hostname, port, mysql_error(conn));
 					metrics.p_counter_array[failure_metric]->Increment();
+					fetch_failed = true;
 				}
 			} else {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching %s Variables from peer %s:%d failed: %s\n", vars_type_str, hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching %s Variables from peer %s:%d failed: %s\n", vars_type_str, hostname, port, mysql_error(conn));
 				metrics.p_counter_array[failure_metric]->Increment();
+				fetch_failed = true;
 			}
 		}
 		if (username) {
@@ -2589,12 +2612,14 @@ __exit_pull_mysql_variables_from_peer:
 			free(ip_address);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_mysql_variables_mutex);
+	if (fetch_failed == true) sleep(1);
 }
 
 void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expected_checksum, const time_t epoch) {
 	char * hostname = NULL;
 	char * ip_address = NULL;
 	uint16_t port = 0;
+	bool fetch_failed = false;
 	pthread_mutex_lock(&GloProxyCluster->update_proxysql_servers_mutex);
 	nodes.get_peer_to_sync_proxysql_servers(&hostname, &port, &ip_address);
 	if (hostname) {
@@ -2687,17 +2712,20 @@ void ProxySQL_Cluster::pull_proxysql_servers_from_peer(const std::string& expect
 							hostname, port, expected_checksum.c_str(), computed_cks.c_str()
 						);
 						metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
+						fetch_failed = true;
 					}
 					mysql_free_result(result);
 				} else {
 					proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 					metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
+					fetch_failed = true;
 				}
 			} else {
 				proxy_debug(PROXY_DEBUG_CLUSTER, 5, "Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				proxy_info("Cluster: Fetching ProxySQL Servers from peer %s:%d failed: %s\n", hostname, port, mysql_error(conn));
 				metrics.p_counter_array[p_cluster_counter::pulled_proxysql_servers_failure]->Increment();
+				fetch_failed = true;
 			}
 		}
 		if (username) {
@@ -2718,6 +2746,7 @@ __exit_pull_proxysql_servers_from_peer:
 			free(ip_address);
 	}
 	pthread_mutex_unlock(&GloProxyCluster->update_proxysql_servers_mutex);
+	if (fetch_failed == true) sleep(1);
 }
 
 void ProxySQL_Node_Entry::set_metrics(MYSQL_RES *_r, unsigned long long _response_time) {
