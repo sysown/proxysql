@@ -1,0 +1,286 @@
+name: CI-taptests-asan
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+env:
+  TAPGROUP: tests_group_asan
+
+jobs:
+  select:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+    
+    - name: Cache restore
+      id: cache-matrix
+      uses: actions/cache/restore@v4
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap_matrix
+        fail-on-cache-miss: true
+        path: |
+          proxysql/tap-matrix*
+
+    - name: Set matrix
+      id: set-matrix
+      run: |
+        #echo -n "[ " > proxysql/tap-matrix.json
+        #echo -n "'multiple_prepared_statements-t', " >> proxysql/tap-matrix.json
+        #echo -n "'test_sqlite3_.*-t', " >> proxysql/tap-matrix.json
+        #echo -n "'test_ssl_.*-t', " >> proxysql/tap-matrix.json
+        #echo -n "'set_testing.*-t', " >> proxysql/tap-matrix.json
+        #echo -n " ]" >> proxysql/tap-matrix.json
+        #echo "matrix=$(cat proxysql/tap-matrix.json)" >> $GITHUB_OUTPUT
+
+        #MATRIX="[ "
+        #for TM in proxysql/tap-matrix*.json; do
+        #  TM=${TM#proxysql/tap-matrix-}
+        #  MATRIX+="'${TM%.json}', "
+        #done
+        #MATRIX+=" ]"
+        MATRIX="[ 'tests', 'tests_with_deps/deprecate_eof_support' ]"
+        echo "===================="
+        echo "matrix=${MATRIX}"
+        echo "===================="
+        echo "matrix=${MATRIX}" >> $GITHUB_OUTPUT
+
+
+  tests:
+    runs-on: ubuntu-22.04
+    needs: [ "select" ]
+    strategy:
+      fail-fast: false
+      matrix:
+#        testgroup: [ '.*admin.*-t|.*basic.*-t|.*charset.*-t|.*firewall.*-t|.*kill.*-t|.*max.*-t', 'multiple.*-t', '.*mysql.*-t', '.*prepare.*-t', 'reg_test.*-t', 'save.*-t', '.*set.*-t', '.*sqlite.*-t', '.*ssl.*-t', 'test_.*-t' ]
+#        testgroup: [ '' ]
+#        testgroup: [ 'kill_connection3-t', 'reg_test_3847_admin_lock-t', 'set_testing-240-t', 'max_connections_ff-t', 'test_server_sess_status-t' ]
+        testgroup: ${{ fromJson(needs.select.outputs.matrix) }}
+    steps:
+
+#    - name: Maximize build space
+#      uses: easimon/maximize-build-space@master
+#      with:
+#        root-reserve-mb: 4096
+#        swap-size-mb: 4096
+##        remove-dotnet: 'true'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update -y
+        sudo apt-get full-upgrade -y
+        sudo apt-get install -y python3-pymysql python3-structlog sysbench mycli
+        sudo pip3 install fastcov
+        
+        wget https://github.com/openark/orchestrator/releases/download/v3.2.6/orchestrator-client_3.2.6_amd64.deb
+        sudo dpkg -i orchestrator-client_3.2.6_amd64.deb
+        
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 467B942D3A79BD29
+        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys A8D3785C
+        wget https://repo.mysql.com/mysql-apt-config_0.8.29-1_all.deb
+        sudo dpkg -i mysql-apt-config_0.8.29-1_all.deb
+        sudo apt-get update -y
+        sudo apt-cache policy mysql-shell
+        sudo apt-get install -y mysql-shell
+
+        sudo sed -i 's/8.0/5.7/' /etc/apt/sources.list.d/mysql.list
+        sudo sed -i 's/jammy/bionic/' /etc/apt/sources.list.d/mysql.list
+        sudo apt-get update -y
+        sudo apt-cache policy libmysqlclient-dev
+        sudo apt-get install -y --allow-downgrades libmysqlclient-dev=5.7*
+
+    - name: Cache restore src
+      id: cache-src
+      uses: actions/cache/restore@v4
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap-asan_src
+        fail-on-cache-miss: true
+        path: |
+          proxysql/src/
+
+    - name: Cache restore test
+      id: cache-test
+      uses: actions/cache/restore@v4
+      with:
+        key: CI-builds_${{ github.sha }}_ubuntu22-tap-asan_test
+        fail-on-cache-miss: true
+        path: |
+          proxysql/test/
+
+    - name: Checkout jenkins_build_scripts
+      uses: actions/checkout@v4
+      with:
+        repository: 'proxysql/jenkins-build-scripts'
+        ref: 'kubernetes'
+#        fetch-depth: 0
+        path: 'jenkins-build-scripts'
+        token: ${{ secrets.GH_TOKEN }}
+        submodules: 'false'
+
+    - name: Configure jenkins/
+      run: |
+        cd jenkins-build-scripts
+        
+        # configure paths
+        sed -i "s|JENKINS_SCRIPTS_PATH=.*|JENKINS_SCRIPTS_PATH=${{ github.workspace }}/jenkins-build-scripts|" env.sh
+        sed -i "s|WORKSPACE=.*|WORKSPACE=${{ github.workspace }}/proxysql|" env.sh
+
+    - name: Configure proxysql/test
+      run: |
+        cd proxysql
+        #mkdir test
+        
+        # select tests
+        echo 'export TAP_WORKDIR="$WORKSPACE/test/tap/${{ matrix.testgroup }}/"' >> test/env.sh
+        echo "export TEST_PY_INTERNAL=0" >> test/env.sh
+        echo "export TEST_PY_BENCHMARK=0" >> test/env.sh
+        echo "export TEST_PY_CHUSER=0" >> test/env.sh
+        echo "export TEST_PY_STATS=0" >> test/env.sh
+        echo "export TEST_PY_TAP=1" >> test/env.sh
+        echo "export TEST_PY_TAPINT=0" >> test/env.sh
+        echo "export TEST_PY_FAILOVER=0" >> test/env.sh
+        echo 'export TEST_PY_TAP_INCL=""' >> test/env.sh
+        echo 'export TEST_PY_TAP_EXCL=""' >> test/env.sh
+        echo 'export MALLOC_CONF="retain:false"' >> test/env.sh
+        echo 'export WITHGCOV=0' >> test/env.sh
+        echo 'export WITHASAN=1' >> test/env.sh
+        echo 'export TEST_WITHASAN=1' >> test/env.sh
+        echo 'export TEST_PY_TAP_DUMP_STATS=0' >> test/env.sh
+        #echo 'export TEST_PY_TAP_DISK_USAGE="$WORKSPACE/ci_*_logs/* $WORKSPACE/ci_infra_logs/regular_infra/proxysql $WORKSPACE/ci_tests_logs/proxysql-tester.py/* $WORKSPACE/src /home/runner/runners/*"' >> test/env.sh
+        #echo 'export' >> test/env.sh
+        #cat test/env.sh
+
+        # remove incompatible tests
+        set +e
+        #cd ${{ github.workspace }}/proxysql/test/tap/${{ matrix.testgroup }}
+        cd ${{ github.workspace }}/proxysql/test/tap/tests
+        # broken
+        rm -f reg_test_3273_ssl_con-t
+        # missing infra
+        rm -f clickhouse_php_conn-t
+        rm -f reg_test_3603-stmt_metadata-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-mysqlsh-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-pymysql-t
+        rm -f reg_test_3992_fast_forward_malformed_packet-t
+        rm -f reg_test_fast_forward_split_packet-t
+        rm -f set_testing-240-t
+        rm -f test_binlog_reader-t
+        #rm -f test_binlog_reader_uses_previous_hostgroup-t
+        #rm -f test_binlog_fast_forward-t
+        rm -f test_clickhouse_server-t
+        rm -f test_clickhouse_server_libmysql-t
+        rm -f test_cluster1-t
+        rm -f test_cluster_sync-t
+        rm -f test_com_reset_connection_com_change_user-t
+        rm -f test_log_last_insert_id-t
+        rm -f test_read_only_actions_offline_hard_servers-t
+        rm -f test_rw_binary_data-t
+        rm -f test_server_sess_status-t
+        rm -f test_session_status_flags-t
+
+        # FAIL
+        #rm -f test_mysql_connect_retries-t
+
+        # fixes
+        cd ${{ github.workspace }}/proxysql/test/tap/tests
+        
+        true
+
+    - name: Run proxysql
+      run: |
+        #set -x
+        set +e
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        
+        ./cluster_start.bash
+        sleep 10
+        
+        cd ${{ github.workspace }}/proxysql
+        mkdir -p ci_infra_logs/regular_infra/proxysql
+        cd src
+        mkdir coverage_reports
+
+        (./proxysql --clickhouse-server --sqlite3-server --idle-threads -f -c "$DOCKER_SCRIPT_PATH/conf/proxysql/proxysql.cnf" -D $REGULAR_INFRA_DATADIR &> $REGULAR_INFRA_DATADIR/proxysql.log) &
+        sleep 10
+        mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "SELECT version();" 2>&1 | grep -v "Using a password"
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        ./cluster_init.bash
+        sleep 10        
+
+    - name: Infra
+      run: |
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
+        ./docker-compose-init.bash
+
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
+        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
+        ./docker-compose-init.bash
+        
+        docker ps -a
+        cat /etc/hosts
+
+    - name: TAP-tests
+      run: |
+        set +e        
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        
+        sudo -E ./test-scripts/bin/proxysql-tester.py
+        RC=$?
+        
+        exit $RC
+
+    - name: Cleanup
+      if: ${{ failure() && !cancelled() }}
+      run: |
+        set +e
+        cd ${{ github.workspace }}/jenkins-build-scripts
+        source ./env.sh
+        
+        mysql -h127.0.0.1 -P6032 -uadmin -padmin -e "PROXYSQL SHUTDOWN SLOW" &> /dev/null
+        sleep 10
+        killall proxysql
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-docker-hoster
+        ./docker-compose-destroy.bash
+        
+        cd ${{ github.workspace }}/jenkins-build-scripts/infra-mysql57
+        sed -i "s/\${INFRA}-\${CONTAINER}-1/\${INFRA}_\${CONTAINER}_1/" docker-compose-init.bash
+        ./docker-compose-destroy.bash
+        
+        sudo chmod -R 777 ${{ github.workspace }}/*
+        echo "${{ matrix.testgroup }}" | tr -d '*|' | sed 's|.*/||' | xargs -0 printf 'TESTGROUP=%s' >> $GITHUB_ENV
+          
+    - name: Archive artifacts logs
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-logs-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        path: |
+          proxysql/ci_*_logs/
+
+    - name: Archive artifacts bins
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-bins-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        path: |
+          proxysql/binaries/
+          proxysql/src/
+          proxysql/libs/
+#          proxysql/deps/
+
+    - name: Archive artifacts tests
+      if: ${{ failure() && !cancelled() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.workflow }}-${{ github.sha }}-tests-run#${{ github.run_number }}-${{ env.TESTGROUP }}
+        path: |
+          proxysql/test/tap/tests*
+          
