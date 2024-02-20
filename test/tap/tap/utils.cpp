@@ -423,19 +423,19 @@ int execvp(const string& cmd, const std::vector<const char*>& argv, string& resu
 
 		if (err == 0) {
 			// Read from child’s stdout
-			count = read(PARENT_READ_FD, buffer, sizeof(buffer));
+			count = read(PARENT_READ_FD, buffer, sizeof(buffer)-1);
 			while (count > 0) {
 				buffer[count] = 0;
 				result_ += buffer;
-				count = read(PARENT_READ_FD, buffer, sizeof(buffer));
+				count = read(PARENT_READ_FD, buffer, sizeof(buffer)-1);
 			}
 		} else {
 			// Read from child’s stderr
-			count = read(PARENT_READ_ERR, buffer, sizeof(buffer));
+			count = read(PARENT_READ_ERR, buffer, sizeof(buffer)-1);
 			while (count > 0) {
 				buffer[count] = 0;
 				result_ += buffer;
-				count = read(PARENT_READ_ERR, buffer, sizeof(buffer));
+				count = read(PARENT_READ_ERR, buffer, sizeof(buffer)-1);
 			}
 		}
 
