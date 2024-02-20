@@ -745,6 +745,7 @@ MySrvC::MySrvC(
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
 	use_ssl=_use_ssl;
+	cur_replication_lag=0;
 	cur_replication_lag_count=0;
 	max_latency_us=_max_latency_ms*1000;
 	current_latency_us=0;
@@ -2026,9 +2027,25 @@ bool MySQL_HostGroups_Manager::commit(
 					mysrvc->weight=atoi(r->fields[14]);
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[15])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]) , mysrvc->status , atoi(r->fields[15]));
-					mysrvc->status=(MySerStatus)atoi(r->fields[15]);
+					bool change_server_status = true;
+					if (GloMTH->variables.evaluate_replication_lag_on_servers_load == 1) {
+						if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && // currently server is shunned due to replication lag
+							(MySerStatus)atoi(r->fields[15]) == MYSQL_SERVER_STATUS_ONLINE) { // new server status is online
+							if (mysrvc->cur_replication_lag != -2) { // Master server? Seconds_Behind_Master column is not present
+								const unsigned int new_max_repl_lag = atoi(r->fields[18]);
+								if (mysrvc->cur_replication_lag < 0 ||
+									(new_max_repl_lag > 0 &&
+									((unsigned int)mysrvc->cur_replication_lag > new_max_repl_lag))) { // we check if current replication lag is greater than new max_replication_lag
+									change_server_status = false;
+								}
+							}
+						}
+					}
+					if (change_server_status == true) {
+						if (GloMTH->variables.hostgroup_manager_verbose)
+							proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]), mysrvc->status, atoi(r->fields[15]));
+						mysrvc->status = (MySerStatus)atoi(r->fields[15]);
+					}
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 						mysrvc->shunned_automatic=false;
 					}
@@ -3669,6 +3686,7 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 	for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+			mysrvc->cur_replication_lag = current_replication_lag;
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 				if (
 //					(current_replication_lag==-1 )
