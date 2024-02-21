@@ -154,7 +154,7 @@ jobs:
 
     - name: Cache save src
       id: cache-save-src
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_src
@@ -163,7 +163,7 @@ jobs:
 
     - name: Cache save test
       id: cache-save-test
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_test
@@ -172,7 +172,7 @@ jobs:
 
     - name: Cache save matrix
       id: cache-save-matrix
-      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && matrix.type == '-tap' }}
+      if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
         key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_matrix
