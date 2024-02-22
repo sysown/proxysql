@@ -758,6 +758,12 @@ admin_metrics_map = std::make_tuple(
 		)
 	},
 	admin_gauge_vector {
+		std::make_tuple (
+			p_admin_gauge::mysql_listener_paused,
+			"proxysql_mysql_listener_paused",
+			"MySQL listener paused because of PROXYSQL PAUSE.",
+			metric_tags {}
+		),
 		// memory metrics
 		std::make_tuple (
 			p_admin_gauge::connpool_memory_bytes,
@@ -7006,6 +7012,12 @@ ProxySQL_Admin::~ProxySQL_Admin() {
 	delete (RE2 *)match_regexes.re[3];
 	free(match_regexes.re);
 	delete (re2::RE2::Options *)match_regexes.opt;
+
+	for (std::unordered_map<std::string, void*>::iterator it = map_test_mysql_firewall_whitelist_rules.begin(); it != map_test_mysql_firewall_whitelist_rules.end(); ++it) {
+		PtrArray* myptrarray = (PtrArray*)it->second;
+		delete myptrarray;
+	}
+	map_test_mysql_firewall_whitelist_rules.clear();
 };
 
 // This function is used only used to export what collations are available
@@ -9431,6 +9443,11 @@ void ProxySQL_Admin::p_update_metrics() {
 	this->p_stats___memory_metrics();
 	// Update stmt metrics
 	this->p_update_stmt_metrics();
+
+	// updated mysql_listener_paused
+	int st = ( proxysql_mysql_paused == true ? 1 : 0);
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_listener_paused]->Set(st);
+
 }
 
 /**
@@ -9925,7 +9942,14 @@ void ProxySQL_Admin::stats___mysql_global() {
 		statsdb->execute(query);
 		free(query);
 	}
-
+	{
+		vn=(char *)"mysql_listener_paused";
+		sprintf(bu, "%s", ( proxysql_mysql_paused==true ? "true" : "false") );
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+	}
 	statsdb->execute("COMMIT");
 }
 

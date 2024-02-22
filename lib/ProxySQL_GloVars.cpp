@@ -17,10 +17,18 @@
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
 static void term_handler(int sig) {
-  proxy_warning("Received TERM signal: shutdown in progress...\n");
+	proxy_warning("Received TERM signal: shutdown in progress...\n");
+/*
+In ProxySQL 2.1 we replace PROXYSQL SHUTDOWN with PROXYSQL SHUTDOWN SLOW , and the former command now perform a "fast shutdown".
+The same is now implemented for TERM signal handler.
+*/
 #ifdef DEBUG
+	// Note: in DEBUG built we will still perform a slow shutdown.
+	// DEBUG built is not meant for production use.
+	__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+#else
+	exit(EXIT_SUCCESS);
 #endif
-  __sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 }
 
 void crash_handler(int sig) {
@@ -224,7 +232,8 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->overview="High Performance Advanced Proxy for MySQL";
 	opt->syntax="proxysql [OPTIONS]";
 	std::string s = "\n\nProxySQL " ;
-	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2022 ProxySQL LLC\nThis program is free and without warranty\n";
+	const char *build_year = __DATE__ + 7;
+	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-" + string(build_year) + " ProxySQL LLC\nThis program is free and without warranty\n";
 	opt->footer =s.c_str();
 
 	opt->add((const char *)"",0,0,0,(const char *)"Display usage instructions.",(const char *)"-h",(const char *)"-help",(const char *)"--help",(const char *)"--usage");

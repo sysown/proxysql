@@ -423,19 +423,19 @@ int execvp(const string& cmd, const std::vector<const char*>& argv, string& resu
 
 		if (err == 0) {
 			// Read from child’s stdout
-			count = read(PARENT_READ_FD, buffer, sizeof(buffer));
+			count = read(PARENT_READ_FD, buffer, sizeof(buffer)-1);
 			while (count > 0) {
 				buffer[count] = 0;
 				result_ += buffer;
-				count = read(PARENT_READ_FD, buffer, sizeof(buffer));
+				count = read(PARENT_READ_FD, buffer, sizeof(buffer)-1);
 			}
 		} else {
 			// Read from child’s stderr
-			count = read(PARENT_READ_ERR, buffer, sizeof(buffer));
+			count = read(PARENT_READ_ERR, buffer, sizeof(buffer)-1);
 			while (count > 0) {
 				buffer[count] = 0;
 				result_ += buffer;
-				count = read(PARENT_READ_ERR, buffer, sizeof(buffer));
+				count = read(PARENT_READ_ERR, buffer, sizeof(buffer)-1);
 			}
 		}
 
@@ -1712,4 +1712,54 @@ void check_query_count(MYSQL* admin, vector<uint32_t> queries, uint32_t hg) {
 	} else {
 		dump_conn_stats(admin, { hg });
 	}
+};
+
+const char* get_env_str(const char* envname, const char* envdefault) {
+
+	const char* envval = std::getenv(envname);
+
+	if (envval != NULL)
+		return envval;
+
+	return envdefault;
+};
+
+int get_env_int(const char* envname, int envdefault) {
+
+	const char* envval = std::getenv(envname);
+	int res = envdefault;
+
+	if (envval != NULL)
+		res = strtol(envval, NULL, 0);
+//	diag("%s: %s='%s' >>> %d", __FUNCTION__, envname, envval, res);
+
+	return res;
+};
+
+bool get_env_bool(const char* envname, bool envdefault) {
+
+	const char* envval = std::getenv(envname);
+	int res = envdefault;
+
+	if (envval != NULL) {
+		if (strcasecmp(envval, "true") == 0) {
+			res = 1;
+		} else if (strcasecmp(envval, "false") == 0) {
+			res = 0;
+		} else if (strcasecmp(envval, "yes") == 0) {
+			res = 1;
+		} else if (strcasecmp(envval, "no") == 0) {
+			res = 0;
+		} else if (strcasecmp(envval, "on") == 0) {
+			res = 1;
+		} else if (strcasecmp(envval, "off") == 0) {
+			res = 0;
+		} else {
+			res = strtol(envval, NULL, 0);
+		}
+	}
+
+//	diag("%s: %s='%s' >>> %d", __FUNCTION__, envname, envval, res);
+
+	return (bool) res;
 };

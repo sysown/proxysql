@@ -25,7 +25,6 @@
 #define SQLITE_HOSTGROUP -4
 
 
-#define MYSQL_DEFAULT_TX_ISOLATION	"READ-COMMITTED"
 #define MYSQL_DEFAULT_SESSION_TRACK_GTIDS      "OFF"
 #define MYSQL_DEFAULT_COLLATION_CONNECTION	""
 #define MYSQL_DEFAULT_NET_WRITE_TIMEOUT	"60"
@@ -511,7 +510,6 @@ class MySQL_Threads_Handler
 		char *init_connect;
 		char *ldap_user_variable;
 		char *add_ldap_user_comment;
-		char *default_tx_isolation;
 		char *default_session_track_gtids;
 		char *default_variables[SQL_NAME_LAST_LOW_WM];
 		char *firewall_whitelist_errormsg;
@@ -552,6 +550,7 @@ class MySQL_Threads_Handler
 		bool log_mysql_warnings_enabled;
 		int data_packets_history_size;
 		int handle_warnings;
+		int evaluate_replication_lag_on_servers_load;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;
