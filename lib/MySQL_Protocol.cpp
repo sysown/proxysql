@@ -2483,11 +2483,26 @@ __do_auth:
 						ret = true;
 					}
 				} else if (auth_plugin_id == AUTH_MYSQL_CACHING_SHA2_PASSWORD) { // caching_sha2_password
-					PPHR_6auth2(ret, vars1);
-					if (ret == true) {
-						if ((*myds)->switching_auth_stage == 0) {
-							const unsigned char fast_auth_success = '\3';
-							generate_one_byte_pkt(fast_auth_success);
+					// Checking 'switching_auth_stage' is required case due to a potential concurrent update
+					// of pass in 'GloMyAuth'. When the pass found is clear-text it's assumed that full-auth
+					// is never required and that we are in the first auth stage, because of this, the pass
+					// received by the client is assumed to be hashed (first auth data received). Yet, during
+					// during a 'full-auth' the pass stored in 'GloMyAuth' could have been updated either by
+					// user action or by another concurrent connection that called 'set_clear_text_pass' on
+					// completion. In this case, we would have received a 'clear-text' pass form 'GloMyAuth'
+					// but we since we would be in the final auth stage, the pass sent by client should also
+					// be 'clear-text' (encrypt-pass).
+					if ((*myds)->switching_auth_stage == 5) {
+						if (strcmp(vars1.password, reinterpret_cast<char*>(vars1.pass)) == 0) {
+							ret = true;
+						}
+					} else {
+						PPHR_6auth2(ret, vars1);
+						if (ret == true) {
+							if ((*myds)->switching_auth_stage == 0) {
+								const unsigned char fast_auth_success = '\3';
+								generate_one_byte_pkt(fast_auth_success);
+							}
 						}
 					}
 				} else {
