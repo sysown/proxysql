@@ -1207,6 +1207,8 @@ bool MySQL_Protocol::generate_pkt_auth_switch_request(bool send, void **ptr, uns
 		(*myds)->DSS=STATE_SERVER_HANDSHAKE;
 		(*myds)->sess->status=CONNECTING_CLIENT;
 	}
+	(*myds)->switching_auth_sent = (*myds)->switching_auth_type;
+
 	if (len) { *len=size; }
 	if (ptr) { *ptr=(void *)_ptr; }
 #ifdef DEBUG

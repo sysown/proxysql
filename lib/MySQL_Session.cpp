@@ -1163,6 +1163,7 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			}
 		}
 		j["client"]["DSS"] = client_myds->DSS;
+		j["client"]["switching_auth_sent"] = client_myds->switching_auth_sent;
 		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
 		j["client"]["prot"]["sent_auth_plugin_id"] = client_myds->myprot.sent_auth_plugin_id;
 		j["client"]["prot"]["auth_plugin_id"] = client_myds->myprot.auth_plugin_id;
