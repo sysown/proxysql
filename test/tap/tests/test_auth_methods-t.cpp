@@ -39,7 +39,9 @@
 #include "command_line.h"
 #include "utils.h"
 
-#define SINGLE_BACKEND_HG 30
+// Additional env variables
+uint32_t TAP_MYSQL8_BACKEND_HG = 30;
+uint32_t TAP_NUM_CLIENT_THREADS = 4;
 
 using std::pair;
 using std::string;
@@ -67,6 +69,9 @@ using std::unique_ptr;
 		} \
 	} while(0)
 
+/**
+ * @brief TODO: Currently unused; move to utilities.
+ */
 string my_escape_string(MYSQL* mysql, const string& q) {
 	size_t size = q.size();
 
@@ -651,9 +656,9 @@ pair<int,vector<user_creds_t>> config_mysql_backend_users(
 	return { EXIT_SUCCESS, std::move(f_users_creds) };
 }
 
-const string def_hg { std::to_string(30) };
-
 int config_proxysql_users(MYSQL* admin, const test_conf_t& test_conf, const vector<user_creds_t>& users) {
+	const string DEF_HG { std::to_string(TAP_MYSQL8_BACKEND_HG) };
+
 	for (const auto& u : users) {
 		MYSQL_QUERY_T(admin, ("DELETE FROM mysql_users WHERE username='" + u.user_def.name + "'").c_str());
 	}
@@ -682,9 +687,7 @@ int config_proxysql_users(MYSQL* admin, const test_conf_t& test_conf, const vect
 				addl_pass = u.user_def.addl_pass.get();
 			}
 
-			const string esc_addl_pass { my_escape_string(admin, addl_pass) };
 			const string hex_addl_pass { hex(addl_pass) };
-
 			attrs = "{\"additional_password\": \"" + hex_addl_pass + "\"}";
 		}
 
@@ -700,18 +703,18 @@ int config_proxysql_users(MYSQL* admin, const test_conf_t& test_conf, const vect
 			if (u.user_def.addl_pass) {
 				insert_query = {
 					"INSERT INTO mysql_users (username,password,default_hostgroup,attributes) "
-						"VALUES ('" + u.user_def.name + "'," + prim_pass + "," + def_hg + ",'" + attrs + "')"
+						"VALUES ('" + u.user_def.name + "'," + prim_pass + "," + DEF_HG + ",'" + attrs + "')"
 				};
 			} else {
 				insert_query = {
 					"INSERT INTO mysql_users (username,password,default_hostgroup) "
-						"VALUES ('" + u.user_def.name + "'," + prim_pass + "," + def_hg + ")"
+						"VALUES ('" + u.user_def.name + "'," + prim_pass + "," + DEF_HG + ")"
 				};
 			}
 		} else {
 			insert_query = {
 				"INSERT INTO mysql_users (username,default_hostgroup,attributes) "
-					"VALUES ('" + u.user_def.name + "'," + def_hg + ",'" + attrs + "')"
+					"VALUES ('" + u.user_def.name + "'," + DEF_HG + ",'" + attrs + "')"
 			};
 		}
 
@@ -1442,12 +1445,12 @@ int backend_conns_cleanup(MYSQL* admin) {
 	diag("Cleaning up previous backend connections...");
 	MYSQL_QUERY(admin,
 		("UPDATE mysql_servers SET max_connections=0 "
-			"WHERE hostgroup_id=" + std::to_string(SINGLE_BACKEND_HG)).c_str()
+			"WHERE hostgroup_id=" + std::to_string(TAP_MYSQL8_BACKEND_HG)).c_str()
 	);
 	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Wait for backend connection cleanup
-	int w_res = wait_target_backend_conns(admin, 0, 10, SINGLE_BACKEND_HG);
+	int w_res = wait_target_backend_conns(admin, 0, 10, TAP_MYSQL8_BACKEND_HG);
 	if (w_res != EXIT_SUCCESS) {
 		diag("Waiting for backend connections failed   res:'%d'", w_res);
 		return EXIT_FAILURE;
@@ -1456,7 +1459,7 @@ int backend_conns_cleanup(MYSQL* admin) {
 	diag("Setup new connection limit   max_connections='2000'");
 	MYSQL_QUERY(admin,
 		("UPDATE mysql_servers SET max_connections=2000 "
-			"WHERE hostgroup_id=" + std::to_string(SINGLE_BACKEND_HG)).c_str()
+			"WHERE hostgroup_id=" + std::to_string(TAP_MYSQL8_BACKEND_HG)).c_str()
 	);
 	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
@@ -1515,7 +1518,6 @@ bool req_sha2_auth(const test_conf_t& conf, const test_creds_t& creds) {
 int test_confs_creds_combs_frontend(
 	CommandLine& cl,
 	MYSQL* admin,
-	const uint64_t NUM_CLIENT_THREADS,
 	const vector<user_creds_t>& user_creds,
 	const vector<pair<test_conf_t, vector<test_creds_t>>>& confs_creds_map,
 	const chk_exp_scs_t& chk_exp_scs
@@ -1538,7 +1540,7 @@ int test_confs_creds_combs_frontend(
 		std::vector<std::thread> client_threads {};
 
 		// Perform parallel fronted logging tests
-		for (uint32_t i = 0; i < NUM_CLIENT_THREADS; i++) {
+		for (uint32_t i = 0; i < TAP_NUM_CLIENT_THREADS; i++) {
 			client_threads.push_back(std::thread([&cl, &p_conf_creds, &chk_exp_scs] () {
 				for (const auto& creds : p_conf_creds.second) {
 					test_creds_frontend(cl, p_conf_creds.first, creds, chk_exp_scs);
@@ -1557,7 +1559,6 @@ int test_confs_creds_combs_frontend(
 int test_all_confs_creds(
 	CommandLine& cl,
 	MYSQL* admin,
-	const uint64_t NUM_CLIENT_THREADS,
 	const vector<test_conf_t>& all_conf_combs,
 	const vector<user_creds_t>& users_creds,
 	const vector<test_creds_t>& tests_creds,
@@ -1583,14 +1584,14 @@ int test_all_confs_creds(
 		MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
 
 		std::vector<std::thread> client_thds {};
-		std::vector<uint64_t> thds_exp_sha2_auths(NUM_CLIENT_THREADS);
+		std::vector<uint64_t> thds_exp_sha2_auths(TAP_NUM_CLIENT_THREADS);
 		std::vector<auth_reg_t> thds_auth_regs {};
 
-		for (uint32_t i = 0; i < NUM_CLIENT_THREADS; i++) {
+		for (uint32_t i = 0; i < TAP_NUM_CLIENT_THREADS; i++) {
 			thds_auth_regs.push_back(create_auth_reg(users_creds));
 		}
 
-		for (uint32_t i = 0; i < NUM_CLIENT_THREADS; i++) {
+		for (uint32_t i = 0; i < TAP_NUM_CLIENT_THREADS; i++) {
 			client_thds.push_back(
 				std::thread(
 					[&cl, &conf, &thds_auth_regs, &thds_exp_sha2_auths, i, &users_creds, &tests_creds] () {
@@ -1626,7 +1627,7 @@ int test_all_confs_creds(
 			cthread.join();
 		}
 
-		for (uint32_t i = 0; i < NUM_CLIENT_THREADS; i++) {
+		for (uint32_t i = 0; i < TAP_NUM_CLIENT_THREADS; i++) {
 			auth_reg_t& auth_reg { thds_auth_regs[i] };
 
 			for (const auto& auth_stats : auth_reg) {
@@ -1639,7 +1640,7 @@ int test_all_confs_creds(
 		}
 	}
 
-	uint64_t exp_scs_total = non_warmup_tests_scs_count * NUM_CLIENT_THREADS;
+	uint64_t exp_scs_total = non_warmup_tests_scs_count * TAP_NUM_CLIENT_THREADS;
 	uint64_t exp_full_sha2_total = exp_sha2_auths;
 
 	ok(
@@ -1664,6 +1665,9 @@ int main(int argc, char** argv) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	TAP_MYSQL8_BACKEND_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 30);
+	TAP_NUM_CLIENT_THREADS = get_env_int("TAP_NUM_CLIENT_THREADS", 4);
 
 	MYSQL* mysql = mysql_init(NULL);
 
@@ -1748,7 +1752,7 @@ int main(int argc, char** argv) {
 
 	pair<uint64_t,uint64_t> rnd_scs_stats {};
 
-	if (getenv("DISABLE_SEQ_CHECKS_RAND_PASS") == nullptr) {
+	if (getenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS") == nullptr) {
 		rnd_scs_stats = count_exp_scs(all_conf_combs, rnd_cbres.second, rnd_tests_creds);
 	}
 
@@ -1762,7 +1766,7 @@ int main(int argc, char** argv) {
 
 	uint64_t non_warmup_tests_fail_count = 0;
 
-	if (getenv("DISABLE_NON_WARMUP_EXP_FAILS") == nullptr) {
+	if (getenv("TAP_DISABLE_NON_WARMUP_EXP_FAILS") == nullptr) {
 		for (const auto& p_conf_creds : non_warmup_tests_fail) {
 			non_warmup_tests_fail_count += p_conf_creds.second.size();
 		}
@@ -1770,7 +1774,7 @@ int main(int argc, char** argv) {
 
 	uint64_t non_warmup_tests_scs_count = 0;
 
-	if (getenv("DISABLE_NON_WARMUP_EXP_SCS") == nullptr) {
+	if (getenv("TAP_DISABLE_NON_WARMUP_EXP_SCS") == nullptr) {
 		for (const auto& p_conf_creds : non_warmup_tests_scs) {
 			non_warmup_tests_scs_count += p_conf_creds.second.size();
 		}
@@ -1778,7 +1782,7 @@ int main(int argc, char** argv) {
 
 	uint64_t non_warmup_tests_scs_ratio = 0;
 
-	if (getenv("DISABLE_NON_WARMUP_EXP_RATIO") == nullptr) {
+	if (getenv("TAP_DISABLE_NON_WARMUP_EXP_RATIO") == nullptr) {
 		non_warmup_tests_scs_ratio = 2;
 	}
 
@@ -1813,7 +1817,7 @@ int main(int argc, char** argv) {
 	}
 
 	// sequential; verify correctness in the procedure; RANDOM passwords
-	if (getenv("DISABLE_SEQ_CHECKS_RAND_PASS") == nullptr) {
+	if (getenv("TAP_DISABLE_SEQ_CHECKS_RAND_PASS") == nullptr) {
 		for (const auto& conf : all_conf_combs) {
 			int rc = backend_conns_cleanup(admin);
 			if (rc) { goto cleanup; }
@@ -1837,11 +1841,10 @@ int main(int argc, char** argv) {
 	}
 
 	// concurrent; known to fail tests cases; no previous auths
-	if (getenv("DISABLE_NON_WARMUP_EXP_FAILS") == nullptr) {
+	if (getenv("TAP_DISABLE_NON_WARMUP_EXP_FAILS") == nullptr) {
 		diag("Starting frontend non-warmup FAIL tests; expected all auths to FAIL");
 
-		int res = test_confs_creds_combs_frontend(
-			cl, admin, NUM_CLIENT_THREADS, cbres.second, non_warmup_tests_fail,
+		int res = test_confs_creds_combs_frontend(cl, admin, cbres.second, non_warmup_tests_fail,
 			[] (const test_conf_t&, const test_creds_t&) { return false; }
 		);
 
@@ -1849,11 +1852,10 @@ int main(int argc, char** argv) {
 	}
 
 	// concurrent; known to succeed tests cases; no previous auths
-	if (getenv("DISABLE_NON_WARMUP_EXP_SCS") == nullptr) {
+	if (getenv("TAP_DISABLE_NON_WARMUP_EXP_SCS") == nullptr) {
 		diag("Starting frontend non-warmup SUCCESS tests; expected all auths to SUCCEED");
 
-		int res = test_confs_creds_combs_frontend(
-			cl, admin, NUM_CLIENT_THREADS, cbres.second, non_warmup_tests_scs,
+		int res = test_confs_creds_combs_frontend(cl, admin, cbres.second, non_warmup_tests_scs,
 			[] (const test_conf_t&, const test_creds_t&) { return true; }
 		);
 
@@ -1861,17 +1863,11 @@ int main(int argc, char** argv) {
 	}
 
 	// concurrent; warmup phase; only number of succeed/failures is pre-known
-	if (getenv("DISABLE_NON_WARMUP_EXP_RATIO") == nullptr) {
+	if (getenv("TAP_DISABLE_NON_WARMUP_EXP_RATIO") == nullptr) {
 		diag("Starting frontend non-warmup ALL_COMBS tests; predicting SUCCESS/FAILURE ratio");
 
 		int res = test_all_confs_creds(
-			cl,
-			admin,
-			NUM_CLIENT_THREADS,
-			all_conf_combs,
-			cbres.second,
-			tests_creds,
-			non_warmup_tests_scs_count
+			cl, admin, all_conf_combs, cbres.second, tests_creds, non_warmup_tests_scs_count
 		);
 
 		if (res) { goto cleanup; }
