@@ -2204,6 +2204,11 @@ void MySQL_Protocol::PPHR_sha2full(
 	if ((*myds)->switching_auth_stage == 0) {
 		const unsigned char perform_full_authentication = '\4';
 		generate_one_byte_pkt(perform_full_authentication);
+		// Required to be set; later used in 'PPHR_1' for setting current 'auth_plugin_id'. E.g:
+		//  - mysql-default_authentication_plugin: 'caching_sha2_password'
+		//  - Requested authentication: 'caching_sha2_password'
+		//  - Stored password: 'mysql_native_password'
+		// A full auth is required; and the switching auth type will be used later in 'PPHR_1'.
 		(*myds)->switching_auth_type = auth_plugin_id;
 		(*myds)->switching_auth_stage = 4;
 		(*myds)->auth_in_progress = 1;
