@@ -275,6 +275,7 @@ void * ProxySQL_Cluster_Monitor_thread(void *args) {
 				conn = mysql_init(NULL);
 				int ci = __sync_fetch_and_add(&GloProxyCluster->cluster_check_interval_ms,0);
 				usleep((ci)*1000); // remember, usleep is in us
+				sleep(1); // sleep for longer
 			}
 		} else {
 			sleep(1);	// do not monitor if the username is empty
