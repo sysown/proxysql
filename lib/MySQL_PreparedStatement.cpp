@@ -936,16 +936,16 @@ void MySQL_STMT_Manager_v14::get_memory_usage(uint64_t& prep_stmt_metadata_mem_u
 		prep_stmt_metadata_mem_usage += stmt_global_info->total_mem_usage;
 		prep_stmt_metadata_mem_usage += stmt_global_info->ref_count_server *
 			((stmt_global_info->num_params * sizeof(MYSQL_BIND)) +
-			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16;
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16; // ~16 bytes of memory utilized by global_stmt_id and stmt_id mappings
 		prep_stmt_metadata_mem_usage += stmt_global_info->ref_count_client *
 			((stmt_global_info->num_params * sizeof(MYSQL_BIND)) +
-			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16;
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16; // ~16 bytes of memory utilized by global_stmt_id and stmt_id mappings
 
 		// backend
 		prep_stmt_backend_mem_usage += stmt_global_info->ref_count_server * (sizeof(MYSQL_STMT) +
 			56 + //sizeof(MADB_STMT_EXTENSION)
 			(stmt_global_info->num_params * sizeof(MYSQL_BIND)) + 
-			(stmt_global_info->num_columns * sizeof(MYSQL_BIND)));
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD)));
 	}
 	unlock();
 }
