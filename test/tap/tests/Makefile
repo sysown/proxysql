@@ -232,11 +232,11 @@ generate_set_session_csv: generate_set_session_csv.cpp
 aurora: aurora.cpp $(TAP_LDIR)/libtap.so
 	g++ -DTEST_AURORA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
 
-test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap.so
-	g++ $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+test_tokenizer-t: test_tokenizer-t.cpp $(PROXYSQL_LDIR)/c_tokenizer.cpp
+	g++ $^ -DPROXYSQL_PROFILER_TAP $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
-test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap.so
-	g++ $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(PROXYSQL_LDIR)/c_tokenizer.cpp
+	g++ $^ -DPROXYSQL_PROFILER_TAP $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
 	g++ $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@

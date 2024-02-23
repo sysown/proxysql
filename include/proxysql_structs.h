@@ -544,6 +544,7 @@ class ProxySQL_Node_Address;
 #define PROXYSQL_STRUCTS
 #define QUERY_DIGEST_BUF 128
 
+
 struct __SQP_query_parser_t {
 	char buf[QUERY_DIGEST_BUF];
 	uint64_t digest;
@@ -766,6 +767,10 @@ EXTERN global_variables glovars;
 //#endif
 
 #ifdef PROXYSQL_EXTERN
+#ifndef GLOBAL_PROXYSQL_PROFILING
+#define GLOBAL_PROXYSQL_PROFILING
+thread_local std::string thread_bt = "";
+#endif // GLOBAL_PROXYSQL_PROFILING
 #ifndef GLOBAL_DEFINED_OPTS_ENTRIES
 #define GLOBAL_DEFINED_OPTS_ENTRIES
 ProxySQL_GlobalVariables GloVars {};
@@ -940,6 +945,7 @@ __thread unsigned int g_seed;
 
 #endif /* GLOBAL_DEFINED_HOSTGROUP */
 #else
+extern thread_local std::string thread_bt;
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_HostGroups_Manager *MyHGM;
 extern __thread char *mysql_thread___default_schema;

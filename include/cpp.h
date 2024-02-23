@@ -35,3 +35,4 @@
 #include <stdio.h>
 #include <map>
 #include <unordered_map>
+#include "ProxySQL_Profiler.hpp"

@@ -106,6 +106,7 @@ void MySQL_Event::set_server(int _hid, const char *ptr, int len) {
 }
 
 uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
+	PROFILER1_BLOCK1(a);
 	uint64_t total_bytes=0;
 	switch (et) {
 		case PROXYSQL_COM_QUERY:
@@ -139,6 +140,7 @@ uint64_t MySQL_Event::write(std::fstream *f, MySQL_Session *sess) {
 }
 
 void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
+	PROFILER1_BLOCK1(a);
 	json j = {};
 	j["timestamp"] = start_time/1000;
 	{
@@ -260,6 +262,7 @@ void MySQL_Event::write_auth(std::fstream *f, MySQL_Session *sess) {
 }
 
 uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
+	PROFILER1_BLOCK1(a);
 	uint64_t total_bytes=0;
 	total_bytes+=1; // et
 	total_bytes+=mysql_encode_length(thread_id, NULL);
@@ -369,6 +372,7 @@ uint64_t MySQL_Event::write_query_format_1(std::fstream *f) {
 }
 
 uint64_t MySQL_Event::write_query_format_2_json(std::fstream *f) {
+	PROFILER1_BLOCK1(a);
 	json j = {};
 	uint64_t total_bytes=0;
 	if (hid!=UINT64_MAX) {
@@ -674,6 +678,7 @@ void MySQL_Logger::audit_set_datadir(char *s) {
 };
 
 void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
+	PROFILER1_BLOCK1(a);
 	if (events.enabled==false) return;
 	if (events.logfile==NULL) return;
 	// 'MySQL_Session::client_myds' could be NULL in case of 'RequestEnd' being called over a freshly created session
@@ -812,6 +817,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 }
 
 void MySQL_Logger::log_audit_entry(log_event_type _et, MySQL_Session *sess, MySQL_Data_Stream *myds, char *xi) {
+	PROFILER1_BLOCK1(a);
 	if (audit.enabled==false) return;
 	if (audit.logfile==NULL) return;
 
@@ -971,6 +977,7 @@ void MySQL_Logger::flush() {
 }
 
 unsigned int MySQL_Logger::events_find_next_id() {
+	PROFILER1_BLOCK1(a);
 	int maxidx=0;
 	DIR *dir;
 	struct dirent *ent;
@@ -1017,6 +1024,7 @@ unsigned int MySQL_Logger::events_find_next_id() {
 }
 
 unsigned int MySQL_Logger::audit_find_next_id() {
+	PROFILER1_BLOCK1(a);
 	int maxidx=0;
 	DIR *dir;
 	struct dirent *ent;

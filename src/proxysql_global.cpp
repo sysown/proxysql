@@ -4,6 +4,7 @@
 #include "cpp.h"
 //ProxySQL_GlobalVariables GloVars;
 
+
 SSL_CTX * ProxySQL_GlobalVariables::get_SSL_ctx() {
 	// take the mutex
 	std::lock_guard<std::mutex> lock(global.ssl_mutex);
