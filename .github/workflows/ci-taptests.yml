@@ -44,7 +44,7 @@ jobs:
         sed -i "s/'test_rw_binary_data-t', //" proxysql/tap-matrix-$TAPGROUP.json
         sed -i "s/'test_server_sess_status-t', //" proxysql/tap-matrix-$TAPGROUP.json
         sed -i "s/'test_session_status_flags-t', //" proxysql/tap-matrix-$TAPGROUP.json
-        sed -i "s/'test_change_user-t.cpp', //" proxysql/tap-matrix-$TAPGROUP.json
+        sed -i "s/'test_auth_methods-t', //" proxysql/tap-matrix-$TAPGROUP.json
         
         echo "matrix=$(cat proxysql/tap-matrix-$TAPGROUP.json)" >> $GITHUB_OUTPUT
 
