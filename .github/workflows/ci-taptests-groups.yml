@@ -229,7 +229,7 @@ jobs:
         sudo -E ./test-scripts/bin/proxysql-tester.py
         RC=$?
 
-        SUMMARY="$(grep -Po "SUMMARY: .*" ./ci_tests_logs/proxysql-tester.log)"
+        SUMMARY="$(grep -Po "SUMMARY: .*" .${{ github.workspace }}/proxysql/ci_tests_logs/proxysql-tester.log)"
         echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
         
         exit $RC
