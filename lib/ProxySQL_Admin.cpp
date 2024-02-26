@@ -7,6 +7,8 @@
 #include <unordered_set>
 #include <prometheus/exposer.h>
 #include <prometheus/counter.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 #include "MySQL_HostGroups_Manager.h"
 #include "mysql.h"
 #include "proxysql_admin.h"
@@ -4346,6 +4348,29 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							run_query = false;
 						}
 						break;
+					case 54:
+					{
+						run_query = false;
+						if (test_arg1 == 0) {
+							test_arg1 = 1000;
+						}
+						if (GloMTH->variables.ssl_p2s_ca == NULL &&
+							GloMTH->variables.ssl_p2s_capath == NULL) {
+							SPA->send_MySQL_ERR(&sess->client_myds->myprot, "'mysql-ssl_p2s_ca' and 'mysql-ssl_p2s_capath' have not been configured");
+							break;
+						}
+						char msg[256];
+						uint64_t duration = 0ULL;
+						if (SPA->ProxySQL_Test___CA_Certificate_Load_And_Verify(&duration, test_arg1, GloMTH->variables.ssl_p2s_ca,
+							GloMTH->variables.ssl_p2s_capath)) {
+							sprintf(msg, "Took %llums in loading and verifying CA Certificate for %d times\n", duration, test_arg1);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
+						}
+						else {
+							SPA->send_MySQL_ERR(&sess->client_myds->myprot, "Unable to verify CA Certificate");
+						}
+					}
+					break;
 #endif // DEBUG
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
@@ -14917,5 +14942,24 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Bala
 	t2 /= 1000;
 	unsigned long long d = t2-t1;
 	return d;
+}
+
+bool ProxySQL_Admin::ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath)
+{
+	assert(duration);
+	assert(cacert || capath);
+	SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+	uint64_t t1 = monotonic_time();
+	for (int i = 0; i < cnt; i++) {
+		if (0 == SSL_CTX_load_verify_locations(ctx, cacert, capath)) {
+			proxy_error("Unable to load CA Certificate: %s\n", ERR_error_string(ERR_get_error(), NULL));
+			return false;
+		}
+	}
+	uint64_t t2 = monotonic_time();
+	SSL_CTX_free(ctx);
+	*duration = ((t2/1000) - (t1/1000));
+	proxy_info("Duration: %llums\n", *duration);
+	return true;
 }
 #endif //DEBUG

@@ -634,6 +634,7 @@ class ProxySQL_Admin {
 #ifdef DEBUG
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
+	bool ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath);
 #endif
 	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
