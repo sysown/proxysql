@@ -1166,7 +1166,23 @@ void MySQL_Session::generate_proxysql_internal_session_json(json &j) {
 			}
 		}
 		j["client"]["DSS"] = client_myds->DSS;
+		j["client"]["switching_auth_sent"] = client_myds->switching_auth_sent;
 		j["client"]["switching_auth_type"] = client_myds->switching_auth_type;
+		j["client"]["prot"]["sent_auth_plugin_id"] = client_myds->myprot.sent_auth_plugin_id;
+		j["client"]["prot"]["auth_plugin_id"] = client_myds->myprot.auth_plugin_id;
+		switch (client_myds->myprot.auth_plugin_id) {
+			case AUTH_MYSQL_NATIVE_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "mysql_native_password";
+				break;
+			case AUTH_MYSQL_CLEAR_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "mysql_clear_password";
+				break;
+			case AUTH_MYSQL_CACHING_SHA2_PASSWORD:
+				j["client"]["prot"]["auth_plugin"] = "caching_sha2_password";
+				break;
+			default:
+				break;
+		}
 		if (client_myds->myconn != NULL) { // only if myconn is defined
 			if (client_myds->myconn->userinfo != NULL) { // only if userinfo is defined
 				j["client"]["userinfo"]["username"] = ( client_myds->myconn->userinfo->username ? client_myds->myconn->userinfo->username : "" );
@@ -5504,31 +5520,29 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 	bool handshake_err = true;
 
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p , handshake_response=%d , switching_auth_stage=%d , is_encrypted=%d , client_encrypted=%d\n", this, client_myds, handshake_response_return, client_myds->switching_auth_stage, is_encrypted, client_myds->encrypted);
-	if (
-		(handshake_response_return == false) && (client_myds->switching_auth_stage == 1)
-	) {
-		l_free(pkt->size,pkt->ptr);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Returning\n", this, client_myds);
-		return;
-	}
-
-	if (
-		(is_encrypted == false) && // the connection was encrypted
-		(handshake_response_return == false) && // the authentication didn't complete
-		(client_myds->encrypted == true) // client is asking for encryption
-	) {
-		// use SSL
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
-		client_myds->DSS=STATE_SSL_INIT;
-		client_myds->rbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->wbio_ssl = BIO_new(BIO_s_mem());
-		client_myds->ssl = GloVars.get_SSL_new();
-		SSL_set_fd(client_myds->ssl, client_myds->fd);
-		SSL_set_accept_state(client_myds->ssl);
-		SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
-		l_free(pkt->size,pkt->ptr);
-		proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
-		return;
+	if (handshake_response_return == false) {
+		if (client_myds->auth_in_progress != 0) {
+			l_free(pkt->size,pkt->ptr);
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . Returning\n", this, client_myds);
+			return;
+		}
+		if (
+			(is_encrypted == false) && // the connection was encrypted
+			(client_myds->encrypted == true) // client is asking for encryption
+		) {
+			// use SSL
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION,8,"Session=%p , DS=%p . SSL_INIT\n", this, client_myds);
+			client_myds->DSS=STATE_SSL_INIT;
+			client_myds->rbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->wbio_ssl = BIO_new(BIO_s_mem());
+			client_myds->ssl = GloVars.get_SSL_new();
+			SSL_set_fd(client_myds->ssl, client_myds->fd);
+			SSL_set_accept_state(client_myds->ssl);
+			SSL_set_bio(client_myds->ssl, client_myds->rbio_ssl, client_myds->wbio_ssl);
+			l_free(pkt->size,pkt->ptr);
+			proxysql_keylog_attach_callback(GloVars.get_SSL_ctx());
+			return;
+		}
 	}
 
 	if (
@@ -5616,8 +5630,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 				client_authenticated=false;
 				*wrong_pass=true;
 				client_myds->setDSS_STATE_QUERY_SENT_NET();
-				uint8_t _pid = 2;
-				if (client_myds->switching_auth_stage) _pid+=2;
+				//uint8_t _pid = 2;
+				//if (client_myds->switching_auth_stage) _pid+=2;
+				uint8_t _pid = client_myds->pkt_sid; _pid++;
 				if (max_connections_reached==true) {
 					proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p , Too many connections\n", this, client_myds);
 					client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,_pid,1040,(char *)"08004", (char *)"Too many connections", true);
@@ -5677,9 +5692,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					} else {
 						client_addr = strdup((char *)"");
 					}
-					uint8_t _pid = 2;
-					if (client_myds->switching_auth_stage) _pid+=2;
-					if (is_encrypted) _pid++;
+					//uint8_t _pid = 2;
+					//if (client_myds->switching_auth_stage) _pid+=2;
+					//if (is_encrypted) _pid++;
+					uint8_t _pid = client_myds->pkt_sid; _pid++;
 					if (
 						(strcmp(client_addr,(char *)"127.0.0.1")==0)
 						||
@@ -5705,8 +5721,9 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 					free(client_addr);
 				} else {
 					uint8_t _pid = 2;
-					if (client_myds->switching_auth_stage) _pid+=2;
-					if (is_encrypted) _pid++;
+					//if (client_myds->switching_auth_stage) _pid+=2;
+					//if (is_encrypted) _pid++;
+					_pid = client_myds->pkt_sid; _pid++;
 					// If this condition is met, it means that the
 					// 'STATE_SERVER_HANDSHAKE' being performed isn't from the start of a
 					// connection, but as a consequence of a 'COM_USER_CHANGE' which
@@ -5776,9 +5793,10 @@ void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(
 		}
 		if (client_myds->myconn->userinfo->username) {
 			char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-			uint8_t _pid = 2;
-			if (client_myds->switching_auth_stage) _pid+=2;
-			if (is_encrypted) _pid++;
+			//uint8_t _pid = 2;
+			//if (client_myds->switching_auth_stage) _pid+=2;
+			//if (is_encrypted) _pid++;
+			uint8_t _pid = client_myds->pkt_sid; _pid++;
 #ifdef DEBUG
 		if (client_myds->myconn->userinfo->password) {
 			char *tmp_pass=strdup(client_myds->myconn->userinfo->password);
