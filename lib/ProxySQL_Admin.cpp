@@ -115,6 +115,7 @@ static const vector<string> mysql_servers_tablenames = {
 	"mysql_galera_hostgroups",
 	"mysql_aws_aurora_hostgroups",
 	"mysql_hostgroup_attributes",
+	"mysql_servers_ssl_params",
 };
 
 static const vector<string> mysql_firewall_tablenames = {
@@ -402,6 +403,10 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_11
 
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS_V2_6_0 "CREATE TABLE mysql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_capath VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_cipher VARCHAR NOT NULL DEFAULT '' , tls_version VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS_V2_6_0
+
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V1_3_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V1_4_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_0_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
@@ -523,6 +528,9 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_FIREWALL_WHITELIST_SQLI_FINGERPRINTS "CREATE TABLE runtime_mysql_firewall_whitelist_sqli_fingerprints (active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , fingerprint VARCHAR NOT NULL , PRIMARY KEY (fingerprint) )"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , gtid_port INT CHECK ((gtid_port <> port OR gtid_port=0) AND gtid_port >= 0 AND gtid_port <= 65535) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
+
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS_SSL_PARAMS "CREATE TABLE runtime_mysql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_capath VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_cipher VARCHAR NOT NULL DEFAULT '' , tls_version VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )"
+
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
 
@@ -1105,6 +1113,7 @@ incoming_servers_t::incoming_servers_t(
 	SQLite3_result* incoming_galera_hostgroups,
 	SQLite3_result* incoming_aurora_hostgroups,
 	SQLite3_result* incoming_hostgroup_attributes,
+	SQLite3_result* incoming_mysql_servers_ssl_params,
 	SQLite3_result* runtime_mysql_servers
 ) :
 	incoming_mysql_servers_v2(incoming_mysql_servers_v2),
@@ -1113,6 +1122,7 @@ incoming_servers_t::incoming_servers_t(
 	incoming_galera_hostgroups(incoming_galera_hostgroups),
 	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
 	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
+	incoming_mysql_servers_ssl_params(incoming_mysql_servers_ssl_params),
 	runtime_mysql_servers(runtime_mysql_servers)
 {}
 
@@ -3325,6 +3335,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space,"runtime_mysql_aws_aurora_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_hostgroup_attributes")
+				||
+				strstr(query_no_space,"runtime_mysql_servers_ssl_params")
 			) {
 				runtime_mysql_servers=true; refresh=true;
 			}
@@ -3819,6 +3831,8 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			tn = "mysql_aws_aurora_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES))) {
 			tn = "mysql_hostgroup_attributes";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS))) {
+			tn = "mysql_servers_ssl_params";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_V2))) {
 			tn = "mysql_servers_v2";
 		}
@@ -5048,6 +5062,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MYSQL HOSTGROUP ATTRIBUTES") && !strncasecmp("CHECKSUM MYSQL HOSTGROUP ATTRIBUTES", query_no_space, strlen(query_no_space)))){
 			char *q=(char *)"SELECT * FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
+			tablename=(char *)"MYSQL HOSTGROUP ATTRIBUTES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MEM MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_servers_ssl_params ORDER BY hostname, port, username";
 			tablename=(char *)"MYSQL HOSTGROUP ATTRIBUTES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
@@ -6490,6 +6513,8 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES);
+	insert_into_tables_defs(tables_defs_admin,"mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS_SSL_PARAMS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
@@ -6528,6 +6553,7 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	insert_into_tables_defs(tables_defs_config,"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
+	insert_into_tables_defs(tables_defs_config,"mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
@@ -12985,7 +13011,6 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		StrQuery += "mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
 		ASSERT_SQLITE_OK(rc, admindb);
-		//proxy_info("New mysql_aws_aurora_hostgroups table\n");
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			rc=(*proxy_sqlite3_bind_int64)(statement, 1, atol(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb); // hostgroup_id
@@ -13000,6 +13025,51 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],		-1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostgroup_settings
 			rc=(*proxy_sqlite3_bind_text)(statement,  11, r->fields[10],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // servers_defaults
 			rc=(*proxy_sqlite3_bind_text)(statement,  12, r->fields[11],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+		(*proxy_sqlite3_finalize)(statement);
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
+
+	// dump mysql_servers_ssl_params
+
+	StrQuery = "DELETE FROM main.";
+	if (_runtime)
+		StrQuery += "runtime_";
+	StrQuery += "mysql_servers_ssl_params";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", StrQuery.c_str());
+	admindb->execute(StrQuery.c_str());
+	resultset=MyHGM->dump_table_mysql("mysql_servers_ssl_params");
+	if (resultset) {
+		int rc;
+		// table definition:
+		// mysql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_capath VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_cipher VARCHAR NOT NULL DEFAULT '' , tls_version VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )
+		sqlite3_stmt *statement=NULL;
+		StrQuery = "INSERT INTO ";
+		if (_runtime)
+			StrQuery += "runtime_";
+		StrQuery += "mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+		//proxy_info("New mysql_servers_ssl_params table\n");
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			rc=(*proxy_sqlite3_bind_text)(statement,  1,  r->fields[0],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostname
+			rc=(*proxy_sqlite3_bind_int64)(statement, 2,  atol(r->fields[1]));                  ASSERT_SQLITE_OK(rc, admindb); // port
+			rc=(*proxy_sqlite3_bind_text)(statement,  3,  r->fields[2],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // username
+			rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_ca
+			rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_cert
+			rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_key
+			rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_capath
+			rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crl
+			rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crlpath
+			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_cipher
+			rc=(*proxy_sqlite3_bind_text)(statement,  11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // tls_version
+			rc=(*proxy_sqlite3_bind_text)(statement,  12, r->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
@@ -13041,6 +13111,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
+	SQLite3_result *resultset_mysql_servers_ssl_params=NULL;
 
 	SQLite3_result* runtime_mysql_servers = incoming_servers.runtime_mysql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_servers.incoming_replication_hostgroups;
@@ -13048,6 +13119,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	SQLite3_result* incoming_galera_hostgroups = incoming_servers.incoming_galera_hostgroups;
 	SQLite3_result* incoming_aurora_hostgroups = incoming_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_servers.incoming_hostgroup_attributes;
+	SQLite3_result* incoming_mysql_servers_ssl_params = incoming_servers.incoming_mysql_servers_ssl_params;
 	SQLite3_result* incoming_mysql_servers_v2 = incoming_servers.incoming_mysql_servers_v2;
 
 	const char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
@@ -13216,6 +13288,21 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 		MyHGM->save_incoming_mysql_table(resultset_hostgroup_attributes, "mysql_hostgroup_attributes");
 	}
 
+	// support for SSL parameters, table mysql_servers_ssl_params
+	query = (char *)"SELECT * FROM mysql_servers_ssl_params ORDER BY hostname, port, username";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	if (incoming_mysql_servers_ssl_params == nullptr) {
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_mysql_servers_ssl_params);
+	} else {
+		resultset_mysql_servers_ssl_params = incoming_mysql_servers_ssl_params;
+	}
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to MyHGM
+		MyHGM->save_incoming_mysql_table(resultset_mysql_servers_ssl_params, "mysql_servers_ssl_params");
+	}
+
 	// commit all the changes
 	MyHGM->commit(
 		{ runtime_mysql_servers, peer_runtime_mysql_server },
@@ -13247,6 +13334,9 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& inc
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
+	}
+	if (resultset_mysql_servers_ssl_params) {
+		resultset_mysql_servers_ssl_params = NULL;
 	}
 }
 
