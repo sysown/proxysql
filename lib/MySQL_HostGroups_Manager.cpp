@@ -8168,40 +8168,26 @@ void MySQL_HostGroups_Manager::HostGroup_Server_Mapping::remove_HGM(MySrvC* srv)
 
 /**
 * @brief Updates replication hostgroups by adding autodiscovered mysql servers.
-* @details Adds each server from 'new_server_values_mapping' to the 'runtime_mysql_servers' table.
+* @details Adds each server from 'new_servers' to the 'runtime_mysql_servers' table.
 * We then rebuild the 'mysql_servers' table as well as the internal 'hostname_hostgroup_mapping'.
-* @param new_server_values_mapping A mapping containing the hostname of the discovered server mapped to the metadata of server from which it was discovered, stored in a 'serverDetails' struct.
+* @param new_servers A vector of tuples where each tuple contains the values needed to add each new server.
 *
 * @return Returns EXIT_FAILURE code on failure and EXIT_SUCCESS code on success.
 */
-int MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(unordered_map<string, MySQL_HostGroups_Manager::serverDetails> new_server_values_mapping) {
+int MySQL_HostGroups_Manager::add_discovered_servers_to_mysql_servers_and_replication_hostgroups(vector<tuple<string, int, int>> new_servers) {
 	int exit_code = EXIT_SUCCESS;
 	bool added_new_server = false;
 	wrlock();
 
 	try {
-		for (const auto &s : new_server_values_mapping) {
-			if (new_server_values_mapping.find(s.first) == new_server_values_mapping.end()) {
-				continue;
-			}
+		for (tuple<string, int, int> s : new_servers) {
+			string host = std::get<0>(s);
+			uint16_t port = std::get<1>(s);
+			long int hostgroup_id = std::get<2>(s);
 
-			string host = s.first;
-			MySQL_HostGroups_Manager::serverDetails new_server_values = new_server_values_mapping[host];
-
-			long int hostgroup_id = new_server_values.hostgroup_id;
-			uint16_t port = new_server_values.port;
-
-			uint16_t gtid_port = new_server_values.gtid_port;
-			int64_t weight = new_server_values.weight;
-			unsigned int compression = new_server_values.compression;
-			int64_t max_connections = new_server_values.max_connections;
-			unsigned int max_replication_lag = new_server_values.max_replication_lag;
-			int32_t use_ssl = new_server_values.use_ssl;
-			unsigned int max_latency_ms = new_server_values.max_latency_ms;
-
+			// Add the discovered server with default values
 			MySrvC* mysrvc = new MySrvC(
-				const_cast<char*>(host.c_str()), port, gtid_port, weight, MYSQL_SERVER_STATUS_ONLINE,
-				compression, max_connections, max_replication_lag, use_ssl, max_latency_ms, const_cast<char*>("Discovered endpoint")
+				const_cast<char*>(host.c_str()), port, 0, 1, MYSQL_SERVER_STATUS_ONLINE, 0, -1, 0, -1, 0, const_cast<char*>("Discovered endpoint")
 			);
 			add(mysrvc, hostgroup_id);
 

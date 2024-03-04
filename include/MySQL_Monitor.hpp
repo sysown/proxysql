@@ -233,6 +233,7 @@ public:
 	char *hostname;
 	int port;
 	int writer_hostgroup; // used only by group replication
+	int reader_hostgroup;
 	bool writer_is_also_reader; // used only by group replication
 	int  max_transactions_behind; // used only by group replication
 	int max_transactions_behind_count; // used only by group replication
@@ -446,7 +447,7 @@ class MySQL_Monitor {
 	static bool update_dns_cache_from_mysql_conn(const MYSQL* mysql);
 	static void trigger_dns_cache_update();
 
-	void process_discovered_topology(const std::string& originating_server_hostname, vector<MYSQL_ROW> discovered_servers);
+	void process_discovered_topology(const std::string& originating_server_hostname, vector<MYSQL_ROW> discovered_servers, int reader_hostgroup);
 
 	private:
 	std::vector<table_def_t *> *tables_defs_monitor;
