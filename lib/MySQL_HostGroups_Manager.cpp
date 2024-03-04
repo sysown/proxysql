@@ -745,6 +745,7 @@ MySrvC::MySrvC(
 	max_connections=_max_connections;
 	max_replication_lag=_max_replication_lag;
 	use_ssl=_use_ssl;
+	cur_replication_lag=0;
 	cur_replication_lag_count=0;
 	max_latency_us=_max_latency_ms*1000;
 	current_latency_us=0;
@@ -1352,6 +1353,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	mydb->execute(MYHGM_MYSQL_GALERA_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_AWS_AURORA_HOSTGROUPS);
 	mydb->execute(MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES);
+	mydb->execute(MYHGM_MYSQL_SERVERS_SSL_PARAMS);
 	mydb->execute("CREATE INDEX IF NOT EXISTS idx_mysql_servers_hostname_port ON mysql_servers (hostname,port)");
 	MyHostGroups=new PtrArray();
 	runtime_mysql_servers=NULL;
@@ -1360,6 +1362,7 @@ MySQL_HostGroups_Manager::MySQL_HostGroups_Manager() {
 	incoming_galera_hostgroups=NULL;
 	incoming_aws_aurora_hostgroups = NULL;
 	incoming_hostgroup_attributes = NULL;
+	incoming_mysql_servers_ssl_params = NULL;
 	incoming_mysql_servers_v2 = NULL;
 	pthread_rwlock_init(&gtid_rwlock, NULL);
 	gtid_missing_nodes = false;
@@ -1630,6 +1633,7 @@ void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& m
 	CUCFT1(myhash,init,"mysql_galera_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_GALERA_HOSTGROUPS]);
 	CUCFT1(myhash,init,"mysql_aws_aurora_hostgroups","writer_hostgroup", table_resultset_checksum[HGM_TABLES::MYSQL_AWS_AURORA_HOSTGROUPS]);
 	CUCFT1(myhash,init,"mysql_hostgroup_attributes","hostgroup_id", table_resultset_checksum[HGM_TABLES::MYSQL_HOSTGROUP_ATTRIBUTES]);
+	CUCFT1(myhash,init,"mysql_servers_ssl_params","hostname,port,username", table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS_SSL_PARAMS]);
 }
 
 /**
@@ -2026,9 +2030,25 @@ bool MySQL_HostGroups_Manager::commit(
 					mysrvc->weight=atoi(r->fields[14]);
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[15])) {
-					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]) , mysrvc->status , atoi(r->fields[15]));
-					mysrvc->status=(MySerStatus)atoi(r->fields[15]);
+					bool change_server_status = true;
+					if (GloMTH->variables.evaluate_replication_lag_on_servers_load == 1) {
+						if (mysrvc->status == MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG && // currently server is shunned due to replication lag
+							(MySerStatus)atoi(r->fields[15]) == MYSQL_SERVER_STATUS_ONLINE) { // new server status is online
+							if (mysrvc->cur_replication_lag != -2) { // Master server? Seconds_Behind_Master column is not present
+								const unsigned int new_max_repl_lag = atoi(r->fields[18]);
+								if (mysrvc->cur_replication_lag < 0 ||
+									(new_max_repl_lag > 0 &&
+									((unsigned int)mysrvc->cur_replication_lag > new_max_repl_lag))) { // we check if current replication lag is greater than new max_replication_lag
+									change_server_status = false;
+								}
+							}
+						}
+					}
+					if (change_server_status == true) {
+						if (GloMTH->variables.hostgroup_manager_verbose)
+							proxy_info("Changing status for server %d:%s:%d (%s:%d) from %d (%d) to %d\n", mysrvc->myhgc->hid, mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[5]), mysrvc->status, atoi(r->fields[15]));
+						mysrvc->status = (MySerStatus)atoi(r->fields[15]);
+					}
 					if (mysrvc->status==MYSQL_SERVER_STATUS_SHUNNED) {
 						mysrvc->shunned_automatic=false;
 					}
@@ -2143,6 +2163,13 @@ bool MySQL_HostGroups_Manager::commit(
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_hostgroup_attributes\n");
 			mydb->execute("DELETE FROM mysql_hostgroup_attributes");
 			generate_mysql_hostgroup_attributes_table();
+		}
+
+		// SSL params
+		if (incoming_mysql_servers_ssl_params) {
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "DELETE FROM mysql_servers_ssl_params\n");
+			mydb->execute("DELETE FROM mysql_servers_ssl_params");
+			generate_mysql_servers_ssl_params_table();
 		}
 
 		uint64_t new_hash = commit_update_checksum_from_mysql_servers_v2(peer_mysql_servers_v2.resultset);
@@ -2778,6 +2805,8 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 		query=(char *)"SELECT writer_hostgroup, reader_hostgroup, check_type, comment FROM mysql_replication_hostgroups";
 	} else if (name == "mysql_hostgroup_attributes") {
 		query=(char *)"SELECT hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
+	} else if (name == "mysql_servers_ssl_params") {
+		query=(char *)"SELECT hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment FROM mysql_servers_ssl_params ORDER BY hostname, port, username";
 	} else if (name == "mysql_servers") {
 		query = (char *)MYHGM_GEN_ADMIN_RUNTIME_SERVERS;
 	} else if (name == "cluster_mysql_servers") {
@@ -3670,6 +3699,7 @@ void MySQL_HostGroups_Manager::replication_lag_action_inner(MyHGC *myhgc, const 
 	for (j=0; j<(int)myhgc->mysrvs->cnt(); j++) {
 		MySrvC *mysrvc=(MySrvC *)myhgc->mysrvs->servers->index(j);
 		if (strcmp(mysrvc->address,address)==0 && mysrvc->port==port) {
+			mysrvc->cur_replication_lag = current_replication_lag;
 			if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 				if (
 //					(current_replication_lag==-1 )
@@ -4057,6 +4087,8 @@ void MySQL_HostGroups_Manager::save_incoming_mysql_table(SQLite3_result *s, cons
 		inc = &incoming_replication_hostgroups;
 	} else if (name == "mysql_hostgroup_attributes") {
 		inc = &incoming_hostgroup_attributes;
+	} else if (name == "mysql_servers_ssl_params") {
+		inc = &incoming_mysql_servers_ssl_params;
 	} else {
 		assert(0);
 	}
@@ -4094,6 +4126,8 @@ SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& 
 		return this->incoming_replication_hostgroups;
 	} else if (name == "mysql_hostgroup_attributes") {
 		return this->incoming_hostgroup_attributes;
+	} else if (name == "mysql_servers_ssl_params") {
+		return this->incoming_mysql_servers_ssl_params;
 	} else if (name == "cluster_mysql_servers") {
 		return this->runtime_mysql_servers;
 	} else if (name == "mysql_servers_v2") {
@@ -7320,6 +7354,60 @@ void MySQL_HostGroups_Manager::generate_mysql_hostgroup_attributes_table() {
 	incoming_hostgroup_attributes=NULL;
 }
 
+void MySQL_HostGroups_Manager::generate_mysql_servers_ssl_params_table() {
+	if (incoming_mysql_servers_ssl_params==NULL) {
+		return;
+	}
+	int rc;
+	sqlite3_stmt *statement=NULL;
+
+	const char * query = (const char *)"INSERT INTO mysql_servers_ssl_params ("
+		"hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, "
+		"ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES "
+		"(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+
+	rc = mydb->prepare_v2(query, &statement);
+	ASSERT_SQLITE_OK(rc, mydb);
+	proxy_info("New mysql_servers_ssl_params table\n");
+	std::lock_guard<std::mutex> lock(Servers_SSL_Params_map_mutex);
+	Servers_SSL_Params_map.clear();
+
+	for (std::vector<SQLite3_row *>::iterator it = incoming_mysql_servers_ssl_params->rows.begin() ; it != incoming_mysql_servers_ssl_params->rows.end(); ++it) {
+		SQLite3_row *r=*it;
+		proxy_info("Loading MySQL Server SSL Params for (%s,%s,%s)\n",
+			r->fields[0], r->fields[1], r->fields[2]
+		);
+
+		rc=(*proxy_sqlite3_bind_text)(statement,  1,  r->fields[0]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // hostname
+		rc=(*proxy_sqlite3_bind_int64)(statement, 2,  atoi(r->fields[1]));                   ASSERT_SQLITE_OK(rc, mydb); // port
+		rc=(*proxy_sqlite3_bind_text)(statement,  3,  r->fields[2]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // username
+		rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_ca
+		rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_cert
+		rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_key
+		rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_capath
+		rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crl
+		rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_crlpath
+		rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9]  , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // ssl_cipher
+		rc=(*proxy_sqlite3_bind_text)(statement,  11, r->fields[10] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // tls_version
+		rc=(*proxy_sqlite3_bind_text)(statement,  12, r->fields[11] , -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, mydb); // comment
+
+		SAFE_SQLITE3_STEP2(statement);
+		rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, mydb);
+		rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, mydb);
+
+		MySQLServers_SslParams MSSP(
+			r->fields[0], atoi(r->fields[1]), r->fields[2],
+			r->fields[3], r->fields[4],  r->fields[5],
+			r->fields[6], r->fields[7],  r->fields[8],
+			r->fields[9], r->fields[10], r->fields[11]
+		);
+		string MapKey = MSSP.getMapKey(rand_del);
+		Servers_SSL_Params_map.emplace(MapKey, MSSP);
+	}
+	delete incoming_mysql_servers_ssl_params;
+	incoming_mysql_servers_ssl_params=NULL;
+}
+
 void MySQL_HostGroups_Manager::generate_mysql_aws_aurora_hostgroups_table() {
 	if (incoming_aws_aurora_hostgroups==NULL) {
 		return;
@@ -8277,4 +8365,22 @@ void MySQL_HostGroups_Manager::rebuild_hostname_hostgroup_mapping() {
 
 	hgsm_mysql_servers_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
 	hgsm_mysql_replication_hostgroups_checksum = table_resultset_checksum[HGM_TABLES::MYSQL_REPLICATION_HOSTGROUPS];
+}
+
+MySQLServers_SslParams * MySQL_HostGroups_Manager::get_Server_SSL_Params(char *hostname, int port, char *username) {
+	string MapKey = string(hostname) + string(rand_del) + to_string(port) + string(rand_del) + string(username);
+	std::lock_guard<std::mutex> lock(Servers_SSL_Params_map_mutex);
+	auto it = Servers_SSL_Params_map.find(MapKey);
+	if (it != Servers_SSL_Params_map.end()) {
+		MySQLServers_SslParams * MSSP = new MySQLServers_SslParams(it->second);
+		return MSSP;
+	} else {
+		MapKey = string(hostname) + string(rand_del) + to_string(port) + string(rand_del) + ""; // search for empty username
+		it = Servers_SSL_Params_map.find(MapKey);
+		if (it != Servers_SSL_Params_map.end()) {
+			MySQLServers_SslParams * MSSP = new MySQLServers_SslParams(it->second);
+			return MSSP;
+		}
+	}
+	return NULL;
 }

@@ -144,9 +144,10 @@ struct incoming_servers_t {
 	SQLite3_result* incoming_galera_hostgroups = NULL;
 	SQLite3_result* incoming_aurora_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
+	SQLite3_result* incoming_mysql_servers_ssl_params = NULL;
 
 	incoming_servers_t();
-	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
 };
 
 // Separate structs for runtime mysql server and mysql server v2 to avoid human error
@@ -226,7 +227,7 @@ class ProxySQL_Admin {
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
-		bool hash_passwords;
+//		bool hash_passwords;
 		bool vacuum_stats;
 		char * admin_version;
 		char * cluster_username;
@@ -634,6 +635,7 @@ class ProxySQL_Admin {
 #ifdef DEBUG
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
+	bool ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath);
 #endif
 	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };

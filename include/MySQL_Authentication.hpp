@@ -12,9 +12,10 @@ typedef struct _account_details_t {
 	char *username;
 	char *password;
 	void *sha1_pass;
-	bool use_ssl;
-	int default_hostgroup;
+	char *clear_text_password;
 	char *default_schema;
+	int default_hostgroup;
+	bool use_ssl;
 	bool schema_locked;
 	bool transaction_persistent;
 	bool fast_forward;
@@ -79,6 +80,7 @@ class MySQL_Authentication {
 	void set_all_inactive(enum cred_username_type usertype);
 	void remove_inactives(enum cred_username_type usertype);
 	bool set_SHA1(char *username, enum cred_username_type usertype, void *sha_pass);
+	bool set_clear_text_password(char *username, enum cred_username_type usertype, const char *clear_text_password);
 	unsigned int memory_usage();
 	uint64_t get_runtime_checksum();
 	/**

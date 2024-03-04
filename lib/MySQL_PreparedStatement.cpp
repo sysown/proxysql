@@ -16,6 +16,8 @@
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 //#endif
 
+const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
+
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
@@ -934,16 +936,16 @@ void MySQL_STMT_Manager_v14::get_memory_usage(uint64_t& prep_stmt_metadata_mem_u
 		prep_stmt_metadata_mem_usage += stmt_global_info->total_mem_usage;
 		prep_stmt_metadata_mem_usage += stmt_global_info->ref_count_server *
 			((stmt_global_info->num_params * sizeof(MYSQL_BIND)) +
-			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16;
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16; // ~16 bytes of memory utilized by global_stmt_id and stmt_id mappings
 		prep_stmt_metadata_mem_usage += stmt_global_info->ref_count_client *
 			((stmt_global_info->num_params * sizeof(MYSQL_BIND)) +
-			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16;
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16; // ~16 bytes of memory utilized by global_stmt_id and stmt_id mappings
 
 		// backend
 		prep_stmt_backend_mem_usage += stmt_global_info->ref_count_server * (sizeof(MYSQL_STMT) +
 			56 + //sizeof(MADB_STMT_EXTENSION)
 			(stmt_global_info->num_params * sizeof(MYSQL_BIND)) + 
-			(stmt_global_info->num_columns * sizeof(MYSQL_BIND)));
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD)));
 	}
 	unlock();
 }
@@ -1035,7 +1037,7 @@ class PS_global_stats {
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*9);
+		char **pta=(char **)malloc(sizeof(char *)*PS_GLOBAL_STATUS_FIELD_NUM);
 		sprintf(buf,"%lu",statement_id);
 		pta[0]=strdup(buf);
 		assert(schemaname);
@@ -1061,7 +1063,7 @@ class PS_global_stats {
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<7;i++) {
+		for (i=0;i<PS_GLOBAL_STATUS_FIELD_NUM;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -1072,7 +1074,7 @@ class PS_global_stats {
 
 SQLite3_result * MySQL_STMT_Manager_v14::get_prepared_statements_global_infos() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current prepared statements global info\n");
-	SQLite3_result *result=new SQLite3_result(9);
+	SQLite3_result *result=new SQLite3_result(PS_GLOBAL_STATUS_FIELD_NUM);
 	rdlock();
 	result->add_column_definition(SQLITE_TEXT,"stmt_id");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");

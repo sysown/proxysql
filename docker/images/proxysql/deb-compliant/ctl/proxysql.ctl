@@ -1,4 +1,4 @@
-Section: misc
+Section: database
 Priority: optional
 Homepage: https://proxysql.com
 Standards-Version: 3.9.2
@@ -6,6 +6,7 @@ Standards-Version: 3.9.2
 Package: proxysql
 Version: PKG_VERSION_CURVER
 Maintainer: ProxySQL LLC <info@proxysql.com>
+Copyright: copyright
 Architecture: PKG_ARCH
 Depends: libgnutls28 | libgnutls-deb0-28 | libgnutls30
 # Changelog: CHANGELOG.md
