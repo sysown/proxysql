@@ -24,8 +24,8 @@
 #include <vector>
 #include <unistd.h>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysqld_error.h"
 
 #include "json.hpp"
 

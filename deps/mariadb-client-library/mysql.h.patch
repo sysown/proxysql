@@ -1,4 +1,8 @@
-@@ -517,7 +517,7 @@
+diff --git include/mysql.h include/mysql.h
+index 76b16830..9ee86227 100644
+--- include/mysql.h
++++ include/mysql.h
+@@ -531,7 +531,7 @@ const char * STDCALL mysql_info(MYSQL *mysql);
  unsigned long STDCALL mysql_thread_id(MYSQL *mysql);
  const char * STDCALL mysql_character_set_name(MYSQL *mysql);
  void STDCALL mysql_get_character_set_info(MYSQL *mysql, MY_CHARSET_INFO *cs);
@@ -7,7 +11,7 @@
  
  my_bool mariadb_get_infov(MYSQL *mysql, enum mariadb_value value, void *arg, ...);
  my_bool STDCALL mariadb_get_info(MYSQL *mysql, enum mariadb_value value, void *arg);
-@@ -536,6 +536,7 @@
+@@ -550,6 +550,7 @@ MYSQL *		STDCALL mysql_real_connect(MYSQL *mysql, const char *host,
  					   const char *unix_socket,
  					   unsigned long clientflag);
  void		STDCALL mysql_close(MYSQL *sock);
@@ -15,7 +19,7 @@
  int		STDCALL mysql_select_db(MYSQL *mysql, const char *db);
  int		STDCALL mysql_query(MYSQL *mysql, const char *q);
  int		STDCALL mysql_send_query(MYSQL *mysql, const char *q,
-@@ -635,7 +636,7 @@
+@@ -649,7 +650,7 @@ int STDCALL mysql_stmt_next_result_start(int *ret, MYSQL_STMT *stmt);
  int STDCALL mysql_stmt_next_result_cont(int *ret, MYSQL_STMT *stmt, int status);
  
  int STDCALL mysql_set_character_set_start(int *ret, MYSQL *mysql,
@@ -24,7 +28,7 @@
  int STDCALL mysql_set_character_set_cont(int *ret, MYSQL *mysql,
                                                    int status);
  int STDCALL mysql_change_user_start(my_bool *ret, MYSQL *mysql,
-@@ -752,7 +752,7 @@
+@@ -765,7 +766,7 @@ struct st_mariadb_api {
    unsigned long (STDCALL *mysql_thread_id)(MYSQL *mysql);
    const char * (STDCALL *mysql_character_set_name)(MYSQL *mysql);
    void (STDCALL *mysql_get_character_set_info)(MYSQL *mysql, MY_CHARSET_INFO *cs);

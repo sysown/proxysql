@@ -15,8 +15,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysqld_error.h"
 
 #include "tap.h"
 #include "command_line.h"
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
 
 			ok(
 				failed_to_connect,
-				"An invalid user should fail to connect to SQLite3 server, error was: %s",
+				"A valid user with incorrect password should fail to connect to SQLite3 server, error was: %s",
 				inv_pass_err.c_str()
 			);
 

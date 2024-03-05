@@ -505,23 +505,23 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		}
 */
 		if (strcmp(valmetric,"system")==0) {
-			string *s = generate_header((char *)"ProxySQL Graphs");
+			string s = generate_header((char *)"ProxySQL Graphs");
 			char *buttons = generate_buttons((char *)"system");
-			s->append(buttons);
+			s.append(buttons);
 			free(buttons);
-			s->append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
-			string *s1 = generate_canvas((char *)"myChart1");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
+			string s1 = generate_canvas((char *)"myChart1");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart2");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart3");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart4");
-			s->append(s1->c_str());
-			s->append("</div>\n");
+			s.append(s1.c_str());
+			s.append("</div>\n");
 			SQLite3_result *cpu_sqlite = GloProxyStats->get_system_cpu_metrics(interval_i);
 #ifndef NOJEM
 			SQLite3_result *memory_sqlite = GloProxyStats->get_system_memory_metrics(interval_i);
@@ -542,14 +542,13 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			nv[1] = extract_values(cpu_sqlite,3,true,(double)1/sysconf(_SC_CLK_TCK));
 			ts = extract_ts(cpu_sqlite,true);
 			s1 = generate_chart((char *)"myChart1",ts,2,nm,nl,nv);
-			s->append(s1->c_str());
+			s.append(s1.c_str());
 			free(nm);
 			free(nl);
 			free(nv[0]);
 			free(nv[1]);
 			free(nv);
 			free(ts);
-			
 
 #ifndef NOJEM
 			nm = (char **)malloc(sizeof(char *)*5);
@@ -572,7 +571,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			nv[4] = extract_values(memory_sqlite,6,false);
 			ts = extract_ts(cpu_sqlite,true);
 			s1 = generate_chart((char *)"myChart2",ts,5,nm,nl,nv);
-			s->append(s1->c_str());
+			s.append(s1.c_str());
 			free(nm);
 			free(nl);
 			free(nv[0]);
@@ -582,33 +581,35 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			free(nv[4]);
 			free(nv);
 			free(ts);
+			delete memory_sqlite;
 #endif
+			delete cpu_sqlite;
 			
-			s->append("</body></html>");
-	 		response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_PERSISTENT); 
+			s.append("</body></html>");
+	 		response = MHD_create_response_from_buffer(s.length(), (void *) s.c_str(), MHD_RESPMEM_PERSISTENT); 
   			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
   			MHD_destroy_response (response);
 			return ret;
 		}
 
 		if (strcmp(valmetric,"mysql")==0) {
-			string *s = generate_header((char *)"ProxySQL Graphs");
+			string s = generate_header((char *)"ProxySQL Graphs");
 			char *buttons = generate_buttons((char *)"mysql");
-			s->append(buttons);
+			s.append(buttons);
 			free(buttons);
-			s->append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
-			string *s1 = generate_canvas((char *)"myChart1");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
+			string s1 = generate_canvas((char *)"myChart1");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart2");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart3");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart4");
-			s->append(s1->c_str());
-			s->append("</div>\n");
+			s.append(s1.c_str());
+			s.append("</div>\n");
 			char **nm = NULL;
 			char **nl = NULL;
 			char **nv = NULL;
@@ -638,7 +639,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			nv[5] = extract_values(mysql_metrics_sqlite,7,true,(double)1);
 			ts = extract_ts(mysql_metrics_sqlite,true);
 			s1 = generate_chart((char *)"myChart1",ts,6,nm,nl,nv);
-			s->append(s1->c_str());
+			s.append(s1.c_str());
 			free(nm);
 			free(nl);
 			for (int aa=0 ; aa<6 ; aa++) {
@@ -671,7 +672,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			nv[5] = extract_values(mysql_metrics_sqlite,13,true);
 			ts = extract_ts(mysql_metrics_sqlite,true);
 			s1 = generate_chart((char *)"myChart2",ts,6,nm,nl,nv);
-			s->append(s1->c_str());
+			s.append(s1.c_str());
 			free(nm);
 			free(nl);
 			for (int aa=0 ; aa<6 ; aa++) {
@@ -679,6 +680,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			}
 			free(nv);
 			free(ts);
+			delete mysql_metrics_sqlite;
 
 
 			SQLite3_result *myhgm_metrics_sqlite = GloProxyStats->get_myhgm_metrics(interval_i);
@@ -702,7 +704,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			nv[4] = extract_values(myhgm_metrics_sqlite,6,true);
 			ts = extract_ts(myhgm_metrics_sqlite,true);
 			s1 = generate_chart((char *)"myChart3",ts,5,nm,nl,nv);
-			s->append(s1->c_str());
+			s.append(s1.c_str());
 			free(nm);
 			free(nl);
 			for (int aa=0 ; aa<5 ; aa++) {
@@ -710,34 +712,34 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			}
 			free(nv);
 			free(ts);
+			delete myhgm_metrics_sqlite;
 
 
 
-			s->append("</body></html>");
-			response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY);
+			s.append("</body></html>");
+			response = MHD_create_response_from_buffer(s.length(), (void *) s.c_str(), MHD_RESPMEM_MUST_COPY);
 			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 			MHD_destroy_response (response);
-			delete s;
 			return ret;
 		}
 		if (strcmp(valmetric,"cache")==0) {
-			string *s = generate_header((char *)"ProxySQL Graphs");
+			string s = generate_header((char *)"ProxySQL Graphs");
 			char *buttons = generate_buttons((char *)"cache");
-			s->append(buttons);
+			s.append(buttons);
 			free(buttons);
-			s->append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
-			string *s1 = generate_canvas((char *)"myChart1");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append("<div class=\"graphs\" style=\"clear: both; height: auto;\">\n");
+			string s1 = generate_canvas((char *)"myChart1");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart2");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart3");
-			s->append(s1->c_str());
-			s->append("<p></p>\n");
+			s.append(s1.c_str());
+			s.append("<p></p>\n");
 			s1 = generate_canvas((char *)"myChart4");
-			s->append(s1->c_str());
-			s->append("</div>\n");
+			s.append(s1.c_str());
+			s.append("</div>\n");
 			SQLite3_result *mysql_metrics_sqlite = GloProxyStats->get_MySQL_Query_Cache_metrics(interval_i);
 			char **nm = NULL;
 			char **nl = NULL;
@@ -764,7 +766,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			nv[4] = extract_values(mysql_metrics_sqlite,8,false,(double)1);
 			ts = extract_ts(mysql_metrics_sqlite,true);
 			s1 = generate_chart((char *)"myChart1",ts,5,nm,nl,nv);
-			s->append(s1->c_str());
+			s.append(s1.c_str());
 			free(nm);
 			free(nl);
 			for (int aa=0 ; aa<5 ; aa++) {
@@ -788,7 +790,7 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			nv[2] = extract_values(mysql_metrics_sqlite,9,false,(double)1/1024/1024);
 			ts = extract_ts(mysql_metrics_sqlite,true);
 			s1 = generate_chart((char *)"myChart2",ts,3,nm,nl,nv);
-			s->append(s1->c_str());
+			s.append(s1.c_str());
 			free(nm);
 			free(nl);
 			for (int aa=0 ; aa<3 ; aa++) {
@@ -796,12 +798,12 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 			}
 			free(nv);
 			free(ts);
+			delete mysql_metrics_sqlite;
 
-			s->append("</body></html>");
-			response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY);
+			s.append("</body></html>");
+			response = MHD_create_response_from_buffer(s.length(), (void *) s.c_str(), MHD_RESPMEM_MUST_COPY);
 			ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 			MHD_destroy_response (response);
-			delete s;
 			return ret;
 		}
 	}
@@ -825,15 +827,14 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 		return ret;
 	}
 	if (strcmp(url,"/")==0) {
-		string *s = generate_header((char *)"ProxySQL Home");
+		string s = generate_header((char *)"ProxySQL Home");
 		char *home = generate_home();
-		s->append(home);
+		s.append(home);
 		free(home);
-		s->append("</body></html>");
-		response = MHD_create_response_from_buffer(s->length(), (void *) s->c_str(), MHD_RESPMEM_MUST_COPY);
+		s.append("</body></html>");
+		response = MHD_create_response_from_buffer(s.length(), (void *) s.c_str(), MHD_RESPMEM_MUST_COPY);
 		ret = MHD_queue_response (connection, MHD_HTTP_OK, response);
 		MHD_destroy_response (response);
-		delete s;
 		return ret;
 	}
 	response = MHD_create_response_from_buffer (strlen (EMPTY_PAGE), (void *) EMPTY_PAGE, MHD_RESPMEM_PERSISTENT);
@@ -843,24 +844,24 @@ int ProxySQL_HTTP_Server::handler(void *cls, struct MHD_Connection *connection, 
 	return ret;
 }
 
-string * ProxySQL_HTTP_Server::generate_header(char *s) {
-	string *a = new string();
-	a->append("<!DOCTYPE html><head>\n<title>");
-	a->append(s);
-	a->append("</title>\n");
-	a->append("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,600,900|Fira+Mono\"/>\n");
-	a->append("<link rel=\"stylesheet\" href=\"/main-bundle.min.css\"/>\n");
-	a->append("<link rel=\"stylesheet\" href=\"/font-awesome.min.css\"/>\n");
-	a->append("<script src=\"/Chart.bundle.js\"></script>\n</head>\n<body style=\"background-color: white;\">\n");
-	a->append("<header class=\"header cf \" role=\"banner\">\n<a class=\"brand\" href=\"http://www.proxysql.com\"><span><strong>Proxy</strong>SQL</span>\n</a>");
+string ProxySQL_HTTP_Server::generate_header(char *s) {
+	string a{};
+	a.append("<!DOCTYPE html><head>\n<title>");
+	a.append(s);
+	a.append("</title>\n");
+	a.append("<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css?family=Source+Sans+Pro:300,400,400i,600,900|Fira+Mono\"/>\n");
+	a.append("<link rel=\"stylesheet\" href=\"/main-bundle.min.css\"/>\n");
+	a.append("<link rel=\"stylesheet\" href=\"/font-awesome.min.css\"/>\n");
+	a.append("<script src=\"/Chart.bundle.js\"></script>\n</head>\n<body style=\"background-color: white;\">\n");
+	a.append("<header class=\"header cf \" role=\"banner\">\n<a class=\"brand\" href=\"http://www.proxysql.com\"><span><strong>Proxy</strong>SQL</span>\n</a>");
 	return a;
 }
 
-string * ProxySQL_HTTP_Server::generate_canvas(char *s) {
-	string *a = new string();
-	a->append("<div class=\"wrapper\" style=\"width: 750px; height: 350px\"><canvas id=\"");
-	a->append(s);
-	a->append("\" width=\"700\" height=\"330\"></canvas></div>\n");
+string ProxySQL_HTTP_Server::generate_canvas(char *s) {
+	string a{};
+	a.append("<div class=\"wrapper\" style=\"width: 750px; height: 350px\"><canvas id=\"");
+	a.append(s);
+	a.append("\" width=\"700\" height=\"330\"></canvas></div>\n");
 	return a;
 }
 ProxySQL_HTTP_Server::ProxySQL_HTTP_Server() {
@@ -878,61 +879,61 @@ ProxySQL_HTTP_Server::~ProxySQL_HTTP_Server() {
 	}
 }
 
-string * ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int nsets, char **dname, char **llabel, char **values) {
+string ProxySQL_HTTP_Server::generate_chart(char *chart_name, char *ts, int nsets, char **dname, char **llabel, char **values) {
 	char *h=(char *)"0123456789abcdef";
-	string *ret= new string();
+	string ret{};
 	int i;
-	ret->append("<script>\n");
-	ret->append("var ts = ");
-	ret->append(ts);
-	ret->append("\n");
+	ret.append("<script>\n");
+	ret.append("var ts = ");
+	ret.append(ts);
+	ret.append("\n");
 	for (i=0;i<nsets;i++) {
-		ret->append("var ");
-		ret->append(dname[i]);
-		ret->append(" = ");
-		ret->append(values[i]);
-		ret->append("\n");
+		ret.append("var ");
+		ret.append(dname[i]);
+		ret.append(" = ");
+		ret.append(values[i]);
+		ret.append("\n");
 	}
-	ret->append("var ctx = document.getElementById(\"");
-	ret->append(chart_name);
-	ret->append("\");\nvar ");
-	ret->append(chart_name);
-	ret->append(" = new Chart(ctx, { \n");
-	ret->append("type: 'line', \n");
-	ret->append("  data: { \n");
-	ret->append("    labels: ts,\n");
-	ret->append("    datasets: [ \n");
+	ret.append("var ctx = document.getElementById(\"");
+	ret.append(chart_name);
+	ret.append("\");\nvar ");
+	ret.append(chart_name);
+	ret.append(" = new Chart(ctx, { \n");
+	ret.append("type: 'line', \n");
+	ret.append("  data: { \n");
+	ret.append("    labels: ts,\n");
+	ret.append("    datasets: [ \n");
 	for (i=0;i<nsets;i++) {
-		ret->append("      {\n");
-		ret->append("        data: "); ret->append(dname[i]); ret->append(",\n");
-		ret->append("        label: \""); ret->append(llabel[i]); ret->append("\",\n");
+		ret.append("      {\n");
+		ret.append("        data: "); ret.append(dname[i]); ret.append(",\n");
+		ret.append("        label: \""); ret.append(llabel[i]); ret.append("\",\n");
 		int j;
 		char pal[7];
 		for (j=0; j<6; j++) { pal[j]=h[rand()%16]; }
 		pal[6]='\0';
-		ret->append("        borderColor: \"#"); ret->append(pal); ret->append("\",\n");
-		ret->append("        fill: false\n");
-		ret->append("      }");
+		ret.append("        borderColor: \"#"); ret.append(pal); ret.append("\",\n");
+		ret.append("        fill: false\n");
+		ret.append("      }");
 		if (i<nsets-1) {
-			ret->append(",");
+			ret.append(",");
 		}
-		ret->append("\n");
+		ret.append("\n");
 	}
-	ret->append("    ]\n");
-	ret->append("  },\n");
-	ret->append("options: {\n");
-        ret->append("    scales: {\n");
-        ret->append("      xAxes: [{\n");
-        ret->append("        ticks: {\n");
-//        ret->append("          autoSkip: true,\n");
-//        ret->append("          maxRotation: 0,\n");
-//        ret->append("          minRotation: 0\n");
-        ret->append("        }\n");
-        ret->append("      }]\n");
-        ret->append("    }\n");
-        ret->append("  }\n");
-	ret->append("});\n");
-	ret->append("</script>\n");
+	ret.append("    ]\n");
+	ret.append("  },\n");
+	ret.append("options: {\n");
+        ret.append("    scales: {\n");
+        ret.append("      xAxes: [{\n");
+        ret.append("        ticks: {\n");
+//        ret.append("          autoSkip: true,\n");
+//        ret.append("          maxRotation: 0,\n");
+//        ret.append("          minRotation: 0\n");
+        ret.append("        }\n");
+        ret.append("      }]\n");
+        ret.append("    }\n");
+        ret.append("  }\n");
+	ret.append("});\n");
+	ret.append("</script>\n");
 	return ret;
 	
 }

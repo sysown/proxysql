@@ -7,7 +7,10 @@
 #include <unordered_set>
 #include <prometheus/exposer.h>
 #include <prometheus/counter.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
 #include "MySQL_HostGroups_Manager.h"
+#include "mysql.h"
 #include "proxysql_admin.h"
 #include "re2/re2.h"
 #include "re2/regexp.h"
@@ -102,7 +105,7 @@ extern char *ssl_ca_fp;
 int admin___web_verbosity = 0;
 char * proxysql_version = NULL;
 
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
+#include "proxysql_find_charset.h"
 
 
 static const vector<string> mysql_servers_tablenames = {
@@ -112,6 +115,7 @@ static const vector<string> mysql_servers_tablenames = {
 	"mysql_galera_hostgroups",
 	"mysql_aws_aurora_hostgroups",
 	"mysql_hostgroup_attributes",
+	"mysql_servers_ssl_params",
 };
 
 static const vector<string> mysql_firewall_tablenames = {
@@ -399,6 +403,10 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_SERVERS ADMIN_SQLITE_TABLE_MYSQL_SERVERS_V2_0_11
 
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS_V2_6_0 "CREATE TABLE mysql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_capath VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_cipher VARCHAR NOT NULL DEFAULT '' , tls_version VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS_V2_6_0
+
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V1_3_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 0 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V1_4_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
 #define ADMIN_SQLITE_TABLE_MYSQL_USERS_V2_0_0 "CREATE TABLE mysql_users (username VARCHAR NOT NULL , password VARCHAR , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 1 , use_ssl INT CHECK (use_ssl IN (0,1)) NOT NULL DEFAULT 0 , default_hostgroup INT NOT NULL DEFAULT 0 , default_schema VARCHAR , schema_locked INT CHECK (schema_locked IN (0,1)) NOT NULL DEFAULT 0 , transaction_persistent INT CHECK (transaction_persistent IN (0,1)) NOT NULL DEFAULT 1 , fast_forward INT CHECK (fast_forward IN (0,1)) NOT NULL DEFAULT 0 , backend INT CHECK (backend IN (0,1)) NOT NULL DEFAULT 1 , frontend INT CHECK (frontend IN (0,1)) NOT NULL DEFAULT 1 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 10000 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (username, backend) , UNIQUE (username, frontend))"
@@ -521,6 +529,9 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS "CREATE TABLE runtime_mysql_servers (hostgroup_id INT CHECK (hostgroup_id>=0) NOT NULL DEFAULT 0 , hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , gtid_port INT CHECK ((gtid_port <> port OR gtid_port=0) AND gtid_port >= 0 AND gtid_port <= 65535) NOT NULL DEFAULT 0 , status VARCHAR CHECK (UPPER(status) IN ('ONLINE','SHUNNED','OFFLINE_SOFT', 'OFFLINE_HARD')) NOT NULL DEFAULT 'ONLINE' , weight INT CHECK (weight >= 0 AND weight <=10000000) NOT NULL DEFAULT 1 , compression INT CHECK (compression IN(0,1)) NOT NULL DEFAULT 0 , max_connections INT CHECK (max_connections >=0) NOT NULL DEFAULT 1000 , max_replication_lag INT CHECK (max_replication_lag >= 0 AND max_replication_lag <= 126144000) NOT NULL DEFAULT 0 , use_ssl INT CHECK (use_ssl IN(0,1)) NOT NULL DEFAULT 0 , max_latency_ms INT UNSIGNED CHECK (max_latency_ms>=0) NOT NULL DEFAULT 0 , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostgroup_id, hostname, port) )"
 
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS_SSL_PARAMS "CREATE TABLE runtime_mysql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_capath VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_cipher VARCHAR NOT NULL DEFAULT '' , tls_version VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )"
+
+
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_REPLICATION_HOSTGROUPS "CREATE TABLE runtime_mysql_replication_hostgroups (writer_hostgroup INT CHECK (writer_hostgroup>=0) NOT NULL PRIMARY KEY , reader_hostgroup INT NOT NULL CHECK (reader_hostgroup<>writer_hostgroup AND reader_hostgroup>=0) , check_type VARCHAR CHECK (LOWER(check_type) IN ('read_only','innodb_read_only','super_read_only','read_only|innodb_read_only','read_only&innodb_read_only')) NOT NULL DEFAULT 'read_only' , comment VARCHAR NOT NULL DEFAULT '', UNIQUE (reader_hostgroup))"
 
 #define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES "CREATE TABLE runtime_mysql_query_rules (rule_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL , active INT CHECK (active IN (0,1)) NOT NULL DEFAULT 0 , username VARCHAR , schemaname VARCHAR , flagIN INT CHECK (flagIN >= 0) NOT NULL DEFAULT 0 , client_addr VARCHAR , proxy_addr VARCHAR , proxy_port INT CHECK (proxy_port >= 0 AND proxy_port <= 65535), digest VARCHAR , match_digest VARCHAR , match_pattern VARCHAR , negate_match_pattern INT CHECK (negate_match_pattern IN (0,1)) NOT NULL DEFAULT 0 , re_modifiers VARCHAR DEFAULT 'CASELESS' , flagOUT INT CHECK (flagOUT >= 0), replace_pattern VARCHAR CHECK(CASE WHEN replace_pattern IS NULL THEN 1 WHEN replace_pattern IS NOT NULL AND match_pattern IS NOT NULL THEN 1 ELSE 0 END) , destination_hostgroup INT DEFAULT NULL , cache_ttl INT CHECK(cache_ttl > 0) , cache_empty_result INT CHECK (cache_empty_result IN (0,1)) DEFAULT NULL , cache_timeout INT CHECK(cache_timeout >= 0) , reconnect INT CHECK (reconnect IN (0,1)) DEFAULT NULL , timeout INT UNSIGNED CHECK (timeout >= 0) , retries INT CHECK (retries>=0 AND retries <=1000) , delay INT UNSIGNED CHECK (delay >=0) , next_query_flagIN INT UNSIGNED , mirror_flagOUT INT UNSIGNED , mirror_hostgroup INT UNSIGNED , error_msg VARCHAR , OK_msg VARCHAR , sticky_conn INT CHECK (sticky_conn IN (0,1)) , multiplex INT CHECK (multiplex IN (0,1,2)) , gtid_from_hostgroup INT UNSIGNED , log INT CHECK (log IN (0,1)) , apply INT CHECK(apply IN (0,1)) NOT NULL DEFAULT 0 , attributes VARCHAR CHECK (JSON_VALID(attributes) OR attributes = '') NOT NULL DEFAULT '' , comment VARCHAR)"
@@ -594,11 +605,13 @@ MHD_Result http_handler(void *cls, struct MHD_Connection *connection, const char
 
 #define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_2 "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
-#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_2
+#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_6_0 "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
-#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE runtime_mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
+//#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_6_0
 
-#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_2
+#define ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE runtime_mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
+
+#define ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_6_0
 
 // Cluster solution
 
@@ -645,7 +658,7 @@ static char * admin_variables_names[]= {
 	(char *)"telnet_stats_ifaces",
 	(char *)"refresh_interval",
 	(char *)"read_only",
-	(char *)"hash_passwords",
+//	(char *)"hash_passwords",
 	(char *)"vacuum_stats",
 	(char *)"version",
 	(char *)"cluster_username",
@@ -666,6 +679,7 @@ static char * admin_variables_names[]= {
 	(char *)"cluster_mysql_variables_save_to_disk",
 	(char *)"cluster_admin_variables_save_to_disk",
 	(char *)"cluster_ldap_variables_save_to_disk",
+	(char *)"cluster_mysql_servers_sync_algorithm",
 	(char *)"checksum_mysql_query_rules",
 	(char *)"checksum_mysql_servers",
 	(char *)"checksum_mysql_users",
@@ -754,6 +768,12 @@ admin_metrics_map = std::make_tuple(
 		)
 	},
 	admin_gauge_vector {
+		std::make_tuple (
+			p_admin_gauge::mysql_listener_paused,
+			"proxysql_mysql_listener_paused",
+			"MySQL listener paused because of PROXYSQL PAUSE.",
+			metric_tags {}
+		),
 		// memory metrics
 		std::make_tuple (
 			p_admin_gauge::connpool_memory_bytes,
@@ -910,6 +930,18 @@ admin_metrics_map = std::make_tuple(
 			"This is the number of global prepared statements for which proxysql has metadata.",
 			metric_tags {}
 		),
+		std::make_tuple(
+			p_admin_gauge::prepare_stmt_metadata_memory_bytes,
+			"prepare_stmt_metadata_memory_bytes",
+			"Memory used to store meta data related to prepare statements.",
+			metric_tags{}
+		),
+		std::make_tuple(
+			p_admin_gauge::prepare_stmt_backend_memory_bytes,
+			"prepare_stmt_backend_memory_bytes",
+			"Memory used by backend server related to prepare statements.",
+			metric_tags{}
+		),
 		std::make_tuple (
 			p_admin_gauge::fds_in_use,
 			"proxysql_fds_in_use",
@@ -1054,7 +1086,7 @@ bool FlushCommandWrapper(MySQL_Session *sess, const std::vector<std::string>& cm
 		else
 			assert(0);
 		msg += "\n";
-		proxy_debug(PROXY_DEBUG_ADMIN, 4, msg.c_str());
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s", msg.c_str());
 #endif // DEBUG
 		SPA->send_MySQL_OK(&sess->client_myds->myprot, NULL);
 		return true;
@@ -1075,19 +1107,56 @@ bool FlushCommandWrapper(MySQL_Session *sess, const string& modname, char *query
 incoming_servers_t::incoming_servers_t() {}
 
 incoming_servers_t::incoming_servers_t(
-	SQLite3_result* runtime_mysql_servers,
+	SQLite3_result* incoming_mysql_servers_v2,
 	SQLite3_result* incoming_replication_hostgroups,
 	SQLite3_result* incoming_group_replication_hostgroups,
 	SQLite3_result* incoming_galera_hostgroups,
 	SQLite3_result* incoming_aurora_hostgroups,
-	SQLite3_result* incoming_hostgroup_attributes
+	SQLite3_result* incoming_hostgroup_attributes,
+	SQLite3_result* incoming_mysql_servers_ssl_params,
+	SQLite3_result* runtime_mysql_servers
 ) :
-	runtime_mysql_servers(runtime_mysql_servers),
+	incoming_mysql_servers_v2(incoming_mysql_servers_v2),
 	incoming_replication_hostgroups(incoming_replication_hostgroups),
 	incoming_group_replication_hostgroups(incoming_group_replication_hostgroups),
 	incoming_galera_hostgroups(incoming_galera_hostgroups),
 	incoming_aurora_hostgroups(incoming_aurora_hostgroups),
-	incoming_hostgroup_attributes(incoming_hostgroup_attributes)
+	incoming_hostgroup_attributes(incoming_hostgroup_attributes),
+	incoming_mysql_servers_ssl_params(incoming_mysql_servers_ssl_params),
+	runtime_mysql_servers(runtime_mysql_servers)
+{}
+
+runtime_mysql_servers_checksum_t::runtime_mysql_servers_checksum_t() : epoch(0) {}
+
+runtime_mysql_servers_checksum_t::runtime_mysql_servers_checksum_t(const std::string& checksum, time_t epoch) : 
+	value(checksum), epoch(epoch) {}
+
+mysql_servers_v2_checksum_t::mysql_servers_v2_checksum_t() : epoch(0) {}
+
+mysql_servers_v2_checksum_t::mysql_servers_v2_checksum_t(const std::string& checksum, time_t epoch) :
+	value(checksum), epoch(epoch) {}
+
+bootstrap_info_t::~bootstrap_info_t() {
+	if (servers != nullptr) {
+		mysql_free_result(servers);
+	}
+	if (users != nullptr) {
+		mysql_free_result(users);
+	}
+}
+
+peer_runtime_mysql_servers_t::peer_runtime_mysql_servers_t() : resultset(nullptr), checksum() {}
+
+peer_runtime_mysql_servers_t::peer_runtime_mysql_servers_t(
+	SQLite3_result* resultset, const runtime_mysql_servers_checksum_t& checksum
+) : resultset(resultset), checksum(checksum)
+{}
+
+peer_mysql_servers_v2_t::peer_mysql_servers_v2_t() : resultset(nullptr), checksum() {}
+
+peer_mysql_servers_v2_t::peer_mysql_servers_v2_t(
+	SQLite3_result* resultset, const mysql_servers_v2_checksum_t& checksum
+) : resultset(resultset), checksum(checksum)
 {}
 
 int ProxySQL_Test___GetDigestTable(bool reset, bool use_swap) {
@@ -1950,6 +2019,9 @@ bool admin_handler_command_set(char *query_no_space, unsigned int query_no_space
 	// Trim spaces from var name to allow writing like 'var = value'
 	char *var_name = trim_spaces_in_place(untrimmed_var_name);
 
+	if (strstr(var_name,(char *)"password") || strcmp(var_name,(char *)"mysql-default_authentication_plugin")==0) {
+		proxy_info("Received SET command for %s\n", var_name);
+	}
 
 	bool run_query = false;
 	// Check if the command tries to set a non-existing variable.
@@ -3263,6 +3335,8 @@ bool ProxySQL_Admin::GenericRefreshStatistics(const char *query_no_space, unsign
 				strstr(query_no_space,"runtime_mysql_aws_aurora_hostgroups")
 				||
 				strstr(query_no_space,"runtime_mysql_hostgroup_attributes")
+				||
+				strstr(query_no_space,"runtime_mysql_servers_ssl_params")
 			) {
 				runtime_mysql_servers=true; refresh=true;
 			}
@@ -3745,8 +3819,8 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
 	if (sess->session_type == PROXYSQL_SESSION_ADMIN) { // no stats
 		string tn = "";
-		if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS))) {
-			tn = "mysql_servers";
+		if (!strncasecmp(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS, query_no_space, strlen(CLUSTER_QUERY_RUNTIME_MYSQL_SERVERS))) {
+			tn = "cluster_mysql_servers";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_REPLICATION_HOSTGROUPS))) {
 			tn = "mysql_replication_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_GROUP_REPLICATION_HOSTGROUPS))) {
@@ -3757,6 +3831,10 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			tn = "mysql_aws_aurora_hostgroups";
 		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES, query_no_space, strlen(CLUSTER_QUERY_MYSQL_HOSTGROUP_ATTRIBUTES))) {
 			tn = "mysql_hostgroup_attributes";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_SSL_PARAMS))) {
+			tn = "mysql_servers_ssl_params";
+		} else if (!strncasecmp(CLUSTER_QUERY_MYSQL_SERVERS_V2, query_no_space, strlen(CLUSTER_QUERY_MYSQL_SERVERS_V2))) {
+			tn = "mysql_servers_v2";
 		}
 		if (tn != "") {
 			GloAdmin->mysql_servers_wrlock();
@@ -3764,7 +3842,28 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			GloAdmin->mysql_servers_wrunlock();
 
 			if (resultset == nullptr) {
-				resultset=MyHGM->dump_table_mysql(tn);
+				// 'mysql_servers_v2' is a virtual table that represents the latest 'main.mysql_servers'
+				// records promoted by the user. This section shouldn't be reached, since the initial resulset
+				// for this table ('MySQL_HostGroups_Manager::incoming_mysql_servers') is generated during
+				// initialization, and it's only updated in subsequent user config promotions. In case we
+				// reach here, an empty resultset should be replied, as it would mean that no user
+				// config has ever been promoted to runtime, and thus, this virtual table should remain empty.
+				if (tn == "mysql_servers_v2") {
+					const string query_empty_resultset {
+						string { MYHGM_GEN_CLUSTER_ADMIN_RUNTIME_SERVERS } + " LIMIT 0"
+					};
+
+					char *error=NULL;
+					int cols=0;
+					int affected_rows=0;
+					proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 4, "%s\n", query);
+					GloAdmin->mysql_servers_wrlock();
+					GloAdmin->admindb->execute_statement(query_empty_resultset.c_str(), &error, &cols, &affected_rows, &resultset);
+					GloAdmin->mysql_servers_wrunlock();
+				} else {
+					resultset = MyHGM->dump_table_mysql(tn);
+				}
+
 				if (resultset) {
 					sess->SQLite3_to_MySQL(resultset, error, affected_rows, &sess->client_myds->myprot);
 					delete resultset;
@@ -4263,6 +4362,29 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 							run_query = false;
 						}
 						break;
+					case 54:
+					{
+						run_query = false;
+						if (test_arg1 == 0) {
+							test_arg1 = 1000;
+						}
+						if (GloMTH->variables.ssl_p2s_ca == NULL &&
+							GloMTH->variables.ssl_p2s_capath == NULL) {
+							SPA->send_MySQL_ERR(&sess->client_myds->myprot, "'mysql-ssl_p2s_ca' and 'mysql-ssl_p2s_capath' have not been configured");
+							break;
+						}
+						char msg[256];
+						uint64_t duration = 0ULL;
+						if (SPA->ProxySQL_Test___CA_Certificate_Load_And_Verify(&duration, test_arg1, GloMTH->variables.ssl_p2s_ca,
+							GloMTH->variables.ssl_p2s_capath)) {
+							sprintf(msg, "Took %llums in loading and verifying CA Certificate for %d times\n", duration, test_arg1);
+							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
+						}
+						else {
+							SPA->send_MySQL_ERR(&sess->client_myds->myprot, "Unable to verify CA Certificate");
+						}
+					}
+					break;
 #endif // DEBUG
 					default:
 						SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Invalid test");
@@ -4940,6 +5062,15 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 			||
 			(strlen(query_no_space)==strlen("CHECKSUM MYSQL HOSTGROUP ATTRIBUTES") && !strncasecmp("CHECKSUM MYSQL HOSTGROUP ATTRIBUTES", query_no_space, strlen(query_no_space)))){
 			char *q=(char *)"SELECT * FROM mysql_hostgroup_attributes ORDER BY hostgroup_id";
+			tablename=(char *)"MYSQL HOSTGROUP ATTRIBUTES";
+			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
+		}
+		if ((strlen(query_no_space)==strlen("CHECKSUM MEMORY MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MEMORY MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MEM MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MEM MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))
+			||
+			(strlen(query_no_space)==strlen("CHECKSUM MYSQL SERVERS SSL PARAMS") && !strncasecmp("CHECKSUM MYSQL SERVERS SSL PARAMS", query_no_space, strlen(query_no_space)))){
+			char *q=(char *)"SELECT * FROM mysql_servers_ssl_params ORDER BY hostname, port, username";
 			tablename=(char *)"MYSQL HOSTGROUP ATTRIBUTES";
 			SPA->admindb->execute_statement(q, &error, &cols, &affected_rows, &resultset);
 		}
@@ -5894,7 +6025,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.telnet_stats_ifaces=NULL;
 	variables.refresh_interval=2000;
 	variables.mysql_show_processlist_extended = false;
-	variables.hash_passwords=true;	// issue #676
+//	variables.hash_passwords=true;	// issue #676
 	variables.vacuum_stats=true;	// issue #1011
 	variables.admin_read_only=false;	// by default, the admin interface accepts writes
 	variables.admin_version=(char *)PROXYSQL_VERSION;
@@ -5909,6 +6040,7 @@ ProxySQL_Admin::ProxySQL_Admin() :
 	variables.cluster_mysql_variables_diffs_before_sync = 3;
 	variables.cluster_admin_variables_diffs_before_sync = 3;
 	variables.cluster_ldap_variables_diffs_before_sync = 3;
+	variables.cluster_mysql_servers_sync_algorithm = 1;
 	checksum_variables.checksum_mysql_query_rules = true;
 	checksum_variables.checksum_mysql_servers = true;
 	checksum_variables.checksum_mysql_users = true;
@@ -6031,7 +6163,269 @@ void ProxySQL_Admin::init_ldap() {
 	}
 }
 
-bool ProxySQL_Admin::init() {
+struct boot_srv_info_t {
+	string member_id;
+	string member_host;
+	uint32_t member_port;
+	string member_state;
+	string member_role;
+	string member_version;
+};
+
+struct BOOT_SRV_INFO_T {
+	enum {
+		MEMBER_ID,
+		MEMBER_HOST,
+		MEMBER_PORT,
+		MEMBER_STATE,
+		MEMBER_ROLE,
+		MEMBER_VERSION
+	};
+};
+
+struct boot_user_info_t {
+	string user;
+	string ssl_type;
+	string auth_string;
+	string auth_plugin;
+	bool password_expired;
+};
+
+struct BOOT_USER_INFO_T {
+	enum {
+		USER,
+		SSL_TYPE,
+		AUTH_STRING,
+		AUTH_PLUGIN,
+		PASSWORD_EXPIRED
+	};
+};
+
+struct srv_defs_t {
+	int64_t weight;
+	int64_t max_conns;
+	int32_t use_ssl;
+};
+
+using boot_srv_cnf_t = pair<boot_srv_info_t,srv_defs_t>;
+
+vector<boot_srv_info_t> extract_boot_servers_info(MYSQL_RES* servers) {
+	vector<boot_srv_info_t> servers_info {};
+
+	while (MYSQL_ROW row = mysql_fetch_row(servers)) {
+		servers_info.push_back({
+			string { row[BOOT_SRV_INFO_T::MEMBER_ID] },
+			string { row[BOOT_SRV_INFO_T::MEMBER_HOST] },
+			static_cast<uint32>(stoi(row[BOOT_SRV_INFO_T::MEMBER_PORT])),
+			string { row[BOOT_SRV_INFO_T::MEMBER_STATE] },
+			string { row[BOOT_SRV_INFO_T::MEMBER_ROLE] },
+			string { row[BOOT_SRV_INFO_T::MEMBER_VERSION] },
+		});
+	}
+
+	return servers_info;
+}
+
+string build_boot_servers_insert(const vector<boot_srv_cnf_t>& srvs_info_defs) {
+	const string t_srvs_insert {
+		"INSERT INTO mysql_servers (hostgroup_id,hostname,port,status,weight,max_connections,use_ssl) VALUES "
+	};
+	string t_srvs_values {};
+
+	for (const auto& info_defs : srvs_info_defs) {
+		const boot_srv_info_t& srv_info = info_defs.first;
+		const srv_defs_t& srv_defs = info_defs.second;
+
+		const char t_values[] { "(%d, \"%s\", %d, \"%s\", %ld, %ld, %d)" };
+		string srv_values = cstr_format(
+			t_values,
+			srv_info.member_role == "PRIMARY" ? 0 : 1, // HOSTGROUP_ID
+			srv_info.member_host.c_str(),              // HOSTNAME
+			srv_info.member_port,                      // PORT
+			srv_info.member_state.c_str(),             // STATUS
+			srv_defs.weight,                           // Weight
+			srv_defs.max_conns,                        // Max Connections
+			srv_defs.use_ssl                           // UseSSL
+		).str;
+
+		if (&info_defs != &srvs_info_defs.back()) {
+			srv_values += ",";
+		}
+
+		t_srvs_values += srv_values;
+	}
+
+	const string servers_insert { t_srvs_insert + t_srvs_values };
+
+	return servers_insert;
+}
+
+string build_boot_users_insert(MYSQL_RES* users) {
+	vector<boot_user_info_t> users_info {};
+
+	while (MYSQL_ROW row = mysql_fetch_row(users)) {
+		users_info.push_back({
+			string { row[BOOT_USER_INFO_T::USER] },
+			string { row[BOOT_USER_INFO_T::SSL_TYPE] },
+			string { row[BOOT_USER_INFO_T::AUTH_STRING] },
+			string { row[BOOT_USER_INFO_T::AUTH_PLUGIN] },
+			static_cast<bool>(atoi(row[BOOT_USER_INFO_T::PASSWORD_EXPIRED]))
+		});
+	}
+
+	// MySQL Users
+	const string t_users_insert {
+		"INSERT INTO mysql_users (username,password,active,use_ssl) VALUES "
+	};
+	string t_users_values {};
+
+	for (const boot_user_info_t& user : users_info) {
+		uint32_t use_ssl = user.ssl_type.empty() ? 0 : 1;
+		const char t_values[] { "(\"%s\", \"%s\", %d, %d)" };
+
+		string srv_values = cstr_format(
+			t_values,
+			user.user.c_str(),        // USERNAME
+			user.auth_string.c_str(), // HOSTNAME
+			1,                        // ACTIVE: Always ON
+			use_ssl                   // USE_SSL: Dependent on backend user
+		).str;
+
+		if (&user != &users_info.back()) {
+			srv_values += ",";
+		}
+
+		t_users_values += srv_values;
+	}
+
+	const string users_insert { t_users_insert + t_users_values };
+
+	return users_insert;
+}
+
+map<uint64_t,srv_defs_t> get_cur_hg_attrs(SQLite3DB* admindb) {
+	map<uint64_t,srv_defs_t> res {};
+
+	char* error = nullptr;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+
+	admindb->execute_statement(
+		"SELECT hostgroup_id,servers_defaults FROM mysql_hostgroup_attributes",
+		&error, &cols, &affected_rows, &resultset
+	);
+
+	for (SQLite3_row* row : resultset->rows) {
+		const int32_t hid = atoi(row->fields[0]);
+		srv_defs_t srv_defs {};
+		srv_defs.weight = 1;
+		srv_defs.max_conns = 512;
+		srv_defs.use_ssl = 1;
+
+		nlohmann::json j_srv_defs = nlohmann::json::parse(row->fields[1]);
+
+		const auto weight_check = [] (int64_t weight) -> bool { return weight >= 0; };
+		srv_defs.weight = j_get_srv_default_int_val<int64_t>(j_srv_defs, hid, "weight", weight_check);
+
+		const auto max_conns_check = [] (int64_t max_conns) -> bool { return max_conns >= 0; };
+		srv_defs.max_conns = j_get_srv_default_int_val<int64_t>(j_srv_defs, hid, "max_connections", max_conns_check);
+
+		const auto use_ssl_check = [] (int32_t use_ssl) -> bool { return use_ssl == 0 || use_ssl == 1; };
+		srv_defs.use_ssl = j_get_srv_default_int_val<int32_t>(j_srv_defs, hid, "use_ssl", use_ssl_check);
+
+		res.insert({ hid , srv_defs });
+	}
+
+	delete resultset;
+
+	return res;
+}
+
+vector<boot_srv_cnf_t> build_srvs_info_with_defs(
+	const vector<boot_srv_info_t>& srvs_info,
+	const map<uint64_t,srv_defs_t>& hgid_defs,
+	const srv_defs_t global_defs
+) {
+	vector<boot_srv_cnf_t> res {};
+
+	for (const boot_srv_info_t& srv_info : srvs_info) {
+		if (srv_info.member_role == "PRIMARY") {
+			const auto hg_it = hgid_defs.find(0);
+
+			if (hg_it != hgid_defs.end()) {
+				res.push_back({ srv_info, hg_it->second });
+			} else {
+				res.push_back({ srv_info, global_defs });
+			}
+		} else {
+			const auto hg_it = hgid_defs.find(1);
+
+			if (hg_it != hgid_defs.end()) {
+				res.push_back({ srv_info, hg_it->second });
+			} else {
+				res.push_back({ srv_info, global_defs });
+			}
+		}
+	}
+
+	return res;
+}
+
+/**
+ * @brief Helper function used to check if tables are already filled with data.
+ * @details Handles the boilerplate operations of executing 'SELECT COUNT(*)' alike queries.
+ * @param admindb An already initialized instance of a SQLite3DB object to 'mem_admindb'.
+ * @param query The query to be executed, it's required to be 'SELECT COUNT(*)' alike.
+ * @return The resulting int of the 'COUNT(*)' in case of success, '-1' otherwise. In case of error, error
+ *   cause are logged, and `assert` is called.
+ */
+int check_if_user_config(SQLite3DB* admindb, const char* query) {
+	char* error = nullptr;
+	int cols = 0;
+	int affected_rows = 0;
+	SQLite3_result* resultset = NULL;
+
+	admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset);
+	if (error) {
+		proxy_error(
+			"Aborting due to failed query over SQLite3 - db: '%s', query: '%s', err: %s", admindb->get_url(), query, error
+		);
+		assert(0);
+	}
+
+	int count = -1;
+
+	if (resultset != nullptr && !resultset->rows.empty() && resultset->rows[0]->cnt >= 0) {
+		const char* s_count = resultset->rows[0]->fields[0];
+		char* p_end = nullptr;
+
+		count = std::strtol(s_count, &p_end, 10);
+
+		if (p_end == s_count || errno == ERANGE) {
+			proxy_error(
+				"Aborting due to invalid query output, expected single INT (E.g. 'COUNT(*)') - query: '%s'", query
+			);
+			count = -1;
+		}
+	}
+
+	if (count == -1) {
+		assert(0);
+	}
+
+	delete resultset;
+	return count;
+};
+
+/**
+ * @brief Definition of an auxiliary table used to store bootstrap variables.
+ * @details Table is used only to store in configdb bootstrap variables that are required to persist between
+ *   executions.
+ */
+#define ADMIN_SQLITE_TABLE_BOOTSTRAP_VARIABLES "CREATE TABLE IF NOT EXISTS bootstrap_variables (variable_name VARCHAR NOT NULL PRIMARY KEY , variable_value VARCHAR NOT NULL)"
+
+bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	cpu_timer cpt;
 
 	Admin_HTTP_Server = NULL;
@@ -6119,6 +6513,8 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_HOSTGROUP_ATTRIBUTES);
+	insert_into_tables_defs(tables_defs_admin,"mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
+	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_SERVERS_SSL_PARAMS);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_admin,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_admin,"runtime_mysql_query_rules", ADMIN_SQLITE_TABLE_RUNTIME_MYSQL_QUERY_RULES);
@@ -6157,6 +6553,7 @@ bool ProxySQL_Admin::init() {
 	insert_into_tables_defs(tables_defs_config,"mysql_galera_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_GALERA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_aws_aurora_hostgroups", ADMIN_SQLITE_TABLE_MYSQL_AWS_AURORA_HOSTGROUPS);
 	insert_into_tables_defs(tables_defs_config,"mysql_hostgroup_attributes", ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES);
+	insert_into_tables_defs(tables_defs_config,"mysql_servers_ssl_params", ADMIN_SQLITE_TABLE_MYSQL_SERVERS_SSL_PARAMS);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES);
 	insert_into_tables_defs(tables_defs_config,"mysql_query_rules_fast_routing", ADMIN_SQLITE_TABLE_MYSQL_QUERY_RULES_FAST_ROUTING);
 	insert_into_tables_defs(tables_defs_config,"global_variables", ADMIN_SQLITE_TABLE_GLOBAL_VARIABLES);
@@ -6316,8 +6713,201 @@ bool ProxySQL_Admin::init() {
 			__insert_or_replace_disktable_select_maintable();
 		}
 	}
+
+	/**
+	 * @brief Inserts a default 'mysql_group_replication_hostgroup'.
+	 * @details Uses the following defaults:
+	 *   - writer_hostgroup: 0
+	 *   - reader_hostgroup: 1
+	 *   - backup_writer_hostgroup: 2
+	 *   - offline_hostgroup: 3
+	 *   - max_writers: 9
+	 *   - writer_is_also_reader: 0 -> Keep hostgroups separated
+	 *   - max_transactions_behind: 0
+	 *
+	 *   The number of writers in 'multi_primary_mode' wont be restricted, user should tune this value to
+	 *   convenience. By default 'max_writers' is set to 9, as is the current member limitation for Group
+	 *   Replication.
+	 */
+	const char insert_def_gr_hgs[] {
+		"INSERT INTO mysql_group_replication_hostgroups ("
+			"writer_hostgroup,backup_writer_hostgroup,reader_hostgroup,offline_hostgroup,active,max_writers,"
+			"writer_is_also_reader"
+		") VALUES (0,2,1,3,1,9,0)"
+	};
+	vector<boot_srv_info_t> servers_info {};
+
+	if (GloVars.global.gr_bootstrap_mode) {
+		// Check if user config is present for 'mysql_group_replication_hostgroups'
+		bool user_gr_hg_cnf = check_if_user_config(admindb, "SELECT COUNT(*) FROM mysql_group_replication_hostgroups");
+		if (user_gr_hg_cnf == false) {
+			admindb->execute(insert_def_gr_hgs);
+		} else {
+			proxy_info("Bootstrap config, found previous user 'mysql_group_replication_hostgroups' config, reusing...\n");
+		}
+
+		// Stores current user config for 'mysql_hostgroup_attributes::servers_defaults'
+		map<uint64_t,srv_defs_t> hgid_defs {};
+		// Check if user config is present for 'mysql_hostgroup_attributes'
+		bool user_gr_hg_attrs_cnf = check_if_user_config(admindb, "SELECT COUNT(*) FROM mysql_hostgroup_attributes");
+		int32_t have_ssl = 1;
+
+		// SSL explicitly disabled by user for backend connections
+		if (GloVars.global.gr_bootstrap_ssl_mode) {
+			if (strcasecmp(GloVars.global.gr_bootstrap_ssl_mode, "DISABLED") == 0) {
+				have_ssl = 0;
+			}
+		}
+
+		const int64_t DEF_GR_SRV_WEIGHT = 1;
+		const int64_t DEF_GR_SRV_MAX_CONNS = 512;
+		const int32_t DEF_GR_SRV_USE_SSL = have_ssl;
+
+		// Update 'mysql_hostgroup_attributes' with sensible defaults for the new discovered instances
+		if (user_gr_hg_attrs_cnf == false) {
+			const nlohmann::json j_def_attrs {
+				{ "weight", DEF_GR_SRV_WEIGHT },
+				{ "max_connections", DEF_GR_SRV_MAX_CONNS },
+				{ "use_ssl", DEF_GR_SRV_USE_SSL }
+			};
+			const string str_def_attrs { j_def_attrs.dump() };
+			const string insert_def_hg_attrs {
+				"INSERT INTO mysql_hostgroup_attributes (hostgroup_id, servers_defaults) VALUES"
+					" (0,'"+ str_def_attrs + "'), (1,'" + str_def_attrs + "')"
+			};
+			admindb->execute(insert_def_hg_attrs.c_str());
+		} else {
+			proxy_info("Bootstrap config, found previous user 'mysql_hostgroup_attributes' config, reusing...\n");
+			hgid_defs = get_cur_hg_attrs(admindb);
+		}
+
+		// Define the 'global defaults'. Either pure defaults, or user specified (argument). These values are
+		// supersede if previous user config is found for 'mysql_hostgroup_attributes::servers_defaults'.
+		srv_defs_t global_srvs_defs {};
+		global_srvs_defs.weight = DEF_GR_SRV_WEIGHT;
+		global_srvs_defs.max_conns = DEF_GR_SRV_MAX_CONNS;
+		global_srvs_defs.use_ssl = DEF_GR_SRV_USE_SSL;
+
+		servers_info = extract_boot_servers_info(bootstrap_info.servers);
+		auto full_srvs_info = build_srvs_info_with_defs(servers_info, hgid_defs, global_srvs_defs);
+		const string servers_insert { build_boot_servers_insert(full_srvs_info) };
+
+		admindb->execute("DELETE FROM mysql_servers");
+		admindb->execute(servers_insert.c_str());
+
+		const string users_insert { build_boot_users_insert(bootstrap_info.users) };
+		admindb->execute("DELETE FROM mysql_users");
+		admindb->execute(users_insert.c_str());
+
+		// Make the configuration persistent
+		flush_GENERIC__from_to("mysql_servers", "memory_to_disk");
+		flush_mysql_users__from_memory_to_disk();
+	}
+
+	// Admin variables 'bootstrap' modifications
+	if (GloVars.global.gr_bootstrap_mode) {
+		// TODO-NOTE: This MUST go away; 'admin-hash_passwords' will be deprecated
+		admindb->execute("UPDATE global_variables SET variable_value='false' WHERE variable_name='admin-hash_passwords'");
+	}
 	flush_admin_variables___database_to_runtime(admindb,true);
+
+	if (GloVars.global.gr_bootstrap_mode) {
+		flush_admin_variables___runtime_to_database(configdb, false, true, false);
+	}
+
+	// MySQL variables / MySQL Query Rules 'bootstrap' modifications
+	if (GloVars.global.gr_bootstrap_mode && !servers_info.empty()) {
+		const uint64_t base_port {
+			GloVars.global.gr_bootstrap_conf_base_port == 0 ? 6446 :
+				GloVars.global.gr_bootstrap_conf_base_port
+		};
+		const string bind_addr {
+			GloVars.global.gr_bootstrap_conf_bind_address == nullptr ? "0.0.0.0" :
+				string { GloVars.global.gr_bootstrap_conf_bind_address }
+		};
+		const string s_rw_port { std::to_string(base_port) };
+		const string s_ro_port { std::to_string(base_port + 1) };
+		const string rw_addr { bind_addr + ":" + s_rw_port };
+		const string ro_addr { bind_addr + ":" + s_ro_port };
+		const string mysql_interfaces { rw_addr + ";" + ro_addr };
+
+		// Look for the default collation
+		const MARIADB_CHARSET_INFO* charset_info = proxysql_find_charset_nr(bootstrap_info.server_language);
+		const char* server_charset = charset_info == nullptr ? "" : charset_info->csname;
+		const char* server_collation = charset_info == nullptr ? "" : charset_info->name;
+
+		// Holds user specified values, defaults, and implications of variables over others
+		const map<string,const char*> bootstrap_mysql_vars {
+			{ "mysql-server_version", bootstrap_info.server_version.c_str() },
+			{ "mysql-default_charset", server_charset },
+			{ "mysql-default_collation_connection", server_collation },
+			{ "mysql-interfaces", mysql_interfaces.c_str() },
+			{ "mysql-monitor_username", bootstrap_info.mon_user.c_str() },
+			{ "mysql-monitor_password", bootstrap_info.mon_pass.c_str() },
+			{ "mysql-have_ssl", "true" },
+			{ "mysql-ssl_p2s_ca", GloVars.global.gr_bootstrap_ssl_ca },
+			{ "mysql-ssl_p2s_capath", GloVars.global.gr_bootstrap_ssl_capath },
+			{ "mysql-ssl_p2s_cert", GloVars.global.gr_bootstrap_ssl_cert },
+			{ "mysql-ssl_p2s_cipher", GloVars.global.gr_bootstrap_ssl_cipher },
+			{ "mysql-ssl_p2s_crl", GloVars.global.gr_bootstrap_ssl_crl },
+			{ "mysql-ssl_p2s_crlpath", GloVars.global.gr_bootstrap_ssl_crlpath },
+			{ "mysql-ssl_p2s_key", GloVars.global.gr_bootstrap_ssl_key }
+		};
+
+		for (const pair<const string,const char*>& p_var_val : bootstrap_mysql_vars) {
+			if (p_var_val.second != nullptr) {
+				const string& name { p_var_val.first };
+				const string& value { p_var_val.second };
+				const string update_mysql_var {
+					"UPDATE global_variables SET variable_value='" + value + "' WHERE variable_name='" + name + "'"
+				};
+
+				admindb->execute(update_mysql_var.c_str());
+			}
+		}
+
+		// MySQL Query Rules - Port based RW split
+		{
+			// TODO: This should be able to contain in the future Unix socket based rules
+			const string insert_rw_split_rules {
+				"INSERT INTO mysql_query_rules (rule_id,active,proxy_port,destination_hostgroup,apply) VALUES "
+				" (0,1," + s_rw_port + ",0,1), (1,1," + s_ro_port + ",1,1)"
+			};
+
+			// Preserve previous user config targeting hostgroups 0/1
+			bool user_qr_cnf = check_if_user_config(admindb, "SELECT COUNT(*) FROM mysql_query_rules");
+			if (user_qr_cnf == false) {
+				admindb->execute(insert_rw_split_rules.c_str());
+			} else {
+				proxy_info("Bootstrap config, found previous user 'mysql_query_rules' config, reusing...\n");
+			}
+
+			flush_GENERIC__from_to("mysql_query_rules", "memory_to_disk");
+		}
+
+		// Store the 'bootstrap_variables'
+		if (bootstrap_info.rand_gen_user) {
+			configdb->execute(ADMIN_SQLITE_TABLE_BOOTSTRAP_VARIABLES);
+
+			const string insert_bootstrap_user {
+				"INSERT INTO bootstrap_variables (variable_name,variable_value) VALUES"
+					" ('bootstrap_username','" + string { bootstrap_info.mon_user } + "')"
+			};
+			const string insert_bootstrap_pass {
+				"INSERT INTO bootstrap_variables (variable_name,variable_value) VALUES"
+					" ('bootstrap_password','" + string { bootstrap_info.mon_pass } + "')"
+			};
+
+			configdb->execute("DELETE FROM bootstrap_variables WHERE variable_name='bootstrap_username'");
+			configdb->execute(insert_bootstrap_user.c_str());
+			configdb->execute("DELETE FROM bootstrap_variables WHERE variable_name='bootstrap_password'");
+			configdb->execute(insert_bootstrap_pass.c_str());
+		}
+	}
 	flush_mysql_variables___database_to_runtime(admindb,true);
+	if (GloVars.global.gr_bootstrap_mode) {
+		flush_mysql_variables___runtime_to_database(configdb, false, true, false);
+	}
 #ifdef PROXYSQLCLICKHOUSE
 	flush_clickhouse_variables___database_to_runtime(admindb,true);
 #endif /* PROXYSQLCLICKHOUSE */
@@ -6373,10 +6963,12 @@ void ProxySQL_Admin::init_sqliteserver_variables() {
 }
 
 void ProxySQL_Admin::init_ldap_variables() {
+/*
 	if (variables.hash_passwords==true) {
 		proxy_info("Impossible to set admin-hash_passwords=true when LDAP is enabled. Reverting to false\n");
 		variables.hash_passwords=false;
 	}
+*/
 	flush_ldap_variables___runtime_to_database(configdb, false, false, false);
 	flush_ldap_variables___runtime_to_database(admindb, false, true, false);
 	flush_ldap_variables___database_to_runtime(admindb,true);
@@ -6471,6 +7063,12 @@ ProxySQL_Admin::~ProxySQL_Admin() {
 	delete (RE2 *)match_regexes.re[3];
 	free(match_regexes.re);
 	delete (re2::RE2::Options *)match_regexes.opt;
+
+	for (std::unordered_map<std::string, void*>::iterator it = map_test_mysql_firewall_whitelist_rules.begin(); it != map_test_mysql_firewall_whitelist_rules.end(); ++it) {
+		PtrArray* myptrarray = (PtrArray*)it->second;
+		delete myptrarray;
+	}
+	map_test_mysql_firewall_whitelist_rules.clear();
 };
 
 // This function is used only used to export what collations are available
@@ -7535,7 +8133,7 @@ bool ProxySQL_Admin::ProxySQL_Test___Verify_mysql_query_rules_fast_routing(
 	vector<fast_routing_hashmap_t> th_hashmaps {};
 
 	if (maps_per_thread) {
-		for (int i = 0; i < ths; i++) {
+		for (uint32_t i = 0; i < static_cast<uint32_t>(ths); i++) {
 			th_hashmaps.push_back(GloQPro->create_fast_routing_hashmap(resultset2));
 		}
 	}
@@ -8016,6 +8614,10 @@ char * ProxySQL_Admin::get_variable(char *name) {
 		sprintf(intbuf,"%d",variables.cluster_ldap_variables_diffs_before_sync);
 		return strdup(intbuf);
 	}
+	if (!strcasecmp(name,"cluster_mysql_servers_sync_algorithm")) {
+		sprintf(intbuf, "%d", variables.cluster_mysql_servers_sync_algorithm);
+		return strdup(intbuf);
+	}
 	if (!strcasecmp(name,"cluster_mysql_query_rules_save_to_disk")) {
 		return strdup((variables.cluster_mysql_query_rules_save_to_disk ? "true" : "false"));
 	}
@@ -8044,9 +8646,11 @@ char * ProxySQL_Admin::get_variable(char *name) {
 	if (!strcasecmp(name,"read_only")) {
 		return strdup((variables.admin_read_only ? "true" : "false"));
 	}
+/*
 	if (!strcasecmp(name,"hash_passwords")) {
 		return strdup((variables.hash_passwords ? "true" : "false"));
 	}
+*/
 	if (!strcasecmp(name,"vacuum_stats")) {
 		return strdup((variables.vacuum_stats ? "true" : "false"));
 	}
@@ -8390,6 +8994,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_query_rules_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_mysql_query_rules ? intv : 0;
 			if (variables.cluster_mysql_query_rules_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_admin_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
@@ -8404,6 +9009,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_servers_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_mysql_servers ? intv : 0;
 			if (variables.cluster_mysql_servers_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_mysql_servers_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
@@ -8418,6 +9024,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_users_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_mysql_users ? intv : 0;
 			if (variables.cluster_mysql_users_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_mysql_users_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
@@ -8446,6 +9053,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_mysql_variables_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_mysql_variables ? intv : 0;
 			if (variables.cluster_mysql_variables_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_mysql_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
@@ -8460,6 +9068,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_admin_variables_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
+			intv = checksum_variables.checksum_admin_variables ? intv : 0;
 			if (variables.cluster_admin_variables_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_admin_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
@@ -8474,12 +9083,29 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 	if (!strcasecmp(name,"cluster_ldap_variables_diffs_before_sync")) {
 		int intv=atoi(value);
 		if (intv >= 0 && intv <= 1000) {
-			if (variables.cluster_ldap_variables_save_to_disk == 0 && intv != 0) {
+			intv = checksum_variables.checksum_ldap_variables ? intv : 0;
+			if (variables.cluster_ldap_variables_diffs_before_sync == 0 && intv != 0) {
 				proxy_info("Re-enabled previously disabled 'admin-cluster_ldap_variables_diffs_before_sync'. Resetting global checksums to force Cluster re-sync.\n");
 				GloProxyCluster->Reset_Global_Checksums(lock);
 			}
 			variables.cluster_ldap_variables_diffs_before_sync=intv;
 			__sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync, intv);
+			return true;
+		} else {
+			return false;
+		}
+	}
+	if (!strcasecmp(name,"cluster_mysql_servers_sync_algorithm")) {
+		int intv=atoi(value);
+		if (intv >= 1 && intv <= 3) {
+
+			if (variables.cluster_mysql_servers_sync_algorithm != intv) {
+				proxy_info("'cluster_mysql_servers_sync_algorithm' updated. Resetting global checksums to force Cluster re-sync.\n");
+				GloProxyCluster->Reset_Global_Checksums(lock);
+			}
+
+			variables.cluster_mysql_servers_sync_algorithm=intv;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_sync_algorithm, intv);
 			return true;
 		} else {
 			return false;
@@ -8493,6 +9119,8 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		}
 	}
 	if (!strcasecmp(name,"hash_passwords")) {
+		proxy_warning("Variable admin-hash_passwords is now deprecated and removed. See github issue #4218\n");
+/*
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
 			variables.hash_passwords=true;
 			if (GloMyLdapAuth) {
@@ -8506,6 +9134,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 			return true;
 		}
 		return false;
+*/
 	}
 	if (!strcasecmp(name,"vacuum_stats")) {
 		if (strcasecmp(value,"true")==0 || strcasecmp(value,"1")==0) {
@@ -8673,6 +9302,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_query_rules=false;
 			variables.cluster_mysql_query_rules_diffs_before_sync = 0;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_query_rules_diffs_before_sync, 0);
 			proxy_warning("Disabling deprecated 'admin-checksum_mysql_query_rules', setting 'admin-cluster_mysql_query_rules_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -8686,6 +9316,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_servers=false;
 			variables.cluster_mysql_servers_diffs_before_sync = 0;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_servers_diffs_before_sync, 0);
 			proxy_warning("Disabling deprecated 'admin-checksum_mysql_servers', setting 'admin-cluster_mysql_servers_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -8700,6 +9331,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_users=false;
 			variables.cluster_mysql_users_diffs_before_sync = 0;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_users_diffs_before_sync, 0);
 			proxy_warning("Disabling deprecated 'admin-checksum_mysql_users', setting 'admin-cluster_mysql_users_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -8713,6 +9345,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_mysql_variables=false;
 			variables.cluster_mysql_variables_diffs_before_sync = 0;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_mysql_variables_diffs_before_sync, 0);
 			proxy_warning("Disabling deprecated 'admin-checksum_mysql_variables', setting 'admin-cluster_mysql_variables_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -8726,6 +9359,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_admin_variables=false;
 			variables.cluster_admin_variables_diffs_before_sync = 0;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_admin_variables_diffs_before_sync, 0);
 			proxy_warning("Disabling deprecated 'admin-checksum_admin_variables', setting 'admin-cluster_admin_variables_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -8739,6 +9373,7 @@ bool ProxySQL_Admin::set_variable(char *name, char *value, bool lock) {  // this
 		if (strcasecmp(value,"false")==0 || strcasecmp(value,"0")==0) {
 			checksum_variables.checksum_ldap_variables=false;
 			variables.cluster_ldap_variables_diffs_before_sync = 0;
+			__sync_lock_test_and_set(&GloProxyCluster->cluster_ldap_variables_diffs_before_sync, 0);
 			proxy_warning("Disabling deprecated 'admin-checksum_ldap_variables', setting 'admin-cluster_ldap_variables_diffs_before_sync=0'\n");
 			return true;
 		}
@@ -8859,6 +9494,11 @@ void ProxySQL_Admin::p_update_metrics() {
 	this->p_stats___memory_metrics();
 	// Update stmt metrics
 	this->p_update_stmt_metrics();
+
+	// updated mysql_listener_paused
+	int st = ( proxysql_mysql_paused == true ? 1 : 0);
+	this->metrics.p_gauge_array[p_admin_gauge::mysql_listener_paused]->Set(st);
+
 }
 
 /**
@@ -8979,6 +9619,13 @@ void ProxySQL_Admin::p_stats___memory_metrics() {
 		__sync_fetch_and_add(&GloVars.statuses.stack_memory_cluster_threads, 0);
 	this->metrics.p_gauge_array[p_admin_gauge::stack_memory_cluster_threads]->Set(stack_memory_cluster_threads);
 
+	// proxysql_prepare_statement_memory metric
+	uint64_t prepare_stmt_metadata_mem_used;
+	uint64_t prepare_stmt_backend_mem_used;
+	GloMyStmt->get_memory_usage(prepare_stmt_metadata_mem_used, prepare_stmt_backend_mem_used);
+	this->metrics.p_gauge_array[p_admin_gauge::prepare_stmt_metadata_memory_bytes]->Set(prepare_stmt_metadata_mem_used);
+	this->metrics.p_gauge_array[p_admin_gauge::prepare_stmt_backend_memory_bytes]->Set(prepare_stmt_backend_mem_used);
+
 	// Update opened file descriptors
 	int32_t cur_fds = get_open_fds();
 	if (cur_fds != -1) {
@@ -9090,6 +9737,23 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			sprintf(bu,"%llu",mu);
 			query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 			sprintf(query,a,vn,bu);
+			statsdb->execute(query);
+			free(query);
+		}
+		if (GloMyStmt) {
+			uint64_t prep_stmt_metadata_mem_usage;
+			uint64_t prep_stmt_backend_mem_usage;
+			GloMyStmt->get_memory_usage(prep_stmt_metadata_mem_usage, prep_stmt_backend_mem_usage);
+			vn = (char*)"prepare_statement_metadata_memory";
+			sprintf(bu, "%llu", prep_stmt_metadata_mem_usage);
+			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query, a, vn, bu);
+			statsdb->execute(query);
+			free(query);
+			vn = (char*)"prepare_statement_backend_memory";
+			sprintf(bu, "%llu", prep_stmt_backend_mem_usage);
+			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+			sprintf(query, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 		}
@@ -9329,7 +9993,14 @@ void ProxySQL_Admin::stats___mysql_global() {
 		statsdb->execute(query);
 		free(query);
 	}
-
+	{
+		vn=(char *)"mysql_listener_paused";
+		sprintf(bu, "%s", ( proxysql_mysql_paused==true ? "true" : "false") );
+		query=(char *)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
+		sprintf(query,a,vn,bu);
+		statsdb->execute(query);
+		free(query);
+	}
 	statsdb->execute("COMMIT");
 }
 
@@ -9660,9 +10331,6 @@ void ProxySQL_Admin::stats___mysql_query_rules() {
 }
 
 void ProxySQL_Admin::stats___proxysql_servers_checksums() {
-	statsdb->execute("BEGIN");
-	statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
-	SQLite3_result *resultset=NULL;
 	// NOTE: This mutex unlock is required due to a race condition created when:
 	//  - One Admin session has the following callstack:
 	//      + admin_session_handler -> locks on 'sql_query_global_mutex'
@@ -9677,8 +10345,10 @@ void ProxySQL_Admin::stats___proxysql_servers_checksums() {
 	//      + ProxySQL_Cluster::pull_mysql_query_rules_from_peer -> tries to lock on 'sql_query_global_mutex'
 	//  Producing a deadlock scenario between the two threads.
 	pthread_mutex_unlock(&this->sql_query_global_mutex);
-	resultset=GloProxyCluster->get_stats_proxysql_servers_checksums();
+	SQLite3_result* resultset = GloProxyCluster->get_stats_proxysql_servers_checksums();
 	pthread_mutex_lock(&this->sql_query_global_mutex);
+	statsdb->execute("BEGIN");
+	statsdb->execute("DELETE FROM stats_proxysql_servers_checksums");
 	if (resultset) {
 		int rc;
 		sqlite3_stmt *statement1=NULL;
@@ -11295,6 +11965,7 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 	      SQLite3_row *r=*it;
 			char *password=NULL;
+/*
 			if (variables.hash_passwords) { // We must use hashed password. See issue #676
 				// Admin needs to hash the password
 				if (r->fields[1] && strlen(r->fields[1])) {
@@ -11312,12 +11983,13 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 					password=strdup((char *)""); // we also generate a new string if hash_passwords is set
 				}
 			} else {
-				if (r->fields[1]) {
-					password=r->fields[1];
-				} else {
-					password=(char *)"";
-				}
+*/
+			if (r->fields[1]) {
+				password=r->fields[1];
+			} else {
+				password=(char *)"";
 			}
+//			}
 
 			std::vector<enum cred_username_type> usertypes {};
 			char* max_connections = nullptr;
@@ -11376,9 +12048,11 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 				sqlite_result->add_row(&pta[0]);
 			}
 
+/*
 			if (variables.hash_passwords) {
 				free(password); // because we always generate a new string
 			}
+*/
 		}
 
 		if (__user == nullptr) {
@@ -11569,6 +12243,14 @@ void ProxySQL_Admin::dump_checksums_values_table() {
 	SAFE_SQLITE3_STEP2(statement1);
 	rc=(*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 	rc=(*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+
+	rc = (*proxy_sqlite3_bind_text)(statement1, 1, "mysql_servers_v2", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 2, GloVars.checksums_values.mysql_servers_v2.version); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_int64)(statement1, 3, GloVars.checksums_values.mysql_servers_v2.epoch); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_bind_text)(statement1, 4, GloVars.checksums_values.mysql_servers_v2.checksum, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
+	SAFE_SQLITE3_STEP2(statement1);
+	rc = (*proxy_sqlite3_clear_bindings)(statement1); ASSERT_SQLITE_OK(rc, admindb);
+	rc = (*proxy_sqlite3_reset)(statement1); ASSERT_SQLITE_OK(rc, admindb);
 
 	if (GloMyLdapAuth) {
 		rc=(*proxy_sqlite3_bind_text)(statement1, 1, "ldap_variables", -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb);
@@ -12326,23 +13008,68 @@ void ProxySQL_Admin::save_mysql_servers_runtime_to_database(bool _runtime) {
 		StrQuery = "INSERT INTO ";
 		if (_runtime)
 			StrQuery += "runtime_";
-		StrQuery += "mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)";
+		StrQuery += "mysql_hostgroup_attributes (hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex, connection_warming, throttle_connections_per_sec, ignore_session_variables, hostgroup_settings, servers_defaults, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
 		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
 		ASSERT_SQLITE_OK(rc, admindb);
-		//proxy_info("New mysql_aws_aurora_hostgroups table\n");
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 			SQLite3_row *r=*it;
 			rc=(*proxy_sqlite3_bind_int64)(statement, 1, atol(r->fields[0])); ASSERT_SQLITE_OK(rc, admindb); // hostgroup_id
 			rc=(*proxy_sqlite3_bind_int64)(statement, 2, atol(r->fields[1])); ASSERT_SQLITE_OK(rc, admindb); // max_num_online_servers
 			rc=(*proxy_sqlite3_bind_int64)(statement, 3, atol(r->fields[2])); ASSERT_SQLITE_OK(rc, admindb); // autocommit
 			rc=(*proxy_sqlite3_bind_int64)(statement, 4, atol(r->fields[3])); ASSERT_SQLITE_OK(rc, admindb); // free_connections_pct
-			rc=(*proxy_sqlite3_bind_text)(statement,  5, r->fields[4],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // variable_name
+			rc=(*proxy_sqlite3_bind_text)(statement,  5, r->fields[4],      -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // variable_name
 			rc=(*proxy_sqlite3_bind_int64)(statement, 6, atol(r->fields[5])); ASSERT_SQLITE_OK(rc, admindb); // multiplex
 			rc=(*proxy_sqlite3_bind_int64)(statement, 7, atol(r->fields[6])); ASSERT_SQLITE_OK(rc, admindb); // connection_warming
 			rc=(*proxy_sqlite3_bind_int64)(statement, 8, atol(r->fields[7])); ASSERT_SQLITE_OK(rc, admindb); // throttle_connections_per_sec
-			rc=(*proxy_sqlite3_bind_text)(statement,  9, r->fields[8],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ignore_session_variables
-			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // servers_defaults
-			rc=(*proxy_sqlite3_bind_text)(statement, 11, r->fields[10],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+			rc=(*proxy_sqlite3_bind_text)(statement,  9, r->fields[8],      -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ignore_session_variables
+			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],		-1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostgroup_settings
+			rc=(*proxy_sqlite3_bind_text)(statement,  11, r->fields[10],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // servers_defaults
+			rc=(*proxy_sqlite3_bind_text)(statement,  12, r->fields[11],    -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
+
+			SAFE_SQLITE3_STEP2(statement);
+			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
+			rc=(*proxy_sqlite3_reset)(statement); ASSERT_SQLITE_OK(rc, admindb);
+		}
+		(*proxy_sqlite3_finalize)(statement);
+	}
+	if(resultset) delete resultset;
+	resultset=NULL;
+
+	// dump mysql_servers_ssl_params
+
+	StrQuery = "DELETE FROM main.";
+	if (_runtime)
+		StrQuery += "runtime_";
+	StrQuery += "mysql_servers_ssl_params";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", StrQuery.c_str());
+	admindb->execute(StrQuery.c_str());
+	resultset=MyHGM->dump_table_mysql("mysql_servers_ssl_params");
+	if (resultset) {
+		int rc;
+		// table definition:
+		// mysql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_capath VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_cipher VARCHAR NOT NULL DEFAULT '' , tls_version VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )
+		sqlite3_stmt *statement=NULL;
+		StrQuery = "INSERT INTO ";
+		if (_runtime)
+			StrQuery += "runtime_";
+		StrQuery += "mysql_servers_ssl_params (hostname, port, username, ssl_ca, ssl_cert, ssl_key, ssl_capath, ssl_crl, ssl_crlpath, ssl_cipher, tls_version, comment) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)";
+		rc = admindb->prepare_v2(StrQuery.c_str(), &statement);
+		ASSERT_SQLITE_OK(rc, admindb);
+		//proxy_info("New mysql_servers_ssl_params table\n");
+		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
+			SQLite3_row *r=*it;
+			rc=(*proxy_sqlite3_bind_text)(statement,  1,  r->fields[0],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // hostname
+			rc=(*proxy_sqlite3_bind_int64)(statement, 2,  atol(r->fields[1]));                  ASSERT_SQLITE_OK(rc, admindb); // port
+			rc=(*proxy_sqlite3_bind_text)(statement,  3,  r->fields[2],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // username
+			rc=(*proxy_sqlite3_bind_text)(statement,  4,  r->fields[3],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_ca
+			rc=(*proxy_sqlite3_bind_text)(statement,  5,  r->fields[4],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_cert
+			rc=(*proxy_sqlite3_bind_text)(statement,  6,  r->fields[5],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_key
+			rc=(*proxy_sqlite3_bind_text)(statement,  7,  r->fields[6],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_capath
+			rc=(*proxy_sqlite3_bind_text)(statement,  8,  r->fields[7],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crl
+			rc=(*proxy_sqlite3_bind_text)(statement,  9,  r->fields[8],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_crlpath
+			rc=(*proxy_sqlite3_bind_text)(statement,  10, r->fields[9],  -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // ssl_cipher
+			rc=(*proxy_sqlite3_bind_text)(statement,  11, r->fields[10], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // tls_version
+			rc=(*proxy_sqlite3_bind_text)(statement,  12, r->fields[11], -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, admindb); // comment
 
 			SAFE_SQLITE3_STEP2(statement);
 			rc=(*proxy_sqlite3_clear_bindings)(statement); ASSERT_SQLITE_OK(rc, admindb);
@@ -12371,9 +13098,8 @@ void ProxySQL_Admin::load_scheduler_to_runtime() {
 	resultset=NULL;
 }
 
-void ProxySQL_Admin::load_mysql_servers_to_runtime(
-	const incoming_servers_t& incoming_servers, const std::string& checksum, const time_t epoch
-) {
+void ProxySQL_Admin::load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers, 
+	const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server, const mysql_servers_v2_checksum_t& peer_mysql_server_v2) {
 	// make sure that the caller has called mysql_servers_wrlock()
 	char *error=NULL;
 	int cols=0;
@@ -12385,6 +13111,7 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	SQLite3_result *resultset_galera=NULL;
 	SQLite3_result *resultset_aws_aurora=NULL;
 	SQLite3_result *resultset_hostgroup_attributes=NULL;
+	SQLite3_result *resultset_mysql_servers_ssl_params=NULL;
 
 	SQLite3_result* runtime_mysql_servers = incoming_servers.runtime_mysql_servers;
 	SQLite3_result* incoming_replication_hostgroups = incoming_servers.incoming_replication_hostgroups;
@@ -12392,11 +13119,13 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	SQLite3_result* incoming_galera_hostgroups = incoming_servers.incoming_galera_hostgroups;
 	SQLite3_result* incoming_aurora_hostgroups = incoming_servers.incoming_aurora_hostgroups;
 	SQLite3_result* incoming_hostgroup_attributes = incoming_servers.incoming_hostgroup_attributes;
+	SQLite3_result* incoming_mysql_servers_ssl_params = incoming_servers.incoming_mysql_servers_ssl_params;
+	SQLite3_result* incoming_mysql_servers_v2 = incoming_servers.incoming_mysql_servers_v2;
 
-	char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
-	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	const char *query=(char *)"SELECT hostgroup_id,hostname,port,gtid_port,status,weight,compression,max_connections,max_replication_lag,use_ssl,max_latency_ms,comment FROM main.mysql_servers ORDER BY hostgroup_id, hostname, port";
 	if (runtime_mysql_servers == nullptr) {
-		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_servers);
+		proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+		admindb->execute_statement(query, &error, &cols, &affected_rows, &resultset_servers);
 	} else {
 		resultset_servers = runtime_mysql_servers;
 	}
@@ -12559,8 +13288,27 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 		MyHGM->save_incoming_mysql_table(resultset_hostgroup_attributes, "mysql_hostgroup_attributes");
 	}
 
+	// support for SSL parameters, table mysql_servers_ssl_params
+	query = (char *)"SELECT * FROM mysql_servers_ssl_params ORDER BY hostname, port, username";
+	proxy_debug(PROXY_DEBUG_ADMIN, 4, "%s\n", query);
+	if (incoming_mysql_servers_ssl_params == nullptr) {
+		admindb->execute_statement(query, &error , &cols , &affected_rows , &resultset_mysql_servers_ssl_params);
+	} else {
+		resultset_mysql_servers_ssl_params = incoming_mysql_servers_ssl_params;
+	}
+	if (error) {
+		proxy_error("Error on %s : %s\n", query, error);
+	} else {
+		// Pass the resultset to MyHGM
+		MyHGM->save_incoming_mysql_table(resultset_mysql_servers_ssl_params, "mysql_servers_ssl_params");
+	}
+
 	// commit all the changes
-	MyHGM->commit(runtime_mysql_servers, checksum, epoch);
+	MyHGM->commit(
+		{ runtime_mysql_servers, peer_runtime_mysql_server },
+		{ incoming_mysql_servers_v2, peer_mysql_server_v2 },
+		false, true
+	);
 	
 	// quering runtime table will update and return latest records, so this is not needed.
 	// GloAdmin->save_mysql_servers_runtime_to_database(true);
@@ -12586,6 +13334,9 @@ void ProxySQL_Admin::load_mysql_servers_to_runtime(
 	}
 	if (resultset_hostgroup_attributes) {
 		resultset_hostgroup_attributes = NULL;
+	}
+	if (resultset_mysql_servers_ssl_params) {
+		resultset_mysql_servers_ssl_params = NULL;
 	}
 }
 
@@ -13389,6 +14140,28 @@ void ProxySQL_Admin::disk_upgrade_mysql_servers() {
 			" FROM mysql_hostgroup_attributes_v250"
 		);
 	}
+	rci = configdb->check_table_structure((char*)"mysql_hostgroup_attributes", (char*)ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES_V2_5_2);
+	if (rci) {
+		// upgrade is required
+		proxy_warning("Detected version pre-v2.6.0 of mysql_hostgroup_attributes\n");
+		proxy_warning("ONLINE UPGRADE of table mysql_hostgroup_attributes in progress\n");
+		// drop mysql_hostgroup_attributes table with suffix _v252
+		configdb->execute("DROP TABLE IF EXISTS mysql_hostgroup_attributes_v252");
+		// rename current table to add suffix _v252
+		configdb->execute("ALTER TABLE mysql_hostgroup_attributes RENAME TO mysql_hostgroup_attributes_v252");
+		// create new table
+		configdb->build_table((char*)"mysql_hostgroup_attributes", (char*)ADMIN_SQLITE_TABLE_MYSQL_HOSTGROUP_ATTRIBUTES, false);
+		// copy fields from old table
+		configdb->execute(
+			"INSERT INTO mysql_hostgroup_attributes ("
+			" hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex,"
+			" connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment"
+			") SELECT"
+			" hostgroup_id, max_num_online_servers, autocommit, free_connections_pct, init_connect, multiplex,"
+			" connection_warming, throttle_connections_per_sec, ignore_session_variables, servers_defaults, comment"
+			" FROM mysql_hostgroup_attributes_v252"
+		);
+	}
 	configdb->execute("PRAGMA foreign_keys = ON");
 
 }
@@ -13968,17 +14741,13 @@ void ProxySQL_Admin::enable_galera_testing() {
 }
 #endif // TEST_GALERA
 #ifdef TEST_AURORA
-void ProxySQL_Admin::enable_aurora_testing() {
-	proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs from 1271 to 1276\n");
+
+void ProxySQL_Admin::enable_aurora_testing_populate_mysql_servers() {
 	sqlite3_stmt *statement=NULL;
-	//sqlite3 *mydb3=admindb->get_db();
 	unsigned int num_aurora_servers = GloSQLite3Server->num_aurora_servers[0];
-	int rc;
-	mysql_servers_wrlock();
 	admindb->execute("DELETE FROM mysql_servers WHERE hostgroup_id BETWEEN 1271 AND 1276");
 	char *query=(char *)"INSERT INTO mysql_servers (hostgroup_id,hostname,use_ssl,comment) VALUES (?1, ?2, ?3, ?4)";
-	//rc=(*proxy_sqlite3_prepare_v2)(mydb3, query, -1, &statement, 0);
-	rc = admindb->prepare_v2(query, &statement);
+	int rc = admindb->prepare_v2(query, &statement);
 	ASSERT_SQLITE_OK(rc, admindb);
 	for (unsigned int j=1; j<4; j++) {
 		proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs 127%d and 127%d\n" , j*2-1 , j*2);
@@ -13992,7 +14761,6 @@ void ProxySQL_Admin::enable_aurora_testing() {
 				} else {
 					if (j==3) {
 						serverid = "host.1." + std::to_string(i+11) + ".aws-test.com";
-						//serverid = "host." + std::to_string(j) + "." + std::to_string(i+11) + ".aws.3.test.com";
 					}
 				}
 			}
@@ -14008,24 +14776,35 @@ void ProxySQL_Admin::enable_aurora_testing() {
 		}
 	}
 	(*proxy_sqlite3_finalize)(statement);
+}
+
+void ProxySQL_Admin::enable_aurora_testing_populate_mysql_aurora_hostgroups() {
+#ifndef TEST_AURORA_RANDOM
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 1000, 90, 1, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 1')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 1000, 90, 0, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 2')");
+	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1275, 1276, 1, '.aws-test.com', 25, 1000, 90, 0, 2, 10, 20, 5, 'Automated Aurora Testing Cluster 3')");
+#else
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1271, 1272, 1, '.aws-test.com', 25, 120, 90, 1, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 1')");
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1273, 1274, 1, '.cluster2.aws.test', 25, 120, 90, 0, 1, 10, 20, 5, 'Automated Aurora Testing Cluster 2')");
 	admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1275, 1276, 1, '.aws-test.com', 25, 120, 90, 0, 2, 10, 20, 5, 'Automated Aurora Testing Cluster 3')");
-	//admindb->execute("INSERT INTO mysql_aws_aurora_hostgroups (writer_hostgroup, reader_hostgroup, active, domain_name, max_lag_ms, check_interval_ms, check_timeout_ms, writer_is_also_reader, new_reader_weight, add_lag_ms, min_lag_ms, lag_num_checks, comment) VALUES (1275, 1276, 1, '.aws.3.test.com', 25, 120, 90, 0, 2, 10, 20, 5, 'Automated Aurora Testing Cluster 3')");
+#endif
 	admindb->execute("UPDATE mysql_aws_aurora_hostgroups SET active=1");
-	//admindb->execute("update mysql_servers set max_replication_lag=20");
+}
+
+void ProxySQL_Admin::enable_aurora_testing() {
+	proxy_info("Admin is enabling AWS Aurora Testing using SQLite3 Server and HGs from 1271 to 1276\n");
+	mysql_servers_wrlock();
+	enable_aurora_testing_populate_mysql_servers();
+	enable_aurora_testing_populate_mysql_aurora_hostgroups();
 	load_mysql_servers_to_runtime();
 	mysql_servers_wrunlock();
-	//admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_ping_interval'");
-	//admindb->execute("UPDATE global_variables SET variable_value=1500 WHERE variable_name='mysql-monitor_ping_timeout'");
-	//admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_replication_lag_interval'");
-	//admindb->execute("UPDATE global_variables SET variable_value=1500 WHERE variable_name='mysql-monitor_replication_lag_timeout'");
-	admindb->execute("UPDATE global_variables SET variable_value=200 WHERE variable_name='mysql-monitor_ping_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=1000 WHERE variable_name='mysql-monitor_ping_interval'");
 	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_ping_timeout'");
-	admindb->execute("UPDATE global_variables SET variable_value=200 WHERE variable_name='mysql-monitor_replication_lag_interval'");
+	admindb->execute("UPDATE global_variables SET variable_value=1000 WHERE variable_name='mysql-monitor_replication_lag_interval'");
 	admindb->execute("UPDATE global_variables SET variable_value=3000 WHERE variable_name='mysql-monitor_replication_lag_timeout'");
 	admindb->execute("UPDATE global_variables SET variable_value='percona.heartbeat' WHERE variable_name='mysql-monitor_replication_lag_use_percona_heartbeat'");
 	load_mysql_variables_to_runtime();
+	admindb->execute("DELETE FROM mysql_users WHERE username LIKE '%aurora%'");
 	admindb->execute("INSERT INTO mysql_users (username,password,default_hostgroup) VALUES ('aurora1','pass1',1271), ('aurora2','pass2',1273), ('aurora3','pass3',1275)");
 	init_users();
 	admindb->execute("INSERT INTO mysql_query_rules (active, username, match_pattern, destination_hostgroup, apply) VALUES (1, 'aurora1', '^SELECT.*max_lag_ms', 1272, 1)");
@@ -14253,5 +15032,24 @@ unsigned long long ProxySQL_Admin::ProxySQL_Test___MySQL_HostGroups_Manager_Bala
 	t2 /= 1000;
 	unsigned long long d = t2-t1;
 	return d;
+}
+
+bool ProxySQL_Admin::ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath)
+{
+	assert(duration);
+	assert(cacert || capath);
+	SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+	uint64_t t1 = monotonic_time();
+	for (int i = 0; i < cnt; i++) {
+		if (0 == SSL_CTX_load_verify_locations(ctx, cacert, capath)) {
+			proxy_error("Unable to load CA Certificate: %s\n", ERR_error_string(ERR_get_error(), NULL));
+			return false;
+		}
+	}
+	uint64_t t2 = monotonic_time();
+	SSL_CTX_free(ctx);
+	*duration = ((t2/1000) - (t1/1000));
+	proxy_info("Duration: %llums\n", *duration);
+	return true;
 }
 #endif //DEBUG

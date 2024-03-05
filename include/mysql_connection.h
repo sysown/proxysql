@@ -7,7 +7,7 @@
 #include "../deps/json/json.hpp"
 using json = nlohmann::json;
 
-#define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001
+//#define STATUS_MYSQL_CONNECTION_TRANSACTION          0x00000001 // DEPRECATED
 #define STATUS_MYSQL_CONNECTION_COMPRESSION          0x00000002
 #define STATUS_MYSQL_CONNECTION_USER_VARIABLE        0x00000004
 #define STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT   0x00000008
@@ -19,6 +19,9 @@ using json = nlohmann::json;
 #define STATUS_MYSQL_CONNECTION_FOUND_ROWS           0x00000200
 #define STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG      0x00000400
 #define STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT        0x00000800
+#define STATUS_MYSQL_CONNECTION_HAS_WARNINGS         0x00001000
+
+class MySQLServers_SslParams;
 
 class Variable {
 public:
@@ -53,6 +56,8 @@ class MySQL_Connection_userinfo {
 
 class MySQL_Connection {
 	private:
+	void update_warning_count_from_connection();
+	void update_warning_count_from_statement();
 	bool is_expired(unsigned long long timeout);
 	unsigned long long inserted_into_pool;
 	public:
@@ -128,6 +133,7 @@ class MySQL_Connection {
 	} statuses;
 
 	unsigned long largest_query_length;
+	unsigned int warning_count;
 	/**
 	 * @brief This represents the internal knowledge of ProxySQL about the connection. It keeps track of those
 	 *  states which *are not reflected* into 'server_status', but are relevant for connection handling.
@@ -147,6 +153,9 @@ class MySQL_Connection {
 	bool unknown_transaction_status;
 	void compute_unknown_transaction_status();
 	char gtid_uuid[128];
+
+	MySQLServers_SslParams * ssl_params = NULL;
+
 	MySQL_Connection();
 	~MySQL_Connection();
 	bool set_autocommit(bool);

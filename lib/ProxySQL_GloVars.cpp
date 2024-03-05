@@ -17,10 +17,18 @@
 extern MySQL_LDAP_Authentication* GloMyLdapAuth;
 
 static void term_handler(int sig) {
-  proxy_warning("Received TERM signal: shutdown in progress...\n");
+	proxy_warning("Received TERM signal: shutdown in progress...\n");
+/*
+In ProxySQL 2.1 we replace PROXYSQL SHUTDOWN with PROXYSQL SHUTDOWN SLOW , and the former command now perform a "fast shutdown".
+The same is now implemented for TERM signal handler.
+*/
 #ifdef DEBUG
+	// Note: in DEBUG built we will still perform a slow shutdown.
+	// DEBUG built is not meant for production use.
+	__sync_bool_compare_and_swap(&glovars.shutdown,0,1);
+#else
+	exit(EXIT_SUCCESS);
 #endif
-  __sync_bool_compare_and_swap(&glovars.shutdown,0,1);
 }
 
 void crash_handler(int sig) {
@@ -89,10 +97,63 @@ ProxySQL_GlobalVariables::~ProxySQL_GlobalVariables() {
 	checksums_values.admin_variables.in_shutdown = true;
 	checksums_values.mysql_query_rules.in_shutdown = true;
 	checksums_values.mysql_servers.in_shutdown = true;
+	checksums_values.mysql_servers_v2.in_shutdown = true;
 	checksums_values.mysql_users.in_shutdown = true;
 	checksums_values.mysql_variables.in_shutdown = true;
 	checksums_values.ldap_variables.in_shutdown = true;
 	checksums_values.proxysql_servers.in_shutdown = true;
+	if (global.gr_bootstrap_uri) {
+		free(global.gr_bootstrap_uri);
+		global.gr_bootstrap_uri = nullptr;
+	}
+	if (global.gr_bootstrap_account) {
+		free(global.gr_bootstrap_account);
+		global.gr_bootstrap_account = nullptr;
+	}
+	if (global.gr_bootstrap_account_create) {
+		free(global.gr_bootstrap_account_create);
+		global.gr_bootstrap_account_create = nullptr;
+	}
+	if (global.gr_bootstrap_account_host) {
+		free(global.gr_bootstrap_account_host);
+		global.gr_bootstrap_account_host = nullptr;
+	}
+	if (global.gr_bootstrap_conf_bind_address) {
+		free(global.gr_bootstrap_conf_bind_address);
+		global.gr_bootstrap_conf_bind_address = nullptr;
+	}
+	if (global.gr_bootstrap_ssl_ca) {
+		free(global.gr_bootstrap_ssl_ca);
+		global.gr_bootstrap_ssl_ca = nullptr;
+	}
+	if (global.gr_bootstrap_ssl_capath) {
+		free(global.gr_bootstrap_ssl_capath);
+		global.gr_bootstrap_ssl_capath = nullptr;
+	}
+	if (global.gr_bootstrap_ssl_cert) {
+		free(global.gr_bootstrap_ssl_cert);
+		global.gr_bootstrap_ssl_cert = nullptr;
+	}
+	if (global.gr_bootstrap_ssl_cipher) {
+		free(global.gr_bootstrap_ssl_cipher);
+		global.gr_bootstrap_ssl_cipher = nullptr;
+	}
+	if (global.gr_bootstrap_ssl_crl) {
+		free(global.gr_bootstrap_ssl_crl);
+		global.gr_bootstrap_ssl_crl = nullptr;
+	}
+	if (global.gr_bootstrap_ssl_crlpath) {
+		free(global.gr_bootstrap_ssl_crlpath);
+		global.gr_bootstrap_ssl_crlpath = nullptr;
+	}
+	if (global.gr_bootstrap_ssl_key) {
+		free(global.gr_bootstrap_ssl_key);
+		global.gr_bootstrap_ssl_key = nullptr;
+	}
+	if (global.gr_bootstrap_ssl_mode) {
+		free(global.gr_bootstrap_ssl_mode);
+		global.gr_bootstrap_ssl_mode = nullptr;
+	}
 };
 
 ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
@@ -148,18 +209,38 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 #ifdef PROXYSQLCLICKHOUSE
 	global.clickhouse_server=false;
 #endif /* PROXYSQLCLICKHOUSE */
+	global.gr_bootstrap_mode = 0;
+	global.gr_bootstrap_uri = nullptr;
+	global.gr_bootstrap_account = nullptr;
+	global.gr_bootstrap_account_create = nullptr;
+	global.gr_bootstrap_account_host = nullptr;
+	global.gr_bootstrap_password_retries = 20;
+	global.gr_bootstrap_conf_bind_address = nullptr;
+	global.gr_bootstrap_conf_base_port = 0;
+	global.gr_bootstrap_conf_use_sockets = false;
+	global.gr_bootstrap_conf_skip_tcp = false;
+	global.gr_bootstrap_ssl_ca = nullptr;
+	global.gr_bootstrap_ssl_capath = nullptr;
+	global.gr_bootstrap_ssl_cert = nullptr;
+	global.gr_bootstrap_ssl_cipher = nullptr;
+	global.gr_bootstrap_ssl_crl = nullptr;
+	global.gr_bootstrap_ssl_crlpath = nullptr;
+	global.gr_bootstrap_ssl_key = nullptr;
+	global.gr_bootstrap_ssl_mode = nullptr;
 	global.ssl_keylog_enabled = false;
 	opt=new ez::ezOptionParser();
 	opt->overview="High Performance Advanced Proxy for MySQL";
 	opt->syntax="proxysql [OPTIONS]";
 	std::string s = "\n\nProxySQL " ;
-	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-2022 ProxySQL LLC\nThis program is free and without warranty\n";
+	const char *build_year = __DATE__ + 7;
+	s = s + "rev. " + PROXYSQL_VERSION + " -- " + __TIMESTAMP__ + "\nCopyright (C) 2013-" + string(build_year) + " ProxySQL LLC\nThis program is free and without warranty\n";
 	opt->footer =s.c_str();
 
 	opt->add((const char *)"",0,0,0,(const char *)"Display usage instructions.",(const char *)"-h",(const char *)"-help",(const char *)"--help",(const char *)"--usage");
 	opt->add((const char *)"",0,0,0,(const char *)"Print version",(const char *)"-V",(const char *)"--version");
 #ifdef DEBUG
-	opt->add((const char *)"",0,1,0,(const char *)"Enable debugging messages with specific verbosity",(const char *)"-d",(const char *)"--debug");
+	// NOTE: Temporal change for full 'bootstrap' compatibility, only '--debug' is allowed, '-d' is an alias for '-D'
+	opt->add((const char *)"",0,1,0,(const char *)"Enable debugging messages with specific verbosity",(const char *)"--debug");
 #endif /* DEBUG */
 	opt->add((const char *)"",0,0,0,(const char *)"Starts only the admin service",(const char *)"-n",(const char *)"--no-start");
 	opt->add((const char *)"",0,0,0,(const char *)"Do not start Monitor Module",(const char *)"-M",(const char *)"--no-monitor");
@@ -170,6 +251,8 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,0,0,(const char *)"Do not restart ProxySQL if crashes",(const char *)"-e",(const char *)"--exit-on-error");
 	opt->add((const char *)"~/proxysql.cnf",0,1,0,(const char *)"Configuration file",(const char *)"-c",(const char *)"--config");
 	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-D",(const char *)"--datadir");
+	// NOTE: Duplicated option for 'bootstrap' compatibility
+	opt->add((const char *)"",0,1,0,(const char *)"Datadir",(const char *)"-d",(const char *)"--directory");
 	opt->add((const char *)"",0,1,0,(const char *)"UUID",(const char *)"-U",(const char *)"--uuid");
 	opt->add((const char *)"",0,0,0,(const char *)"Rename/empty database file",(const char *)"--initial");
 	opt->add((const char *)"",0,0,0,(const char *)"Merge config file into database file",(const char *)"--reload");
@@ -180,6 +263,34 @@ ProxySQL_GlobalVariables::ProxySQL_GlobalVariables() :
 	opt->add((const char *)"",0,1,0,(const char *)"Administration Unix Socket",(const char *)"-S",(const char *)"--admin-socket");
 
 	opt->add((const char *)"",0,0,0,(const char *)"Enable SQLite3 Server",(const char *)"--sqlite3-server");
+	// Bootstrap General options
+	opt->add((const char *)"",0,1,0,(const char *)"Start ProxySQL in Group Replication bootstrap mode."
+		" An URI needs to be specified for creating a connection to the bootstrap server, if no URI is provided,"
+		" a connection to the default local socket will be attempted.",(const char *)"-B", (const char *)"--bootstrap");
+	opt->add((const char *)"",0,1,0, (const char *)"Account to use by monitoring after bootstrap, either reuses a specify account or creates a new one;"
+		" this behavior is controlled by related option '--acount-create'. When used, a password must be provided." ,(const char *)"--account");
+	opt->add((const char *)"",0,1,0,(const char *)"Account creation policy for bootstrap. Possible values are:\n"
+		"- if-not-exists (default): If the account doesn't exist, create it, otherwise reuse it.\n"
+		"- always: Only bootstrap if the account isn't present and can be created.\n"
+		"- never: Only bootstrap if the account is already present.",(const char *)"--account-create");
+	opt->add((const char *)"",0,1,0,(const char *)"Host pattern to be used for accounts created during bootstrap",(const char *)"--account-host");
+	opt->add((const char *)"",0,1,0,(const char *)"Number of attempts for generating a password when creating an account during bootstrap",(const char *)"--password-retries");
+	opt->add((const char *)"",0,1,0,(const char *)"Sets the default base port ('mysql-interfaces') for the default R/W split port based configuration",(const char *)"--conf-base-port");
+	opt->add((const char *)"",0,1,0,(const char *)"Sets the default bind address ('mysql-interfaces'). Used in combination with '--conf-bind-port'",(const char *)"--conf-bind-address");
+	// TODO: We should make query rules compatible with Unix socket domain addresses for routing
+	opt->add((const char *)"",0,1,0,(const char *)"bootstrap option, configures two Unix sockets with names 'mysql.sock' and 'mysqlro.sock'",(const char *)"--conf-use-sockets");
+	opt->add((const char *)"",0,1,0,(const char *)"Sets the default base port for the default R/W split port based configuration",(const char *)"--conf-skip-tcp");
+	// Bootstrap SSL options
+	opt->add((const char *)"",0,1,0,(const char *)"The path name of the Certificate Authority (CA) certificate file. Must specify the same certificate used by the server",(const char *)"--ssl-ca");
+	opt->add((const char *)"",0,1,0,(const char *)"The path name of the directory that contains trusted SSL CA certificate files",(const char *)"--ssl-capath");
+	opt->add((const char *)"",0,1,0,(const char *)"The path name of the client public key certificate file",(const char *)"--ssl-cert");
+	opt->add((const char *)"",0,1,0,(const char *)"The list of permissible ciphers for SSL encryption",(const char *)"--ssl-cipher");
+	opt->add((const char *)"",0,1,0,(const char *)"The path name of the file containing certificate revocation lists",(const char *)"--ssl-crl");
+	opt->add((const char *)"",0,1,0,(const char *)"The path name of the directory that contains certificate revocation list files",(const char *)"--ssl-crlpath");
+	opt->add((const char *)"",0,1,0,(const char *)"The path name of the client private key file",(const char *)"--ssl-key");
+	// TODO: Complete information about this mode and it's relation with 'ssl-ca'. E.g: For 'VERIFY_CA' mode,
+	// MariaDB connector related options. Not direct option 'MYSQL_OPT_SSL_MODE'.
+	opt->add((const char *)"",0,1,0,(const char *)"SSL connection mode for using during bootstrap during normal operation with the backend servers. Only PREFERRED, and DISABLED are supported.",(const char *)"--ssl-mode");
 #ifdef PROXYSQLCLICKHOUSE
 	opt->add((const char *)"",0,0,0,(const char *)"Enable ClickHouse Server",(const char *)"--clickhouse-server");
 #endif /* PROXYSQLCLICKHOUSE */
@@ -199,6 +310,21 @@ void ProxySQL_GlobalVariables::parse(int argc, const char * argv[]) {
 	opt->parse(argc, argv);
 };
 
+void update_string_var_if_set(char** cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
+	if (opt->isSet(cmd_opt)) {
+		std::string val {};
+		opt->get(cmd_opt)->getString(val);
+		if (*cur_val) { free(*cur_val); }
+		*cur_val = strdup(val.c_str());
+	}
+}
+
+void update_ulong_var_if_set(uint64_t& cur_val, ez::ezOptionParser* opt, const char* cmd_opt) {
+	if (opt->isSet(cmd_opt)) {
+		opt->get(cmd_opt)->getULong(cur_val);
+	}
+}
+
 void ProxySQL_GlobalVariables::process_opts_pre() {
 	if (opt->isSet("-h")) {
 		std::string usage;
@@ -212,8 +338,8 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		exit(EXIT_SUCCESS);
 	}
 
-	if (opt->isSet("-d")) {
-		opt->get("-d")->getInt(GloVars.__cmd_proxysql_gdbg);	
+	if (opt->isSet("--debug")) {
+		opt->get("--debug")->getInt(GloVars.__cmd_proxysql_gdbg);
 		global.gdbg=true;
 	}
 
@@ -236,6 +362,8 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		if (GloVars.__cmd_proxysql_datadir) free(GloVars.__cmd_proxysql_datadir);
 		GloVars.__cmd_proxysql_datadir=strdup(datadir.c_str());
 	}
+
+	update_string_var_if_set(&GloVars.__cmd_proxysql_datadir, opt, "-d");
 
 	if (opt->isSet("-U")) {
 		std::string uuid;
@@ -277,7 +405,24 @@ void ProxySQL_GlobalVariables::process_opts_pre() {
 		global.clickhouse_server=true;
 	}
 #endif /* PROXYSQLCLICKHOUSE */
-
+	update_string_var_if_set(&global.gr_bootstrap_uri, opt, "--bootstrap");
+	global.gr_bootstrap_mode = opt->isSet("--bootstrap");
+	update_ulong_var_if_set(global.gr_bootstrap_conf_base_port, opt, "--conf-base-port");
+	update_string_var_if_set(&global.gr_bootstrap_conf_bind_address, opt, "--conf-bind-address");
+	global.gr_bootstrap_conf_use_sockets = opt->isSet("--conf-use-sockets");
+	global.gr_bootstrap_conf_skip_tcp = opt->isSet("--conf-skip-tcp");
+	update_string_var_if_set(&global.gr_bootstrap_account, opt, "--account");
+	update_string_var_if_set(&global.gr_bootstrap_account_create, opt, "--account-create");
+	update_string_var_if_set(&global.gr_bootstrap_account_host, opt, "--account-host");
+	update_ulong_var_if_set(global.gr_bootstrap_password_retries, opt, "--password-retries");
+	update_string_var_if_set(&global.gr_bootstrap_ssl_ca, opt, "--ssl-ca");
+	update_string_var_if_set(&global.gr_bootstrap_ssl_capath, opt, "--ssl-capath");
+	update_string_var_if_set(&global.gr_bootstrap_ssl_cert, opt, "--ssl-cert");
+	update_string_var_if_set(&global.gr_bootstrap_ssl_cipher, opt, "--ssl-cipher");
+	update_string_var_if_set(&global.gr_bootstrap_ssl_crl, opt, "--ssl-crl");
+	update_string_var_if_set(&global.gr_bootstrap_ssl_crlpath, opt, "--ssl-crlpath");
+	update_string_var_if_set(&global.gr_bootstrap_ssl_key, opt, "--ssl-key");
+	update_string_var_if_set(&global.gr_bootstrap_ssl_mode, opt, "--ssl-mode");
 
 	config_file=GloVars.__cmd_proxysql_config_file;
 
@@ -404,6 +549,11 @@ uint64_t ProxySQL_GlobalVariables::generate_global_checksum() {
 	if (v->version) {
 		myhash.Update(v->checksum,strlen(v->checksum));
 		myhash.Update(&v->version,sizeof(v->version));
+	}
+	v = &checksums_values.mysql_servers_v2;
+	if (v->version) {
+		myhash.Update(v->checksum, strlen(v->checksum));
+		myhash.Update(&v->version, sizeof(v->version));
 	}
 	v = &checksums_values.mysql_users;
 	if (v->version) {

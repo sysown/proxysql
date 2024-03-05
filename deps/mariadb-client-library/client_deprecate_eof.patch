@@ -1,10 +1,10 @@
 diff --git include/ma_common.h include/ma_common.h
-index 62cf71c..c05e9a3 100644
+index 0d3f39b3..112cd3b5 100644
 --- include/ma_common.h
 +++ include/ma_common.h
-@@ -23,6 +23,8 @@
- #include <mysql.h>
- #include <ma_hash.h>
+@@ -24,6 +24,8 @@
+ #include <mysql/client_plugin.h>
+ #include <ma_hashtbl.h>
  
 +#define MAX_PACKET_LENGTH (256L*256L*256L-1)
 +
@@ -12,37 +12,36 @@ index 62cf71c..c05e9a3 100644
    COM_MULTI_OFF= 0,
    COM_MULTI_CANCEL,
 diff --git include/mariadb_com.h include/mariadb_com.h
-index 948d96e..225b2f5 100644
+index 67461b4f..96e6e04f 100644
 --- include/mariadb_com.h
 +++ include/mariadb_com.h
-@@ -160,6 +160,7 @@ enum enum_server_command
- #define CLIENT_CONNECT_ATTRS     (1UL << 20)
+@@ -161,6 +161,7 @@ enum enum_server_command
+ #define CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA (1UL << 21)
  #define CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS (1UL << 22)
  #define CLIENT_SESSION_TRACKING  (1UL << 23)
 +#define CLIENT_DEPRECATE_EOF     (1UL << 24)
+ #define CLIENT_ZSTD_COMPRESSION  (1UL << 26)
  #define CLIENT_PROGRESS          (1UL << 29) /* client supports progress indicator */
  #define CLIENT_PROGRESS_OBSOLETE  CLIENT_PROGRESS 
- #define CLIENT_SSL_VERIFY_SERVER_CERT (1UL << 30)
-@@ -204,8 +205,14 @@ enum enum_server_command
+@@ -209,7 +210,13 @@ enum enum_server_command
                                   CLIENT_REMEMBER_OPTIONS |\
                                   CLIENT_PLUGIN_AUTH |\
                                   CLIENT_SESSION_TRACKING |\
 +                                 CLIENT_DEPRECATE_EOF |\
                                   CLIENT_CONNECT_ATTRS)
- 
 +/* Client capabilities *does no* longer holds 'CLIENT_DEPRECATE_EOF' flag
 + * by default. This is part of ProxySQL feature for conditionally disabling
 + * 'deprecate_eof' support in both client and backend connections. For more
 + * context see #3280.
-+ */
- #define CLIENT_CAPABILITIES	(CLIENT_MYSQL | \
++ */                                 
+ #define CLIENT_CAPABILITIES	    (CLIENT_MYSQL | \
                                   CLIENT_LONG_FLAG |\
                                   CLIENT_TRANSACTIONS |\
 diff --git include/mariadb_stmt.h include/mariadb_stmt.h
-index d07540e..4930573 100644
+index 531c2181..1ae9cf99 100644
 --- include/mariadb_stmt.h
 +++ include/mariadb_stmt.h
-@@ -257,7 +257,7 @@ typedef struct st_mysql_perm_bind {
+@@ -209,7 +209,7 @@ typedef struct st_mysql_perm_bind {
  } MYSQL_PS_CONVERSION;
  
  extern MYSQL_PS_CONVERSION mysql_ps_fetch_functions[MYSQL_TYPE_GEOMETRY + 1];
@@ -52,7 +51,7 @@ index d07540e..4930573 100644
  unsigned long net_field_length(unsigned char **packet);
  int ma_simple_command(MYSQL *mysql,enum enum_server_command command, const char *arg,
 diff --git libmariadb/ma_net.c libmariadb/ma_net.c
-index 15be4fc..a69e637 100644
+index 0b1d0cce..83bf729a 100644
 --- libmariadb/ma_net.c
 +++ libmariadb/ma_net.c
 @@ -39,8 +39,6 @@
@@ -65,10 +64,10 @@ index 15be4fc..a69e637 100644
     See bug conc-57
   */
 diff --git libmariadb/mariadb_lib.c libmariadb/mariadb_lib.c
-index e475e25..1a04b2f 100644
+index 75e3c9a4..916024a8 100644
 --- libmariadb/mariadb_lib.c
 +++ libmariadb/mariadb_lib.c
-@@ -144,6 +144,7 @@ struct st_mariadb_methods MARIADB_DEFAULT_METHODS;
+@@ -150,6 +150,7 @@ struct st_mariadb_methods MARIADB_DEFAULT_METHODS;
  #define IS_CONNHDLR_ACTIVE(mysql)\
    ((mysql)->extension && (mysql)->extension->conn_hdlr)
  
@@ -76,7 +75,7 @@ index e475e25..1a04b2f 100644
  static void end_server(MYSQL *mysql);
  static void mysql_close_memory(MYSQL *mysql);
  void read_user_name(char *name);
-@@ -190,11 +191,15 @@ void net_get_error(char *buf, size_t buf_len,
+@@ -196,11 +197,15 @@ void net_get_error(char *buf, size_t buf_len,
  *****************************************************************************/
  
  ulong
@@ -93,45 +92,44 @@ index e475e25..1a04b2f 100644
  restart:
    if (net->pvio != 0)
      len=ma_net_read(net);
-@@ -251,6 +256,28 @@ restart:
+@@ -263,6 +268,27 @@ restart:
  
      return(packet_error);
    }
 +  else
 +  {
 +    if (is_data_packet) {
-+        unsigned long deprecate_eof =
-+            mysql->server_capabilities & CLIENT_DEPRECATE_EOF;
-+        *is_data_packet = TRUE;
++      unsigned long deprecate_eof = mysql->server_capabilities & CLIENT_DEPRECATE_EOF;
++      *is_data_packet = TRUE;
 +
-+        // NOTE:
-+        // The only possible alternative to an okay packet where the first byte is
-+        // 0xfe, is a packet of int<lenenc> which is bigger than 0xffffff. This is
-+        // the reason why a check 'len <= MAX_PACKET_LENGTH' guarantees that
-+        // *by_exclusion* the current packet is an 'ok_packet'.
-+        if (deprecate_eof && (net->read_pos[0] == 254 && len <= MAX_PACKET_LENGTH)) {
-+            *is_data_packet = FALSE;
-+        }
-+        // A '< 9' check guarantees that it's an EOF packet.
-+        else if (!deprecate_eof && (net->read_pos[0] == 254 && len < 9))
-+        {
-+            *is_data_packet = FALSE;
-+        }
++      // NOTE:
++      // The only possible alternative to an okay packet where the first byte is
++      // 0xfe, is a packet of int<lenenc> which is bigger than 0xffffff. This is
++      // the reason why a check 'len <= MAX_PACKET_LENGTH' guarantees that
++      // *by_exclusion* the current packet is an 'ok_packet'.
++      if (deprecate_eof && (net->read_pos[0] == 254 && len <= MAX_PACKET_LENGTH)) {
++        *is_data_packet = FALSE;
++      }
++      // A '< 9' check guarantees that it's an EOF packet.
++      else if (!deprecate_eof && (net->read_pos[0] == 254 && len < 9))
++      {
++        *is_data_packet = FALSE;
++      }
 +    }
 +  }
    return len;
  }
  
-@@ -424,7 +451,7 @@ mthd_my_send_cmd(MYSQL *mysql,enum enum_server_command command, const char *arg,
+@@ -448,7 +474,7 @@ mthd_my_send_cmd(MYSQL *mysql,enum enum_server_command command, const char *arg,
  
-   if (!skipp_check)
+   if (!skip_check)
    {
 -    result= ((mysql->packet_length=ma_net_safe_read(mysql)) == packet_error ?
 +    result= ((mysql->packet_length=ma_net_safe_read(mysql, NULL)) == packet_error ?
  	     1 : 0);
    }
   end:
-@@ -565,12 +592,14 @@ end_server(MYSQL *mysql)
+@@ -581,12 +607,14 @@ end_server(MYSQL *mysql)
  void mthd_my_skip_result(MYSQL *mysql)
  {
    ulong pkt_len;
@@ -148,29 +146,29 @@ index e475e25..1a04b2f 100644
    return;
  }
  
-@@ -851,6 +880,95 @@ static size_t rset_field_offsets[]= {
+@@ -1021,6 +1049,95 @@ static size_t rset_field_offsets[]= {
    OFFSET(MYSQL_FIELD, org_name_length)
  };
  
 +/**
-+ * @brief Helper function to unpack a particular field.
-+ *
-+ * NOTE: This function have been introduced due to the requirement
-+ *  of 'field unpacking' in mthd_my_read_metadata_ex. Extracting the
-+ *  logic from 'unpack_fields' function.
-+ *
-+ * @param mysql The mysql connection handler.
-+ * @param alloc The mem_root allocator.
-+ * @param default_value The default value to use for the field in case
-+ *  of not containing one.
-+ * @param row The row containing the field description.
-+ * @param field Output parameter holding the unpacked MYSQL_FIELD.
-+ *
-+ * @returns 0 on success.
-+ */
++  * @brief Helper function to unpack a particular field.
++  *
++  * NOTE: This function have been introduced due to the requirement
++  *  of 'field unpacking' in mthd_my_read_metadata_ex. Extracting the
++  *  logic from 'unpack_fields' function.
++  *
++  * @param mysql The mysql connection handler.
++  * @param alloc The mem_root allocator.
++  * @param default_value The default value to use for the field in case
++  *  of not containing one.
++  * @param row The row containing the field description.
++  * @param field Output parameter holding the unpacked MYSQL_FIELD.
++  *
++  * @returns 0 on success.
++  */
 +int
 +unpack_field(const MYSQL *mysql, MA_MEM_ROOT *alloc, my_bool default_value,
-+    MYSQL_ROWS *row, MYSQL_FIELD *field)
++      MYSQL_ROWS *row, MYSQL_FIELD *field, ulong* field_length)
 +{
 +  unsigned int i, field_count = sizeof(rset_field_offsets) / sizeof(size_t) / 2;
 +  char *p = NULL;
@@ -181,15 +179,15 @@ index e475e25..1a04b2f 100644
 +  {
 +    // Initialize in case of empty field
 +    if (row->data[i][0] == 0) {
-+      *(char **)(((char *)field) + rset_field_offsets[i*2]) = ma_strdup_root(alloc, "");
-+      *(unsigned int *)(((char *)field) + rset_field_offsets[i*2+1]) = 0;
++        *(char **)(((char *)field) + rset_field_offsets[i*2]) = ma_strdup_root(alloc, "");
++        *(unsigned int *)(((char *)field) + rset_field_offsets[i*2+1]) = 0;
 +    }
 +    // Copy data in case of not empty
 +    else
 +    {
-+      uint length = (uint)(row->data[i+1] - row->data[i] - 1);
++      uint length = ((field_length != NULL) ? (uint)field_length[i] : (uint)(row->data[i+1] - row->data[i] - 1));
 +      *(char **)(((char *)field) + rset_field_offsets[i*2]) =
-+        ma_strdup_root(alloc, (char *)row->data[i]);
++          ma_strdup_root(alloc, (char *)row->data[i]);
 +      *(unsigned int *)(((char *)field) + rset_field_offsets[i*2+1]) =
 +        length;
 +    }
@@ -228,9 +226,9 @@ index e475e25..1a04b2f 100644
 +    field->flags|= NUM_FLAG;
 +
 +  i++;
-+  /* This is used by deprecated function mysql_list_fields only,
-+     however the reported length is not correct, so we always zero it */
-+  if (default_value && row->data[i])
++  /*This is used by deprecated function mysql_list_fields only,
++    however the reported length is not correct, so we always zero it */
++    if (default_value && row->data[i])
 +    field->def = ma_strdup_root(alloc,(char*) row->data[i]);
 +  else
 +    field->def = 0;
@@ -244,7 +242,7 @@ index e475e25..1a04b2f 100644
  MYSQL_FIELD *
  unpack_fields(const MYSQL *mysql,
                MYSQL_DATA *data, MA_MEM_ROOT *alloc, uint fields,
-@@ -858,71 +976,19 @@ unpack_fields(const MYSQL *mysql,
+@@ -1028,71 +1145,19 @@ unpack_fields(const MYSQL *mysql,
  {
    MYSQL_ROWS	*row;
    MYSQL_FIELD	*field,*result;
@@ -264,7 +262,7 @@ index e475e25..1a04b2f 100644
 -    for (i=0; i < field_count; i++)
 -    {
 -      uint length= (uint)(row->data[i+1] - row->data[i] - 1);
--      if (!row->data[i] && row->data[i][length])
+-      if (!row->data[i] || row->data[i][length])
 -        goto error;
 -
 -      *(char **)(((char *)field) + rset_field_offsets[i*2])=
@@ -314,12 +312,12 @@ index e475e25..1a04b2f 100644
 -    field->def_length= 0;
 -
 -    field->max_length= 0;
-+    if (unpack_field(mysql, alloc, default_value, row, field) != 0)
++    if (unpack_field(mysql, alloc, default_value, row, field, NULL) != 0)
 +      goto error;
    }
    if (field < result + fields)
      goto error;
-@@ -948,8 +1014,9 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
+@@ -1118,8 +1183,9 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
    MYSQL_DATA *result;
    MYSQL_ROWS **prev_ptr,*cur;
    NET *net = &mysql->net;
@@ -330,7 +328,7 @@ index e475e25..1a04b2f 100644
      return(0);
    if (!(result=(MYSQL_DATA*) calloc(1, sizeof(MYSQL_DATA))))
    {
-@@ -962,7 +1029,7 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
+@@ -1132,7 +1198,7 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
    result->rows=0;
    result->fields=fields;
  
@@ -339,7 +337,7 @@ index e475e25..1a04b2f 100644
    {
      result->rows++;
      if (!(cur= (MYSQL_ROWS*) ma_alloc_root(&result->alloc,
-@@ -1005,7 +1072,7 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
+@@ -1175,7 +1241,7 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
        }
      }
      cur->data[field]=to;			/* End of last field */
@@ -348,10 +346,10 @@ index e475e25..1a04b2f 100644
      {
        free_rows(result);
        return(0);
-@@ -1015,10 +1082,14 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
-   /* save status */
+@@ -1186,10 +1252,14 @@ MYSQL_DATA *mthd_my_read_rows(MYSQL *mysql,MYSQL_FIELD *mysql_fields,
    if (pkt_len > 1)
    {
+     unsigned int last_status= mysql->server_status;
 -    cp++;
 -    mysql->warning_count= uint2korr(cp);
 -    cp+= 2;
@@ -359,15 +357,15 @@ index e475e25..1a04b2f 100644
 +    // read the final EOF or OK packet
 +    if (mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
 +    {
-+        ma_read_ok_packet(mysql, cp + 1, pkt_len);
++      ma_read_ok_packet(mysql, cp + 1, pkt_len);
 +    } else {
-+        mysql->warning_count = uint2korr(cp + 1);
-+        mysql->server_status = uint2korr(cp + 3);
++      mysql->warning_count = uint2korr(cp + 1);
++      mysql->server_status = uint2korr(cp + 3);
 +    }
+     ma_status_callback(mysql, last_status)
    }
    return(result);
- }
-@@ -1035,15 +1106,21 @@ int mthd_my_read_one_row(MYSQL *mysql,uint fields,MYSQL_ROW row, ulong *lengths)
+@@ -1207,15 +1277,21 @@ int mthd_my_read_one_row(MYSQL *mysql,uint fields,MYSQL_ROW row, ulong *lengths)
    uint field;
    ulong pkt_len,len;
    uchar *pos,*prev_pos, *end_pos;
@@ -381,20 +379,19 @@ index e475e25..1a04b2f 100644
 +  // we are reading either final 'OK' or 'EOF' packet
 +  if (mysql->net.read_pos[0] != 0 && !is_data_packet)
    {
+     unsigned int last_status= mysql->server_status;
 -    mysql->warning_count= uint2korr(mysql->net.read_pos + 1);
 -    mysql->server_status= uint2korr(mysql->net.read_pos + 3);
--    return 1;				/* End of data */
 +    if (mysql->server_capabilities & CLIENT_DEPRECATE_EOF) {
 +      ma_read_ok_packet(mysql, mysql->net.read_pos + 1, pkt_len);
 +    } else {
 +      mysql->warning_count= uint2korr(mysql->net.read_pos + 1);
 +      mysql->server_status= uint2korr(mysql->net.read_pos + 3);
 +    }
-+    return 1;
+     ma_status_callback(mysql, last_status);
+     return 1;				/* End of data */
    }
-   prev_pos= 0;				/* allowed to write at packet[-1] */
-   pos=mysql->net.read_pos;
-@@ -1077,6 +1154,85 @@ int mthd_my_read_one_row(MYSQL *mysql,uint fields,MYSQL_ROW row, ulong *lengths)
+@@ -1251,6 +1327,85 @@ int mthd_my_read_one_row(MYSQL *mysql,uint fields,MYSQL_ROW row, ulong *lengths)
    return 0;
  }
  
@@ -438,27 +435,27 @@ index e475e25..1a04b2f 100644
 +    // read the columns info
 +    for (f_i = 0; f_i < field_count; f_i++)
 +    {
-+        if (mthd_my_read_one_row(mysql, m_field_count, m_rows.data, m_len) == -1)
-+          return NULL;
-+        if (unpack_field(mysql, mem_root, 0, &m_rows, m_fields++))
-+          return NULL;
++      if (mthd_my_read_one_row(mysql, m_field_count, m_rows.data, m_len) == -1)
++        return NULL;
++      if (unpack_field(mysql, mem_root, 0, &m_rows, m_fields++, m_len))
++        return NULL;
 +    }
 +    // read EOF packet in case of client not supporting 'CLIENT_DEPRECATE_EOF'
 +    if (!(mysql->server_capabilities & CLIENT_DEPRECATE_EOF))
 +    {
 +      // read the EOF packet
 +      if (packet_error == ma_net_safe_read(mysql, NULL))
-+          return 0;
++        return 0;
 +
-+      // verify it's actually an EOF packet
-+      if (*(mysql->net.read_pos) == 254)
-+      {
-+          mysql->warning_count = uint2korr(mysql->net.read_pos + 1);
-+          mysql->server_status = uint2korr(mysql->net.read_pos + 3);
-+      }
++    // verify it's actually an EOF packet
++    if (*(mysql->net.read_pos) == 254)
++    {
++      mysql->warning_count = uint2korr(mysql->net.read_pos + 1);
++      mysql->server_status = uint2korr(mysql->net.read_pos + 3);
 +    }
++  }
 +
-+    return result;
++  return result;
 +}
 +
 +/**
@@ -474,13 +471,13 @@ index e475e25..1a04b2f 100644
 + */
 +MYSQL_FIELD* mthd_my_read_metadata(MYSQL* mysql, ulong field_count, uint m_field_count)
 +{
-+    return mthd_my_read_metadata_ex(mysql, &mysql->field_alloc, field_count, m_field_count);
++  return mthd_my_read_metadata_ex(mysql, &mysql->field_alloc, field_count, m_field_count);
 +}
 +
  /****************************************************************************
  ** Init MySQL structure or allocate one
  ****************************************************************************/
-@@ -1494,7 +1650,7 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
+@@ -1793,7 +1948,7 @@ restart:
      goto error;
    }
   */
@@ -489,7 +486,7 @@ index e475e25..1a04b2f 100644
    {
      if (mysql->net.last_errno == CR_SERVER_LOST)
        my_set_error(mysql, CR_SERVER_LOST, SQLSTATE_UNKNOWN,
-@@ -1596,6 +1752,16 @@ MYSQL *mthd_my_real_connect(MYSQL *mysql, const char *host, const char *user,
+@@ -1894,6 +2049,16 @@ restart:
      }
    }
  
@@ -506,14 +503,15 @@ index e475e25..1a04b2f 100644
    /* pad 2 */
    end+= 18;
  
-@@ -2361,14 +2527,13 @@ int mthd_my_read_query_result(MYSQL *mysql)
+@@ -2856,7 +3021,6 @@ int mthd_my_read_query_result(MYSQL *mysql)
  {
    uchar *pos;
    ulong field_count;
 -  MYSQL_DATA *fields;
    ulong length;
-   my_bool can_local_infile= (mysql->options.extension) && (mysql->extension->auto_local_infile != WAIT_FOR_QUERY);
- 
+   const uchar *end;
+   uchar has_metadata;
+@@ -2866,7 +3030,7 @@ int mthd_my_read_query_result(MYSQL *mysql)
    if (mysql->options.extension && mysql->extension->auto_local_infile == ACCEPT_FILE_REQUEST)
      mysql->extension->auto_local_infile= WAIT_FOR_QUERY;
  
@@ -522,7 +520,7 @@ index e475e25..1a04b2f 100644
    {
      return(1);
    }
-@@ -2381,7 +2546,7 @@ get_info:
+@@ -2880,7 +3044,7 @@ get_info:
    {
      int error=mysql_handle_local_infile(mysql, (char *)pos, can_local_infile);
  
@@ -531,27 +529,34 @@ index e475e25..1a04b2f 100644
        return(-1);
      goto get_info;				/* Get info packet */
    }
-@@ -2389,12 +2554,13 @@ get_info:
-     mysql->server_status|= SERVER_STATUS_IN_TRANS;
+@@ -2901,18 +3065,19 @@ get_info:
  
-   mysql->extra_info= net_field_length_ll(&pos); /* Maybe number of rec */
--  if (!(fields=mysql->methods->db_read_rows(mysql,(MYSQL_FIELD*) 0,
--                                            ma_result_set_rows(mysql))))
--    return(-1);
--  if (!(mysql->fields=unpack_fields(mysql, fields, &mysql->field_alloc,
--				    (uint) field_count, 1)))
--    return(-1);
-+  // read packet metadata
-+  mysql->fields =
-+      mthd_my_read_metadata(mysql, field_count, 7 + ma_extended_type_info_rows(mysql));
-+  if (!mysql->fields) {
-+    ma_free_root(&mysql->field_alloc, MYF(0));
-+    return(1);
-+  }
-   mysql->status=MYSQL_STATUS_GET_RESULT;
-   mysql->field_count=field_count;
-   return(0);
-@@ -2775,21 +2941,17 @@ mysql_list_fields(MYSQL *mysql, const char *table, const char *wild)
+   if (has_metadata)
+   {
+-    if (!(fields= mysql->methods->db_read_rows(mysql, (MYSQL_FIELD *) 0,
+-                                               ma_result_set_rows(mysql))))
+-      return (-1);
+-    if (!(mysql->fields= unpack_fields(mysql, fields, &mysql->field_alloc,
+-                                       (uint) field_count, 1)))
+-      return (-1);
++    // read packet metadata
++    mysql->fields =
++        mthd_my_read_metadata(mysql, field_count, 7 + ma_extended_type_info_rows(mysql));
++    if (!mysql->fields) {
++      ma_free_root(&mysql->field_alloc, MYF(0));
++      return(1);
++    }
+   }
+   else
+   {
+     unsigned int last_status= mysql->server_status;
+     /* Read EOF, to get the status and warning count.  */
+-    if ((length= ma_net_safe_read(mysql)) == packet_error)
++    if ((length= ma_net_safe_read(mysql, NULL)) == packet_error)
+     {
+       return -1;
+     }
+@@ -3309,20 +3474,16 @@ mysql_list_fields(MYSQL *mysql, const char *table, const char *wild)
  MYSQL_RES * STDCALL
  mysql_list_processes(MYSQL *mysql)
  {
@@ -569,14 +574,12 @@ index e475e25..1a04b2f 100644
 -    return(NULL);
 -  if (!(mysql->fields= unpack_fields(mysql, fields, &mysql->field_alloc,
 -                                     field_count, 0)))
--    return(NULL);
 +  mysql->fields= mthd_my_read_metadata(mysql, field_count, 7);
 +  if (!mysql->fields)
-+   return(NULL);
+     return(NULL);
    mysql->status=MYSQL_STATUS_GET_RESULT;
    mysql->field_count=field_count;
-   return(mysql_store_result(mysql));
-@@ -4251,7 +4413,7 @@ mysql_debug(const char *debug __attribute__((unused)))
+@@ -4830,7 +4991,7 @@ mysql_debug(const char *debug __attribute__((unused)))
  *********************************************************************/
  ulong STDCALL mysql_net_read_packet(MYSQL *mysql)
  {
@@ -586,23 +589,23 @@ index e475e25..1a04b2f 100644
  
  ulong STDCALL mysql_net_field_length(uchar **packet)
 diff --git libmariadb/mariadb_rpl.c libmariadb/mariadb_rpl.c
-index 6a7e0cf..492727d 100644
+index 0019f246..daa6d242 100644
 --- libmariadb/mariadb_rpl.c
 +++ libmariadb/mariadb_rpl.c
-@@ -122,7 +122,7 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
-     return 0;
+@@ -1021,7 +1021,7 @@ MARIADB_RPL_EVENT * STDCALL mariadb_rpl_fetch(MARIADB_RPL *rpl, MARIADB_RPL_EVEN
  
-   while (1) {
--    unsigned long pkt_len= ma_net_safe_read(rpl->mysql);
-+    unsigned long pkt_len= ma_net_safe_read(rpl->mysql, NULL);
- 
-     if (pkt_len == packet_error)
+     if (rpl->mysql)
      {
+-      pkt_len= ma_net_safe_read(rpl->mysql);
++      pkt_len= ma_net_safe_read(rpl->mysql, NULL);
+ 
+       if (pkt_len == packet_error)
+       {
 diff --git libmariadb/mariadb_stmt.c libmariadb/mariadb_stmt.c
-index 0aaaf1a..229023b 100644
+index d6df0825..af442088 100644
 --- libmariadb/mariadb_stmt.c
 +++ libmariadb/mariadb_stmt.c
-@@ -78,6 +78,9 @@ typedef struct
+@@ -80,6 +80,9 @@ typedef struct
  } MADB_STMT_EXTENSION;
  
  static my_bool net_stmt_close(MYSQL_STMT *stmt, my_bool remove);
@@ -612,18 +615,19 @@ index 0aaaf1a..229023b 100644
  
  static my_bool is_not_null= 0;
  static my_bool is_null= 1;
-@@ -153,8 +156,9 @@ static int stmt_unbuffered_eof(MYSQL_STMT *stmt __attribute__((unused)),
+@@ -171,8 +174,9 @@ static int stmt_unbuffered_eof(MYSQL_STMT *stmt __attribute__((unused)),
  static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
  {
    ulong pkt_len;
-+  my_bool is_data_packet;
- 
+-
 -  pkt_len= ma_net_safe_read(stmt->mysql);
++  my_bool is_data_packet;
++  
 +  pkt_len= ma_net_safe_read(stmt->mysql, &is_data_packet);
  
    if (pkt_len == packet_error)
    {
-@@ -162,8 +166,10 @@ static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
+@@ -180,8 +184,11 @@ static int stmt_unbuffered_fetch(MYSQL_STMT *stmt, uchar **row)
      return(1);
    }
  
@@ -631,11 +635,12 @@ index 0aaaf1a..229023b 100644
 +  if (stmt->mysql->net.read_pos[0] != 0 && !is_data_packet)
    {
 +    if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
-+        ma_read_ok_packet(stmt->mysql, stmt->mysql->net.read_pos + 1, pkt_len);
++      ma_read_ok_packet(stmt->mysql, stmt->mysql->net.read_pos + 1, pkt_len);
++
      *row = NULL;
      stmt->fetch_row_func= stmt_unbuffered_eof;
      return(MYSQL_NO_DATA);
-@@ -195,13 +201,15 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+@@ -213,10 +220,11 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
    MYSQL_ROWS *current, **pprevious;
    ulong packet_len;
    unsigned char *p;
@@ -646,6 +651,11 @@ index 0aaaf1a..229023b 100644
 -  while ((packet_len = ma_net_safe_read(stmt->mysql)) != packet_error)
 +  while ((packet_len = ma_net_safe_read(stmt->mysql, &is_data_packet)) != packet_error)
    {
+     // This change is required due to the new algorithm introduced in ProxySQL in #3295.
+     // ********************************************************************************
+@@ -237,7 +245,8 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+     // ********************************************************************************
+ 
      p= stmt->mysql->net.read_pos;
 -    if (packet_len > 7 || p[0] != 254)
 +    // The check is by 'ma_net_safe_read'
@@ -653,26 +663,26 @@ index 0aaaf1a..229023b 100644
      {
        /* allocate space for rows */
        if (!(current= (MYSQL_ROWS *)ma_alloc_root(&result->alloc, sizeof(MYSQL_ROWS) + packet_len)))
-@@ -276,10 +284,14 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
-     {
+@@ -324,10 +333,14 @@ int mthd_stmt_read_all_rows(MYSQL_STMT *stmt)
+       unsigned int last_status= stmt->mysql->server_status;
        *pprevious= 0;
        /* sace status info */
 -      p++;
 -      stmt->upsert_status.warning_count= stmt->mysql->warning_count= uint2korr(p);
 -      p+=2;
 -      stmt->upsert_status.server_status= stmt->mysql->server_status= uint2korr(p);
-+
 +      if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF && !is_data_packet) {
 +        ma_read_ok_packet(stmt->mysql, p + 1, packet_len);
++        stmt->upsert_status.warning_count= stmt->mysql->warning_count;
++        stmt->upsert_status.server_status= stmt->mysql->server_status;
 +      } else {
 +        stmt->upsert_status.warning_count= stmt->mysql->warning_count= uint2korr(p + 1);
 +        stmt->upsert_status.server_status= stmt->mysql->server_status= uint2korr(p + 3);
 +      }
-+
+       ma_status_callback(stmt->mysql, last_status);
        stmt->result_cursor= result->data;
        return(0);
-     }
-@@ -336,30 +348,52 @@ static int stmt_cursor_fetch(MYSQL_STMT *stmt, uchar **row)
+@@ -388,34 +401,57 @@ static int stmt_cursor_fetch(MYSQL_STMT *stmt, uchar **row)
  void mthd_stmt_flush_unbuffered(MYSQL_STMT *stmt)
  {
    ulong packet_len;
@@ -682,7 +692,9 @@ index 0aaaf1a..229023b 100644
 -  while ((packet_len = ma_net_safe_read(stmt->mysql)) != packet_error)
 +  while ((packet_len = ma_net_safe_read(stmt->mysql, &is_data_packet)) != packet_error)
    {
+     unsigned int last_status= stmt->mysql->server_status;
      uchar *pos= stmt->mysql->net.read_pos;
+ 
 -    if (!in_resultset && *pos == 0) /* OK */
 +    if (stmt->mysql->server_capabilities & CLIENT_DEPRECATE_EOF)
      {
@@ -690,22 +702,23 @@ index 0aaaf1a..229023b 100644
 -      net_field_length(&pos);
 -      net_field_length(&pos);
 -      stmt->mysql->server_status= uint2korr(pos);
--      goto end;
 +      if (!in_resultset && *pos == 0) /* OK */
 +      {
-+          // 'ma_read_ok_packet' now updates 'server_status'
-+          ma_read_ok_packet(stmt->mysql, pos + 1, packet_len);
-+          goto end;
++        // 'ma_read_ok_packet' now updates 'server_status'
++        ma_read_ok_packet(stmt->mysql, pos + 1, packet_len);
++        goto end;
 +      }
 +
 +      // We got the initial ok_packet, avoid extra checks.
 +      in_resultset = 1;
 +
 +      if (*pos != 0 && !is_data_packet) { /* Final OK */
-+          // 'ma_read_ok_packet' now updates 'server_status'
-+          ma_read_ok_packet(stmt->mysql, pos + 1, packet_len);
-+          goto end;
++        // 'ma_read_ok_packet' now updates 'server_status'
++        ma_read_ok_packet(stmt->mysql, pos + 1, packet_len);
++        goto end;
 +      }
+       ma_status_callback(stmt->mysql, last_status);
+       goto end;
      }
 -    if (packet_len < 8 && *pos == 254) /* EOF */
 +    else
@@ -722,6 +735,7 @@ index 0aaaf1a..229023b 100644
 +      if (packet_len < 8 && *pos == 254) /* EOF */
        {
 -        stmt->mysql->server_status= uint2korr(pos + 3);
+         ma_status_callback(stmt->mysql, last_status);
 -        if (in_resultset)
 +        if (mariadb_connection(stmt->mysql))
 +        {
@@ -739,7 +753,7 @@ index 0aaaf1a..229023b 100644
      }
    }
  end:
-@@ -1554,7 +1588,7 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
+@@ -1675,7 +1711,7 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
    ulong packet_length;
    uchar *p;
  
@@ -748,7 +762,7 @@ index 0aaaf1a..229023b 100644
      return(1);
  
    p= (uchar *)stmt->mysql->net.read_pos;
-@@ -1579,28 +1613,38 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
+@@ -1747,28 +1783,37 @@ my_bool mthd_stmt_read_prepare_response(MYSQL_STMT *stmt)
    return(0);
  }
  
@@ -773,12 +787,11 @@ index 0aaaf1a..229023b 100644
 -  if (!(result= stmt->mysql->methods->db_read_rows(stmt->mysql, (MYSQL_FIELD *)0,
 -                                                   7 + ma_extended_type_info_rows(stmt->mysql))))
 +  if (!(mthd_my_read_metadata_ex(stmt->mysql, &mt_alloc, stmt->param_count,
-+        7 + ma_extended_type_info_rows(stmt->mysql))))
++      7 + ma_extended_type_info_rows(stmt->mysql))))
      return(1);
  
 -  free_rows(result);
 +  ma_free_root(&mt_alloc, MYF(0));
-+
    return(0);
  }
  
@@ -793,30 +806,29 @@ index 0aaaf1a..229023b 100644
 -  if (!(stmt->fields= unpack_fields(stmt->mysql, result, fields_ma_alloc_root,
 -          stmt->field_count, 0)))
 +  stmt->fields =
-+      mthd_my_read_metadata_ex(stmt->mysql, fields_ma_alloc_root, stmt->field_count,
-+                 7 + ma_extended_type_info_rows(stmt->mysql));
++        mthd_my_read_metadata_ex(stmt->mysql, fields_ma_alloc_root, stmt->field_count,
++        7 + ma_extended_type_info_rows(stmt->mysql));
 +  if (!(stmt->fields))
      return(1);
    return(0);
  }
-@@ -1871,6 +1915,12 @@ int stmt_read_execute_response(MYSQL_STMT *stmt)
-   if (!stmt->mysql)
-     return(1);
- 
+@@ -2003,6 +2048,11 @@ int mthd_stmt_read_execute_response(MYSQL_STMT *stmt)
+         return (1);
+       }
+   }
 +  /*
 +   * NOTE: There is a relevant patch that should be applied in
 +   * this section in case CURSOR support is added to ProxySQL,
 +   * check: https://github.com/mysql/mysql-server/blob/ee4455a33b10f1b1886044322e4893f587b319ed/libmysql/libmysql.cc#L1994
 +   */
-+
+ 
    /* update affected rows, also if an error occurred */
    stmt->upsert_status.affected_rows= stmt->mysql->affected_rows;
- 
 diff --git plugins/auth/my_auth.c plugins/auth/my_auth.c
-index 0435b4f..c54c0e5 100644
+index 72773079..38e50b7a 100644
 --- plugins/auth/my_auth.c
 +++ plugins/auth/my_auth.c
-@@ -401,7 +401,7 @@ static int client_mpvio_read_packet(struct st_plugin_vio *mpv, uchar **buf)
+@@ -463,7 +463,7 @@ static int client_mpvio_read_packet(struct st_plugin_vio *mpv, uchar **buf)
    }
  
    /* otherwise read the data */
@@ -825,7 +837,7 @@ index 0435b4f..c54c0e5 100644
      return (int)packet_error;
  
    mpvio->last_read_packet_len= pkt_len;
-@@ -617,7 +617,7 @@ retry:
+@@ -691,7 +691,7 @@ retry:
  
    /* read the OK packet (or use the cached value in mysql->net.read_pos */
    if (res == CR_OK)
@@ -835,14 +847,14 @@ index 0435b4f..c54c0e5 100644
      pkt_length= mpvio.last_read_packet_len;
  
 diff --git unittest/libmariadb/ps_bugs.c unittest/libmariadb/ps_bugs.c
-index 25fd9f5..b1abcdd 100644
+index efe3d447..67effa26 100644
 --- unittest/libmariadb/ps_bugs.c
 +++ unittest/libmariadb/ps_bugs.c
-@@ -3931,6 +3931,10 @@ static int test_conc141(MYSQL *mysql)
+@@ -3961,6 +3961,10 @@ static int test_conc141(MYSQL *mysql)
  
    rc= mysql_stmt_execute(stmt);
    check_stmt_rc(rc, stmt);
-+
++  
 +  rc= mysql_stmt_free_result(stmt);
 +  check_stmt_rc(rc, stmt);
 +
@@ -850,20 +862,20 @@ index 25fd9f5..b1abcdd 100644
    rc= mysql_stmt_next_result(stmt);
    FAIL_IF(rc==-1, "No more results and error expected");
 diff --git unittest/libmariadb/ps_new.c unittest/libmariadb/ps_new.c
-index 9b89d6f..39b93cb 100644
+index ea228f1c..38eaa0af 100644
 --- unittest/libmariadb/ps_new.c
 +++ unittest/libmariadb/ps_new.c
-@@ -105,6 +105,9 @@ static int test_multi_result(MYSQL *mysql)
+@@ -108,6 +108,9 @@ static int test_multi_result(MYSQL *mysql)
   
    FAIL_IF(int_data[0] != 10 || int_data[1] != 20 || int_data[2] != 30,
            "expected 10 20 30");
 +  rc= mysql_stmt_free_result(stmt); // must call before next mysql_stmt_next_result
 +  check_stmt_rc(rc, stmt);
-+
++      
    rc= mysql_stmt_next_result(stmt);
    check_stmt_rc(rc, stmt);
    rc= mysql_stmt_bind_result(stmt, rs_bind);
-@@ -113,6 +116,8 @@ static int test_multi_result(MYSQL *mysql)
+@@ -116,6 +119,8 @@ static int test_multi_result(MYSQL *mysql)
    FAIL_IF(mysql_stmt_field_count(stmt) != 3, "expected 3 fields");
    FAIL_IF(int_data[0] != 100 || int_data[1] != 200 || int_data[2] != 300,
            "expected 100 200 300");
@@ -872,12 +884,11 @@ index 9b89d6f..39b93cb 100644
  
    FAIL_IF(mysql_stmt_next_result(stmt) != 0, "expected more results");
    rc= mysql_stmt_bind_result(stmt, rs_bind);
-@@ -121,7 +126,10 @@ static int test_multi_result(MYSQL *mysql)
+@@ -124,7 +129,9 @@ static int test_multi_result(MYSQL *mysql)
    FAIL_IF(mysql_stmt_field_count(stmt) != 2, "expected 2 fields");
    FAIL_IF(int_data[0] != 200 || int_data[1] != 300,
-           "expected 100 200 300");
+           "expected 200 300");
 -  
-+
 +  rc= mysql_stmt_free_result(stmt);
 +  check_stmt_rc(rc, stmt);
 +

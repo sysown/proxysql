@@ -107,8 +107,7 @@ void ma_free_root(MA_MEM_ROOT *root, myf MyFlags)
 
 extern char * binary_sha1;
 
-extern const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr);
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name);
+#include "proxysql_find_charset.h"
 
 void Variable::fill_server_internal_session(json &j, int conn_num, int idx) {
 	if (idx == SQL_CHARACTER_SET_RESULTS || idx == SQL_CHARACTER_SET_CLIENT || idx == SQL_CHARACTER_SET_DATABASE) {
@@ -434,6 +433,7 @@ MySQL_Connection::MySQL_Connection() {
 	query.stmt_meta=NULL;
 	query.stmt_result=NULL;
 	largest_query_length=0;
+	warning_count=0;
 	multiplex_delayed=false;
 	MyRS=NULL;
 	MyRS_reuse=NULL;
@@ -514,6 +514,11 @@ MySQL_Connection::~MySQL_Connection() {
 
 	if (connected_host_details.ip)
 		free(connected_host_details.ip);
+
+	if (ssl_params != NULL) {
+		delete ssl_params;
+		ssl_params = NULL;
+	}
 };
 
 bool MySQL_Connection::set_autocommit(bool _ac) {
@@ -546,6 +551,36 @@ unsigned int MySQL_Connection::set_charset(unsigned int _c, enum charset_action 
 	mysql_variables.client_set_value(myds->sess, SQL_CHARACTER_ACTION, ss.str());
 
 	return _c;
+}
+
+void MySQL_Connection::update_warning_count_from_connection() {
+	// if a prepared statement was cached while 'mysql_thread_query_digest' was true, and subsequently, 
+	// 'mysql_thread_query_digest' is set to false, fetching that statement from the cache may still contain the digest text.
+	// To prevent this, we will check the digest text in conjunction with 'mysql_thread_query_digest' to verify whether it 
+	// is enabled or disabled.
+	if (myds && myds->sess && myds->sess->CurrentQuery.QueryParserArgs.digest_text) { 
+		const char* dig_text = myds->sess->CurrentQuery.QueryParserArgs.digest_text;
+		const size_t dig_len = strlen(dig_text);
+		// SHOW WARNINGS doesn't have any impact warning count,
+		// so we are replication same behaviour here
+		if (parent->myhgc->handle_warnings_enabled() && 
+			(dig_len != 13 || strncasecmp(dig_text, "SHOW WARNINGS", 13) != 0)) {
+			warning_count = mysql_warning_count(mysql);
+		}
+	}
+}
+
+void MySQL_Connection::update_warning_count_from_statement() {
+	// if a prepared statement was cached while 'mysql_thread_query_digest' was true, and subsequently, 
+	// 'mysql_thread_query_digest' is set to false, fetching that statement from the cache may still contain the digest text.
+	// To prevent this, we will check the digest text in conjunction with 'mysql_thread_query_digest' to verify whether it 
+	// is enabled or disabled.
+	if (myds && myds->sess && myds->sess->CurrentQuery.stmt_info && myds->sess->CurrentQuery.stmt_info->digest_text &&
+		mysql_thread___query_digests == true) {
+		if (parent->myhgc->handle_warnings_enabled()) {
+			warning_count = mysql_stmt_warning_count(query.stmt);
+		}
+	}
 }
 
 bool MySQL_Connection::is_expired(unsigned long long timeout) {
@@ -710,14 +745,31 @@ void MySQL_Connection::connect_start() {
 		mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "mysql_bug_102266", "Avoid MySQL bug https://bugs.mysql.com/bug.php?id=102266 , https://github.com/sysown/proxysql/issues/3276");
 	}
 	if (parent->use_ssl) {
-		mysql_ssl_set(mysql,
-				mysql_thread___ssl_p2s_key,
-				mysql_thread___ssl_p2s_cert,
-				mysql_thread___ssl_p2s_ca,
-				mysql_thread___ssl_p2s_capath,
-				mysql_thread___ssl_p2s_cipher);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		if (ssl_params != NULL) {
+			delete ssl_params;
+			ssl_params = NULL;
+		}
+		ssl_params = MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username);
+		if (ssl_params == NULL) {
+			mysql_ssl_set(mysql,
+					mysql_thread___ssl_p2s_key,
+					mysql_thread___ssl_p2s_cert,
+					mysql_thread___ssl_p2s_ca,
+					mysql_thread___ssl_p2s_capath,
+					mysql_thread___ssl_p2s_cipher);
+			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
+			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		} else {
+			mysql_ssl_set(mysql,
+					ssl_params->ssl_key.c_str(),
+					ssl_params->ssl_cert.c_str(),
+					ssl_params->ssl_ca.c_str(),
+					ssl_params->ssl_capath.c_str(),
+					ssl_params->ssl_cipher.c_str()
+			);
+			mysql_options(mysql, MYSQL_OPT_SSL_CRL, ssl_params->ssl_crl.c_str());
+			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, ssl_params->ssl_crlpath.c_str());
+		}
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 	unsigned int timeout= 1;
@@ -1107,13 +1159,29 @@ handler_again:
 				}
 			}
 			if (!ret_mysql) {
-				// always increase the counter
-				proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
-    		NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
+				int myerr = mysql_errno(mysql);
+				if (ssl_params != NULL && myerr == 2026) {
+					proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s. SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
+						parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql),
+						ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
+						ssl_params->ssl_crl.c_str() , ssl_params->ssl_crlpath.c_str() , ssl_params->ssl_cipher.c_str() , ssl_params->tls_version.c_str()
+					);
+				} else {
+					proxy_error("Failed to mysql_real_connect() on %u:%s:%d , FD (Conn:%d , MyDS:%d) , %d: %s.\n", parent->myhgc->hid, parent->address, parent->port, mysql->net.fd , myds->fd, mysql_errno(mysql), mysql_error(mysql));
+				}
+				if (ssl_params != NULL) {
+					delete ssl_params;
+					ssl_params = NULL;
+				}
+				NEXT_IMMEDIATE(ASYNC_CONNECT_FAILED);
 			} else {
-    		NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
+				if (ssl_params != NULL) {
+					delete ssl_params;
+					ssl_params = NULL;
+				}
+				NEXT_IMMEDIATE(ASYNC_CONNECT_SUCCESSFUL);
 			}
-    	break;
+			break;
 		case ASYNC_CONNECT_SUCCESSFUL:
 			if (mysql && ret_mysql) {
 				// PMC-10005
@@ -1352,6 +1420,7 @@ handler_again:
 				if (query.stmt_result==NULL) {
 					NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_END);
 				} else {
+					update_warning_count_from_statement();
 					if (myds->sess->mirror==false) {
 						if (MyRS_reuse == NULL) {
 							MyRS = new MySQL_ResultSet();
@@ -1466,6 +1535,7 @@ handler_again:
 				NEXT_IMMEDIATE(ASYNC_STMT_EXECUTE_SUCCESSFUL);
 			}
 */
+			update_warning_count_from_statement();
 			break;
 //		case ASYNC_STMT_EXECUTE_SUCCESSFUL:
 //			break;
@@ -1531,6 +1601,14 @@ handler_again:
 			if (mysql_result==NULL) {
 				NEXT_IMMEDIATE(ASYNC_QUERY_END);
 			} else {
+				// since 'add_eof' utilizes 'warning_count,' we are setting the 'warning_count' here
+
+				// Note: There is a possibility of obtaining inaccurate warning_count and server_status at this point
+				// if the backend server has CLIENT_DEPRECATE_EOF enabled, and the client does not support CLIENT_DEPRECATE_EOF,
+				// especially when the query generates a warning. This information will be included in the intermediate EOF packet. 
+				// Correct information becomes available only after fetching all rows,
+				// and the warning_count and status flag details are extracted from the final OK packet.
+				update_warning_count_from_connection();
 				if (myds->sess->mirror==false) {
 					if (MyRS_reuse == NULL) {
 						MyRS = new MySQL_ResultSet();
@@ -1633,8 +1711,11 @@ handler_again:
 							}
 						}
 					}
+					// since 'add_eof' utilizes 'warning_count,' we are setting the 'warning_count' here
+					update_warning_count_from_connection();
 					// we reach here if there was no error
-					MyRS->add_eof();
+					// exclude warning_count from the OK/EOF packet for the ‘SHOW WARNINGS’ statement
+					MyRS->add_eof(query.length == 13 && strncasecmp(query.ptr, "SHOW WARNINGS", 13) == 0);
 					NEXT_IMMEDIATE(ASYNC_QUERY_END);
 				}
 			}
@@ -1645,6 +1726,7 @@ handler_again:
 				int _myerrno=mysql_errno(mysql);
 				if (_myerrno == 0) {
 					unknown_transaction_status = false;
+					update_warning_count_from_connection();
 				} else {
 					compute_unknown_transaction_status();
 				}
@@ -2448,7 +2530,10 @@ bool MySQL_Connection::MultiplexDisabled(bool check_delay_token) {
 // status_flags stores information about the status of the connection
 // can be used to determine if multiplexing can be enabled or not
 	bool ret=false;
-	if (status_flags & (STATUS_MYSQL_CONNECTION_TRANSACTION|STATUS_MYSQL_CONNECTION_USER_VARIABLE|STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT|STATUS_MYSQL_CONNECTION_LOCK_TABLES|STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE|STATUS_MYSQL_CONNECTION_GET_LOCK|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX|STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0|STATUS_MYSQL_CONNECTION_FOUND_ROWS|STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG|STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT) ) {
+	if (status_flags & (STATUS_MYSQL_CONNECTION_USER_VARIABLE | STATUS_MYSQL_CONNECTION_PREPARED_STATEMENT |
+		STATUS_MYSQL_CONNECTION_LOCK_TABLES | STATUS_MYSQL_CONNECTION_TEMPORARY_TABLE | STATUS_MYSQL_CONNECTION_GET_LOCK | STATUS_MYSQL_CONNECTION_NO_MULTIPLEX |
+		STATUS_MYSQL_CONNECTION_SQL_LOG_BIN0 | STATUS_MYSQL_CONNECTION_FOUND_ROWS | STATUS_MYSQL_CONNECTION_NO_MULTIPLEX_HG |
+		STATUS_MYSQL_CONNECTION_HAS_SAVEPOINT | STATUS_MYSQL_CONNECTION_HAS_WARNINGS) ) {
 		ret=true;
 	}
 	if (check_delay_token && auto_increment_delay_token) return true;
@@ -2569,6 +2654,32 @@ void MySQL_Connection::ProcessQueryAndSetStatusFlags(char *query_digest_text) {
 			}
 		}
 	}
+	// checking warnings and disabling multiplexing will be effective only when the mysql-query_digests is enabled
+	if (get_status(STATUS_MYSQL_CONNECTION_HAS_WARNINGS) == false) {
+		if (warning_count > 0) {
+			// 'warning_in_hg' will be used if the next query is 'SHOW WARNINGS' or
+			// 'SHOW COUNT(*) WARNINGS'
+			if (myds && myds->sess)
+				myds->sess->warning_in_hg = myds->sess->current_hostgroup;
+			// enabling multiplexing
+			set_status(true, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+		}
+	} else { // reset warning_in_hg 
+		const char* dig = query_digest_text;
+		const size_t dig_len = strlen(dig);
+		// disable multiplexing and reset the 'warning_in_hg' flag only when the current executed query is not 
+		// 'SHOW WARNINGS' or 'SHOW COUNT(*) WARNINGS', as these queries do not clear the warning message list
+		// on backend.
+		if (!((dig_len == 22 && strncasecmp(dig, "SHOW COUNT(*) WARNINGS", 22) == 0) ||
+			(dig_len == 13 && strncasecmp(dig, "SHOW WARNINGS", 13) == 0))) {
+			if (myds && myds->sess)
+				myds->sess->warning_in_hg = -1;
+			warning_count = 0;
+			// disabling multiplexing
+			set_status(false, STATUS_MYSQL_CONNECTION_HAS_WARNINGS);
+		}
+	}
+	
 	if (get_status(STATUS_MYSQL_CONNECTION_USER_VARIABLE)==false) { // we search for variables only if not already set
 //			if (
 //				strncasecmp(query_digest_text,"SELECT @@tx_isolation", strlen("SELECT @@tx_isolation"))
@@ -2797,7 +2908,7 @@ void MySQL_Connection::reset() {
 	set_status(old_compress,STATUS_MYSQL_CONNECTION_COMPRESSION);
 	reusable=true;
 	options.last_set_autocommit=-1; // never sent
-
+	warning_count=0;
 	delete local_stmts;
 	local_stmts=new MySQL_STMTs_local_v14(false);
 	creation_time = monotonic_time();

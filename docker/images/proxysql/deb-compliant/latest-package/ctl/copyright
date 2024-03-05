@@ -1,0 +1,6 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: proxysql
+Upstream-Contact: ProxySQL LLC <info@proxysql.com>
+Source: https://github.com/sysown/proxysql
+Copyright: 2013-PKG_YEAR ProxySQL LLC
+License: GPL-3

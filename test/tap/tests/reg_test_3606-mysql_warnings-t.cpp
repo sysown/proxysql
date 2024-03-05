@@ -18,14 +18,13 @@
 #include <string>
 #include <stdio.h>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysqld_error.h"
 
-#include <proxysql_utils.h>
+#include "proxysql_utils.h"
 
 #include "tap.h"
 #include "command_line.h"
-#include "utils.h"
 #include "utils.h"
 
 using std::vector;

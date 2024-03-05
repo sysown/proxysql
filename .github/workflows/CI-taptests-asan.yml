@@ -1,0 +1,17 @@
+name: CI-taptests-asan
+
+on:
+  workflow_dispatch:
+
+  workflow_run:
+    workflows: [ "CI-builds" ]
+    types: [ completed ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+
+jobs:
+  run:
+    uses: sysown/proxysql/.github/workflows/ci-taptests-asan.yml@GH-Actions
+    secrets: inherit
+    

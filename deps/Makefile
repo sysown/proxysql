@@ -1,65 +1,57 @@
 #!/bin/make -f
 
 
-UNAME_S := $(shell uname -s)
-UNAME_MS := $(word 2, $(shell uname -ms))
+SYS_KERN := $(shell uname -s)
+SYS_ARCH := $(shell uname -m)
 
+CENTOSVER := Unknown
 ifneq (,$(wildcard /etc/system-release))
 	CENTOSVER := $(shell rpm --eval %rhel)
-else
-	CENTOSVER := Unknown
 endif
 
-IS_ARM = $(if $(findstring aarch64, $(arch)),true,false)
-IS_CENTOS = $(if $(findstring Unknown, $(CENTOSVER)),false,true)
+IS_ARM := $(if $(findstring aarch64, $(SYS_ARCH)),true,false)
+IS_CENTOS := $(if $(findstring Unknown, $(CENTOSVER)),false,true)
 
 # to compile libmariadb_client with support for valgrind enabled, run:
 # export USEVALGRIND=1
-#
-USEVALGRIND := $(shell echo $(USEVALGRIND))
 
-PROXYDEBUG := $(shell echo $(PROXYDEBUG))
 ifeq ($(PROXYDEBUG),1)
-MYCFLAGS=-O0
-MYJEOPT=--enable-xmalloc --enable-prof --enable-fill --enable-debug
-
-ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
-	MYJEOPT+=--with-lg-page=16
-endif
-
+	MYCFLAGS := -O0
+	MYJEOPT := --enable-xmalloc --enable-prof --enable-fill --enable-debug
 else
-MYCFLAGS=-O2
-MYJEOPT=--enable-xmalloc --enable-prof
-
+	MYCFLAGS := -O2
+	MYJEOPT := --enable-xmalloc --enable-prof
+endif
 ifeq ($(and $(IS_ARM),$(IS_CENTOS)),true)
-	MYJEOPT+=--with-lg-page=16
+	MYJEOPT += --with-lg-page=16
 endif
 
-endif
 
-
-# determine compiler support for c++11/17
-export CPLUSPLUS=$(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
-ifeq ($(CPLUSPLUS),)
-	export CPLUSPLUS=$(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
-ifeq ($(CPLUSPLUS),)
+### detect compiler support for c++11/17
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201703L)
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201103L)
 	$(error Compiler must support at least c++11)
 endif
 endif
+STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
-PROXYSQLCLICKHOUSE := $(shell echo $(PROXYSQLCLICKHOUSE))
-tmpdefault=libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
-ifeq ($(UNAME_S),Linux)
-  tmpdefault+= coredumper
+targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp
+ifeq ($(SYS_KERN),Linux)
+	targets += coredumper
 endif
 ifeq ($(PROXYSQLCLICKHOUSE),1)
-  tmpdefault+= clickhouse-cpp
+	targets += clickhouse-cpp
 endif
-default: $(tmpdefault)
+
+
+default: $(targets)
 .PHONY: default
 
 
+### deps targets
 
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
@@ -68,7 +60,7 @@ ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
 	cd libinjection/libinjection && patch -p1 < ../libinjection_sqli.c.patch
 endif
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(SYS_KERN),Darwin)
 	sed -i '' 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
 else
 	sed -i -e 's/CC=/CC?=/' libinjection/libinjection/src/Makefile
@@ -86,7 +78,7 @@ libssl/openssl/libssl.a:
 #	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
 	cd libssl/openssl && CC=${CC} CXX=${CXX} ${MAKE}
-	cd libssl/openssl && ln -s . lib # curl wants this path
+	cd libssl/openssl && ln -fsT . lib # curl wants this path
 
 libssl: libssl/openssl/libssl.a
 
@@ -112,7 +104,7 @@ ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
 	cd libhttpserver/libhttpserver && ./bootstrap && mkdir build
-	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false
+	cd libhttpserver/libhttpserver/build && LDFLAGS=-L$(shell pwd)/libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/ CPPFLAGS=-I$(shell pwd)/libmicrohttpd/libmicrohttpd/src/include ../configure --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html --enable-fastopen=false --disable-examples
 	cd libhttpserver/libhttpserver/build && CC=${CC} CXX=${CXX} ${MAKE}
 
 libhttpserver: libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a
@@ -140,7 +132,7 @@ curl/curl/lib/.libs/libcurl.a: libssl/openssl/libssl.a
 	cd curl && tar -zxf curl-*.tar.gz
 #	cd curl/curl && ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --with-ssl=$(shell pwd)/../../libssl/openssl/ && CC=${CC} CXX=${CXX} ${MAKE}
 	cd curl/curl && autoreconf -fi
-ifeq ($(UNAME_S),Darwin)
+ifeq ($(SYS_KERN),Darwin)
 	cd curl/curl && patch configure < ../configure.patch
 endif
 	cd curl/curl && CFLAGS=-fPIC ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp --disable-proxy --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2 --without-libssh2 --without-brotli --without-librtmp --without-libpsl --without-zstd --with-ssl=$(shell pwd)/libssl/openssl/ --enable-shared=yes && LD_LIBRARY_PATH=$(shell pwd)/libssl/openssl CC=${CC} CXX=${CXX} ${MAKE}
@@ -150,15 +142,8 @@ curl: curl/curl/lib/.libs/libcurl.a
 
 libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a:
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
-	cd libmicrohttpd && rm -f libmicrohttpd || true
-ifeq ($(CENTOSVER),6)
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.55 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.55.tar.gz
-else
-	cd libmicrohttpd && ln -s libmicrohttpd-0.9.75 libmicrohttpd
-	cd libmicrohttpd && tar -zxf libmicrohttpd-0.9.75.tar.gz
+	cd libmicrohttpd && tar -zxf libmicrohttpd-*.tar.gz
 #	cd libmicrohttpd/libmicrohttpd && patch src/microhttpd/connection.c < ../connection.c-snprintf-overflow.patch
-endif
 	cd libmicrohttpd/libmicrohttpd && ./configure --enable-https && CC=${CC} CXX=${CXX} ${MAKE}
 
 microhttpd: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a
@@ -183,17 +168,9 @@ lz4: lz4/lz4/lib/liblz4.a
 
 clickhouse-cpp/clickhouse-cpp/clickhouse/libclickhouse-cpp-lib-static.a:
 	cd clickhouse-cpp && rm -rf clickhouse-cpp-*/ || true
-#ifeq ($(CPLUSPLUS),201703L)
-#	echo ">>> Clickhouse CXX17"
-	cd clickhouse-cpp && ln -fs clickhouse-cpp-2.3.0 clickhouse-cpp
+	cd clickhouse-cpp && ln -fsT clickhouse-cpp-2.3.0 clickhouse-cpp
 	cd clickhouse-cpp && tar -zxf v2.3.0.tar.gz && sync
 	cd clickhouse-cpp/clickhouse-cpp && patch clickhouse/base/wire_format.h < ../wire_format.patch
-#else
-#	echo ">>> Clickhouse CXX11"
-#	cd clickhouse-cpp && ln -fs clickhouse-cpp-1.0.0 clickhouse-cpp
-#	cd clickhouse-cpp && tar -zxf v1.0.0.tar.gz && sync
-#	cd clickhouse-cpp && sed -i -e 's/SET (CMAKE_CXX_STANDARD_REQUIRED ON)//' clickhouse-cpp/cmake/cpp17.cmake
-#endif
 	cd clickhouse-cpp/clickhouse-cpp && cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo .
 	cd clickhouse-cpp/clickhouse-cpp && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -222,57 +199,49 @@ jemalloc/jemalloc/lib/libjemalloc.a:
 jemalloc: jemalloc/jemalloc/lib/libjemalloc.a
 
 
-WITHASAN := $(shell echo $(WITHASAN))
-
 mariadb-client-library/mariadb_client/libmariadb/libmariadbclient.a: libssl/openssl/libssl.a
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
-	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.1.9-src.tar.gz
-	cd mariadb-client-library/mariadb_client && patch ./plugins/auth/CMakeLists.txt < ../plugin_auth_CMakeLists.txt.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../ConnectorName.patch
+	cd mariadb-client-library && tar -zxf mariadb-connector-c-3.3.8-src.tar.gz
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../plugin_auth_CMakeLists.txt.patch
 	cd mariadb-client-library/mariadb_client && cmake . -Wno-dev -DOPENSSL_ROOT_DIR=$(shell pwd)/libssl/openssl/ -DOPENSSL_LIBRARIES=$(shell pwd)/libssl/openssl/ -DICONV_LIBRARIES=$(brew --prefix libiconv)/lib -DICONV_INCLUDE=$(brew --prefix libiconv)/include .
 ifeq ($(PROXYDEBUG),1)
-	cd mariadb-client-library/mariadb_client && patch include/ma_context.h < ../ma_context.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 else ifeq ($(USEVALGRIND),1)
-	cd mariadb-client-library/mariadb_client && patch include/ma_context.h < ../ma_context.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_context.h.patch
 endif
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_stmt.c < ../mariadb_stmt.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.collation.patch # make sure this path is applied after mariadb_lib.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.ipv6_fix.patch # make sure this patch is applied after mariadb_lib.c.collation.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.collation.patch # make sure this path is applied after mariadb_lib.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_lib.c.ipv6_fix.patch # make sure this patch is applied after mariadb_lib.c.collation.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/net.c < ../net.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_async.c < ../mariadb_async.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_password.c < ../ma_password.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_async.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_password.c.patch
 #	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_secure.c < ../ma_secure.c.patch
-	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.patch
-	cd mariadb-client-library/mariadb_client && patch include/mariadb_com.h < ../mariadb_com.h.patch
-	cd mariadb-client-library/mariadb_client && patch include/ma_priv.h < ../ma_priv.h.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_alloc.c < ../ma_alloc.c.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_charset.c < ../ma_charset.c.patch
-#	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
-	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/basic-t.c < ../unittest_basic-t.c.patch
-	cd mariadb-client-library/mariadb_client && patch unittest/libmariadb/charset.c < ../unittest_charset.c.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../cr_new_stmt_metadata_removal.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../ps_buffer_stmt_read_all_rows.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../empty_split_compress_packet.patch
-	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt_store_result_err.patch
-
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mysql.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_priv.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_alloc.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_charset.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../unittest_basic-t.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../unittest_charset.c.patch
 ifeq ($(WITHASAN),1)
 	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_asan.patch
 endif
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_dyncol.c < ../mariadb_dyncol.c-multiplication-overflow.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/ma_array.c < ../ma_array.c-multiplication-overflow.patch
-	cd mariadb-client-library/mariadb_client && patch zlib/zutil.c < ../zutil.c-multiplication-overflow.patch
-	# patches for replication testing
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_rpl.c < ../mariadb_rpl.c.patch
-	cd mariadb-client-library/mariadb_client && patch include/mariadb_rpl.h < ../mariadb_rpl.h.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_dyncol.c-multiplication-overflow.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ma_array.c-multiplication-overflow.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../zutil.c-multiplication-overflow.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../cr_new_stmt_metadata_removal.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../ps_buffer_stmt_read_all_rows.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_stmt_store_result_err.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../empty_split_compress_packet.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../sslkeylogfile.patch
+	#cd mariadb-client-library/mariadb_client && patch libmariadb/ma_pvio.c < ../ma_pvio.c.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../client_deprecate_eof.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_com.h.patch
 	# patches for x509 cache . See https://github.com/sysown/proxysql/issues/4117 (Slow connection time with SSL and large CA file , relevant on Aurora)
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.x509cache.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.x509cache.patch
-	cd mariadb-client-library/mariadb_client && patch include/mysql.h < ../mysql.h.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch include/ma_common.h < ../ma_common.h.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/mariadb_lib.c < ../mariadb_lib.c.sslkeylogfile.patch
-	cd mariadb-client-library/mariadb_client && patch libmariadb/secure/openssl.c < ../openssl.c.sslkeylogfile.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../x509cache.patch
+	# patches for replication testing
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../mariadb_rpl.patch
+	cd mariadb-client-library/mariadb_client && patch -p0 < ../cmakelists.txt.patch
 	cd mariadb-client-library/mariadb_client && CC=${CC} CXX=${CXX} ${MAKE} mariadbclient
 #	cd mariadb-client-library/mariadb_client/include && make my_config.h
 
@@ -318,11 +287,11 @@ re2/re2/obj/libre2.a:
 #	cd re2/re2 && sed -i -e 's/-O3 -g /-O3 -fPIC /' Makefile
 #	cd re2/re2 && patch util/mutex.h < ../mutex.h.patch
 	cd re2/re2 && patch re2/onepass.cc < ../onepass.cc-multiplication-overflow.patch
-ifeq ($(UNAME_S),Darwin)
-	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -std=c++11 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
+ifeq ($(SYS_KERN),Darwin)
+	cd re2/re2 && sed -i '' -e 's/-O3 -g/-O3 -g -${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 #	cd re2/re2 && sed -i '' -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 else
-	cd re2/re2 && sed -i -e 's/-O3 -g/-O3 -g -std=c++11 -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
+	cd re2/re2 && sed -i -e 's/-O3 -g/-O3 -g ${STDCPP} -fPIC -DMEMORY_SANITIZER -DRE2_ON_VALGRIND /' Makefile
 #	cd re2/re2 && sed -i -e 's/RE2_CXXFLAGS?=-std=c++11 /RE2_CXXFLAGS?=-std=c++11 -fPIC /' Makefile
 endif
 	cd re2/re2 && CC=${CC} CXX=${CXX} ${MAKE}
@@ -340,6 +309,7 @@ pcre/pcre/.libs/libpcre.a:
 pcre: pcre/pcre/.libs/libpcre.a
 
 
+### clean targets
 
 cleanpart:
 	cd mariadb-client-library && rm -rf mariadb-connector-c-*/ || true
@@ -360,7 +330,6 @@ cleanall:
 	cd clickhouse-cpp/ && rm -rf clickhouse-cpp-* || true
 	cd lz4 && rm -rf lz4-*/ || true
 	cd libmicrohttpd && rm -rf libmicrohttpd-*/ || true
-	cd libmicrohttpd && rm -f libmicrohttpd || true
 	cd curl && rm -rf curl-*/ || true
 	cd libev && rm -rf libev-*/ || true
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true

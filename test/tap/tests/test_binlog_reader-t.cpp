@@ -28,8 +28,8 @@
 #include <utility>
 #include <vector>
 
-#include <mysql.h>
-#include <mysql/mysqld_error.h>
+#include "mysql.h"
+#include "mysqld_error.h"
 #include <json.hpp>
 
 #include "tap.h"

@@ -105,71 +105,6 @@ mythr_g_st_vars_t MySQL_Thread_status_variables_gauge_array[] {
 
 extern mysql_variable_st mysql_tracked_variables[];
 
-const MARIADB_CHARSET_INFO * proxysql_find_charset_nr(unsigned int nr) {
-	const MARIADB_CHARSET_INFO * c = mariadb_compiled_charsets;
-	do {
-		if (c->nr == nr) {
-			return c;
-		}
-		++c;
-	} while (c[0].nr != 0);
-	return NULL;
-}
-
-MARIADB_CHARSET_INFO * proxysql_find_charset_name(const char *name_) {
-	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
-	const char *name;
-	if (strcasecmp(name_,(const char *)"utf8mb3")==0) {
-		name = (const char *)"utf8";
-	} else {
-		name = name_;
-	}
-	do {
-		if (!strcasecmp(c->csname, name)) {
-			return c;
-		}
-		++c;
-	} while (c[0].nr != 0);
-	return NULL;
-}
-
-MARIADB_CHARSET_INFO * proxysql_find_charset_collate_names(const char *csname_, const char *collatename_) {
-	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
-	char buf[64];
-	const char *csname;
-	const char *collatename;
-	if (strcasecmp(csname_,(const char *)"utf8mb3")==0) {
-		csname = (const char *)"utf8";
-	} else {
-		csname = csname_;
-	}
-	if (strncasecmp(collatename_,(const char *)"utf8mb3", 7)==0) {
-		memcpy(buf,(const char *)"utf8",4);
-		strcpy(buf+4,collatename_+7);
-		collatename = buf;
-	} else {
-		collatename = collatename_;
-	}
-	do {
-		if (!strcasecmp(c->csname, csname) && !strcasecmp(c->name, collatename)) {
-			return c;
-		}
-		++c;
-	} while (c[0].nr != 0);
-	return NULL;
-}
-
-MARIADB_CHARSET_INFO * proxysql_find_charset_collate(const char *collatename) {
-	MARIADB_CHARSET_INFO *c = (MARIADB_CHARSET_INFO *)mariadb_compiled_charsets;
-	do {
-		if (!strcasecmp(c->name, collatename)) {
-			return c;
-		}
-		++c;
-	} while (c[0].nr != 0);
-	return NULL;
-}
-
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
@@ -195,113 +130,6 @@ extern "C" {
 __thread unsigned int __thread_MySQL_Thread_Variables_version;
 
 volatile static unsigned int __global_MySQL_Thread_Variables_version;
-
-
-
-static unsigned int near_pow_2 (unsigned int n) {
-	unsigned int i = 1;
-	while (i < n) i <<= 1;
-	return i ? i : n;
-}
-
-
-void ProxySQL_Poll::shrink() {
-	unsigned int new_size=near_pow_2(len+1);
-	fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-	myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
-	last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
-	last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
-	size=new_size;
-}
-
-void ProxySQL_Poll::expand(unsigned int more) {
-	if ( (len+more) > size ) {
-		unsigned int new_size=near_pow_2(len+more);
-		fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-		myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
-		last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
-		last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
-		size=new_size;
-	}
-}
-
-ProxySQL_Poll::ProxySQL_Poll() {
-	loop_counters=new StatCounters(15,10);
-	poll_timeout=0;
-	loops=0;
-	len=0;
-	pending_listener_add=0;
-	pending_listener_del=0;
-	bootstrapping_listeners = true;
-	size=MIN_POLL_LEN;
-	fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
-	myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
-	last_recv=(unsigned long long *)malloc(size*sizeof(unsigned long long));
-	last_sent=(unsigned long long *)malloc(size*sizeof(unsigned long long));
-}
-
-
-ProxySQL_Poll::~ProxySQL_Poll() {
-	unsigned int i;
-	for (i=0;i<len;i++) {
-		if (
-			myds[i] && // fix bug #278 . This should be caused by not initialized datastreams used to ping the backend
-			myds[i]->myds_type==MYDS_LISTENER) {
-				delete myds[i];
-		}
-	}
-	free(myds);
-	free(fds);
-	free(last_recv);
-	free(last_sent);
-	delete loop_counters;
-}
-
-
-void ProxySQL_Poll::add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
-	if (len==size) {
-		expand(1);
-	}
-	myds[len]=_myds;
-	fds[len].fd=_fd;
-	fds[len].events=_events;
-	fds[len].revents=0;
-	if (_myds) {
-		_myds->mypolls=this;
-		_myds->poll_fds_idx=len;  // fix a serious bug
-	}
-	last_recv[len]=monotonic_time();
-	last_sent[len]=sent_time;
-	len++;
-}
-
-void ProxySQL_Poll::remove_index_fast(unsigned int i) {
-	if ((int)i==-1) return;
-	myds[i]->poll_fds_idx=-1; // this prevents further delete
-	if (i != (len-1)) {
-		myds[i]=myds[len-1];
-		fds[i].fd=fds[len-1].fd;
-		fds[i].events=fds[len-1].events;
-		fds[i].revents=fds[len-1].revents;
-		myds[i]->poll_fds_idx=i;  // fix a serious bug
-		last_recv[i]=last_recv[len-1];
-		last_sent[i]=last_sent[len-1];
-	}
-	len--;
-	if ( ( len>MIN_POLL_LEN ) && ( size > len*MIN_POLL_DELETE_RATIO ) ) {
-		shrink();
-	}
-}
-
-int ProxySQL_Poll::find_index(int fd) {
-	unsigned int i;
-	for (i=0; i<len; i++) {
-		if (fds[i].fd==fd) {
-			return i;
-		}
-	}
-	return -1;
-}
 
 
 MySQL_Listeners_Manager::MySQL_Listeners_Manager() {
@@ -553,6 +381,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"long_query_time",
 	(char *)"query_cache_size_MB",
 	(char *)"query_cache_soft_ttl_pct",
+	(char *)"query_cache_handle_warnings",
 	(char *)"ping_interval_server_msec",
 	(char *)"ping_timeout_server",
 	(char *)"default_schema",
@@ -561,6 +390,7 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"server_capabilities",
 	(char *)"server_version",
 	(char *)"keep_multiplexing_variables",
+	(char *)"default_authentication_plugin",
 	(char *)"kill_backend_connection_when_disconnect",
 	(char *)"client_session_track_gtid",
 	(char *)"sessions_sort",
@@ -594,7 +424,6 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"init_connect",
 	(char *)"ldap_user_variable",
 	(char *)"add_ldap_user_comment",
-	(char *)"default_tx_isolation",
 	(char *)"default_session_track_gtids",
 	(char *)"connpoll_reset_queue_length",
 	(char *)"min_num_servers_lantency_awareness",
@@ -603,6 +432,8 @@ static char * mysql_thread_variables_names[]= {
 	(char *)"stats_time_query_processor",
 	(char *)"query_cache_stores_empty_result",
 	(char *)"data_packets_history_size",
+	(char *)"handle_warnings",
+	(char *)"evaluate_replication_lag_on_servers_load",
 	NULL
 };
 
@@ -1066,6 +897,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_retries_on_failure=1;
 	variables.client_host_cache_size=0;
 	variables.client_host_error_counts=0;
+	variables.handle_warnings=1;
+	variables.evaluate_replication_lag_on_servers_load=1;
 	variables.connect_retries_on_failure=10;
 	variables.connection_delay_multiplex_ms=0;
 	variables.connection_max_age_ms=0;
@@ -1141,21 +974,20 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.query_processor_iterations=0;
 	variables.query_processor_regex=1;
 	variables.set_query_lock_on_hostgroup=1;
-	// FIXME: this must become 2 in 2.6.0
-	variables.set_parser_algorithm=1; // before 2.6.0 this was 1 , must become 2
+	variables.set_parser_algorithm=2; // before 2.6.0 this was 1
 	variables.reset_connection_algorithm=2;
 	variables.auto_increment_delay_multiplex=5;
 	variables.auto_increment_delay_multiplex_timeout_ms=10000;
 	variables.long_query_time=1000;
 	variables.query_cache_size_MB=256;
 	variables.query_cache_soft_ttl_pct=0;
+	variables.query_cache_handle_warnings=0;
 	variables.init_connect=NULL;
 	variables.ldap_user_variable=NULL;
 	variables.add_ldap_user_comment=NULL;
 	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
 		variables.default_variables[i]=strdup(mysql_tracked_variables[i].default_value);
 	}
-	variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
 	variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
 	variables.ping_interval_server_msec=10000;
 	variables.ping_timeout_server=200;
@@ -1215,6 +1047,8 @@ MySQL_Threads_Handler::MySQL_Threads_Handler() {
 	variables.ssl_p2s_crl=NULL;
 	variables.ssl_p2s_crlpath=NULL;
 	variables.keep_multiplexing_variables=strdup((char *)"tx_isolation,transaction_isolation,version");
+	variables.default_authentication_plugin=strdup((char *)"mysql_native_password");
+	variables.default_authentication_plugin_int = 0; // mysql_native_password
 #ifdef DEBUG
 	variables.session_debug=true;
 #endif /*debug */
@@ -1417,12 +1251,6 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 				return strdup(variables.default_variables[i]);
 			}
 		}
-		if (!strcmp(name,"default_tx_isolation")) {
-			if (variables.default_tx_isolation==NULL) {
-				variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
-			}
-			return strdup(variables.default_tx_isolation);
-		}
 		if (!strcmp(name,"default_session_track_gtids")) {
 			if (variables.default_session_track_gtids==NULL) {
 				variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
@@ -1436,6 +1264,7 @@ char * MySQL_Threads_Handler::get_variable_string(char *name) {
 	if (!strcmp(name,"auditlog_filename")) return strdup(variables.auditlog_filename);
 	if (!strcmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	if (!strcmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	// LCOV_EXCL_START
 	proxy_error("Not existing variable: %s\n", name); assert(0);
 	return NULL;
@@ -1538,12 +1367,6 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 			return strdup(variables.add_ldap_user_comment);
 		}
 	}
-	if (!strcasecmp(name,"default_tx_isolation")) {
-		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION);
-		}
-		return strdup(variables.default_tx_isolation);
-	}
 	if (!strcasecmp(name,"default_session_track_gtids")) {
 		if (variables.default_session_track_gtids==NULL) {
 			variables.default_session_track_gtids=strdup((char *)MYSQL_DEFAULT_SESSION_TRACK_GTIDS);
@@ -1570,6 +1393,7 @@ char * MySQL_Threads_Handler::get_variable(char *name) {	// this is the public f
 	if (!strcasecmp(name,"eventslog_filename")) return strdup(variables.eventslog_filename);
 	if (!strcasecmp(name,"default_schema")) return strdup(variables.default_schema);
 	if (!strcasecmp(name,"keep_multiplexing_variables")) return strdup(variables.keep_multiplexing_variables);
+	if (!strcasecmp(name,"default_authentication_plugin")) return strdup(variables.default_authentication_plugin);
 	if (!strcasecmp(name,"interfaces")) return strdup(variables.interfaces);
 	if (!strcasecmp(name,"server_capabilities")) {
 		// FIXME : make it human readable
@@ -1873,19 +1697,6 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		return true;
 	}
 
-	if (!strcasecmp(name,"default_tx_isolation")) {
-		if (variables.default_tx_isolation) free(variables.default_tx_isolation);
-		variables.default_tx_isolation=NULL;
-		if (vallen) {
-			if (strcmp(value,"(null)"))
-				variables.default_tx_isolation=strdup(value);
-		}
-		if (variables.default_tx_isolation==NULL) {
-			variables.default_tx_isolation=strdup((char *)MYSQL_DEFAULT_TX_ISOLATION); // default
-		}
-		return true;
-	}
-
 	if (!strcasecmp(name,"default_session_track_gtids")) {
 		if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 		variables.default_session_track_gtids=NULL;
@@ -1920,6 +1731,25 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 				if (variables.default_variables[i] == NULL)
 					variables.default_variables[i] = strdup(mysql_tracked_variables[i].default_value);
 				return true;
+			}
+		}
+		if (!strcasecmp(name,"default_authentication_plugin")) {
+			if (vallen) {
+				const char * valids[2] = { "mysql_native_password", "caching_sha2_password" };
+				for (long unsigned int i=0; i < sizeof(valids)/sizeof(char *) ; i++) {
+					if (strcmp(valids[i],value)==0) {
+						free(variables.default_authentication_plugin);
+						variables.default_authentication_plugin=strdup(value);
+						if (i==0) variables.default_authentication_plugin_int = 0;
+						if (i==1) variables.default_authentication_plugin_int = 2;
+						return true;
+					}
+				}
+				// not found
+				proxy_error("%s is an invalid value for default_authentication_plugin\n", value);
+				return false;
+			} else {
+				return false;
 			}
 		}
 	}
@@ -2005,16 +1835,18 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		} else if (value[0] == '/') {
 			char *full_path = strdup(value);
-                        char *eval_dirname = dirname(full_path);
-                        DIR* eventlog_dir = opendir(eval_dirname);
-			free(full_path);
-                        if (eventlog_dir) {
+			char* eval_dirname = dirname(full_path);
+			DIR* eventlog_dir = opendir(eval_dirname);
+			if (eventlog_dir) {
 				closedir(eventlog_dir);
 				free(variables.auditlog_filename);
-				variables.auditlog_filename=strdup(value);
-                                return true;
-			} else {
+				variables.auditlog_filename = strdup(value);
+				free(full_path);
+				return true;
+			}
+			else {
 				proxy_error("%s is an invalid value for auditlog_filename path, the directory cannot be accessed\n", eval_dirname);
+				free(full_path);
 				return false;
 			}
 		} else {
@@ -2029,16 +1861,18 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		} else if (value[0] == '/') {
 			char *full_path = strdup(value);
-                        char *eval_dirname = dirname(full_path);
-                        DIR* eventlog_dir = opendir(eval_dirname);
-			free(full_path);
-                        if (eventlog_dir) {
+			char* eval_dirname = dirname(full_path);
+			DIR* eventlog_dir = opendir(eval_dirname);
+			if (eventlog_dir) {
 				closedir(eventlog_dir);
 				free(variables.eventslog_filename);
-				variables.eventslog_filename=strdup(value);
-                                return true;
-			} else {
+				variables.eventslog_filename = strdup(value);
+				free(full_path);
+				return true;
+			}
+			else {
 				proxy_error("%s is an invalid value for eventslog_filename path, the directory cannot be accessed\n", eval_dirname);
+				free(full_path);
 				return false;
 			}
 		} else {
@@ -2048,8 +1882,12 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 		}
 	}
 	if (!strcasecmp(name,"server_capabilities")) {
-		int intv=atoi(value);
-		if (intv > 10 && intv <= 65535) {
+		// replaced atoi() with strtoul() to have a 32 bit result
+		uint32_t intv = strtoul(value, NULL, 10);
+		if (intv > 10) {
+			// Note that:
+			// - some capabilities are changed at runtime while performing the handshake with the client
+			// - even if we support 32 bits capabilities, many of them do not have any real meaning for proxysql (not supported)
 			variables.server_capabilities=intv;
 			return true;
 		} else {
@@ -2270,6 +2108,8 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["ping_timeout_server"]           = make_tuple(&variables.ping_timeout_server,          10,       600*1000, false);
 		VariablesPointers_int["client_host_cache_size"]        = make_tuple(&variables.client_host_cache_size,        0,      1024*1024, false);
 		VariablesPointers_int["client_host_error_counts"]      = make_tuple(&variables.client_host_error_counts,      0,      1024*1024, false);
+		VariablesPointers_int["handle_warnings"]			   = make_tuple(&variables.handle_warnings,				  0,			  1, false);
+		VariablesPointers_int["evaluate_replication_lag_on_servers_load"] = make_tuple(&variables.evaluate_replication_lag_on_servers_load, 0, 1, false);
 
 		// logs
 		VariablesPointers_int["auditlog_filesize"]     = make_tuple(&variables.auditlog_filesize,    1024*1024, 1*1024*1024*1024, false);
@@ -2280,11 +2120,13 @@ char ** MySQL_Threads_Handler::get_variables_list() {
 		VariablesPointers_int["max_allowed_packet"]        = make_tuple(&variables.max_allowed_packet,        8192,   1024*1024*1024, false);
 		VariablesPointers_int["max_connections"]           = make_tuple(&variables.max_connections,              1,        1000*1000, false);
 		VariablesPointers_int["max_stmts_per_connection"]  = make_tuple(&variables.max_stmts_per_connection,     1,             1024, false);
-		VariablesPointers_int["max_stmts_cache"]           = make_tuple(&variables.max_stmts_cache,           1024,        1024*1024, false);
+		VariablesPointers_int["max_stmts_cache"]           = make_tuple(&variables.max_stmts_cache,            128,        1024*1024, false);
 		VariablesPointers_int["max_transaction_idle_time"] = make_tuple(&variables.max_transaction_idle_time, 1000,  20*24*3600*1000, false);
 		VariablesPointers_int["max_transaction_time"]      = make_tuple(&variables.max_transaction_time,      1000,  20*24*3600*1000, false);
 		VariablesPointers_int["query_cache_size_mb"]       = make_tuple(&variables.query_cache_size_MB,          0,       1024*10240, false);
 		VariablesPointers_int["query_cache_soft_ttl_pct"]  = make_tuple(&variables.query_cache_soft_ttl_pct,     0,              100, false);
+		VariablesPointers_int["query_cache_handle_warnings"] = make_tuple(&variables.query_cache_handle_warnings,	 0,				   1, false);
+
 #ifdef IDLE_THREADS
 		VariablesPointers_int["session_idle_ms"]           = make_tuple(&variables.session_idle_ms,              1,        3600*1000, false);
 #endif // IDLE_THREADS
@@ -2691,11 +2533,11 @@ MySQL_Threads_Handler::~MySQL_Threads_Handler() {
 	if (variables.interfaces) free(variables.interfaces);
 	if (variables.server_version) free(variables.server_version);
 	if (variables.keep_multiplexing_variables) free(variables.keep_multiplexing_variables);
+	if (variables.default_authentication_plugin) free(variables.default_authentication_plugin);
 	if (variables.firewall_whitelist_errormsg) free(variables.firewall_whitelist_errormsg);
 	if (variables.init_connect) free(variables.init_connect);
 	if (variables.ldap_user_variable) free(variables.ldap_user_variable);
 	if (variables.add_ldap_user_comment) free(variables.add_ldap_user_comment);
-	if (variables.default_tx_isolation) free(variables.default_tx_isolation);
 	if (variables.default_session_track_gtids) free(variables.default_session_track_gtids);
 	if (variables.eventslog_filename) free(variables.eventslog_filename);
 	if (variables.auditlog_filename) free(variables.auditlog_filename);
@@ -2822,11 +2664,11 @@ MySQL_Thread::~MySQL_Thread() {
 	if (mysql_thread___default_schema) { free(mysql_thread___default_schema); mysql_thread___default_schema=NULL; }
 	if (mysql_thread___server_version) { free(mysql_thread___server_version); mysql_thread___server_version=NULL; }
 	if (mysql_thread___keep_multiplexing_variables) { free(mysql_thread___keep_multiplexing_variables); mysql_thread___keep_multiplexing_variables=NULL; }
+	if (mysql_thread___default_authentication_plugin) { free(mysql_thread___default_authentication_plugin); mysql_thread___default_authentication_plugin=NULL; }
 	if (mysql_thread___firewall_whitelist_errormsg) { free(mysql_thread___firewall_whitelist_errormsg); mysql_thread___firewall_whitelist_errormsg=NULL; }
 	if (mysql_thread___init_connect) { free(mysql_thread___init_connect); mysql_thread___init_connect=NULL; }
 	if (mysql_thread___ldap_user_variable) { free(mysql_thread___ldap_user_variable); mysql_thread___ldap_user_variable=NULL; }
 	if (mysql_thread___add_ldap_user_comment) { free(mysql_thread___add_ldap_user_comment); mysql_thread___add_ldap_user_comment=NULL; }
-	if (mysql_thread___default_tx_isolation) { free(mysql_thread___default_tx_isolation); mysql_thread___default_tx_isolation=NULL; }
 	if (mysql_thread___default_session_track_gtids) { free(mysql_thread___default_session_track_gtids); mysql_thread___default_session_track_gtids=NULL; }
 
 	for (int i=0; i<SQL_NAME_LAST_LOW_WM; i++) {
@@ -2893,8 +2735,12 @@ MySQL_Session * MySQL_Thread::create_new_session_and_client_data_stream(int _fd)
 		int nb = fcntl(_fd, F_SETFL, prevflags | O_NONBLOCK);
 		if (nb == -1) {
 			proxy_error("For FD %d fcntl() returned -1 , previous flags %d , errno %d\n", _fd, prevflags, errno);
-			if (shutdown == 0)
-				assert (nb != -1);
+			// previously we were asserting here. But it is possible that this->shutdown is still 0 during the
+			// shutdown itself:
+			// - the current thread is processing connections
+			// - the signal handler thread is still setting shutdown = 0
+			//if (shutdown == 0)
+			//	assert (nb != -1);
 		}
 	}
 	setsockopt(sess->client_myds->fd, IPPROTO_TCP, TCP_NODELAY, (char *) &arg_on, sizeof(arg_on));
@@ -4033,6 +3879,7 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___long_query_time=GloMTH->get_variable_int((char *)"long_query_time");
 	mysql_thread___query_cache_size_MB=GloMTH->get_variable_int((char *)"query_cache_size_MB");
 	mysql_thread___query_cache_soft_ttl_pct=GloMTH->get_variable_int((char *)"query_cache_soft_ttl_pct");
+	mysql_thread___query_cache_handle_warnings =GloMTH->get_variable_int((char*)"query_cache_handle_warnings");
 	mysql_thread___ping_interval_server_msec=GloMTH->get_variable_int((char *)"ping_interval_server_msec");
 	mysql_thread___ping_timeout_server=GloMTH->get_variable_int((char *)"ping_timeout_server");
 	mysql_thread___shun_on_failures=GloMTH->get_variable_int((char *)"shun_on_failures");
@@ -4116,8 +3963,6 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___ldap_user_variable=GloMTH->get_variable_string((char *)"ldap_user_variable");
 	if (mysql_thread___add_ldap_user_comment) free(mysql_thread___add_ldap_user_comment);
 	mysql_thread___add_ldap_user_comment=GloMTH->get_variable_string((char *)"add_ldap_user_comment");
-	if (mysql_thread___default_tx_isolation) free(mysql_thread___default_tx_isolation);
-	mysql_thread___default_tx_isolation=GloMTH->get_variable_string((char *)"default_tx_isolation");
 	if (mysql_thread___default_session_track_gtids) free(mysql_thread___default_session_track_gtids);
 	mysql_thread___default_session_track_gtids=GloMTH->get_variable_string((char *)"default_session_track_gtids");
 
@@ -4149,6 +3994,9 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___default_schema=GloMTH->get_variable_string((char *)"default_schema");
 	if (mysql_thread___keep_multiplexing_variables) free(mysql_thread___keep_multiplexing_variables);
 	mysql_thread___keep_multiplexing_variables=GloMTH->get_variable_string((char *)"keep_multiplexing_variables");
+	if (mysql_thread___default_authentication_plugin) free(mysql_thread___default_authentication_plugin);
+	mysql_thread___default_authentication_plugin=GloMTH->get_variable_string((char *)"default_authentication_plugin");
+	mysql_thread___default_authentication_plugin_int = GloMTH->variables.default_authentication_plugin_int;
 	mysql_thread___server_capabilities=GloMTH->get_variable_uint16((char *)"server_capabilities");
 	mysql_thread___handle_unknown_charset=GloMTH->get_variable_int((char *)"handle_unknown_charset");
 	mysql_thread___poll_timeout=GloMTH->get_variable_int((char *)"poll_timeout");
@@ -4194,6 +4042,8 @@ void MySQL_Thread::refresh_variables() {
 	mysql_thread___log_mysql_warnings_enabled=(bool)GloMTH->get_variable_int((char *)"log_mysql_warnings_enabled");
 	mysql_thread___client_host_cache_size=GloMTH->get_variable_int((char *)"client_host_cache_size");
 	mysql_thread___client_host_error_counts=GloMTH->get_variable_int((char *)"client_host_error_counts");
+	mysql_thread___handle_warnings=GloMTH->get_variable_int((char*)"handle_warnings");
+	mysql_thread___evaluate_replication_lag_on_servers_load=GloMTH->get_variable_int((char*)"evaluate_replication_lag_on_servers_load");
 #ifdef DEBUG
 	mysql_thread___session_debug=(bool)GloMTH->get_variable_int((char *)"session_debug");
 #endif /* DEBUG */

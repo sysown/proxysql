@@ -87,7 +87,7 @@ vemit_tap(int pass, char const *fmt, va_list ap)
 {
   fprintf(tapout, "%sok %d%s",
           pass ? "" : "not ",
-          ++g_test.last,
+          __sync_add_and_fetch(&g_test.last, 1),
           (fmt && *fmt) ? " - " : "");
   if (fmt && *fmt)
     vfprintf(tapout, fmt, ap);
@@ -248,7 +248,7 @@ ok(int pass, char const *fmt, ...)
   va_start(ap, fmt);
 
   if (!pass && *g_test.todo == '\0')
-    ++g_test.failed;
+    __sync_add_and_fetch(&g_test.failed, 1);
 
   vemit_tap(pass, fmt, ap);
   va_end(ap);
@@ -265,7 +265,7 @@ ok1(int const pass)
   memset(&ap, 0, sizeof(ap));
 
   if (!pass && *g_test.todo == '\0')
-    ++g_test.failed;
+    __sync_add_and_fetch(&g_test.failed, 1);
 
   vemit_tap(pass, NULL, ap);
 

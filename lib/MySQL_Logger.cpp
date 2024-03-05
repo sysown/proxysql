@@ -705,7 +705,7 @@ void MySQL_Logger::log_request(MySQL_Session *sess, MySQL_Data_Stream *myds) {
 			break;
 		case WAITING_CLIENT_DATA:
 			{
-				unsigned char c=*((unsigned char *)sess->pktH->ptr+sizeof(mysql_hdr));
+				unsigned char c=*((unsigned char *)sess->pkt.ptr+sizeof(mysql_hdr));
 				switch ((enum_mysql_command)c) {
 					case _MYSQL_COM_STMT_PREPARE:
 						// proxysql is responding to COM_STMT_PREPARE without

@@ -9,11 +9,9 @@
 ### export GIT_VERSION=2.x-dev
 ### ```
 
-ifndef GIT_VERSION
-GIT_VERSION := $(shell git describe --long --abbrev=7)
+GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
 $(error GIT_VERSION is not set)
-endif
 endif
 
 ### NOTES:
@@ -28,37 +26,40 @@ endif
 ###
 ### ** to use on-demand coredump generation feature, compile code without ASAN option (WITHASAN=0).
 
-O0=-O0
-O2=-O2
-O1=-O1
-O3=-O3 -mtune=native
-#OPTZ=$(O2)
-EXTRALINK=#-pg
-ALL_DEBUG=-ggdb -DDEBUG
-NO_DEBUG=
-DEBUG=${ALL_DEBUG}
+O0 := -O0
+O2 := -O2
+O1 := -O1
+O3 := -O3 -mtune=native
+
+#EXTRALINK := #-pg
+ALL_DEBUG := $(O0) -ggdb -DDEBUG
+NO_DEBUG := $(O2) -ggdb
+DEBUG := $(ALL_DEBUG)
+CURVER ?= 2.6.1
 #export DEBUG
-#export OPTZ
 #export EXTRALINK
 export MAKE
-export CURVER?=2.6.0
 
+export CURVER
 
-# determine compiler support for c++11/17
-export CPLUSPLUS=$(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
-ifeq ($(CPLUSPLUS),)
-	export CPLUSPLUS=$(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
-ifeq ($(CPLUSPLUS),)
+### detect compiler support for c++11/17
+CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+ifneq ($(CPLUSPLUS),201703L)
+	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
+	LEGACY_BUILD := 1
+ifneq ($(CPLUSPLUS),201103L)
 	$(error Compiler must support at least c++11)
 endif
 endif
+STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
+### detect distro
 DISTRO := Unknown
 ifneq (,$(wildcard /etc/os-release))
 	DISTRO := $(shell awk -F= '/^NAME/{print $$2}' /etc/os-release)
 endif
 
-
+### multiprocessing
 NPROCS := 1
 OS := $(shell uname -s)
 ifeq ($(OS),Linux)
@@ -67,30 +68,35 @@ endif
 ifeq ($(OS),Darwin)
 	NPROCS := $(shell sysctl -n hw.ncpu)
 endif
-export MAKEOPT=-j ${NPROCS}
+export MAKEOPT := -j${NPROCS}
 
-
+### systemd
 SYSTEMD := 0
 ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
 	SYSTEMD := 1
 endif
 
+### check user/group
 USERCHECK := $(shell getent passwd proxysql)
 GROUPCHECK := $(shell getent group proxysql)
 
 
 ### main targets
 
+.DEFAULT: default
 .PHONY: default
 default: build_src
 
 .PHONY: debug
 debug: build_src_debug
 
+.PHONY: testaurora_random
+testaurora_random: build_src_testaurora_random
+
 .PHONY: testaurora
 testaurora: build_src_testaurora
-	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
-	cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
+	# cd test/tap && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
+	# cd test/tap/tests && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE} $(MAKECMDGOALS)
 
 .PHONY: testgalera
 testgalera: build_src_testgalera
@@ -119,32 +125,64 @@ debug_clickhouse: build_src_debug_clickhouse
 ### helper targets
 
 .PHONY: build_deps
-build_deps:
-	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_deps: $(if $(LEGACY_BUILD),build_deps_legacy,build_deps_default)
 
 .PHONY: build_lib
-build_lib: build_deps
-	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_lib: $(if $(LEGACY_BUILD),build_lib_legacy,build_lib_default)
 
 .PHONY: build_src
-build_src: build_lib
-	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+build_src: $(if $(LEGACY_BUILD),build_src_legacy,build_src_default)
 
 .PHONY: build_deps_debug
-build_deps_debug:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_deps_debug: $(if $(LEGACY_BUILD),build_deps_debug_legacy,build_deps_debug_default)
 
 .PHONY: build_lib_debug
-build_lib_debug: build_deps_debug
+build_lib_debug: $(if $(LEGACY_BUILD),build_lib_debug_legacy,build_lib_debug_default)
+
+.PHONY: build_src_debug
+build_src_debug: $(if $(LEGACY_BUILD),build_src_debug_legacy,build_src_debug_default)
+
+# legacy build targets (pre c++17)
+.PHONY: build_deps_legacy
+build_deps_legacy:
+	cd deps && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_legacy
+build_lib_legacy: build_deps_legacy
+	cd lib && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_legacy
+build_src_legacy: build_lib_legacy
+	cd src && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_deps_debug_legacy
+build_deps_debug_legacy:
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_debug_legacy
+build_lib_debug_legacy: build_deps_debug_legacy
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_debug_legacy
+build_src_debug_legacy: build_lib_debug_legacy
+	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+#--
 
 .PHONY: build_src_testaurora
 build_src_testaurora: build_lib_testaurora
 	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
 
+.PHONY: build_src_testaurora_random
+build_src_testaurora_random: build_lib_testaurora_random
+	cd src && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_AURORA_RANDOM" CC=${CC} CXX=${CXX} ${MAKE}
+
 .PHONY: build_lib_testaurora
 build_lib_testaurora: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA" CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_testaurora_random
+build_lib_testaurora_random: build_deps_debug
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_AURORA_RANDOM" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_src_testgalera
 build_src_testgalera: build_lib_testgalera
@@ -187,44 +225,67 @@ build_lib_testall: build_deps_debug
 	cd lib && OPTZ="${O0} -ggdb -DDEBUG -DTEST_AURORA -DTEST_GALERA -DTEST_GROUPREP -DTEST_READONLY -DTEST_REPLICATIONLAG" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_tap_test
-build_tap_test: build_src
-	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
+build_tap_test: build_tap_tests
+.PHONY: build_tap_tests
+build_tap_tests: build_src
+	cd test/tap && OPTZ="${O2} -ggdb" CC=${CC} CXX=${CXX} ${MAKE}
 
 .PHONY: build_tap_test_debug
-build_tap_test_debug: build_src_debug
+build_tap_test_debug: build_tap_tests_debug
+.PHONY: build_tap_tests_debug
+build_tap_tests_debug: build_src_debug
 	cd test/tap && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE} debug
 
-.PHONY: build_src_debug
-build_src_debug: build_lib_debug
-	cd src && OPTZ="${O0} -ggdb -DDEBUG" CC=${CC} CXX=${CXX} ${MAKE}
-
+# ClickHouse build targets are now default build targets. 
+# To maintain backward compatibility, ClickHouse targets are still available.
 .PHONY: build_deps_clickhouse
-build_deps_clickhouse:
-	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_deps_clickhouse: build_deps_default
 
 .PHONY: build_deps_debug_clickhouse
-build_deps_debug_clickhouse:
-	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_deps_debug_clickhouse: build_deps_debug_default
 
 .PHONY: build_lib_clickhouse
-build_lib_clickhouse: build_deps_clickhouse
-	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_lib_clickhouse: build_lib_default
 
 .PHONY: build_lib_debug_clickhouse
-build_lib_debug_clickhouse: build_deps_debug_clickhouse
-	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_lib_debug_clickhouse: build_lib_debug_default
 
 .PHONY: build_src_clickhouse
-build_src_clickhouse: build_lib_clickhouse
-	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+build_src_clickhouse: build_src_default
 
 .PHONY: build_src_debug_clickhouse
-build_src_debug_clickhouse: build_lib_debug_clickhouse
+build_src_debug_clickhouse: build_src_debug_default
+#--
+
+.PHONY: build_deps_default
+build_deps_default:
+	cd deps && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+PHONY: build_deps_debug_default
+build_deps_debug_default:
+	cd deps && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 PROXYDEBUG=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_default
+build_lib_default: build_deps_default
+	cd lib && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_lib_debug_default
+build_lib_debug_default: build_deps_debug_default
+	cd lib && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_default
+build_src_default: build_lib_default
+	cd src && OPTZ="${O2} -ggdb" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
+
+.PHONY: build_src_debug_default
+build_src_debug_default: build_lib_debug_default
 	cd src && OPTZ="${O0} -ggdb -DDEBUG" PROXYSQLCLICKHOUSE=1 CC=${CC} CXX=${CXX} ${MAKE}
 
 
 ### packaging targets
 
+SYS_KERN := $(shell uname -s)
+#SYS_DIST := $(shell source /etc/os-release &>/dev/null; if [ -z ${NAME} ]; then head -1 /etc/redhat-release; else echo ${NAME}; fi | awk '{ print $1 })
 SYS_ARCH := $(shell uname -m)
 REL_ARCH := $(subst x86_64,amd64,$(subst aarch64,arm64,$(SYS_ARCH)))
 RPM_ARCH := .$(SYS_ARCH)
@@ -243,17 +304,17 @@ ubuntu: $(REL_ARCH)-ubuntu ;
 
 amd64-packages: amd64-centos amd64-ubuntu amd64-debian amd64-fedora amd64-opensuse amd64-almalinux
 amd64-almalinux: almalinux8 almalinux8-clang almalinux8-dbg almalinux9 almalinux9-clang almalinux9-dbg
-amd64-centos: centos6 centos6-dbg centos7 centos7-dbg centos8 centos8-clang centos8-dbg
-amd64-debian: debian8 debian8-dbg debian9 debian9-dbg debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
-amd64-fedora: fedora27 fedora27-dbg fedora28 fedora28-dbg fedora33 fedora33-dbg fedora34 fedora34-clang fedora34-dbg fedora36 fedora36-clang fedora36-dbg fedora37 fedora37-clang fedora37-dbg fedora38 fedora38-clang fedora38-dbg
+amd64-centos: centos7 centos7-dbg centos8 centos8-clang centos8-dbg centos9 centos9-clang centos9-dbg
+amd64-debian: debian10 debian10-dbg debian11 debian11-clang debian11-dbg debian12 debian12-clang debian12-dbg
+amd64-fedora: fedora38 fedora38-clang fedora38-dbg fedora39 fedora39-clang fedora39-dbg
 amd64-opensuse: opensuse15 opensuse15-clang opensuse15-dbg
-amd64-ubuntu: ubuntu14 ubuntu14-dbg ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
+amd64-ubuntu: ubuntu16 ubuntu16-dbg ubuntu18 ubuntu18-dbg ubuntu20 ubuntu20-clang ubuntu20-dbg ubuntu22 ubuntu22-clang ubuntu22-dbg
 
 arm64-packages: arm64-centos arm64-debian arm64-ubuntu arm64-fedora arm64-opensuse arm64-almalinux
 arm64-almalinux: almalinux8 almalinux9
-arm64-centos: centos7 centos8
-arm64-debian: debian9 debian10 debian11 debian12
-arm64-fedora: fedora33 fedora34 fedora36 fedora37 fedora38
+arm64-centos: centos7 centos8 centos9
+arm64-debian: debian10 debian11 debian12
+arm64-fedora: fedora38 fedora39
 arm64-opensuse: opensuse15
 arm64-ubuntu: ubuntu16 ubuntu18 ubuntu20 ubuntu22
 
@@ -281,8 +342,9 @@ build-%:
 
 .NOTPARALLEL: binaries/proxysql%
 binaries/proxysql%:
-	@docker-compose -p $(IMG_NAME) down -v --remove-orphans
-	@docker-compose -p $(IMG_NAME) up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
+	@docker-compose -p proxysql down -v --remove-orphans
+	@docker-compose -p proxysql up $(IMG_NAME)$(IMG_TYPE)$(IMG_COMP)_build
+	@docker-compose -p proxysql down -v --remove-orphans
 
 
 ### clean targets
@@ -292,6 +354,8 @@ clean:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
+	cd test/deps && ${MAKE} clean
+	rm -f pkgroot || true
 
 .PHONY: cleanall
 cleanall:
@@ -299,9 +363,11 @@ cleanall:
 	cd lib && ${MAKE} clean
 	cd src && ${MAKE} clean
 	cd test/tap && ${MAKE} clean
+	cd test/deps && ${MAKE} cleanall
 	rm -f binaries/*deb || true
 	rm -f binaries/*rpm || true
 	rm -f binaries/*id-hash || true
+	rm -rf pkgroot || true
 
 .PHONY: cleanbuild
 cleanbuild:
@@ -342,7 +408,7 @@ ifeq ($(DISTRO),"Debian GNU/Linux")
 		update-rc.d proxysql defaults
 else
 ifeq ($(DISTRO),"Unknown")
-		$(warning Not sure how to install proxysql service on this OS)
+	$(warning Not sure how to install proxysql service on this OS)
 endif
 endif
 endif
@@ -379,7 +445,7 @@ ifeq ($(DISTRO),"Debian GNU/Linux")
 		update-rc.d proxysql remove
 else
 ifeq ($(DISTRO),"Unknown")
-		$(warning Not sure how to uninstall proxysql service on this OS)
+$(warning Not sure how to uninstall proxysql service on this OS)
 endif
 endif
 endif

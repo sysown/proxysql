@@ -1,0 +1,17 @@
+name: CI-3p-laravel-framework
+
+on:
+  workflow_dispatch:
+
+  workflow_run:
+    workflows: [ "CI-builds" ]
+    types: [ completed ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+
+jobs:
+  run:
+    uses: sysown/proxysql/.github/workflows/ci-3p-laravel-framework.yml@GH-Actions
+    secrets: inherit
+    

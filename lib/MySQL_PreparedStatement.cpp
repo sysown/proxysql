@@ -16,6 +16,8 @@
 extern MySQL_STMT_Manager_v14 *GloMyStmt;
 //#endif
 
+const int PS_GLOBAL_STATUS_FIELD_NUM = 9;
+
 static uint64_t stmt_compute_hash(char *user,
                                   char *schema, char *query,
                                   unsigned int query_length) {
@@ -140,6 +142,7 @@ MySQL_STMT_Global_info::MySQL_STMT_Global_info(uint64_t id,
                                                char *fc,
                                                MYSQL_STMT *stmt, uint64_t _h) {
 	pthread_rwlock_init(&rwlock_, NULL);
+	total_mem_usage = 0;
 	statement_id = id;
 	ref_count_client = 0;
 	ref_count_server = 0;
@@ -293,6 +296,33 @@ __exit_MySQL_STMT_Global_info___search_select:
 			// memcpy(pd,ps,sizeof(MYSQL_BIND));
 			memset(params[i], 0, sizeof(MYSQL_BIND));
 		}
+	}
+
+	calculate_mem_usage();
+}
+
+void MySQL_STMT_Global_info::calculate_mem_usage() {
+	total_mem_usage = sizeof(MySQL_STMT_Global_info) +
+		(num_params * (sizeof(MYSQL_BIND) + sizeof(MYSQL_BIND*))) +
+		(num_columns * (sizeof(MYSQL_FIELD) + sizeof(MYSQL_FIELD*))) +
+		query_length + 1;// +
+		//(ref_count_client * 24) +
+		//(ref_count_server * 24);
+
+	if (username) total_mem_usage += strlen(username) + 1;
+	if (schemaname) total_mem_usage += strlen(schemaname) + 1;
+	if (first_comment) total_mem_usage += strlen(first_comment) + 1;
+	if (digest_text) total_mem_usage += strlen(digest_text) + 1;
+
+	for (uint16_t i = 0; i < num_columns; i++) {
+		const MYSQL_FIELD* fd = fields[i];
+		if (fd->name) total_mem_usage += strlen(fd->name) + 1;
+		if (fd->org_name) total_mem_usage += strlen(fd->org_name) + 1;
+		if (fd->table) total_mem_usage += strlen(fd->table) + 1;
+		if (fd->org_table) total_mem_usage += strlen(fd->org_table) + 1;
+		if (fd->db) total_mem_usage += strlen(fd->db) + 1;
+		if (fd->catalog) total_mem_usage += strlen(fd->catalog) + 1;
+		if (fd->def) total_mem_usage += strlen(fd->def) + 1;
 	}
 }
 
@@ -478,6 +508,7 @@ void MySQL_STMT_Global_info::update_metadata(MYSQL_STMT *stmt) {
 			}
 		}
 // till here is copied from constructor
+		calculate_mem_usage();
 	}
 	pthread_rwlock_unlock(&rwlock_);
 }
@@ -892,6 +923,33 @@ MySQL_STMT_Global_info *MySQL_STMT_Manager_v14::add_prepared_statement(
 	return ret;
 }
 
+
+void MySQL_STMT_Manager_v14::get_memory_usage(uint64_t& prep_stmt_metadata_mem_usage, uint64_t& prep_stmt_backend_mem_usage) {
+	prep_stmt_backend_mem_usage = 0;
+	prep_stmt_metadata_mem_usage = sizeof(MySQL_STMT_Manager_v14);
+	rdlock();	
+	prep_stmt_metadata_mem_usage += map_stmt_id_to_info.size() * (sizeof(uint64_t) + sizeof(MySQL_STMT_Global_info*));
+	prep_stmt_metadata_mem_usage += map_stmt_hash_to_info.size() * (sizeof(uint64_t) + sizeof(MySQL_STMT_Global_info*));
+	prep_stmt_metadata_mem_usage += free_stmt_ids.size() * (sizeof(uint64_t));
+	for (const auto& keyval : map_stmt_id_to_info) {
+		const MySQL_STMT_Global_info* stmt_global_info = keyval.second;
+		prep_stmt_metadata_mem_usage += stmt_global_info->total_mem_usage;
+		prep_stmt_metadata_mem_usage += stmt_global_info->ref_count_server *
+			((stmt_global_info->num_params * sizeof(MYSQL_BIND)) +
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16; // ~16 bytes of memory utilized by global_stmt_id and stmt_id mappings
+		prep_stmt_metadata_mem_usage += stmt_global_info->ref_count_client *
+			((stmt_global_info->num_params * sizeof(MYSQL_BIND)) +
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD))) + 16; // ~16 bytes of memory utilized by global_stmt_id and stmt_id mappings
+
+		// backend
+		prep_stmt_backend_mem_usage += stmt_global_info->ref_count_server * (sizeof(MYSQL_STMT) +
+			56 + //sizeof(MADB_STMT_EXTENSION)
+			(stmt_global_info->num_params * sizeof(MYSQL_BIND)) + 
+			(stmt_global_info->num_columns * sizeof(MYSQL_FIELD)));
+	}
+	unlock();
+}
+
 void MySQL_STMT_Manager_v14::get_metrics(uint64_t *c_unique, uint64_t *c_total,
                              uint64_t *stmt_max_stmt_id, uint64_t *cached,
                              uint64_t *s_unique, uint64_t *s_total) {
@@ -979,7 +1037,7 @@ class PS_global_stats {
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*9);
+		char **pta=(char **)malloc(sizeof(char *)*PS_GLOBAL_STATUS_FIELD_NUM);
 		sprintf(buf,"%lu",statement_id);
 		pta[0]=strdup(buf);
 		assert(schemaname);
@@ -1005,7 +1063,7 @@ class PS_global_stats {
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<7;i++) {
+		for (i=0;i<PS_GLOBAL_STATUS_FIELD_NUM;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -1016,7 +1074,7 @@ class PS_global_stats {
 
 SQLite3_result * MySQL_STMT_Manager_v14::get_prepared_statements_global_infos() {
 	proxy_debug(PROXY_DEBUG_MYSQL_QUERY_PROCESSOR, 4, "Dumping current prepared statements global info\n");
-	SQLite3_result *result=new SQLite3_result(9);
+	SQLite3_result *result=new SQLite3_result(PS_GLOBAL_STATUS_FIELD_NUM);
 	rdlock();
 	result->add_column_definition(SQLITE_TEXT,"stmt_id");
 	result->add_column_definition(SQLITE_TEXT,"schemaname");

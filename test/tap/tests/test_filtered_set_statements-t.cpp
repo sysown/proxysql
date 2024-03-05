@@ -14,7 +14,7 @@
 #include <vector>
 #include <string>
 #include <stdio.h>
-#include <mysql.h>
+#include "mysql.h"
 
 #include "proxysql_utils.h"
 #include "tap.h"
@@ -28,7 +28,7 @@
  * TODO: Fill with all the statements that should be properly handled by ProxySQL.
  */
 std::vector<std::pair<std::string, std::string>> filtered_set_queries {
-	{ "sql_mode", "ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO" },
+	{ "sql_mode", "'ONLY_FULL_GROUP_BY,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO'" },
 	{ "wait_timeout", "28801" },
 	{ "character_set_results", "latin1" },
 	{ "character_set_connection", "latin1" },

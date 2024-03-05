@@ -16,7 +16,7 @@
 #include <poll.h>
 #include <sys/epoll.h>
 
-#include <mysql.h>
+#include "mysql.h"
 #include <thread>
 
 #include "tap.h"
@@ -59,7 +59,7 @@ int create_connections(const conn_opts_t& conn_opts, uint32_t cons_num, std::vec
 const uint32_t ADMIN_CONN_NUM = 100;
 const uint32_t MYSQL_CONN_NUM = 100;
 const uint32_t REPORT_INTV_SEC = 5;
-const double MAX_ALLOWED_CPU_USAGE = 13.0;
+double MAX_ALLOWED_CPU_USAGE = (double) get_env_int("TAP_MAX_ALLOWED_CPU_USAGE", 13);
 
 int get_idle_conns_cpu_usage(CommandLine& cl, uint64_t mode, double& idle_cpu_ms, double& final_cpu_ms) {
 	// get ProxySQL idle cpu usage

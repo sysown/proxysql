@@ -33,6 +33,8 @@
 #include <fcntl.h>
 #include <sys/utsname.h>
 
+using std::string;
+
 #define SELECT_VERSION_COMMENT "select @@version_comment limit 1"
 #define SELECT_VERSION_COMMENT_LEN 32
 #define SELECT_DB_USER "select DATABASE(), USER() limit 1"
@@ -316,6 +318,44 @@ bool match_monitor_query(const std::string& monitor_query, const std::string& qu
 	}
 }
 #endif // TEST_GROUPREP
+
+#ifdef TEST_AURORA
+
+using std::vector;
+
+using aurora_hg_info_t = std::tuple<uint32_t,uint32_t,string>;
+enum AURORA_HG_INFO {
+	WRITER_HG,
+	READER_HG,
+	DOMAIN_NAME
+};
+
+vector<aurora_hg_info_t> get_hgs_info(SQLite3DB* db) {
+	vector<aurora_hg_info_t> whgs {};
+
+	char* error = NULL;
+	int cols = 0;
+	int affected_rows = 0;
+    SQLite3_result* resultset = NULL;
+
+	GloAdmin->admindb->execute_statement(
+		"SELECT writer_hostgroup,reader_hostgroup,domain_name FROM mysql_aws_aurora_hostgroups",
+		&error, &cols, &affected_rows, &resultset
+	);
+
+	for (const SQLite3_row* r : resultset->rows) {
+		uint32_t writer_hg = atoi(r->fields[0]);
+		uint32_t reader_hg = atoi(r->fields[1]);
+		string domain_name { r->fields[2] };
+
+		whgs.push_back({writer_hg, reader_hg, domain_name});
+	}
+
+	return whgs;
+}
+
+
+#endif
 
 void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 
@@ -735,7 +775,34 @@ __run_query:
 #ifdef TEST_AURORA
 			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
 				pthread_mutex_lock(&GloSQLite3Server->aurora_mutex);
-				GloSQLite3Server->populate_aws_aurora_table(sess);
+
+				if (strcasestr(query_no_space, TEST_AURORA_MONITOR_BASE_QUERY)) {
+					string s_whg { query_no_space + strlen(TEST_AURORA_MONITOR_BASE_QUERY) };
+					uint32_t whg = atoi(s_whg.c_str());
+
+					GloSQLite3Server->populate_aws_aurora_table(sess, whg);
+					vector<aurora_hg_info_t> hgs_info { get_hgs_info(GloAdmin->admindb) };
+
+					const auto match_writer = [&whg](const aurora_hg_info_t& hg_info) {
+						return std::get<AURORA_HG_INFO::WRITER_HG>(hg_info) == whg;
+					};
+					const auto hg_info_it = std::find_if(hgs_info.begin(), hgs_info.end(), match_writer);
+					string select_query {
+						"SELECT SERVER_ID,SESSION_ID,LAST_UPDATE_TIMESTAMP,REPLICA_LAG_IN_MILLISECONDS,CPU"
+							" FROM REPLICA_HOST_STATUS "
+					};
+
+					if (hg_info_it == hgs_info.end()) {
+						select_query += " LIMIT 0";
+					} else {
+						const string& domain_name { std::get<AURORA_HG_INFO::DOMAIN_NAME>(*hg_info_it) };
+						select_query += " WHERE DOMAIN_NAME='" + domain_name + "' ORDER BY SERVER_ID";
+					}
+
+					free(query);
+					query = static_cast<char*>(malloc(select_query.length() + 1));
+					strcpy(query, select_query.c_str());
+				}
 			}
 #endif // TEST_AURORA
 #ifdef TEST_GALERA
@@ -751,7 +818,7 @@ __run_query:
 				// NOTE: This query should be in one place that can be reused by
 				// 'ProxySQL_Monitor' module.
 				const std::string grouprep_monitor_test_query_start {
-					"SELECT viable_candidate,read_only,transactions_behind "
+					"SELECT viable_candidate,read_only,transactions_behind,members "
 						"FROM GR_MEMBER_ROUTING_CANDIDATE_STATUS "
 				};
 
@@ -769,14 +836,15 @@ __run_query:
 					free(query);
 
 					std::string t_select_as_query {
-						"SELECT '%s' AS viable_candidate, '%s' AS read_only, %d AS transactions_behind"
+						"SELECT '%s' AS viable_candidate, '%s' AS read_only, %d AS transactions_behind, '%s' AS members"
 					};
 					std::string select_as_query {};
 					string_format(
 						t_select_as_query, select_as_query,
 						std::get<0>(gr_srv_status) ? "YES" : "NO",
 						std::get<1>(gr_srv_status) ? "YES" : "NO",
-						std::get<2>(gr_srv_status)
+						std::get<2>(gr_srv_status),
+						std::get<3>(gr_srv_status).c_str()
 					);
 
 					query = static_cast<char*>(malloc(select_as_query.length() + 1));
@@ -842,10 +910,12 @@ __run_query:
 #ifdef TEST_AURORA
 			if (strstr(query_no_space,(char *)"REPLICA_HOST_STATUS")) {
 				pthread_mutex_unlock(&GloSQLite3Server->aurora_mutex);
+#ifdef TEST_AURORA_RANDOM
 				if (rand() % 100 == 0) {
 					// randomly add some latency on 1% of the traffic
 					sleep(2);
 				}
+#endif
 			}
 #endif // TEST_AURORA
 #ifdef TEST_GALERA
@@ -913,7 +983,7 @@ __run_query:
 
 #ifdef TEST_GROUPREP
 group_rep_status SQLite3_Server::grouprep_test_value(const std::string& srv_addr) {
-	group_rep_status cur_srv_st { "YES", "YES", 0 };
+	group_rep_status cur_srv_st { "YES", "YES", 0, "" };
 
 	auto it = grouprep_map.find(srv_addr);
 	if (it != grouprep_map.end()) {
@@ -1091,7 +1161,7 @@ static void * sqlite3server_main_loop(void *arg)
 					if ( pthread_create(&child, &attr, child_func[callback_func[i]], client) != 0 )
 						perror("Thread creation");
 				} else {
-					proxy_error("accept() error:\n", strerror(errno));
+					proxy_error("accept() error: %s\n", strerror(errno));
 				}
 			}
 			fds[i].revents=0;
@@ -1378,27 +1448,187 @@ void SQLite3_Server::populate_galera_table(MySQL_Session *sess) {
 #endif // TEST_GALERA
 
 #ifdef TEST_AURORA
-void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
-	// this function needs to be called with lock on mutex aurora_mutex already acquired
-	sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
-	sqlite3_stmt *statement=NULL;
-    //sqlite3 *mydb3=sessdb->get_db();
-	int rc;
-    char *query=(char *)"INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5)";
-    //rc=sqlite3_prepare_v2(mydb3, query, -1, &statement, 0);
-    rc = sessdb->prepare_v2(query, &statement);
-    ASSERT_SQLITE_OK(rc, sessdb);
+
+float get_rand_cpu() {
+	int cpu_i = rand() % 10000;
+	float cpu = static_cast<float>(cpu_i) / 100;
+
+	return cpu;
+}
+
+string get_curtime_str() {
 	time_t __timer;
 	char lut[30];
 	struct tm __tm_info;
 	time(&__timer);
 	localtime_r(&__timer, &__tm_info);
 	strftime(lut, 25, "%Y-%m-%d %H:%M:%S", &__tm_info);
+	string s = string(lut);
+	return s;
+}
+
+void bind_query_params(
+	SQLite3DB* db,
+	sqlite3_stmt* stmt,
+	const string& server_id,
+	const string& domain,
+	const string& session_id,
+	float cpu,
+	const string& lut,
+	int32_t lag_ms
+) {
+	int rc = 0;
+
+	rc=sqlite3_bind_text(stmt, 1, server_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+	rc=sqlite3_bind_text(stmt, 2, domain.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+	rc=sqlite3_bind_text(stmt, 3, session_id.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+	rc=sqlite3_bind_double(stmt, 4, cpu); ASSERT_SQLITE_OK(rc, db);
+	rc=sqlite3_bind_text(stmt, 5, lut.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, db);
+	rc=sqlite3_bind_double(stmt, 6, lag_ms); ASSERT_SQLITE_OK(rc, db);
+	SAFE_SQLITE3_STEP2(stmt);
+	rc=sqlite3_clear_bindings(stmt); ASSERT_SQLITE_OK(rc, db);
+	rc=sqlite3_reset(stmt); ASSERT_SQLITE_OK(rc, db);
+}
+
+/**
+ * @brief Extracts SERVER_ID from the supplied hostname using DOMAIN_NAME.
+ * @param hostname The server hostname (SERVER_ID + DOMAIN_NAME)).
+ * @param domain_name The server DOMAIN_NAME as in 'mysql_aws_aurora_hostgroups'
+ * @return Either the SERVER_ID in the supplied hostname or empty if DOMAIN_NAME failed to match.
+ */
+string get_server_id(const string& hostname, const string& domain_name) {
+	string::size_type pos = hostname.find(domain_name);
+
+	if (pos == string::npos) {
+		return {};
+	} else {
+		return hostname.substr(0, pos);
+	}
+}
+
+void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess, uint32_t whg) {
+	int rc = 0;
+	sqlite3_stmt* stmt = NULL;
+    const char query[] { "INSERT INTO REPLICA_HOST_STATUS VALUES (?1, ?2, ?3, ?4, ?5, ?6)" };
+
+	rc = sessdb->prepare_v2(query, &stmt);
+	ASSERT_SQLITE_OK(rc, sessdb);
+
+#ifndef TEST_AURORA_RANDOM
+    SQLite3_result* host_status = NULL;
+
+	{
+		char* error = NULL;
+		int cols = 0;
+		int affected_rows = 0;
+
+		string query {
+			"SELECT SERVER_ID,DOMAIN_NAME,SESSION_ID,LAST_UPDATE_TIMESTAMP,REPLICA_LAG_IN_MILLISECONDS"
+				" FROM REPLICA_HOST_STATUS"
+		};
+		sessdb->execute_statement(query.c_str(), &error, &cols, &affected_rows, &host_status);
+	}
+
+	// If empty, we fill the map with sensible defaults for performing manual testing.
+	if (host_status->rows.empty()) {
+		vector<aurora_hg_info_t> hgs_info { get_hgs_info(GloAdmin->admindb) };
+		SQLite3_result* resultset = nullptr;
+
+		{
+			char* error = nullptr;
+			int cols = 0;
+			int affected_rows = 0;
+
+			GloAdmin->admindb->execute_statement(
+				"SELECT hostname, hostgroup_id FROM mysql_servers WHERE hostgroup_id BETWEEN 1270 AND 1300"
+					" GROUP BY HOSTNAME",
+				&error, &cols, &affected_rows, &resultset
+			);
+		}
+
+		sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
+		vector<string> proc_srvs {};
+
+		for (const aurora_hg_info_t& hg_info : hgs_info) {
+			const auto match_writer = [&hg_info](const SQLite3_row* row) {
+				return atoi(row->fields[1]) == std::get<AURORA_HG_INFO::WRITER_HG>(hg_info);
+			};
+			const auto mysrv_it = std::find_if(resultset->rows.begin(), resultset->rows.end(), match_writer);
+			bool writer_set = false;
+
+			for (const SQLite3_row* r : resultset->rows) {
+				const string srv_hostname { r->fields[0] };
+				const uint32_t srv_hg_id = atoi(r->fields[1]);
+				const string& aurora_domain { std::get<AURORA_HG_INFO::DOMAIN_NAME>(hg_info) };
+
+				if (
+					srv_hostname.find(aurora_domain) == string::npos ||
+					std::find(proc_srvs.begin(), proc_srvs.end(), srv_hostname) != proc_srvs.end()
+				) {
+					continue;
+				}
+
+				const string server_id {
+					get_server_id(srv_hostname, std::get<AURORA_HG_INFO::DOMAIN_NAME>(hg_info))
+				};
+
+				string session_id {};
+
+				if (
+					(mysrv_it == resultset->rows.end() && writer_set == false) ||
+					(srv_hg_id == std::get<AURORA_HG_INFO::WRITER_HG>(hg_info) && writer_set == false)
+				) {
+					session_id = "MASTER_SESSION_ID";
+					writer_set = true;
+				} else {
+					session_id = "TESTID-" + server_id + aurora_domain + "-R";
+				}
+
+				const float cpu = get_rand_cpu();
+				const string lut { get_curtime_str() };
+				const int lag_ms = 0;
+
+				bind_query_params(sessdb, stmt, server_id, aurora_domain, session_id, cpu, lut, lag_ms);
+				proc_srvs.push_back(srv_hostname);
+			}
+		}
+
+		sqlite3_finalize(stmt);
+		delete resultset;
+	} else {
+		// We just re-generate deterministic 'SESSION_IDS', preserving 'MASTER_SESSION_ID' values:
+		// 'SESSION_IDS' are preserved, 'MASTER_SESSION_ID' or others.
+		for (SQLite3_row* row : host_status->rows) {
+			const char* server_id = row->fields[0];
+			const char* domain_name = row->fields[1];
+
+			const char update_query_t[] {
+				"UPDATE REPLICA_HOST_STATUS SET SESSION_ID='%s',CPU=%f,LAST_UPDATE_TIMESTAMP='%s'"
+				" WHERE SERVER_ID='%s' AND DOMAIN_NAME='%s' AND SESSION_ID!='MASTER_SESSION_ID'"
+			};
+
+			const string session_id { "TESTID-" + string { server_id } + domain_name + "-R" };
+			const float cpu = get_rand_cpu();
+			const string lut { get_curtime_str() };
+
+			const string update_query {
+				cstr_format(update_query_t, session_id.c_str(), cpu, lut.c_str(), server_id, domain_name).str
+			};
+
+			sessdb->execute(update_query.c_str());
+		}
+	}
+
+	delete host_status;
+#else
+	sessdb->execute("DELETE FROM REPLICA_HOST_STATUS");
+
+	string lut { get_curtime_str() };
 	string myip = string(sess->client_myds->proxy_addr.addr);
 	string clu_id_s = myip.substr(6,1);
 	unsigned int cluster_id = atoi(clu_id_s.c_str());
 	cluster_id--;
-	//if (rand() % 200 == 0) {
+
 	if (rand() % 20000 == 0) {
 		// simulate a failover
 		cur_aurora_writer[cluster_id] = rand() % num_aurora_servers[cluster_id];
@@ -1419,14 +1649,12 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 		}
 	}
 	for (unsigned int i=0; i<num_aurora_servers[cluster_id]; i++) {
-		string serverid = "";
-		//if (cluster_id==0) {
-			//serverid = "host." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
-			serverid = "host." + std::to_string( ( cluster_id == 2 ? 0 : cluster_id )  +1) + "." + std::to_string(i+11); // we simulate that clusters 1 and 3 have the same servers
-		//} else {
-		//	serverid = "127.0." + std::to_string(cluster_id+1) + "." + std::to_string(i+11);
-		//}
+		// we simulate that clusters 1 and 3 have the same servers
+		string serverid = "host." + std::to_string( ( cluster_id == 2 ? 0 : cluster_id )  +1) + "." + std::to_string(i+11);
 		string sessionid= "";
+		string aurora_domain {
+			(cluster_id == 0 || cluster_id == 3) ? ".aws-test.com" : ".cluster2.aws.test"
+		};
 		float lag_ms = 0;
 		if (i==cur_aurora_writer[cluster_id]) {
 			sessionid = "MASTER_SESSION_ID";
@@ -1438,19 +1666,11 @@ void SQLite3_Server::populate_aws_aurora_table(MySQL_Session *sess) {
 			lag_ms /= 100;
 			lag_ms += 10;
 		}
-		int cpu_i = rand() % 10000;
-		float cpu = cpu_i;
-		cpu /= 100;
-		rc=sqlite3_bind_text(statement, 1, serverid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
-		rc=sqlite3_bind_text(statement, 2, sessionid.c_str(), -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
-		rc=sqlite3_bind_double(statement, 3, cpu); ASSERT_SQLITE_OK(rc, sessdb);
-		rc=sqlite3_bind_text(statement, 4, lut, -1, SQLITE_TRANSIENT); ASSERT_SQLITE_OK(rc, sessdb);
-		rc=sqlite3_bind_double(statement, 5, lag_ms); ASSERT_SQLITE_OK(rc, sessdb);
-		SAFE_SQLITE3_STEP2(statement);
-		rc=sqlite3_clear_bindings(statement); ASSERT_SQLITE_OK(rc, sessdb);
-		rc=sqlite3_reset(statement); ASSERT_SQLITE_OK(rc, sessdb);
+		float cpu = get_rand_cpu();
+		bind_query_params(sessdb, stmt, serverid, aurora_domain, sessionid, cpu, lut, lag_ms);
 	}
-	sqlite3_finalize(statement);
+	sqlite3_finalize(stmt);
+#endif // TEST_AURORA_RANDOM
 }
 #endif // TEST_AURORA
 
@@ -1482,7 +1702,8 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind
 			const group_rep_status srv_status {
 				std::string { r->fields[2] } == "YES" ? true : false,
 				std::string { r->fields[3] } == "YES" ? true : false,
-				atoi(r->fields[4])
+				atoi(r->fields[4]),
+				std::string { r->fields[5] }
 			};
 
 			this->grouprep_map[srv_addr] = srv_status;
@@ -1509,16 +1730,16 @@ void SQLite3_Server::populate_grouprep_table(MySQL_Session *sess, int txs_behind
 			int hostgroup_id = atoi(r->fields[2]);
 			const std::string t_insert_query {
 				"INSERT INTO GR_MEMBER_ROUTING_CANDIDATE_STATUS"
-					" (hostname, port, viable_candidate, read_only, transactions_behind) VALUES"
-					" ('%s', %d, '%s', '%s', 0)"
+					" (hostname, port, viable_candidate, read_only, transactions_behind, members) VALUES"
+					" ('%s', %d, '%s', '%s', 0, '%s')"
 			};
 			std::string insert_query {};
 
 			if (hostgroup_id % 4 == 0) {
-				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "NO");
+				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "NO", "");
 				sessdb->execute(insert_query.c_str());
 			} else {
-				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "YES");
+				string_format(t_insert_query, insert_query, hostname.c_str(), port, "YES", "YES", "");
 				sessdb->execute(insert_query.c_str());
 			}
 		}
@@ -1582,7 +1803,12 @@ bool SQLite3_Server::init() {
 	tables_defs_aurora = new std::vector<table_def_t *>;
 	insert_into_tables_defs(tables_defs_aurora,
 		(const char *)"REPLICA_HOST_STATUS",
-		(const char *)"CREATE TABLE REPLICA_HOST_STATUS (SERVER_ID VARCHAR NOT NULL, SESSION_ID VARCHAR NOT NULL, CPU REAL NOT NULL, LAST_UPDATE_TIMESTAMP VARCHAR NOT NULL, REPLICA_LAG_IN_MILLISECONDS REAL NOT NULL)");
+		"CREATE TABLE REPLICA_HOST_STATUS ("
+			" SERVER_ID VARCHAR NOT NULL , DOMAIN_NAME VARCHAR NOT NULL , SESSION_ID VARCHAR NOT NULL ,"
+			" CPU REAL NOT NULL , LAST_UPDATE_TIMESTAMP VARCHAR NOT NULL , REPLICA_LAG_IN_MILLISECONDS REAL NOT NULL ,"
+			" PRIMARY KEY (SERVER_ID, DOMAIN_NAME)"
+		")"
+	);
 	check_and_build_standard_tables(sessdb, tables_defs_aurora);
 	GloAdmin->enable_aurora_testing();
 #endif // TEST_AURORA
@@ -1599,7 +1825,7 @@ bool SQLite3_Server::init() {
 	insert_into_tables_defs(tables_defs_grouprep,
 		(const char *)"GR_MEMBER_ROUTING_CANDIDATE_STATUS",
 		(const char*)"CREATE TABLE GR_MEMBER_ROUTING_CANDIDATE_STATUS ("
-			"hostname VARCHAR NOT NULL, port INT NOT NULL, viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null, PRIMARY KEY (hostname, port)"
+			"hostname VARCHAR NOT NULL, port INT NOT NULL, viable_candidate varchar not null, read_only varchar not null, transactions_behind int not null, members VARCHAR NOT NULL, PRIMARY KEY (hostname, port)"
 		")"
 	);
 

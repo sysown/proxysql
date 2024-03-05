@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <mysql.h>
+#include "mysql.h"
 #include <string.h>
 #include <string>
 #include <time.h>
@@ -39,6 +39,7 @@ int queries_per_connections=10;
 //unsigned int num_threads=5;
 unsigned int num_threads=20;
 int count=20;
+int total_conn_having_client_deprecate_eof_support = (count * 0.2); // 20% of connections will have CLIENT_DEPRECATE_EOF flag enabled
 char *username=NULL;
 char *password=NULL;
 char *host=(char *)"localhost";
@@ -82,6 +83,29 @@ class var_counter {
 	}
 };
 
+// Generate string containing randomly chosen characters between
+// ';' and ' ', with length between 1 and 8
+std::string generate_random_noise() {
+	// Seed the random number generator with the current time
+	std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+	static const char characters[] = { ';', ' ' };
+	static const int numCharacters = sizeof(characters) / sizeof(char);
+
+	// max lengh of string is 8
+	const int length = std::rand() % 8 + 1;
+
+	std::string randomString;
+	randomString.reserve(length);
+
+	for (int i = 0; i < length; ++i) {
+		char randomChar = characters[std::rand() % numCharacters];
+		randomString.push_back(randomChar);
+	}
+
+	return randomString;
+}
+
 //std::unordered_map<std::string,int> unknown_var_counters;
 
 std::unordered_map<std::string,var_counter> vars_counters;
@@ -114,13 +138,19 @@ void * my_conn_thread(void *arg) {
 		if (mysql==NULL) {
 			exit(EXIT_FAILURE);
 		}
-		MYSQL *rc=mysql_real_connect(mysql, cl.root_host, cl.root_username, cl.root_password, schema, (local ? 0 : ( port + rand()%multiport ) ), NULL, 0);
-//		MYSQL *rc=mysql_real_connect(mysql, cl.mysql_host, cl.mysql_username, cl.mysql_password, schema, (local ? 0 : ( cl.mysql_port + rand()%multiport ) ), NULL, 0);
+
+		if (i < total_conn_having_client_deprecate_eof_support) {
+			// enable 'CLIENT_DEPRECATE_EOF' support
+			mysql->options.client_flag |= CLIENT_DEPRECATE_EOF;
+		}
+		int port = local ? 0 : ( cl.port + rand()%multiport );
+		MYSQL *rc=mysql_real_connect(mysql, cl.host, cl.username, cl.password, schema, port, NULL, 0);
+
 		if (rc==NULL) {
 			if (silent==0) {
-				fprintf(stderr,"%s\n", mysql_error(mysql));
+				fprintf(stderr,"Error while connecting on %s:%d : %s\n", cl.host , port , mysql_error(mysql));
 			}
-			exit(EXIT_FAILURE);
+			return NULL;
 		}
 		mysqlconns[i]=mysql;
 		set_sql_mode[i]=false;
@@ -160,6 +190,7 @@ void * my_conn_thread(void *arg) {
 		diag("Thread_id: %lu, random number: %d . Query/ies: %s", mysql->thread_id, r2, testCases[r2].command.c_str());
 		std::vector<std::string> commands = split(testCases[r2].command.c_str(), ';');
 		for (auto c : commands) {
+			c += generate_random_noise();
 			if (mysql_query(mysql, c.c_str())) {
 				if (silent==0) {
 					fprintf(stderr,"ERROR while running -- \"%s\" :  (%d) %s\n", c.c_str(), mysql_errno(mysql), mysql_error(mysql));
@@ -425,6 +456,11 @@ void * my_conn_thread(void *arg) {
 	}
 	__sync_fetch_and_add(&query_phase_completed,1);
 
+	// close all connections
+	for (i=0; i<count; i++) {
+		mysql_close(mysqlconns[i]);
+	}
+
 	return NULL;
 }
 
@@ -437,11 +473,6 @@ int main(int argc, char *argv[]) {
 	}
 
 	std::string fileName2(std::string(cl.workdir) + "/set_testing-240.csv");
-
-	if (detect_version(cl, is_mariadb) != 0) {
-		diag("Cannot detect MySQL version");
-		return exit_status();
-	}
 
 /*
 	num_threads = 10;
@@ -467,49 +498,89 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(proxysql_admin));
 		return EXIT_FAILURE;
 	}
+
+/* admin-hash_passwords has been deprecated
 	diag("Disabling admin-hash_passwords to be able to run test on MySQL 8");
 	MYSQL_QUERY(proxysql_admin, "SET admin-hash_passwords='false'");
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
+*/
 
-	diag("Creating new hostgroup 101: DELETE FROM mysql_servers WHERE hostgroup_id = 101");
+	// find all reader host groups
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
-//	diag("Creating new hostgroup 101: INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (21)");
-	diag("Creating new hostgroup 101: INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1501)");
-//	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (21)");
-	MYSQL_QUERY(proxysql_admin, "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id IN (1501)");
-	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
-	diag("Changing read traffic to hostgroup 101: UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
-	MYSQL_QUERY(proxysql_admin, "UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=1");
-	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+	MYSQL_QUERY(proxysql_admin, "SELECT hostgroup_id, comment FROM mysql_servers WHERE hostgroup_id%10 = 1 GROUP BY hostgroup_id");
+	MYSQL_RES *result = mysql_store_result(proxysql_admin);
+	std::vector<mysql_res_row> rows_res { extract_mysql_rows(result) };
+	mysql_free_result(result);
+
+	for (const auto& act_row : rows_res) {
+		diag("Found hostgroup: %s '%s'", act_row[0].c_str(), act_row[1].c_str());
+	}
 
 	//queries = 3000;
 	//queries = testCases.size();
-	plan(queries * num_threads);
+	queries = queries / rows_res.size();		// keep test duration constant
+	unsigned int p = queries * num_threads;
+	p *= 2;										// number of algorithms
+	p *= rows_res.size();						// number of host groups
+	plan(p);
 
-	if (strcmp(host,"localhost")==0) {
-		local = 1;
-	}
-	if (uniquequeries == 0) {
-		if (queries) uniquequeries=queries;
-	}
-	if (uniquequeries) {
-		uniquequeries=(int)sqrt(uniquequeries);
-	}
+	for (const auto& act_row : rows_res) {
+		diag("Using hostgroup: %s '%s'", act_row[0].c_str(), act_row[1].c_str());
 
-	pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
-	if (thi==NULL)
-		return exit_status();
+		diag("Creating new hostgroup 101: DELETE FROM mysql_servers WHERE hostgroup_id = 101");
+		MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
 
-	for (unsigned int i=0; i<num_threads; i++) {
-		if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
-			perror("Thread creation");
-	}
-	for (unsigned int i=0; i<num_threads; i++) {
-		pthread_join(thi[i], NULL);
-	}
-	for (std::unordered_map<std::string,var_counter>::iterator it = vars_counters.begin(); it!=vars_counters.end(); it++) {
-		diag("Unknown variable %s:\t Count: %d , unknown: %d", it->first.c_str(), it->second.count, it->second.unknown);
+		const std::string insert = "INSERT INTO mysql_servers (hostgroup_id, hostname, port, max_connections, max_replication_lag, comment) SELECT DISTINCT 101, hostname, port, 100, 0, comment FROM mysql_servers WHERE hostgroup_id = '" + act_row[0] + "'";
+		diag("Creating new hostgroup 101: %s" , insert.c_str());
+		MYSQL_QUERY(proxysql_admin, insert.c_str());
+		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+		const std::string update = "UPDATE mysql_query_rules SET destination_hostgroup=101 WHERE destination_hostgroup=" + act_row[0];
+		diag("Changing read traffic to hostgroup 101: %s", update.c_str());
+		MYSQL_QUERY(proxysql_admin, update.c_str());
+		MYSQL_QUERY(proxysql_admin, "LOAD MYSQL QUERY RULES TO RUNTIME");
+
+		if (detect_version(cl, is_mariadb) != 0) {
+			diag("Cannot detect MySQL version");
+			return exit_status();
+		}
+
+		if (strcmp(host,"localhost")==0) {
+			local = 1;
+		}
+		if (uniquequeries == 0) {
+			if (queries) uniquequeries=queries;
+		}
+		if (uniquequeries) {
+			uniquequeries=(int)sqrt(uniquequeries);
+		}
+
+		for (int algo = 1; algo <= 2; algo++ ) {
+			connect_phase_completed = 0;
+			query_phase_completed = 0;
+			std::string qu = "SET mysql-set_parser_algorithm=" + std::to_string(algo);
+			diag("Setting %s", qu.c_str());
+			MYSQL_QUERY(proxysql_admin, qu.c_str());
+			MYSQL_QUERY(proxysql_admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+			pthread_t *thi=(pthread_t *)malloc(sizeof(pthread_t)*num_threads);
+			if (thi==NULL)
+				return exit_status();
+
+			for (unsigned int i=0; i<num_threads; i++) {
+				if ( pthread_create(&thi[i], NULL, my_conn_thread , NULL) != 0 )
+					perror("Thread creation");
+			}
+			for (unsigned int i=0; i<num_threads; i++) {
+				pthread_join(thi[i], NULL);
+			}
+			free(thi);
+		}
+		for (std::unordered_map<std::string,var_counter>::iterator it = vars_counters.begin(); it!=vars_counters.end(); it++) {
+			diag("Unknown variable %s:\t Count: %d , unknown: %d", it->first.c_str(), it->second.count, it->second.unknown);
+		}
+		sleep(10);
+
 	}
 	return exit_status();
 }

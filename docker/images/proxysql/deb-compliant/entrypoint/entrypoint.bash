@@ -10,9 +10,9 @@ echo "==> '${ARCH}' architecture detected for package"
 DIST=$(source /etc/os-release; echo ${ID%%[-._ ]*}${VERSION%%[-._ ]*})
 echo "==> '${DIST}' distro detected for package"
 
-echo -e "==> C compiler: ${CC} -> $(readlink -e $(which ${CC}))\n$(${CC} --version)"
-echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(which ${CXX}))\n$(${CXX} --version)"
-#echo -e "==> linker version:\n$ ${LD} -> $(readlink -e $(which ${LD}))\n$(${LD} --version)"
+echo -e "==> C compiler: ${CC} -> $(readlink -e $(type -p ${CC}))\n$(${CC} --version)"
+echo -e "==> C++ compiler: ${CXX} -> $(readlink -e $(type -p ${CXX}))\n$(${CXX} --version)"
+#echo -e "==> linker version:\n$ ${LD} -> $(readlink -e $(type -p ${LD}))\n$(${LD} --version)"
 
 echo "==> Cleaning"
 # Delete package if exists
@@ -51,8 +51,10 @@ echo "==> Packaging"
 mkdir -p /opt/proxysql/pkgroot/tmp || true
 pushd /opt/proxysql/pkgroot
 cp /root/ctl/proxysql.ctl ./proxysql.ctl
+cp /root/ctl/copyright ./copyright
 sed -i "s/PKG_VERSION_CURVER/${CURVER}/g" ./proxysql.ctl
 sed -i "s/PKG_ARCH/${ARCH}/g" ./proxysql.ctl
+sed -i "s/PKG_YEAR/$(date +%Y)/g" ./copyright
 cp ../src/proxysql ./
 cp -r ../etc ./etc
 cp -r ../tools ./tools

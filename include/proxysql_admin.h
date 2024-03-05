@@ -1,9 +1,9 @@
 #ifndef __CLASS_PROXYSQL_ADMIN_H
 #define __CLASS_PROXYSQL_ADMIN_H
 
-#include <prometheus/exposer.h>
-#include <prometheus/counter.h>
-#include <prometheus/gauge.h>
+#include "prometheus/exposer.h"
+#include "prometheus/counter.h"
+#include "prometheus/gauge.h"
 
 #include "query_processor.h"
 #include "proxy_defines.h"
@@ -79,6 +79,8 @@ struct p_admin_gauge {
 		stack_memory_mysql_threads,
 		stack_memory_admin_threads,
 		stack_memory_cluster_threads,
+		prepare_stmt_metadata_memory_bytes,
+		prepare_stmt_backend_memory_bytes,
 		// stmt metrics
 		stmt_client_active_total,
 		stmt_client_active_unique,
@@ -88,6 +90,7 @@ struct p_admin_gauge {
 		stmt_cached,
 		fds_in_use,
 		version_info,
+		mysql_listener_paused,
 		__size
 	};
 };
@@ -114,19 +117,71 @@ struct admin_metrics_map_idx {
 	};
 };
 
+/**
+ * @brief Holds the retrieved info from the bootstrapping server.
+ * @details Used during ProxySQL_Admin initialization.
+ */
+struct bootstrap_info_t {
+	uint32_t server_language;
+	std::string server_version;
+	MYSQL_RES* servers;
+	MYSQL_RES* users;
+	std::string mon_user;
+	std::string mon_pass;
+	bool rand_gen_user;
+
+	~bootstrap_info_t();
+};
+
 // ProxySQL_Admin shared variables
 extern int admin__web_verbosity;
 
 struct incoming_servers_t {
+	SQLite3_result* incoming_mysql_servers_v2 = NULL;
 	SQLite3_result* runtime_mysql_servers = NULL;
 	SQLite3_result* incoming_replication_hostgroups = NULL;
 	SQLite3_result* incoming_group_replication_hostgroups = NULL;
 	SQLite3_result* incoming_galera_hostgroups = NULL;
 	SQLite3_result* incoming_aurora_hostgroups = NULL;
 	SQLite3_result* incoming_hostgroup_attributes = NULL;
+	SQLite3_result* incoming_mysql_servers_ssl_params = NULL;
 
 	incoming_servers_t();
-	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+	incoming_servers_t(SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*, SQLite3_result*);
+};
+
+// Separate structs for runtime mysql server and mysql server v2 to avoid human error
+struct runtime_mysql_servers_checksum_t {
+	std::string value;
+	time_t epoch;
+
+	runtime_mysql_servers_checksum_t();
+	runtime_mysql_servers_checksum_t(const std::string& value, time_t epoch);
+};
+
+struct mysql_servers_v2_checksum_t {
+	std::string value;
+	time_t epoch;
+
+	mysql_servers_v2_checksum_t();
+	mysql_servers_v2_checksum_t(const std::string& value, time_t epoch);
+};
+//
+
+struct peer_runtime_mysql_servers_t {
+	SQLite3_result* resultset { nullptr };
+	runtime_mysql_servers_checksum_t checksum {};
+
+	peer_runtime_mysql_servers_t();
+	peer_runtime_mysql_servers_t(SQLite3_result*, const runtime_mysql_servers_checksum_t&);
+};
+
+struct peer_mysql_servers_v2_t {
+	SQLite3_result* resultset { nullptr };
+	mysql_servers_v2_checksum_t checksum {};
+
+	peer_mysql_servers_v2_t();
+	peer_mysql_servers_v2_t(SQLite3_result*, const mysql_servers_v2_checksum_t&);
 };
 
 class ProxySQL_Admin {
@@ -172,7 +227,7 @@ class ProxySQL_Admin {
 		char *telnet_admin_ifaces;
 		char *telnet_stats_ifaces;
 		bool admin_read_only;
-		bool hash_passwords;
+//		bool hash_passwords;
 		bool vacuum_stats;
 		char * admin_version;
 		char * cluster_username;
@@ -186,6 +241,7 @@ class ProxySQL_Admin {
 		int cluster_mysql_variables_diffs_before_sync;
 		int cluster_admin_variables_diffs_before_sync;
 		int cluster_ldap_variables_diffs_before_sync;
+		int cluster_mysql_servers_sync_algorithm;
 		bool cluster_mysql_query_rules_save_to_disk;
 		bool cluster_mysql_servers_save_to_disk;
 		bool cluster_mysql_users_save_to_disk;
@@ -351,7 +407,14 @@ class ProxySQL_Admin {
 #endif
 	int pipefd[2];
 	void print_version();
-	bool init();
+	/**
+	 * @brief Initializes the module.
+	 * @details Bootstrap info is only used for 'bootstrap mode', i.e. if 'GloVars.global.gr_bootstrap_mode'
+	 *   is detected to be 'true'.
+	 * @param bootstrap_info Info used to create default config during initialization in bootstrap mode.
+	 * @return Always true.
+	 */
+	bool init(const bootstrap_info_t& bootstrap_info);
 	void init_ldap();
 	bool get_read_only() { return variables.admin_read_only; }
 	bool set_read_only(bool ro) { variables.admin_read_only=ro; return variables.admin_read_only; }
@@ -410,7 +473,8 @@ class ProxySQL_Admin {
 //	void flush_admin_variables__from_disk_to_memory(); // commented in 2.3 because unused
 	void flush_admin_variables__from_memory_to_disk();
 	void flush_ldap_variables__from_memory_to_disk();
-	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const std::string& checksum = "", const time_t epoch = 0);
+	void load_mysql_servers_to_runtime(const incoming_servers_t& incoming_servers = {}, const runtime_mysql_servers_checksum_t& peer_runtime_mysql_server = {},
+		const mysql_servers_v2_checksum_t& peer_mysql_server_v2 = {});
 	void save_mysql_servers_from_runtime();
 	/**
 	 * @brief Performs the load to runtime of the current configuration in 'main' for 'mysql_query_rules' and
@@ -544,6 +608,8 @@ class ProxySQL_Admin {
 
 #ifdef TEST_AURORA
 	void enable_aurora_testing();
+	void enable_aurora_testing_populate_mysql_servers();
+	void enable_aurora_testing_populate_mysql_aurora_hostgroups();
 #endif // TEST_AURORA
 
 #ifdef TEST_GALERA
@@ -569,6 +635,7 @@ class ProxySQL_Admin {
 #ifdef DEBUG
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
+	bool ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* duration, int cnt, const char* cacert, const char* capath);
 #endif
 	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
 };
