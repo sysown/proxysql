@@ -11,35 +11,35 @@ env:
 
 jobs:
 
-#  lock:
-#    runs-on: ubuntu-22.04
-#    env:
-#      GH_TOKEN: ${{ secrets.gh_token }}
-#
-#    steps:
-#
-#    - name: Concurency locking
-#      run: |
-#        # lock fast
-#        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-#        gh variable -R sysown/proxysql list | grep -i ${LOCK} >/dev/null || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}' >/dev/null
-#
-#        # wait for unlock
-#        sleep 5
-#        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-#        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-#          while [[ ! -z ${PROBE} ]]; do
-#            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
-#            sleep 15
-#            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-#          done
-#        else
-#          echo "Aquired lock '${LOCK^^}' by '${{ github.workflow }}'"
-#        fi
+  lock:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.gh_token }}
+
+    steps:
+
+    - name: Concurency locking
+      run: |
+        # lock fast
+        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
+        gh variable -R sysown/proxysql list | grep -i ${LOCK} >/dev/null || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}' >/dev/null
+
+        # wait for unlock
+        sleep 5
+        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
+          while [[ ! -z ${PROBE} ]]; do
+            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
+            sleep 15
+            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+          done
+        else
+          echo "Aquired lock '${LOCK^^}' by '${{ github.workflow }}'"
+        fi
 
   builds:
     runs-on: ubuntu-22.04
-#    needs: [ lock ]
+    needs: [ lock ]
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     strategy:
@@ -187,26 +187,26 @@ jobs:
         path: |
           proxysql/
 
-#  unlock:
-#    runs-on: ubuntu-22.04
-#    if: ${{ always() }}
-#    needs: [ builds ]
-#    env:
-#      GH_TOKEN: ${{ secrets.gh_token }}
-#
-#    steps:
-#    
-#    - name: Concurency unlock
-#      run: |
-#        # delete lock
-#        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-#        if [[ ${PROBE} =~ ${{ github.workflow }} ]]; then
-#          echo "Releasing lock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-#          gh variable -R sysown/proxysql delete ${LOCK} || true
-#        elif [[ ! -z ${PROBE} ]]; then
-#          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-#        #  exit -1
-#        else
-#          echo "Not locked '${LOCK^^}'"
-#        fi
+  unlock:
+    runs-on: ubuntu-22.04
+    if: ${{ always() }}
+    needs: [ builds ]
+    env:
+      GH_TOKEN: ${{ secrets.gh_token }}
+
+    steps:
+    
+    - name: Concurency unlock
+      run: |
+        # delete lock
+        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+        if [[ ${PROBE} =~ ${{ github.workflow }} ]]; then
+          echo "Releasing lock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+          gh variable -R sysown/proxysql delete ${LOCK} || true
+        elif [[ ! -z ${PROBE} ]]; then
+          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+        #  exit -1
+        else
+          echo "Not locked '${LOCK^^}'"
+        fi
 
