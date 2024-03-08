@@ -38,7 +38,7 @@ endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
-targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp postgresql
+targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp postgresql libusual
 ifeq ($(SYS_KERN),Linux)
 	targets += coredumper
 endif
@@ -309,6 +309,15 @@ postgresql/postgresql/src/interfaces/libpq/libpq.a : libssl/openssl/libssl.a
 
 postgresql: postgresql/postgresql/src/interfaces/libpq/libpq.a
 
+libusual/libusual/.libs/libusual.a: libssl/openssl/libssl.a
+	cd libusual && rm -rf libusual-*/ || true
+	cd libusual && tar -zxf libusual-*.tar.gz
+	cd libusual/libusual && ./autogen.sh
+	cd libusual/libusual && ./configure --with-openssl=$(shell pwd)/libssl/openssl/ --disable-shared
+	cd libusual/libusual && CC=${CC} CXX=${CXX} ${MAKE}
+
+libusual: libusual/libusual/.libs/libusual.a
+
 ### clean targets
 
 cleanpart:
@@ -339,5 +348,6 @@ cleanall:
 	cd cityhash && rm -rf cityhash-*/ || true
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd postgresql && rm -rf postgresql-*/ || true
+	cd libusual && rm -rf libusual-*/ || true
 .PHONY: cleanall
 

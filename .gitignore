@@ -94,6 +94,7 @@ deps/re2/re2-*/
 deps/sqlite3/sqlite-amalgamation-*/
 deps/coredumper/coredumper-*/
 deps/postgresql/postgresql-*/
+deps/libusual/libusual-*/
 
 test/.vagrant
 .DS_Store
