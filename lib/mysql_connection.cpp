@@ -17,12 +17,12 @@ typedef int     myf;    // Type of MyFlags in my_funcs
 #define MY_KEEP_PREALLOC    1
 #define MY_ALIGN(A,L)    (((A) + (L) - 1) & ~((L) - 1))
 #define ALIGN_SIZE(A)    MY_ALIGN((A),sizeof(double))
-void ma_free_root(MA_MEM_ROOT *root, myf MyFLAGS);
-void *ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size);
+static void ma_free_root(MA_MEM_ROOT *root, myf MyFLAGS);
+static void *ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size);
 #define MAX(a,b) (((a) > (b)) ? (a) : (b))
 
 
-void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
+static void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
 {
   size_t get_size;
   void * point;
@@ -75,7 +75,7 @@ void * ma_alloc_root(MA_MEM_ROOT *mem_root, size_t Size)
 }
 
 
-void ma_free_root(MA_MEM_ROOT *root, myf MyFlags)
+static void ma_free_root(MA_MEM_ROOT *root, myf MyFlags)
 { 
   MA_USED_MEM *next,*old;
 

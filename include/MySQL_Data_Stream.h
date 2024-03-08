@@ -119,7 +119,7 @@ class MySQL_Data_Stream
 	PtrSizeArray *resultset;
 	unsigned int resultset_length;
 
-	ProxySQL_Poll *mypolls;
+	ProxySQL_Poll<MySQL_Data_Stream> *mypolls;
 	//int listener;
 	MySQL_Connection *myconn;
 	MySQL_Session *sess;  // pointer to the session using this data stream
@@ -174,8 +174,8 @@ class MySQL_Data_Stream
 	char *com_field_wild;
 
 	MySQL_Data_Stream();
-	~MySQL_Data_Stream();
-
+	virtual ~MySQL_Data_Stream();
+	bool is_postgres = false;
 	int array2buffer_full();
 	void init();	// initialize the data stream
 	void init(enum MySQL_DS_type, MySQL_Session *, int); // initialize with arguments
@@ -269,5 +269,8 @@ class MySQL_Data_Stream
 	void destroy_queues();
 
 	bool data_in_rbio();
+
+	void reset_connection();
+
 };
 #endif /* __CLASS_MYSQL_DATA_STREAM_H */

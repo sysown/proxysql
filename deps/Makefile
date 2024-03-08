@@ -38,7 +38,7 @@ endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
 
 
-targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp postgresql libusual
+targets := libconfig libdaemon jemalloc mariadb_client re2 sqlite3 pcre lz4 cityhash microhttpd curl ev libssl libhttpserver libinjection prometheus-cpp postgresql libusual libscram
 ifeq ($(SYS_KERN),Linux)
 	targets += coredumper
 endif
@@ -73,7 +73,7 @@ libinjection: libinjection/libinjection/src/libinjection.a
 libssl/openssl/libssl.a:
 	cd libssl && rm -rf openssl-openssl-*/ openssl-3*/ || true
 	cd libssl && tar -zxf openssl-*.tar.gz
-	#cd libssl && ./verify-bio_st-match.sh
+	cd libssl && ./verify-bio_st-match.sh
 #	cd libssl/openssl && patch crypto/ec/curve448/curve448.c < ../curve448.c-multiplication-overflow.patch
 #	cd libssl/openssl && patch crypto/asn1/a_time.c < ../a_time.c-multiplication-overflow.patch
 	cd libssl/openssl && ./config no-ssl3 no-tests
@@ -250,7 +250,6 @@ sqlite3/sqlite3/sqlite3.o:
 
 sqlite3: sqlite3/sqlite3/sqlite3.o
 
-
 libconfig/libconfig/lib/.libs/libconfig++.a:
 	cd libconfig && rm -rf libconfig-*/ || true
 	cd libconfig && tar -zxf libconfig-*.tar.gz
@@ -318,6 +317,12 @@ libusual/libusual/.libs/libusual.a: libssl/openssl/libssl.a
 
 libusual: libusual/libusual/.libs/libusual.a
 
+libscram/lib/libscram.a: libusual
+	cd libscram && rm -rf lib/* || true
+	cd libscram && CC=${CC} CXX=${CXX} ${MAKE} LIBUSUAL_DIR=$(shell pwd)/libusual/libusual LIBOPENSSL_DIR=$(shell pwd)/libssl/openssl/
+
+libscram: libscram/lib/libscram.a
+
 ### clean targets
 
 cleanpart:
@@ -349,5 +354,6 @@ cleanall:
 	cd coredumper && rm -rf coredumper-*/ || true
 	cd postgresql && rm -rf postgresql-*/ || true
 	cd libusual && rm -rf libusual-*/ || true
+	cd libscram && rm -rf lib/* obj/* || true
 .PHONY: cleanall
 

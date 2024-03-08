@@ -1507,3 +1507,20 @@ bool MySQL_Data_Stream::data_in_rbio() {
 	}
 	return false;
 }
+
+void MySQL_Data_Stream::reset_connection() {
+	if (myconn) {
+		if (mysql_thread___multiplexing && (DSS == STATE_MARIADB_GENERIC || DSS == STATE_READY) && myconn->reusable == true && myconn->IsActiveTransaction() == false && myconn->MultiplexDisabled() == false && myconn->async_state_machine == ASYNC_IDLE) {
+			myconn->last_time_used = sess->thread->curtime;
+			return_MySQL_Connection_To_Pool();
+		}
+		else {
+			if (sess && sess->session_fast_forward == false) {
+				destroy_MySQL_Connection_From_Pool(true);
+			}
+			else {
+				destroy_MySQL_Connection_From_Pool(false);
+			}
+		}
+	}
+}

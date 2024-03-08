@@ -144,6 +144,7 @@ class ProxySQL_GlobalVariables {
 	};
 	struct {
 		unsigned long stack_memory_mysql_threads;
+		unsigned long stack_memory_pgsql_threads;
 		unsigned long stack_memory_admin_threads;
 		unsigned long stack_memory_cluster_threads;
 	} statuses;

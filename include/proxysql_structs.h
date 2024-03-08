@@ -10,6 +10,10 @@
 #ifndef PROXYSQL_ENUMS
 #define PROXYSQL_ENUMS
 
+#define MIN_POLL_LEN 8
+#define MIN_POLL_DELETE_RATIO  8
+#define MY_EPOLL_THREAD_MAXEVENTS 128
+
 enum MySerStatus {
 	MYSQL_SERVER_STATUS_ONLINE,
 	MYSQL_SERVER_STATUS_SHUNNED,
@@ -495,6 +499,7 @@ typedef unsigned spinlock;
 typedef struct _rwlock_t rwlock_t;
 typedef struct _PtrSize_t PtrSize_t;
 typedef struct _proxysql_mysql_thread_t proxysql_mysql_thread_t;
+typedef struct _proxysql_pgsql_thread_t proxysql_pgsql_thread_t;
 typedef struct { char * table_name; char * table_def; } table_def_t;
 typedef struct __SQP_query_parser_t SQP_par_t;
 #endif /* PROXYSQL_TYPEDEFS */
@@ -503,19 +508,33 @@ typedef struct __SQP_query_parser_t SQP_par_t;
 #ifndef PROXYSQL_CLASSES
 #define PROXYSQL_CLASSES
 class MySQL_Data_Stream;
+class PgSQL_Data_Stream;
 class MySQL_Connection_userinfo;
 class MySQL_Session;
+class PgSQL_Session;
+template<class T>
+class Client_Session;
+template<class T>
+class Query_Info_T;
+template<class T>
+class Data_Stream_T;
+template<class T>
+class Connection_Info_T;
 class MySQL_Backend;
+class PgSQL_Backend;
 class MySQL_Monitor;
+class PgSQL_Thread;
 class MySQL_Thread;
 class MySQL_Threads_Handler;
 class SQLite3DB;
 class SimpleKV;
 class AdvancedKV;
+template <class T>
 class ProxySQL_Poll;
 class Query_Cache;
 class MySQL_Authentication;
 class MySQL_Connection;
+class PgSQL_Connection;
 class MySQL_Protocol;
 class PtrArray;
 class PtrSizeArray;
@@ -526,6 +545,7 @@ class SQLite3_result;
 class stmt_execute_metadata_t;
 class MySQL_STMTs_meta;
 class MySQL_HostGroups_Manager;
+class PgSQL_HostGroups_Manager;
 class ProxySQL_HTTP_Server;
 class MySQL_STMTs_local_v14;
 class MySQL_STMT_Global_info;
@@ -633,6 +653,10 @@ struct _proxysql_mysql_thread_t {
 	pthread_t thread_id;
 };
 
+struct _proxysql_pgsql_thread_t {
+	PgSQL_Thread* worker;
+	pthread_t thread_id;
+};
 
 /* Every communication between client and proxysql, and between proxysql and mysql server is
  * performed within a mysql_data_stream_t
@@ -773,6 +797,14 @@ ProxySQL_GlobalVariables GloVars {};
 #ifndef GLOBAL_DEFINED_HOSTGROUP
 #define GLOBAL_DEFINED_HOSTGROUP
 MySQL_HostGroups_Manager *MyHGM;
+PgSQL_HostGroups_Manager* PgSQL_HGM;
+
+// PostgreSQL thread variables
+__thread int pgsql_thread___authentication_method;
+__thread int pgsql_thread___show_processlist_extended;
+__thread char *pgsql_thread___server_version;
+//---------------------------
+
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___keep_multiplexing_variables;
@@ -942,6 +974,14 @@ __thread unsigned int g_seed;
 #else
 extern ProxySQL_GlobalVariables GloVars;
 extern MySQL_HostGroups_Manager *MyHGM;
+extern PgSQL_HostGroups_Manager *PgSQL_HGM;
+
+//PostgreSQL Thread Variables
+extern __thread int pgsql_thread___authentication_method;
+extern __thread int pgsql_thread___show_processlist_extended;
+extern __thread char *pgsql_thread___server_version;
+//---------------------------
+
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___keep_multiplexing_variables;

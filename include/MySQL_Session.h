@@ -13,6 +13,7 @@ using json = nlohmann::json;
 
 extern class MySQL_Variables mysql_variables;
 
+/*
 enum proxysql_session_type {
 	PROXYSQL_SESSION_MYSQL,
 	PROXYSQL_SESSION_ADMIN,
@@ -23,6 +24,7 @@ enum proxysql_session_type {
 
 	PROXYSQL_SESSION_NONE
 };
+*/
 
 enum ps_type : uint8_t {
 	ps_type_not_set = 0x0,
@@ -30,21 +32,12 @@ enum ps_type : uint8_t {
 	ps_type_execute_stmt = 0x2
 };
 
-std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
-// these structs will be used for various regex hardcoded
-// their initial use will be for sql_log_bin , sql_mode and time_zone
-// issues #509 , #815 and #816
-class Session_Regex {
-	private:
-	void *opt;
-	void *re;
-	char *s;
-	public:
-	Session_Regex(char *p);
-	~Session_Regex();
-	bool match(char *m);
-};
+
+std::string proxysql_session_type_str(enum proxysql_session_type session_type);
+ 
+
+
 
 class Query_Info {
 	public:

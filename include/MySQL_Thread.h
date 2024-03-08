@@ -16,9 +16,11 @@
 
 #include "set_parser.h"
 
+/*
 #define MIN_POLL_LEN 8
 #define MIN_POLL_DELETE_RATIO  8
 #define MY_EPOLL_THREAD_MAXEVENTS 128
+*/
 
 #define ADMIN_HOSTGROUP	-2
 #define STATS_HOSTGROUP	-3
@@ -101,6 +103,7 @@ enum MySQL_Thread_status_variable {
 
 class __attribute__((aligned(64))) MySQL_Thread
 {
+	friend class PgSQL_Thread;
 	private:
 	unsigned int servers_table_version_previous;
 	unsigned int servers_table_version_current;
@@ -150,7 +153,7 @@ class __attribute__((aligned(64))) MySQL_Thread
 
 	void *gen_args;	// this is a generic pointer to create any sort of structure
 
-	ProxySQL_Poll mypolls;
+	ProxySQL_Poll<MySQL_Data_Stream> mypolls;
 	pthread_t thread_id;
 	unsigned long long curtime;
 	unsigned long long pre_poll_time;

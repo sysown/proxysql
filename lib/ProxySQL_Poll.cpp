@@ -3,32 +3,36 @@
 #include <string.h>
 #include "StatCounters.h"
 #include "MySQL_Data_Stream.h"
+#include "PgSQL_Data_Stream.h"
 #include "ProxySQL_Poll.h"
 #include "proxysql_structs.h"
 #include <poll.h>
 #include "cpp.h"
 
-void ProxySQL_Poll::shrink() {
+template<class T>
+void ProxySQL_Poll<T>::shrink() {
 	unsigned int new_size=l_near_pow_2(len+1);
 	fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-	myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
+	myds=(T **)realloc(myds,new_size*sizeof(T *));
 	last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
 	last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
 	size=new_size;
 }
 
-void ProxySQL_Poll::expand(unsigned int more) {
+template<class T>
+void ProxySQL_Poll<T>::expand(unsigned int more) {
 	if ( (len+more) > size ) {
 		unsigned int new_size=l_near_pow_2(len+more);
 		fds=(struct pollfd *)realloc(fds,new_size*sizeof(struct pollfd));
-		myds=(MySQL_Data_Stream **)realloc(myds,new_size*sizeof(MySQL_Data_Stream *));
+		myds=(T **)realloc(myds,new_size*sizeof(T *));
 		last_recv=(unsigned long long *)realloc(last_recv,new_size*sizeof(unsigned long long));
 		last_sent=(unsigned long long *)realloc(last_sent,new_size*sizeof(unsigned long long));
 		size=new_size;
 	}
 }
 
-ProxySQL_Poll::ProxySQL_Poll() {
+template<class T>
+ProxySQL_Poll<T>::ProxySQL_Poll() {
 	loop_counters=new StatCounters(15,10);
 	poll_timeout=0;
 	loops=0;
@@ -38,13 +42,13 @@ ProxySQL_Poll::ProxySQL_Poll() {
 	bootstrapping_listeners = true;
 	size=MIN_POLL_LEN;
 	fds=(struct pollfd *)malloc(size*sizeof(struct pollfd));
-	myds=(MySQL_Data_Stream **)malloc(size*sizeof(MySQL_Data_Stream *));
+	myds=(T**)malloc(size*sizeof(T *));
 	last_recv=(unsigned long long *)malloc(size*sizeof(unsigned long long));
 	last_sent=(unsigned long long *)malloc(size*sizeof(unsigned long long));
 }
 
-
-ProxySQL_Poll::~ProxySQL_Poll() {
+template<class T>
+ProxySQL_Poll<T>::~ProxySQL_Poll() {
 	unsigned int i;
 	for (i=0;i<len;i++) {
 		if (
@@ -60,8 +64,8 @@ ProxySQL_Poll::~ProxySQL_Poll() {
 	delete loop_counters;
 }
 
-
-void ProxySQL_Poll::add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, unsigned long long sent_time) {
+template<class T>
+void ProxySQL_Poll<T>::add(uint32_t _events, int _fd, T *_myds, unsigned long long sent_time) {
 	if (len==size) {
 		expand(1);
 	}
@@ -78,7 +82,8 @@ void ProxySQL_Poll::add(uint32_t _events, int _fd, MySQL_Data_Stream *_myds, uns
 	len++;
 }
 
-void ProxySQL_Poll::remove_index_fast(unsigned int i) {
+template<class T>
+void ProxySQL_Poll<T>::remove_index_fast(unsigned int i) {
 	if ((int)i==-1) return;
 	myds[i]->poll_fds_idx=-1; // this prevents further delete
 	if (i != (len-1)) {
@@ -96,7 +101,8 @@ void ProxySQL_Poll::remove_index_fast(unsigned int i) {
 	}
 }
 
-int ProxySQL_Poll::find_index(int fd) {
+template<class T>
+int ProxySQL_Poll<T>::find_index(int fd) {
 	unsigned int i;
 	for (i=0; i<len; i++) {
 		if (fds[i].fd==fd) {
@@ -105,3 +111,6 @@ int ProxySQL_Poll::find_index(int fd) {
 	}
 	return -1;
 }
+
+template class ProxySQL_Poll<PgSQL_Data_Stream>;
+template class ProxySQL_Poll<MySQL_Data_Stream>;

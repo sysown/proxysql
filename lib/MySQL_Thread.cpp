@@ -26,7 +26,7 @@ using std::vector;
 using std::function;
 
 #ifdef DEBUG
-MySQL_Session *sess_stopat;
+static MySQL_Session *sess_stopat;
 #endif
 
 #ifdef epoll_create1
@@ -1836,14 +1836,14 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		} else if (value[0] == '/') {
 			char *full_path = strdup(value);
-                        char *eval_dirname = dirname(full_path);
-                        DIR* eventlog_dir = opendir(eval_dirname);
-			free(full_path);
-                        if (eventlog_dir) {
+			char* eval_dirname = dirname(full_path);
+			DIR* eventlog_dir = opendir(eval_dirname);
+			if (eventlog_dir) {
 				closedir(eventlog_dir);
 				free(variables.auditlog_filename);
-				variables.auditlog_filename=strdup(value);
-                                return true;
+				variables.auditlog_filename = strdup(value);
+				free(full_path);
+				return true;
 			} else {
 				proxy_error("%s is an invalid value for auditlog_filename path, the directory cannot be accessed\n", eval_dirname);
 				return false;
@@ -1860,14 +1860,14 @@ bool MySQL_Threads_Handler::set_variable(char *name, const char *value) {	// thi
 			return false;
 		} else if (value[0] == '/') {
 			char *full_path = strdup(value);
-                        char *eval_dirname = dirname(full_path);
-                        DIR* eventlog_dir = opendir(eval_dirname);
-			free(full_path);
-                        if (eventlog_dir) {
+			char* eval_dirname = dirname(full_path);
+			DIR* eventlog_dir = opendir(eval_dirname);
+			if (eventlog_dir) {
 				closedir(eventlog_dir);
 				free(variables.eventslog_filename);
-				variables.eventslog_filename=strdup(value);
-                                return true;
+				variables.eventslog_filename = strdup(value);
+				free(full_path);
+				return true;
 			} else {
 				proxy_error("%s is an invalid value for eventslog_filename path, the directory cannot be accessed\n", eval_dirname);
 				return false;
@@ -2323,7 +2323,7 @@ void MySQL_Threads_Handler::stop_listeners() {
  * @return Either an string holding the string representation of internal
  *   member 'client_addr', or empty string if this member is NULL.
  */
-std::string get_client_addr(struct sockaddr* client_addr) {
+static std::string get_client_addr(struct sockaddr* client_addr) {
 	char buf[INET6_ADDRSTRLEN];
 	std::string str_client_addr {};
 
@@ -2423,7 +2423,7 @@ char** client_host_cache_entry_row(
  *
  * @param row The pointer array holding the row values to be freed.
  */
-void free_client_host_cache_row(char** row) {
+static void free_client_host_cache_row(char** row) {
 	for (int i = 0; i < CLIENT_HOST_CACHE_COLUMNS; i++) {
 		free(row[i]);
 	}

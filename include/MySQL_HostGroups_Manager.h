@@ -123,10 +123,6 @@ class MySrvC;
 class MySrvList;
 class MyHGC;
 
-
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed);
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed);
-
 class GTID_Server_Data {
 	public:
 	char *address;

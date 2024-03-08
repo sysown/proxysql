@@ -19,6 +19,11 @@ typedef struct { uint32_t hash; uint32_t key; } t_symstruct;
 class ProxySQL_Config;
 class ProxySQL_Restapi;
 
+enum PROTOCOL_TYPE {
+	PROTOCOL_TYPE_MYSQL,
+	PROTOCOL_TYPE_POSTGRESQL
+};
+
 class Scheduler_Row {
 	public:
 	unsigned int id;
@@ -91,6 +96,7 @@ struct p_admin_gauge {
 		fds_in_use,
 		version_info,
 		mysql_listener_paused,
+		pgsql_listener_paused,
 		__size
 	};
 };
@@ -255,6 +261,7 @@ class ProxySQL_Admin {
 		int stats_system_cpu;
 		int stats_system_memory;
 		int mysql_show_processlist_extended;
+		int pgsql_show_processlist_extended;
 		bool restapi_enabled;
 		bool restapi_enabled_old;
 		int restapi_port;
@@ -328,8 +335,11 @@ class ProxySQL_Admin {
 	 *  param 'resultset' is supplied, it will match it's value, otherwise it will be a locally created
 	 *  'SQLite3_result*' that should be freed.
 	 */
+	template<enum PROTOCOL_TYPE>
 	SQLite3_result* __add_active_users(enum cred_username_type usertype, char *user=NULL, SQLite3_result* resultset = nullptr);
+	template<enum PROTOCOL_TYPE>
 	void __delete_inactive_users(enum cred_username_type usertype);
+	template<enum PROTOCOL_TYPE>
 	void add_admin_users();
 	void __refresh_users(std::unique_ptr<SQLite3_result>&& all_users = nullptr, const std::string& checksum = "", const time_t epoch = 0);
 	void __add_active_users_ldap();
@@ -348,10 +358,14 @@ class ProxySQL_Admin {
 	void disk_upgrade_rest_api_routes();
 
 #ifdef DEBUG
+	template<enum PROTOCOL_TYPE>
 	void add_credentials(char *type, char *credentials, int hostgroup_id);
+	template<enum PROTOCOL_TYPE>
 	void delete_credentials(char *type, char *credentials);
 #else
+	template<enum PROTOCOL_TYPE>
 	void add_credentials(char *credentials, int hostgroup_id);
+	template<enum PROTOCOL_TYPE>
 	void delete_credentials(char *credentials);
 #endif /* DEBUG */
 
@@ -363,6 +377,14 @@ class ProxySQL_Admin {
 	void flush_clickhouse_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_clickhouse_variables___database_to_runtime(SQLite3DB *db, bool replace);
 #endif /* PROXYSQLCLICKHOUSE */
+
+	// PostgreSQL
+	void __refresh_pgsql_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	//void __add_active_pgsql_users(char* user = NULL);
+	//void __delete_inactive_pgsql_users();
+	void flush_pgsql_variables___runtime_to_database(SQLite3DB* db, bool replace, bool del, bool onlyifempty, bool runtime = false, bool use_lock = true);
+	void flush_pgsql_variables___database_to_runtime(SQLite3DB* db, bool replace, const std::string& checksum = "", const time_t epoch = 0);
+	//
 
 	void flush_sqliteserver_variables___runtime_to_database(SQLite3DB *db, bool replace, bool del, bool onlyifempty, bool runtime=false);
 	void flush_sqliteserver_variables___database_to_runtime(SQLite3DB *db, bool replace);
@@ -390,8 +412,9 @@ class ProxySQL_Admin {
 		bool checksum_admin_variables;
 		bool checksum_ldap_variables;
 	} checksum_variables;
+	template<enum PROTOCOL_TYPE pt>
 	void public_add_active_users(enum cred_username_type usertype, char *user=NULL) {
-		__add_active_users(usertype, user);
+		__add_active_users<pt>(usertype, user);
 	}
 	ProxySQL_Admin();
 	~ProxySQL_Admin();
@@ -599,6 +622,18 @@ class ProxySQL_Admin {
 	void save_clickhouse_users_runtime_to_database(bool _runtime);
 #endif /* PROXYSQLCLICKHOUSE */
 
+	//PostgreSQL
+	void init_pgsql_variables();
+	void load_pgsql_variables_to_runtime(const std::string& checksum = "", const time_t epoch = 0) { flush_pgsql_variables___database_to_runtime(admindb, true, checksum, epoch); }
+	void save_pgsql_variables_from_runtime() { flush_pgsql_variables___runtime_to_database(admindb, true, true, false); }
+	void init_pgsql_users(std::unique_ptr<SQLite3_result>&& mysql_users_resultset = nullptr, const std::string& checksum = "", const time_t epoch = 0);
+	void flush_pgsql_users__from_memory_to_disk();
+	void flush_pgsql_users__from_disk_to_memory();
+	void stats___pgsql_processlist();
+
+	void save_pgsql_users_runtime_to_database(bool _runtime);
+	//
+
 	void vacuum_stats(bool);
 	int FlushDigestTableToDisk(SQLite3DB *);
 
@@ -635,6 +670,7 @@ class ProxySQL_Admin {
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_HG_lookup();
 	unsigned long long ProxySQL_Test___MySQL_HostGroups_Manager_Balancing_HG5211();
 #endif
-	friend void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
+	friend void admin_mysql_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
+	friend void admin_pgsql_session_handler(PgSQL_Session* sess, void* _pa, PtrSize_t* pkt);
 };
 #endif /* __CLASS_PROXYSQL_ADMIN_H */

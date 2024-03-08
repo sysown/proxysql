@@ -590,7 +590,7 @@ bool MySQL_Authentication::reset() {
 
 using std::map;
 
-uint64_t compute_accounts_hash(const umap_auth& accs_map) {
+static uint64_t compute_accounts_hash(const umap_auth& accs_map) {
 	if (accs_map.size() == 0) {
 		return 0;
 	}
@@ -644,7 +644,7 @@ uint64_t MySQL_Authentication::get_runtime_checksum() {
 	return hashB+hashF;
 }
 
-pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
+static pair<umap_auth, umap_auth> extract_accounts_details(MYSQL_RES* resultset, unique_ptr<SQLite3_result>& all_users) {
 	if (resultset == nullptr) { return { umap_auth {}, umap_auth {} }; }
 
 	// The following order is assumed for the resulset received fields:

@@ -63,6 +63,12 @@ static pthread_mutex_t ev_loop_mutex;
 
 //static std::unordered_map <string, Gtid_Server_Info *> gtid_map;
 
+static std::string gtid_executed_to_string(gtid_set_t & gtid_executed);
+static void addGtid(const gtid_t & gtid, gtid_set_t & gtid_executed);
+
+
+const int MYSQL_ERRORS_STATS_FIELD_NUM = 11;
+
 static void gtid_async_cb(struct ev_loop *loop, struct ev_async *watcher, int revents) {
 	if (glovars.shutdown) {
 		ev_break(loop);
@@ -115,7 +121,7 @@ static int wait_for_mysql(MYSQL *mysql, int status) {
 	}
 }
 
-void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
+static void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 	pthread_mutex_lock(&ev_loop_mutex);
 	if (revents & EV_READ) {
 		GTID_Server_Data *sd = (GTID_Server_Data *)w->data;
@@ -144,7 +150,7 @@ void reader_cb(struct ev_loop *loop, struct ev_io *w, int revents) {
 	pthread_mutex_unlock(&ev_loop_mutex);
 }
 
-void connect_cb(EV_P_ ev_io *w, int revents) {
+static void connect_cb(EV_P_ ev_io *w, int revents) {
 	pthread_mutex_lock(&ev_loop_mutex);
 	struct ev_io * c = w;
 	if (revents & EV_WRITE) {
@@ -446,7 +452,7 @@ bool GTID_Server_Data::read_next_gtid() {
 	return true;
 }
 
-std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
+static std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 	std::string gtid_set;
 	for (auto it=gtid_executed.begin(); it!=gtid_executed.end(); ++it) {
 		std::string s = it->first;
@@ -473,7 +479,7 @@ std::string gtid_executed_to_string(gtid_set_t& gtid_executed) {
 
 
 
-void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
+static void addGtid(const gtid_t& gtid, gtid_set_t& gtid_executed) {
 	auto it = gtid_executed.find(gtid.first);
 	if (it == gtid_executed.end())
 	{
@@ -1747,7 +1753,7 @@ unique_ptr<SQLite3_result> get_mysql_servers_v2() {
 	return unique_ptr<SQLite3_result>(resultset);
 }
 
-void update_glovars_checksum_with_peers(
+static void update_glovars_checksum_with_peers(
 	ProxySQL_Checksum_Value& module_checksum,
 	const string& new_checksum,
 	const string& peer_checksum_value,
@@ -1784,7 +1790,7 @@ void update_glovars_checksum_with_peers(
  * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
-void update_glovars_mysql_servers_checksum(
+static void update_glovars_mysql_servers_checksum(
 	const string& new_checksum,
 	const runtime_mysql_servers_checksum_t& peer_checksum = {},
 	bool update_version = false
@@ -1815,7 +1821,7 @@ void update_glovars_mysql_servers_checksum(
  * @param epoch The epoch to be preserved in case the supplied 'peer_checksum' matches the new computed
  *  checksum.
  */
-void update_glovars_mysql_servers_v2_checksum(
+static void update_glovars_mysql_servers_v2_checksum(
 	const string& new_checksum,
 	const mysql_servers_v2_checksum_t& peer_checksum = {},
 	bool update_version = false
@@ -5961,7 +5967,7 @@ bool Galera_Info::update(int b, int r, int o, int mw, int mtb, bool _a, int _w, 
 	return ret;
 }
 
-void print_galera_nodes_last_status() {
+static void print_galera_nodes_last_status() {
 	std::unique_ptr<SQLite3_result> result { new SQLite3_result(13) };
 
 	result->add_column_definition(SQLITE_TEXT,"hostname");
@@ -6871,7 +6877,7 @@ class MySQL_Errors_stats {
 	}
 	char **get_row() {
 		char buf[128];
-		char **pta=(char **)malloc(sizeof(char *)*11);
+		char **pta=(char **)malloc(sizeof(char *)*MYSQL_ERRORS_STATS_FIELD_NUM);
 		sprintf(buf,"%d",hostgroup);
 		pta[0]=strdup(buf);
 		assert(hostname);
@@ -6913,7 +6919,7 @@ class MySQL_Errors_stats {
 	}
 	void free_row(char **pta) {
 		int i;
-		for (i=0;i<11;i++) {
+		for (i=0;i<MYSQL_ERRORS_STATS_FIELD_NUM;i++) {
 			assert(pta[i]);
 			free(pta[i]);
 		}
@@ -6977,7 +6983,7 @@ void MySQL_HostGroups_Manager::add_mysql_errors(int hostgroup, char *hostname, i
 }
 
 SQLite3_result * MySQL_HostGroups_Manager::get_mysql_errors(bool reset) {
-	SQLite3_result *result=new SQLite3_result(11);
+	SQLite3_result *result=new SQLite3_result(MYSQL_ERRORS_STATS_FIELD_NUM);
 	pthread_mutex_lock(&mysql_errors_mutex);
 	result->add_column_definition(SQLITE_TEXT,"hid");
 	result->add_column_definition(SQLITE_TEXT,"hostname");

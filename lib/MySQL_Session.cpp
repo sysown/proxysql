@@ -137,6 +137,7 @@ extern ClickHouse_Authentication *GloClickHouseAuth;
 extern ClickHouse_Server *GloClickHouseServer;
 #endif /* PROXYSQLCLICKHOUSE */
 
+/*
 std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
 	if (session_type == PROXYSQL_SESSION_MYSQL) {
 		return "PROXYSQL_SESSION_MYSQL";
@@ -153,27 +154,11 @@ std::string proxysql_session_type_str(enum proxysql_session_type session_type) {
 	} else {
 		return "PROXYSQL_SESSION_NONE";
 	}
-};
+};*/
 
-Session_Regex::Session_Regex(char *p) {
-	s=strdup(p);
-	re2::RE2::Options *opt2=new re2::RE2::Options(RE2::Quiet);
-	opt2->set_case_sensitive(false);
-	opt=(void *)opt2;
-	re=(RE2 *)new RE2(s, *opt2);
-}
 
-Session_Regex::~Session_Regex() {
-	free(s);
-	delete (RE2 *)re;
-	delete (re2::RE2::Options *)opt;
-}
 
-bool Session_Regex::match(char *m) {
-	bool rc=false;
-	rc=RE2::PartialMatch(m,*(RE2 *)re);
-	return rc;
-}
+
 KillArgs::KillArgs(char* u, char* p, char* h, unsigned int P, unsigned int _hid, unsigned long i, int kt, int _use_ssl, MySQL_Thread* _mt) :
 	KillArgs(u, p, h, P, _hid, i, kt, _use_ssl, _mt, NULL) {
 	// resolving DNS if available in Cache
@@ -416,7 +401,7 @@ unsigned long long Query_Info::query_parser_update_counters() {
 	}
 	if (MyComQueryCmd==MYSQL_COM_QUERY___NONE) return 0; // this means that it was never initialized
 	if (MyComQueryCmd == MYSQL_COM_QUERY__UNINITIALIZED) return 0; // this means that it was never initialized
-	unsigned long long ret=GloQPro->query_parser_update_counters(sess, MyComQueryCmd, &QueryParserArgs, end_time-start_time);
+	unsigned long long ret=GloQPro->query_parser_update_counters(TO_CLIENT_SESSION(sess), MyComQueryCmd, &QueryParserArgs, end_time-start_time);
 	MyComQueryCmd=MYSQL_COM_QUERY___NONE;
 	QueryPointer=NULL;
 	QueryLength=0;
@@ -478,16 +463,6 @@ bool Query_Info::is_select_NOT_for_update() {
 				// let simplify. If NOWAIT is used, we assume FOR UPDATE|SHARE is used
 				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
 				return false;
-/*
-				if (strcasestr(QP," FOR UPDATE ")==NULL) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-				if (strcasestr(QP," FOR SHARE ")==NULL) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-*/
 			}
 			p=QP;
 			p+=ql-12;
@@ -495,16 +470,6 @@ bool Query_Info::is_select_NOT_for_update() {
 				// let simplify. If SKIP LOCKED is used, we assume FOR UPDATE|SHARE is used
 				__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
 				return false;
-/*
-				if (strcasestr(QP," FOR UPDATE ")) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-				if (strcasestr(QP," FOR SHARE ")) {
-					__sync_fetch_and_add(&MyHGM->status.select_for_update_or_equivalent, 1);
-					return false;
-				}
-*/
 			}
 			p=QP;
 			char buf[129];
@@ -3368,7 +3333,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
-		qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+		qpo=GloQPro->process_mysql_query(TO_CLIENT_SESSION(this),pkt.ptr,pkt.size,TO_QUERY_INFO(&CurrentQuery));
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 			thread->status_variables.stvar[st_var_query_processor_time] = thread->status_variables.stvar[st_var_query_processor_time] +
@@ -3508,7 +3473,7 @@ void MySQL_Session::handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_C
 		if (thread->variables.stats_time_query_processor) {
 			clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 		}
-		qpo=GloQPro->process_mysql_query(this,NULL,0,&CurrentQuery);
+		qpo=GloQPro->process_mysql_query(TO_CLIENT_SESSION(this),NULL,0,TO_QUERY_INFO(&CurrentQuery));
 		if (qpo->max_lag_ms >= 0) {
 			thread->status_variables.stvar[st_var_queries_with_max_lag_ms]++;
 		}
@@ -3950,6 +3915,30 @@ __get_pkts_from_client:
 							}
 						}
 						c=*((unsigned char *)pkt.ptr+sizeof(mysql_hdr));
+						/*if (client_myds != NULL && client_myds->is_postgres == true) {
+							if (session_type == PROXYSQL_SESSION_ADMIN || session_type == PROXYSQL_SESSION_STATS) {
+								c = *((unsigned char*)pkt.ptr + 0);
+								if (c == 'Q') {
+									handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_QUERY___not_mysql(pkt);
+								}
+								else if (c == 'X') {
+									//proxy_debug(PROXY_DEBUG_MYSQL_COM, 5, "Got COM_QUIT packet\n");
+									//if (GloMyLogger) { GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_AUTH_QUIT, this, NULL); }
+									l_free(pkt.size, pkt.ptr);
+									handler_ret = -1;
+									return handler_ret;
+								}
+								else {
+									proxy_error("Experimental feature");
+									//assert(0);
+								}
+							}
+							else {
+								proxy_error("Experimental feature");
+								assert(0);
+							}
+							break;
+						}*/
 						if (session_type == PROXYSQL_SESSION_CLICKHOUSE) {
 							if ((enum_mysql_command)c == _MYSQL_COM_INIT_DB) {
 								handler___status_WAITING_CLIENT_DATA___STATE_SLEEP___MYSQL_COM_INIT_DB_replace_CLICKHOUSE(pkt);
@@ -3999,7 +3988,7 @@ __get_pkts_from_client:
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&begint);
 									}
-									qpo=GloQPro->process_mysql_query(this,pkt.ptr,pkt.size,&CurrentQuery);
+									qpo=GloQPro->process_mysql_query(TO_CLIENT_SESSION(this),pkt.ptr,pkt.size,TO_QUERY_INFO(&CurrentQuery));
 									if (thread->variables.stats_time_query_processor) {
 										clock_gettime(CLOCK_THREAD_CPUTIME_ID,&endt);
 										thread->status_variables.stvar[st_var_query_processor_time]=thread->status_variables.stvar[st_var_query_processor_time] +

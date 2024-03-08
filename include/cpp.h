@@ -1,7 +1,11 @@
 #include "gen_utils.h"
+#include "PgSQL_Thread.h"
 #include "MySQL_Thread.h"
 #include "MySQL_Session.h"
+#include "PgSQL_Session.h"
+#include "Client_Session.h"
 #include "mysql_backend.h"
+#include "PgSQL_Backend.h"
 #include "ProxySQL_Poll.h"
 //#include "MySQL_Data_Stream.h"
 #include "query_cache.hpp"
@@ -18,12 +22,16 @@
 #include "fileutils.hpp"
 #include "configfile.hpp"
 //#include "query_processor.h"
-#include "proxysql_admin.h"
+
 //#include "SQLite3_Server.h"
 #ifdef PROXYSQLCLICKHOUSE
 #include "ClickHouse_Server.h"
 #endif /* PROXYSQLCLICKHOUSE */
 #include "MySQL_HostGroups_Manager.h"
+#include "PgSQL_HostGroups_Manager.h"
+#include "PgSQL_Connection.h"
+#include "proxysql_admin.h"
+
 //#include "MySQL_Logger.hpp"
 //#include "MySQL_PreparedStatement.h"
 //#include "ProxySQL_Cluster.hpp" // cluster
