@@ -761,14 +761,16 @@ void MySQL_Connection::connect_start() {
 			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
 		} else {
 			mysql_ssl_set(mysql,
-					ssl_params->ssl_key.c_str(),
-					ssl_params->ssl_cert.c_str(),
-					ssl_params->ssl_ca.c_str(),
-					ssl_params->ssl_capath.c_str(),
-					ssl_params->ssl_cipher.c_str()
+					( ssl_params->ssl_key.length()    > 0 ? ssl_params->ssl_key.c_str()    : NULL ) ,
+					( ssl_params->ssl_cert.length()   > 0 ? ssl_params->ssl_cert.c_str()   : NULL ) ,
+					( ssl_params->ssl_ca.length()     > 0 ? ssl_params->ssl_ca.c_str()     : NULL ) ,
+					( ssl_params->ssl_capath.length() > 0 ? ssl_params->ssl_capath.c_str() : NULL ) ,
+					( ssl_params->ssl_cipher.length() > 0 ? ssl_params->ssl_cipher.c_str() : NULL )
 			);
-			mysql_options(mysql, MYSQL_OPT_SSL_CRL, ssl_params->ssl_crl.c_str());
-			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, ssl_params->ssl_crlpath.c_str());
+			mysql_options(mysql, MYSQL_OPT_SSL_CRL,
+				( ssl_params->ssl_crl.length() > 0 ? ssl_params->ssl_crl.c_str() : NULL ) );
+			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH,
+				( ssl_params->ssl_crlpath.length() > 0 ? ssl_params->ssl_crlpath.c_str() : NULL ) );
 		}
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
