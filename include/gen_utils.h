@@ -190,11 +190,11 @@ class PtrSizeArray {
 	}
 };
 
-typedef struct {
-	void*  data = nullptr;
-	size_t len = 0;        
+struct buffer_t {
+	void * data = nullptr;
+	size_t len = 0;
 	size_t capacity = 0;
-} buffer_t;
+};
 
 class FixedSizeQueue : public std::queue<buffer_t> {
 private:
