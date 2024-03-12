@@ -4370,11 +4370,11 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 		bool retry_conn=false;
 		if (myconn->server_status==MYSQL_SERVER_STATUS_SHUNNED_REPLICATION_LAG) {
 			thread->status_variables.stvar[st_var_backend_lagging_during_query]++;
-			proxy_error("Detected a lagging server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+			proxy_error("Detected a lagging server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_LAGGING_SRV);
 		} else {
 			thread->status_variables.stvar[st_var_backend_offline_during_query]++;
-			proxy_error("Detected an offline server during query: %s, %d\n", myconn->parent->address, myconn->parent->port);
+			proxy_error("Detected an offline server during query: %s, %d, session_id:%u\n", myconn->parent->address, myconn->parent->port, this->thread_session_id);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, myconn->parent->myhgc->hid, myconn->parent->address, myconn->parent->port, ER_PROXYSQL_OFFLINE_SRV);
 		}
 		if (myds->query_retries_on_failure > 0) {
