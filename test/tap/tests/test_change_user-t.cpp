@@ -187,7 +187,7 @@ int TestSet1(const CommandLine& cl, const char *plugin, bool test_ssl , bool tes
 				}
 			}
 		}
-		close_connections;
+		close_connections();
 	}
 	return 0;
 }
