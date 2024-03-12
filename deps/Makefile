@@ -56,6 +56,7 @@ default: $(targets)
 libinjection/libinjection/src/libinjection.a:
 	cd libinjection && rm -rf libinjection-*/ || true
 	cd libinjection && tar -zxf libinjection-3.10.0.tar.gz
+	cd libinjection/libinjection && patch -p1 < ../cc-ar-ld-from-env.patch
 ifneq ($(CENTOSVER),6)
 	cd libinjection/libinjection && patch -p1 < ../update-build-py3.diff
 	cd libinjection/libinjection && patch -p1 < ../libinjection_sqli.c.patch

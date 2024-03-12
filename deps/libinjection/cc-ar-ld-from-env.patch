@@ -1,0 +1,38 @@
+Upstream: Yes: https://github.com/libinjection/libinjection/pull/15
+From 3193a70beb53ff6a39673b47002f6fe4165110a8 Mon Sep 17 00:00:00 2001
+From: Arnaud Lefebvre <a.lefebvre@outlook.fr>
+Date: Fri, 9 Apr 2021 19:16:56 +0200
+Subject: [PATCH] Makefile: use CC, LD and AR from environment if available
+
+---
+ src/Makefile | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/src/Makefile b/src/Makefile
+index f288176..48bdc6a 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -1,10 +1,10 @@
+ 
+-AR=ar -r
++AR ?= ar
+ # MAC
+ # AR=libtool -static
+ 
+-CC=cc
+-LD=ld
++CC ?= cc
++LD ?= ld
+ CFLAGS=-Wall -Wextra -Werror -pedantic -ansi -g -O3 -fPIC
+ 
+ INSTALL=install
+@@ -67,7 +67,7 @@ ${SHAREDLIB}: ${OBJECTS}
+ 
+ ${STATICLIB}: ${OBJECTS}
+ 	rm -f ${STATICLIB}
+-	${AR} ${STATICLIB} ${OBJECTS}
++	${AR} -r ${STATICLIB} ${OBJECTS}
+ 
+ check: ${TESTDRIVERS}
+ 	@./test-driver.sh test-unit.sh
+
