@@ -48,7 +48,7 @@ int main() {
 		if (error_msg.find("Invalid test") != std::string::npos) {
 			ok(true, "ProxySQL is not compiled in Debug mode. Skipping test");
 		} else {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, error_msg);
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, error_msg.c_str());
 		}
 	} else {
 		const std::string& msg = mysql_info(proxysql_admin);
