@@ -9745,13 +9745,13 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			uint64_t prep_stmt_backend_mem_usage;
 			GloMyStmt->get_memory_usage(prep_stmt_metadata_mem_usage, prep_stmt_backend_mem_usage);
 			vn = (char*)"prepare_statement_metadata_memory";
-			sprintf(bu, "%llu", prep_stmt_metadata_mem_usage);
+			sprintf(bu, "%lu", prep_stmt_metadata_mem_usage);
 			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 			sprintf(query, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 			vn = (char*)"prepare_statement_backend_memory";
-			sprintf(bu, "%llu", prep_stmt_backend_mem_usage);
+			sprintf(bu, "%lu", prep_stmt_backend_mem_usage);
 			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 			sprintf(query, a, vn, bu);
 			statsdb->execute(query);
@@ -15049,7 +15049,7 @@ bool ProxySQL_Admin::ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* du
 	uint64_t t2 = monotonic_time();
 	SSL_CTX_free(ctx);
 	*duration = ((t2/1000) - (t1/1000));
-	proxy_info("Duration: %llums\n", *duration);
+	proxy_info("Duration: %lums\n", *duration);
 	return true;
 }
 #endif //DEBUG

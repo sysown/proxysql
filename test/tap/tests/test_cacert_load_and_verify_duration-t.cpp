@@ -57,7 +57,7 @@ int main() {
 		if (start_pos != std::string::npos &&
 			end_pos != std::string::npos) {
 			uint64_t time = std::stoull(msg.substr(start_pos + 5, end_pos - (start_pos + 5)));
-			ok(time < 20000, "Total duration is '%llu ms' should be less than 20 Seconds", time);
+			ok(time < 20000, "Total duration is '%lu ms' should be less than 20 Seconds", time);
 		}
 	}
 	mysql_close(proxysql_admin);
