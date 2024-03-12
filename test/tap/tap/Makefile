@@ -70,19 +70,19 @@ debug: libtap.a libtap.so
 ### helper targets
 
 command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c command_line.cpp $(IDIRS) $(OPT)
+	$(CXX) -fPIC -c command_line.cpp $(IDIRS) $(OPT)
 
 utils.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c utils.cpp $(IDIRS) $(OPT)
+	$(CXX) -fPIC -c utils.cpp $(IDIRS) $(OPT)
 
 tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c tap.cpp $(IDIRS) $(OPT)
+	$(CXX) -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
 libtap.a: tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
 
 libtap.so: libtap.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
-	gcc -shared -o libtap.so -Wl,--whole-archive libtap.a -Wl,--no-whole-archive
+	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap.a -Wl,--no-whole-archive
 
 
 ### tap deps targets

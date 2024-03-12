@@ -221,51 +221,49 @@ py-%:
 #	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -lpthread -ldl $(STATIC_LIBS) $(TAP_LDIR)/libtap.so -o $@
 
 galera_1_timeout_count: galera_1_timeout_count.cpp $(TAP_LDIR)/libtap.so
-	g++ -DTEST_GALERA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) -DTEST_GALERA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 galera_2_timeout_no_count: galera_2_timeout_no_count.cpp $(TAP_LDIR)/libtap.so
-	g++ -DTEST_GALERA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) -DTEST_GALERA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 generate_set_session_csv: generate_set_session_csv.cpp
-	g++ $< $(OPT) -o $@
+	$(CXX) $< $(OPT) -o $@
 
 aurora: aurora.cpp $(TAP_LDIR)/libtap.so
-	g++ -DTEST_AURORA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) -DTEST_AURORA $< ../tap/SQLite3_Server.cpp $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBSJEMALLOC) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 test_tokenizer-t: test_tokenizer-t.cpp $(TAP_LDIR)/libtap.so
-	g++ $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
 test_mysql_query_digests_stages-t: test_mysql_query_digests_stages-t.cpp $(TAP_LDIR)/libtap.so
-	g++ $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
 sqlite3-t: sqlite3-t.cpp $(TAP_LDIR)/libtap.so
-	g++ $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 test_gtid_forwarding-t: test_gtid_forwarding-t.cpp $(TAP_LDIR)/libtap.so
-	g++ $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
 test_admin_prometheus_metrics_dump-t: test_admin_prometheus_metrics_dump-t.cpp $(TAP_LDIR)/libtap.so
-	g++ $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
+	$(CXX) $< $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) -o $@
 
 create_connection_annotation: test_connection_annotation-t.cpp $(TAP_LDIR)/libtap.so
-	g++ -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
+	$(CXX) -DTEST_AURORA $< $(IDIRS) $(LDIRS) $(OPT) $(OBJ) $(MYLIBS) $(STATIC_LIBS) -o $@
 
 setparser_test: setparser_test.cpp $(TAP_LDIR)/libtap.so $(RE2_PATH)/util/test.cc $(PROXYSQL_LDIR)/set_parser.cpp $(LIBPROXYSQLAR) $(LIBCOREDUMPERAR)
-	g++ $< $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< $(RE2_PATH)/util/test.cc $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 setparser_test2-t: setparser_test2
-	rm setparser_test2-t || true
 	ln -fs setparser_test2 setparser_test2-t
 
 setparser_test2: setparser_test2.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
-	g++ $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 setparser_test3-t: setparser_test3
-	rm setparser_test3-t || true
 	ln -fs setparser_test3 setparser_test3-t
 
 setparser_test3: setparser_test3.cpp $(TAP_LDIR)/libtap.so $(PROXYSQL_LDIR)/set_parser.cpp setparser_test_common.h $(LIBCOREDUMPERAR)
-	g++ -DPARSERDEBUG $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
+	$(CXX) -DPARSERDEBUG $< $(PROXYSQL_LDIR)/set_parser.cpp $(IDIRS) $(LDIRS) $(OPT) $(MYLIBS) $(LIBCOREDUMPERAR) -o $@
 
 
 CUSTOMARGS := -I$(TAP_IDIR) -I$(CURL_IDIR) -I$(SQLITE3_IDIR) -I$(PROXYSQL_IDIR) -I$(JSON_IDIR) -I$(SSL_IDIR)
