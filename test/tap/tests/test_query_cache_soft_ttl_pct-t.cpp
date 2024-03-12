@@ -95,7 +95,7 @@ std::map<string, int> get_digest_stats_dummy_query(MYSQL* proxy_admin) {
 	MYSQL_RES* res = mysql_store_result(proxy_admin);
 
 	MYSQL_ROW row;
-	while (row = mysql_fetch_row(res)) {
+	while ((row = mysql_fetch_row(res))) {
 		if (atoi(row[0]) == -1)
 			stats["cache"] += atoi(row[1]);
 		else
