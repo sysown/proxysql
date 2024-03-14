@@ -9,6 +9,7 @@ env:
   TESTDIST: debian11
 #  INFRADB:  mysql80
 #  BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK }}
+  BLDCACHE: CI-builds_${{ github.sha }}_${{ env.TESTDIST }}_bin
 
 jobs:
   test:
@@ -31,6 +32,22 @@ jobs:
         sparse-checkout: |
           test_django-framework
           proxysql
+
+    - name: Wait for cache
+      run: |
+        CACHE="CI-builds_${{ github.sha }}_debian11_bin"
+        echo "Wating for cache '${BLDCACHE}' ..."
+        sleep 550
+        PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${CACHE} || echo '')"
+        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
+          while [[ ! -z ${PROBE} ]]; do
+            echo "Wating for cache '${CACHE}' ..."
+            sleep 30
+            PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${CACHE} || echo ''))"
+          done
+        else
+         echo "Cache available '${CACHE}'"
+        fi
 
     - name: Cache restore bin
       uses: actions/cache/restore@v4
