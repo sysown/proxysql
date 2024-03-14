@@ -6,7 +6,7 @@ on:
 
 env:
   TESTNAME: django-framework
-  TESTDIST: debian11
+#  TESTDIST: debian11
 #  INFRADB:  mysql80
 #  BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK }}
 
@@ -16,10 +16,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dist: [ 'debian11' ]
+        testdist: [ 'debian11' ]
         infradb: [ 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
     env:
-      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.dist }}_bin
+      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
 #      BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} }}
 
     steps:
@@ -37,8 +37,9 @@ jobs:
           proxysql
 
     - name: Wait for cache
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
       run: |
-        CACHE="CI-builds_${{ github.sha }}_debian11_bin"
         echo "Wating for cache '${BLDCACHE}' ..."
         #sleep 550
         PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE} || echo '')"
@@ -55,7 +56,6 @@ jobs:
     - name: Cache restore bin
       uses: actions/cache/restore@v4
       with:
-#        key: CI-builds_${{ github.sha }}_debian11_bin
         key: ${{ env.BLDCACHE }}
         fail-on-cache-miss: true
         path: |
