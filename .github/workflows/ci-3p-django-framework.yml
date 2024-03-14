@@ -20,7 +20,7 @@ jobs:
         infradb: [ 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
     env:
       BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.dist }}_bin
-      BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} }}
+#      BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} }}
 
     steps:
         
