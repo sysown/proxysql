@@ -148,9 +148,12 @@ endif
 WASAN :=
 ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address -DTEST_WITHASAN
+	# Force the disable of JEMALLOC, since ASAN isn't compatible.
+	export NOJEMALLOC=1
 	# workaroud ASAN limitation ASLR > 28bits
 	# https://github.com/google/sanitizers/issues/1716
-	DUMMY := $(shell sudo sysctl vm.mmap_rnd_bits=28)
+	# sudo sysctl vm.mmap_rnd_bits=28
+    $(warning ASAN needs ASLR =< 28bits, make sure 'sysctl vm.mmap_rnd_bits=28' is set.)
 endif
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,$(TAP_LDIR) $(WGCOV) $(WASAN) -DGITVERSION=\"$(GIT_VERSION)\"
