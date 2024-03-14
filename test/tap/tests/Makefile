@@ -3,7 +3,7 @@
 
 GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-	$(error GIT_VERSION is not set)
+    $(error GIT_VERSION is not set)
 endif
 
 
@@ -126,8 +126,8 @@ STATIC_LIBS := $(CITYHASH_LDIR)/libcityhash.a
 
 LIBCOREDUMPERAR :=
 ifeq ($(UNAME_S),Linux)
-  LIBCOREDUMPERAR := $(COREDUMPER_LDIR)/libcoredumper.a
-  STATIC_LIBS += $(LIBCOREDUMPERAR)
+	LIBCOREDUMPERAR := $(COREDUMPER_LDIR)/libcoredumper.a
+	STATIC_LIBS += $(LIBCOREDUMPERAR)
 endif
 
 ### detect compiler support for c++11/17
@@ -135,7 +135,7 @@ CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201103L)
-	$(error Compiler must support at least c++11)
+    $(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
