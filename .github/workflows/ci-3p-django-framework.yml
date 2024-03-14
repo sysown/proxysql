@@ -22,7 +22,7 @@ jobs:
       BLDCACHE: CI-builds_${{ github.sha }}_debian11_bin
 #      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
 #      BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} }}
-      BASELINE: ${{ fromJSON(vars)[format('BASELINE_3P_DJANGO_FRAMEWORK_{0}', matrix.infradb)] }}
+#      BASELINE: ${{ fromJSON(vars)[format('BASELINE_3P_DJANGO_FRAMEWORK_{0}', matrix.infradb)] }}
 
     steps:
         
@@ -42,7 +42,7 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.gh_token }}
       run: |
-        echo "BASELINE: '${BSAELINE}'"
+        echo "BASELINE: '${BASELINE}' '${{ fromJSON(vars) }}'"
         echo "Wating for cache '${BLDCACHE}' ..."
         #sleep 550
         PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
