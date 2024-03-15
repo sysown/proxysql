@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         testdist: [ 'debian11' ]
-#        infradb: [ 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57' ]
     env:
       TESTDIST: ${{ matrix.testdist }}
