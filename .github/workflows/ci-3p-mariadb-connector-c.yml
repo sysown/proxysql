@@ -7,17 +7,17 @@ on:
 env:
   TESTNAME: mariadb-connector-c
   TESTDIST: debian11
-#  INFRADB:  mysql57
+  INFRADB:  mysql57
 #  BASELINE: ${{ vars.BASELINE_3P_MARIADB_CONNECTOR_C }}
 
 jobs:
   test:
     runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
+#    strategy:
+#      fail-fast: false
+#      matrix:
 #        testdist: [ 'debian11' ]
-        infradb: [ 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+#        infradb: [ 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
     env:
       BLDCACHE: CI-builds_${{ github.sha }}_debian11_bin
 #      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
