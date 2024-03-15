@@ -20,7 +20,7 @@ jobs:
     env:
       BLDCACHE: CI-builds_${{ github.sha }}_debian11_bin
 #      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
-      BASELINE: ${{ vars[format('BASELINE_{0}_{1}', github.workflow, matrix.infradb)] }}
+      BASELINE: ${{ vars[format('BASELINE_3P_LARAVEL_FRAMEWORK_{0}', matrix.infradb)] }}
 
     steps:
         
