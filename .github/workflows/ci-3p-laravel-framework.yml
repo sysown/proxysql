@@ -17,6 +17,10 @@ jobs:
       fail-fast: false
       matrix:
         infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+    env:
+      BLDCACHE: CI-builds_${{ github.sha }}_debian11_bin
+#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
+      BASELINE: ${{ vars[format('BASELINE_{0}_{1}', github.workflow, matrix.infradb)] }}
 
     steps:
         
