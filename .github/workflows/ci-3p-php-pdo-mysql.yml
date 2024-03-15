@@ -6,13 +6,25 @@ on:
 
 env:
   TESTNAME: php-pdo-mysql
-  TESTDIST: debian11
-  INFRADB:  mysql57
-  BASELINE: ${{ vars.BASELINE_3P_PHP_PDO_MYSQL }}
+#  TESTDIST: debian11
+#  INFRADB:  mysql57
+#  BASELINE: ${{ vars.BASELINE_3P_PHP_PDO_MYSQL }}
 
 jobs:
   test:
     runs-on: ubuntu-22.04
+     strategy:
+      fail-fast: false
+      matrix:
+        testdist: [ 'debian11' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+        infradb: [ 'mysql57' ]
+    env:
+      TESTDIST: ${{ matrix.testdist }}
+      INFRADB:  ${{ matrix.infradb }}
+      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
+      BASELINE: ${{ vars[format('BASELINE_3P_PHP_PDO_MYSQL_{0}', matrix.infradb)] }}
+
     steps:
         
     - name: Checkout proxysql_3p_testing
@@ -30,7 +42,7 @@ jobs:
     - name: Cache restore bin
       uses: actions/cache/restore@v4
       with:
-        key: CI-builds_${{ github.sha }}_debian11_bin
+        key: ${{ env.BLDCACHE }}
         fail-on-cache-miss: true
         path: |
           proxysql/binaries/
