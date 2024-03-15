@@ -56,7 +56,7 @@ jobs:
     - name: Cache restore bin
       uses: actions/cache/restore@v4
       with:
-        key: CI-builds_${{ github.sha }}_debian11_bin
+        key: ${{ env.BLDCACHE }}
         fail-on-cache-miss: true
         path: |
           proxysql/binaries/
