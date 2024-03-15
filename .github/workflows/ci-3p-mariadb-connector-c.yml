@@ -22,9 +22,7 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-      BLDCACHE: CI-builds_${{ github.sha }}_debian11_bin
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
-#      BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} }}
+      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
       BASELINE: ${{ vars[format('BASELINE_3P_MARIADB_CONNECTOR_C_{0}', matrix.infradb)] }}
       
     steps:
