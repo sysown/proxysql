@@ -13,7 +13,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-22.04
-     strategy:
+    strategy:
       fail-fast: false
       matrix:
         testdist: [ 'debian11' ]
