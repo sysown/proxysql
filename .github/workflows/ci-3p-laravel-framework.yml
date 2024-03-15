@@ -6,7 +6,7 @@ on:
 
 env:
   TESTNAME: laravel-framework
-  TESTDIST: debian11
+#  TESTDIST: debian11
 #  INFRADB:  mysql57
 #  BASELINE: ${{ vars.BASELINE_3P_LARAVEL_FRAMEWORK }}
 
