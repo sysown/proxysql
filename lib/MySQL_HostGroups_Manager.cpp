@@ -722,6 +722,18 @@ void MySrvList::remove(MySrvC *s) {
 	servers->remove_index_fast((unsigned int)i);
 }
 
+unsigned int MySrvConnList::conns_with_multiplexing_disabled()
+{
+    unsigned int multiplexing_disabled_count = 0;
+    for (unsigned int i = 0; i < conns_length(); ++i) {
+        MySQL_Connection* conn = static_cast<MySQL_Connection*>(conns->index(i));
+        if (conn->MultiplexDisabled()) {
+            multiplexing_disabled_count++;
+        }
+    }
+    return multiplexing_disabled_count;
+}
+
 void MySrvConnList::drop_all_connections() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Dropping all connections (%u total) on MySrvConnList %p for server %s:%d , hostgroup=%d , status=%d\n", conns_length(), this, mysrvc->address, mysrvc->port, mysrvc->myhgc->hid, mysrvc->status);
 	while (conns_length()) {
@@ -1267,7 +1279,7 @@ hg_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_conn_free,
 			"proxysql_connpool_conns",
-			"How many backend connections are currently (free|used).",
+			"How many backend connections are currently (free|used|demuxed).",
 			metric_tags {
 				{ "status", "free" }
 			}
@@ -1275,9 +1287,17 @@ hg_metrics_map = std::make_tuple(
 		std::make_tuple (
 			p_hg_dyn_gauge::connection_pool_conn_used,
 			"proxysql_connpool_conns",
-			"How many backend connections are currently (free|used).",
+			"How many backend connections are currently (free|used|demuxed).",
 			metric_tags {
 				{ "status", "used" }
+			}
+		),
+		std::make_tuple (
+			p_hg_dyn_gauge::connection_pool_conn_demuxed,
+			"proxysql_connpool_conns",
+			"How many backend connections are currently (free|used|demuxed).",
+			metric_tags {
+				{ "status", "demuxed" }
 			}
 		),
 		std::make_tuple (
@@ -4352,6 +4372,12 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 			p_update_connection_pool_update_gauge(endpoint_id, pool_conn_used_labels,
 				status.p_connection_pool_conn_used_map, mysrvc->ConnectionsUsed->conns_length(), p_hg_dyn_gauge::connection_pool_conn_used);
 
+			// proxysql_connection_pool_conn_demuxed metric
+			std::map<std::string, std::string> pool_conn_demuxed_labels = common_labels;
+			pool_conn_demuxed_labels.insert({"status", "demuxed"});
+			p_update_connection_pool_update_gauge(endpoint_id, pool_conn_demuxed_labels,
+				status.p_connection_pool_conn_demuxed_map, mysrvc->ConnectionsUsed->conns_with_multiplexing_disabled(), p_hg_dyn_gauge::connection_pool_conn_demuxed);
+
 			// proxysql_connection_pool_latency_us metric
 			p_update_connection_pool_update_gauge(endpoint_id, common_labels,
 				status.p_connection_pool_latency_us_map, mysrvc->current_latency_us, p_hg_dyn_gauge::connection_pool_latency_us);
@@ -4387,6 +4413,10 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 		gauge = status.p_connection_pool_conn_used_map[key];
 		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_used]->Remove(gauge);
 		status.p_connection_pool_conn_used_map.erase(key);
+
+		gauge = status.p_connection_pool_conn_demuxed_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_demuxed]->Remove(gauge);
+		status.p_connection_pool_conn_demuxed_map.erase(key);
 
 		gauge = status.p_connection_pool_latency_us_map[key];
 		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_latency_us]->Remove(gauge);
