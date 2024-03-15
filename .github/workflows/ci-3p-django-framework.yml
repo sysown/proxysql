@@ -16,12 +16,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-#        testdist: [ 'debian11' ]
+        testdist: [ 'debian11' ]
         infradb: [ 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
     env:
-      BLDCACHE: CI-builds_${{ github.sha }}_debian11_bin
-#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
-#      BASELINE: ${{ vars.BASELINE_3P_DJANGO_FRAMEWORK_${{ matrix.infradb }} }}
+      TESTDIST: ${{ matrix.testdist }}
+      INFRADB: ${{ matrix.infradb }}
+      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
       BASELINE: ${{ vars[format('BASELINE_3P_DJANGO_FRAMEWORK_{0}', matrix.infradb)] }}
 
     steps:
