@@ -24,7 +24,7 @@ jobs:
       INFRADB:  ${{ matrix.infradb }}
       BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
 #      BASELINE: ${{ vars[format('BASELINE_3P_MARIADB_CONNECTOR_C_{0}', matrix.infradb)] }}
-      BASELINE: ${{ vars[format('BASELINE_3P_{0}', env.TESTNAME)] }}
+      BASELINE: ${{ vars['BASELINE_3P_MARIADB_CONNECTOR_C'] }}
       
     steps:
         
