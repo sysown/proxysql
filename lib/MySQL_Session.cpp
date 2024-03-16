@@ -222,6 +222,9 @@ void* kill_query_thread(void *arg) {
 	std::unique_ptr<MySQL_Thread> mysql_thr(new MySQL_Thread());
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
+
+	MySQLServers_SslParams * ssl_params = NULL;
+
 	MYSQL *mysql=mysql_init(NULL);
 	if (!mysql) {
 		goto __exit_kill_query_thread;
@@ -230,15 +233,10 @@ void* kill_query_thread(void *arg) {
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
 
+
 	if (ka->use_ssl && ka->port) {
-		mysql_ssl_set(mysql, 
-			mysql_thread___ssl_p2s_key,
-			mysql_thread___ssl_p2s_cert,
-			mysql_thread___ssl_p2s_ca,
-			mysql_thread___ssl_p2s_capath,
-			mysql_thread___ssl_p2s_cipher);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		ssl_params = MyHGM->get_Server_SSL_Params(ka->hostname, ka->port, ka->username);
+		MySQL_Connection::set_ssl_params(mysql,ssl_params);
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 
@@ -275,7 +273,16 @@ void* kill_query_thread(void *arg) {
 		ret=mysql_real_connect(mysql,"localhost",ka->username,ka->password,NULL,0,ka->hostname,0);
 	}
 	if (!ret) {
-		proxy_error("Failed to connect to server %s:%d to run KILL %s %lu: Error: %s\n" , ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id, mysql_error(mysql));
+		int myerr = mysql_errno(mysql);
+		if (ssl_params != NULL && myerr == 2026) {
+			proxy_error("Failed to connect to server %s:%d to run KILL %s %lu.  SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
+				ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id,
+				ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
+				ssl_params->ssl_crl.c_str() , ssl_params->ssl_crlpath.c_str() , ssl_params->ssl_cipher.c_str() , ssl_params->tls_version.c_str()
+			);
+		} else {
+			proxy_error("Failed to connect to server %s:%d to run KILL %s %lu: Error: %s\n" , ka->hostname, ka->port, ( ka->kill_type==KILL_QUERY ? "QUERY" : "CONNECTION" ) , ka->id, mysql_error(mysql));
+		}
 		MyHGM->p_update_mysql_error_counter(p_mysql_error_type::mysql, ka->hid, ka->hostname, ka->port, mysql_errno(mysql));
 		goto __exit_kill_query_thread;
 	}
@@ -300,6 +307,10 @@ __exit_kill_query_thread:
 	if (mysql)
 		mysql_close(mysql);
 	delete ka;
+	if (ssl_params != NULL) {
+		delete ssl_params;
+		ssl_params = NULL;
+	}
 	return NULL;
 }
 
