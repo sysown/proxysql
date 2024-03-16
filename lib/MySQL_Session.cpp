@@ -223,6 +223,10 @@ void* kill_query_thread(void *arg) {
 	mysql_thr->curtime=monotonic_time();
 	mysql_thr->refresh_variables();
 	MYSQL *mysql=mysql_init(NULL);
+	if (!mysql) {
+		goto __exit_kill_query_thread;
+	}
+
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "program_name", "proxysql_killer");
 	mysql_options4(mysql, MYSQL_OPT_CONNECT_ATTR_ADD, "_server_host", ka->hostname);
 
@@ -238,9 +242,6 @@ void* kill_query_thread(void *arg) {
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 
-	if (!mysql) {
-		goto __exit_kill_query_thread;
-	}
 	MYSQL *ret;
 	if (ka->port) {
 		switch (ka->kill_type) {
