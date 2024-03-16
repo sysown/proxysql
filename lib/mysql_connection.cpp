@@ -750,28 +750,7 @@ void MySQL_Connection::connect_start() {
 			ssl_params = NULL;
 		}
 		ssl_params = MyHGM->get_Server_SSL_Params(parent->address, parent->port, userinfo->username);
-		if (ssl_params == NULL) {
-			mysql_ssl_set(mysql,
-					mysql_thread___ssl_p2s_key,
-					mysql_thread___ssl_p2s_cert,
-					mysql_thread___ssl_p2s_ca,
-					mysql_thread___ssl_p2s_capath,
-					mysql_thread___ssl_p2s_cipher);
-			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
-		} else {
-			mysql_ssl_set(mysql,
-					( ssl_params->ssl_key.length()    > 0 ? ssl_params->ssl_key.c_str()    : NULL ) ,
-					( ssl_params->ssl_cert.length()   > 0 ? ssl_params->ssl_cert.c_str()   : NULL ) ,
-					( ssl_params->ssl_ca.length()     > 0 ? ssl_params->ssl_ca.c_str()     : NULL ) ,
-					( ssl_params->ssl_capath.length() > 0 ? ssl_params->ssl_capath.c_str() : NULL ) ,
-					( ssl_params->ssl_cipher.length() > 0 ? ssl_params->ssl_cipher.c_str() : NULL )
-			);
-			mysql_options(mysql, MYSQL_OPT_SSL_CRL,
-				( ssl_params->ssl_crl.length() > 0 ? ssl_params->ssl_crl.c_str() : NULL ) );
-			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH,
-				( ssl_params->ssl_crlpath.length() > 0 ? ssl_params->ssl_crlpath.c_str() : NULL ) );
-		}
+		MySQL_Connection::set_ssl_params(mysql, ssl_params);
 		mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 	}
 	unsigned int timeout= 1;
@@ -2977,4 +2956,29 @@ bool MySQL_Connection::get_gtid(char *buff, uint64_t *trx_id) {
 		}
 	}
 	return ret;
+}
+
+void MySQL_Connection::set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params) {
+	if (ssl_params == NULL) {
+		mysql_ssl_set(mysql,
+				mysql_thread___ssl_p2s_key,
+				mysql_thread___ssl_p2s_cert,
+				mysql_thread___ssl_p2s_ca,
+				mysql_thread___ssl_p2s_capath,
+				mysql_thread___ssl_p2s_cipher);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+	} else {
+		mysql_ssl_set(mysql,
+				( ssl_params->ssl_key.length()    > 0 ? ssl_params->ssl_key.c_str()    : NULL ) ,
+				( ssl_params->ssl_cert.length()   > 0 ? ssl_params->ssl_cert.c_str()   : NULL ) ,
+				( ssl_params->ssl_ca.length()     > 0 ? ssl_params->ssl_ca.c_str()     : NULL ) ,
+				( ssl_params->ssl_capath.length() > 0 ? ssl_params->ssl_capath.c_str() : NULL ) ,
+				( ssl_params->ssl_cipher.length() > 0 ? ssl_params->ssl_cipher.c_str() : NULL )
+		);
+		mysql_options(mysql, MYSQL_OPT_SSL_CRL,
+			( ssl_params->ssl_crl.length() > 0 ? ssl_params->ssl_crl.c_str() : NULL ) );
+		mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH,
+			( ssl_params->ssl_crlpath.length() > 0 ? ssl_params->ssl_crlpath.c_str() : NULL ) );
+	}
 }
