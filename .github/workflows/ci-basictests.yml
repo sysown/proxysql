@@ -8,6 +8,18 @@ jobs:
 
   tests:
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        testdist: [ 'ubuntu22' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+        infradb: [ 'mysql57' ]
+    env:
+      TESTDIST: ${{ matrix.testdist }}
+      INFRADB:  ${{ matrix.infradb }}
+      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}-tap_src
+      BASELINE: ${{ vars[format('BASELINE_3P_MARIADB_CONNECTOR_C_{0}', matrix.infradb)] }}
+
     steps:
     
     - name: Install dependencies
@@ -32,6 +44,21 @@ jobs:
         sudo apt-get update -y
         sudo apt-cache policy libmysqlclient-dev
         sudo apt-get install -y --allow-downgrades libmysqlclient-dev=5.7*
+
+    - name: Wait for cache
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
+      run: |
+        echo "BASELINE: '${BASELINE}'"
+        echo "Wating for cache '${BLDCACHE}' ..."
+        #sleep 550
+        PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
+        while [[ -z ${PROBE} ]]; do
+          echo "Wating for cache '${BLDCACHE}' ..."
+          sleep 30
+          PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
+        done
+        echo "Cache available '${BLDCACHE}'"
 
     - name: Cache restore src
       id: cache-src
