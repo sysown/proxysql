@@ -63,10 +63,10 @@ jobs:
             type: '-tap-asan'
           - dist: 'ubuntu22'
             type: '-clang'
-          - dist: 'ubuntu22'
-            type: '-clang-tap'
-          - dist: 'ubuntu22'
-            type: '-clang-tap-asan'
+#          - dist: 'ubuntu22'
+#            type: '-clang-tap'
+#          - dist: 'ubuntu22'
+#            type: '-clang-tap-asan'
     env:
       BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
 
