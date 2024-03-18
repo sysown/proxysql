@@ -1525,15 +1525,10 @@ __exit_set_wait_timeout:
 bool MySQL_Monitor_State_Data::create_new_connection() {
 		mysql=mysql_init(NULL);
 		assert(mysql);
-		if (use_ssl) {
-			mysql_ssl_set(mysql,
-					mysql_thread___ssl_p2s_key,
-					mysql_thread___ssl_p2s_cert,
-					mysql_thread___ssl_p2s_ca,
-					mysql_thread___ssl_p2s_capath,
-					mysql_thread___ssl_p2s_cipher);
-			mysql_options(mysql, MYSQL_OPT_SSL_CRL, mysql_thread___ssl_p2s_crl);
-			mysql_options(mysql, MYSQL_OPT_SSL_CRLPATH, mysql_thread___ssl_p2s_crlpath);
+		MySQLServers_SslParams * ssl_params = NULL;
+		if (use_ssl && port) {
+			ssl_params = MyHGM->get_Server_SSL_Params(hostname, port, mysql_thread___monitor_username);
+			MySQL_Connection::set_ssl_params(mysql,ssl_params);
 			mysql_options(mysql, MARIADB_OPT_SSL_KEYLOG_CALLBACK, (void*)proxysql_keylog_write_line_callback);
 		}
 		unsigned int timeout=mysql_thread___monitor_connect_timeout/1000;
@@ -1551,6 +1546,13 @@ bool MySQL_Monitor_State_Data::create_new_connection() {
 			mysql_error_msg=strdup(mysql_error(mysql));
 			int myerrno=mysql_errno(mysql);
 			MyHGM->p_update_mysql_error_counter(p_mysql_error_type::proxysql, hostgroup_id, hostname, port, myerrno);
+			if (ssl_params != NULL && myerrno == 2026) {
+				proxy_error("Failed to connect to server %s:%d . SSL Params: %s , %s , %s , %s , %s , %s , %s , %s\n",
+					( port ? hostname : "localhost" ) , port ,
+					ssl_params->ssl_ca.c_str() , ssl_params->ssl_cert.c_str() , ssl_params->ssl_key.c_str() , ssl_params->ssl_capath.c_str() ,
+					ssl_params->ssl_crl.c_str() , ssl_params->ssl_crlpath.c_str() , ssl_params->ssl_cipher.c_str() , ssl_params->tls_version.c_str()
+				);
+			}
 			if (myerrno < 2000) {
 				mysql_close(mysql);
 			} else {
