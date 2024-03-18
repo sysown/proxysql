@@ -21,7 +21,6 @@ jobs:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
       BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}-tap_src
-#      BASELINE: ${{ vars[format('BASELINE_3P_MARIADB_CONNECTOR_C_{0}', matrix.infradb)] }}
 
     steps:
     
@@ -30,11 +29,26 @@ jobs:
         sudo apt-get update -y
         sudo apt-get install -y sysbench gettext
       
+    - name: Wait for cache
+      env:
+        GH_TOKEN: ${{ secrets.gh_token }}
+      run: |
+        echo "BASELINE: '${BASELINE}'"
+        echo "Wating for cache '${BLDCACHE}' ..."
+        #sleep 550
+        PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
+        while [[ -z ${PROBE} ]]; do
+          echo "Wating for cache '${BLDCACHE}' ..."
+          sleep 30
+          PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
+        done
+        echo "Cache available '${BLDCACHE}'"
+
     - name: Cache restore src
       id: cache-src
       uses: actions/cache/restore@v4
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap_src
+        key: ${{ env.BLDCACHE }}
         fail-on-cache-miss: true
         path: |
           proxysql/src/
