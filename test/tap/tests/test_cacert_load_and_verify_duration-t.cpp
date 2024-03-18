@@ -48,7 +48,7 @@ int main() {
 		if (error_msg.find("Invalid test") != std::string::npos) {
 			ok(true, "ProxySQL is not compiled in Debug mode. Skipping test");
 		} else {
-			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, error_msg);
+			fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, error_msg.c_str());
 		}
 	} else {
 		const std::string& msg = mysql_info(proxysql_admin);
@@ -57,7 +57,7 @@ int main() {
 		if (start_pos != std::string::npos &&
 			end_pos != std::string::npos) {
 			uint64_t time = std::stoull(msg.substr(start_pos + 5, end_pos - (start_pos + 5)));
-			ok(time < 20000, "Total duration is '%llu ms' should be less than 20 Seconds", time);
+			ok(time < 20000, "Total duration is '%lu ms' should be less than 20 Seconds", time);
 		}
 	}
 	mysql_close(proxysql_admin);

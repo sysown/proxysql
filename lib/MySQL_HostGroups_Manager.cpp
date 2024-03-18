@@ -2026,7 +2026,7 @@ bool MySQL_HostGroups_Manager::commit(
 
 				if (atoi(r->fields[4])!=atoi(r->fields[14])) {
 					if (GloMTH->variables.hostgroup_manager_verbose)
-						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%d) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->weight , atoi(r->fields[14]));
+						proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 5, "Changing weight for server %d:%s:%d (%s:%d) from %d (%ld) to %d\n" , mysrvc->myhgc->hid , mysrvc->address, mysrvc->port, r->fields[1], atoi(r->fields[2]), atoi(r->fields[4]) , mysrvc->weight , atoi(r->fields[14]));
 					mysrvc->weight=atoi(r->fields[14]);
 				}
 				if (atoi(r->fields[5])!=atoi(r->fields[15])) {

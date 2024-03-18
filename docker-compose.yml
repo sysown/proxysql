@@ -1,4 +1,4 @@
-version: "2.0"
+version: "3.0"
 services:
 
 ####################################################################################################
@@ -6,6 +6,7 @@ services:
   _build:
     image: none
     network_mode: bridge
+    privileged: true
     environment:
       - MAKE
       - MAKEOPT

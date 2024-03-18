@@ -4370,18 +4370,18 @@ void admin_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt) {
 						}
 						if (GloMTH->variables.ssl_p2s_ca == NULL &&
 							GloMTH->variables.ssl_p2s_capath == NULL) {
-							SPA->send_MySQL_ERR(&sess->client_myds->myprot, "'mysql-ssl_p2s_ca' and 'mysql-ssl_p2s_capath' have not been configured");
+							SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"'mysql-ssl_p2s_ca' and 'mysql-ssl_p2s_capath' have not been configured");
 							break;
 						}
 						char msg[256];
 						uint64_t duration = 0ULL;
 						if (SPA->ProxySQL_Test___CA_Certificate_Load_And_Verify(&duration, test_arg1, GloMTH->variables.ssl_p2s_ca,
 							GloMTH->variables.ssl_p2s_capath)) {
-							sprintf(msg, "Took %llums in loading and verifying CA Certificate for %d times\n", duration, test_arg1);
+							sprintf(msg, "Took %lums in loading and verifying CA Certificate for %d times\n", duration, test_arg1);
 							SPA->send_MySQL_OK(&sess->client_myds->myprot, msg);
 						}
 						else {
-							SPA->send_MySQL_ERR(&sess->client_myds->myprot, "Unable to verify CA Certificate");
+							SPA->send_MySQL_ERR(&sess->client_myds->myprot, (char *)"Unable to verify CA Certificate");
 						}
 					}
 					break;
@@ -9745,13 +9745,13 @@ void ProxySQL_Admin::stats___memory_metrics() {
 			uint64_t prep_stmt_backend_mem_usage;
 			GloMyStmt->get_memory_usage(prep_stmt_metadata_mem_usage, prep_stmt_backend_mem_usage);
 			vn = (char*)"prepare_statement_metadata_memory";
-			sprintf(bu, "%llu", prep_stmt_metadata_mem_usage);
+			sprintf(bu, "%lu", prep_stmt_metadata_mem_usage);
 			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 			sprintf(query, a, vn, bu);
 			statsdb->execute(query);
 			free(query);
 			vn = (char*)"prepare_statement_backend_memory";
-			sprintf(bu, "%llu", prep_stmt_backend_mem_usage);
+			sprintf(bu, "%lu", prep_stmt_backend_mem_usage);
 			query=(char*)malloc(strlen(a)+strlen(vn)+strlen(bu)+16);
 			sprintf(query, a, vn, bu);
 			statsdb->execute(query);
@@ -15049,7 +15049,7 @@ bool ProxySQL_Admin::ProxySQL_Test___CA_Certificate_Load_And_Verify(uint64_t* du
 	uint64_t t2 = monotonic_time();
 	SSL_CTX_free(ctx);
 	*duration = ((t2/1000) - (t1/1000));
-	proxy_info("Duration: %llums\n", *duration);
+	proxy_info("Duration: %lums\n", *duration);
 	return true;
 }
 #endif //DEBUG
