@@ -9,6 +9,17 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        testdist: [ 'ubuntu22' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+        infradb: [ 'mysql57' ]
+    env:
+      TESTDIST: ${{ matrix.testdist }}
+      INFRADB:  ${{ matrix.infradb }}
+      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}-tap_matrix
+
     steps:
     
     - name: Cache restore
