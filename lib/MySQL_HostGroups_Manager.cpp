@@ -4380,13 +4380,13 @@ void MySQL_HostGroups_Manager::p_update_connection_pool() {
 		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_status]->Remove(gauge);
 		status.p_connection_pool_status_map.erase(key);
 
-		gauge = status.p_connection_pool_conn_used_map[key];
-		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_free]->Remove(gauge);
-		status.p_connection_pool_conn_used_map.erase(key);
-
 		gauge = status.p_connection_pool_conn_free_map[key];
-		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_used]->Remove(gauge);
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_free]->Remove(gauge);
 		status.p_connection_pool_conn_free_map.erase(key);
+
+		gauge = status.p_connection_pool_conn_used_map[key];
+		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_conn_used]->Remove(gauge);
+		status.p_connection_pool_conn_used_map.erase(key);
 
 		gauge = status.p_connection_pool_latency_us_map[key];
 		status.p_dyn_gauge_array[p_hg_dyn_gauge::connection_pool_latency_us]->Remove(gauge);
