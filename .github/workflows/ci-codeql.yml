@@ -1,25 +1,8 @@
 name: CI-codeql
 
 on:
-#  push:
-#    branches: [ v2.x ]
-#    paths-ignore:
-#    - '.github/**'
-#    - '**.md'
-#  pull_request:
-#    # The branches below must be a subset of the branches above
-#    branches: [ v2.x ]
-#    paths-ignore:
-#    - '.github/**'
-#    - '**.md'
-#  schedule:
-#    - cron: '15 13 * * 3'
   workflow_dispatch:
   workflow_call:
-
-#concurrency:
-#  group: ${{ github.workflow }}-${{ github.ref_name }}
-#  cancel-in-progress: true
 
 jobs:
   analyze:

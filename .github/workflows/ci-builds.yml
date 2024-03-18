@@ -11,35 +11,35 @@ env:
 
 jobs:
 
-  lock:
-    runs-on: ubuntu-22.04
-    env:
-      GH_TOKEN: ${{ secrets.gh_token }}
-
-    steps:
-
-    - name: Concurency locking
-      run: |
-        # lock fast
-        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
-        gh variable -R sysown/proxysql list | grep -i ${LOCK} >/dev/null || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}' >/dev/null
-
-        # wait for unlock
-        sleep 5
-        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
-          while [[ ! -z ${PROBE} ]]; do
-            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
-            sleep 15
-            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-          done
-        else
-          echo "Aquired lock '${LOCK^^}' by '${{ github.workflow }}'"
-        fi
+#  lock:
+#    runs-on: ubuntu-22.04
+#    env:
+#      GH_TOKEN: ${{ secrets.gh_token }}
+#
+#    steps:
+#
+#    - name: Concurency locking
+#      run: |
+#        # lock fast
+#        echo "Setting lock '${LOCK^^}' to '${{ github.workflow }}'"
+#        gh variable -R sysown/proxysql list | grep -i ${LOCK} >/dev/null || gh variable -R sysown/proxysql set ${LOCK} -b '${{ github.workflow }}' >/dev/null
+#
+#        # wait for unlock
+#        sleep 5
+#        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+#        if [[ ! ${PROBE} =~ ${{ github.workflow }} ]]; then
+#          while [[ ! -z ${PROBE} ]]; do
+#            echo "Wating for unlock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')' ..."
+#            sleep 15
+#            PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+#          done
+#        else
+#          echo "Aquired lock '${LOCK^^}' by '${{ github.workflow }}'"
+#        fi
 
   builds:
     runs-on: ubuntu-22.04
-    needs: [ lock ]
+#    needs: [ lock ]
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     strategy:
@@ -58,11 +58,17 @@ jobs:
           - dist: 'ubuntu16'
             type: ''
           - dist: 'ubuntu22'
-            type: '-clang'
-          - dist: 'ubuntu22'
             type: '-tap'
           - dist: 'ubuntu22'
             type: '-tap-asan'
+          - dist: 'ubuntu22'
+            type: '-clang'
+          - dist: 'ubuntu22'
+            type: '-clang-tap'
+          - dist: 'ubuntu22'
+            type: '-clang-tap-asan'
+    env:
+      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
 
     steps:
 
@@ -71,7 +77,8 @@ jobs:
       uses: actions/cache/restore@v4
       with:
 #        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap_bin
+#        key: CI-builds_${{ github.sha }}_ubuntu22-tap_bin
+        key: ${{ env.BLDCACHE }}
         lookup-only: true
         path: |
           proxysql/binaries/
@@ -85,18 +92,18 @@ jobs:
         fetch-depth: 0
         path: 'proxysql'
 
-    - name: Patch TAP-tests
-      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
-      run: |
-        # apply patches
-        #for PATCH in $(cd jenkins-build-scripts/test-scripts/patches && find . -type f); do
-        #  if [[ $PATCH =~ \.patch ]]; then
-        #    patch --verbose proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
-        #  elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
-        #    cp -v jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
-        #  fi
-        #done
-        #ls -l proxysql/test/tap
+#    - name: Patch TAP-tests
+#      if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
+#      run: |
+#         apply patches
+#        for PATCH in $(cd jenkins-build-scripts/test-scripts/patches && find . -type f); do
+#          if [[ $PATCH =~ \.patch ]]; then
+#            patch --verbose proxysql/${PATCH%.patch} jenkins-build-scripts/test-scripts/patches/${PATCH} || true
+#          elif [[ ! -f jenkins-build-scripts/test-scripts/patches/${PATCH#./}.patch ]]; then
+#            cp -v jenkins-build-scripts/test-scripts/patches/${PATCH#./} proxysql/${PATCH#./} || true
+#          fi
+#        done
+#        ls -l proxysql/test/tap
 
     - name: Build
       id: build
@@ -187,26 +194,26 @@ jobs:
         path: |
           proxysql/
 
-  unlock:
-    runs-on: ubuntu-22.04
-    if: ${{ always() }}
-    needs: [ builds ]
-    env:
-      GH_TOKEN: ${{ secrets.gh_token }}
-
-    steps:
-    
-    - name: Concurency unlock
-      run: |
-        # delete lock
-        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
-        if [[ ${PROBE} =~ ${{ github.workflow }} ]]; then
-          echo "Releasing lock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-          gh variable -R sysown/proxysql delete ${LOCK} || true
-        elif [[ ! -z ${PROBE} ]]; then
-          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
-        #  exit -1
-        else
-          echo "Not locked '${LOCK^^}'"
-        fi
+#  unlock:
+#    runs-on: ubuntu-22.04
+#    if: ${{ always() }}
+#    needs: [ builds ]
+#    env:
+#      GH_TOKEN: ${{ secrets.gh_token }}
+#
+#    steps:
+#    
+#    - name: Concurency unlock
+#      run: |
+#        # delete lock
+#        PROBE="$(gh variable -R sysown/proxysql list | grep -i ${LOCK} || echo '')"
+#        if [[ ${PROBE} =~ ${{ github.workflow }} ]]; then
+#          echo "Releasing lock '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+#          gh variable -R sysown/proxysql delete ${LOCK} || true
+#        elif [[ ! -z ${PROBE} ]]; then
+#          echo "Lock raced '${LOCK^^}' by '$(echo ${PROBE} | awk '{ print $2 }')'"
+#        #  exit -1
+#        else
+#          echo "Not locked '${LOCK^^}'"
+#        fi
 

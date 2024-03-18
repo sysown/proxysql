@@ -28,12 +28,12 @@ jobs:
       run: |
         echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
-        #sleep 550
-        PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
+        sleep $(( $RANDOM / 1024 ))
+        PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE}) || echo ''"
         while [[ -z ${PROBE} ]]; do
           echo "Wating for cache '${BLDCACHE}' ..."
           sleep 30
-          PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
+          PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE}) || echo ''"
         done
         echo "Cache available '${BLDCACHE}'"
 

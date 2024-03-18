@@ -1,23 +1,7 @@
 name: CI-maketest
 on:
-#  push:
-#    branches: [ "v2.x" ]
-#    paths-ignore:
-#    - '.github/**'
-#    - '**.md'
-#  pull_request:
-#    branches: [ "v2.x" ]
-#    paths-ignore:
-#    - '.github/**'
-#   - '**.md'
-#  schedule:
-#    - cron: '15 13 * * 3'
   workflow_dispatch:
   workflow_call:
-
-#concurrency:
-#  group: ${{ github.workflow }}-${{ github.ref_name }}
-#  cancel-in-progress: true
 
 jobs:
   builds:
@@ -25,7 +9,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        targets: [ 'testaurora','testgalera','testgrouprep','testreadonly','testreplicationlag','testall' ]
+        target: [ 'testaurora','testgalera','testgrouprep','testreadonly','testreplicationlag','testall' ]
+
     steps:
          
     - name: Checkout repository
@@ -54,7 +39,6 @@ jobs:
         make ubuntu22-dbg | tee ../build.log
         
     - name: Check build
-      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
       run: |
         grep 'exited with code 0' build.log
         

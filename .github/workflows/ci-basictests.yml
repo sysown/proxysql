@@ -18,7 +18,6 @@ jobs:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
       BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}-tap_src
-      BASELINE: ${{ vars[format('BASELINE_3P_MARIADB_CONNECTOR_C_{0}', matrix.infradb)] }}
 
     steps:
     
@@ -51,12 +50,12 @@ jobs:
       run: |
         echo "BASELINE: '${BASELINE}'"
         echo "Wating for cache '${BLDCACHE}' ..."
-        #sleep 550
-        PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
+        sleep $(( $RANDOM / 1024 ))
+        PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE}) || echo ''"
         while [[ -z ${PROBE} ]]; do
           echo "Wating for cache '${BLDCACHE}' ..."
           sleep 30
-          PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE})"
+          PROBE="$(gh cache list --repo sysown/proxysql | grep -i ${BLDCACHE}) || echo ''"
         done
         echo "Cache available '${BLDCACHE}'"
 
