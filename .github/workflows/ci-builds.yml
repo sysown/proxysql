@@ -78,8 +78,8 @@ jobs:
       with:
         key: ${{ env.BLDCACHE }}
         lookup-only: true
-#        path: |
-#          proxysql/binaries/
+        path: |
+          proxysql/binaries/
 
     - name: Checkout repository
       if: ${{ steps.cache-check.outputs.cache-hit != 'true' }}
