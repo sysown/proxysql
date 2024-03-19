@@ -69,6 +69,7 @@ jobs:
       uses: github/codeql-action/init@v3
       with:
         languages: ${{ matrix.language }}
+        checkout_path: proxysql/
 
 #    - if: matrix.language == 'python' || matrix.language == 'java' 
 #      name: Autobuild
