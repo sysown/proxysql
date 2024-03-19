@@ -55,14 +55,14 @@ jobs:
         done
         echo "Cache available '${BLDCACHE}'"
 
-    - name: Cache restore src
-      id: cache-src
-      uses: actions/cache/restore@v4
-      with:
-        key: ${{ env.BLDCACHE }}
-        fail-on-cache-miss: true
-        path: |
-          proxysql/src/
+#    - name: Cache restore src
+#      id: cache-src
+#      uses: actions/cache/restore@v4
+#      with:
+#        key: ${{ env.BLDCACHE }}
+#        fail-on-cache-miss: true
+#        path: |
+#          proxysql/src/
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
@@ -86,10 +86,11 @@ jobs:
 #        echo "git descibe : ${VERS}-${CMTS}-g${HASH}"
 #        echo "GIT_VERSION=${VERS}-${CMTS}-g${HASH}" >> $GITHUB_ENV
     
-#    - if: matrix.language == 'cpp' 
-#      name: Build C++
-#      run: |
-#        make -j$(nproc) clickhouse
+    - if: matrix.language == 'cpp'
+      name: Build C++
+      run: |
+        cd proxysql
+        make -j$(nproc) clickhouse
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3
