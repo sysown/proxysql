@@ -133,7 +133,7 @@ jobs:
       if: ${{ always() }}
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ env.GITHUB_WORKFLOW }}-${{ env.GIT_VERSION }}-run#${{ github.run_number }}
+        name: ${{ github.workflow }}-${{ github.sha }}-run#${{ github.run_number }}
         path: |
           proxysql/src/
           proxysql/test/

@@ -16,9 +16,9 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
-        repository: 'sysown/proxysql'
+#        repository: 'sysown/proxysql'
 #        ref: 'v2.x'
-        ref: ${{ github.head_ref }}
+#        ref: ${{ github.head_ref }}
         fetch-depth: 0
         path: 'proxysql'
         
