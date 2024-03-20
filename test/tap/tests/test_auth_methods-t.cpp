@@ -39,6 +39,8 @@
 #include "command_line.h"
 #include "utils.h"
 
+CommandLine cl;
+
 // Additional env variables
 uint32_t TAP_MYSQL8_BACKEND_HG = 30;
 uint32_t TAP_NUM_CLIENT_THREADS = 4;
@@ -1659,12 +1661,6 @@ int test_all_confs_creds(
 }
 
 int main(int argc, char** argv) {
-	CommandLine cl;
-
-	if (cl.getEnv()) {
-		diag("Failed to get the required environmental variables.");
-		return EXIT_FAILURE;
-	}
 
 	TAP_MYSQL8_BACKEND_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 30);
 	TAP_NUM_CLIENT_THREADS = get_env_int("TAP_NUM_CLIENT_THREADS", 4);
