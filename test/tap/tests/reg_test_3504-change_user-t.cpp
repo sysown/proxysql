@@ -108,11 +108,11 @@ void perform_helper_test(
 		act_SSL_val = output_res.at("ssl_enabled");
 
 		if (auth == "mysql_clear_password") {
-			exp_switching_auth_type = 0;
+			exp_switching_auth_type = -1;
 		} else if  (auth == "mysql_native_password") {
-			exp_switching_auth_type = 0;
+			exp_switching_auth_type = -1;
 		} else if (auth == "caching_sha2_password") {
-			exp_switching_auth_type = 1;
+			exp_switching_auth_type = 0;
 		}
 
 		act_ch_usernames.push_back(output_res.at("client_com_change_user_1"));

@@ -447,8 +447,10 @@ class MySQL_Threads_Handler
 		char *interfaces;
 		char *server_version;
 		char *keep_multiplexing_variables;
+		char *default_authentication_plugin;
 		//unsigned int default_charset; // removed in 2.0.13 . Obsoleted previously using MySQL_Variables instead
 		int handle_unknown_charset;
+		int default_authentication_plugin_int;
 		bool servers_stats;
 		bool commands_stats;
 		bool query_digests;
@@ -548,6 +550,7 @@ class MySQL_Threads_Handler
 		bool log_mysql_warnings_enabled;
 		int data_packets_history_size;
 		int handle_warnings;
+		int evaluate_replication_lag_on_servers_load;
 	} variables;
 	struct {
 		unsigned int mirror_sessions_current;

@@ -66,6 +66,9 @@ using json = nlohmann::json;
 
 #define MYHGM_MYSQL_HOSTGROUP_ATTRIBUTES "CREATE TABLE mysql_hostgroup_attributes (hostgroup_id INT NOT NULL PRIMARY KEY , max_num_online_servers INT CHECK (max_num_online_servers>=0 AND max_num_online_servers <= 1000000) NOT NULL DEFAULT 1000000 , autocommit INT CHECK (autocommit IN (-1, 0, 1)) NOT NULL DEFAULT -1 , free_connections_pct INT CHECK (free_connections_pct >= 0 AND free_connections_pct <= 100) NOT NULL DEFAULT 10 , init_connect VARCHAR NOT NULL DEFAULT '' , multiplex INT CHECK (multiplex IN (0, 1)) NOT NULL DEFAULT 1 , connection_warming INT CHECK (connection_warming IN (0, 1)) NOT NULL DEFAULT 0 , throttle_connections_per_sec INT CHECK (throttle_connections_per_sec >= 1 AND throttle_connections_per_sec <= 1000000) NOT NULL DEFAULT 1000000 , ignore_session_variables VARCHAR CHECK (JSON_VALID(ignore_session_variables) OR ignore_session_variables = '') NOT NULL DEFAULT '' , hostgroup_settings VARCHAR CHECK (JSON_VALID(hostgroup_settings) OR hostgroup_settings = '') NOT NULL DEFAULT '' , servers_defaults VARCHAR CHECK (JSON_VALID(servers_defaults) OR servers_defaults = '') NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '')"
 
+
+#define MYHGM_MYSQL_SERVERS_SSL_PARAMS "CREATE TABLE mysql_servers_ssl_params (hostname VARCHAR NOT NULL , port INT CHECK (port >= 0 AND port <= 65535) NOT NULL DEFAULT 3306 , username VARCHAR NOT NULL DEFAULT '' , ssl_ca VARCHAR NOT NULL DEFAULT '' , ssl_cert VARCHAR NOT NULL DEFAULT '' , ssl_key VARCHAR NOT NULL DEFAULT '' , ssl_capath VARCHAR NOT NULL DEFAULT '' , ssl_crl VARCHAR NOT NULL DEFAULT '' , ssl_crlpath VARCHAR NOT NULL DEFAULT '' , ssl_cipher VARCHAR NOT NULL DEFAULT '' , tls_version VARCHAR NOT NULL DEFAULT '' , comment VARCHAR NOT NULL DEFAULT '' , PRIMARY KEY (hostname, port, username) )"
+
 /*
  * @brief Generates the 'runtime_mysql_servers' resultset exposed to other ProxySQL cluster members.
  * @details Makes 'SHUNNED' and 'SHUNNED_REPLICATION_LAG' statuses equivalent to 'ONLINE'. 'SHUNNED' states
@@ -203,6 +206,7 @@ class MySrvC {	// MySQL Server Container
 	unsigned int max_connections_used; // The maximum number of connections that has been opened
 	unsigned int connect_OK;
 	unsigned int connect_ERR;
+	int cur_replication_lag;
 	unsigned int cur_replication_lag_count;
 	// note that these variables are in microsecond, while user defines max latency in millisecond
 	unsigned int current_latency_us;
@@ -376,6 +380,68 @@ class AWS_Aurora_Info {
 	~AWS_Aurora_Info();
 };
 
+class MySQLServers_SslParams {
+	public:
+	string hostname;
+	int port;
+	string username;
+	string ssl_ca;
+	string ssl_cert;
+	string ssl_key;
+	string ssl_capath;
+	string ssl_crl;
+	string ssl_crlpath;
+	string ssl_cipher;
+	string tls_version;
+	string comment;
+	string MapKey;
+	MySQLServers_SslParams(string _h, int _p, string _u,
+		string ca, string cert, string key, string capath,
+		string crl, string crlpath, string cipher, string tls,
+		string c) {
+		hostname = _h;
+		port = _p;
+		username = _u;
+		ssl_ca = ca;
+		ssl_cert = cert;
+		ssl_key = key;
+		ssl_capath = capath;
+		ssl_crl = crl;
+		ssl_crlpath = crlpath;
+		ssl_cipher = cipher;
+		tls_version = tls;
+		comment = c;
+		MapKey = "";
+	}
+	MySQLServers_SslParams(char * _h, int _p, char * _u,
+		char * ca, char * cert, char * key, char * capath,
+		char * crl, char * crlpath, char * cipher, char * tls,
+		char * c) {
+		hostname = string(_h);
+		port = _p;
+		username = string(_u);
+		ssl_ca = string(ca);
+		ssl_cert = string(cert);
+		ssl_key = string(key);
+		ssl_capath = string(capath);
+		ssl_crl = string(crl);
+		ssl_crlpath = string(crlpath);
+		ssl_cipher = string(cipher);
+		tls_version = string(tls);
+		comment = string(c);
+		MapKey = "";
+	}
+	MySQLServers_SslParams(string _h, int _p, string _u) {
+		MySQLServers_SslParams(_h, _p, _u, "", "", "", "", "", "", "", "", "");
+	}
+	string getMapKey(const char *del) {
+		if (MapKey == "") {
+			MapKey = hostname + string(del) + to_string(port) + string(del) + username;
+		}
+		return MapKey;
+	}
+};
+
 struct p_hg_counter {
 	enum metric {
 		servers_table_version = 0,
@@ -527,6 +593,7 @@ class MySQL_HostGroups_Manager {
 		MYSQL_GALERA_HOSTGROUPS,
 		MYSQL_AWS_AURORA_HOSTGROUPS,
 		MYSQL_HOSTGROUP_ATTRIBUTES,
+		MYSQL_SERVERS_SSL_PARAMS,
 		MYSQL_SERVERS,
 
 		__HGM_TABLES_SIZE
@@ -636,6 +703,9 @@ class MySQL_HostGroups_Manager {
 	PtrArray *MyHostGroups;
 	std::unordered_map<unsigned int, MyHGC *>MyHostGroups_map;
 
+	std::mutex Servers_SSL_Params_map_mutex;
+	std::unordered_map<std::string, MySQLServers_SslParams> Servers_SSL_Params_map;
+
 	MyHGC * MyHGC_find(unsigned int);
 	MyHGC * MyHGC_create(unsigned int);
 
@@ -709,6 +779,9 @@ class MySQL_HostGroups_Manager {
 
 	void generate_mysql_hostgroup_attributes_table();
 	SQLite3_result *incoming_hostgroup_attributes;
+
+	void generate_mysql_servers_ssl_params_table();
+	SQLite3_result *incoming_mysql_servers_ssl_params;
 
 	SQLite3_result* incoming_mysql_servers_v2;
 
@@ -1114,6 +1187,8 @@ class MySQL_HostGroups_Manager {
 	void shutdown();
 	void unshun_server_all_hostgroups(const char * address, uint16_t port, time_t t, int max_wait_sec, unsigned int *skip_hid);
 	MySrvC* find_server_in_hg(unsigned int _hid, const std::string& addr, int port);
+
+	MySQLServers_SslParams * get_Server_SSL_Params(char *hostname, int port, char *username);
 
 private:
 	void update_hostgroup_manager_mappings();

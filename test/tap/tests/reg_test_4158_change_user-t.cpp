@@ -83,7 +83,7 @@ int run_funct_timeout(void *(*start_routine)(void *), int timeout) {
 				diag("Waiting up to %d seconds", timeout);
 			}
 		}
-		if (tr =! 0) {
+		if (tr != 0) {
 			return EXIT_FAILURE;
 		}
 	} else {

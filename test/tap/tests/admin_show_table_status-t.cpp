@@ -90,7 +90,7 @@ int main() {
 			MYSQL_QUERY(proxysql_admin, query);
 			MYSQL_RES* proxy_res = mysql_store_result(proxysql_admin);
 			unsigned long rows = proxy_res->row_count;
-			ok(rows = 1 , "SHOW TABLE STATUS %s generated %lu row(s)", it->c_str(), rows);
+			ok(rows == 1 , "SHOW TABLE STATUS %s generated %lu row(s)", it->c_str(), rows);
 			mysql_free_result(proxy_res);
 		}
 		free(query);

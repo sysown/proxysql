@@ -3,7 +3,7 @@
 
 GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-	$(error GIT_VERSION is not set)
+    $(error GIT_VERSION is not set)
 endif
 
 
@@ -42,7 +42,7 @@ CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201103L)
-	$(error Compiler must support at least c++11)
+    $(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
@@ -50,6 +50,12 @@ STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPL
 WASAN :=
 ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address
+	# Force the disable of JEMALLOC, since ASAN isn't compatible.
+	export NOJEMALLOC=1
+	# workaroud ASAN limitation ASLR > 28bits
+	# https://github.com/google/sanitizers/issues/1716
+	# sudo sysctl vm.mmap_rnd_bits=28
+    $(warning ASAN needs ASLR =< 28bits, make sure 'sysctl vm.mmap_rnd_bits=28' is set.)
 endif
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed $(WASAN)
@@ -70,19 +76,19 @@ debug: libtap.a libtap.so
 ### helper targets
 
 command_line.o: command_line.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c command_line.cpp $(IDIRS) $(OPT)
+	$(CXX) -fPIC -c command_line.cpp $(IDIRS) $(OPT)
 
 utils.o: utils.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c utils.cpp $(IDIRS) $(OPT)
+	$(CXX) -fPIC -c utils.cpp $(IDIRS) $(OPT)
 
 tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so.3 libcrypto.so.3 libcpp_dotenv.so
-	g++ -fPIC -c tap.cpp $(IDIRS) $(OPT)
+	$(CXX) -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
 libtap.a: tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
 	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
 
 libtap.so: libtap.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
-	gcc -shared -o libtap.so -Wl,--whole-archive libtap.a -Wl,--no-whole-archive
+	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap.a -Wl,--no-whole-archive
 
 
 ### tap deps targets
@@ -104,6 +110,7 @@ cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a:
 	cd cpp-dotenv/static && tar -zxf ../cpp-dotenv-*.tar.gz
 	cd cpp-dotenv/static/cpp-dotenv && patch src/dotenv.cpp < ../../dotenv.cpp.patch
 	cd cpp-dotenv/static/cpp-dotenv && patch include/dotenv.h < ../../dotenv.h.patch
+	cd cpp-dotenv/static/cpp-dotenv && patch -p0 < ../../nm_clang_fix.patch
 	cd cpp-dotenv/static/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Debug
 	cd cpp-dotenv/static/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
 
@@ -112,6 +119,7 @@ cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so:
 	cd cpp-dotenv/dynamic && tar -zxf ../cpp-dotenv-*.tar.gz
 	cd cpp-dotenv/dynamic/cpp-dotenv && patch src/dotenv.cpp < ../../dotenv.cpp.patch
 	cd cpp-dotenv/dynamic/cpp-dotenv && patch include/dotenv.h < ../../dotenv.h.patch
+	cd cpp-dotenv/dynamic/cpp-dotenv && patch -p0 < ../../nm_clang_fix.patch
 	cd cpp-dotenv/dynamic/cpp-dotenv && cmake . -DBUILD_TESTING=OFF -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_RPATH="../tap:../../tap" -DCMAKE_BUILD_TYPE=Debug
 	cd cpp-dotenv/dynamic/cpp-dotenv && CC=${CC} CXX=${CXX} ${MAKE}
 

@@ -1,0 +1,12 @@
+diff --git src/dotenv.cpp src/dotenv.cpp
+index 89bd3c1..1dcaf5a 100644
+--- src/dotenv.cpp
++++ src/dotenv.cpp
+@@ -8,7 +8,6 @@
+ 
+ 
+ using namespace std;
+-using namespace dotenv;
+ 
+ 
+ dotenv::dotenv& dotenv::dotenv::load_dotenv(const string& dotenv_path, const bool overwrite, const bool interpolate)

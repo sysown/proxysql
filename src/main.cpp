@@ -294,6 +294,7 @@ void ProxySQL_Main_init_SSL_module() {
 	}
 	//SSL_CTX_set_options(GloVars.global.ssl_ctx, SSL_OP_NO_SSLv3); // no necessary, because of previous SSL_CTX_set_min_proto_version
 #ifdef DEBUG
+#if 0
 	{
 		STACK_OF(SSL_CIPHER) *ciphers;
 		ciphers = SSL_CTX_get_ciphers(GloVars.global.ssl_ctx);
@@ -308,7 +309,8 @@ void ProxySQL_Main_init_SSL_module() {
 		}
 		fprintf(stderr,"\n");
 	}
-#endif
+#endif // 0
+#endif // DEBUG
 	std::string msg = "";
 	ProxySQL_create_or_load_TLS(true, msg);
 }

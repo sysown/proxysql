@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
 
 	unsigned long fetched_row_count = 0;
 
-	while (row = mysql_fetch_row(mysql_result)) {
+	while ((row = mysql_fetch_row(mysql_result))) {
 		fetched_row_count++;
 		usleep(10);
 	}

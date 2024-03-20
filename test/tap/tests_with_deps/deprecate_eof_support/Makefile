@@ -3,7 +3,7 @@
 
 GIT_VERSION ?= $(shell git describe --long --abbrev=7)
 ifndef GIT_VERSION
-	$(error GIT_VERSION is not set)
+    $(error GIT_VERSION is not set)
 endif
 
 
@@ -90,7 +90,7 @@ CPLUSPLUS := $(shell ${CC} -std=c++17 -dM -E -x c++ /dev/null 2>/dev/null | grep
 ifneq ($(CPLUSPLUS),201703L)
 	CPLUSPLUS := $(shell ${CC} -std=c++11 -dM -E -x c++ /dev/null 2>/dev/null| grep -F __cplusplus | grep -Po '\d\d\d\d\d\dL')
 ifneq ($(CPLUSPLUS),201103L)
-	$(error Compiler must support at least c++11)
+    $(error Compiler must support at least c++11)
 endif
 endif
 STDCPP := -std=c++$(shell echo $(CPLUSPLUS) | cut -c3-4) -DCXX$(shell echo $(CPLUSPLUS) | cut -c3-4)
@@ -103,6 +103,12 @@ endif
 WASAN :=
 ifeq ($(WITHASAN),1)
 	WASAN := -fsanitize=address
+	# Force the disable of JEMALLOC, since ASAN isn't compatible.
+	export NOJEMALLOC=1
+	# workaroud ASAN limitation ASLR > 28bits
+	# https://github.com/google/sanitizers/issues/1716
+	# sudo sysctl vm.mmap_rnd_bits=28
+    $(warning ASAN needs ASLR =< 28bits, make sure 'sysctl vm.mmap_rnd_bits=28' is set.)
 endif
 
 OPT := $(STDCPP) -O2 -ggdb -Wl,--no-as-needed -Wl,-rpath,"../../tap" $(WGCOV) $(WASAN)

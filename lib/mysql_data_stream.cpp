@@ -10,36 +10,39 @@
 
 #include <openssl/x509v3.h>
 
-/*
-
-in libssl 1.1.0 
-struct bio_st {
-	const BIO_METHOD *method;
-	long (*callback) (struct bio_st *, int, const char *, int, long, long);
-	char *cb_arg;
-	int init;
-	int shutdown;
-	int flags;
-	int retry_reason;
-	int num;
-	void *ptr;
-	struct bio_st *next_bio;
-	struct bio_st *prev_bio;
-	int references;
-	uint64_t num_read;
-	uint64_t num_write;
-	CRYPTO_EX_DATA ex_data;
-	CRYPTO_RWLOCK *lock;
-};
-*/
-
-typedef int CRYPTO_REF_COUNT;
 
 /**
- * @brief This is the 'bio_st' struct definition from libssl 3.0.0. NOTE: This is an internal struct from
+ * @brief This is the 'bio_st' struct definition from libssl. NOTE: This is an internal struct from
  *   OpenSSL library, currently it's used for performing checks on the reads/writes performed on the BIO objects.
  *   It's extremely important to keep this struct up to date with each OpenSSL dependency update.
  */
+typedef int CRYPTO_REF_COUNT;
+
+#if (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x10100000
+#pragma message "libssl 1.1.x detected"
+struct bio_st {
+    const BIO_METHOD *method;
+    /* bio, mode, argp, argi, argl, ret */
+    BIO_callback_fn callback;
+    BIO_callback_fn_ex callback_ex;
+    char *cb_arg;               /* first argument for the callback */
+    int init;
+    int shutdown;
+    int flags;                  /* extra storage */
+    int retry_reason;
+    int num;
+    void *ptr;
+    struct bio_st *next_bio;    /* used by filter BIOs */
+    struct bio_st *prev_bio;    /* used by filter BIOs */
+    CRYPTO_REF_COUNT references;
+    uint64_t num_read;
+    uint64_t num_write;
+    CRYPTO_EX_DATA ex_data;
+    CRYPTO_RWLOCK *lock;
+};
+
+#elif (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30000000 || (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30100000
+#pragma message "libssl 3.0.x / 3.1.x detected"
 struct bio_st {
     OSSL_LIB_CTX *libctx;
     const BIO_METHOD *method;
@@ -63,6 +66,35 @@ struct bio_st {
     CRYPTO_EX_DATA ex_data;
     CRYPTO_RWLOCK *lock;
 };
+
+#elif (OPENSSL_VERSION_NUMBER & 0xFFFF0000) == 0x30200000
+#pragma message "libssl 3.2.x detected"
+struct bio_st {
+    OSSL_LIB_CTX *libctx;
+    const BIO_METHOD *method;
+    /* bio, mode, argp, argi, argl, ret */
+#ifndef OPENSSL_NO_DEPRECATED_3_0
+    BIO_callback_fn callback;
+#endif
+    BIO_callback_fn_ex callback_ex;
+    char *cb_arg;               /* first argument for the callback */
+    int init;
+    int shutdown;
+    int flags;                  /* extra storage */
+    int retry_reason;
+    int num;
+    void *ptr;
+    struct bio_st *next_bio;    /* used by filter BIOs */
+    struct bio_st *prev_bio;    /* used by filter BIOs */
+    CRYPTO_REF_COUNT references;
+    uint64_t num_read;
+    uint64_t num_write;
+    CRYPTO_EX_DATA ex_data;
+};
+
+#else
+#error "libssl version not supported: OPENSSL_VERSION_NUMBER = " ##OPENSSL_VERSION_NUMBER
+#endif
 
 
 #define RESULTSET_BUFLEN_DS_16K 16000
@@ -305,7 +337,9 @@ MySQL_Data_Stream::MySQL_Data_Stream() {
 	DSS=STATE_NOT_CONNECTED;
 	encrypted=false;
 	switching_auth_stage = 0;
-	switching_auth_type = 0;
+	switching_auth_type = AUTH_UNKNOWN_PLUGIN;
+	switching_auth_sent = AUTH_UNKNOWN_PLUGIN;
+	auth_in_progress = 0;
 	x509_subject_alt_name=NULL;
 	ssl=NULL;
 	rbio_ssl = NULL;

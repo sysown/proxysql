@@ -2453,7 +2453,7 @@ int main(int, char**) {
 		//	std::make_tuple("admin-cluster_username"                           , ""                          ), Known issue, can't clear
 		//	std::make_tuple("admin-cluster_password"                           , ""                          ), Known issue, can't clear
 		//	std::make_tuple("admin-debug"                                      , "false"                     ), Should not be synced
-			std::make_tuple("admin-hash_passwords"                             , "true"                      ),
+//			std::make_tuple("admin-hash_passwords"                             , "true"                      ), // deprecated variable
 		//	std::make_tuple("admin-mysql_ifaces"                               , "0.0.0.0:6032"              ), // disabled because of cluster_sync_interfaces=false
 			std::make_tuple("admin-prometheus_memory_metrics_interval"         , "61"                        ),
 			std::make_tuple("admin-read_only"                                  , "false"                     ),

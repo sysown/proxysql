@@ -776,10 +776,12 @@ MySQL_HostGroups_Manager *MyHGM;
 __thread char *mysql_thread___default_schema;
 __thread char *mysql_thread___server_version;
 __thread char *mysql_thread___keep_multiplexing_variables;
+__thread char *mysql_thread___default_authentication_plugin;
 __thread char *mysql_thread___init_connect;
 __thread char *mysql_thread___ldap_user_variable;
 __thread char *mysql_thread___default_session_track_gtids;
 __thread char *mysql_thread___firewall_whitelist_errormsg;
+__thread int mysql_thread___default_authentication_plugin_int;
 __thread int mysql_thread___max_allowed_packet;
 __thread bool mysql_thread___automatic_detect_sqli;
 __thread bool mysql_thread___firewall_whitelist_enabled;
@@ -866,6 +868,7 @@ __thread bool mysql_thread___enable_load_data_local_infile;
 __thread int mysql_thread___client_host_cache_size;
 __thread int mysql_thread___client_host_error_counts;
 __thread int mysql_thread___handle_warnings;
+__thread int mysql_thread___evaluate_replication_lag_on_servers_load;
 
 /* variables used for Query Cache */
 __thread int mysql_thread___query_cache_size_MB;
@@ -944,10 +947,12 @@ extern MySQL_HostGroups_Manager *MyHGM;
 extern __thread char *mysql_thread___default_schema;
 extern __thread char *mysql_thread___server_version;
 extern __thread char *mysql_thread___keep_multiplexing_variables;
+extern __thread char *mysql_thread___default_authentication_plugin;
 extern __thread char *mysql_thread___init_connect;
 extern __thread char *mysql_thread___ldap_user_variable;
 extern __thread char *mysql_thread___default_session_track_gtids;
 extern __thread char *mysql_thread___firewall_whitelist_errormsg;
+extern __thread int mysql_thread___default_authentication_plugin_int;
 extern __thread int mysql_thread___max_allowed_packet;
 extern __thread bool mysql_thread___automatic_detect_sqli;
 extern __thread bool mysql_thread___firewall_whitelist_enabled;
@@ -1034,6 +1039,7 @@ extern __thread bool mysql_thread___enable_load_data_local_infile;
 extern __thread int mysql_thread___client_host_cache_size;
 extern __thread int mysql_thread___client_host_error_counts;
 extern __thread int mysql_thread___handle_warnings;
+extern __thread int mysql_thread___evaluate_replication_lag_on_servers_load;
 
 /* variables used for Query Cache */
 extern __thread int mysql_thread___query_cache_size_MB;

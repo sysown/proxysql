@@ -644,13 +644,14 @@ void check_query_count(MYSQL* admin, uint32_t queries, uint32_t hg);
 void check_query_count(MYSQL* admin, std::vector<uint32_t> queries, uint32_t hg);
 
 /**
- * @brief fetches and converts env var value to int if possible otherwise uses default
- * @details helper function for fetching int from env
+ * @brief fetches and converts env var value to str/int/bool if possible otherwise uses default
+ * @details helper function for fetching str/int/bool from env
  * @param envname - name for the env variable
- * @param envdefault - default int to use
- * @return int value or int default
+ * @param envdefault - default value to use
+ * @return str/int/bool value or default
  */
-int get_env_int(const char * envname, int envdefault);
-bool get_env_bool(const char * envname, bool envdefault);
+const char* get_env_str(const char* envname, const char* envdefault);
+int get_env_int(const char* envname, int envdefault);
+bool get_env_bool(const char* envname, bool envdefault);
 
 #endif // #define UTILS_H

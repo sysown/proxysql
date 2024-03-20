@@ -505,10 +505,12 @@ int main(int argc, char *argv[]) {
 		ok(cl.compression == proxysql_admin->net.compress, "Compression: (%d)", proxysql_admin->net.compress);
 	}
 
+/* admin-hash_passwords has been deprecated
 	diag("Disabling admin-hash_passwords to be able to run test on MySQL 8");
 	MYSQL_QUERY(proxysql_admin, "SET admin-hash_passwords='false'");
 	MYSQL_QUERY(proxysql_admin, "LOAD ADMIN VARIABLES TO RUNTIME");
 	MYSQL_QUERY(proxysql_admin, "LOAD MYSQL USERS TO RUNTIME");
+*/
 
 	// find all reader host groups
 	MYSQL_QUERY(proxysql_admin, "DELETE FROM mysql_servers WHERE hostgroup_id = 101");
