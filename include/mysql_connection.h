@@ -253,5 +253,6 @@ class MySQL_Connection {
 	bool requires_CHANGE_USER(const MySQL_Connection *client_conn);
 	unsigned int number_of_matching_session_variables(const MySQL_Connection *client_conn, unsigned int& not_matching);
 	unsigned long get_mysql_thread_id() { return mysql ? mysql->thread_id : 0; }
+	static void set_ssl_params(MYSQL *mysql, MySQLServers_SslParams *ssl_params);
 };
 #endif /* __CLASS_MYSQL_CONNECTION_H */
