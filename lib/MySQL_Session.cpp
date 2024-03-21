@@ -5294,7 +5294,9 @@ int MySQL_Session::handler() {
 	}
 	}
 
-	housekeeping_before_pkts();
+	// housekeeping_before_pkts() performs tasks only if hgs_expired_conns.size() is not 0
+	if (hgs_expired_conns.size() != 0)
+		housekeeping_before_pkts();
 	// The function get_pkts_from_client() is called to retrieve packets from the client, passing a reference to wrong_pass and the pkt variable.
 	handler_ret = get_pkts_from_client(wrong_pass, pkt);
 	// If get_pkts_from_client() returns a non-zero value, indicating an error, the function returns that value immediately.
