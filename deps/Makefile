@@ -85,13 +85,21 @@ libssl: libssl/openssl/libssl.a
 
 libhttpserver/libhttpserver/build/src/.libs/libhttpserver.a: libmicrohttpd/libmicrohttpd/src/microhttpd/.libs/libmicrohttpd.a re2/re2/obj/libre2.a
 	cd libhttpserver && rm -rf libhttpserver-*/ || true
-	cd libhttpserver && tar -zxf libhttpserver-*.tar.gz
+ifeq ($(CPLUSPLUS),201703L)
+	cd libhttpserver && ln -fs libhttpserver-0.19.0 libhttpserver
+	cd libhttpserver && tar -zxf libhttpserver-0.19.0.tar.gz
 	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../re2_regex.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process.patch
 	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash.patch
-	cd libhttpserver/libhttpserver && patch -p0 < ../expose_raw_url.patch
-	cd libhttpserver/libhttpserver && patch -p0 < ../replace_static_global_strings.patch
+else
+	cd libhttpserver && ln -fs libhttpserver-0.18.2 libhttpserver
+	cd libhttpserver && tar -zxf libhttpserver-0.18.2.tar.gz
+	cd libhttpserver/libhttpserver && patch -p1 < ../noexcept_v0.18.2.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../re2_regex_v0.18.2.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../final_val_post_process_v0.18.2.patch
+	cd libhttpserver/libhttpserver && patch -p1 < ../empty_uri_log_crash_v0.18.2.patch
+endif
 ifeq ($(UNAME_S),FreeBSD)
 	sed -i -e 's/\/bin\/bash/\/usr\/local\/bin\/bash/' libhttpserver/libhttpserver/bootstrap
 endif
