@@ -250,7 +250,15 @@ int main(int argc, char** argv) {
 	}
 
 	// Impose a timeout to avoid race conditions
-	wait_for_backend_conns(admin, "ConnFree", 50, 1);
+	if(wait_for_backend_conns(admin, "ConnFree", 50, 5)) {
+		// Timeout exceeded. wait_for_backend_conns() failed.
+		std::string q0 =
+			(const std::string)"mysql -h " + cl.host + (const std::string)" -u " + cl.admin_username +
+			" -p" + cl.admin_password + " -P " + std::to_string(cl.admin_port) + " -t -e " +
+			"\"SELECT hostgroup, srv_host, srv_port, status, ConnUsed, ConnFree, ConnOK, ConnERR, MaxConnUsed, Queries"
+			" FROM stats_mysql_connection_pool\"";
+		system(q0.c_str());
+	}
 
 	// Check there are 'N' backend connections
 	uint32_t cur_free_conns = 0;
