@@ -5684,15 +5684,15 @@ handler_again:
 __exit_DSS__STATE_NOT_INITIALIZED:
 
 
-	if (mybe && mybe->server_myds) {
-	if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
 #ifdef DEBUG
-		MySQL_Data_Stream *myds=mybe->server_myds;
-		MySQL_Connection *myconn=mybe->server_myds->myconn;
+	if (mybe && mybe->server_myds) {
+		if (mybe->server_myds->DSS > STATE_MARIADB_BEGIN && mybe->server_myds->DSS < STATE_MARIADB_END) {
+			MySQL_Data_Stream *myds=mybe->server_myds;
+			MySQL_Connection *myconn=mybe->server_myds->myconn;
+			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
+		}
+	}
 #endif /* DEBUG */
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Sess=%p, status=%d, server_myds->DSS==%d , revents==%d , async_state_machine=%d\n", this, status, mybe->server_myds->DSS, myds->revents, myconn->async_state_machine);
-	}
-	}
 
 	writeout();
 
@@ -5750,74 +5750,6 @@ bool MySQL_Session::handler_again___multiple_statuses(int *rc) {
 	}
 	return ret;
 }
-
-/*
-void MySQL_Session::handler___status_CHANGING_USER_CLIENT___STATE_CLIENT_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
-	// FIXME: no support for SSL yet
-	if (
-		client_myds->myprot.process_pkt_auth_swich_response((unsigned char *)pkt->ptr,pkt->size)==true
-	) {
-		l_free(pkt->size,pkt->ptr);
-		proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Successful connection\n", this, client_myds);
-		client_myds->myprot.generate_pkt_OK(true,NULL,NULL,2,0,0,0,0,NULL);
-		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_CHANGE_USER_OK, this, NULL);
-		status=WAITING_CLIENT_DATA;
-		client_myds->DSS=STATE_SLEEP;
-	} else {
-		l_free(pkt->size,pkt->ptr);
-		*wrong_pass=true;
-		// FIXME: this should become close connection
-		client_myds->setDSS_STATE_QUERY_SENT_NET();
-		char *client_addr=NULL;
-		if (client_myds->client_addr) {
-			char buf[512];
-			switch (client_myds->client_addr->sa_family) {
-				case AF_INET: {
-					struct sockaddr_in *ipv4 = (struct sockaddr_in *)client_myds->client_addr;
-					if (ipv4->sin_port) {
-						inet_ntop(client_myds->client_addr->sa_family, &ipv4->sin_addr, buf, INET_ADDRSTRLEN);
-						client_addr = strdup(buf);
-					} else {
-						client_addr = strdup((char *)"localhost");
-					}
-					break;
-				}
-				case AF_INET6: {
-					struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)client_myds->client_addr;
-					inet_ntop(client_myds->client_addr->sa_family, &ipv6->sin6_addr, buf, INET6_ADDRSTRLEN);
-					client_addr = strdup(buf);
-					break;
-				}
-				default:
-					client_addr = strdup((char *)"localhost");
-					break;
-			}
-		} else {
-			client_addr = strdup((char *)"");
-		}
-		char *_s=(char *)malloc(strlen(client_myds->myconn->userinfo->username)+100+strlen(client_addr));
-		sprintf(_s,"ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		proxy_error("ProxySQL Error: Access denied for user '%s'@'%s' (using password: %s)", client_myds->myconn->userinfo->username, client_addr, (client_myds->myconn->userinfo->password ? "YES" : "NO"));
-		client_myds->myprot.generate_pkt_ERR(true,NULL,NULL,2,1045,(char *)"28000", _s, true);
-#ifdef DEBUG
-		if (client_myds->myconn->userinfo->password) {
-			char *tmp_pass=strdup(client_myds->myconn->userinfo->password);
-			int lpass = strlen(tmp_pass);
-			for (int i=2; i<lpass-1; i++) {
-				tmp_pass[i]='*';
-			}
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Wrong credentials for frontend: %s:%s . Password=%s . Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr, tmp_pass);
-			free(tmp_pass);
-		} else {
-			proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session=%p , DS=%p . Wrong credentials for frontend: %s:%s . No password. Disconnecting\n", this, client_myds, client_myds->myconn->userinfo->username, client_addr);
-		}
-#endif //DEBUG
-		GloMyLogger->log_audit_entry(PROXYSQL_MYSQL_CHANGE_USER_ERR, this, NULL);
-		free(_s);
-		__sync_fetch_and_add(&MyHGM->status.access_denied_wrong_password, 1);
-	}
-}
-*/
 
 void MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE(PtrSize_t *pkt, bool *wrong_pass) {
 	bool is_encrypted = client_myds->encrypted;
