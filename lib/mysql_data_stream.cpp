@@ -691,6 +691,7 @@ int MySQL_Data_Stream::read_from_net() {
 		if (encrypted==false) {
 			int myds_errno=errno;
 			if (r==0 || (r==-1 && myds_errno != EINTR && myds_errno != EAGAIN)) {
+				proxy_debug(PROXY_DEBUG_NET, 5, "Session=%p: 'read' returned with '%d' bytes and errno '%d'\n", sess, r, myds_errno);
 				shut_soft();
 			}
 		} else {
@@ -1001,6 +1002,10 @@ int MySQL_Data_Stream::buffer2array() {
 		if (pkts_recv==0) { pkts_recv=1; }
 		queueIN.pkt.size=queue_data(queueIN);
 		ret=queueIN.pkt.size;
+		proxy_debug(
+			PROXY_DEBUG_PKT_ARRAY, 5, "Copying recv %d bytes for fast-forward Session=%p\n",
+			queueIN.pkt.size, sess
+		);
 		if (ret >= RESULTSET_BUFLEN_DS_16K) {
 			// legacy approach
 			queueIN.pkt.ptr=l_alloc(queueIN.pkt.size);
