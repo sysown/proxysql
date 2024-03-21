@@ -32,6 +32,7 @@
 #include "MySQL_Logger.hpp"
 #include "SQLite3_Server.h"
 #include "Web_Interface.hpp"
+#include "sqlite3exts.h"
 
 #include <dirent.h>
 #include <search.h>
@@ -6466,6 +6467,14 @@ bool ProxySQL_Admin::init(const bootstrap_info_t& bootstrap_info) {
 	admindb=new SQLite3DB();
 	admindb->open((char *)"file:mem_admindb?mode=memory&cache=shared", SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX);
 	admindb->execute("PRAGMA cache_size = -50000");
+
+	// Initialize Admin SQLite3 extension functions
+	char* ext_err = nullptr;
+	int ext_rc = sqlite3_extensions_init(admindb->get_db(), &ext_err, nullptr);
+	if (ext_rc != SQLITE_OK) {
+		proxy_error("SQLite3 extensions init failed with error '%s'\n", ext_err);
+	}
+
 	//sqlite3_enable_load_extension(admindb->get_db(),1);
 	//sqlite3_auto_extension( (void(*)(void))sqlite3_json_init);
 	statsdb=new SQLite3DB();
