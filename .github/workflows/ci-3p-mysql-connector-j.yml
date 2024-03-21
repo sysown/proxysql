@@ -22,7 +22,8 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB: ${{ matrix.infradb }}
-      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
+#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_bin
+      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_bin
       BASELINE: ${{ vars[format('BASELINE_3P_MYSQL_CONNECTOR_J_{0}', matrix.infradb)] }}
 
     steps:

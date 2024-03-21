@@ -15,13 +15,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        testdist: [ 'ubuntu22' ]
+        testdist: [ 'ubuntu22-tap-asan' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57' ]
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}-tap_matrix
+#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_matrix
+      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_matrix
 
     steps:
 
@@ -79,10 +80,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        testdist: [ 'ubuntu22-tap-asan' ]
+#        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
+        infradb: [ 'mysql57' ]
 #        testgroup: [ '.*admin.*-t|.*basic.*-t|.*charset.*-t|.*firewall.*-t|.*kill.*-t|.*max.*-t', 'multiple.*-t', '.*mysql.*-t', '.*prepare.*-t', 'reg_test.*-t', 'save.*-t', '.*set.*-t', '.*sqlite.*-t', '.*ssl.*-t', 'test_.*-t' ]
 #        testgroup: [ '' ]
 #        testgroup: [ 'kill_connection3-t', 'reg_test_3847_admin_lock-t', 'set_testing-240-t', 'max_connections_ff-t', 'test_server_sess_status-t' ]
         testgroup: ${{ fromJson(needs.select.outputs.matrix) }}
+    env:
+      TESTDIST: ${{ matrix.testdist }}
+      INFRADB:  ${{ matrix.infradb }}
+#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}
+      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}
+
     steps:
 
 #    - name: Maximize build space
@@ -120,7 +130,7 @@ jobs:
       id: cache-src
       uses: actions/cache/restore@v4
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap-asan_src
+        key: ${{ env.BLDCACHE }}_src
         fail-on-cache-miss: true
         path: |
           proxysql/src/
@@ -129,7 +139,7 @@ jobs:
       id: cache-test
       uses: actions/cache/restore@v4
       with:
-        key: CI-builds_${{ github.sha }}_ubuntu22-tap-asan_test
+        key: ${{ env.BLDCACHE }}_test
         fail-on-cache-miss: true
         path: |
           proxysql/test/

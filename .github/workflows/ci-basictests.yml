@@ -17,7 +17,8 @@ jobs:
     env:
       TESTDIST: ${{ matrix.testdist }}
       INFRADB:  ${{ matrix.infradb }}
-      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}-tap_src
+#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.testdist }}_src
+      BLDCACHE: ${{ github.sha }}_${{ matrix.testdist }}_src
 
     steps:
     

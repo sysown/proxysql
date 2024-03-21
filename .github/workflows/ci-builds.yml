@@ -40,8 +40,8 @@ jobs:
   builds:
     runs-on: ubuntu-22.04
 #    needs: [ lock ]
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
+#    outputs:
+#      matrix: ${{ steps.set-matrix.outputs.matrix }}
     strategy:
       fail-fast: false
       matrix:
