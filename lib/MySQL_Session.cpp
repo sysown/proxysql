@@ -2299,25 +2299,57 @@ bool MySQL_Session::handler_again___verify_backend_multi_statement() {
 		else
 			mybe->server_myds->myconn->options.client_flag &= ~CLIENT_MULTI_STATEMENTS;
 
-		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-				case PROCESSING_STMT_PREPARE:
-			previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-				case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
+		// Sets the previous status of the MySQL session according to the current status.
+		set_previous_status_mode3();
 		NEXT_IMMEDIATE_NEW(SETTING_MULTI_STMT);
 	}
 	return false;
+}
+
+/**
+ * @brief Sets the previous status of the MySQL session according to the current status, with an option to allow EXECUTE statements.
+ *
+ * This method updates the previous status of the MySQL session based on its current status. It employs a switch statement
+ * to determine the current status and then pushes the corresponding status value onto the `previous_status` stack. If the
+ * `allow_execute` parameter is set to true and the current status is `PROCESSING_STMT_EXECUTE`, the method pushes this status
+ * onto the stack; otherwise, it skips pushing the status for EXECUTE statements. If the current status does not match any known
+ * status value (which should not occur under normal circumstances), the method asserts to indicate a programming error.
+ * It currently works with only 3 possible status:
+ * - PROCESSING_QUERY
+ * - PROCESSING_STMT_PREPARE
+ * - PROCESSING_STMT_EXECUTE
+ *
+ * @param allow_execute A boolean value indicating whether to allow the status of EXECUTE statements to be pushed onto the
+ * `previous_status` stack. If set to true, the method will include EXECUTE statements in the session's status history.
+ *
+ * @return void.
+ * @note This method assumes that the `status` member variable has been properly initialized with one of the predefined
+ * status values.
+ * @note This method is primarily used to maintain a history of the session's previous states for later reference or
+ * recovery purposes.
+ * @note The LCOV_EXCL_START and LCOV_EXCL_STOP directives are used to exclude the assert statement from code coverage
+ * analysis because the condition should not occur during normal execution and is included as a safeguard against
+ * programming errors.
+ */
+void MySQL_Session::set_previous_status_mode3(bool allow_execute) {
+	switch(status) {
+		case PROCESSING_QUERY:
+			previous_status.push(PROCESSING_QUERY);
+			break;
+		case PROCESSING_STMT_PREPARE:
+			previous_status.push(PROCESSING_STMT_PREPARE);
+			break;
+		case PROCESSING_STMT_EXECUTE:
+			if (allow_execute == true) {
+				previous_status.push(PROCESSING_STMT_EXECUTE);
+				break;
+			}
+		default:
+			// LCOV_EXCL_START
+			assert(0); // Assert to indicate an unexpected status value
+			break;
+			// LCOV_EXCL_STOP
+	}
 }
 
 /**
@@ -2347,22 +2379,8 @@ bool MySQL_Session::handler_again___verify_init_connect() {
 		if (tmp_init_connect) {
 			// we send init connect queries only if set
 			mybe->server_myds->myconn->options.init_connect=strdup(tmp_init_connect);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(SETTING_INIT_CONNECT);
 		}
 	}
@@ -2433,18 +2451,8 @@ bool MySQL_Session::handler_again___verify_backend_session_track_gtids() {
 		mybe->server_myds->myconn->options.session_track_gtids_int =
 			SpookyHash::Hash32((char *)"OWN_GTID", strlen((char *)"OWN_GTID"), 10);
 		// we now switch status to set session_track_gtids
-		switch(status) {
-			case PROCESSING_QUERY:
-			case PROCESSING_STMT_PREPARE:
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(status);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
+		// Sets the previous status of the MySQL session according to the current status.
+		set_previous_status_mode3();
 		NEXT_IMMEDIATE_NEW(SETTING_SESSION_TRACK_GTIDS);
 	}
 	return ret;
@@ -2499,22 +2507,8 @@ bool MySQL_Session::handler_again___verify_ldap_user_variable() {
 		if (mysql_thread___ldap_user_variable) {
 			// we send ldap user variable  query only if set
 			mybe->server_myds->myconn->options.ldap_user_variable=strdup(mysql_thread___ldap_user_variable);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(SETTING_LDAP_USER_VARIABLE);
 		}
 	}
@@ -2549,44 +2543,14 @@ bool MySQL_Session::handler_again___verify_backend_autocommit() {
 			// enforce_autocommit_on_reads is disabled
 			// we need to check if it is a SELECT not FOR UPDATE
 			if (CurrentQuery.is_select_NOT_for_update()==false) {
-				//previous_status.push(PROCESSING_QUERY);
-				switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-					case PROCESSING_QUERY:
-						previous_status.push(PROCESSING_QUERY);
-						break;
-					case PROCESSING_STMT_PREPARE:
-						previous_status.push(PROCESSING_STMT_PREPARE);
-						break;
-					case PROCESSING_STMT_EXECUTE:
-						previous_status.push(PROCESSING_STMT_EXECUTE);
-						break;
-					default:
-						// LCOV_EXCL_START
-						assert(0);
-						break;
-						// LCOV_EXCL_STOP
-				}
+				// Sets the previous status of the MySQL session according to the current status.
+				set_previous_status_mode3();
 				NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 			}
 		} else {
 			// in every other cases, enforce autocommit
-			//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(CHANGING_AUTOCOMMIT);
 		}
 	} else {
@@ -2633,44 +2597,14 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , client: %s , backend: %s\n", this, client_myds->myconn->userinfo->schemaname, mybe->server_myds->myconn->userinfo->schemaname);
 	if (client_myds->myconn->userinfo->hash!=mybe->server_myds->myconn->userinfo->hash) {
 		if (strcmp(client_myds->myconn->userinfo->username,myds->myconn->userinfo->username)) {
-			//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
 			NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
 		}
 		if (strcmp(client_myds->myconn->userinfo->schemaname,myds->myconn->userinfo->schemaname)) {
-			//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			NEXT_IMMEDIATE_NEW(CHANGING_SCHEMA);
 		}
 	}
@@ -2680,18 +2614,9 @@ bool MySQL_Session::handler_again___verify_backend_user_schema() {
 		// the backend connection has some session variable set
 		// that the client never asked for
 		// because we can't unset variables, we will reset the connection
-		switch(status) {
-			case PROCESSING_QUERY:
-			case PROCESSING_STMT_PREPARE:
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(status);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
+
+		// Sets the previous status of the MySQL session according to the current status.
+		set_previous_status_mode3();
 		mybe->server_myds->wait_until = thread->curtime + mysql_thread___connect_timeout_server*1000;   // max_timeout
 		NEXT_IMMEDIATE_NEW(CHANGING_USER_SERVER);
 	}
@@ -4759,23 +4684,8 @@ int MySQL_Session::handler_ProcessingQueryError_CheckBackendConnectionStatus(MyS
 		myds->fd=0;
 		if (retry_conn) {
 			myds->DSS=STATE_NOT_INITIALIZED;
-			//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				case PROCESSING_STMT_EXECUTE:
-					previous_status.push(PROCESSING_STMT_EXECUTE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-			}
+			// Sets the previous status of the MySQL session according to the current status.
+			set_previous_status_mode3();
 			return 1;
 		}
 		return -1;
@@ -4943,23 +4853,8 @@ bool MySQL_Session::handler_minus1_ClientLibraryError(MySQL_Data_Stream *myds, i
 	myds->fd=0;
 	if (retry_conn) {
 		myds->DSS=STATE_NOT_INITIALIZED;
-		//previous_status.push(PROCESSING_QUERY);
-		switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-			case PROCESSING_QUERY:
-				previous_status.push(PROCESSING_QUERY);
-				break;
-			case PROCESSING_STMT_PREPARE:
-				previous_status.push(PROCESSING_STMT_PREPARE);
-				break;
-			case PROCESSING_STMT_EXECUTE:
-				previous_status.push(PROCESSING_STMT_EXECUTE);
-				break;
-			default:
-				// LCOV_EXCL_START
-				assert(0);
-				break;
-				// LCOV_EXCL_STOP
-		}
+		// Sets the previous status of the MySQL session according to the current status.
+		set_previous_status_mode3();
 		if (*errmsg) {
 			free(*errmsg);
 			*errmsg = NULL;
@@ -5033,20 +4928,8 @@ bool MySQL_Session::handler_minus1_HandleErrorCodes(MySQL_Data_Stream *myds, int
 			myds->fd=0;
 			if (retry_conn) {
 				myds->DSS=STATE_NOT_INITIALIZED;
-				//previous_status.push(PROCESSING_QUERY);
-			switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-				case PROCESSING_QUERY:
-					previous_status.push(PROCESSING_QUERY);
-					break;
-				case PROCESSING_STMT_PREPARE:
-					previous_status.push(PROCESSING_STMT_PREPARE);
-					break;
-				default:
-					// LCOV_EXCL_START
-					assert(0);
-					break;
-					// LCOV_EXCL_STOP
-				}
+				// Sets the previous status of the MySQL session according to the current status.
+				set_previous_status_mode3(false);
 				if (*errmsg) {
 					free(*errmsg);
 					*errmsg = NULL;
@@ -5405,22 +5288,8 @@ handler_again:
 			if (mybe->server_myds->DSS==STATE_NOT_INITIALIZED) {
 				// we don't have a backend yet
 				// It saves the current processing status of the session (status) onto the previous_status stack
-				switch(status) { // this switch can be replaced with a simple previous_status.push(status), but it is here for readibility
-					case PROCESSING_QUERY:
-						previous_status.push(PROCESSING_QUERY);
-						break;
-					case PROCESSING_STMT_PREPARE:
-						previous_status.push(PROCESSING_STMT_PREPARE);
-						break;
-					case PROCESSING_STMT_EXECUTE:
-						previous_status.push(PROCESSING_STMT_EXECUTE);
-						break;
-					default:
-						// LCOV_EXCL_START
-						assert(0);
-						break;
-						// LCOV_EXCL_STOP
-				}
+				// Sets the previous status of the MySQL session according to the current status.
+				set_previous_status_mode3();
 				// It transitions the session to the CONNECTING_SERVER state immediately.
 				NEXT_IMMEDIATE(CONNECTING_SERVER);
 			} else {

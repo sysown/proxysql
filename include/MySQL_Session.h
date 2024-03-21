@@ -434,6 +434,8 @@ class MySQL_Session
 	void generate_status_one_hostgroup(int hid, std::string& s);
 	void reset_warning_hostgroup_flag_and_release_connection();
 	friend void SQLite3_Server_session_handler(MySQL_Session *sess, void *_pa, PtrSize_t *pkt);
+
+	void set_previous_status_mode3(bool allow_execute=true);
 };
 
 #define KILL_QUERY       1
