@@ -68,7 +68,8 @@ jobs:
 #          - dist: 'ubuntu22'
 #            type: '-clang-tap-asan'
     env:
-      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
+#      BLDCACHE: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}
+      BLDCACHE: ${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}
 
     steps:
 
@@ -76,7 +77,7 @@ jobs:
       id: cache-check
       uses: actions/cache/restore@v4
       with:
-        key: ${{ env.BLDCACHE }}
+        key: ${{ env.BLDCACHE }}_bin
         lookup-only: true
         path: |
           proxysql/binaries/
@@ -153,7 +154,7 @@ jobs:
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' }}
       uses: actions/cache/save@v4
       with:
-        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_bin
+        key: ${{ env.BLDCACHE }}_bin
         path: |
           proxysql/binaries/
 
@@ -162,7 +163,7 @@ jobs:
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
-        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_src
+        key: ${{ env.BLDCACHE }}_src
         path: |
           proxysql/src/
 
@@ -171,7 +172,7 @@ jobs:
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
-        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_test
+        key: ${{ env.BLDCACHE }}_test
         path: |
           proxysql/test/
 
@@ -180,7 +181,7 @@ jobs:
       if: ${{ success() && steps.cache-check.outputs.cache-hit != 'true' && contains(matrix.type,'-tap') }}
       uses: actions/cache/save@v4
       with:
-        key: CI-builds_${{ github.sha }}_${{ matrix.dist }}${{ matrix.type }}_matrix
+        key: ${{ env.BLDCACHE }}_matrix
         path: |
           proxysql/tap-matrix*
 
