@@ -1,3 +1,9 @@
+/**
+ * @file MySQL_Session.h
+ * @brief Declaration of the MySQL_Session class and associated types and enums.
+ */
+
+
 #ifndef __CLASS_MYSQL_SESSION_H
 #define __CLASS_MYSQL_SESSION_H
 
@@ -13,6 +19,10 @@ using json = nlohmann::json;
 
 extern class MySQL_Variables mysql_variables;
 
+/**
+ * @enum proxysql_session_type
+ * @brief Defines the types of ProxySQL sessions.
+ */
 enum proxysql_session_type {
 	PROXYSQL_SESSION_MYSQL,
 	PROXYSQL_SESSION_ADMIN,
@@ -24,6 +34,10 @@ enum proxysql_session_type {
 	PROXYSQL_SESSION_NONE
 };
 
+/**
+ * @enum ps_type
+ * @brief Defines types for prepared statement handling.
+ */
 enum ps_type : uint8_t {
 	ps_type_not_set = 0x0,
 	ps_type_prepare_stmt = 0x1,
@@ -32,9 +46,14 @@ enum ps_type : uint8_t {
 
 std::string proxysql_session_type_str(enum proxysql_session_type session_type);
 
-// these structs will be used for various regex hardcoded
-// their initial use will be for sql_log_bin , sql_mode and time_zone
-// issues #509 , #815 and #816
+/**
+ * @class Session_Regex
+ * @brief Encapsulates regex operations for session handling.
+ *
+ * This class is used for matching patterns in SQL queries, specifically for
+ * settings like sql_log_bin, sql_mode, and time_zone.
+ * See issues #509 , #815 and #816
+ */
 class Session_Regex {
 	private:
 	void *opt;
@@ -46,6 +65,13 @@ class Session_Regex {
 	bool match(char *m);
 };
 
+/**
+ * @class Query_Info
+ * @brief Holds information about a SQL query within a session.
+ *
+ * This class encapsulates various details about a query such as its text,
+ * execution times, affected rows, and more, to facilitate query processing and logging.
+ */
 class Query_Info {
 	public:
 	SQP_par_t QueryParserArgs;
@@ -84,6 +110,13 @@ class Query_Info {
 	bool is_select_NOT_for_update();
 };
 
+/**
+ * @class MySQL_Session
+ * @brief Manages a client session, including query parsing, backend connections, and state transitions.
+ *
+ * This class is central to ProxySQL's handling of client connections. It manages the lifecycle
+ * of a session, processes queries, and communicates with backend MySQL servers.
+ */
 class MySQL_Session
 {
 	private:
