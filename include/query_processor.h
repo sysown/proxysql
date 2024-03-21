@@ -73,6 +73,7 @@ class QP_query_digest_stats {
 struct _Query_Processor_rule_t {
 	int rule_id;
 	bool active;
+	bool switch_to_fast_forward;
 	char *username;
 	char *schemaname;
 	int flagIN;
@@ -145,6 +146,7 @@ class Query_Processor_Output {
 	char *comment; // #643
 	char *min_gtid;
 	bool create_new_conn;
+	bool switch_to_fast_forward;
 	std::string *new_query;
 	void * operator new(size_t size) {
 		return l_alloc(size);
