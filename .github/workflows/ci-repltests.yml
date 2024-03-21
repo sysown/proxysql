@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        testdist: [ 'ubuntu22' ]
+        testdist: [ 'ubuntu22-tap' ]
 #        infradb: [ 'mysql57', 'mysql80', 'mysql81', 'mysql82', 'mariadb10', 'mariadb11' ]
         infradb: [ 'mysql57' ]
     env:
