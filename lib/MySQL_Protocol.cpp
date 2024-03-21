@@ -2979,6 +2979,7 @@ bool MySQL_Protocol::generate_COM_QUERY_from_COM_FIELD_LIST(PtrSize_t *pkt) {
 
 MySQL_ResultSet::MySQL_ResultSet() {
 	buffer = NULL;
+	nTrx = -1;
 	//reset_pid = true;
 }
 
@@ -2993,6 +2994,7 @@ void MySQL_ResultSet::buffer_init(MySQL_Protocol* myproto) {
 
 void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my, MYSQL_STMT *_stmt) {
 	PROXY_TRACE2();
+	nTrx = -1;
 	transfer_started=false;
 	resultset_completed=false;
 	myprot=_myprot;
@@ -3055,7 +3057,9 @@ void MySQL_ResultSet::init(MySQL_Protocol *_myprot, MYSQL_RES *_res, MYSQL *_my,
 	deprecate_eof_active = c_myds->myconn && (c_myds->myconn->options.client_flag & CLIENT_DEPRECATE_EOF);
 
 	// first EOF
-	unsigned int nTrx=myds->sess->NumActiveTransactions();
+	if (nTrx == -1) { // not initialized yet
+		nTrx=myds->sess->NumActiveTransactions();
+	}
 	uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 	if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 	setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit
@@ -3102,6 +3106,7 @@ void MySQL_ResultSet::remove_last_eof() {
 void MySQL_ResultSet::init_with_stmt(MySQL_Connection *myconn) {
 	PROXY_TRACE2();
 	assert(stmt);
+	nTrx = -1;
 	MYSQL_STMT *_stmt = stmt;
 	MySQL_Data_Stream * c_myds = *(myprot->myds);
 		buffer_to_PSarrayOut();
@@ -3341,7 +3346,9 @@ unsigned int MySQL_ResultSet::add_row2(MYSQL_ROWS *row, unsigned char *offset) {
 
 void MySQL_ResultSet::add_eof(bool suppress_warning_count) {
 	if (myprot) {
-		unsigned int nTrx=myds->sess->NumActiveTransactions();
+		if (nTrx == -1) { // not initialized yet
+			nTrx=myds->sess->NumActiveTransactions();
+		}
 		uint16_t setStatus = (nTrx ? SERVER_STATUS_IN_TRANS : 0 );
 		if (myds->sess->autocommit) setStatus += SERVER_STATUS_AUTOCOMMIT;
 		setStatus |= ( mysql->server_status & ~SERVER_STATUS_AUTOCOMMIT ); // get flags from server_status but ignore autocommit

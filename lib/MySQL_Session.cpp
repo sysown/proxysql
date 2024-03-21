@@ -782,6 +782,7 @@ void MySQL_Session::update_expired_conns(const vector<function<bool(MySQL_Connec
 			}
 		}
 	}
+	hgs_expired_conns_cnt = hgs_expired_conns.size();
 }
 
 MySQL_Backend * MySQL_Session::create_backend(int hostgroup_id, MySQL_Data_Stream *_myds) {
@@ -4865,6 +4866,7 @@ void MySQL_Session::housekeeping_before_pkts() {
 		if (hgs_expired_conns.empty() == false) {
 			hgs_expired_conns.clear();
 		}
+		hgs_expired_conns_cnt = hgs_expired_conns.size();
 	}
 }
 
@@ -4912,7 +4914,9 @@ int MySQL_Session::handler() {
 	}
 	}
 
-	housekeeping_before_pkts();
+	if (unlikely(hgs_expired_conns_cnt != 0)) {
+		housekeeping_before_pkts();
+	}
 	handler_ret = get_pkts_from_client(wrong_pass, pkt);
 	if (handler_ret != 0) {
 		return handler_ret;
@@ -5029,19 +5033,24 @@ handler_again:
 				MySQL_Data_Stream *myds=mybe->server_myds;
 				MySQL_Connection *myconn=myds->myconn;
 				mybe->server_myds->max_connect_time=0;
+				MySQL_Connection *client_myconn = client_myds->myconn;
 				// we insert it in mypolls only if not already there
 				if (myds->mypolls==NULL) {
 					thread->mypolls.add(POLLIN|POLLOUT, mybe->server_myds->fd, mybe->server_myds, thread->curtime);
 				}
 				if (default_hostgroup>=0) {
-					if (handler_again___verify_backend_user_schema()) {
-						goto handler_again;
+					if (mybe->server_myds->DSS != STATE_MARIADB_QUERY) { // probably this should be: if (mybe->server_myds->DSS == STATE_READY || mybe->server_myds->DSS == STATE_MARIADB_GENERIC) {
+						if (handler_again___verify_backend_user_schema()) {
+							goto handler_again;
+						}
 					}
 					if (mirror==false) { // do not care about autocommit and charset if mirror
 							proxy_debug(PROXY_DEBUG_MYSQL_CONNECTION, 5, "Session %p , default_HG=%d server_myds DSS=%d , locked_on_HG=%d\n", this, default_hostgroup, mybe->server_myds->DSS, locked_on_hostgroup);
 						if (mybe->server_myds->DSS == STATE_READY || mybe->server_myds->DSS == STATE_MARIADB_GENERIC) {
-							if (handler_again___verify_init_connect()) {
-								goto handler_again;
+							if (unlikely(myconn->options.init_connect_sent==false)) { // micro-optimization. Perform this check outside handler_again___verify_init_connect()
+								if (handler_again___verify_init_connect()) {
+									goto handler_again;
+								}
 							}
 							if (use_ldap_auth) {
 								if (handler_again___verify_ldap_user_variable()) {
@@ -5053,8 +5062,10 @@ handler_again:
 							}
 							if (locked_on_hostgroup == -1 || locked_on_hostgroup_and_all_variables_set == false ) {
 
-								if (handler_again___verify_backend_multi_statement()) {
-									goto handler_again;
+								if (unlikely((client_myconn->options.client_flag & CLIENT_MULTI_STATEMENTS) != (myconn->options.client_flag & CLIENT_MULTI_STATEMENTS))) { // micro-optimization. Perform this check outside handler_again___verify_backend_multi_statement
+									if (handler_again___verify_backend_multi_statement()) {
+										goto handler_again;
+									}
 								}
 
 								if (handler_again___verify_backend_session_track_gtids()) {
@@ -5066,8 +5077,26 @@ handler_again:
 									goto handler_again;
 								}
 
+/*
+								// Since all variables below SQL_NAME_LAST_LOW_WM
+								// are related to charset, this section of the code is
+								// redundant because verify_set_names() takes care of it.
+								bool SQL_NAME_LAST_LOW_WM_matches = true;
+								// this is a "fast" version of the extensive check that follows
+								for (auto i = 0; i < SQL_NAME_LAST_LOW_WM && SQL_NAME_LAST_LOW_WM_matches == true; i++) {
+									if (i == SQL_CHARACTER_ACTION) {
+										if (client_myconn->var_hash[i] != myconn->var_hash[i]) {
+											SQL_NAME_LAST_LOW_WM_matches = false;
+										}
+									}
+								}
+								if (SQL_NAME_LAST_LOW_WM_matches == false) {
 								for (auto i = 0; i < SQL_NAME_LAST_LOW_WM; i++) {
-									auto client_hash = client_myds->myconn->var_hash[i];
+									auto client_hash = client_myconn->var_hash[i];
+									if (i == SQL_CHARACTER_ACTION) {
+										// SQL_CHARACTER_ACTION has no meaning for the backend
+										continue;
+									}
 #ifdef DEBUG
 									if (GloVars.global.gdbg) {
 										switch (i) {
@@ -5092,11 +5121,12 @@ handler_again:
 										}
 									}
 								}
-								MySQL_Connection *c_con = client_myds->myconn;
-								vector<uint32_t>::const_iterator it_c = c_con->dynamic_variables_idx.begin();  // client connection iterator
-								for ( ; it_c != c_con->dynamic_variables_idx.end() ; it_c++) {
+								}
+*/
+								vector<uint32_t>::const_iterator it_c = client_myconn->dynamic_variables_idx.begin();  // client connection iterator
+								for ( ; it_c != client_myconn->dynamic_variables_idx.end() ; it_c++) {
 									auto i = *it_c;
-									auto client_hash = c_con->var_hash[i];
+									auto client_hash = client_myconn->var_hash[i];
 									auto server_hash = myconn->var_hash[i];
 									if (client_hash != server_hash) {
 										if(
