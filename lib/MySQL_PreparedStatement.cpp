@@ -418,7 +418,13 @@ void MySQL_STMT_Global_info::update_metadata(MYSQL_STMT *stmt) {
 		}
 	}
 	if (need_refresh) {
-		proxy_warning("Updating metadata for stmt %lu , user %s, query %s\n", statement_id, username, query);
+		std::string s(query);
+		std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+		if (s.rfind("EXPLAIN", 0) == 0) {
+			proxy_info("Updating metadata for stmt %lu , user %s, query %s\n", statement_id, username, query);
+		} else {
+			proxy_info("Updating metadata for stmt %lu , user %s, query %s\n", statement_id, username, query);
+		}
 // from here is copied from destructor
 		if (num_columns) {
 			uint16_t i;
