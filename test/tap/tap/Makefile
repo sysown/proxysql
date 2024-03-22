@@ -85,7 +85,7 @@ tap.o: tap.cpp cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a libcurl.so libssl.so
 	$(CXX) -fPIC -c tap.cpp $(IDIRS) $(OPT)
 
 libtap.a: tap.o command_line.o utils.o cpp-dotenv/static/cpp-dotenv/libcpp_dotenv.a
-	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o
+	ar rcs libtap.a tap.o command_line.o utils.o $(SQLITE3_LDIR)/sqlite3.o $(PROXYSQL_LDIR)/obj/sha256crypt.oo
 
 libtap.so: libtap.a cpp-dotenv/dynamic/cpp-dotenv/libcpp_dotenv.so
 	$(CXX) -shared -o libtap.so -Wl,--whole-archive libtap.a -Wl,--no-whole-archive
