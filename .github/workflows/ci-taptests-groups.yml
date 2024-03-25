@@ -209,6 +209,7 @@ jobs:
         rm -f test_server_sess_status-t
         rm -f test_session_status_flags-t
         rm -f test_auth_methods-t
+        rm -f test_sqlite3_pass_exts-t
 
         # FAIL
         #rm -f test_mysql_connect_retries-t
