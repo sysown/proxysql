@@ -1584,16 +1584,43 @@ int MySQL_HostGroups_Manager::servers_add(SQLite3_result *resultset) {
 	return 0;
 }
 
+/**
+ * @brief Execute a SQL query and retrieve the resultset.
+ *
+ * This function executes a SQL query using the provided query string and returns the resultset obtained from the
+ * database operation. It also provides an optional error parameter to capture any error messages encountered during
+ * query execution.
+ *
+ * @param query A pointer to a null-terminated string containing the SQL query to be executed.
+ * @param error A pointer to a char pointer where any error message encountered during query execution will be stored.
+ *              Pass nullptr if error handling is not required.
+ * @return A pointer to a SQLite3_result object representing the resultset obtained from the query execution. This
+ *         pointer may be nullptr if the query execution fails or returns an empty result.
+ */
 SQLite3_result * MySQL_HostGroups_Manager::execute_query(char *query, char **error) {
 	int cols=0;
 	int affected_rows=0;
 	SQLite3_result *resultset=NULL;
 	wrlock();
-  mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
+	mydb->execute_statement(query, error , &cols , &affected_rows , &resultset);
 	wrunlock();
 	return resultset;
 }
 
+/**
+ * @brief Calculate and update the checksum for a specified table in the database.
+ *
+ * This function calculates the checksum for a specified table in the database using the provided SpookyHash object.
+ * The checksum is computed based on the table's contents, sorted by the specified column name. If the initialization
+ * flag is false, the SpookyHash object is initialized with predefined parameters. The calculated checksum is stored
+ * in the raw_checksum parameter.
+ *
+ * @param myhash A reference to the SpookyHash object used for calculating the checksum.
+ * @param init A reference to a boolean flag indicating whether the SpookyHash object has been initialized.
+ * @param TableName The name of the table for which the checksum is to be calculated.
+ * @param ColumnName The name of the column to be used for sorting the table before calculating the checksum.
+ * @param raw_checksum A reference to a uint64_t variable where the calculated checksum will be stored.
+ */
 void MySQL_HostGroups_Manager::CUCFT1(
 	SpookyHash& myhash, bool& init, const string& TableName, const string& ColumnName, uint64_t& raw_checksum
 ) {
@@ -1620,6 +1647,18 @@ void MySQL_HostGroups_Manager::CUCFT1(
 	}
 }
 
+/**
+ * @brief Compute and update checksum values for specified tables.
+ *
+ * This function computes checksum values for specified tables by executing checksum calculation queries for each table.
+ * It updates the checksum values in the `table_resultset_checksum` array.
+ *
+ * @param myhash A reference to a SpookyHash object used for computing the checksums.
+ * @param init A reference to a boolean flag indicating whether the checksum computation has been initialized.
+ * @note This function resets the current checksum values for all tables except MYSQL_SERVERS and MYSQL_SERVERS_V2
+ *       before recomputing the checksums.
+ * @note The computed checksum values are stored in the `table_resultset_checksum` array.
+ */
 void MySQL_HostGroups_Manager::commit_update_checksums_from_tables(SpookyHash& myhash, bool& init) {
 	// Always reset the current table values before recomputing
 	for (size_t i = 0; i < table_resultset_checksum.size(); i++) {
@@ -1836,6 +1875,18 @@ void update_glovars_mysql_servers_v2_checksum(
 	);
 }
 
+/**
+ * @brief Commit and update checksum from the MySQL servers.
+ *
+ * This function commits updates and calculates the checksum from the MySQL servers. It performs the following steps:
+ * 1. Deletes existing data from the 'mysql_servers' table.
+ * 2. Generates a new 'mysql_servers' table.
+ * 3. Saves the runtime MySQL servers data obtained from the provided result set or from the database if the result set is null.
+ * 4. Calculates the checksum of the runtime MySQL servers data and updates the checksum value in the 'table_resultset_checksum' array.
+ *
+ * @param runtime_mysql_servers A pointer to the result set containing runtime MySQL servers data.
+ * @return The raw checksum value calculated from the runtime MySQL servers data.
+ */
 uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers(SQLite3_result* runtime_mysql_servers) {
 	mydb->execute("DELETE FROM mysql_servers");
 	generate_mysql_servers_table();
@@ -1853,6 +1904,16 @@ uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers(SQL
 	return raw_checksum;
 }
 
+/**
+ * @brief Commit and update checksum from the MySQL servers V2.
+ *
+ * This function commits updates and calculates the checksum from the MySQL servers V2 data. It performs the following steps:
+ * 1. Saves the provided MySQL servers V2 data if not null, or retrieves and saves the data from the database.
+ * 2. Calculates the checksum of the MySQL servers V2 data and updates the checksum value in the 'table_resultset_checksum' array.
+ *
+ * @param mysql_servers_v2 A pointer to the result set containing MySQL servers V2 data.
+ * @return The raw checksum value calculated from the MySQL servers V2 data.
+ */
 uint64_t MySQL_HostGroups_Manager::commit_update_checksum_from_mysql_servers_v2(SQLite3_result* mysql_servers_v2) {
 	if (mysql_servers_v2 == nullptr) {
 		unique_ptr<SQLite3_result> resultset { get_mysql_servers_v2() };
@@ -2270,6 +2331,22 @@ uint64_t MySQL_HostGroups_Manager::get_mysql_servers_checksum(SQLite3_result* ru
 	return table_resultset_checksum[HGM_TABLES::MYSQL_SERVERS];
 }
 
+/**
+ * @brief Check if a GTID exists for a given MySQL server connection.
+ *
+ * This function checks whether a GTID (Global Transaction Identifier) exists for the specified MySQL server connection.
+ * It performs the following steps:
+ * 1. Acquires a read lock on the GTID read-write lock.
+ * 2. Constructs a string representation of the MySQL server address and port.
+ * 3. Searches for the GTID information associated with the MySQL server in the GTID map using the constructed string as the key.
+ * 4. If the GTID information is found and is active, it checks whether the specified GTID exists.
+ * 5. Releases the read lock on the GTID read-write lock.
+ *
+ * @param mysrvc A pointer to the MySQL server connection.
+ * @param gtid_uuid A pointer to the character array representing the GTID UUID.
+ * @param gtid_trxid The GTID transaction ID.
+ * @return True if the specified GTID exists for the MySQL server connection, false otherwise.
+ */
 bool MySQL_HostGroups_Manager::gtid_exists(MySrvC *mysrvc, char * gtid_uuid, uint64_t gtid_trxid) {
 	bool ret = false;
 	pthread_rwlock_rdlock(&gtid_rwlock);
@@ -2368,6 +2445,14 @@ void MySQL_HostGroups_Manager::generate_mysql_gtid_executed_tables() {
 	pthread_rwlock_unlock(&gtid_rwlock);
 }
 
+/**
+ * @brief Purge the MySQL servers table by removing offline hard servers with no active connections.
+ *
+ * This function iterates through each host group in the host groups manager and examines each server within the host group.
+ * For each server that is marked as offline hard and has no active connections (both used and free), it removes the server from the host group.
+ * After removing the server, it deletes the server object to free up memory.
+ * This process ensures that offline hard servers with no connections are properly removed from the MySQL servers table.
+ */
 void MySQL_HostGroups_Manager::purge_mysql_servers_table() {
 	for (unsigned int i=0; i<MyHostGroups->len; i++) {
 		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
@@ -2527,6 +2612,17 @@ void MySQL_HostGroups_Manager::generate_mysql_servers_table(int *_onlyhg) {
 	delete lst;
 }
 
+/**
+ * @brief Generate the mysql_replication_hostgroups table based on incoming data.
+ *
+ * This function populates the mysql_replication_hostgroups table in the host groups manager database
+ * using the incoming replication hostgroups data. It iterates through each row of the incoming data,
+ * constructs an SQL INSERT query to insert the data into the table, and executes the query.
+ * If verbose mode is enabled, it logs information about each row being processed.
+ *
+ * @note This function assumes that the incoming_replication_hostgroups member variable is not NULL.
+ *       If it is NULL, the function returns without performing any action.
+ */
 void MySQL_HostGroups_Manager::generate_mysql_replication_hostgroups_table() {
 	if (incoming_replication_hostgroups==NULL)
 		return;
@@ -2791,6 +2887,19 @@ void MySQL_HostGroups_Manager::update_table_mysql_servers_for_monitor(bool lock)
 	MySQL_Monitor::trigger_dns_cache_update();
 }
 
+/**
+ * @brief Dump data from a specified MySQL table.
+ *
+ * This function retrieves data from the specified MySQL table and returns it as a result set.
+ * The table name determines the SQL query to be executed to fetch the data. If the table is
+ * one of the predefined tables with special handling (e.g., mysql_servers), additional actions
+ * such as purging and generating the table may be performed before fetching the data.
+ *
+ * @param name The name of the MySQL table from which to dump data.
+ * @return A SQLite3_result pointer representing the result set containing the dumped data.
+ *         The caller is responsible for managing the memory of the result set.
+ * @note If the provided table name is not recognized, the function assertion fails.
+ */
 SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) {
 	char * query = (char *)"";
 	if (name == "mysql_aws_aurora_hostgroups") {
@@ -2830,12 +2939,30 @@ SQLite3_result * MySQL_HostGroups_Manager::dump_table_mysql(const string& name) 
 	return resultset;
 }
 
-
+/**
+ * @brief Create a new MySQL host group container.
+ *
+ * This function creates a new instance of the MySQL host group container (`MyHGC`) with
+ * the specified host group ID and returns a pointer to it.
+ *
+ * @param _hid The host group ID for the new container.
+ * @return A pointer to the newly created `MyHGC` instance.
+ */
 MyHGC * MySQL_HostGroups_Manager::MyHGC_create(unsigned int _hid) {
 	MyHGC *myhgc=new MyHGC(_hid);
 	return myhgc;
 }
 
+/**
+ * @brief Find a MySQL host group container by host group ID.
+ *
+ * This function searches for a MySQL host group container with the specified host group ID
+ * in the list of host groups. If found, it returns a pointer to the container; otherwise,
+ * it returns a null pointer.
+ *
+ * @param _hid The host group ID to search for.
+ * @return A pointer to the found `MyHGC` instance if found; otherwise, a null pointer.
+ */
 MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
 	if (MyHostGroups->len < 100) {
 		// for few HGs, we use the legacy search
@@ -2858,6 +2985,18 @@ MyHGC * MySQL_HostGroups_Manager::MyHGC_find(unsigned int _hid) {
 	return NULL;
 }
 
+/**
+ * @brief Lookup or create a MySQL host group container by host group ID.
+ *
+ * This function looks up a MySQL host group container with the specified host group ID. If
+ * found, it returns a pointer to the existing container; otherwise, it creates a new container
+ * with the specified host group ID, adds it to the list of host groups, and returns a pointer
+ * to it.
+ *
+ * @param _hid The host group ID to lookup or create.
+ * @return A pointer to the found or newly created `MyHGC` instance.
+ * @note The function assertion fails if a newly created container is not found.
+ */
 MyHGC * MySQL_HostGroups_Manager::MyHGC_lookup(unsigned int _hid) {
 	MyHGC *myhgc=NULL;
 	myhgc=MyHGC_find(_hid);
@@ -2877,58 +3016,123 @@ void MySQL_HostGroups_Manager::increase_reset_counter() {
 	status.myconnpoll_reset++;
 	wrunlock();
 }
+
+/**
+ * @brief Pushes a MySQL_Connection back to the connection pool.
+ *
+ * This method is responsible for returning a MySQL_Connection object back to its associated connection pool
+ * after it has been used. It performs various checks and optimizations before deciding whether to return
+ * the connection to the pool or destroy it.
+ *
+ * @param c The MySQL_Connection object to be pushed back to the pool.
+ * @param _lock Boolean flag indicating whether to acquire a lock before performing the operation. Default is true.
+ *
+ * @note The method assumes that the provided MySQL_Connection object has a valid parent server (MySrvC).
+ * If the parent server is not valid, unexpected behavior may occur.
+ *
+ * @note The method also assumes that the global thread handler (GloMTH) is available and initialized properly.
+ * If the global thread handler is not initialized, certain checks may fail, leading to unexpected behavior.
+ */
 void MySQL_HostGroups_Manager::push_MyConn_to_pool(MySQL_Connection *c, bool _lock) {
+	// Ensure that the provided connection has a valid parent server
 	assert(c->parent);
-	MySrvC *mysrvc=NULL;
+
+	MySrvC *mysrvc = nullptr; // Pointer to the parent server object
+
+	// Acquire a lock if specified
 	if (_lock)
 		wrlock();
+
+	// Reset the auto-increment delay token associated with the connection
 	c->auto_increment_delay_token = 0;
+
+	// Increment the counter tracking the number of connections pushed back to the pool
 	status.myconnpoll_push++;
-	mysrvc=(MySrvC *)c->parent;
+
+	// Obtain a pointer to the parent server (MySrvC)
+	mysrvc = static_cast<MySrvC *>(c->parent);
+
+	// Log debug information about the connection being returned to the pool
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
+
+	// Remove the connection from the list of used connections for the parent server
 	mysrvc->ConnectionsUsed->remove(c);
-	if (GloMTH == NULL) { goto __exit_push_MyConn_to_pool; }
+
+	// If the global thread handler (GloMTH) is not available, skip further processing
+	if (GloMTH == nullptr) {
+		goto __exit_push_MyConn_to_pool;
+	}
+
+	// If the largest query length exceeds the threshold, destroy the connection
 	if (c->largest_query_length > (unsigned int)GloMTH->variables.threshold_query_length) {
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d . largest_query_length = %lu\n", c, mysrvc->address, mysrvc->port, mysrvc->status, c->largest_query_length);
 		delete c;
 		goto __exit_push_MyConn_to_pool;
-	}
+	}	
+
+	// If the server is online and the connection is in the idle state
 	if (mysrvc->status==MYSQL_SERVER_STATUS_ONLINE) {
 		if (c->async_state_machine==ASYNC_IDLE) {
 			if (GloMTH == NULL) { goto __exit_push_MyConn_to_pool; }
+			// Check if the connection has too many prepared statements
 			if (c->local_stmts->get_num_backend_stmts() > (unsigned int)GloMTH->variables.max_stmts_per_connection) {
+				// Log debug information about destroying the connection due to too many prepared statements
 				proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d because has too many prepared statements\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
 //				delete c;
-				mysrvc->ConnectionsUsed->add(c);
-				destroy_MyConn_from_pool(c, false);
+				mysrvc->ConnectionsUsed->add(c); // Add the connection back to the list of used connections
+				destroy_MyConn_from_pool(c, false); // Destroy the connection from the pool
 			} else {
-				c->optimize();
-				mysrvc->ConnectionsFree->add(c);
+				c->optimize(); // Optimize the connection
+				mysrvc->ConnectionsFree->add(c); // Add the connection to the list of free connections
 			}
 		} else {
+			// Log debug information about destroying the connection
 			proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
-			delete c;
+			delete c; // Destroy the connection
 		}
 	} else {
+		// Log debug information about destroying the connection
 		proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Destroying MySQL_Connection %p, server %s:%d with status %d\n", c, mysrvc->address, mysrvc->port, mysrvc->status);
-		delete c;
+		delete c; // Destroy the connection
 	}
+
+// Exit point for releasing the lock
 __exit_push_MyConn_to_pool:
 	if (_lock)
-		wrunlock();
+		wrunlock(); // Release the lock if acquired
 }
 
+/**
+ * @brief Pushes an array of MySQL_Connection objects back to the connection pool.
+ *
+ * This method is responsible for returning an array of MySQL_Connection objects back to their associated
+ * connection pool after they have been used. It iterates through the array and calls the push_MyConn_to_pool
+ * method for each connection without acquiring a lock for each individual push operation.
+ *
+ * @param ca An array of MySQL_Connection pointers representing the connections to be pushed back to the pool.
+ * @param cnt The number of connections in the array.
+ *
+ * @note This method assumes that the array of connections is valid and does not contain any nullptr entries.
+ * Unexpected behavior may occur if the array contains invalid pointers.
+ */
 void MySQL_HostGroups_Manager::push_MyConn_to_pool_array(MySQL_Connection **ca, unsigned int cnt) {
-	unsigned int i=0;
-	MySQL_Connection *c=NULL;
+	unsigned int i=0; // Index variable for iterating through the array
+	MySQL_Connection *c = nullptr; // Pointer to hold the current connection from the array
 	c=ca[i];
+
+	// Acquire a write lock to perform the operations atomically
 	wrlock();
+
+	// Iterate through the array of connections
 	while (i<cnt) {
+		// Push the current connection back to the pool without acquiring a lock for each individual push
 		push_MyConn_to_pool(c,false);
 		i++;
 		if (i<cnt)
 			c=ca[i];
 	}
+
+	// Release the write lock after processing all connections in the array
 	wrunlock();
 }
 
@@ -3536,10 +3740,37 @@ void MySQL_HostGroups_Manager::unshun_server_all_hostgroups(const char * address
 	}
 }
 
+/**
+ * @brief Retrieves a MySQL_Connection from the connection pool for a given hostgroup.
+ *
+ * This method is responsible for retrieving a MySQL_Connection from the connection pool associated
+ * with the specified hostgroup. It selects a random MySQL server within the hostgroup based on various
+ * criteria such as GTID information, maximum lag, and session attributes. If a suitable connection is found,
+ * it is marked as used and returned to the caller.
+ *
+ * @param _hid The ID of the hostgroup from which to retrieve the connection.
+ * @param sess A pointer to the MySQL_Session object associated with the connection.
+ * @param ff A boolean flag indicating whether to prioritize failover connections.
+ * @param gtid_uuid The GTID UUID used for GTID-based routing.
+ * @param gtid_trxid The GTID transaction ID used for GTID-based routing.
+ * @param max_lag_ms The maximum allowed lag in milliseconds.
+ *
+ * @return A pointer to the retrieved MySQL_Connection object if successful, or nullptr if no suitable connection
+ *         is available in the pool.
+ *
+ * @note This method locks the connection pool to ensure thread safety during access. It releases the lock once
+ *       the operation is completed.
+ */
 MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _hid, MySQL_Session *sess, bool ff, char * gtid_uuid, uint64_t gtid_trxid, int max_lag_ms) {
-	MySQL_Connection * conn=NULL;
+	MySQL_Connection * conn = nullptr; // Pointer to hold the retrieved MySQL_Connection
+
+	// Acquire a write lock to access the connection pool
 	wrlock();
+
+	// Increment the counter for connection pool retrieval attempts
 	status.myconnpoll_get++;
+
+	// Look up the hostgroup by ID and retrieve a random MySQL server from it based on specified criteria
 	MyHGC *myhgc=MyHGC_lookup(_hid);
 	MySrvC *mysrvc = NULL;
 #ifdef TEST_AURORA
@@ -3547,15 +3778,24 @@ MySQL_Connection * MySQL_HostGroups_Manager::get_MyConn_from_pool(unsigned int _
 #endif // TEST_AURORA
 	mysrvc = myhgc->get_random_MySrvC(gtid_uuid, gtid_trxid, max_lag_ms, sess);
 	if (mysrvc) { // a MySrvC exists. If not, we return NULL = no targets
+		// Attempt to get a random MySQL_Connection from the server's free connection pool
 		conn=mysrvc->ConnectionsFree->get_random_MyConn(sess, ff);
+
+		// If a connection is obtained, mark it as used and update connection pool statistics
 		if (conn) {
 			mysrvc->ConnectionsUsed->add(conn);
 			status.myconnpoll_get_ok++;
 			mysrvc->update_max_connections_used();
 		}
 	}
+
+	// Release the write lock after accessing the connection pool
 	wrunlock();
+
+	// Debug message indicating the retrieved MySQL_Connection and its server details
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Returning MySQL Connection %p, server %s:%d\n", conn, (conn ? conn->parent->address : "") , (conn ? conn->parent->port : 0 ));
+
+	// Return the retrieved MySQL_Connection (or nullptr if none available)
 	return conn;
 }
 
@@ -3673,23 +3913,46 @@ void update_hg_attrs_server_defaults(MySrvC* mysrvc, MyHGC* myhgc) {
 	}
 }
 
+/**
+ * @brief Adds a MySQL server connection (MySrvC) to the specified hostgroup.
+ *
+ * This method adds a MySQL server connection (MySrvC) to the hostgroup identified by the given hostgroup ID (_hid).
+ * It performs necessary updates to the server metrics and attributes associated with the hostgroup. Additionally, it
+ * updates the endpoint metrics for the server based on its address and port.
+ *
+ * @param mysrvc A pointer to the MySQL server connection (MySrvC) to be added to the hostgroup.
+ * @param _hid The ID of the hostgroup to which the server connection is being added.
+ *
+ * @note The method updates various metrics and attributes associated with the server and hostgroup. It also ensures
+ *       that endpoint metrics are updated to reflect the addition of the server to the hostgroup.
+ */
 void MySQL_HostGroups_Manager::add(MySrvC *mysrvc, unsigned int _hid) {
+
+	// Debug message indicating the addition of the MySQL server connection to the hostgroup
 	proxy_debug(PROXY_DEBUG_MYSQL_CONNPOOL, 7, "Adding MySrvC %p (%s:%d) for hostgroup %d\n", mysrvc, mysrvc->address, mysrvc->port, _hid);
+
+	// Construct the endpoint ID using the hostgroup ID, server address, and port
+	std::string endpoint_id { std::to_string(_hid) + ":" + string { mysrvc->address } + ":" + std::to_string(mysrvc->port) };
 
 	// Since metrics for servers are stored per-endpoint; the metrics for a particular endpoint can live longer than the
 	// 'MySrvC' itself. For example, a failover or a server config change could remove the server from a particular
 	// hostgroup, and a subsequent one bring it back to the original hostgroup. For this reason, everytime a 'mysrvc' is
 	// created and added to a particular hostgroup, we update the endpoint metrics for it.
-	std::string endpoint_id { std::to_string(_hid) + ":" + string { mysrvc->address } + ":" + std::to_string(mysrvc->port) };
 
+	// Update server metrics based on endpoint ID
 	mysrvc->bytes_recv = get_prometheus_counter_val(this->status.p_conn_pool_bytes_data_recv_map, endpoint_id);
 	mysrvc->bytes_sent = get_prometheus_counter_val(this->status.p_conn_pool_bytes_data_sent_map, endpoint_id);
 	mysrvc->connect_ERR = get_prometheus_counter_val(this->status.p_connection_pool_conn_err_map, endpoint_id);
 	mysrvc->connect_OK = get_prometheus_counter_val(this->status.p_connection_pool_conn_ok_map, endpoint_id);
 	mysrvc->queries_sent = get_prometheus_counter_val(this->status.p_connection_pool_queries_map, endpoint_id);
 
+	// Lookup the hostgroup by ID and add the server connection to it
 	MyHGC *myhgc=MyHGC_lookup(_hid);
+
+	// Update server defaults with hostgroup attributes
 	update_hg_attrs_server_defaults(mysrvc, myhgc);
+
+	// Add the server to the hostgroup's servers list
 	myhgc->mysrvs->add(mysrvc);
 }
 
@@ -4114,6 +4377,31 @@ void MySQL_HostGroups_Manager::save_mysql_servers_v2(SQLite3_result* s) {
 	incoming_mysql_servers_v2 = s;
 }
 
+/**
+ * @brief Retrieves the current SQLite3 result set associated with the specified MySQL table name.
+ *
+ * This method retrieves the current SQLite3 result set corresponding to the specified MySQL table name.
+ * The method is used to obtain the result set for various MySQL tables, such as hostgroups, replication configurations,
+ * SSL parameters, and runtime server information.
+ *
+ * @param name The name of the MySQL table for which the current SQLite3 result set is to be retrieved.
+ *             Supported table names include:
+ *                - "mysql_aws_aurora_hostgroups"
+ *                - "mysql_galera_hostgroups"
+ *                - "mysql_group_replication_hostgroups"
+ *                - "mysql_replication_hostgroups"
+ *                - "mysql_hostgroup_attributes"
+ *                - "mysql_servers_ssl_params"
+ *                - "cluster_mysql_servers"
+ *                - "mysql_servers_v2"
+ *
+ * @return A pointer to the current SQLite3 result set associated with the specified MySQL table name.
+ *         If the table name is not recognized or no result set is available for the specified table, NULL is returned.
+ *
+ * @note The method assumes that the result sets are stored in class member variables, and it returns the pointer to
+ *       the appropriate result set based on the provided table name. If the table name is not recognized, an assertion
+ *       failure occurs, indicating an invalid table name.
+ */
 SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& name) {
 	if (name == "mysql_aws_aurora_hostgroups") {
 		return this->incoming_aws_aurora_hostgroups;
@@ -4132,7 +4420,7 @@ SQLite3_result* MySQL_HostGroups_Manager::get_current_mysql_table(const string& 
 	} else if (name == "mysql_servers_v2") {
 		return this->incoming_mysql_servers_v2;
 	} else {
-		assert(0);
+		assert(0); // Assertion failure for unrecognized table name
 	}
 	return NULL;
 }
@@ -5191,27 +5479,50 @@ SQLite3_result * MySQL_HostGroups_Manager::SQL3_Get_ConnPool_Stats() {
 	return result;
 }
 
-
+/**
+ * @brief Retrieves memory usage statistics for the MySQL host groups manager.
+ *
+ * This method calculates the total memory usage of the MySQL host groups manager, including memory allocated for
+ * host groups, server connections, and MySQL connections. It iterates over all host groups and their associated
+ * server connections to compute the memory usage.
+ *
+ * @return The total memory usage of the MySQL host groups manager in bytes.
+ */
 unsigned long long MySQL_HostGroups_Manager::Get_Memory_Stats() {
+	// Initialize the memory size counter
 	unsigned long long intsize=0;
+	// Acquire write lock to ensure thread safety during memory calculation
 	wrlock();
-	MySrvC *mysrvc=NULL;
-  for (unsigned int i=0; i<MyHostGroups->len; i++) {
+	MySrvC *mysrvc=NULL; // Pointer to a MySQL server connection
+
+	// Iterate over all hostgroups
+	for (unsigned int i=0; i<MyHostGroups->len; i++) {
+		// Add memory size for the hostgroup object
 		intsize+=sizeof(MyHGC);
-    MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
+		// Get the hostgroup object
+		MyHGC *myhgc=(MyHGC *)MyHostGroups->index(i);
 		unsigned int j,k;
+		// Get the number of server connections in the hostgroup
 		unsigned int l=myhgc->mysrvs->cnt();
+		// Iterate over all server connections in the hostgroup
 		if (l) {
 			for (j=0; j<l; j++) {
+				// Add memory size for the server connection object
 				intsize+=sizeof(MySrvC);
+				// Get the server connection object
 				mysrvc=myhgc->mysrvs->idx(j);
+				// Calculate memory usage for each connection in the "ConnectionsFree" list
 				intsize+=((mysrvc->ConnectionsUsed->conns_length())*sizeof(MySQL_Connection *));
 				for (k=0; k<mysrvc->ConnectionsFree->conns_length(); k++) {
-					//MySQL_Connection *myconn=(MySQL_Connection *)mysrvc->ConnectionsFree->conns->index(k);
+					// Get a MySQL connection
 					MySQL_Connection *myconn=mysrvc->ConnectionsFree->index(k);
+					// Add memory size for MySQL connection object and MYSQL struct
 					intsize+=sizeof(MySQL_Connection)+sizeof(MYSQL);
+					// Add memory size for the MySQL packet buffer
 					intsize+=myconn->mysql->net.max_packet;
+					// Add memory size for the default stack size of the asynchronous context
 					intsize+=(4096*15); // ASYNC_CONTEXT_DEFAULT_STACK_SIZE
+					// Add memory size for result set object if present
 					if (myconn->MyRS) {
 						intsize+=myconn->MyRS->current_size();
 					}
@@ -5220,7 +5531,9 @@ unsigned long long MySQL_HostGroups_Manager::Get_Memory_Stats() {
 			}
 		}
 	}
+	// Release the write lock
 	wrunlock();
+	// Return the total memory usage
 	return intsize;
 }
 

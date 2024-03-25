@@ -289,6 +289,15 @@ void MySQL_Connection::compute_unknown_transaction_status() {
 	}
 }
 
+/**
+ * Computes a unique hash value for a user connection.
+ * 
+ * This function generates a hash based on the concatenation of username, password, and schema name,
+ * interspersed with two predefined delimiters. It leverages the SpookyHash algorithm for hashing.
+ * The purpose of this hash could be for identifying unique user connections or sessions within ProxySQL.
+ * 
+ * @return Returns the computed hash value.
+ */
 uint64_t MySQL_Connection_userinfo::compute_hash() {
 	int l=0;
 	if (username)
@@ -364,6 +373,17 @@ void MySQL_Connection_userinfo::set(MySQL_Connection_userinfo *ui) {
 }
 
 
+/**
+ * Sets the schema name for the current connection.
+ * 
+ * This function updates the schema name for a connection. If the new schema name differs
+ * from the current one, it updates the internal representation and recalculates any related hash or identifier
+ * for the session. This is typically used to switch contexts or databases within the same connection.
+ * 
+ * @param _new The new schema name to be set.
+ * @param l Length of the schema name string.
+ * @return Returns true if the schema name was changed, false otherwise.
+ */
 bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 	int _l=0;
 	if (schemaname) {
@@ -391,7 +411,13 @@ bool MySQL_Connection_userinfo::set_schemaname(char *_new, int l) {
 }
 
 
-
+/**
+ * Constructor for MySQL_Connection.
+ * 
+ * Initializes a new MySQL connection object. Sets up the initial state, allocates necessary resources, 
+ * and prepares the connection for use. It initializes member variables to their default values, including
+ * setting up default options for the MySQL client library, and prepares the connection for database operations.
+ */
 MySQL_Connection::MySQL_Connection() {
 	mysql=NULL;
 	async_state_machine=ASYNC_CONNECT_START;

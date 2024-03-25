@@ -8,6 +8,13 @@
 
 #define USLEEP_SQLITE_LOCKED 100
 
+
+/**
+ * @brief Constructor for the SQLite3_column class.
+ * 
+ * @param a The datatype of the column.
+ * @param b The name of the column.
+ */
 SQLite3_column::SQLite3_column(int a, const char *b) {
 	datatype=a;
 	if (b) {
@@ -17,11 +24,18 @@ SQLite3_column::SQLite3_column(int a, const char *b) {
 	}
 }
 
+/**
+ * @brief Destructor for the SQLite3_column class.
+ */
 SQLite3_column::~SQLite3_column() {
 	free(name);
 }
 
-
+/**
+ * @brief Constructor for the SQLite3_row class.
+ * 
+ * @param c The number of columns in the row.
+ */
 SQLite3_row::SQLite3_row(int c) {
 	sizes=(int *)malloc(sizeof(int)*c);
 	fields=(char **)malloc(sizeof(char *)*c);
@@ -31,6 +45,11 @@ SQLite3_row::SQLite3_row(int c) {
 	ds=0;
 }
 
+/**
+ * @brief Calculates the total size of the SQLite3_row object.
+ * 
+ * @return The size of the SQLite3_row object.
+ */
 unsigned long long SQLite3_row::get_size() {
 	unsigned long long s = sizeof(SQLite3_row);
 	s += cnt * sizeof(int);
@@ -39,6 +58,9 @@ unsigned long long SQLite3_row::get_size() {
 	return s;
 }
 
+/**
+ * @brief Destructor for the SQLite3_row class.
+ */
 SQLite3_row::~SQLite3_row() {
 	free(fields);
 	free(sizes);
@@ -47,6 +69,11 @@ SQLite3_row::~SQLite3_row() {
 	}
 }
 
+/**
+ * @brief Adds fields to the SQLite3_row object based on data from a SQLite statement.
+ * 
+ * @param stmt The SQLite statement.
+ */
 void SQLite3_row::add_fields(sqlite3_stmt *stmt) {
 	int i;
 	int t;
@@ -83,6 +110,11 @@ void SQLite3_row::add_fields(sqlite3_stmt *stmt) {
 	ds=data_size;
 }
 
+/**
+ * @brief Adds fields to the SQLite3_row object based on provided field data.
+ * 
+ * @param _fields The array of field data.
+ */
 void SQLite3_row::add_fields(char **_fields) {
 		int i;
 		int data_size=0;
@@ -113,6 +145,10 @@ void SQLite3_row::add_fields(char **_fields) {
 		ds=data_size;
 }
 
+
+/**
+ * @brief Constructor for the SQLite3DB class.
+ */
 SQLite3DB::SQLite3DB() {
 	db=NULL;
 	url=NULL;
@@ -120,6 +156,9 @@ SQLite3DB::SQLite3DB() {
 	pthread_rwlock_init(&rwlock, NULL);
 }
 
+/**
+ * @brief Destructor for the SQLite3DB class.
+ */
 SQLite3DB::~SQLite3DB() {
 	if (db) {
 		// close db
@@ -135,6 +174,13 @@ SQLite3DB::~SQLite3DB() {
 	if (url) {free(url); url=NULL;}
 }
 
+/**
+ * @brief Opens a SQLite database connection.
+ * 
+ * @param __url The URL of the database.
+ * @param flags Flags to control the opening mode.
+ * @return The status of the database opening operation.
+ */
 int SQLite3DB::open(char *__url, int flags) {
 	// we shouldn't call open if url is not NULL
 	assert(url==NULL); // we always assert() here
@@ -153,6 +199,12 @@ int SQLite3DB::open(char *__url, int flags) {
 	return 0;
 }
 
+/**
+ * @brief Executes a SQL statement.
+ * 
+ * @param str The SQL statement to execute.
+ * @return True if the execution was successful, false otherwise.
+ */
 bool SQLite3DB::execute(const char *str) {
 	assert(url);
 	assert(db);
@@ -181,6 +233,13 @@ bool SQLite3DB::execute(const char *str) {
 	return false;
 }
 
+/**
+ * @brief Prepares a SQL statement for execution.
+ * 
+ * @param str The SQL statement to prepare.
+ * @param statement Pointer to a SQLite statement object.
+ * @return The status of the preparation operation.
+ */
 int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
 	int rc;
 	do {
@@ -192,6 +251,15 @@ int SQLite3DB::prepare_v2(const char *str, sqlite3_stmt **statement) {
 	return rc;
 }
 
+/**
+ * @brief Executes a SQL statement and returns the result set.
+ * 
+ * @param str The SQL statement to execute.
+ * @param _error Pointer to a variable to store the error message.
+ * @param _cols Pointer to a variable to store the number of columns.
+ * @param _affected_rows Pointer to a variable to store the number of affected rows.
+ * @return A pointer to the SQLite3_result object representing the result set.
+ */
 SQLite3_result* SQLite3DB::execute_statement(const char *str, char **_error, int *_cols, int *_affected_rows) {
 	SQLite3_result* resultset;
 
@@ -210,6 +278,16 @@ SQLite3_result* SQLite3DB::execute_statement(const char *str, char **_error, int
 	return NULL;
 }
 
+/**
+ * @brief Executes a SQL statement and returns the result set.
+ * 
+ * @param str The SQL statement to execute.
+ * @param error Pointer to a variable to store the error message.
+ * @param cols Pointer to a variable to store the number of columns.
+ * @param affected_rows Pointer to a variable to store the number of affected rows.
+ * @param resultset Pointer to a pointer to a SQLite3_result object representing the result set.
+ * @return True if the execution was successful, false otherwise.
+ */
 bool SQLite3DB::execute_statement(const char *str, char **error, int *cols, int *affected_rows, SQLite3_result **resultset) {
 	int rc;
 	sqlite3_stmt *statement=NULL;
@@ -263,6 +341,16 @@ __exit_execute_statement:
 	return ret;
 }
 
+/**
+ * @brief Executes a SQL statement and returns the result set without parsing it.
+ * 
+ * @param str The SQL statement to execute.
+ * @param error Pointer to a variable to store the error message.
+ * @param cols Pointer to a variable to store the number of columns.
+ * @param affected_rows Pointer to a variable to store the number of affected rows.
+ * @param statement Pointer to a pointer to a SQLite statement object.
+ * @return True if the execution was successful, false otherwise.
+ */
 bool SQLite3DB::execute_statement_raw(const char *str, char **error, int *cols, int *affected_rows, sqlite3_stmt **statement) {
 	int rc;
 	//sqlite3_stmt *statement=NULL;
@@ -301,6 +389,12 @@ __exit_execute_statement:
 	return ret;
 }
 
+/**
+ * @brief Executes a SQL statement and returns a single integer result.
+ * 
+ * @param str The SQL statement to execute.
+ * @return The integer result of the execution.
+ */
 int SQLite3DB::return_one_int(const char *str) {
 	char *error=NULL;
 	int cols=0;
@@ -322,6 +416,13 @@ int SQLite3DB::return_one_int(const char *str) {
 	return ret;
 }
 
+/**
+ * @brief Checks the structure of a table in the database.
+ * 
+ * @param table_name The name of the table.
+ * @param table_def The definition of the table.
+ * @return The number of tables matching the structure.
+ */
 int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
 	const char *q1="SELECT COUNT(*) FROM sqlite_master WHERE type=\"table\" AND name=\"%s\" AND sql=\"%s\"";
 	int count=0;
@@ -344,6 +445,14 @@ int SQLite3DB::check_table_structure(char *table_name, char *table_def) {
 	return count;
 }
 
+/**
+ * @brief Builds a table in the database.
+ * 
+ * @param table_name The name of the table.
+ * @param table_def The definition of the table.
+ * @param dropit Flag to indicate whether to drop existing table before creating.
+ * @return True if the table creation was successful, false otherwise.
+ */
 bool SQLite3DB::build_table(char *table_name, char *table_def, bool dropit) {
 	bool rc;
 	if (dropit) {
@@ -361,6 +470,16 @@ bool SQLite3DB::build_table(char *table_name, char *table_def, bool dropit) {
 	return rc;
 }
 
+/**
+ * @brief Checks and builds a table in the database if it doesn't exist.
+ * 
+ * This function checks whether a table exists in the database. If the table does not exist, 
+ * it builds the table using the provided table name and definition.
+ * 
+ * @param table_name The name of the table.
+ * @param table_def The definition of the table.
+ * @return True if the table already exists or was successfully created, false otherwise.
+ */
 bool SQLite3DB::check_and_build_table(char *table_name, char *table_def) {
 	int rci;
 	bool rcb;
@@ -370,22 +489,49 @@ bool SQLite3DB::check_and_build_table(char *table_name, char *table_def) {
 	return rcb;
 }
 
+/**
+ * @brief Acquires a read lock on the database.
+ * 
+ * This function acquires a read lock on the SQLite database to prevent concurrent write access.
+ */
 void SQLite3DB::rdlock() {
 	pthread_rwlock_rdlock(&rwlock);
 }
 
+/**
+ * @brief Releases the read lock on the database.
+ * 
+ * This function releases the read lock acquired by rdlock() on the SQLite database.
+ */
 void SQLite3DB::rdunlock() {
 	pthread_rwlock_unlock(&rwlock);
 }
 
+/**
+ * @brief Acquires a write lock on the database.
+ * 
+ * This function acquires a write lock on the SQLite database to prevent concurrent read and write access.
+ */
 void SQLite3DB::wrlock() {
 	pthread_rwlock_wrlock(&rwlock);
 }
 
+/**
+ * @brief Releases the write lock on the database.
+ * 
+ * This function releases the write lock acquired by wrlock() on the SQLite database.
+ */
 void SQLite3DB::wrunlock() {
 	pthread_rwlock_unlock(&rwlock);
 }
 
+/**
+ * @brief Calculates the raw checksum of the SQLite3_result object.
+ * 
+ * This function calculates the raw checksum of the SQLite3_result object, excluding metadata.
+ * 
+ * @return The raw checksum of the result.
+ */
 uint64_t SQLite3_result::raw_checksum() {
 	if (this->rows_count==0) return 0;
 	uint64_t hash1, hash2;
@@ -406,7 +552,13 @@ uint64_t SQLite3_result::raw_checksum() {
 	return hash1;
 }
 
-
+/**
+ * @brief Calculates the checksum of the SQLite3_result object.
+ * 
+ * This function calculates the checksum of the SQLite3_result object, including metadata.
+ * 
+ * @return The checksum of the result.
+ */
 char *SQLite3_result::checksum() {
 	uint64_t hash1=raw_checksum();
 	char buf[128];
@@ -417,6 +569,14 @@ char *SQLite3_result::checksum() {
 	return strdup(buf);
 }
 
+/**
+ * @brief Dumps the content of the SQLite3_result object to the standard error stream.
+ * 
+ * This function prints the content of the SQLite3_result object to the standard error stream.
+ * It is useful for debugging purposes to inspect the content of the result object.
+ * 
+ * @note This function is intended for debugging purposes and should not be used in production code.
+ */
 void SQLite3_result::dump_to_stderr() {
 	if (columns == 0) return;
 	size_t *columns_lengths = (size_t *)malloc(sizeof(size_t)*columns);
@@ -518,6 +678,15 @@ void SQLite3_result::dump_to_stderr() {
 	free(columns_lengths);
 }
 
+/**
+ * @brief Constructs a new SQLite3_result object from an existing SQLite3_result object.
+ * 
+ * This constructor initializes a new SQLite3_result object based on the provided source
+ * SQLite3_result object. It copies the column definitions, rows, and mutex status from
+ * the source object to the new object.
+ * 
+ * @param[in] src Pointer to the source SQLite3_result object to copy from.
+ */
 SQLite3_result::SQLite3_result(SQLite3_result *src) {
 	enabled_mutex = false; // default
 	rows_count=0;
@@ -538,6 +707,13 @@ SQLite3_result::SQLite3_result(SQLite3_result *src) {
 	}
 }
 
+/**
+ * @brief Retrieves the size of the SQLite3_result object.
+ * 
+ * This function returns the current size (number of rows) of the SQLite3_result object.
+ * 
+ * @return The size (number of rows) of the result object.
+ */
 unsigned long long SQLite3_result::get_size() {
 	unsigned long long s = sizeof(SQLite3_result);
 	s += column_definition.size() * sizeof(SQLite3_column *);
@@ -553,11 +729,31 @@ unsigned long long SQLite3_result::get_size() {
 	return s;
 }
 
+/**
+ * @brief Adds a column definition to the SQLite3_result object.
+ * 
+ * This function creates a new SQLite3_column object with the specified name and type
+ * and adds it to the column definitions vector of the SQLite3_result object.
+ * 
+ * @param[in] a The name of the column to add.
+ * @param[in] b The type of the column to add.
+ */
 void SQLite3_result::add_column_definition(int a, const char *b) {
 	SQLite3_column *cf=new SQLite3_column(a,b);
 	column_definition.push_back(cf);
 }
 
+/**
+ * @brief Adds a row to the SQLite3_result object.
+ * 
+ * This function adds a row to the SQLite3_result object either from the provided
+ * SQLite statement or from the specified fields array. If the `skip` parameter is set
+ * to false, a new row is created and added to the rows vector of the SQLite3_result object.
+ * 
+ * @param[in] stmt The SQLite statement from which to fetch the row data.
+ * @param[in] skip A boolean indicating whether to skip adding the row (default is false).
+ * @return An integer representing the result of the operation (SQLITE_ROW on success).
+ */
 int SQLite3_result::add_row(sqlite3_stmt *stmt, bool skip) {
 	int rc=(*proxy_sqlite3_step)(stmt);
 	if (rc!=SQLITE_ROW) return rc;
@@ -570,6 +766,15 @@ int SQLite3_result::add_row(sqlite3_stmt *stmt, bool skip) {
 	return SQLITE_ROW;
 }
 
+/**
+ * @brief Adds a row to the SQLite3_result object.
+ * 
+ * This function adds a row to the SQLite3_result object from the provided fields array.
+ * A new row is created and added to the rows vector of the SQLite3_result object.
+ * 
+ * @param[in] _fields The array of fields representing the row data.
+ * @return An integer representing the result of the operation (SQLITE_ROW on success).
+ */
 int SQLite3_result::add_row(char **_fields) {
 	SQLite3_row *row=new SQLite3_row(columns);
 	row->add_fields(_fields);
@@ -612,6 +817,15 @@ int SQLite3_result::add_row(const char* _field, ...) {
 	return this->add_row(const_cast<char**>(&fields[0]));
 }
 
+/**
+ * @brief Adds a row to the SQLite3_result object based on an existing row.
+ * 
+ * This function creates a new row in the SQLite3_result object and copies the fields
+ * from the provided existing row to the new row.
+ * 
+ * @param[in] old_row Pointer to the existing SQLite3_row object from which to copy fields.
+ * @return int Returns SQLITE_ROW to indicate successful addition of the row.
+ */
 int SQLite3_result::add_row(SQLite3_row *old_row) {
 	SQLite3_row *row=new SQLite3_row(columns);
 	row->add_fields(old_row->fields);
@@ -620,6 +834,15 @@ int SQLite3_result::add_row(SQLite3_row *old_row) {
 	return SQLITE_ROW;
 }
 
+/**
+ * @brief Constructs a SQLite3_result object based on the result of a SQLite3 statement.
+ * 
+ * This constructor initializes a SQLite3_result object using the result of a SQLite3 statement.
+ * It retrieves the column count and column names/types from the statement and adds them as column definitions.
+ * It then iterates through the result rows, adding each row to the SQLite3_result object.
+ * 
+ * @param[in] stmt Pointer to the SQLite3 statement.
+ */
 SQLite3_result::SQLite3_result(sqlite3_stmt *stmt) {
 	enabled_mutex = false; // default
 	rows_count=0;
@@ -630,6 +853,18 @@ SQLite3_result::SQLite3_result(sqlite3_stmt *stmt) {
 	while (add_row(stmt)==SQLITE_ROW) {};
 }
 
+/**
+ * @brief Constructs a SQLite3_result object based on the result of a SQLite3 statement with pagination support.
+ * 
+ * This constructor initializes a SQLite3_result object using the result of a SQLite3 statement with pagination support.
+ * It retrieves the column count and column names/types from the statement and adds them as column definitions.
+ * It then iterates through the result rows based on the provided offset and limit, adding each row to the SQLite3_result object.
+ * 
+ * @param[in] stmt Pointer to the SQLite3 statement.
+ * @param[out] found_rows Pointer to store the total number of found rows.
+ * @param[in] offset Offset for pagination.
+ * @param[in] limit Limit for pagination.
+ */
 SQLite3_result::SQLite3_result(sqlite3_stmt *stmt, int * found_rows, unsigned int offset, unsigned int limit) {
 	enabled_mutex = false; // default
 	rows_count=0;
@@ -663,6 +898,14 @@ SQLite3_result::SQLite3_result(sqlite3_stmt *stmt, int * found_rows, unsigned in
 	*found_rows = fr;
 }
 
+/**
+ * @brief Constructs a SQLite3_result object with a specified number of columns and mutex enablement.
+ * 
+ * This constructor initializes a SQLite3_result object with a specified number of columns and enables/disables mutex based on the provided flag.
+ * 
+ * @param[in] num_columns Number of columns.
+ * @param[in] en_mutex Flag to enable/disable mutex.
+ */
 SQLite3_result::SQLite3_result(int num_columns, bool en_mutex) {
 	rows_count=0;
 	columns=num_columns;
@@ -674,6 +917,11 @@ SQLite3_result::SQLite3_result(int num_columns, bool en_mutex) {
 	}
 }
 
+/**
+ * @brief Destructor for the SQLite3_result object.
+ * 
+ * This destructor cleans up memory by deleting allocated column definitions and rows.
+ */
 SQLite3_result::~SQLite3_result() {
 	for (std::vector<SQLite3_column *>::iterator it = column_definition.begin() ; it != column_definition.end(); ++it) {
 		SQLite3_column *c=*it;
@@ -685,11 +933,25 @@ SQLite3_result::~SQLite3_result() {
 	}
 }
 
+/**
+ * @brief Default constructor for the SQLite3_result object.
+ * 
+ * This constructor initializes a SQLite3_result object with default values.
+ */
 SQLite3_result::SQLite3_result() {
 	enabled_mutex = false; // default
 	columns=0;
 }
 
+/**
+ * @brief Loads a SQLite3 plugin.
+ * 
+ * This function loads a SQLite3 plugin specified by the given plugin_name.
+ * It initializes function pointers to SQLite3 API functions provided by the plugin.
+ * If the plugin_name is NULL, it loads the built-in SQLite3 library and initializes function pointers to its API functions.
+ * 
+ * @param[in] plugin_name The name of the SQLite3 plugin library to load.
+ */
 void SQLite3DB::LoadPlugin(const char *plugin_name) {
 	proxy_sqlite3_config = NULL;
 	proxy_sqlite3_bind_double = NULL;

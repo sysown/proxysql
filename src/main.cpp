@@ -106,14 +106,30 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 char * know_latest_version = NULL;
 static unsigned int randID = 0;
 
+/**
+ * @brief Checks for the latest version of ProxySQL by querying the specified URL.
+ *
+ * This function sends an HTTP GET request to the ProxySQL website to fetch the latest version information.
+ * It sets a custom user-agent string containing the version, SHA1 hash of the binary (if available), and a random ID.
+ * The response is stored in memory and returned as a character pointer.
+ *
+ * @return A character pointer containing the response data from the Proxysql website.
+ *         If an error occurs during the HTTP request, NULL is returned.
+ */
 static char * main_check_latest_version() {
-	CURL *curl_handle;
-	CURLcode res;
-	struct MemoryStruct chunk;
+	CURL *curl_handle; // CURL handle for performing HTTP requests
+	CURLcode res; // Variable to store CURL operation result
+	struct MemoryStruct chunk; // // Struct to store memory chunk received from HTTP response
+
+	// Initialize memory struct to store response data
 	chunk.memory = (char *)malloc(1);
 	chunk.size = 0;
+
+	// Initialize CURL library
 	curl_global_init(CURL_GLOBAL_ALL);
+	// Initialize CURL handle for HTTP request
 	curl_handle = curl_easy_init();
+	// Set CURL options for the HTTP request
 	curl_easy_setopt(curl_handle, CURLOPT_URL, "https://www.proxysql.com/latest");
 	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYPEER, 0L);
 	curl_easy_setopt(curl_handle, CURLOPT_SSL_VERIFYHOST, 0L);
@@ -122,6 +138,7 @@ static char * main_check_latest_version() {
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
 	curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
 
+	// Set custom user-agent string including ProxySQL version, binary SHA1 hash, and a random ID
 	string s = "proxysql-agent/";
 	s += PROXYSQL_VERSION;
 	if (binary_sha1) {
@@ -131,41 +148,68 @@ static char * main_check_latest_version() {
 	}
 	s += " " + std::to_string(randID);
 	curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, s.c_str());
+
+	// Set timeout and connect timeout for the HTTP request
 	curl_easy_setopt(curl_handle, CURLOPT_TIMEOUT, 10);
 	curl_easy_setopt(curl_handle, CURLOPT_CONNECTTIMEOUT, 10);
 
+	// Perform the HTTP request
 	res = curl_easy_perform(curl_handle);
 
+	// Check if the request was successful
 	if (res != CURLE_OK) {
 		switch (res) {
+			// Handle common errors and free memory if necessary
 			case CURLE_COULDNT_RESOLVE_HOST:
 			case CURLE_COULDNT_CONNECT:
 			case CURLE_OPERATION_TIMEDOUT:
+				// These errors are expected in case of network issues or timeouts
 				break;
 			default:
+				// Log other errors using proxy_error and free memory
 				proxy_error("curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
 				break;
 		}
 		free(chunk.memory);
 		chunk.memory = NULL;
 	}
+
+	// Cleanup CURL handle and global resources
 	curl_easy_cleanup(curl_handle);
 	curl_global_cleanup();
+
+	// Return the response data from the ProxySQL website
 	return chunk.memory;
 }
 
 
+/**
+ * @brief Thread function to check for the latest version of ProxySQL asynchronously.
+ *
+ * This function is intended to be executed as a separate thread to asynchronously check for the latest version of ProxySQL.
+ * It calls the main_check_latest_version function to fetch the latest version information from the ProxySQL website.
+ * If the fetched version information is valid and different from the currently known latest version,
+ * it updates the known latest version and logs a message indicating the availability of the new version.
+ *
+ * @param arg Pointer to the argument passed to the thread function (unused).
+ * @return NULL.
+ */
 void * main_check_latest_version_thread(void *arg) {
+	// Fetch the latest version information
 	char * latest_version = main_check_latest_version();
-	// we check for potential invalid data , see issue #4042 
+	// we check for potential invalid data , see issue #4042
+	// Check for potential invalid data and update the known latest version if a new version is detected
 	if (latest_version != NULL && strlen(latest_version) < 32) {
 		if (
 			(know_latest_version == NULL) // first check
 			|| (strcmp(know_latest_version,latest_version)) // new version detected
 		) {
+			// Free previously known latest version and update it with the new version
 			if (know_latest_version)
 				free(know_latest_version);
+			// Duplicate latest version string
 			know_latest_version = strdup(latest_version);
+			// Log the availability of the new version
 			proxy_info("Latest ProxySQL version available: %s\n", latest_version);
 		}
 	}
@@ -1193,40 +1237,76 @@ void ProxySQL_Main_init_phase4___shutdown() {
 #endif
 }
 
-
+/**
+ * @brief Phase 1 of the daemonization process for ProxySQL.
+ *
+ * This function performs the first phase of the daemonization process for ProxySQL. It sets up essential parameters
+ * and checks for conditions necessary for daemonization. If any of the conditions are not met or if an error occurs,
+ * the function logs an error message and exits with a failure status code.
+ *
+ * @param argv0 The name of the executable file used to start ProxySQL.
+ * @return void.
+ * @note This function does not return if an error occurs; it exits the process.
+ */
 void ProxySQL_daemonize_phase1(char *argv0) {
-	int rc;
+	int rc; // Variable to store the return code of system calls
+
+	// Set the PID file identification to the global PID variable
 	daemon_pid_file_ident=GloVars.pid;
+
+	// Set the log identification based on the executable file name
 	daemon_log_ident=daemon_ident_from_argv0(argv0);
+
+	// Change the current working directory to the data directory
 	rc=chdir(GloVars.datadir);
 	if (rc) {
+		// Log an error message if changing the directory fails and exit with failure status
 		daemon_log(LOG_ERR, "Could not chdir into datadir: %s . Error: %s", GloVars.datadir, strerror(errno));
 		exit(EXIT_FAILURE);
 	}
-	daemon_pid_file_proc=proxysql_pid_file;
+
+	// Set the PID file process to the ProxySQL PID file
+	daemon_pid_file_proc = proxysql_pid_file;
+
+	// Check if ProxySQL is already running by checking the PID file
 	pid=daemon_pid_file_is_running();
 	if (pid>=0) {
+		// Log an error message if ProxySQL is already running and exit with failure status
 		daemon_log(LOG_ERR, "Daemon already running on PID file %u", pid);
 		exit(EXIT_FAILURE);
 	}
 	if (daemon_retval_init() < 0) {
+		// Initialize the return value for daemonization; log an error if initialization fails
 		daemon_log(LOG_ERR, "Failed to create pipe.");
 		exit(EXIT_FAILURE);
 	}
 }
 
-
+/**
+ * @brief Wait for the return value from the daemon process.
+ *
+ * This function waits for the return value from the daemon process for a specified duration. If the return value is
+ * received within the specified time, the function logs the return value. If an error occurs during the waiting process,
+ * the function logs an error message and exits with a failure status code.
+ *
+ * @return void.
+ * @note This function does not return if an error occurs; it exits the process.
+ */
 void ProxySQL_daemonize_wait_daemon() {
-	int ret;
-	/* Wait for 20 seconds for the return value passed from the daemon process */
+	int ret; // Variable to store the return value from daemon_retval_wait()
+	// Wait for 20 seconds for the return value passed from the daemon process
 	if ((ret = daemon_retval_wait(20)) < 0) {
+		// Log an error message if waiting for the return value fails and exit with failure status
 		daemon_log(LOG_ERR, "Could not receive return value from daemon process: %s", strerror(errno));
 		exit(EXIT_FAILURE);
 	}
 
+	// If a return value is received, log it
 	if (ret) {
 		daemon_log(LOG_ERR, "Daemon returned %i as return value.", ret);
 	}
+
+	// Exit with the return value received from the daemon process
 	exit(ret);
 }
 
@@ -1269,28 +1349,60 @@ bool ProxySQL_daemonize_phase2() {
 	return true;
 }
 
-
+/**
+ * @brief Calls an external script upon exit failure.
+ *
+ * This function attempts to execute an external script specified in the global variable `GloVars.execute_on_exit_failure`
+ * if the program exits due to failure. It first checks if the variable is set, and if not, returns without further action.
+ * If the variable is set, it attempts to fork a child process to execute the script. If forking fails, the function exits
+ * with failure status. If forking succeeds, the child process attempts to execute the script using the `system` function.
+ * If the script execution fails, an error message is logged, and the child process exits with failure status. Otherwise, the
+ * child process exits with success status. Additionally, the function creates a detached thread to wait for the child process
+ * to exit, ensuring that the parent process does not block. If thread creation fails, the function logs an error message and
+ * exits with failure status.
+ *
+ * @return void.
+ * @note This function does not return if an error occurs; it exits the process.
+ */
 void call_execute_on_exit_failure() {
+	// Check if the global variable execute_on_exit_failure is NULL
 	if (GloVars.execute_on_exit_failure == NULL) {
+		// Exit the function if the variable is not set
 		return;
 	}
+
+	// Log a message indicating the attempt to call the external script
 	proxy_error("Trying to call external script after exit failure: %s\n", GloVars.execute_on_exit_failure);
+
+	// Fork a child process
 	pid_t cpid;
 	cpid = fork();
+
+	// Check for fork failure
 	if (cpid == -1) {
+		// Exit with failure status if fork fails
 		exit(EXIT_FAILURE);
 	}
+
+	// Child process
 	if (cpid == 0) {
 		int rc;
+		// Execute the external script
 		rc = system(GloVars.execute_on_exit_failure);
+
+		// Check if script execution failed
 		if (rc) {
+			// Log an error message and exit with failure status if execution fails
 			proxy_error("Execute on EXIT_FAILURE: Failed to run %s\n", GloVars.execute_on_exit_failure);
 			perror("system()");
 			exit(EXIT_FAILURE);
 		} else {
+			// Exit with success status if script execution succeeds
 			exit(EXIT_SUCCESS);
 		}
-	} else {
+	}
+	// Parent process
+	else {
 		pthread_attr_t attr;
 		pthread_attr_init(&attr);
 		pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -1298,6 +1410,8 @@ void call_execute_on_exit_failure() {
 		pid_t *cpid_ptr=(pid_t *)malloc(sizeof(pid_t));
 		*cpid_ptr=cpid;
 		pthread_t thr;
+
+		// Create a detached thread to wait for the child process to exit
 		if (pthread_create(&thr, &attr, waitpid_thread, (void *)cpid_ptr) !=0 ) {
 			perror("Thread creation");
 			exit(EXIT_FAILURE);

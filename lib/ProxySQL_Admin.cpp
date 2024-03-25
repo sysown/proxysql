@@ -152,46 +152,6 @@ static void BQE1(SQLite3DB *db, const vector<string>& tbs, const string& p1, con
 	}
 }
 
-/*
-static long
-get_file_size (const char *filename) {
-	FILE *fp;
-	fp = fopen (filename, "rb");
-	if (fp) {
-		long size;
-		if ((0 != fseek (fp, 0, SEEK_END)) || (-1 == (size = ftell (fp))))
-			size = 0;
-		fclose (fp);
-		return size;
-	} else
-		return 0;
-}
-
-static char * load_file (const char *filename) {
-	FILE *fp;
-	char *buffer;
-	long size;
-	size = get_file_size (filename);
-	if (0 == size)
-		return NULL;
-	fp = fopen (filename, "rb");
-	if (! fp)
-		return NULL;
-	buffer = (char *)malloc (size + 1);
-	if (! buffer) {
-		fclose (fp);
-		return NULL;
-	}
-	buffer[size] = '\0';
-	if (size != (long)fread (buffer, 1, size, fp)) {
-		free (buffer);
-		buffer = NULL;
-	}
-	fclose (fp);
-	return buffer;
-}
-*/
-
 
 static int round_intv_to_time_interval(int& intv) {
 	if (intv > 300) {
@@ -223,14 +183,6 @@ static int round_intv_to_time_interval(int& intv) {
 	}
 	return intv;
 }
-
-/*
-int sqlite3_json_init(
-  sqlite3 *db,
-  char **pzErrMsg,
-  const sqlite3_api_routines *pApi
-);
-*/
 
 #ifdef __APPLE__
 #ifndef MSG_NOSIGNAL
@@ -11451,40 +11403,6 @@ int ProxySQL_Admin::flush_debug_levels_database_to_runtime(SQLite3DB *db) {
 }
 #endif /* DEBUG */
 
-/*
-// commented in 2.3 as it seems unused in favour of
-// __insert_or_replace_maintable_select_disktable()
-void ProxySQL_Admin::__insert_or_ignore_maintable_select_disktable() {
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_servers SELECT * FROM disk.mysql_servers");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_replication_hostgroups SELECT * FROM disk.mysql_replication_hostgroups");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_group_replication_hostgroups SELECT * FROM disk.mysql_group_replication_hostgroups");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_galera_hostgroups SELECT * FROM disk.mysql_galera_hostgroups");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_aws_aurora_hostgroups SELECT * FROM disk.mysql_aws_aurora_hostgroups");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_users SELECT * FROM disk.mysql_users");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules SELECT * FROM disk.mysql_query_rules");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_query_rules_fast_routing SELECT * FROM disk.mysql_query_rules_fast_routing");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_users SELECT * FROM disk.mysql_firewall_whitelist_users");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_rules SELECT * FROM disk.mysql_firewall_whitelist_rules");
-	admindb->execute("INSERT OR IGNORE INTO main.mysql_firewall_whitelist_sqli_fingerprints SELECT * FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("INSERT OR IGNORE INTO main.global_variables SELECT * FROM disk.global_variables");
-	admindb->execute("INSERT OR IGNORE INTO main.scheduler SELECT * FROM disk.scheduler");
-	admindb->execute("INSERT OR IGNORE INTO main.proxysql_servers SELECT * FROM disk.proxysql_servers");
-#ifdef DEBUG
-	admindb->execute("INSERT OR IGNORE INTO main.debug_levels SELECT * FROM disk.debug_levels");
-	admindb->execute("INSERT OR IGNORE INTO main.debug_filters SELECT * FROM disk.debug_filters");
-#endif // DEBUG
-#ifdef PROXYSQLCLICKHOUSE
-	if ( GloVars.global.clickhouse_server == true ) {
- 		admindb->execute("INSERT OR IGNORE INTO main.clickhouse_users SELECT * FROM disk.clickhouse_users");
-	}
-#endif // PROXYSQLCLICKHOUSE
-	if (GloMyLdapAuth) {
-		admindb->execute("INSERT OR IGNORE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
-	}
-	admindb->execute("PRAGMA foreign_keys = ON");
-}
-*/
 
 void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -11537,34 +11455,6 @@ void ProxySQL_Admin::__insert_or_replace_maintable_select_disktable() {
 		admindb->execute("INSERT OR REPLACE INTO main.mysql_ldap_mapping SELECT * FROM disk.mysql_ldap_mapping");
 	}
 }
-
-/* commented in 2.3 , unused
-void ProxySQL_Admin::__delete_disktable() {
-	admindb->execute("DELETE FROM disk.mysql_servers");
-	admindb->execute("DELETE FROM disk.mysql_replication_hostgroups");
-	admindb->execute("DELETE FROM disk.mysql_users");
-	admindb->execute("DELETE FROM disk.mysql_query_rules");
-	admindb->execute("DELETE FROM disk.mysql_query_rules_fast_routing");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_users");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_rules");
-	admindb->execute("DELETE FROM disk.mysql_firewall_whitelist_sqli_fingerprints");
-	admindb->execute("DELETE FROM disk.global_variables");
-	admindb->execute("DELETE FROM disk.scheduler");
-	admindb->execute("DELETE FROM disk.proxysql_servers");
-#ifdef DEBUG
-	admindb->execute("DELETE FROM disk.debug_levels");
-	admindb->execute("DELETE FROM disk.debug_filters");
-#endif // DEBUG
-#ifdef PROXYSQLCLICKHOUSE
-	if ( GloVars.global.clickhouse_server == true ) {
-		admindb->execute("DELETE FROM disk.clickhouse_users");
-	}
-#endif // PROXYSQLCLICKHOUSE
-	if (GloMyLdapAuth) {
-		admindb->execute("DELETE FROM disk.mysql_ldap_mapping");
-	}
-}
-*/
 
 void ProxySQL_Admin::__insert_or_replace_disktable_select_maintable() {
 	BQE1(admindb, mysql_servers_tablenames, "", "INSERT OR REPLACE INTO disk.", " SELECT * FROM main.");
@@ -11653,15 +11543,6 @@ void ProxySQL_Admin::flush_GENERIC__from_to(const string& name, const string& di
 	admindb->wrunlock();
 }
 
-/* commented in 2.3 because unused
-void ProxySQL_Admin::flush_mysql_variables__from_disk_to_memory() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'mysql-%'");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
-}
-*/
 void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -11670,15 +11551,6 @@ void ProxySQL_Admin::flush_mysql_variables__from_memory_to_disk() {
 	admindb->wrunlock();
 }
 
-/* commented in 2.3 because unused
-void ProxySQL_Admin::flush_admin_variables__from_disk_to_memory() {
-	admindb->wrlock();
-	admindb->execute("PRAGMA foreign_keys = OFF");
-	admindb->execute("INSERT OR REPLACE INTO main.global_variables SELECT * FROM disk.global_variables WHERE variable_name LIKE 'admin-%'");
-	admindb->execute("PRAGMA foreign_keys = ON");
-	admindb->wrunlock();
-}
-*/
 void ProxySQL_Admin::flush_admin_variables__from_memory_to_disk() {
 	admindb->wrlock();
 	admindb->execute("PRAGMA foreign_keys = OFF");
@@ -11965,25 +11837,6 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 		for (std::vector<SQLite3_row *>::iterator it = resultset->rows.begin() ; it != resultset->rows.end(); ++it) {
 	      SQLite3_row *r=*it;
 			char *password=NULL;
-/*
-			if (variables.hash_passwords) { // We must use hashed password. See issue #676
-				// Admin needs to hash the password
-				if (r->fields[1] && strlen(r->fields[1])) {
-					if (r->fields[1][0]=='*') { // the password is already hashed
-						password=strdup(r->fields[1]);
-					} else { // we must hash it
-						unsigned char md1_buf[SHA_DIGEST_LENGTH];
-						unsigned char md2_buf[SHA_DIGEST_LENGTH];
-						SHA1((const unsigned char *)r->fields[1], strlen(r->fields[1]),md1_buf);
-						SHA1(md1_buf,SHA_DIGEST_LENGTH,md2_buf);
-
-						password=sha1_pass_hex((char *)md2_buf); // note that sha1_pass_hex() returns a new buffer
-					}
-				} else {
-					password=strdup((char *)""); // we also generate a new string if hash_passwords is set
-				}
-			} else {
-*/
 			if (r->fields[1]) {
 				password=r->fields[1];
 			} else {
@@ -12047,12 +11900,6 @@ SQLite3_result* ProxySQL_Admin::__add_active_users(
 				}
 				sqlite_result->add_row(&pta[0]);
 			}
-
-/*
-			if (variables.hash_passwords) {
-				free(password); // because we always generate a new string
-			}
-*/
 		}
 
 		if (__user == nullptr) {
