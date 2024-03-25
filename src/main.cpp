@@ -212,7 +212,6 @@ void parent_close_error_log() {
 	}
 }
 
-time_t laststart;
 pid_t pid;
 
 static const char * proxysql_pid_file() {
@@ -1705,6 +1704,90 @@ pair<int32_t,acct_creds_t> create_bootstrap_account(MYSQL* mysql, const string& 
 	return { myerr, { user, pass } };
 }
 
+
+/**
+ * @brief This function handles the restart of a process based on certain conditions.
+ * 
+ * If glovars.proxy_restart_on_error is true, the process restart logic is executed.
+ * The function implements exponential backoff and terminates if the maximum number of restart attempts is reached.
+ */
+void handleProcessRestart() {
+	// Maximum number of restart attempts allowed
+	constexpr int MAX_RESTART_ATTEMPTS = 5;
+	// Threshold in seconds for considering restarts too frequent
+	constexpr int EXECUTION_THRESHOLD = 10;
+
+	// Initialize restart attempts counter
+	time_t laststart = 0;
+	int restartAttempts = 0;
+	do {
+		// Check if laststart is set. It means that the process was already started at least once
+		if (laststart) {
+			// Get current time
+			time_t currenttime = time(NULL);
+			// Calculate elapsed time since laststart
+			time_t elapsed_seconds = currenttime - laststart;
+
+			// Check if elapsed time is less than threshold
+			if (elapsed_seconds < EXECUTION_THRESHOLD) {
+				// if restart is too frequent, something really bad is going on
+				// Implement exponential backoff - wait exponentially longer after each failed attempt
+				restartAttempts++;
+
+				// Check if restart attempts exceed the maximum allowed
+				if (restartAttempts > MAX_RESTART_ATTEMPTS) {
+					// the parent exits before the fork
+					parent_open_error_log();
+					proxy_error("Angel process already attempted to restart ProxySQL %d times and has no retries left. exit() with failure.\n", MAX_RESTART_ATTEMPTS);
+					exit(EXIT_FAILURE);
+				}
+
+				// Calculate wait time using exponential backoff
+				int waitTime = 1 << restartAttempts;
+				parent_open_error_log();
+				proxy_info("ProxySQL exited after only %d seconds , below the %d seconds threshold. Restarting attempt %d\n", elapsed_seconds, EXECUTION_THRESHOLD, restartAttempts);
+				proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", waitTime);
+				parent_close_error_log();
+
+				// Wait for the calculated time before next restart attempt
+				sleep(waitTime);
+			} else {
+				// Reset restart attempts counter if elapsed time is greater than or equal to threshold
+				restartAttempts = 0;
+			}
+		}
+
+		// Update laststart time to current time
+		laststart=time(NULL);
+
+		// Fork the process
+		pid = fork();
+
+		// Check for fork error
+		if (pid < 0) {
+			parent_open_error_log();
+			proxy_error("[FATAL]: Error in fork()\n");
+
+			// Exit with failure
+			exit(EXIT_FAILURE);
+		}
+
+		// Check if the process is the parent
+		if (pid) { // The parent
+			parent_close_error_log();
+			if (ProxySQL_daemonize_phase3()==true) {
+				break;
+			}
+		} else { // The daemon
+			// we open the files also on the child process
+			// this is required if the child process was created after a crash
+			parent_open_error_log();
+			GloVars.global.start_time=monotonic_time();
+			GloVars.install_signal_handler();
+		}
+	} while (pid > 0);
+}
+
 int main(int argc, const char * argv[]) {
 
 	{
@@ -2117,47 +2200,9 @@ int main(int argc, const char * argv[]) {
 #endif
 		}
 
-	laststart=0;
-	if (glovars.proxy_restart_on_error) {
-gotofork:
-		if (laststart) {
-			int currenttime=time(NULL);
-			if (currenttime == laststart) { /// we do not want to restart multiple times in the same second
-				// if restart is too frequent, something really bad is going on
-				//daemon_log(LOG_INFO, "Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
-				parent_open_error_log();
-				proxy_info("Angel process is waiting %d seconds before starting a new ProxySQL process\n", glovars.proxy_restart_delay);
-				parent_close_error_log();
-				sleep(glovars.proxy_restart_delay);
-			}
+		if (glovars.proxy_restart_on_error) {
+			handleProcessRestart();
 		}
-		laststart=time(NULL);
-		pid = fork();
-		if (pid < 0) {
-			//daemon_log(LOG_INFO, "[FATAL]: Error in fork()\n");
-			parent_open_error_log();
-			proxy_error("[FATAL]: Error in fork()\n");
-			exit(EXIT_FAILURE);
-		}
-
-		if (pid) { /* The parent */
-
-			parent_close_error_log();
-			if (ProxySQL_daemonize_phase3()==false) {
-				goto gotofork;
-			}
-
-		} else { /* The daemon */
-
-			// we open the files also on the child process
-			// this is required if the child process was created after a crash
-			parent_open_error_log();
-			GloVars.global.start_time=monotonic_time();
-			GloVars.install_signal_handler();
-		}
-	}
-
-
 
 	} else {
 		GloAdmin->flush_error_log();
@@ -2192,6 +2237,15 @@ __start_label:
 	proxy_info("For consultancy visit: https://proxysql.com/services/consulting/\n");
 
 	{
+#if 0
+		{
+			// the following commented code is here only to manually test handleProcessRestart()
+			// DO NOT ENABLE
+			//proxy_info("Service is up\n");
+			//sleep(2);
+			//assert(0);
+		}
+#endif
 		unsigned int missed_heartbeats = 0;
 		unsigned long long previous_time = monotonic_time();
 		unsigned int inner_loops = 0;
