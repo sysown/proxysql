@@ -6,6 +6,9 @@
  *       - 'mysql_native_password'
  *       - 'caching_sha2_password'
  *   2. Stress password creation, ensure that start and length matches expected.
+ *   3. End-to-end password generation testing:
+ *       1. Create passwords in both MySQL and ProxySQL using buit-in Admin function for hash generation.
+ *       2. Connect to ProxySQL and force a new backend connection using these passwords.
  */
 
 #include <cassert>
@@ -19,6 +22,9 @@
 #include "tap.h"
 #include "utils.h"
 
+// Additional env variables
+uint32_t TAP_MYSQL8_BACKEND_HG = 30;
+
 using std::string;
 using std::vector;
 using std::pair;
@@ -31,6 +37,12 @@ struct user_def_t {
 	string salt;
 };
 
+struct user_creds_t {
+	string name;
+	string auth;
+	string pass;
+};
+
 #define MYSQL_QUERY_T_(mysql, query) \
 	do { \
 		const std::string time { get_formatted_time() }; \
@@ -40,6 +52,41 @@ struct user_def_t {
 			return { EXIT_FAILURE, user_def_t {} }; \
 		} \
 	} while(0)
+
+int create_mysql_user(MYSQL* mysql, const user_creds_t& creds) {
+	const string CREATE_USER {
+		"CREATE USER '" + creds.name + "'@'%' IDENTIFIED WITH"
+			" '" + creds.auth + "' BY '" + creds.pass + "'"
+	};
+	const string GRANT_USER_PRIVS { "GRANT ALL on *.* to '" + creds.name + "'@'%'" };
+	const string DROP_USER { "DROP USER IF EXISTS '" + creds.name + "'"};
+
+	MYSQL_QUERY_T(mysql, DROP_USER.c_str());
+	MYSQL_QUERY_T(mysql, CREATE_USER.c_str());
+	MYSQL_QUERY_T(mysql, GRANT_USER_PRIVS.c_str());
+
+	return EXIT_SUCCESS;
+}
+
+int config_proxysql_user(MYSQL* admin, const user_creds_t& creds) {
+	const string DEF_HG { std::to_string(TAP_MYSQL8_BACKEND_HG) };
+
+	MYSQL_QUERY_T(admin, ("DELETE FROM mysql_users WHERE username='" + creds.name + "'").c_str());
+
+	// Ensure cleanup of previously cached clear_text 'caching_sha2' passwords
+	MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
+	MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
+
+	const string insert_query {
+		"INSERT INTO mysql_users (username,password,default_hostgroup) "
+			"VALUES ('" + creds.name + "'," + creds.auth + "('" + creds.pass + "')," + DEF_HG + ")"
+	};
+
+	MYSQL_QUERY_T(admin, insert_query.c_str());
+	MYSQL_QUERY_T(admin, "LOAD MYSQL USERS TO RUNTIME");
+
+	return EXIT_SUCCESS;
+}
 
 pair<int,user_def_t> create_mysql_user_rnd_creds(MYSQL* mysql, const string& name, const string& auth) {
 	diag("Creating user with random pass   user:'%s'", name.c_str());
@@ -261,6 +308,7 @@ struct inv_input_t {
 // NOTE: If modified, set even numbers
 const uint32_t USER_GEN_COUNT = 100;
 const uint32_t PASS_GEN_COUNT = 1000;
+const uint32_t RAND_USERS_GEN = 100;
 
 const vector<inv_input_t> INV_INPUTS {
 	{
@@ -296,13 +344,17 @@ int main(int argc, char** argv) {
 		INV_INPUTS.size() +
 		USER_GEN_COUNT +
 		PASS_GEN_COUNT * 2 +
-		2 // EXTRA: Two extra correctness tests; forcing randomness
+		2 + // EXTRA: Two extra correctness tests; forcing randomness
+		RAND_USERS_GEN +
+		1 // EXTRA: Conn count after 'RAND_USERS_GEN'; consistency check
 	);
 
 	if (cl.getEnv()) {
 		diag("Failed to get the required environmental variables.");
 		return EXIT_FAILURE;
 	}
+
+	TAP_MYSQL8_BACKEND_HG = get_env_int("TAP_MYSQL8_BACKEND_HG", 30);
 
 	MYSQL* mysql = mysql_init(NULL);
 
@@ -397,6 +449,112 @@ int main(int argc, char** argv) {
 
 			test_pass_gen(admin, "caching_sha2_password", pass, salt);
 		}
+	}
+
+	// Tests end-to-end connection with MySQL using same gen passwords
+	{
+		const string TAP_MYSQL8_BACKEND_HG_S { std::to_string(TAP_MYSQL8_BACKEND_HG) };
+		const string RAND_USERS_GEN_S { std::to_string(RAND_USERS_GEN) };
+
+		diag("Cleaning up previous backend connections...");
+		MYSQL_QUERY(admin,
+			("UPDATE mysql_servers SET max_connections=0 "
+				"WHERE hostgroup_id=" + TAP_MYSQL8_BACKEND_HG_S).c_str()
+		);
+		MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+		const string COND_CONN_CLEANUP {
+			"SELECT IIF((SELECT SUM(ConnUsed + ConnFree) FROM stats.stats_mysql_connection_pool"
+				" WHERE hostgroup=" + TAP_MYSQL8_BACKEND_HG_S + ")=0, 'TRUE', 'FALSE')"
+		};
+		int w_res = wait_for_cond(admin, COND_CONN_CLEANUP, 10);
+		if (w_res) {
+			diag("Waiting for backend connections failed   res:'%d'", w_res);
+			goto cleanup;
+		}
+
+		// Just in case a low connection limit is set by default
+		diag("Setup new connection limit   max_connections='2000'");
+		MYSQL_QUERY(admin,
+			("UPDATE mysql_servers SET max_connections=2000 "
+				"WHERE hostgroup_id=" + TAP_MYSQL8_BACKEND_HG_S).c_str()
+		);
+		MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
+
+		for (uint32_t i = 0; i < RAND_USERS_GEN; i++) {
+			const string name { "username_" + std::to_string(i) };
+			const string pass { random_string(20) };
+			const string auth { i < 50 ? "MYSQL_NATIVE_PASSWORD" : "CACHING_SHA2_PASSWORD" };
+			const user_creds_t user_creds { name, auth, pass };
+
+			// TODO: Current 'auth_switch' limitation. Set 'caching_sha2_password' as default-auth method.
+			if (i < 50) {
+				MYSQL_QUERY(admin, "SET mysql-default_authentication_plugin='mysql_native_password'");
+				MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+			} else {
+				MYSQL_QUERY(admin, "SET mysql-default_authentication_plugin='caching_sha2_password'");
+				MYSQL_QUERY(admin, "LOAD MYSQL VARIABLES TO RUNTIME");
+			}
+
+			diag(
+				"Testing Client-to-MySQL with SQLite3 created hashes   user:'%s', pass:'%s', auth:'%s'",
+				name.c_str(), pass.c_str(), auth.c_str()
+			);
+
+			if (create_mysql_user(mysql, user_creds)) {
+				diag("Failed to create MySQL user. Aborting further testing");
+				goto cleanup;
+			}
+
+			if (config_proxysql_user(admin, user_creds)) {
+				diag("Failed to create ProxySQL user. Aborting further testing");
+				goto cleanup;
+			}
+
+			diag(
+				"Creating connection to ProxySQL   user:'%s', pass:'%s', auth:'%s'",
+				name.c_str(), pass.c_str(), auth.c_str()
+			);
+
+			MYSQL* proxy = mysql_init(NULL);
+			mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
+
+			if (
+				!mysql_real_connect(
+					proxy, cl.host, name.c_str(), pass.c_str(), NULL, cl.port, NULL, CLIENT_SSL
+				)
+			) {
+				diag("Failed to connect to ProxySQL   error:'%s'", mysql_error(proxy));
+				goto cleanup;
+			}
+
+			int rc = mysql_query(proxy, "/* create_new_connection=1 */ DO 1");
+			ok(rc == 0, "End-to-end connection should succeed   rc:'%d', err:'%s'", rc, mysql_error(proxy));
+
+			mysql_close(proxy);
+		}
+
+		const string SEL_POOL_CONNS {
+			"SELECT SUM(ConnUsed + ConnFree) FROM stats.stats_mysql_connection_pool"
+				" WHERE hostgroup=" + TAP_MYSQL8_BACKEND_HG_S
+		};
+		const string COND_CONN_CREATION {
+			"SELECT IIF((" + SEL_POOL_CONNS + ")=" + RAND_USERS_GEN_S + ", 'TRUE', 'FALSE')"
+		};
+		wait_for_cond(admin, COND_CONN_CREATION, 10);
+
+		ext_val_t<uint64_t> cur_conns { mysql_query_ext_val(admin, SEL_POOL_CONNS, uint64_t(0)) };
+
+		if (cur_conns.err) {
+			const string err { get_ext_val_err(admin, cur_conns) };
+			diag("Fetching conn count from pool failed   err:'%s'", err.c_str());
+		}
+
+		ok(
+			RAND_USERS_GEN == cur_conns.val,
+			"Number of backend conns created should match conn attempts   exp:'%u', act:'%lu'",
+			RAND_USERS_GEN, cur_conns.val
+		);
 	}
 
 cleanup:
