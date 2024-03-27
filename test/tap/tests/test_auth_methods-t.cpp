@@ -282,7 +282,7 @@ struct test_conf_t {
 	bool hashed_pass;
 	/* @brief Wether to attempt auth under SSL conn or not. */
 	bool use_ssl;
-	/* @brief Wether to attempt auth under SSL conn or not. */
+	/* @brief Wether to attempt auth with compression enabled or not. */
 	bool use_comp;
 };
 
