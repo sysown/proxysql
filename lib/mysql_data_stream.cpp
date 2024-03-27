@@ -1328,8 +1328,16 @@ int MySQL_Data_Stream::array2buffer() {
 					memcpy(&queueOUT.pkt,PSarrayOUT->index(idx), sizeof(PtrSize_t));
 					idx++;
 		//VALGRIND_ENABLE_ERROR_REPORTING;
-					// this is a special case, needed because compression is enabled *after* the first OK
-					if (DSS==STATE_CLIENT_AUTH_OK) {
+					// This is a special case, needed because compression is enabled *after* the first OK. In
+					// case of 'caching_sha2_password', not only the first packet needs to be processed, since
+					// there are other scenarios in which one extra byte is sent prior to the final OK packet
+					// flagging auth success. The generation of these extra packets should all be queued at
+					// the same time, since they represent the final client response. Right now this is
+					// handled during 'MySQL_Session::handler___status_CONNECTING_CLIENT___STATE_SERVER_HANDSHAKE'.
+					// Because of this, we can make the assumption that once we have sent all the packets
+					// currently in 'PSarrayOUT', it's safe to change the 'DSS' status, and enable compression
+					// if connections requires it.
+					if (DSS==STATE_CLIENT_AUTH_OK && idx == PSarrayOUT->len) {
 						DSS=STATE_SLEEP;
 						// enable compression
 						if (myconn->options.server_capabilities & CLIENT_COMPRESS) {
