@@ -98,69 +98,6 @@ bool match_pass(const char* p1, const char* p2) {
 	}
 }
 
-// TODO: Refactor
-///////////////////////////////////////////////////////////////////////////////
-
-int get_query_result(MYSQL* mysql, const string& query, uint64_t& out_val) {
-	int rc = mysql_query(mysql, query.c_str());
-	if (rc != EXIT_SUCCESS) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
-		return EXIT_FAILURE;
-	}
-
-	MYSQL_RES* myres = mysql_store_result(mysql);
-	if (myres == nullptr) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, mysql_error(mysql));
-		return EXIT_FAILURE;
-	}
-
-	MYSQL_ROW row = mysql_fetch_row(myres);
-	if (row == nullptr || row[0] == nullptr) {
-		fprintf(stderr, "File %s, line %d, Error: %s\n", __FILE__, __LINE__, "Received empty row");
-		return EXIT_FAILURE;
-	}
-
-	out_val = std::stol(row[0]);
-
-	mysql_free_result(myres);
-
-	return EXIT_SUCCESS;
-}
-
-int wait_target_backend_conns(MYSQL* admin, uint32_t tg_conns, uint32_t timeout, int32_t hg=-1) {
-	const string query_select { "SELECT SUM(ConnFree + ConnUsed) FROM stats_mysql_connection_pool" };
-	const string query_where { hg == -1 ? "" : " WHERE hostgroup=" + std::to_string(hg) };
-	const string query { query_select + query_where };
-
-	uint32_t waited = 0;
-
-	while (waited < timeout) {
-		uint64_t conns_count = 0;
-		int q_res = get_query_result(admin, query.c_str(), conns_count);
-
-		if (q_res != EXIT_SUCCESS) {
-			diag("Failed getting conn stats   query:`%s`,error:`%s`", query.c_str(), mysql_error(admin));
-			return -1;
-		}
-
-		if (conns_count == tg_conns) {
-			diag("Reached target conn count   tg_conns:'%d',conns_count:'%ld'", tg_conns, conns_count);
-			break;
-		} else {
-			waited += 1;
-			diag(
-				"Conn count yet unmatched    tg_conns:'%d',conns_count:'%ld',checks:'%u'",
-				tg_conns, conns_count, waited
-			);
-			sleep(1);
-		}
-	}
-
-	return waited < timeout ? 0 : -2;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
 std::string unhex(const std::string& hex) {
 	if (hex.size() % 2) { return {}; };
 
@@ -345,6 +282,8 @@ struct test_conf_t {
 	bool hashed_pass;
 	/* @brief Wether to attempt auth under SSL conn or not. */
 	bool use_ssl;
+	/* @brief Wether to attempt auth under SSL conn or not. */
+	bool use_comp;
 };
 
 struct sess_info_t {
@@ -1052,7 +991,8 @@ vector<test_conf_t> get_conf_combs(
 	const vector<string>& def_auths,
 	const vector<string>& req_auths,
 	const vector<bool>& hash_pass,
-	const vector<bool>& use_ssl
+	const vector<bool>& use_ssl,
+	const vector<bool>& use_comp
 ) {
 	vector<test_conf_t> confs {};
 
@@ -1060,7 +1000,9 @@ vector<test_conf_t> get_conf_combs(
 		for (const auto& req_auth : req_auths) {
 			for (const auto& hashed : hash_pass) {
 				for (const auto& ssl : use_ssl) {
-					confs.push_back({def_auth, req_auth, hashed, ssl});
+					for (const auto& comp : use_comp) {
+						confs.push_back({def_auth, req_auth, hashed, ssl, comp});
+					}
 				}
 			}
 		}
@@ -1156,11 +1098,15 @@ int config_mysql_conn(const CommandLine& cl, const test_conf_t& conf, MYSQL* pro
 
 	if (conf.use_ssl) {
 		mysql_ssl_set(proxy, NULL, NULL, NULL, NULL, NULL);
-		cflags = CLIENT_SSL;
+		cflags |= CLIENT_SSL;
 
 		if (getenv("SSLKEYLOGFILE") && F_SSLKEYLOGFILE) {
 			mysql_options(proxy, MARIADB_OPT_SSL_KEYLOG_CALLBACK, reinterpret_cast<void*>(ssl_keylog_callback));
 		}
+	}
+
+	if (conf.use_comp) {
+		cflags |= CLIENT_COMPRESS;
 	}
 
 	return cflags;
@@ -1450,7 +1396,11 @@ int backend_conns_cleanup(MYSQL* admin) {
 	MYSQL_QUERY(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
 	// Wait for backend connection cleanup
-	int w_res = wait_target_backend_conns(admin, 0, 10, TAP_MYSQL8_BACKEND_HG);
+	const string check_conn_cleanup {
+		"SELECT IIF((SELECT SUM(ConnUsed + ConnFree) FROM stats.stats_mysql_connection_pool"
+			" WHERE hostgroup=" + std::to_string(TAP_MYSQL8_BACKEND_HG) + ")=0, 'TRUE', 'FALSE')"
+	};
+	int w_res = wait_for_cond(admin, check_conn_cleanup, 10);
 	if (w_res != EXIT_SUCCESS) {
 		diag("Waiting for backend connections failed   res:'%d'", w_res);
 		return EXIT_FAILURE;
@@ -1745,9 +1695,12 @@ int main(int argc, char** argv) {
 	};
 	const vector<bool> hash_pass { false, true };
 	const vector<bool> use_ssl { false, true };
+	const vector<bool> use_comp { false, true };
 
 	// Sequential access tests; exercising full logic
-	const vector<test_conf_t> all_conf_combs { get_conf_combs(def_auths, req_auhts, hash_pass, use_ssl) };
+	const vector<test_conf_t> all_conf_combs {
+		get_conf_combs(def_auths, req_auhts, hash_pass, use_ssl, use_comp)
+	};
 	const auto scs_stats { count_exp_scs(all_conf_combs, cbres.second, tests_creds) };
 
 	pair<uint64_t,uint64_t> rnd_scs_stats {};
