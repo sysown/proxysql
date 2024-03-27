@@ -94,7 +94,10 @@ int main(int argc, char** argv) {
 				MYSQL_QUERY_T(admin, "UPDATE mysql_servers set max_connections=0");
 				MYSQL_QUERY_T(admin, "LOAD MYSQL SERVERS TO RUNTIME");
 
-				int wait_res = wait_for_backend_conns(admin, "ConnFree", 0, 5);
+				int wait_res = wait_for_cond(admin,
+					"SELECT IIF((SELECT SUM(ConnFree) FROM stats_mysql_connection_pool)=0, 'TRUE', 'FALSE')",
+					5
+				);
 				if (wait_res != EXIT_SUCCESS) {
 					diag("Error waiting for ProxySQL to close backend connection.");
 					return EXIT_FAILURE;
