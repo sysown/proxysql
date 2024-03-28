@@ -418,7 +418,11 @@ void MySQL_STMT_Global_info::update_metadata(MYSQL_STMT *stmt) {
 		}
 	}
 	if (need_refresh) {
-		proxy_warning("Updating metadata for stmt %lu , user %s, query %s\n", statement_id, username, query);
+		if (digest_text && strncasecmp(digest_text, "EXPLAIN", strlen("EXPLAIN"))==0) {
+			// do not print any message in case of EXPLAIN
+		} else {
+			proxy_warning("Updating metadata for stmt %lu , user %s, query %s\n", statement_id, username, query);
+		}
 // from here is copied from destructor
 		if (num_columns) {
 			uint16_t i;

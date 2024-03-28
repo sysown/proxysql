@@ -1,8 +1,7 @@
 /**
- * @file reg_test_3371_prepared_statement_crash-t.cpp
- * @brief Tries to execute prepared statements with a not existing stmt_id.
- * This used to crash ProxySQL , so this tap test verifies that ProxySQL
- * doesn't crash
+ * @file stmt_explain-t.cpp
+ * @brief executes EXPLAIN using prepared statements.
+ * It doesn't perform any real test, only code coverage.
  */
 
 
@@ -19,7 +18,6 @@
 
 using std::string;
 
-const int NUM_LOOPS = 100; ///< Number of loops for statement execution.
 
 int main(int argc, char** argv) {
 	CommandLine cl;
@@ -30,7 +28,7 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	plan(1+NUM_LOOPS*2); // Plan for testing purposes
+	plan(1); // Plan for testing purposes
 
 	MYSQL* mysql = mysql_init(NULL); ///< MySQL connection object
 	if (!mysql) {
@@ -52,7 +50,7 @@ int main(int argc, char** argv) {
 			return exit_status();
 		}
 
-	std::string select_query = "SELECT 1";
+	std::string select_query = "EXPLAIN SELECT 1";
 	diag("select_query: %s", select_query.c_str());
 	if (mysql_stmt_prepare(stmt, select_query.c_str(), strlen(select_query.c_str()))) {
 		fprintf(stderr, "mysql_stmt_prepare at line %d failed: %s\n", __LINE__ , mysql_error(mysql));
@@ -61,21 +59,7 @@ int main(int argc, char** argv) {
 		return exit_status();
 	}
 
-	diag("Increasing stmt_id by 1, so that mysql_stmt_execute() must fail");
-	int rc = 0;
-	for (int i = 0; i < NUM_LOOPS ; i++) {
-		stmt->stmt_id += 1;
-		rc = mysql_stmt_execute(stmt);
-		ok (rc , "mysql_stmt_execute() must fail");
-		if (rc) {
-			unsigned int psrc = mysql_stmt_errno(stmt);
-			ok( psrc == 1243 , "mysql_stmt_execute at line %d failed: %d , %s", __LINE__ , psrc , mysql_stmt_error(stmt));
-		}
-	}
-
-	diag("Decreasing stmt_id by 1, so that mysql_stmt_execute() must succeed");
-	stmt->stmt_id -= NUM_LOOPS;
-	rc = mysql_stmt_execute(stmt);
+	int rc  = mysql_stmt_execute(stmt);
 	ok (rc == 0 , "mysql_stmt_execute() succeeded");
 	if (rc) {
 		fprintf(stderr, "mysql_stmt_execute at line %d failed: %d , %s\n", __LINE__ , rc , mysql_stmt_error(stmt));
